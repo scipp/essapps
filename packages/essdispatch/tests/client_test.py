@@ -44,6 +44,7 @@ from ess.dispatch.backend import Entry
 from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
 from ess.spec import (
     AccumulatorRef,
+    Binding,
     DriverBinding,
     WorkflowSpec,
     function_binding,
@@ -230,6 +231,7 @@ class WalkParams(StepsParams):
 
 
 WALK = _spec('walk', params=WalkParams, tables=('steps',))
+UNTYPED = _spec('untyped', params=Parts, tables=('parts',))  # its driver returns a dict
 
 
 class Unchecked(StepsParams):
@@ -405,6 +407,16 @@ class Walking:
         return _value(self._factor * self._total)
 
 
+class Untyped:
+    """The driver of UNTYPED, whose outputs are a dict, not a Value."""
+
+    def push(self, table: str, rows: Sequence[Any]) -> None:
+        pass
+
+    def outputs(self) -> Any:
+        return {'value': Amount(value=0.0)}
+
+
 def _eventually(condition: Callable[[], bool]) -> bool:
     """Whether ``condition`` holds within five seconds, as other threads go on."""
     deadline = time.monotonic() + 5
@@ -482,32 +494,34 @@ def scaled_sum() -> ScaledSum:
 
 
 @pytest.fixture
-def backend(
-    datasets: FakeDatasets,
+def bindings(
     shifting: StagedFunction,
     scaling: StagedFunction,
     scaled_sum: ScaledSum,
     loading: threading.Event,
-) -> Iterator[Backend]:
+) -> list[Binding]:
     def load(params: Sample) -> LoadOutputs:
         loading.wait(timeout=5)
         return load_run(params)
 
-    backend = Backend(
-        datasets,
-        [
-            function_binding(LOAD, load),
-            shifting,
-            scaling,
-            folding(TOTAL, _add),
-            folding(DIGITS, append_digit),
-            DriverBinding(SUM, scaled_sum),
-            kept_rows(WEIGHTED, weighted),
-            DriverBinding(SPREAD, Averaging),
-            kept_rows(STITCH, stitch),
-            DriverBinding(WALK, Walking),
-        ],
-    )
+    return [
+        function_binding(LOAD, load),
+        shifting,
+        scaling,
+        folding(TOTAL, _add),
+        folding(DIGITS, append_digit),
+        DriverBinding(SUM, scaled_sum),
+        kept_rows(WEIGHTED, weighted),
+        DriverBinding(SPREAD, Averaging),
+        kept_rows(STITCH, stitch),
+        DriverBinding(WALK, Walking),
+        DriverBinding(UNTYPED, lambda fixed: Untyped()),
+    ]
+
+
+@pytest.fixture
+def backend(datasets: FakeDatasets, bindings: list[Binding]) -> Iterator[Backend]:
+    backend = Backend(datasets, bindings)
     yield backend
     backend.close()
 
@@ -747,24 +761,27 @@ def test_a_stage_needs_a_binding_that_makes_stages(client: Client) -> None:
         client.stage(Template(TOTAL, params={'speed': 1.0}, blanks=('parts',)))
 
 
-def test_a_client_gives_the_specs_the_backend_runs(client: Client) -> None:
+def test_a_client_gives_the_specs_the_backend_runs(
+    client: Client, bindings: list[Binding]
+) -> None:
     load = client.compute(_load(1))
 
     assert client.spec(load.spec) is LOAD
-    assert client.specs() == [
-        LOAD,
-        SHIFT,
-        SCALE,
-        TOTAL,
-        DIGITS,
-        SUM,
-        WEIGHTED,
-        SPREAD,
-        STITCH,
-        WALK,
-    ]
-    with pytest.raises(SubmitError, match=r'^unknown spec load/v2$'):
+    assert client.specs() == [b.spec for b in bindings]
+    with pytest.raises(KeyError, match='unknown spec load/v2'):
         client.spec(SpecId(name='load', version=2))
+
+
+def test_reading_an_accumulator_whose_driver_returns_no_outputs_instance_raises(
+    client: Client,
+) -> None:
+    untyped = client.accumulator(Template(UNTYPED, blanks=('parts',)))
+    untyped.push(parts=[Amount(value=1.0)])
+
+    returned = 'the workflow of untyped/v1 returned dict, not Value'
+    for _ in range(2):  # computed again at each read
+        with pytest.raises(NotReadable, match=f'^{returned}$'):
+            client.output(untyped)
 
 
 def test_bind_is_a_list_of_bindings(datasets: FakeDatasets) -> None:

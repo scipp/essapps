@@ -381,7 +381,8 @@ A request that cannot run is refused at submission with a `SubmitError`.
 Its `errors` list each reason as a `FieldError`, as pydantic's `ValidationError.errors()` does: the place of the field at fault, `loc`, such as `('sample', 2, 'transmission')`, the reason, `msg`, and for a call with several requests the request's key or index, `entry`.
 If one request of a call is refused, none is submitted.
 A request that fails in the call phase makes a failed record.
-Its failure is the error's message when the framework refuses a value, such as `beam_centre.tolerance: Value error, ...`, and otherwise the type and message of the error that the binding, its driver, or the store raised, such as `KeyError: 'counts'`.
+Its failure, `client.failure(record)`, keeps the framework's own words as they are: a value refused in the call phase, such as `beam_centre.tolerance: Value error, ...`, and the backend's reasons, such as `record r17 failed`, `the workflow of sans-iofq/v1 returned None as iofq`, or `the write failed: ...`.
+An error that the binding, its driver, the dataset source, or the store raises is given with its type, such as `KeyError: 'counts'` or `the write failed: OSError: no space left on device`.
 Validation in the request phase never proves that a workflow will succeed.
 
 ## References

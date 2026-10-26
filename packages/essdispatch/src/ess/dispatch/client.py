@@ -304,7 +304,7 @@ class Client:
     def spec(self, spec_id: SpecId) -> WorkflowSpec[Any, Any]:
         """
         The spec the backend runs as ``spec_id``, such as ``record.spec``;
-        raises ``SubmitError`` for one it does not run, as a submission does.
+        raises ``KeyError`` for one it does not run.
         """
         return self._backend.spec(spec_id, self._id)
 
@@ -564,12 +564,13 @@ class Client:
 
     def readable(self, records: Any) -> Any:
         """
-        The outputs of each record, by name, that a submission of this client
-        may reference now: every output of a record the client keeps, pending
-        or completed, and otherwise those persisted, unless their write
-        failed. A record that failed or was cancelled has none, and one that
-        has completed only those its workflow returned. It waits for nothing
-        and reads no value, so a picker of records calls it at each refresh::
+        The outputs of each record, by name, that a plain submission of this
+        client, not one through a stage, may reference now: every output of a
+        record the client keeps, pending or completed, and otherwise those
+        persisted, unless their write failed. A record that failed or was
+        cancelled has none, and one that has completed only those its
+        workflow returned. It waits for nothing and reads no value, so a
+        picker of records calls it at each refresh::
 
             for record, names in zip(records, client.readable(records)):
                 ...  # offer record.ref(name) for each name

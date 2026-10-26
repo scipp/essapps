@@ -51,7 +51,7 @@ A client reads, and its requests, stages, and accumulators reference, only the
 outputs of records it keeps, whether they are pending or completed, and
 persisted outputs, written or with their write pending; a request through a
 stage that has yet to stage also those the stage keeps (see
-:meth:`Backend._access`), and one through a stage that has staged reads only
+:meth:`Backend._refusal`), and one through a stage that has staged reads only
 the values of its blanks. So whether a call is accepted does not depend on
 how far other work has run, and a value kept only for another client or for a
 pending request is refused. A request, or a read of outputs, that may read an
@@ -737,9 +737,15 @@ class Backend:
         return None
 
     def spec(self, spec_id: SpecId, client: str) -> Spec:
-        """The spec the backend runs as ``spec_id``; refuses one it does not run."""
+        """
+        The spec the backend runs as ``spec_id``; raises ``KeyError`` for one
+        it does not run.
+        """
         self._client(client)
-        return self._spec(spec_id)
+        binding = self._bindings.get(spec_id)
+        if binding is None:
+            raise KeyError(f'unknown spec {spec_id}')
+        return binding.spec
 
     def specs(self, client: str) -> list[Spec]:
         """The specs the backend runs, one for each binding, in the order bound."""
@@ -871,7 +877,7 @@ class Backend:
                 for ref in request.upstream()
                 if ref.record not in state_ids.values()
             }
-            return {key for key in keys if self._access(caller, key, also)}
+            return {key for key in keys if self._from_store(caller, key, also)}
 
         requests = [
             r.model_copy(update={'params': map_refs(r.params, state_record)})
@@ -1007,7 +1013,7 @@ class Backend:
         """
         Check the outputs of records and accumulators that ``params``, of the
         spec, read; lock held. Each must be one the client may reference (see
-        :meth:`_readable`), declared by its spec, and fit its field (see
+        :meth:`_source_spec`), declared by its spec, and fit its field (see
         :func:`.checks.check_fit`).
 
         Only a submission reads accumulators, from the ``states`` it pinned;
@@ -1023,7 +1029,7 @@ class Backend:
         for loc, ref, tp in ref_types(self._bindings[spec_id].spec.params, params):
             if isinstance(ref, DatasetRef):
                 continue  # checked when resolved
-            source = self._readable(ref, loc, caller, states, also)
+            source = self._source_spec(ref, loc, caller, states, also)
             check_fit(self._bindings[source].spec, ref, tp, loc)
 
     def _check_stage(
@@ -1058,7 +1064,7 @@ class Backend:
             )
         return stage
 
-    def _readable(
+    def _source_spec(
         self,
         ref: OutputRef | AccumulatorRef,
         loc: Loc,
@@ -1105,55 +1111,44 @@ class Backend:
         Why a request of the client may not reference an output of a record
         of its proposal now, or ``None``; lock held.
 
-        The record must not have failed or been cancelled, and a record that
-        has completed must have returned the output. The client must keep the
-        record, or the request's stage the output, ``also``, or the output be
-        persisted (see :meth:`_access`). A pending record passes: whether a
-        request is accepted does not depend on how far what it reads has run.
-        So no client references the record of a state, which only the
-        submission that made it keeps (see the module docstring), unless a
-        freeze persisted it.
+        This is the read rule. The record must not have failed or been
+        cancelled, and a record that has completed must have returned the
+        output. The client must keep the record, or the request's stage the
+        output, ``also``, and reads it from memory; or the output must be
+        persisted, written or with the write pending, and the client reads it
+        from the store (see :meth:`_from_store`). A pending record passes:
+        whether a request is accepted does not depend on how far what it
+        reads has run. So no client references the record of a state, which
+        only the submission that made it keeps (see the module docstring),
+        unless a freeze persisted it.
         """
         record_id, name = key
         status = self._views.status(record_id)
         if status in (Status.FAILED, Status.CANCELLED):
             return f'record {record_id} {status}'
-        try:
-            self._access(caller, key, also)
-        except SubmitError as error:
-            return str(error)
+        if self._from_store(caller, key, also):
+            write = self._views.write(key)
+            if isinstance(write, WriteFailed):
+                where = f'record {record_id} output {name}'
+                return f'{where}: the write failed: {write.reason}'
+            if write is None:
+                return f'record {record_id} is not kept by this client'
         if self._views.omitted(key):
             return f'record {record_id} output {name}: the workflow did not return it'
         return None
 
-    def _access(
+    def _from_store(
         self,
         caller: _Client,
         key: tuple[str, str],
         also: Collection[tuple[str, str]] = (),
     ) -> bool:
         """
-        Whether the client reads an output from the store, not from memory;
-        lock held. Raises ``SubmitError`` if it may not read it.
-
-        This is the read rule: a client reads from memory the outputs of the
-        records it keeps, and ``also``, those its request's stage keeps; and
-        from the store the outputs that are persisted, written or with the
-        write pending. Nothing else, so whether a call is accepted does not
-        depend on how far other work has run.
+        Whether the client reads an output it may read (see :meth:`_refusal`)
+        from the store, not from memory: it keeps neither the record nor,
+        through the request's stage, ``also``, the output; lock held.
         """
-        record_id, name = key
-        if record_id in caller.kept or key in also:
-            return False
-        write = self._views.write(key)
-        if isinstance(write, WriteFailed):
-            raise SubmitError.at(
-                (),
-                f'record {record_id} output {name}: the write failed: {write.reason}',
-            )
-        if write is None:
-            raise SubmitError.at((), f'record {record_id} is not kept by this client')
-        return True
+        return key[0] not in caller.kept and key not in also
 
     # Execution
 
@@ -2198,7 +2193,7 @@ class Backend:
 
         A record the client keeps is read from memory; otherwise its
         persisted outputs are read from the store, once written (see
-        :meth:`_access`): this waits for the record and for a pending write.
+        :meth:`_refusal`): this waits for the record and for a pending write.
         Raises ``RecordFailed`` if the record fails or is cancelled, and
         ``NotReadable`` for an output the client may not read, also once it
         releases a record whose outputs this waits for, or whose write
@@ -2234,16 +2229,11 @@ class Backend:
             finished = views.finished.get(record_id)
             if finished is not None and finished.status is not Status.COMPLETED:
                 raise RecordFailed(record_id, finished.status, finished.failure)
-            try:
-                for name in names:
-                    self._access(caller, (record_id, name))
-            except SubmitError as error:
-                raise NotReadable(str(error)) from None
             if every:
                 names = [n for n in names if not views.omitted((record_id, n))]
             for name in names:
-                if views.omitted((record_id, name)):
-                    raise _not_returned(f'record {record_id} output {name}')
+                if (why := self._refusal(caller, (record_id, name))) is not None:
+                    raise NotReadable(why)
             # from memory if kept, else from the store: never another's value
             values = {n: self._outputs[(record_id, n)] for n in names if kept}
         if not kept:
@@ -2312,7 +2302,10 @@ class Backend:
             for name in names or ():
                 if name not in declared:
                     raise KeyError(f'{acc.template.spec} has no output {name!r}')
-            outputs = acc.outputs()
+            try:
+                outputs = acc.outputs()
+            except _Failure as error:  # the driver returned no outputs instance
+                raise NotReadable(str(error)) from None
             for name in names or ():
                 if name not in outputs:
                     raise _not_returned(f'{accumulator_id}[:{upto}].{name}')
