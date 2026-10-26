@@ -34,7 +34,9 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
         measure(3, [5.0, 4.0, 3.0, 2.0], role='sample'),
     ]
     template = Template(
-        IOFQ, params={'beam_centre': centre.ref('centre')}, blanks=('sample',)
+        IOFQ,
+        params={'beam_centre': centre.ref('centre'), 'normalization': None},
+        blanks=('sample',),
     )
 
     requests = apply(

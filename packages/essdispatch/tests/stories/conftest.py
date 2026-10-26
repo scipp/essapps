@@ -154,7 +154,7 @@ class IofQParams(Data):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: Sample
     beam_centre: BeamCentre | None = None
-    normalization: ComputedNormalization | None = None
+    normalization: ComputedNormalization | None
 
 
 class IofQOutputs(Data):
@@ -203,7 +203,7 @@ class IofQV2Params(Data):
     reduction: ReductionV2 = Field(default_factory=ReductionV2)
     sample: Sample
     beam_centre: BeamCentre | None = None
-    normalization: ComputedNormalization | None = None
+    normalization: ComputedNormalization | None
 
 
 IOFQ_V2 = WorkflowSpec(

@@ -61,7 +61,7 @@ def test_e2_automatic_reduction_goes_quiet(
 ) -> None:
     rule = Rule(
         'auto-iofq',
-        Template(IOFQ, blanks=('sample',)),
+        Template(IOFQ, params={'normalization': None}, blanks=('sample',)),
         at=('sample', 'file'),
         selector=Selector(role='sample'),
         label='iofq',
@@ -80,7 +80,7 @@ def test_e3_reduction_of_our_own_output(
 ) -> None:
     rule = Rule(
         'auto-iofq',
-        Template(IOFQ, blanks=('sample',)),
+        Template(IOFQ, params={'normalization': None}, blanks=('sample',)),
         at=('sample', 'file'),
         selector=Selector(),
         label='iofq',
@@ -99,7 +99,7 @@ def test_e4_template_improved_during_a_beamtime(
 ) -> None:
     rule = Rule(
         'auto-iofq',
-        Template(IOFQ, blanks=('sample',)),
+        Template(IOFQ, params={'normalization': None}, blanks=('sample',)),
         at=('sample', 'file'),
         selector=Selector(role='sample'),
         label='iofq',
@@ -109,7 +109,10 @@ def test_e4_template_improved_during_a_beamtime(
 
     improved = replace(
         rule,
-        template=replace(rule.template, params={'reduction': Reduction(threshold=1.5)}),
+        template=replace(
+            rule.template,
+            params={'reduction': Reduction(threshold=1.5), 'normalization': None},
+        ),
     )
     second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
     (after,) = TriggerLoop(client, rules=[improved]).step()

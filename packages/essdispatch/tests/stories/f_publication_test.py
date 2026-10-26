@@ -24,7 +24,11 @@ def test_f1_publish_then_trace_six_months_later(
     tune = client.stage(
         Template(
             IOFQ,
-            params={'sample': {'file': run}, 'beam_centre': centre.ref('centre')},
+            params={
+                'sample': {'file': run},
+                'beam_centre': centre.ref('centre'),
+                'normalization': None,
+            },
             blanks=('reduction',),
         )
     )
@@ -51,6 +55,7 @@ def test_f2_reproduce_after_two_upgrades(
         params={
             'reduction': Reduction(threshold=1.5),
             'sample': {'file': measure(1, [1.0, 2.0, 3.0, 4.0])},
+            'normalization': None,
         },
     )
     upgraded = upgrade(versions={'scipp': '99.0'})
