@@ -27,7 +27,7 @@ def test_a_place_with_nothing_given_is_shown_and_nothing_is_submitted(
 
     assert app.compute() is None
     assert app.message.object == (
-        'Refused:\n\n- sample.file: choose a run\n- sample.thickness: give a value'
+        'Refused:\n\n- sample.file: choose a dataset\n- sample.thickness: give a value'
     )
     assert client.records() == []
 

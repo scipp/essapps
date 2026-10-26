@@ -88,19 +88,19 @@ class Listing:
     """
 
     def __init__(self, client: Client) -> None:
-        runs: dict[DatasetRef, Any] = {}
+        metadata = {
+            r: client.datasets.metadata(r) for r in client.datasets.list(Selector())
+        }
         self.datasets: dict[str, DatasetRef] = {}
-        for ref in client.datasets.list(Selector()):
-            metadata = client.datasets.metadata(ref)
-            runs[ref] = metadata['run']
-            role = f' ({metadata["role"]})' if 'role' in metadata else ''
-            self.datasets[f'run {metadata["run"]}{role}'] = ref
+        for ref, fields in metadata.items():
+            role = f' ({fields["role"]})' if 'role' in fields else ''
+            self.datasets[_dataset_label(ref, fields) + role] = ref
 
         def source(ref: Any) -> str:
             if not isinstance(ref, DatasetRef):
                 return str(ref.record[:6])
-            run = runs[ref] if ref in runs else client.datasets.metadata(ref)['run']
-            return f'run {run}'
+            known = metadata[ref] if ref in metadata else client.datasets.metadata(ref)
+            return _dataset_label(ref, known)
 
         self.records = client.records()
         specs = {s: client.spec(s) for s in {r.spec for r in self.records}}
@@ -126,6 +126,15 @@ class Listing:
     def fitting(self, tp: Any) -> dict[str, OutputRef]:
         """The outputs a request may reference that fit ``tp``, newest first."""
         return {label: ref for label, ref, out in self._outputs if fits(out, tp)}
+
+
+def _dataset_label(ref: DatasetRef, metadata: Mapping[str, Any]) -> str:
+    """
+    ``run 101`` where the metadata has a run, else the dataset's identity:
+    the contract of a dataset source names no field but ``proposal``.
+    """
+    run = metadata.get('run')
+    return str(ref) if run is None else f'run {run}'
 
 
 def _default(info: FieldInfo) -> Any:
@@ -181,11 +190,11 @@ class _File:
         self.refresh(listing)
 
     def refresh(self, listing: Listing) -> None:
-        _picked(self.widget, {'(choose a run)': None, **listing.datasets})
+        _picked(self.widget, {'(choose a dataset)': None, **listing.datasets})
 
     def value(self, loc: Loc, missing: _Missing) -> Any:
         if self.widget.value is None:
-            missing.append(FieldError(None, loc, 'choose a run'))
+            missing.append(FieldError(None, loc, 'choose a dataset'))
             return UNSET
         return self.widget.value
 

@@ -54,7 +54,7 @@ def test_params_are_the_defaults_and_what_is_given(form: Form, run: DatasetRef) 
 
 def test_an_input_without_a_default_starts_with_nothing_given(form: Form) -> None:
     assert missing(form) == {
-        (('sample', 'file'), 'choose a run'),
+        (('sample', 'file'), 'choose a dataset'),
         (('sample', 'thickness'), 'give a value'),
     }
 
@@ -213,12 +213,15 @@ def test_the_file_picker_lists_a_dataset_measured_after_the_form_was_made(
     datasets: FakeDatasets, form: Form, run: DatasetRef
 ) -> None:
     form.refresh()
-    assert list(widget(form, 'File').options) == ['(choose a run)', 'run 101 (sample)']
+    assert list(widget(form, 'File').options) == [
+        '(choose a dataset)',
+        'run 101 (sample)',
+    ]
 
     datasets.measure(102, {'counts': 1.0, 'x': 0.0}, role='sample')
     form.refresh()
     assert list(widget(form, 'File').options) == [
-        '(choose a run)',
+        '(choose a dataset)',
         'run 101 (sample)',
         'run 102 (sample)',
     ]
@@ -234,3 +237,10 @@ def test_a_listing_labels_each_record_and_the_outputs_that_fit(
     centre = find_spec.outputs.model_fields['centre'].annotation
     assert listing.fitting(centre) == {f'{label}: centre': found.ref('centre')}
     assert listing.datasets == {'run 101 (sample)': run}
+
+
+def test_a_dataset_without_a_run_is_labelled_by_its_identity(
+    client: Client, datasets: FakeDatasets, run: DatasetRef
+) -> None:
+    datasets.correct(run, run=None)
+    assert Listing(client).datasets == {f'{run} (sample)': run}
