@@ -78,6 +78,16 @@ possibly typed ``X | None``, not a union::
     beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
                                             # typed in, or found in this graph
 
+:func:`place` describes what a request writes at a place, as the table
+above has it, for the params schema of a spec and for a form that a UI
+makes from the models: a :class:`File`, a :class:`Value`, or the
+:class:`Ways` of a group or a union; of a list whose elements are places,
+the :class:`Rows`. For the two ``beam_centre`` above::
+
+    Ways(tag=None, inline={None: BeamCentre}, record=BeamCentre, none=False, ...)
+    Ways(tag='kind', inline={'given': GivenCentre, 'find': FindCentre},
+         record=None, none=False, ...)
+
 A group with no reference inside, at any depth, is an inline value. In the
 request phase, :func:`held` validates it whole, from its JSON form, so that
 its validators run, and the record holds the JSON form of the validated
@@ -105,10 +115,11 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import PurePath
 from types import NoneType, UnionType
 from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel, Discriminator, ValidationError
+from pydantic import BaseModel, Discriminator, Field, ValidationError
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticSerializationError
 
@@ -423,6 +434,115 @@ def _refused(loc: Loc, msg: str) -> ParamsError:
     return ParamsError([(loc, msg)])
 
 
+@dataclass(frozen=True)
+class File:
+    """A file: a request writes a reference to a dataset, or ``None`` if ``none``."""
+
+    type: type[PurePath]
+    none: bool  # typed X | None
+
+
+@dataclass(frozen=True)
+class Value:
+    """
+    A value of any type but a file, a group, or a union of groups: a request
+    writes it inline, whole, as JSON, or ``None`` if ``none``. A data value
+    has no JSON form, and no request writes it: a group that holds one is
+    given by reference only (see :func:`unwritten`).
+    """
+
+    type: Any  # without | None and Annotated metadata
+    metadata: tuple[Any, ...]  # of the field, then of the Annotated in its type
+    none: bool  # typed X | None
+
+
+@dataclass(frozen=True)
+class Ways:
+    """
+    A group, a union of groups, or either typed ``X | None``: the ways a
+    request writes it. ``inline`` holds the groups that a request writes as
+    an object of their fields, each a place: the alternatives of a union by
+    the value of its tag field ``tag``; a group by ``None``, unless it holds
+    a data value. ``record`` is the type that an output must fit to be given
+    by reference; ``None`` for a union and for a group that holds a file,
+    which no reference fits.
+    """
+
+    tag: str | None
+    inline: dict[str | None, type[BaseModel]]
+    record: type[BaseModel] | None
+    none: bool  # typed X | None
+    metadata: tuple[Any, ...]  # of the field, then of the Annotated in its type
+
+
+type Place = File | Value | Ways
+
+
+@dataclass(frozen=True)
+class Rows:
+    """
+    A list whose elements are places, each as ``element`` describes it, and
+    ``metadata``, the constraints of the list, such as its length.
+    """
+
+    element: Place
+    metadata: tuple[Any, ...]
+
+
+def place(model: type[BaseModel], name: str) -> Place | Rows:
+    """
+    What a request writes at the field ``name`` of ``model``, a parameter or
+    a field of a group (see the table in :mod:`ess.spec.places`); of a list
+    whose elements are places, :class:`Rows`. Raises ``ValueError`` as
+    :func:`alternatives` does.
+    """
+    info = model.model_fields[name]
+    metadata = tuple(info.metadata)
+    if info.discriminator is not None:
+        metadata += (Field(discriminator=info.discriminator),)
+    if is_list(model, name):
+        return Rows(_described(get_args(info.annotation)[0], ()), metadata)
+    return _described(info.annotation, metadata)
+
+
+def _described(annotation: Any, metadata: tuple[Any, ...]) -> Place:
+    """The description of a place of type ``annotation`` with ``metadata``."""
+    tp, inner, none = _unwrapped(annotation)
+    metadata = (*metadata, *inner)
+    if element(tp) is None:
+        if is_file(tp):
+            return File(tp, none)
+        annotated = Annotated[tp, *metadata] if metadata else tp
+        if (union := alternatives(annotated)) is not None:
+            tag, groups = union
+            return Ways(tag, groups, None, none, metadata)
+        if is_group(tp):
+            inline = {} if unwritten(tp) is not None else {None: tp}
+            return Ways(None, inline, None if holds_file(tp) else tp, none, metadata)
+    return Value(tp, metadata, none)
+
+
+def _unwrapped(annotation: Any) -> tuple[Any, tuple[Any, ...], bool]:
+    """
+    ``annotation`` without its outer ``Annotated`` and ``| None``, at any
+    depth; the metadata of each ``Annotated``, the outer first; and whether
+    it had ``| None``. Unlike :func:`~ess.spec.field_types.optional`, it
+    keeps the metadata of the members of a union and the elements of a list.
+    """
+    tp, metadata, none = annotation, (), False
+    while True:
+        origin, args = get_origin(tp), get_args(tp)
+        if origin is Annotated:
+            metadata = (*metadata, *tp.__metadata__)
+            tp = args[0]
+        elif origin in (Union, UnionType) and NoneType in args:
+            rest = tuple(a for a in args if a is not NoneType)
+            tp = rest[0] if len(rest) == 1 else Union[rest]  # noqa: UP007
+            none = True
+        else:
+            return tp, metadata, none
+
+
 def alternatives(
     annotation: Any, discriminator: Any = None
 ) -> tuple[str, dict[str, Any]] | None:
@@ -442,21 +562,12 @@ def alternatives(
     alternative that a request cannot write inline (see :func:`unwritten`),
     since no reference fits a union.
     """
-    tp = annotation
-    while True:
-        origin, args = get_origin(tp), get_args(tp)
-        if origin is Annotated:
-            for meta in tp.__metadata__:
-                if isinstance(meta, FieldInfo) and meta.discriminator is not None:
-                    discriminator = meta.discriminator
-                elif isinstance(meta, Discriminator):
-                    discriminator = meta
-            tp = args[0]
-        elif origin in (Union, UnionType) and NoneType in args:
-            rest = tuple(a for a in args if a is not NoneType)
-            tp = rest[0] if len(rest) == 1 else Union[rest]  # noqa: UP007
-        else:
-            break
+    tp, metadata, _ = _unwrapped(annotation)
+    for meta in metadata:
+        if isinstance(meta, FieldInfo) and meta.discriminator is not None:
+            discriminator = meta.discriminator
+        elif isinstance(meta, Discriminator):
+            discriminator = meta
     if get_origin(tp) not in (Union, UnionType):
         return None
     members = [plain(arg) for arg in get_args(tp)]
