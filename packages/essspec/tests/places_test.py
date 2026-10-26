@@ -23,9 +23,8 @@ class Sample(BaseModel):
 
 class Reduction(BaseModel):
     bins: int = Field(50, ge=1)
-    edges: list[float] | None = None
     scales: dict[str, float] = {}
-    limits: Annotated[float, Gt(0)] | None = Field(None, ge=1)
+    limits: Annotated[float, Gt(0)] = Field(1.0, ge=1)
     angles: list[float] = []
 
 
@@ -49,20 +48,16 @@ class Params(BaseModel):
 
 
 def test_a_file_takes_a_dataset() -> None:
-    assert place(Sample, 'file') == File(Path, none=False)
+    assert place(Sample, 'file') == File(Path)
 
 
 def test_a_value_is_written_inline_whole_with_its_constraints() -> None:
-    assert place(Reduction, 'bins') == Value(int, (Ge(1),), none=False)
-    assert place(Reduction, 'scales') == Value(dict[str, float], (), none=False)
-
-
-def test_a_list_that_may_be_none_is_a_value() -> None:
-    assert place(Reduction, 'edges') == Value(list[float], (), none=True)
+    assert place(Reduction, 'bins') == Value(int, (Ge(1),))
+    assert place(Reduction, 'scales') == Value(dict[str, float], ())
 
 
 def test_a_value_has_the_constraints_of_its_field_then_of_its_type() -> None:
-    assert place(Reduction, 'limits') == Value(float, (Ge(1), Gt(0)), none=True)
+    assert place(Reduction, 'limits') == Value(float, (Ge(1), Gt(0)))
 
 
 def test_a_group_with_a_data_value_takes_a_reference_only() -> None:
@@ -118,8 +113,8 @@ def test_a_list_parameter_describes_its_rows() -> None:
 
 
 def test_a_list_field_of_a_group_describes_its_elements() -> None:
-    assert place(Sample, 'runs') == Rows(File(Path, none=False), ())
-    assert place(Reduction, 'angles') == Rows(Value(float, (), none=False), ())
+    assert place(Sample, 'runs') == Rows(File(Path), ())
+    assert place(Reduction, 'angles') == Rows(Value(float, ()), ())
 
 
 def test_a_union_without_a_discriminator_is_refused() -> None:

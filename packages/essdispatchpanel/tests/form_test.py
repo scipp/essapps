@@ -23,6 +23,11 @@ def options(client: Client, options_spec: Spec) -> Form:
     return Form(options_spec, client)
 
 
+@pytest.fixture
+def subtract(client: Client, subtract_spec: Spec) -> Form:
+    return Form(subtract_spec, client)
+
+
 def widget(form: Form, label: str) -> Any:
     """The input labelled ``label``, as the user finds it on the page."""
     (found,) = (w for w in form.panel().select(pn.widgets.Widget) if w.label == label)
@@ -120,6 +125,37 @@ def test_a_group_typed_x_or_none_offers_none(options: Form) -> None:
     assert options.ways('direct_beam') == ['Given', 'None']
     options.set({'settings': {'flag': False, 'count': 1}, 'direct_beam': None})
     assert options.params['direct_beam'] is None
+
+
+def test_a_group_typed_x_or_none_in_a_group_without_a_default_starts_unset(
+    client: Client, subtract: Form, subtract_spec: Spec
+) -> None:
+    assert way(subtract, 'Centre').options == ['Given', 'None']
+    assert way(subtract, 'Centre').value is None
+    assert subtract.params == {'background': {'scale': 1.0}}
+    with pytest.raises(SubmitError) as refused:
+        client.submit(subtract_spec, params=subtract.params)
+    assert [e.loc for e in refused.value.errors] == [('background', 'centre')]
+
+
+def test_a_group_typed_x_or_none_in_a_group_is_given_each_way(
+    client: Client,
+    subtract: Form,
+    subtract_spec: Spec,
+    find_spec: Spec,
+    run: DatasetRef,
+) -> None:
+    found = client.compute(find_spec, params={'run': {'file': run}})
+    subtract.refresh()
+    assert way(subtract, 'Centre').options == ['Given', 'From a record', 'None']
+
+    for centre in (None, {'x': 2.0, 'y': 0.0}, found.ref('centre')):
+        params = {'background': {'scale': 1.0, 'centre': centre}}
+        subtract.set(params)
+        assert subtract.params == params
+        record = client.compute(subtract_spec, params=subtract.params)
+        assert client.failure(record) is None
+        assert record.request.params == params
 
 
 def test_a_union_offers_its_alternatives_and_no_record(

@@ -72,13 +72,13 @@ class Run(BaseModel, arbitrary_types_allowed=True):
 
     file: Path
     shift: Shift = Field(default_factory=Shift)
-    offset: float | None = None
+    offset: float = 0.0
     weights: list[float] = Field(default_factory=list, max_length=3)
     transmission: MeasuredTransmission | None = None
 
     @model_validator(mode='after')
     def _offset_not_negative(self) -> 'Run':
-        if self.offset is not None and self.offset < 0:
+        if self.offset < 0:
             raise ValueError('a negative offset')
         return self
 
@@ -97,13 +97,13 @@ class LoadOutputs(BaseModel):
 class Terms(BaseModel):
     """
     Fields of types that take no reference: numbers added to a shift, and
-    ``kind``, whose JSON form holds the key ``@ref``.
+    ``kinds``, whose JSON form holds the key ``@ref``.
     """
 
-    offset: float | None = None
+    offset: float = 0.0
     pair: tuple[float, float] = (0.0, 0.0)
     values: list[float] = Field(default_factory=list)
-    kind: Kind | None = None
+    kinds: list[Kind] = Field(default_factory=list)
 
 
 class AddParams(BaseModel):
@@ -254,7 +254,7 @@ class BeamCentre(BaseModel):
 
 class FindCentre(BaseModel):
     kind: Literal['find'] = 'find'
-    run: Path | None = None
+    run: SampleRun | None = None
     tolerance: float = 0.5
 
     @field_validator('tolerance')
@@ -319,7 +319,7 @@ def add(params: AddParams) -> Value:
     transmission, terms = params.transmission, params.terms
     return Value(
         value=params.shift.offset
-        + (terms.offset or 0.0)
+        + terms.offset
         + (0.0 if transmission is None else transmission.fraction.value)
         + sum(terms.pair)
         + sum(terms.values)
@@ -332,7 +332,7 @@ def runs(params: RunsParams) -> Value:
         value=sum(
             read_dataset(run.file)
             + run.shift.offset
-            + (run.offset or 0.0)
+            + run.offset
             + (0.0 if run.transmission is None else run.transmission.fraction.value)
             for run in rows
         )
@@ -358,7 +358,7 @@ def centred(params: CentredParams) -> Value:
     centre = params.beam_centre
     if isinstance(centre, BeamCentre):
         return Value(value=centre.x)
-    run = 0.0 if centre.run is None else read_dataset(centre.run)
+    run = 0.0 if centre.run is None else read_dataset(centre.run.file)
     return Value(value=run * centre.tolerance)
 
 
@@ -779,7 +779,7 @@ def test_a_group_with_a_reference_is_validated_whole_in_the_call_phase(
 
 
 def test_a_union_parameter_takes_either_alternative(client: Client) -> None:
-    find = {'kind': 'find', 'run': dataset_ref(run=2), 'tolerance': 0.5}
+    find = {'kind': 'find', 'run': {'file': dataset_ref(run=2)}, 'tolerance': 0.5}
     found = client.compute(CENTRED, params={'beam_centre': find})
     given = client.compute(CENTRED, params={'beam_centre': {'kind': 'given', 'x': 3.0}})
     default = client.compute(CENTRED, params={})
@@ -790,7 +790,7 @@ def test_a_union_parameter_takes_either_alternative(client: Client) -> None:
         0.0,
     ]
     (run,) = found.request.datasets()
-    assert found.request.params['beam_centre'] == {**find, 'run': run}
+    assert found.request.params['beam_centre'] == {**find, 'run': {'file': run}}
 
 
 @pytest.mark.parametrize(
@@ -831,7 +831,7 @@ def test_an_error_inside_a_union_names_its_place_without_the_tag(
     assert error.loc == ('beam_centre', 'tolerance')
 
     computed = client.submit(
-        CENTRED, params={'beam_centre': {**find, 'run': dataset_ref(run=1)}}
+        CENTRED, params={'beam_centre': {**find, 'run': {'file': dataset_ref(run=1)}}}
     )
     assert _failed(client, computed) == (
         'beam_centre.tolerance: Value error, tolerance must be between 0 and 1'
@@ -908,9 +908,10 @@ def test_a_value_whose_json_form_reads_as_a_reference_is_refused(
     client: Client,
 ) -> None:
     with pytest.raises(
-        SubmitError, match=r'^terms\.kind: has a JSON form that reads as a reference$'
+        SubmitError,
+        match=r'^terms\.kinds\[0\]: has a JSON form that reads as a reference$',
     ):
-        client.submit(ADD, params={'terms': {'kind': Kind(kind='output')}})
+        client.submit(ADD, params={'terms': {'kinds': [Kind(kind='output')]}})
 
 
 def test_a_group_that_holds_a_data_value_is_given_by_reference_only(

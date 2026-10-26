@@ -18,8 +18,9 @@ parameter, each element of a list, and each field of a group, at any depth::
     }
 
 The type at a place decides what the request writes there, with ``| None``
-removed (a place of type ``X | None`` also takes ``None``), but for a list:
-``list[X] | None`` is written whole, as a dict is:
+removed: a place of type ``X | None`` also takes ``None``. At a field of a
+group, and at an element of a list there, ``X`` is a group (see
+:mod:`ess.spec._workflow_spec`):
 
 ========================================  =====================================
 Type at the place                         The request writes
@@ -33,7 +34,7 @@ a union of groups                         an object of the fields of one
                                           group; never a reference
 a list, ``list[X]``                       a list, each element a place of
                                           type ``X``
-``list[X] | None``, ``dict[str, X]``      the value as JSON, whole (*inline*)
+``dict[str, X]``                          the value as JSON, whole (*inline*)
 any other type with a JSON form           the value as JSON (*inline*)
 any other type, a *data value*            nothing: it is a field of a group
 ========================================  =====================================
@@ -52,12 +53,12 @@ No field of a group that holds a file is a data value: no reference stands
 for such a group, so a request writes it field by field (see
 :func:`unwritten`).
 
-The contents of a tuple, a set, a dict, a list that may be ``None``, a
-``TypedDict``, or a dataclass are not places: such a value is written
-whole, inline, and a reference stands neither for it nor for a part of
-it. ``"@ref"`` is reserved at every depth, so that a reference is found
-without the spec (see :func:`ess.spec.refs.positions`), and a reference at
-a position that is not a place is refused.
+The contents of a tuple, a set, a dict, a ``TypedDict``, or a dataclass
+are not places: such a value is written whole, inline, and a reference
+stands neither for it nor for a part of it. ``"@ref"`` is reserved at every
+depth, so that a reference is found without the spec (see
+:func:`ess.spec.refs.positions`), and a reference at a position that is not
+a place is refused.
 
 A *union of groups* is a pydantic discriminated union,
 ``Annotated[A | B, Field(discriminator='kind')]``, in which each
@@ -249,8 +250,8 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
             raise _refused(
                 at,
                 f'{inner} is inside a value of {type_name(tp)}, given inline, '
-                'whole: the contents of a tuple, a dict, or a list that may be '
-                'None are not places',
+                'whole: the contents of a tuple, a dict, or a dataclass are not '
+                'places',
             )
     return _inline(loc, slot, value)
 
@@ -436,24 +437,22 @@ def _refused(loc: Loc, msg: str) -> ParamsError:
 
 @dataclass(frozen=True)
 class File:
-    """A file: a request writes a reference to a dataset, or ``None`` if ``none``."""
+    """A file: a request writes a reference to a dataset."""
 
     type: type[PurePath]
-    none: bool  # typed X | None
 
 
 @dataclass(frozen=True)
 class Value:
     """
     A value of any type but a file, a group, or a union of groups: a request
-    writes it inline, whole, as JSON, or ``None`` if ``none``. A data value
-    has no JSON form, and no request writes it: a group that holds one is
-    given by reference only (see :func:`unwritten`).
+    writes it inline, whole, as JSON. A data value has no JSON form, and no
+    request writes it: a group that holds one is given by reference only
+    (see :func:`unwritten`).
     """
 
-    type: Any  # without | None and Annotated metadata
+    type: Any  # without Annotated metadata
     metadata: tuple[Any, ...]  # of the field, then of the Annotated in its type
-    none: bool  # typed X | None
 
 
 @dataclass(frozen=True)
@@ -525,7 +524,7 @@ def _described(annotation: Any, metadata: tuple[Any, ...]) -> Place:
     metadata = (*metadata, *inner)
     if element(tp) is None:
         if is_file(tp):
-            return File(tp, none)
+            return File(tp)
         annotated = Annotated[tp, *metadata] if metadata else tp
         if (union := alternatives(annotated)) is not None:
             tag, groups = union
@@ -533,7 +532,7 @@ def _described(annotation: Any, metadata: tuple[Any, ...]) -> Place:
         if is_group(tp):
             inline = {} if unwritten(tp) is not None else {None: tp}
             return Ways(None, inline, None if holds_file(tp) else tp, none, metadata)
-    return Value(tp, metadata, none)
+    return Value(tp, metadata)
 
 
 def _unwrapped(annotation: Any) -> tuple[Any, tuple[Any, ...], bool]:

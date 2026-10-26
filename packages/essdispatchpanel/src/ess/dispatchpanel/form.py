@@ -37,8 +37,7 @@ default: the params name it as missing (see :attr:`Form.params`). An empty
 text is the value ``''`` where the place has a default, and nothing given
 where it has none, since a text input cannot tell an empty text from none.
 
-Not covered: list parameters (tables, :class:`Rows`), and ``X | None`` as a
-field of a group, which scipp/essapps#87 may forbid.
+Not covered: list parameters (tables, :class:`Rows`), scipp/essapps#101.
 """
 
 from __future__ import annotations
@@ -142,7 +141,7 @@ def _default(info: FieldInfo) -> Any:
 
 
 def _place(
-    model: type[BaseModel], name: str, listing: Listing, in_group: bool
+    model: type[BaseModel], name: str, listing: Listing
 ) -> _File | _Scalar | _Choice:
     """The widget for the value at the place of field ``name`` of ``model``."""
     info = model.model_fields[name]
@@ -150,8 +149,6 @@ def _place(
     described = place(model, name)
     if isinstance(described, Rows):
         raise NotImplementedError(f'{name}: a list of places (a table)')
-    if described.none and in_group:
-        raise TypeError(f'{name}: X | None as a field of a group (scipp/essapps#87)')
     if isinstance(described, File):
         return _File(label, listing)
     if isinstance(described, Value):
@@ -272,7 +269,7 @@ class _Group:
     ) -> None:
         self.tag = tag
         self._fields = {
-            name: _place(group, name, listing, in_group=True)
+            name: _place(group, name, listing)
             for name in group.model_fields
             if name not in tag
         }
@@ -447,7 +444,7 @@ class Form:
         self._client = client
         listing = Listing(client)
         self._params = {
-            name: _place(spec.params, name, listing, in_group=False)
+            name: _place(spec.params, name, listing)
             for name in spec.params.model_fields
         }
         self._panel = pn.Column(

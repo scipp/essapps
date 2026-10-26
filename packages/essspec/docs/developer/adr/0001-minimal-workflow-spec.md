@@ -116,7 +116,7 @@ value.
 | a group | `Reduction`, `Sample`, `ComputedTransmission` | no, if a field is a data value; else an object of its fields, each a place | to an output that fits and holds no file |
 | a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag, as for a group | no |
 | a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
-| at a field of a group: `list[X] \| None`, or a dict, with a JSON form | `list[float] \| None` | yes, whole: its contents are not places | no |
+| at a field of a group: a dict with a JSON form | `dict[str, float]` | yes, whole: its contents are not places | no |
 | any other type with a JSON form | `int`, `float`, an enum, `tuple[float, float]` | yes | no |
 | any other type, a *data value* | `sc.DataArray`, as the field `transmission` of `ComputedTransmission` | no: nothing is written at it | no: it is a field of a group, which is given by reference |
 
@@ -144,12 +144,12 @@ as in `Sample.transmission: ComputedTransmission`.
 
 A data value that a request may leave out is wrapped as a group typed
 `| None`, such as `mask: PixelMask | None`, with the array a field of
-`PixelMask`. A group with a field `mask: sc.DataArray | None` is given by
-reference only, even where the value is `None`.
+`PixelMask`. A field `mask: sc.DataArray | None` is refused: at a field of a
+group, `X` in `X | None` is a group, so that a UI shows each `X | None` as a
+toggle over the fields of a group.
 
-The contents of a tuple, a set, a dict, a list that may be `None`, a
-`TypedDict`, or a dataclass are not places: such a value is written whole,
-inline.
+The contents of a tuple, a set, a dict, a `TypedDict`, or a dataclass are not
+places: such a value is written whole, inline.
 
 Each parameter is a group, a union of groups, or a list of one, possibly
 typed `X | None`; a file or a number is a field of a group. So a UI
@@ -228,8 +228,16 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 - No type in the params or the outputs is a `NewType`, at any depth.
 - Each output's type is a type, possibly typed `X | None`, or a list or a dict
   of one.
-- A file is at a place only, possibly typed `X | None` or in a list: not
-  inside a tuple, a dict, or a dataclass, where no dataset can give it.
+- A file is at a place only, possibly in a list: not inside a tuple, a dict,
+  or a dataclass, where no dataset can give it.
+- At a field of a group, at any depth, or at an element of a list there,
+  `X` in `X | None` is a group, such as `range: WavelengthRange | None`, not
+  `start: float | None` and `stop: float | None`. A UI shows `X | None` as a
+  toggle over the fields of a group. So a value that a request may leave
+  out is a field of such a group: an optional file is the `file` of a run,
+  `transmission: TransmissionRun | None`, and an optional data value is a
+  field of a group given by reference, `mask: PixelMask | None`. A value
+  written whole that may be empty is `[]` or `()`, not `None`.
 - A data value is a field of a group, not a parameter or the element of a
   list parameter. No field of a group that holds a file is a data value: no
   reference stands for such a group, so a request writes it field by field.
@@ -246,7 +254,7 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
   field and model validators of any mode, which run when the group is
   validated whole. It is not at a place inside itself, at any depth, such as
   a tree with `children: list[Node]`; a tree is written whole,
-  `children: list[Node] | None`.
+  `children: tuple[Node, ...] = ()`.
 - A default is a value, never a reference: what a request may write at the
   place, which round-trips and holds no `@ref` object at any depth; of a type
   without a JSON form, `None` or `[]`. It is the value that validating it
