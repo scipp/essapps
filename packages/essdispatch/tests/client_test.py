@@ -134,11 +134,11 @@ DIGITS = _spec('digits', params=Parts, tables=('parts',))
 
 
 class Labels(BaseModel):
-    tags: Any = None
+    tags: list[str] = []
 
 
 class Tag(BaseModel):
-    tags: Any = None
+    tags: list[str] = []
 
 
 class TaggedRun(BaseModel):
@@ -1305,13 +1305,13 @@ def test_an_accumulator_s_values_reach_the_driver_as_the_log_holds_them(
     client: Client, scaled_sum: ScaledSum
 ) -> None:
     acc = client.accumulator(
-        Template(SUM, params={'labels': Labels(tags=('a', 'b'))}, blanks=('runs',))
+        Template(SUM, params={'labels': Labels(tags=['a', 'b'])}, blanks=('runs',))
     )
-    acc.push(runs=[{'file': dataset(run=1), 'tag': Tag(tags=('c', 'd'))}])
+    acc.push(runs=[{'file': dataset(run=1), 'tag': Tag(tags=['c', 'd'])}])
     read = client.compute(_read(acc))
 
     assert client.output(read, 'value') == Amount(value=1.0)
-    assert acc.template.params == {'labels': {'tags': ['a', 'b']}}  # JSON has no tuple
+    assert acc.template.params == {'labels': {'tags': ['a', 'b']}}
     (run,) = _state(client, read).request.params['runs']
     assert run['tag'] == {'tags': ['c', 'd']}
     assert scaled_sum.opened[0]['labels'] == Labels(tags=['a', 'b'])

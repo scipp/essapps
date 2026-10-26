@@ -34,10 +34,14 @@ a union of groups                         an object of the fields of one
                                           group; never a reference
 a list, ``list[X]``                       a list, each element a place of
                                           type ``X``
-``dict[str, X]``                          the value as JSON, whole (*inline*)
-any other type with a JSON form           the value as JSON (*inline*)
-any other type, a *data value*            nothing: it is a field of a group
+a *scalar*: ``int``, ``float``, ``str``,  the value as JSON (*inline*)
+``bool``, an enum, or a ``Literal``
+a type without a JSON form, a *data       nothing: it is a field of a group
+value*
 ========================================  =====================================
+
+A field of a group holds no other type: a value of several parts, such as a
+tuple, a dict, or a dataclass, is a group, so that each part is a place.
 
 A reference stands for a group or a file only. A reference to an output
 fits the place's type, and the output's type holds no file, so that a file
@@ -53,12 +57,8 @@ No field of a group that holds a file is a data value: no reference stands
 for such a group, so a request writes it field by field (see
 :func:`unwritten`).
 
-The contents of a tuple, a set, a dict, a ``TypedDict``, or a dataclass
-are not places: such a value is written whole, inline, and a reference
-stands neither for it nor for a part of it. ``"@ref"`` is reserved at every
-depth, so that a reference is found without the spec (see
-:func:`ess.spec.refs.positions`), and a reference at a position that is not
-a place is refused.
+``"@ref"`` is reserved at every depth, so that a reference is found
+without the spec (see :func:`ess.spec.refs.positions`).
 
 A *union of groups* is a pydantic discriminated union,
 ``Annotated[A | B, Field(discriminator='kind')]``, in which each
@@ -201,12 +201,11 @@ def held(model: type[BaseModel], name: str, value: Any, on_ref: OnRef) -> Any:
 def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
     tp, nullable = optional(slot.annotation)
     if (ref := ref_at(loc, value)) is not None:
-        if element(tp) is not None:
-            whole = 'list' if get_origin(tp) is list else 'dict'
+        if slot.is_list:
             raise _refused(
                 loc,
-                f'{ref} is a reference to a whole {whole}; a reference never '
-                'stands for a whole list or dict',
+                f'{ref} is a reference to a whole list; a reference stands for '
+                'a group or a file only',
             )
         if alternatives(slot.annotation, slot.discriminator) is not None:
             raise _refused(
@@ -245,14 +244,6 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
         raise _refused(
             loc, f'{value!r} is not a dataset; a file is given as dataset(path=...)'
         )
-    for at, item in positions(loc, value):
-        if (inner := ref_at(at, item)) is not None:
-            raise _refused(
-                at,
-                f'{inner} is inside a value of {type_name(tp)}, given inline, '
-                'whole: the contents of a tuple, a dict, or a dataclass are not '
-                'places',
-            )
     return _inline(loc, slot, value)
 
 
@@ -395,7 +386,8 @@ def _place(loc: Loc, slot: _Slot, inner: Loc) -> Loc:
     """
     The place ``inner`` inside a value at ``loc`` of the type ``slot``, as
     pydantic gives it, without the tag after each union place. A position
-    that is not a place, such as an element of a tuple, is kept as it is.
+    that is not a place, such as a field that a group lacks, is kept as it
+    is.
     """
     rest = list(inner)
     while rest:
@@ -445,10 +437,9 @@ class File:
 @dataclass(frozen=True)
 class Value:
     """
-    A value of any type but a file, a group, or a union of groups: a request
-    writes it inline, whole, as JSON. A data value has no JSON form, and no
-    request writes it: a group that holds one is given by reference only
-    (see :func:`unwritten`).
+    A scalar, which a request writes inline, as JSON, or a data value, which
+    has no JSON form, and no request writes: a group that holds one is given
+    by reference only (see :func:`unwritten`).
     """
 
     type: Any  # without Annotated metadata

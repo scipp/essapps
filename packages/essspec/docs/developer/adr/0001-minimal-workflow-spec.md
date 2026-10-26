@@ -116,18 +116,18 @@ value.
 | a group | `Reduction`, `Sample`, `ComputedTransmission` | no, if a field is a data value; else an object of its fields, each a place | to an output that fits and holds no file |
 | a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag, as for a group | no |
 | a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
-| at a field of a group: a dict with a JSON form | `dict[str, float]` | yes, whole: its contents are not places | no |
-| any other type with a JSON form | `int`, `float`, an enum, `tuple[float, float]` | yes | no |
-| any other type, a *data value* | `sc.DataArray`, as the field `transmission` of `ComputedTransmission` | no: nothing is written at it | no: it is a field of a group, which is given by reference |
+| a *scalar*: `int`, `float`, `str`, `bool`, an enum, or a `Literal` | `Reduction.bins` | yes | no |
+| a *data value* | `sc.DataArray`, as the field `transmission` of `ComputedTransmission` | no: nothing is written at it | no: it is a field of a group, which is given by reference |
 
 A file is given by reference to a dataset only, so that the dataset source
 checks access and the record holds the dataset's identity; the binding gets a
 local path. For the same reason, a reference to an output whose type holds a
 file is refused. A *group* is a pydantic model, such as `Reduction` or
 `Sample` below, written as an object of its fields, so a file in it comes from
-a dataset. A `RootModel` is not a group: it is written as its root value. A
-*data value* is a value of a type that is neither a file, a group, a union of
-groups, a list, nor a dict, and has no JSON form, such as a scipp array.
+a dataset. A `RootModel` is not a group. A *scalar* may have constraints, such
+as `Annotated[float, Gt(0)]`. A *data value* is a value of a type that is
+neither a file, a group, a union of groups, a list, nor a dict, and has no JSON
+form, such as a scipp array.
 
 A reference stands for a group or a file only. A number or a scipp array names
 no role: every output of its type fits a place of that type, so a UI that
@@ -148,8 +148,11 @@ A data value that a request may leave out is wrapped as a group typed
 group, `X` in `X | None` is a group, so that a UI shows each `X | None` as a
 toggle over the fields of a group.
 
-The contents of a tuple, a set, a dict, a `TypedDict`, or a dataclass are not
-places: such a value is written whole, inline.
+A field of a group holds nothing but these, since a form has a widget for
+these only. A value of several parts is a group, so that each part is a place
+with a widget of its own: `range: WavelengthRange`, a group of start and stop,
+not `limits: tuple[float, float]`, and `scales: list[BankScale]`, a list of
+groups of bank and scale, not `scales: dict[str, float]`.
 
 Each parameter is a group, a union of groups, or a list of one, possibly
 typed `X | None`; a file or a number is a field of a group. So a UI
@@ -230,14 +233,17 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
   of one.
 - A file is at a place only, possibly in a list: not inside a tuple, a dict,
   or a dataclass, where no dataset can give it.
+- A field of a group, at any depth, is a file, a group, a data value, or a
+  scalar, or a list of one. No other type, such as a tuple, a dict, a set, a
+  `TypedDict`, a dataclass, or a `RootModel`, is at a field of a group.
 - At a field of a group, at any depth, or at an element of a list there,
   `X` in `X | None` is a group, such as `range: WavelengthRange | None`, not
   `start: float | None` and `stop: float | None`. A UI shows `X | None` as a
   toggle over the fields of a group. So a value that a request may leave
   out is a field of such a group: an optional file is the `file` of a run,
   `transmission: TransmissionRun | None`, and an optional data value is a
-  field of a group given by reference, `mask: PixelMask | None`. A value
-  written whole that may be empty is `[]` or `()`, not `None`.
+  field of a group given by reference, `mask: PixelMask | None`. A list
+  that may be empty is `[]`, not `None`.
 - A data value is a field of a group, not a parameter or the element of a
   list parameter. No field of a group that holds a file is a data value: no
   reference stands for such a group, so a request writes it field by field.
@@ -253,13 +259,14 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
   and these would make the group's own JSON form differ from it. It may have
   field and model validators of any mode, which run when the group is
   validated whole. It is not at a place inside itself, at any depth, such as
-  a tree with `children: list[Node]`; a tree is written whole,
-  `children: tuple[Node, ...] = ()`.
+  a tree with `children: list[Node]`, since the params schema of its places
+  would not end.
 - A default is a value, never a reference: what a request may write at the
   place, which round-trips and holds no `@ref` object at any depth; of a type
   without a JSON form, `None` or `[]`. It is the value that validating it
   gives, since pydantic does not validate a default: a group's default is an
-  instance, not the object of its fields.
+  instance, not the object of its fields, and an enum's a member, not its
+  value.
 - A table has no default (see the multi-run spec below).
 - The params model has no field validators, serializers, computed fields, or
   aliases, and no `default_factory` that takes the other values. A list
@@ -309,8 +316,8 @@ output name). Only a request holds an `AccumulatorRef`: the framework replaces
 it, when it accepts the request, by an output of a record of the accumulator's
 state. A reference stands for the value at a place whose type is a group or
 a file, such as `sample.file` or `beam_centre`: never for a union of groups, a
-number, a whole list, a tag of a union, or a position inside a value given
-inline. Its JSON form is an object with the key `@ref`, which names its kind:
+number, a whole list, or a tag of a union. Its JSON form is an object with the
+key `@ref`, which names its kind:
 
 ```json
 {"@ref": "dataset", "dataset": "run:loki/60339"}
@@ -321,8 +328,7 @@ The key `@ref` is reserved at every depth: an object with it is a reference.
 So a framework finds the references of a request without the spec, in every
 array and every object, as a remote client that holds only the serialized
 spec must, and an inline value never reads as a reference. With the spec, the
-framework refuses an `@ref` object that is not at a place, such as an element
-of a `tuple`, and an inline value or a default whose JSON form holds the key.
+framework refuses an inline value or a default whose JSON form holds the key.
 
 The identity string of a `DatasetRef` is opaque to the spec and interpreted
 only by the framework that minted it, which makes it self-describing where it
@@ -585,6 +591,11 @@ output, and dims and units of an output for a UI.
   level. Two files of one type then need `keys=` for distinct sciline keys,
   and a generated UI shows a parameter that is not a group outside the
   sections of the groups.
+- **A field of a group of any type with a JSON form**, such as
+  `limits: tuple[float, float]` or `scales: dict[str, float]`, given inline
+  as one value. A form has no widget for it, no reference stands for a part
+  of it, and no spec needs one: its parts are the fields of a group,
+  `range: WavelengthRange` or `scales: list[BankScale]`.
 - **A union inside a group**, such as a transmission that is taken from each
   run's file or typed in, for one field of a row of a table. A generated UI
   would show a choice inside a section. A table whose rows are a union gives

@@ -110,7 +110,7 @@ class PiecesOutputs(BaseModel):
 
 
 class Item(BaseModel):
-    value: Any = None
+    value: float = 0.0
 
 
 class Box(BaseModel):
@@ -123,7 +123,7 @@ class BoxParams(BaseModel):
 
 
 class Values(BaseModel):
-    values: frozenset[float] = frozenset()
+    values: list[float] = []
 
 
 class Mode(Enum):
@@ -150,7 +150,7 @@ def slow(params: ModeParams) -> ValueOutputs:
 
 SPLIT = _spec('split', outputs=PartsOutputs)
 PIECES = _spec('pieces', outputs=PiecesOutputs)
-ANYTHING = _spec('anything', params=BoxParams)  # a box of any value
+BOXED = _spec('boxed', params=BoxParams)  # a box of a number
 SCALED = _spec('scaled', params=ScaledParams)
 MODES = _spec('modes', params=ModeParams)
 SUM = _spec('sum', params=SumParams, tables=('sample',))
@@ -219,7 +219,7 @@ def backend(datasets: FakeDatasets, gate: Gate) -> Iterator[Backend]:
         function_binding(SUM, total),
         function_binding(SPLIT, split),
         function_binding(PIECES, pieces),
-        function_binding(ANYTHING, lambda p: ValueOutputs(value=Amount(value=0.0))),
+        function_binding(BOXED, lambda p: ValueOutputs(value=Amount(value=0.0))),
         StagedFunction(MODES, slow),
     ]
     backend = Backend(datasets, bindings)
@@ -330,7 +330,7 @@ def test_one_refused_request_refuses_the_submission(client: Client) -> None:
 
 def _boxed(value: Any) -> Request:
     return Request(
-        ANYTHING,
+        BOXED,
         params={'box': {'item': {'value': value}}, 'sample': {'file': dataset(run=1)}},
     )
 
@@ -352,7 +352,7 @@ def test_a_value_whose_json_form_reads_back_as_another_is_refused(
         client.submit(_boxed(value))
 
 
-def test_a_number_that_is_not_finite_is_refused_in_a_set(client: Client) -> None:
+def test_a_number_that_is_not_finite_is_refused_in_a_list(client: Client) -> None:
     with pytest.raises(
         SubmitError, match=r'^values\.values\[1\]: has no JSON form that reads'
     ):
@@ -398,7 +398,7 @@ def test_a_strict_group_with_a_reference_passes_the_call_phase(
 
 def test_a_field_a_nested_group_lacks_is_refused(client: Client) -> None:
     typo = Request(
-        ANYTHING,
+        BOXED,
         params={'box': {'item': {'unknown': 1}}, 'sample': {'file': dataset(run=1)}},
     )
 
@@ -708,7 +708,7 @@ def test_a_refusal_names_the_request_and_the_field(client: Client) -> None:
 
 def test_a_refusal_lists_each_problem_of_a_value(client: Client) -> None:
     typo = Request(
-        ANYTHING,
+        BOXED,
         params={
             'box': {'item': {'valeu': 1, 'other': 2}},
             'sample': {'file': dataset(run=1)},

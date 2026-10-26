@@ -150,7 +150,7 @@ It has no exception for data values: `None` in `transmission: ComputedTransmissi
 This holds at any depth, and at an element of a list there: `range: WavelengthRange | None`, not `start: float | None` and `stop: float | None`.
 So each toggle is over the fields of a group, as in esslivedata's dashboard, which shows `range_filter: TOARange | None` as a card with a switch (scipp/esslivedata#1426).
 A value that a request may leave out is a field of such a group: an optional file is a run, `transmission: TransmissionRun | None`, and an optional data value is a group of it, `mask: PixelMask | None`.
-A value written whole that may be empty is `[]` or `()`, not `None`.
+A list that may be empty is `[]`, not `None`.
 A parameter is a group or a union of groups already, so the rule changes nothing there.
 A union stays a parameter only, while a group typed `X | None` may be a field of a group.
 A union sets one sciline key per alternative; `None` sets no key, so a group typed `X | None` inside a group loses nothing.

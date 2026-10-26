@@ -196,10 +196,8 @@ def positions(loc: Loc, value: Any) -> Iterator[tuple[Loc, Any]]:
     and each element of a list and each field of an object that is not a
     reference, at any depth, such as ``('runs', 2, 'transmission')``.
 
-    These are the places where a request may hold a reference, and the
-    positions inside an inline value, such as the elements of a tuple, where
-    it may not. Only the spec tells them apart; ``"@ref"`` is reserved at
-    each of them, so the references are found without it.
+    These are the places where a request may hold a reference, found
+    without the spec, since ``"@ref"`` is reserved at each of them.
     """
     yield loc, value
     if isinstance(value, list):
