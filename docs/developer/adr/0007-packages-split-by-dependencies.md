@@ -46,16 +46,16 @@ packages/
   essdispatch/              ess.dispatch              client, in-process backend, controllers
   essdispatchinstruments/   ess.dispatchinstruments   specs and bindings per instrument
   essdispatchservice/       ess.dispatchservice       hosting: storage, workers, SciCat, retention, auth, automatic reduction
-  essdispatchjupyter/       ess.dispatchjupyter       ipywidgets forms and apps
+  essdispatchpanel/         ess.dispatchpanel         Panel forms and apps
 frontends/
   <app>/                    a web frontend, against the HTTP API of ess.dispatch
 ```
 
-Of these, `essspec` and `essdispatch` exist.
+Of these, `essspec`, `essdispatch`, and `essdispatchpanel` exist.
 Each of the others is created with its first module, so none is an empty scaffold.
 
 ```text
-essspec  <-  essdispatch  <-  essdispatchservice, essdispatchjupyter
+essspec  <-  essdispatch  <-  essdispatchservice, essdispatchpanel
    ^             ^
    |             +----------  frontends (over HTTP)
    +----------  essdispatchinstruments, workflow packages
@@ -68,7 +68,7 @@ essspec  <-  essdispatch  <-  essdispatchservice, essdispatchjupyter
 - **`essdispatchinstruments` holds one subpackage per instrument**, in two halves: `specs.py` needs essspec and, for the types of data values, scipp, so GUIs and Python clients import it without a workflow package; `bindings.py` needs the instrument's workflow package, behind an extra such as `[loki]`. A spec can move into its instrument package only after essspec has moved to scipp/ess, and only once its binding is a plain `PipelineBinding`, with no facility defaults or adapters. Deployment configuration, such as automatic-reduction rules and data paths, is not here; it belongs to the service's configuration.
 - **A spec module may import scipp, and nothing else of the science stack.** A data value is a field of a group, typed by its scipp class, such as `intensity: sc.DataArray` of the group `IofQ`, so that a type checker checks a binding against the spec; the backend checks by the group's class that an output fits a place. scipp needs only numpy and imports in about 130 ms. scippnexus, sciline, and ess.reduce stay out of spec modules: they belong to `bindings.py` and the workflow packages. The command-line tool and web frontends read `SerializedWorkflowSpec`, which names each data type as a string, so they import no spec module and need neither scipp nor the workflow package.
 - **`essdispatchservice` holds what only the hosted backend needs.** The rules of the trigger loop stay in `essdispatch`; the service runs the loop as a daemon from a configuration file.
-- **GUI code has one package per toolkit, and no toolkit-independent GUI package.** A form is built from the schemas of `SerializedWorkflowSpec`, which `ess.spec` provides, so ipywidgets, Panel, and a web frontend share one description of a form. An app keeps its own logic, such as grouping runs by sample and angle, in plain classes apart from its widgets. A package of shared app logic is made once two apps share some. An instrument app moves to its instrument package's `gui` extra, as in `essreflectometry[gui]`, only after the app's specs have moved there; otherwise the extra would depend on `essdispatchinstruments`, whose extra depends on the instrument package. That extra is the one way a workflow package depends on the framework; its plain install depends on `essspec` only.
+- **GUI code has one package per toolkit, and no toolkit-independent GUI package.** A Python GUI builds its form from the models through `ess.spec.places.place`. A web frontend builds it from the params schema of `SerializedWorkflowSpec`, which `ess.spec` builds from the same function, so both read one set of rules. An app keeps its own logic, such as grouping runs by sample and angle, in plain classes apart from its widgets. A package of shared app logic is made once two apps share some. An instrument app moves to its instrument package's `gui` extra, as in `essreflectometry[gui]`, only after the app's specs have moved there; otherwise the extra would depend on `essdispatchinstruments`, whose extra depends on the instrument package. That extra is the one way a workflow package depends on the framework; its plain install depends on `essspec` only.
 - **Names follow the ess monorepo**: distribution `essX`, import `ess.X`, one level under `ess`. A second distribution cannot install into a regular package such as `ess.dispatch`, and a namespace package `ess.dispatch` could not export `local` and the rest.
 
 ```python
@@ -97,7 +97,7 @@ essdispatch run loki-iofq/1 --run 4711 --url https://reduce.example --proposal p
 - **Bindings only passed explicitly, as a list to `bind=`.** The command-line tool and the service would each need their own list of workflows, and a new workflow package would need a change to each.
 - **The command-line tool in a package of its own.** It needs nothing that `essdispatch` lacks.
 - **The HTTP server in the service package.** A web frontend against a local backend needs it too, and so does development.
-- **A generic GUI layer under the toolkit packages.** The form description it would hold is the schemas of `SerializedWorkflowSpec`, the only description a web frontend can read.
+- **A generic GUI layer under the toolkit packages.** The description of a form that it would hold is `ess.spec.places.place`, which is in essspec already, and a web frontend reads its rules from the params schema of `SerializedWorkflowSpec`.
 - **`ess.apps` as the core's name.** The core is what apps are built on, not an app. Names that mean something else here were avoided: run (a neutron run), job (a cluster job), workflow (sciline), reduce (essreduce), stage and session (terms of the design).
 
 ## Consequences
@@ -106,6 +106,6 @@ essdispatch run loki-iofq/1 --run 4711 --url https://reduce.example --proposal p
 - A Python client that imports spec modules installs scipp, and nothing else of the science stack.
 - A change to the spec, the core, and the instrument specs is one pull request. The ess branch with `ess.reduce.spec` (scipp/ess#690) is replaced by essspec and is to be closed.
 - essspec has its own tags (`essspec/*`) and its own ADRs (`packages/essspec/docs/developer/adr`, where scipp/ess keeps them), so moving it to scipp/ess is a variant of the move that scipp/ess's `ADDING_PACKAGES.md` describes: the history filtered to `packages/essspec`, and no tag rename, since its tags already carry the prefix.
-- The packages are installed together from the checkout: `pip install -e packages/essspec -e 'packages/essdispatch[test]'`, where the test extra brings `essspec[scipp,sciline]`. Neither is on PyPI.
+- The packages are installed together from the checkout: `pip install -e packages/essspec -e 'packages/essdispatch[test]' -e 'packages/essdispatchpanel[test]'`, where the test extra of essdispatch brings `essspec[scipp,sciline]`. None is on PyPI.
 - The HTTP API is a public interface once a web frontend uses it, with its own versioning.
 - The repository keeps its name, scipp/essapps.
