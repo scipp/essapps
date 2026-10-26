@@ -79,6 +79,7 @@ LOAD = _spec('load')
 ADD = _spec('add', params=AddParams)
 NOTHING = _spec('nothing')  # its workflow returns None as a required output
 UNTYPED = _spec('untyped')  # its workflow returns a dict
+COUNTS = _spec('counts')  # its workflow looks up a key that is not there
 
 
 class Scale(BaseModel):
@@ -214,6 +215,7 @@ def backend(datasets: FakeDatasets, gate: Gate) -> Iterator[Backend]:
         function_binding(ADD, add),
         function_binding(NOTHING, lambda p: ValueOutputs.model_construct(value=None)),
         function_binding(UNTYPED, lambda p: {'value': 1.0}),
+        function_binding(COUNTS, lambda p: {}['counts']),
         function_binding(SUM, total),
         function_binding(SPLIT, split),
         function_binding(PIECES, pieces),
@@ -300,7 +302,7 @@ def test_a_failed_input_fails_everything_downstream(client: Client, gate: Gate) 
         Status.FAILED,
         Status.FAILED,
     ]
-    assert client.failure(bad) == 'negative run'
+    assert client.failure(bad) == 'ValueError: negative run'
     assert client.failure(first) == f'record {bad.id} failed'
     assert client.failure(second) == f'record {first.id} failed'
 
@@ -579,6 +581,12 @@ def test_reading_an_output_of_a_failed_record_raises(
 def test_an_unknown_parameter_is_refused(client: Client) -> None:
     with pytest.raises(SubmitError, match='scale: not a parameter of'):
         client.submit(LOAD, params={'scale': {}, 'sample': {'file': dataset(run=1)}})
+
+
+def test_a_failure_names_the_type_of_the_workflow_s_error(client: Client) -> None:
+    failed = client.compute(COUNTS, params={'sample': {'file': dataset(run=1)}})
+
+    assert client.failure(failed) == "KeyError: 'counts'"
 
 
 def test_a_workflow_that_returns_none_as_a_required_output_fails(

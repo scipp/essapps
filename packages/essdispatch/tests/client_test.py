@@ -33,6 +33,7 @@ from ess.dispatch import (
     Record,
     Request,
     Selector,
+    SpecId,
     Status,
     SubmitError,
     Template,
@@ -643,7 +644,7 @@ def test_a_stage_whose_staging_fails_stops(
     failed = client.compute(stage, params=twice)
 
     assert client.status(failed) is Status.FAILED
-    assert client.failure(failed) == 'staging failed'
+    assert client.failure(failed) == 'OSError: staging failed'
     with pytest.raises(SubmitError, match='the stage stopped: staging failed'):
         client.submit(stage, params=twice)
     assert scaling.staged == []
@@ -660,8 +661,8 @@ def test_the_calls_waiting_for_a_stage_whose_staging_fails_fail_with_it(
     client.wait(pending)
 
     assert sorted(client.failure(r) for r in pending) == [
-        'staging failed',
-        *['the stage stopped: staging failed: staging failed'] * 2,
+        'OSError: staging failed',
+        *['the stage stopped: staging failed: OSError: staging failed'] * 2,
     ]
     assert shifting.staged == []
 
@@ -744,6 +745,26 @@ def test_a_stage_needs_a_binding_that_makes_stages(client: Client) -> None:
         client.stage(Template(TOTAL, blanks=('parts',)))
     with pytest.raises(SubmitError, match=r'^total/v1: its binding makes no stages$'):
         client.stage(Template(TOTAL, params={'speed': 1.0}, blanks=('parts',)))
+
+
+def test_a_client_gives_the_specs_the_backend_runs(client: Client) -> None:
+    load = client.compute(_load(1))
+
+    assert client.spec(load.spec) is LOAD
+    assert client.specs() == [
+        LOAD,
+        SHIFT,
+        SCALE,
+        TOTAL,
+        DIGITS,
+        SUM,
+        WEIGHTED,
+        SPREAD,
+        STITCH,
+        WALK,
+    ]
+    with pytest.raises(SubmitError, match=r'^unknown spec load/v2$'):
+        client.spec(SpecId(name='load', version=2))
 
 
 def test_bind_is_a_list_of_bindings(datasets: FakeDatasets) -> None:
@@ -1032,6 +1053,9 @@ def test_every_call_of_a_closed_client_raises_client_ended(client: Client) -> No
         lambda: client.output(total),
         lambda: client.provenance(total),
         lambda: client.records(),
+        lambda: client.readable(load),
+        lambda: client.spec(load.spec),
+        lambda: client.specs(),
         lambda: client.stage(Template(SCALE, blanks=('speed',))),
         lambda: client.accumulator(Template(TOTAL, blanks=('parts',))),
         lambda: client.release(load),
@@ -1754,7 +1778,7 @@ def test_a_push_that_fails_to_add_stops_the_accumulator(
     after = client.submit(_read(total))
     summing.go.set()
 
-    stopped = 'the accumulator stopped: push 1 failed: cannot add'
+    stopped = 'the accumulator stopped: push 1 failed: ValueError: cannot add'
     state = _state(client, after)
     assert client.wait(after) is Status.FAILED
     assert client.failure([state, after]) == [stopped, f'record {state.id} failed']
@@ -1782,7 +1806,7 @@ def test_an_accumulator_returns_at_once_and_stops_if_it_fails_to_open(
     ) as client:
         summed = client.accumulator(Template(SUM, blanks=('runs',)))  # returns first
 
-        stopped = 'the accumulator stopped: opening failed: cannot open'
+        stopped = 'the accumulator stopped: opening failed: ValueError: cannot open'
         with pytest.raises(NotReadable, match=f'^{stopped}$'):
             client.output(summed)
         with pytest.raises(SubmitError, match=f'^{stopped}$'):
@@ -2547,7 +2571,7 @@ def test_a_push_proceeds_after_readers_whose_outputs_failed(
     _start(lambda: sides.push(backgrounds=[loads[1].ref('value')])).result(5)
     state = _state(client, copied)
     assert client.failure([state, copied]) == [
-        'cannot compute',
+        'ValueError: cannot compute',
         f'record {state.id} failed',
     ]
     assert _listed(client.output(sides, 'difference')) == [-1.0]
@@ -2766,7 +2790,7 @@ def test_a_stopped_driver_is_dropped_before_the_accumulator_is_released(
     subtracting.refusing = True
     sides.push(samples=[loads[1].ref('value')])  # fails to add
 
-    with pytest.raises(NotReadable, match='push 1 failed: cannot add'):
+    with pytest.raises(NotReadable, match='push 1 failed: ValueError: cannot add'):
         client.output(sides, 'difference')
     gc.collect()
     assert subtracting.held[0]() is None  # nothing reads it any more

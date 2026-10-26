@@ -408,7 +408,8 @@ def test_a_push_whose_file_cannot_be_read_stops_the_accumulator(
     datasets.corrupt(datasets.resolve(dataset(run=1)))
     acc.push(sample=[{'file': dataset(run=1)}])
 
-    with pytest.raises(NotReadable, match='push 0 failed: file signature not found'):
+    unreadable = 'push 0 failed: OSError: file signature not found'
+    with pytest.raises(NotReadable, match=unreadable):
         client.output(acc, 'value')
 
 

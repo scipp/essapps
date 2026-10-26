@@ -19,6 +19,7 @@ from ess.dispatch import (
     Client,
     ClientEnded,
     NotReadable,
+    Record,
     RecordFailed,
     Status,
     SubmitError,
@@ -293,7 +294,7 @@ def test_a_failed_write_fails_a_record_persisted_at_submission(
     load = client.submit(LOAD, params=_sample(1), persist=True)
 
     assert client.wait(load) is Status.FAILED
-    assert client.failure(load) == 'the write failed: no space left on device'
+    assert client.failure(load) == 'the write failed: OSError: no space left on device'
     with pytest.raises(RecordFailed, match='no space left'):
         client.output(load, 'value')
     with pytest.raises(SubmitError, match='failed'):
@@ -311,7 +312,7 @@ def test_a_reader_of_a_record_persisted_at_submission_fails_with_its_write(
 
     assert client.wait([load, shift]) == [Status.FAILED, Status.FAILED]
     assert client.failure([load, shift]) == [
-        'the write failed: no space left on device',
+        'the write failed: OSError: no space left on device',
         f'record {load.id} failed',
     ]
 
@@ -352,14 +353,14 @@ def test_a_failed_write_of_persist_fails_only_the_persist_request(
     store.gate.set()
 
     assert other.wait(shift) is Status.FAILED
-    assert 'the write failed: no space left' in other.failure(shift)
+    assert 'the write failed: OSError: no space left' in other.failure(shift)
     assert client.status(load) is Status.COMPLETED
     assert client.output(load, 'value') == Amount(
         value=1.0
     )  # the client still keeps it
-    with pytest.raises(NotReadable, match='the write failed: no space left'):
+    with pytest.raises(NotReadable, match='the write failed: OSError: no space left'):
         other.output(load, 'value')
-    with pytest.raises(SubmitError, match='the write failed: no space left'):
+    with pytest.raises(SubmitError, match='the write failed: OSError: no space left'):
         other.submit(SHIFT, params={'source': load.ref('value')})
 
     store.free()
@@ -504,7 +505,7 @@ def test_reading_every_output_raises_if_a_write_failed(
     store.fill()
     client.persist(load, 'value')
 
-    with pytest.raises(NotReadable, match='the write failed: no space left'):
+    with pytest.raises(NotReadable, match='the write failed: OSError: no space left'):
         connect().output(load)
     store.free()
     client.persist(load, 'value')
@@ -522,8 +523,9 @@ def test_closing_a_client_raises_if_a_write_it_asked_for_failed(
 
     with pytest.raises(RuntimeError, match='writes failed') as raised:
         client.close()
-    assert f'record {load.id} output value: no space left' in str(raised.value)
-    assert f'record {shift.id} output value: no space left' in str(raised.value)
+    for record in (load, shift):
+        failed = f'record {record.id} output value: OSError: no space left'
+        assert failed in str(raised.value)
     with pytest.raises(ClientEnded):
         client.output(load, 'value')
 
@@ -586,6 +588,99 @@ def restart(
         return start(copy)
 
     return restart
+
+
+def _referenced(client: Client, record: Record) -> tuple[str, ...]:
+    """The outputs of the record that a submission of the client may reference."""
+    accepted = []
+    for name in record.outputs:
+        try:
+            client.submit(SHIFT, params={'source': record.ref(name)})
+        except SubmitError:
+            continue
+        accepted.append(name)
+    return tuple(accepted)
+
+
+def test_readable_gives_every_output_returned_of_a_record_the_client_keeps(
+    client: Client,
+) -> None:
+    load = client.compute(LOAD, params=_sample(1))  # returns no note
+
+    assert client.readable(load) == ('value', 'extra') == _referenced(client, load)
+
+
+def test_readable_gives_every_output_of_a_pending_record_without_waiting(
+    client: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    load = client.submit(LOAD, params=_sample(1))
+
+    assert client.readable(load) == ('value', 'extra', 'note')
+    assert client.status(load) is Status.PENDING
+    assert _referenced(client, load) == ('value', 'extra', 'note')
+    loading.set()
+
+
+def test_readable_gives_nothing_of_a_record_released_or_of_another_client(
+    client: Client, connect: Callable[[], Client]
+) -> None:
+    released, kept = (
+        client.compute(LOAD, params=_sample(1)),
+        client.compute(LOAD, params=_sample(2)),
+    )
+    client.release(released)
+    other = connect()
+
+    assert client.readable([released, kept]) == [(), ('value', 'extra')]
+    assert other.readable({'kept': kept}) == {'kept': ()}
+    assert _referenced(client, released) == _referenced(other, kept) == ()
+
+
+def test_readable_gives_the_outputs_persisted_to_every_client(
+    client: Client, connect: Callable[[], Client], store: GatedStore
+) -> None:
+    store.gate.clear()
+    load = client.submit(LOAD, params=_sample(1), persist=('value',))
+    other = connect()
+
+    # The write is pending: a submission is accepted, and waits for it.
+    assert client.readable(load) == other.readable(load) == ('value',)
+    assert _referenced(other, load) == ('value',)
+    store.gate.set()
+    client.wait(load)
+    assert client.readable(load) == other.readable(load) == ('value',)
+    assert _referenced(client, load) == ('value',)
+
+
+def test_readable_gives_nothing_whose_write_failed(
+    client: Client, connect: Callable[[], Client], store: GatedStore
+) -> None:
+    load = client.compute(LOAD, params=_sample(1))
+    store.fill()
+    client.persist(load, 'value')
+    other = connect()
+    with pytest.raises(NotReadable, match='the write failed'):
+        other.output(load, 'value')  # waits for the write
+
+    assert other.readable(load) == () == _referenced(other, load)
+    assert client.readable(load) == ('value', 'extra')  # still kept
+
+
+def test_readable_gives_nothing_of_a_record_that_failed_or_was_cancelled(
+    client: Client, store: GatedStore, loading: threading.Event
+) -> None:
+    store.fill()
+    failed = client.submit(LOAD, params=_sample(1), persist=True)
+    client.wait(failed)
+    loading.clear()
+    cancelled = client.submit(LOAD, params=_sample(2))
+    client.cancel(cancelled)
+
+    assert client.status([failed, cancelled]) == [Status.FAILED, Status.CANCELLED]
+    assert client.readable([failed, cancelled]) == [(), ()]
+    assert _referenced(client, failed) == _referenced(client, cancelled) == ()
+    loading.set()
 
 
 def test_a_restart_runs_pending_persisted_work_and_cancels_the_rest(

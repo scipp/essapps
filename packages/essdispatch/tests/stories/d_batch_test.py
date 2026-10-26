@@ -86,7 +86,7 @@ def test_d2_overnight_cluster_batch(
     morning.wait(reruns)
 
     assert [r.member for r in failed] == ['7']
-    assert reasons == ['file signature not found']
+    assert reasons == ['OSError: file signature not found']
     assert reruns[0].request == failed[0].request
     assert morning.latest('night', member='7') == reruns[0]
     assert morning.output(night['1'], 'iofq').values.tolist() == [2.0, 2.0]
