@@ -208,6 +208,7 @@ from .places import (
     groups_at,
     held,
     place,
+    title,
     unwritten,
     validated,
 )
@@ -707,7 +708,7 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
             Field(
                 # Undefined, and so required, if the field is.
                 default=info.get_default(call_default_factory=True),
-                title=info.title or name.replace('_', ' ').title(),
+                title=title(name, info),
                 description=info.description,
             ),
         )
@@ -799,16 +800,14 @@ def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
     """
     fields: dict[str, Any] = {}
     for name, info in group.model_fields.items():
-        title = info.title
-        if name == tag and title is None:
-            title = get_args(info.annotation)[0].replace('_', ' ').title()
+        label = title(get_args(info.annotation)[0], info) if name == tag else None
         fields[name] = (
             info.annotation if name == tag else _field_forms(group, name),
             Field(
                 default=PydanticUndefined
                 if name == tag
                 else info.get_default(call_default_factory=True),
-                title=title,
+                title=label or info.title,
                 description=info.description,
                 examples=info.examples,
                 **(

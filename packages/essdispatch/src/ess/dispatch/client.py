@@ -299,6 +299,19 @@ class Client:
             if self._owns_backend:
                 self._backend.close()
 
+    # Specs
+
+    def spec(self, spec_id: SpecId) -> WorkflowSpec[Any, Any]:
+        """
+        The spec the backend runs as ``spec_id``, such as ``record.spec``;
+        raises ``KeyError`` for one it does not run.
+        """
+        return self._backend.spec(spec_id, self._id)
+
+    def specs(self) -> list[WorkflowSpec[Any, Any]]:
+        """The specs the backend runs, one for each binding, in the order bound."""
+        return self._backend.specs(self._id)
+
     # Submitting
 
     def submit(
@@ -447,7 +460,7 @@ class Client:
         accumulator_id, resolved = self._backend.open_accumulator(
             template, client=self._id
         )
-        outputs = tuple(self._backend.spec(resolved.spec).outputs.model_fields)
+        outputs = tuple(self.spec(resolved.spec).outputs.model_fields)
         push = functools.partial(self._backend.push, accumulator_id, client=self._id)
         return Accumulator(resolved, accumulator_id, outputs, push)
 
@@ -548,6 +561,25 @@ class Client:
         else:
             values = self._backend.outputs(what.id, names, self._id, select=select)
         return values if name is None else values[name]
+
+    def readable(self, records: Any) -> Any:
+        """
+        The outputs of each record, by name, that a plain submission of this
+        client, not one through a stage, may reference now: every output of a
+        record the client keeps, pending or completed, and otherwise those
+        persisted, unless their write failed. A record that failed or was
+        cancelled has none, and one that has completed only those its
+        workflow returned. It waits for nothing and reads no value, so a
+        picker of records calls it at each refresh::
+
+            for record, names in zip(records, client.readable(records)):
+                ...  # offer record.ref(name) for each name
+
+        A record persisted in part, such as with ``persist=('iofq',)``, has
+        only those outputs.
+        """
+        ids = [r.id for r in _items(records)]
+        return _reshape(records, self._backend.readable(ids, self._id))
 
     def records(self, *, label: str | None = None) -> list[Record]:
         """The proposal's records, oldest first, under ``label`` if given."""

@@ -347,12 +347,14 @@ On the service, only that part leaves the backend.
 | `client.status(records)` | the current status of each record |
 | `client.wait(records)` | blocks until all have finished, and does not raise failures |
 | `client.failure(records)` | why each record failed, or `None` |
+| `client.readable(records)` | the names of the outputs of each record that a submission may reference now (see How long records and values are kept) |
 | `client.cancel(records)` | cancels unfinished records of the proposal, including those of other clients |
 | `client.release(records)` | drops the client's hold on their outputs |
 
 Each takes one request or record, a list, or a dict, and returns the same shape.
 `Request(IOFQ, params=...)` makes a request without submitting it, and `request.upstream()` lists the outputs of other records that it reads.
 A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)` in place of `IOFQ`.
+`client.spec(record.spec)` gives the spec that the backend runs under that `SpecId`, and `client.specs()` every spec it runs, so a form needs no specs of its own.
 
 **Validation.** Each parameter's value is validated once in each phase, by pydantic:
 
@@ -379,6 +381,8 @@ A request that cannot run is refused at submission with a `SubmitError`.
 Its `errors` list each reason as a `FieldError`, as pydantic's `ValidationError.errors()` does: the place of the field at fault, `loc`, such as `('sample', 2, 'transmission')`, the reason, `msg`, and for a call with several requests the request's key or index, `entry`.
 If one request of a call is refused, none is submitted.
 A request that fails in the call phase makes a failed record.
+Its failure, `client.failure(record)`, keeps the framework's own words as they are: a value refused in the call phase, such as `beam_centre.tolerance: Value error, ...`, and the backend's reasons, such as `record r17 failed`, `the workflow of sans-iofq/v1 returned None as iofq`, or `the write failed: ...`.
+An error that the binding, its driver, the dataset source, or the store raises is given with its type, such as `KeyError: 'counts'` or `the write failed: OSError: no space left on device`.
 Validation in the request phase never proves that a workflow will succeed.
 
 ## References
@@ -502,6 +506,9 @@ A submission may reference only
 Any other reference is refused, even to a record that is still pending.
 `client.output` reads only the same values, and raises `NotReadable` for any other.
 So another client, even one in the same process, reads a value only once it is persisted.
+A submission also refuses a reference to a record that failed or was cancelled, and to an output that a completed record's workflow did not return.
+`client.readable(records)` gives, for each record, the names of the outputs that a submission may reference now.
+It waits for nothing and reads no value, so a form calls it each time it lists the records to pick from.
 
 ```python
 centre = client.compute(BEAM_CENTRE, params={'direct_beam': {'file': dataset(run=60330)}})
