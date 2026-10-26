@@ -549,9 +549,7 @@ def _place_problems(
     at a position that is not a place, a union that the framework cannot
     take apart by a value's tag, a group at a place inside itself, the
     problems of each group at its places, each named by its group (see
-    :func:`_group_problems`), and an alternative of a union that a request
-    cannot write inline (see :func:`~ess.spec.places.unwritten`), since no
-    reference fits a union. ``path`` holds the groups that hold the field,
+    :func:`_group_problems`). ``path`` holds the groups that hold the field,
     and ``seen`` the problems of the groups checked already, so that a group
     at several places is checked once, and its problems named at each.
     """
@@ -576,15 +574,6 @@ def _place_problems(
             seen[group] = []
             seen[group] = _group_problems(group, (*path, group), seen)
             problems.extend(seen[group])
-    # Several groups are the alternatives of a union: Union[A] is A itself.
-    if not problems and len(groups) > 1:
-        problems.extend(
-            f'{group.__name__}.{data}: no request writes it, since an alternative '
-            'of a union is written inline, with its tag, and no reference fits a '
-            'union'
-            for group in groups
-            if (data := unwritten(group)) is not None
-        )
     return problems
 
 

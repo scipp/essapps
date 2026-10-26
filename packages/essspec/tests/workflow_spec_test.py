@@ -230,6 +230,13 @@ class Centring(BaseModel):
     centre: BeamCentre | None = None
 
 
+class ByPeak(BaseModel):
+    """An alternative written inline, with a place for a group given by reference."""
+
+    mode: Literal['peak'] = 'peak'
+    centre: BeamCentre
+
+
 @pydantic.dataclasses.dataclass(
     config=pydantic.ConfigDict(arbitrary_types_allowed=True)
 )
@@ -486,6 +493,12 @@ class TestModelRules:
                     'P',
                     centre=(BeamCentre | None, None),
                     centres=(list[BeamCentre], []),
+                )
+            },
+            {
+                'params': model(
+                    'P',
+                    by=(Annotated[ByTime | ByPeak, Field(discriminator='mode')], ...),
                 )
             },
             {'params': model('P', tree=(WholeTree, ...))},

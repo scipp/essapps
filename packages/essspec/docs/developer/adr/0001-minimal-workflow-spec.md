@@ -324,10 +324,11 @@ framework normalizes it before a reference enters a record.
 
 **Fit.** A reference *fits* a place when the type of the data it names can be
 the value there: its type is the place's class or a subclass of it. A
-`BeamCentre` output fits a place typed `BeamCentre`. No reference fits a
-union of groups, such as `GivenCentre | FindCentre`: a request writes it
-inline, and a reference at a field of an alternative fits by that field's
-type. A subclass that names a role fits a place typed by its base class too,
+`BeamCentre` output fits a place typed `BeamCentre`. No reference stands for
+the value of a union of groups, such as `GivenCentre | FindCentre`: a request
+writes it inline. A field of an alternative is a place of its own, so a
+reference at it fits by that field's type, such as a dataset at
+`FindCentre.file`. A subclass that names a role fits a place typed by its base class too,
 so a place that takes one role only is typed by that role's class.
 A dataset reference fits a file only. A framework checks fit in the request
 phase, so that a chain of requests is refused before anything runs.
@@ -577,7 +578,7 @@ output, and dims and units of an output for a UI.
   and a generated UI shows a parameter that is not a group outside the
   sections of the groups.
 - **A union inside a group**, such as a transmission that is taken from each
-  run's file or computed, for one field of a row of a table. A generated UI
+  run's file or typed in, for one field of a row of a table. A generated UI
   would show a choice inside a section. A table whose rows are a union gives
   each row that choice instead, a correction that some rows have is a group
   typed `X | None`, and a choice of way for all rows is a parameter.

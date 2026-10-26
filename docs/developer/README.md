@@ -225,17 +225,16 @@ beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = 
 {'beam_centre': {'kind': 'find', 'file': dataset(run=60339), 'tolerance': 0.05}}
 ```
 
-A union is written inline only: no reference fits it, and the params schema of a union has no reference form.
-An output that fit a union would carry the tag of an alternative, so the workflow that computes it would have to know the specs that take it.
-So no field of an alternative is a data value.
-A place that takes an output of another workflow is a group, such as `beam_centre: BeamCentre`, which takes `finder.ref('centre')`.
-A field of an alternative is a place of its own: the `file` of a `FindCentre` takes a dataset.
+A union is written inline only: no reference stands for the value of a union, and the params schema of a union has no reference form.
+No field of an alternative is a data value, since no request writes a data value inline.
+A place that takes an output of another workflow is a group, such as `beam_centre: BeamCentre`, which takes `centre.ref('centre')` (see References).
+A field of an alternative is a place of its own, so the `file` of a `FindCentre` takes a dataset, and a field of an alternative that is a group takes an output.
 An error inside a union names its place without the tag, `beam_centre.tolerance`, in either phase.
 A union is never a field of a group: a choice between ways is a parameter of its own, which a generated UI shows as a choice.
 A value given per row of a table, such as the transmission of a `Sample`, is a field of the row's group, and a choice of way for all rows is a parameter.
 
 `X | None` means *without X*: apply no mask, no direct-beam correction.
-A value obtained in one of several ways is a union that names each way, not `None` for one of them.
+A value obtained in one of several ways that a request writes inline is a union that names each way, not `None` for one of them.
 A UI shows a group as its fields or a record, a union as a choice between its alternatives, and `X | None` as a toggle that adds `None` to either.
 So a toggle that is off must read as what `None` does:
 
@@ -246,7 +245,7 @@ direct_beam: DirectBeam | None                    # [x] Direct beam  File: [run 
 beam_centre: BeamCentre = BeamCentre()
 # Beam centre: x [0.0] y [0.0]  [or from a record ▾]
 beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
-# Beam centre: (•) given: x [0.0] y [0.0]  ( ) find: File [ ] tolerance [0.1]
+# Beam centre: (•) Given: x [0.0] y [0.0]  ( ) Find: File [ ] tolerance [0.1]
 # not `beam_centre: GivenCentre | None = None  # None: find it`,
 # whose toggle, off, reads as "no beam centre"
 ```
@@ -420,7 +419,6 @@ A reference *fits* a place when the type of the data it names can be the value a
 `| None` is removed on both sides.
 A reference with a key names one element, of the output's element type, and an element of a list parameter takes a reference by the element type.
 A reference at a field of a group takes the field's type; at a field of an alternative of a union, the type of that field in the alternative the tag names.
-A reference at a union fits nothing (see Specs and bindings), so a request that holds one is refused.
 Otherwise the data fit when the output's type is the class at the place or a subclass of it:
 
 | Type of the output | Type at the place | Fits |

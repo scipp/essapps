@@ -244,9 +244,9 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
     return _inline(loc, slot, value)
 
 
-def _written(loc: Loc, group: type[BaseModel] | None) -> None:
+def _written(loc: Loc, group: type[BaseModel]) -> None:
     """Refuse ``group`` written at ``loc`` if it is given by reference only."""
-    if group is not None and (data := unwritten(group)) is not None:
+    if (data := unwritten(group)) is not None:
         held_type = type_name(optional(group.model_fields[data].annotation)[0])
         raise _refused(
             loc,
@@ -438,7 +438,9 @@ def alternatives(
     by the tag of a value: one with a type that is not a group, without a
     discriminator, or with one that is not the name of a field, such as a
     callable ``Discriminator``; one whose tag field has an alias or is not a
-    ``Literal`` of one string, such as ``Literal['find']``.
+    ``Literal`` of one string, such as ``Literal['find']``; one with an
+    alternative that a request cannot write inline (see :func:`unwritten`),
+    since no reference fits a union.
     """
     tp = annotation
     while True:
@@ -484,6 +486,12 @@ def alternatives(
             for a in ('alias', 'validation_alias', 'serialization_alias')
         ):
             raise ValueError(f'{where}: a tag has no alias')
+        if (data := unwritten(member)) is not None:
+            raise ValueError(
+                f'{member.__name__}.{data}: no request writes it, since an '
+                'alternative of a union is written inline, with its tag, and no '
+                'reference fits a union'
+            )
         groups[tags[0]] = member  # pydantic refuses two alternatives of one tag
     return discriminator, groups
 
