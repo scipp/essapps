@@ -33,7 +33,7 @@ from typing import Any, NewType, TypeVar
 import numpy as np
 import sciline
 import scipp as sc
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ess.spec import DriverBinding, WorkflowSpec, function_binding
 from ess.spec.pipeline import PipelineBinding
@@ -41,8 +41,19 @@ from ess.spec.pipeline import PipelineBinding
 # The specs: what apps, clients, and the backend see.
 
 
+PIXEL_COUNT = 4
+"""The detector's pixels, one row; the Q bins sum them in equal groups."""
+
+
 class Reduction(BaseModel):
     bins: int = Field(default=2, gt=0)
+
+    @field_validator('bins')
+    @classmethod
+    def _divides_the_pixels(cls, bins: int) -> int:
+        if PIXEL_COUNT % bins:
+            raise ValueError(f'bins must divide the {PIXEL_COUNT} pixels')
+        return bins
 
 
 class BeamCentre(BaseModel):
@@ -194,7 +205,9 @@ CAN_RUNS = {
 TRANSMISSION_RUNS = {
     120: {'monitor': 10.0, 'transmitted': 9.0},
 }
-PIXELS = sc.vectors(dims=['pixel'], values=[[x, 0.0, 0.0] for x in range(4)], unit='mm')
+PIXELS = sc.vectors(
+    dims=['pixel'], values=[[x, 0.0, 0.0] for x in range(PIXEL_COUNT)], unit='mm'
+)
 """The position of each pixel."""
 
 
