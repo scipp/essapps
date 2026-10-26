@@ -1,8 +1,8 @@
-# ADR 0008: A choice between ways of obtaining a value is a union of groups; `X | None` means without X
+# ADR 0008: A choice between ways of obtaining a value is a union of groups, written inline; `X | None` means without X
 
 - Status: proposed
 - Deciders: Simon
-- Date: 2026-10-22
+- Date: 2026-10-26
 
 ## Context
 
@@ -15,13 +15,14 @@ The spec must state these choices so that:
 
 - a generic UI shows them, from the params schema alone ([ADR 0001](0001-minimal-workflow-spec.md));
 - a request holds only values that mean something for the choice it makes;
-- a reference to an output fits the choice it stands for, such as a found centre for "the centre";
+- a workflow outputs a value without knowing which specs take it, and the output fits each place typed by its class, such as a found centre at `beam_centre: BeamCentre`;
 - a `PipelineBinding` sets sciline keys from which sciline picks the providers, without a provider that takes the choice apart.
 
 Terms from [ADR 0001](0001-minimal-workflow-spec.md) and the developer README:
 
 - A *group* is a pydantic model at a place of a request, written as an object of its fields.
 - A *place* is the value of a parameter, an element of a list, or a field of a group, at any depth.
+- A *reference* names data that exist elsewhere: an output of a record, `finder.ref('centre')`, or a dataset. It *fits* a place when the data it names can be the value there.
 - A *data value* is a value of a type that is neither a file, a group, a union of groups, a list, nor a dict, and has no JSON form, such as an `sc.DataArray`. It is a field of a group, which a request gives by reference only, since no request can write a data value inline (ADR 0001).
 - A *template* is a request with some parameters left open, its *blanks*; the values it gives are its *fixed values*. A *plain request* gives every value.
 - A *stage* is a template that the backend keeps: it computes what does not depend on the blanks once, and the rest at each call.
@@ -58,15 +59,38 @@ class IofQParams(BaseModel):
     beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
     ...
 
-# the params of two requests; `finder` is the record of a request whose output `centre` is a GivenCentre
+# the params of two requests
+{'beam_centre': {'kind': 'given', 'x': 0.012, 'y': -0.003}}
 {'beam_centre': {'kind': 'find', 'file': dataset(run=60339), 'tolerance': 0.05}}
-{'beam_centre': finder.ref('centre')}
 ```
 
 - The tag is a `Literal` of one string, its own, without an alias, and the union is discriminated by the tag's name, not by a callable. The framework walks a value without running code of the spec, so it reads the tag by name.
-- A request writes the tag inline, even where the alternative has a default for it, and never by reference: the tag says which alternative's fields the object has, and so which of them are files.
+- A request writes the tag inline, even where the alternative has a default for it: the tag says which alternative's fields the object has, and so which of them are files.
 - A union that holds a group holds groups only: a value of another type has no tag.
-- An output fits the union when it fits one alternative.
+
+**A union is written inline only: no reference fits it.**
+An output that fit a union would carry the tag of one alternative.
+The workflow that computes it would then name an alternative of each spec that takes it, so a producer would know its consumers.
+A centre finder that outputs `BeamCentre` fits `beam_centre: BeamCentre`, but not `GivenCentre | FindCentre`.
+An alternative that only a reference can give, one that holds a data value, would carry a tag that no request writes.
+So:
+
+- `WorkflowSpec` refuses an alternative that a request cannot write inline: one with a field that is a data value.
+- A request with a reference at a union is refused at submission. A field of an alternative is a place of its own, so `FindCentre.file` takes a dataset as any file does.
+- The params schema of a union has no reference form.
+
+At each place, the spec author picks a group or a union:
+
+```python
+beam_centre: BeamCentre = BeamCentre()        # typed in, or from a record: finder.ref('centre')
+beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
+                                              # typed in, or found in this graph; no reference fits
+```
+
+A value obtained either as a record's output or in another way is a group, given by reference, and the other way is a workflow that outputs the group.
+A published normalization, a file of the factor that a vanadium reduction computes, is given by submitting a workflow that reads the file and outputs the normalization, and by referencing that output.
+In the known cases, the normalization and the transmission, the other way is a file of the data that a workflow computes: `Computed | File`.
+A way to hide that difference from the user is left open.
 
 **`X | None` means *without X*.**
 `mask: PixelMask | None = None` applies no mask for `None`; `direct_beam: DirectBeam | None`, a group of the direct-beam run's `file: Path`, applies no direct-beam correction.
@@ -84,10 +108,11 @@ transmission: Annotated[FromFile | TransmissionFraction, Field(discriminator='ki
 # not: transmission: TransmissionFraction | None = None   # None: the one in the run's file
 ```
 
-A UI shows a union as a choice between its alternatives, and a type `X | None` as a toggle:
+A UI shows a group as its fields, with a record as the other option; a union as a choice between its alternatives; and a type `X | None` as a toggle, which adds the option `None` to either:
 
 ```
-Transmission: (•) From the sample's file  ( ) Given: [0.75]  [or from a record ▾]
+Beam centre: x [0.012] y [-0.003]  [or from a record ▾]
+Transmission: (•) From the sample's file  ( ) Given: [0.75]
 [x] Direct beam  File: [60340]
 [ ] Mask
 ```
@@ -97,19 +122,17 @@ A union without a default starts with no alternative chosen, as any field withou
 A toggle that is off reads as "without X", so `None` must mean that.
 A type `U | None`, for a union `U`, is a toggle with a choice inside.
 This is a guideline, not a rule the framework checks.
-It has no exception for data values.
-A data value obtained in one of several ways is a field of an alternative.
-The workflow that computes it outputs the alternative, so that a reference to the output fits the union without a level in between.
-The alternative is given by reference only, so a UI offers a record for it, `( ) From a record ▾`, and no fields:
+It has no exception for data values: `None` in `transmission: ComputedTransmission | None` does not mean "the one in the run's file".
+A data value that another workflow computes is a field of a group given by reference, such as `ComputedTransmission`, the output of a transmission reduction.
+A union names only ways that a request writes inline, such as a transmission computed in this graph from a transmission run:
 
 ```python
-class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):
-    kind: Literal['computed'] = 'computed'
-    transmission: sc.DataArray
+class FromRun(BaseModel):
+    kind: Literal['run'] = 'run'
+    file: Path                            # the transmission run
 
-transmission: Annotated[FromFile | ComputedTransmission, Field(discriminator='kind')] = FromFile()
-
-{'transmission': t611.ref('transmission')}   # t611's output is a ComputedTransmission
+transmission: Annotated[FromFile | TransmissionFraction | FromRun, Field(discriminator='kind')] = FromFile()
+transmission: ComputedTransmission        # a group with a data value: by reference, t611.ref('transmission')
 ```
 
 **A default never leaves out a correction that a correct reduction needs.**
@@ -168,19 +191,22 @@ A value held at a key that a parameter's key leads to has the same effect, but t
 
 ## Consequences
 
-- A UI generator needs two components beyond a plain group: a choice between the alternatives of a union, and a toggle for a type `X | None`. A toggle is the choice between two alternatives, one of them empty.
-- An output whose type is an alternative carries the tag, such as a `ComputedTransmission` output, so that it fits the union.
+- A UI generator needs two components beyond a plain group: a choice between the alternatives of a union, and a toggle for a type `X | None`. A toggle is the choice between two alternatives, one of them empty. No place offers both the alternatives of a union and a record.
+- An output carries no tag. A workflow's output fits each place typed by its class, in any spec, without a class per consumer.
+- One place does not offer "type it in, compute it here, or take it from a record" together: the spec author picks a group or a union. "A record, or another way" is a group given by reference, plus a workflow that outputs the group from the other way.
 - An author who wraps a workflow factory that holds a value at a key of a union replaces it with a provider, `pipeline.insert(adapter)`, such as an adapter from `GivenCentre` to esssans' `BeamCenter`. Mapping the alternatives to other keys with `keys=` does not help while the held value stays further down the graph.
 - An author tests that each alternative has its effect, and that a request with `None` after one with a value gives the result without X. The second fails if `make_pipeline` sets the value in a pipeline it keeps.
 - A spec that tunes a value in a stage, such as a scan of the beam centre, types that parameter as a plain group, or its client submits plain requests.
 - A table whose single-run parameter is a union has a key per alternative, so the driver of the multi-run spec cannot cut the single-run graph at one key for its rows.
-- A choice for one field of a row of a table is not a union, since a union is never a field of a group. A choice of way per row, such as a transmission from the sample run or from a separate transmission run, is a table whose rows are a union, `list[A | B]`; a correction that some rows have is a group typed `X | None` in the row; and a choice of way for all rows is a parameter.
+- A choice for one field of a row of a table is not a union, since a union is never a field of a group. A choice of way per row, such as a transmission from the sample run or from a separate transmission run, is a table whose rows are a union, `list[A | B]`, each row written inline; a correction that some rows have is a group typed `X | None` in the row; and a choice of way for all rows is a parameter.
 
 ## Alternatives considered
 
-- **A selector field next to the fields of every mode**, `enabled: bool` or `mode: Literal[...]`, as esslivedata's detector and monitor views do. A request can then hold values that mean nothing, `{'enabled': False, 'tolerance': 0.05}`, and a required field must be given even for a mode that does not use it: a group that holds a run cannot be disabled without naming a run. An output of one mode's type does not fit.
+- **A selector field next to the fields of every mode**, `enabled: bool` or `mode: Literal[...]`, as esslivedata's detector and monitor views do. A request can then hold values that mean nothing, `{'enabled': False, 'tolerance': 0.05}`, and a required field must be given even for a mode that does not use it: a group that holds a run cannot be disabled without naming a run.
 - **A union held by a wrapper group.** The binding sets the wrapper's key, so a provider takes the union apart instead of sciline choosing providers by key.
-- **An exception for data values**, whose `None` could mean something else when the field's description says what. A UI shows the description, but the toggle still reads "without X" when off, and a guideline with an exception is one more thing to teach. The alternative that holds the data value costs no level in a request when the workflow that computes it outputs the alternative.
+- **A reference that fits a union when the output fits an alternative.** One place then offers a value typed in, computed in this graph, or taken from a record. But an output fits only if its class is an alternative, with its tag, so the workflow that computes it knows the specs that take it. A centre finder outputs a tagged `GivenCentre`, a second class next to the `BeamCentre` that a place typed `BeamCentre` takes, and an alternative given only by reference, such as a computed transmission, carries a tag that no request writes.
+- **A tag owned by the framework**, through a pydantic callable discriminator: `Annotated[BeamCentre | FindCentre, Choice()]`, where a request names the alternative by its class name under a reserved key, `{'@kind': 'FindCentre', 'file': ..., 'tolerance': 0.05}`, and no group has a tag field. An untagged `BeamCentre` output then fits the union, and plain pydantic validates and dumps it. But it adds an annotation that the framework owns, makes class names part of a spec's interface, and differs from the pydantic-native `kind` fields that esslivedata uses. With no reference at a union, a tag field that the author writes serves.
+- **An exception for data values**, whose `None` could mean something else when the field's description says what, such as `transmission: ComputedTransmission | None` with `None` for the one in the run's file. A UI shows the description, but the toggle still reads "without X" when off, and a guideline with an exception is one more thing to teach.
 - **No type `X | None` in the spec**, with an empty list, an `enabled` flag, or an empty alternative such as `NoMask` in its place. Every place that may go without a value would be a union, and a request that goes without it would write a tagged object, also at a field of a group, such as a mask for one run of a table and not another. It puts a concern of sciline bindings into the spec, which `function_binding` and `DriverBinding` do not share: they get `None` as a plain value.
 - **`X | None` keyed like a union**, with `None` setting nothing. `make_pipeline` would not set the key by hand. But `None` would then mean whatever the graph does without a value at `X`, typically "compute X", and nothing makes the author say otherwise.
 - **`X | None` setting `pipeline[X] = None`.** It replaces a provider of `X` with `None`, so every provider that takes `X` must accept `None`.

@@ -170,9 +170,6 @@ def test_type_name_is_the_name_of_the_class() -> None:
         (sc.DataArray | None, sc.DataArray),
         (sc.DataArray, sc.DataArray | None),
         (list[int], list[int]),
-        (BeamCentre, BeamCentre | FindCentre),  # data fit one alternative
-        (BeamCentre, BeamCentre | FindCentre | None),
-        (SampleParts, BeamCentre | Parts),  # a subclass of one alternative
     ],
 )
 def test_fits(data: Any, field: Any) -> None:
@@ -190,8 +187,6 @@ def test_fits(data: Any, field: Any) -> None:
         (list[int], list),
         (list[SampleParts], list[Parts]),  # generic aliases fit only themselves
         (sc.DataArray, list[sc.DataArray]),
-        (sc.DataArray, Parts | sc.Variable),
-        (Parts, SampleParts | CanParts),
         (BeamCentre | FindCentre, BeamCentre),
     ],
 )

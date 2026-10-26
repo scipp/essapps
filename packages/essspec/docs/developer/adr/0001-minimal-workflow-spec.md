@@ -114,7 +114,7 @@ value.
 |---|---|---|---|
 | a file: `Path` | `Sample.file` | no | to a dataset |
 | a group | `Reduction`, `Sample`, `ComputedTransmission` | no, if a field is a data value; else an object of its fields, each a place | to an output that fits and holds no file |
-| a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag, as for a group | to an output that fits and holds no file |
+| a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag, as for a group | no |
 | a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
 | at a field of a group: `list[X] \| None`, or a dict, with a JSON form | `list[float] \| None` | yes, whole: its contents are not places | no |
 | any other type with a JSON form | `int`, `float`, an enum, `tuple[float, float]` | yes | no |
@@ -164,12 +164,13 @@ A parameter may be a discriminated union of groups, such as a beam centre
 that is given, `GivenCentre`, or found from a run with a tolerance,
 `FindCentre`; the request writes the fields of one alternative with its tag,
 inline, which says what each of the other fields takes:
-`{'kind': 'find', 'file': dataset(run=60339), 'tolerance': 0.05}`. A union is
-a parameter, or the element of a list parameter, never a field of a group:
-a choice between ways is a parameter of its own, which a generated UI shows
-as a
-choice at the top of its section. Why a choice is a union, and what `X | None`
-means, is [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
+`{'kind': 'find', 'file': dataset(run=60339), 'tolerance': 0.05}`. No
+reference fits a union, so no field of an alternative is a data value. A
+union is a parameter, or the element of a list parameter, never a field of a
+group: a choice between ways is a parameter of its own, which a generated UI
+shows as a choice at the top of its section. Why a choice is a union, why it is
+written inline, and what `X | None` means, is
+[ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
 ```python
 class Reduction(BaseModel):                       # a group
@@ -236,8 +237,9 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
   never a field of a group, at any depth. It is discriminated by the name of
   its tag field, not by a callable. The tag field of each alternative is a
   `Literal` of one string, its own, such as `Literal['find']`, without an
-  alias. A union that holds a
-  group holds groups only: a value of a type that is not a group has no tag.
+  alias. A union that holds a group holds groups only: a value of a type
+  that is not a group has no tag. No field of an alternative is a data
+  value: a request writes a union inline.
 - A group has no serializers, computed fields, or aliases: the record holds a
   group as the object of its places, each in the JSON form of its own type,
   and these would make the group's own JSON form differ from it. It may have
@@ -297,8 +299,8 @@ output), a dataset the framework did not compute (`DatasetRef`: one identity
 string), or an output of an accumulator (`AccumulatorRef`: accumulator and
 output name). Only a request holds an `AccumulatorRef`: the framework replaces
 it, when it accepts the request, by an output of a record of the accumulator's
-state. A reference stands for the value at a place whose type is a group, a
-union of groups, or a file, such as `sample.file` or `beam_centre`: never for a
+state. A reference stands for the value at a place whose type is a group or
+a file, such as `sample.file` or `beam_centre`: never for a union of groups, a
 number, a whole list, a tag of a union, or a position inside a value given
 inline. Its JSON form is an object with the key `@ref`, which names its kind:
 
@@ -322,11 +324,11 @@ framework normalizes it before a reference enters a record.
 
 **Fit.** A reference *fits* a place when the type of the data it names can be
 the value there: its type is the place's class or a subclass of it. A
-`BeamCentre` output fits a place typed `BeamCentre`, and a `GivenCentre`
-output fits the union `GivenCentre | FindCentre`, since data fit a union of
-groups when they fit one alternative. A subclass that names a role fits a
-place typed by its base class too, so a place that takes one role only is
-typed by that role's class.
+`BeamCentre` output fits a place typed `BeamCentre`. No reference fits a
+union of groups, such as `GivenCentre | FindCentre`: a request writes it
+inline, and a reference at a field of an alternative fits by that field's
+type. A subclass that names a role fits a place typed by its base class too,
+so a place that takes one role only is typed by that role's class.
 A dataset reference fits a file only. A framework checks fit in the request
 phase, so that a chain of requests is refused before anything runs.
 `ess.spec.field_types.fits` states the rule.

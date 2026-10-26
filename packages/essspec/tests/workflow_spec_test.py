@@ -218,7 +218,7 @@ class BeamCentre(BaseModel, arbitrary_types_allowed=True):
 
 
 class ByCentre(BaseModel, arbitrary_types_allowed=True):
-    """An alternative that holds a data value: given by reference only."""
+    """An alternative that holds a data value: refused, no request writes it."""
 
     mode: Literal['centre'] = 'centre'
     centre: sc.Variable
@@ -486,10 +486,6 @@ class TestModelRules:
                     'P',
                     centre=(BeamCentre | None, None),
                     centres=(list[BeamCentre], []),
-                    by=(
-                        Annotated[ByTime | ByCentre, Field(discriminator='mode')],
-                        ...,
-                    ),
                 )
             },
             {'params': model('P', tree=(WholeTree, ...))},
@@ -776,6 +772,36 @@ class TestModelRules:
             (
                 {'params': model('P', by=(ByMonitor | float, ...))},
                 'P.by: a union holds groups only, or no group',
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        by=(
+                            Annotated[ByTime | ByCentre, Field(discriminator='mode')],
+                            ...,
+                        ),
+                    )
+                },
+                'P.by: ByCentre.centre: no request writes it, since an alternative '
+                'of a union is written inline, with its tag, and no reference fits a '
+                'union',
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        by=(
+                            list[
+                                Annotated[
+                                    ByCentre | ByTime, Field(discriminator='mode')
+                                ]
+                            ],
+                            [],
+                        ),
+                    )
+                },
+                'P.by: ByCentre.centre: no request writes it',
             ),
             (
                 {
@@ -1212,7 +1238,7 @@ def file_ref(data_type: str) -> dict[str, Any]:
 
 
 def data_ref(data_type: str) -> dict[str, Any]:
-    """The schema of a reference to a group, or a union of groups: an output."""
+    """The schema of a reference to a group: an output."""
     kinds = ('OutputRef', 'AccumulatorRef')
     return {'anyOf': [{'$ref': f'#/$defs/{k}'} for k in kinds], 'dataType': data_type}
 
@@ -1310,33 +1336,24 @@ class TestSerialization:
         assert schema['$defs']['CanRun']['properties'] == {'file': file_ref('Path')}
         assert 'BeamCentre' not in schema['$defs']
 
-    def test_a_union_offers_inline_only_the_alternatives_without_a_data_value(
-        self,
-    ) -> None:
-        by = Annotated[ByMonitor | ByTime | ByCentre, Field(discriminator='mode')]
-        schema = spec(params=model('P', by=(by, ...))).serialize().params_schema
-        assert schema['properties']['by'] == {
-            'anyOf': [
-                inline(
-                    {
-                        'oneOf': [
-                            {'$ref': '#/$defs/ByMonitor'},
-                            {'$ref': '#/$defs/ByTime'},
-                        ],
-                        'discriminator': {
-                            'propertyName': 'mode',
-                            'mapping': {
-                                'monitor': '#/$defs/ByMonitor',
-                                'time': '#/$defs/ByTime',
-                            },
-                        },
-                    }
-                ),
-                data_ref('ByMonitor | ByTime | ByCentre'),
-            ],
-            'title': 'By',
-        }
-        assert 'ByCentre' not in schema['$defs']
+    def test_a_union_is_its_alternatives_inline_never_a_reference(self) -> None:
+        params = model('P', by=(By, ...), maybe=(By | None, None), each=(list[By], []))
+        properties = spec(params=params).serialize().params_schema['properties']
+        alternatives = inline(
+            {
+                'oneOf': [{'$ref': '#/$defs/ByMonitor'}, {'$ref': '#/$defs/ByTime'}],
+                'discriminator': {
+                    'propertyName': 'mode',
+                    'mapping': {
+                        'monitor': '#/$defs/ByMonitor',
+                        'time': '#/$defs/ByTime',
+                    },
+                },
+            }
+        )
+        assert properties['by'] == {**alternatives, 'title': 'By'}
+        assert properties['maybe']['anyOf'] == [alternatives, {'type': 'null'}]
+        assert properties['each']['items'] == alternatives
 
     def test_a_list_parameter_has_the_forms_per_row(self) -> None:
         params = model(
@@ -1450,13 +1467,14 @@ class TestSerialization:
         ref = OutputRef(record='r1', output='x')
         request = {
             'reduction': ref,
-            'by': ref,
+            'by': {'mode': 'monitor'},
             'gate': {'mode': 'window', 'window': ref},  # in an alternative
             'sample': {'file': DatasetRef(dataset='run:loki/1'), 'geometry': ref},
         }
         jsonschema.validate(to_jsonable_python(request), schema)
         for refused in (
             {'reduction': {'bins': ref}},  # a number is given inline only
+            {'by': ref},  # no reference fits a union
             {'by': {'mode': 'time', 'seconds': ref}},
             {'by': {'mode': ref, 'seconds': 1.0}},  # at a tag
             {'gate': {'mode': 'window', 'window': {'start': ref, 'stop': 1.0}}},

@@ -132,8 +132,9 @@ class Request(BaseModel, frozen=True):
     a dict, or a reference, as the parameter's type allows; a list of these
     for a list parameter.
     A file is always given by reference, such as ``dataset(path=...)``. A
-    reference stands for a group, a union of groups, or a file, at any place:
-    a value, an element of a list, or a field of a group, at any depth.
+    reference stands for a group or a file, at any place: a value, an
+    element of a list, or a field of a group, at any depth; a union of
+    groups is written inline only.
     ``"@ref"`` is reserved at every depth, so the references of a request
     are found without its spec (see :func:`ess.spec.refs.iter_refs`).
     """

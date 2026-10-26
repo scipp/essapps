@@ -156,7 +156,7 @@ The type at the place decides which of the two it accepts, with `| None` removed
 |---|---|---|---|
 | a file: `Path` | the field `file` of a `Sample` | no | to a dataset |
 | a group | `Reduction`, `Sample`, `ComputedTransmission` | no, if a field is a data value; else an object of its fields, each a place | to an output that fits and holds no file |
-| a union of groups, as a parameter or the element of a list parameter | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag, as for a group | to an output that fits and holds no file |
+| a union of groups, as a parameter or the element of a list parameter | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag, as for a group | no |
 | a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
 | at a field of a group: `list[X] \| None`, or a dict, with a JSON form | `list[float] \| None` | yes, whole: its contents are not places | no |
 | any other type with a JSON form | `int`, `float`, an enum, `tuple[float, float]` | yes | no |
@@ -205,7 +205,7 @@ A sample run and a can run both hold a file, and each is a class of its own, `Sa
 
 The contents of a tuple, a set, a dict, a `TypedDict`, or a dataclass are not places: such a value is written whole, inline, such as `'limits': [0.1, 0.5]` for `tuple[float, float]`.
 A parameter, or the element of a list parameter, may be a discriminated union of groups, `Annotated[A | B, Field(discriminator='kind')]`, in which each alternative has the *tag* field `kind`, typed as a `Literal` of one string, its own, such as `Literal['find']`.
-The request writes the fields of one alternative with its tag, inline, never by reference, since the tag says which alternative's fields the object has.
+The request writes the fields of one alternative with its tag, inline, since the tag says which alternative's fields the object has.
 It writes the tag even where the alternative has a default for it, and the params schema requires it:
 
 ```python
@@ -221,22 +221,30 @@ class FindCentre(BaseModel):                      # an alternative: settings to 
 
 beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
 
+{'beam_centre': {'kind': 'given', 'x': 0.012, 'y': -0.003}}
 {'beam_centre': {'kind': 'find', 'file': dataset(run=60339), 'tolerance': 0.05}}
-{'beam_centre': finder.ref('centre')}             # an output of type GivenCentre
 ```
 
+A union is written inline only: no reference fits it, and the params schema of a union has no reference form.
+An output that fit a union would carry the tag of an alternative, so the workflow that computes it would have to know the specs that take it.
+So no field of an alternative is a data value.
+A place that takes an output of another workflow is a group, such as `beam_centre: BeamCentre`, which takes `finder.ref('centre')`.
+A field of an alternative is a place of its own: the `file` of a `FindCentre` takes a dataset.
 An error inside a union names its place without the tag, `beam_centre.tolerance`, in either phase.
 A union is never a field of a group: a choice between ways is a parameter of its own, which a generated UI shows as a choice.
 A value given per row of a table, such as the transmission of a `Sample`, is a field of the row's group, and a choice of way for all rows is a parameter.
 
 `X | None` means *without X*: apply no mask, no direct-beam correction.
-A value obtained in one of several ways is a union that names each way.
-A UI shows `X | None` as a toggle, and a union as a choice between its alternatives, so a toggle that is off must read as what `None` does:
+A value obtained in one of several ways is a union that names each way, not `None` for one of them.
+A UI shows a group as its fields or a record, a union as a choice between its alternatives, and `X | None` as a toggle that adds `None` to either.
+So a toggle that is off must read as what `None` does:
 
 ```python
 mask: PixelMask | None = None                     # [ ] Mask
 direct_beam: DirectBeam | None                    # [x] Direct beam  File: [run 60340]
 
+beam_centre: BeamCentre = BeamCentre()
+# Beam centre: x [0.0] y [0.0]  [or from a record ▾]
 beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
 # Beam centre: (•) given: x [0.0] y [0.0]  ( ) find: File [ ] tolerance [0.1]
 # not `beam_centre: GivenCentre | None = None  # None: find it`,
@@ -245,8 +253,7 @@ beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = 
 
 `DirectBeam` is a group of the direct-beam run's `file: Path`.
 `direct_beam` has no default (see Defaults below), so a UI shows its toggle with neither state chosen until the user picks one.
-A data value obtained in one of several ways is a field of an alternative, since a union holds groups only.
-The workflow that computes it outputs the alternative, so that a reference to the output fits the union.
+A value obtained either as an output of another workflow or in another way, such as from a file, is a group given by reference, and the other way is a workflow that outputs the group: a published normalization is read by a workflow whose output another request references ([user-stories.md](user-stories.md), story C2).
 The reasons are [ADR 0008](../../packages/essspec/docs/developer/adr/0008-a-choice-between-ways-is-a-union-of-groups.md).
 
 The module that defines a spec imports pydantic, `ess.spec`, and scipp for the types of data values, but no workflow package.
@@ -261,7 +268,7 @@ A value *round-trips* when its JSON form reads back as the value.
 - No type in the params or the outputs is a `NewType`, at any depth: a spec names a role by a class, and a binding maps it to a key of its own.
 - Each output is a type, possibly typed `X | None`, or a list or a dict of one.
 - A file is at a place only, possibly typed `X | None` or in a list: not inside a tuple, a dict, or a dataclass, where no dataset can give it.
-- A union of groups is a parameter, or the element of a list parameter, never a field of a group. It is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag.
+- A union of groups is a parameter, or the element of a list parameter, never a field of a group. It is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag. No field of an alternative is a data value: a request writes a union inline.
 - No field of a group that holds a file is a data value: no reference stands for such a group, so a request writes it field by field, and no request writes a data value. A group in it that holds no file may have a field that is a data value, since a request gives that group by reference, as in `Sample.transmission: ComputedTransmission`.
 - A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation). It is not at a place inside itself, at any depth, such as a tree with `children: list[Node]`; a tree is written whole, `children: list[Node] | None`.
 - A default is a value, never a reference: what a request may write at the place, which round-trips and holds no `@ref` object at any depth; of a type without a JSON form, `None` or `[]`. It is the value that validating it gives, since pydantic does not validate a default: a group's default is an instance, not the object of its fields.
@@ -396,7 +403,7 @@ A file is always given by reference: `dataset(path=...)` names a file by its pat
 `record.ref(output, key)` names one element of a list or dict output: by its index for a list, `key='2'`, and by its key for a dict.
 A key that the output lacks fails in the call phase.
 
-A reference stands for the value at a place whose type is a group, a union of groups, or a file, such as `beam_centre`, `sample.file`, or `sample[2].transmission`: never for a value of another type, a whole list, a tag of a union, or a position inside a value given inline, such as an element of a tuple.
+A reference stands for the value at a place whose type is a group or a file, such as `beam_centre`, `sample.file`, or `sample[2].transmission`: never for a union of groups, a value of another type, a whole list, a tag of a union, or a position inside a value given inline, such as an element of a tuple.
 Its JSON form is an object with the key `@ref`, which names its kind:
 
 ```json
@@ -412,14 +419,14 @@ With the spec, it refuses an `@ref` object that is not at a place, such as an el
 A reference *fits* a place when the type of the data it names can be the value at the place.
 `| None` is removed on both sides.
 A reference with a key names one element, of the output's element type, and an element of a list parameter takes a reference by the element type.
-A reference at a field of a group takes the field's type, and one in an alternative of a union that of the alternative the tag names.
-Data fit a union when they fit one of its alternatives.
-Then the data fit when the output's type is the class at the place or a subclass of it:
+A reference at a field of a group takes the field's type; at a field of an alternative of a union, the type of that field in the alternative the tag names.
+A reference at a union fits nothing (see Specs and bindings), so a request that holds one is refused.
+Otherwise the data fit when the output's type is the class at the place or a subclass of it:
 
 | Type of the output | Type at the place | Fits |
 |---|---|---|
 | `BeamCentre` | `BeamCentre \| None` | yes |
-| `GivenCentre` | `GivenCentre \| FindCentre`, a union of groups | yes |
+| `BeamCentre` | `GivenCentre \| FindCentre`, a union of groups | no: a union is written inline |
 | `list[TimeRange]`, with a key | `TimeRange`, a row of `time_range: list[TimeRange]` | yes |
 | `ComputedTransmission` | `ComputedTransmission`, the field `transmission` of a `Sample` | yes |
 | `sc.DataArray` | `ComputedTransmission` | no: a reference stands for a group, so the workflow outputs `ComputedTransmission` |

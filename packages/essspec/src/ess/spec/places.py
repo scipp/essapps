@@ -30,7 +30,7 @@ a group                                   an object of its fields, each a
                                           or a reference to an output
 a union of groups                         an object of the fields of one
                                           alternative, with its tag, as for a
-                                          group; or a reference to an output
+                                          group; never a reference
 a list, ``list[X]``                       a list, each element a place of
                                           type ``X``
 ``list[X] | None``, ``dict[str, X]``      the value as JSON, whole (*inline*)
@@ -46,7 +46,6 @@ fit, so a value computed by another workflow comes as a group, such as a
 found beam centre, and a data value is a field of one::
 
     class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):
-        kind: Literal['computed'] = 'computed'
         transmission: sc.DataArray  # a data value: given by reference only
 
 No field of a group that holds a file is a data value: no reference stands
@@ -67,6 +66,17 @@ of one string, its own, such as ``Literal['find']``. The tag is written
 inline, never as a reference: it says which alternative's fields the object
 has, and so what each of them takes. A union that holds a group holds groups
 only, since a value of another type has no tag.
+
+A union is written inline only, and no reference fits it, so that an
+output need not be of a tagged class to feed a place: the producer of a
+group need not know its consumers. So a request writes each alternative
+inline: no field of it is a data value (see :func:`unwritten`). A place
+that takes either a value typed in or one from a record is a group,
+possibly typed ``X | None``, not a union::
+
+    beam_centre: BeamCentre = BeamCentre()  # typed in, or finder.ref('centre')
+    beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
+                                            # typed in, or found in this graph
 
 A group with no reference inside, at any depth, is an inline value. In the
 request phase, :func:`held` validates it whole, from its JSON form, so that
@@ -186,7 +196,13 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
                 f'{ref} is a reference to a whole {whole}; a reference never '
                 'stands for a whole list or dict',
             )
-        if not (is_file(tp) or groups_at(slot.model, slot.name)):
+        if alternatives(slot.annotation, slot.discriminator) is not None:
+            raise _refused(
+                loc,
+                f'{ref}: a union of groups is written inline, with the tag of an '
+                'alternative; a reference stands for a group or a file only',
+            )
+        if not (is_file(tp) or is_group(tp)):
             raise _refused(
                 loc,
                 f'{ref}: {type_name(tp)} is given inline; a reference stands for '

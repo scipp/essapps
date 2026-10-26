@@ -19,7 +19,7 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Any
 
 import numpy as np
 import pytest
@@ -136,31 +136,25 @@ class BeamCentre(Data):
 
 class ComputedNormalization(Data):
     """
-    The normalization that ``VANADIUM`` computes from a vanadium run: a group
-    that holds a data value, so a request gives it by reference only.
+    The normalization that ``VANADIUM`` computes from a vanadium run, or that
+    ``LOAD_NORMALIZATION`` reads from a published file: a group that holds a
+    data value, so a request gives it by reference only.
     """
 
-    kind: Literal['computed'] = 'computed'
     factor: sc.Variable
 
 
-class PublishedNormalization(Data):
+class PublishedNormalization(BaseModel):
     """A normalization published to the catalogue, as a file of its factor (C2)."""
 
-    kind: Literal['published'] = 'published'
     file: Path
-
-
-Normalization = Annotated[
-    ComputedNormalization | PublishedNormalization, Field(discriminator='kind')
-]
 
 
 class IofQParams(Data):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: Sample
     beam_centre: BeamCentre | None = None
-    normalization: Normalization | None = None
+    normalization: ComputedNormalization | None = None
 
 
 class IofQOutputs(Data):
@@ -181,22 +175,12 @@ def _reduce(params: IofQParams, counts: np.ndarray) -> IofQOutputs:
     masked = np.where(counts < reduction.threshold, 0.0, counts)
     centre = params.beam_centre
     reduced = masked - (0.0 if centre is None else centre.position.value)
-    reduced = reduced / _factor(params.normalization)
+    normalization = params.normalization
+    reduced = reduced / (1.0 if normalization is None else normalization.factor.value)
     return IofQOutputs(
         iofq=_array(reduced.reshape(reduction.bins, -1).sum(axis=1)),
         masked=_array(masked),
     )
-
-
-def _factor(
-    normalization: ComputedNormalization | PublishedNormalization | None,
-) -> float:
-    """The factor of a normalization, read from its file if it is published."""
-    if normalization is None:
-        return 1.0
-    if isinstance(normalization, PublishedNormalization):
-        return float(read_dataset(normalization.file))
-    return normalization.factor.value
 
 
 class IofQCanParams(IofQParams):
@@ -219,7 +203,7 @@ class IofQV2Params(Data):
     reduction: ReductionV2 = Field(default_factory=ReductionV2)
     sample: Sample
     beam_centre: BeamCentre | None = None
-    normalization: Normalization | None = None
+    normalization: ComputedNormalization | None = None
 
 
 IOFQ_V2 = WorkflowSpec(
@@ -282,6 +266,21 @@ def vanadium(params: VanadiumParams) -> VanadiumOutputs:
             factor=sc.scalar(total * params.scaling.scale)
         )
     )
+
+
+class LoadNormalizationParams(Data):
+    published: PublishedNormalization
+
+
+LOAD_NORMALIZATION = _spec(
+    'load-normalization', VanadiumOutputs, params=LoadNormalizationParams
+)
+
+
+def load_normalization(params: LoadNormalizationParams) -> VanadiumOutputs:
+    """The normalization of a published file of its factor (C2)."""
+    factor = sc.scalar(float(read_dataset(params.published.file)))
+    return VanadiumOutputs(normalization=ComputedNormalization(factor=factor))
 
 
 class NormalizeParams(Data):
@@ -618,6 +617,7 @@ TOYS: dict[SpecId, Binding[Any, Any]] = {
         function_binding(IOFQ_CAN, iofq_can),
         function_binding(BEAM_CENTRE, beam_centre),
         StagedFunction(VANADIUM, vanadium),
+        function_binding(LOAD_NORMALIZATION, load_normalization),
         summing(NORMALIZE, normalize),
         summing(BACKGROUND, background),
         function_binding(CONTRIBUTE, contribute),

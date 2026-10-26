@@ -10,14 +10,15 @@ A story that needs what the design leaves open or defers says so in a "Gap" line
 
 Toy specs stand in for instrument workflows, so that a story's numbers can be checked by hand.
 A dataset made by `measure` holds a list of counts.
-Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate record is made only for a result worth keeping by itself, or for a value that one user types in and another computes (section I).
+Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate record is made only for a result worth keeping by itself, for a value that one user types in and another computes (section I), or for a value that a workflow computes and a file also holds, which a loader workflow reads (C2).
 
 | Spec | Params | Outputs | Computes | Stands in for |
 |---|---|---|---|---|
-| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: Sample`, `beam_centre: BeamCentre \| None`, `normalization: ComputedNormalization \| PublishedNormalization \| None` | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre.position`; divided by the normalization's `factor`, read from its file if it is published; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, of one run |
+| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: Sample`, `beam_centre: BeamCentre \| None`, `normalization: ComputedNormalization \| None` | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre.position`; divided by the normalization's `factor`; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, of one run |
 | `IOFQ_CAN` | the params of `IOFQ`, and `can: Can` | `iofq`, `masked` | as `IOFQ`, of the counts minus the can's counts | a SANS reduction of one run with the can subtracted |
 | `BEAM_CENTRE` | `direct_beam: DirectBeam` | `centre: BeamCentre` | `BeamCentre(position=...)`, with the mean of the counts | beam-centre finding |
 | `VANADIUM` | `scaling: Scaling` (`scale=1.0`), `vanadium: Vanadium` | `normalization: ComputedNormalization` | `ComputedNormalization(factor=...)`, with the sum of the counts times `scale` | vanadium processing |
+| `LOAD_NORMALIZATION` | `published: PublishedNormalization` | `normalization: ComputedNormalization` | `ComputedNormalization(factor=...)`, with the factor read from the file | reading a result published to a catalogue |
 | `NORMALIZE` | `scaling: Scaling`, `runs: list[Sample]`, a table | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
 | `BACKGROUND` | `sample_runs: list[Sample]`, `background_runs: list[Background]`, a table each | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
 | `CONTRIBUTE` | `sample: Sample` | `parts: Parts` (`numerator`, `denominator`), `transmission: Transmission` | a copy of the counts and their total; `Transmission(fraction=...)`, with the first count divided by the total | a reduction of one run whose outputs another request sums |
@@ -33,14 +34,13 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `FIND_CENTRE` | `direct_beam: DirectBeam` | `centre: Centre` | `Centre(x=...)`, with the mean of the counts | beam-centre finding, with the centre as a group |
 | `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleWithTransmission]`, a table; `can: list[Can]`, a table | `centred` | each sample run's counts times its transmission, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
 
-The type at a place, the value of a parameter, an element of a list, or a field of a group at any depth, decides how a request gives its value (README.md, Specs and bindings, which also has the row for a dict or a list that may be `None`, at a field of a group):
+The type at a place, the value of a parameter, an element of a list, or a field of a group at any depth, decides how a request gives its value (README.md, Specs and bindings, which also has the rows for a union of groups, and for a dict or a list that may be `None` at a field of a group):
 
 | The type at a place | In the toy specs | Given as |
 |---|---|---|
 | a file: `Path` | the `file` of each run, such as `Sample.file` | a dataset reference |
 | a group, no field of which is a data value | the runs, such as `Sample` and `SampleWithTransmission`; `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre`, `PublishedNormalization` | an object of its fields, each a place, or a reference to an output that fits and holds no file |
 | a group with a field that is a data value | `BeamCentre`, `ComputedNormalization`, `Transmission`, `Parts`, `Volume`, `Reflectivity` | a reference to an output that fits |
-| a union of groups | `ComputedNormalization \| PublishedNormalization`, by the tag `kind` | an object of one alternative's fields, with its tag, as for a group, or a reference to an output that fits and holds no file |
 | a list, `list[X]` | each list parameter, such as `runs` and `parts` | a list, each element a place of type `X` |
 | any other type with a JSON form | `int`, `float`, as in `bins` and `scale` | an inline value |
 | any other type, a *data value*, such as `sc.Variable` | the fields of the groups above, such as `Volume.counts` | nothing: it is a field of a group |
@@ -61,10 +61,10 @@ class Can(Run): ...
 A request gives each run as an object with a dataset reference at `file`, and a table of runs as a list of them, such as `[{'file': r} for r in runs]`.
 An output without a type in the list of toy specs is a `sc.Variable`.
 `BeamCentre`, `Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each, named by its role: `position`, `fraction`, `counts`, and `curve`.
-`ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` a file of it, `file: Path`; each has the tag `kind`.
+`ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` a file of it, `file: Path`.
 `Parts` is a group of two `sc.Variable`s.
 `SampleWithTransmission` is a `Sample` with `transmission: Transmission`, without a default: each row gives the transmission of its run.
-A reference to an output fits a place when the output's type fits the type at the place (README.md): `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `VANADIUM`'s `normalization` fits `IOFQ`'s `normalization`, `FIND_CENTRE`'s `centre` fits `CENTRED_MULTI`'s `centre`, `CONTRIBUTE`'s `transmission` fits the field `transmission` of a `SampleWithTransmission`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
+A reference to an output fits a place when the output's type fits the type at the place (README.md): `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `VANADIUM`'s and `LOAD_NORMALIZATION`'s `normalization` fit `IOFQ`'s `normalization`, `FIND_CENTRE`'s `centre` fits `CENTRED_MULTI`'s `centre`, `CONTRIBUTE`'s `transmission` fits the field `transmission` of a `SampleWithTransmission`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
 The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with a run per row; that of `SLICES` has a time range per row.
 These specs declare their tables with `tables=`, and each table needs a row, with `Field(min_length=1)`, as in `runs: list[Sample] = Field(min_length=1)`.
@@ -78,7 +78,7 @@ So both `sample` and `can` are tables that need a row.
 `PARTS_SUM` is bound with `function_binding` to a function that sums each field of `Parts` over the list `parts`.
 The other toy specs are bound with `function_binding`.
 No toy spec returns an output that shares memory with a value it takes.
-A story may add a toy spec to the list of toy specs; it must take runs directly and be checkable by hand.
+A story may add a toy spec to the list of toy specs; it must take runs directly, or be a loader of a file, and be checkable by hand.
 
 ## Conventions
 
@@ -386,16 +386,17 @@ pid = other.publish(vanadium.ref('normalization'), 'scicat')
 published = datasets.add_published(scicat.entries[pid])
 
 sample = measure(2, [4.0, 8.0])
-normalization = {'kind': 'published', 'file': dataset(pid=pid)}
-result = client.compute(IOFQ, params={'sample': {'file': sample}, 'normalization': normalization})
+loaded = client.compute(LOAD_NORMALIZATION, params={'published': {'file': dataset(pid=pid)}})
+result = client.compute(IOFQ, params={'sample': {'file': sample},
+                                      'normalization': loaded.ref('normalization')})
 
 assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]    # [4, 8] / ((1 + 1) * 2)
 assert set(client.provenance(result).datasets()) == {sample, published}
-assert client.records() == [result]              # the vanadium record is on the other backend
+assert client.records() == [loaded, result]      # the vanadium record is on the other backend
 ```
 
 Provenance stops at the published dataset, since what lies behind a dataset belongs to its source. How the backend reads the published output is system story C2.
-The published normalization is a file of its factor, and a dataset reference fits a file only, so `normalization` is a choice between ways of obtaining it (ADR 0008): the `ComputedNormalization` that `VANADIUM` outputs, by reference, or a `PublishedNormalization`, whose file a request gives by dataset. The workflow reads the file, as it reads a run.
+The published normalization is a file of its factor, and a dataset reference fits a file only. So `LOAD_NORMALIZATION` reads the file and outputs a `ComputedNormalization`, which `IOFQ`'s `normalization` takes by reference, as it takes the output of `VANADIUM`. `normalization` is a group, not a union of the two ways, since no reference fits a union (README.md, Specs and bindings).
 A result of another proposal, such as a direct-beam function an instrument scientist prepared for the users of later proposals, is read the same way, never through the other proposal's records (G5).
 
 ### C4. Reflectometry angle series
