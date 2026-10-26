@@ -25,7 +25,9 @@ def test_d1_temperature_scan(
     ]
     corrupt(runs[1])
     template = Template(
-        IOFQ, params={'reduction': Reduction(bins=1)}, blanks=('sample',)
+        IOFQ,
+        params={'reduction': Reduction(bins=1), 'normalization': None},
+        blanks=('sample',),
     )
     requests = apply(
         template,
@@ -61,7 +63,7 @@ def test_d2_overnight_cluster_batch(
     for member, run in runs.items():
         client.submit(
             IOFQ,
-            params={'sample': {'file': run}},
+            params={'sample': {'file': run}, 'normalization': None},
             label='night',
             member=member,
             persist=True,
@@ -98,7 +100,9 @@ def test_d2_overnight_cluster_batch(
 def test_d3_cancel_and_resubmit(client: Client, measure: Measure) -> None:
     runs = [measure(n, [1.0, 1.0, 1.0, 1.0]) for n in range(1, 501)]
     wrong = Template(
-        IOFQ, params={'reduction': Reduction(threshold=20.0)}, blanks=('sample',)
+        IOFQ,
+        params={'reduction': Reduction(threshold=20.0), 'normalization': None},
+        blanks=('sample',),
     )
     first = client.submit(
         apply(wrong, runs, client.datasets, at=('sample', 'file'), member_field='run'),
@@ -106,7 +110,10 @@ def test_d3_cancel_and_resubmit(client: Client, measure: Measure) -> None:
         persist=True,
     )
     client.cancel(first)
-    fixed = replace(wrong, params={'reduction': Reduction(threshold=0.5)})
+    fixed = replace(
+        wrong,
+        params={'reduction': Reduction(threshold=0.5), 'normalization': None},
+    )
     second = client.compute(
         apply(fixed, runs, client.datasets, at=('sample', 'file'), member_field='run'),
         label='scan',
@@ -123,7 +130,9 @@ def test_d3_cancel_and_resubmit(client: Client, measure: Measure) -> None:
 def test_d4_typo_caught_before_500_failures(client: Client, measure: Measure) -> None:
     runs = [measure(n, [1.0, 1.0]) for n in range(1, 501)]
     typo = Template(
-        IOFQ, params={'reduction': {'threshold': '2,5'}}, blanks=('sample',)
+        IOFQ,
+        params={'reduction': {'threshold': '2,5'}, 'normalization': None},
+        blanks=('sample',),
     )
     requests = apply(
         typo, runs, client.datasets, at=('sample', 'file'), member_field='run'
@@ -138,7 +147,9 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
     client: Client, measure: Measure
 ) -> None:
     template = Template(
-        IOFQ, params={'reduction': Reduction(threshold=1.5)}, blanks=('sample',)
+        IOFQ,
+        params={'reduction': Reduction(threshold=1.5), 'normalization': None},
+        blanks=('sample',),
     )
     runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
     client.compute(
@@ -161,7 +172,9 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
     with pytest.raises(SubmitError, match=r'reduction\.threshold: Extra inputs'):
         client.submit(renamed, label='scan')
     moved = replace(
-        template, spec=IOFQ_V2, params={'reduction': ReductionV2(mask_below=1.5)}
+        template,
+        spec=IOFQ_V2,
+        params={'reduction': ReductionV2(mask_below=1.5), 'normalization': None},
     )
     requests = apply(
         moved, runs, client.datasets, at=('sample', 'file'), member_field='run'

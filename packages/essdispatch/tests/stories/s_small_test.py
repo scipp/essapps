@@ -31,7 +31,12 @@ from .conftest import (
 def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
     run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
     result = client.compute(
-        IOFQ, params={'reduction': Reduction(threshold=1.5), 'sample': {'file': run}}
+        IOFQ,
+        params={
+            'reduction': Reduction(threshold=1.5),
+            'sample': {'file': run},
+            'normalization': None,
+        },
     )
 
     assert client.output(result, 'iofq').values.tolist() == [2.0, 7.0]
@@ -42,7 +47,11 @@ def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
 def test_s2_tune_one_parameter(client: Client, measure: Measure) -> None:
     run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
     tune = client.stage(
-        Template(IOFQ, params={'sample': {'file': run}}, blanks=('reduction',))
+        Template(
+            IOFQ,
+            params={'sample': {'file': run}, 'normalization': None},
+            blanks=('reduction',),
+        )
     )
     for bins in (1, 2, 4):
         result = client.compute(
@@ -60,7 +69,12 @@ def test_s3_look_at_a_value_inside_a_reduction(
 ) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
     result = client.compute(
-        IOFQ, params={'reduction': Reduction(threshold=2.5), 'sample': {'file': run}}
+        IOFQ,
+        params={
+            'reduction': Reduction(threshold=2.5),
+            'sample': {'file': run},
+            'normalization': None,
+        },
     )
 
     assert client.output(result, 'masked').values.tolist() == [0.0, 0.0, 3.0, 4.0]
@@ -108,7 +122,9 @@ def test_s7_reduce_each_sample_with_the_can_measured_before_it(
     first = measure(2, [5.0, 6.0], role='sample')
     can_3 = measure(3, [2.0, 2.0], role='can')
     second = measure(4, [6.0, 9.0], role='sample')
-    template = Template(IOFQ_CAN, blanks=('sample', 'can'))
+    template = Template(
+        IOFQ_CAN, params={'normalization': None}, blanks=('sample', 'can')
+    )
     cans = Lookup({('can', 'file'): LastBefore(Selector(role='can'))})
 
     requests = apply(

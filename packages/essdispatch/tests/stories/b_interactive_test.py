@@ -21,7 +21,11 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
 ) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
     tune = client.stage(
-        Template(IOFQ, params={'sample': {'file': run}}, blanks=('reduction',))
+        Template(
+            IOFQ,
+            params={'sample': {'file': run}, 'normalization': None},
+            blanks=('reduction',),
+        )
     )
     for bins, threshold in [(1, 0.0), (4, 0.0), (4, 1.5), (2, 1.5)]:
         reduction = Reduction(bins=bins, threshold=threshold)

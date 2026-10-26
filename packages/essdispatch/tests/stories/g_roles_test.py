@@ -19,7 +19,11 @@ def test_g2_developer_iterates_on_a_workflow(
     draft = iofq
     dev = local(proposal='p1', datasets=datasets, bind=[function_binding(IOFQ, draft)])
     result = dev.compute(
-        IOFQ, params={'sample': {'file': measure(1, [1.0, 2.0, 3.0, 4.0])}}
+        IOFQ,
+        params={
+            'sample': {'file': measure(1, [1.0, 2.0, 3.0, 4.0])},
+            'normalization': None,
+        },
     )
 
     assert dev.output(result, 'iofq').values.tolist() == [3.0, 7.0]
@@ -39,6 +43,10 @@ def test_g5_reference_across_proposals_refused(
     with pytest.raises(SubmitError, match='p1'):
         mine.compute(
             IOFQ,
-            params={'sample': {'file': sample}, 'beam_centre': centre.ref('centre')},
+            params={
+                'sample': {'file': sample},
+                'beam_centre': centre.ref('centre'),
+                'normalization': None,
+            },
         )
     assert mine.records() == []
