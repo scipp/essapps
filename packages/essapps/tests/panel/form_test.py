@@ -453,10 +453,10 @@ GIVEN_TIMES = {
         ('2026-03-04T05:06:07Z', 'At (UTC)', '2026-03-04T06:06:07Z'),
         ('2026-03-04T05:06:07+02:00', 'At (UTC+02:00)', '2026-03-04T06:06:07+02:00'),
         ('2026-03-04T05:06:07', 'At (no time zone)', '2026-03-04T06:06:07'),
-        ('2026-03-04T05:06:07.123Z', 'At (UTC)', '2026-03-04T06:06:07.123000Z'),
+        ('2026-03-04T05:06:07.123Z', 'At (UTC)', '2026-03-04T06:06:07Z'),
     ],
 )
-def test_a_time_edited_in_the_browser_keeps_its_zone_and_fraction_of_a_second(
+def test_a_time_edited_in_the_browser_keeps_its_zone(
     times_and_lists: Form, given: str, label: str, edited: str
 ) -> None:
     times = {**GIVEN_TIMES, 'at': given}
@@ -465,6 +465,18 @@ def test_a_time_edited_in_the_browser_keeps_its_zone_and_fraction_of_a_second(
     assert shown(picker) == '2026-03-04 05:06:07'
     sent(picker, '2026-03-04 06:06:07')
     assert times_and_lists.params['times'] == {**times, 'at': edited}
+
+
+def test_a_time_unchanged_in_the_browser_keeps_its_fraction_of_a_second(
+    times_and_lists: Form,
+) -> None:
+    times = {**GIVEN_TIMES, 'at': '2026-03-04T05:06:07.123Z'}
+    times_and_lists.set({'times': times, 'lists': {'banks': []}})
+    sent(widget(times_and_lists, 'At (UTC)'), '2026-03-04 05:06:07')
+    assert times_and_lists.params['times'] == {
+        **times,
+        'at': '2026-03-04T05:06:07.123000Z',
+    }
 
 
 def test_a_time_without_a_value_is_in_the_zone_of_its_type(

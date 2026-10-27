@@ -275,7 +275,7 @@ class _Scalar:
         self._type = tp
         self._default = default
         self._zone: tzinfo | None = None
-        self._fraction = 0  # microseconds, which the picker of a time drops
+        self._time_set: datetime | None = None  # with the zone and fraction
         options: dict[str, Any] = {
             'label': label,
             'description': description,
@@ -308,9 +308,13 @@ class _Scalar:
             missing.append(FieldError(None, loc, 'give a value'))
             return UNSET
         if self._type in _TIMES:
-            # The picker gives a time without a zone, to the second.
-            fraction = value.microsecond or self._fraction
-            value = value.replace(microsecond=fraction, tzinfo=self._zone)
+            # The picker gives a time without a zone, to the second: the time
+            # set, unless the user changed it.
+            value = value.replace(tzinfo=self._zone)
+            if (set_ := self._time_set) is not None and value == set_.replace(
+                microsecond=0
+            ):
+                value = set_
         return to_jsonable_python(value)
 
     def set(self, value: Any) -> None:
@@ -327,17 +331,17 @@ class _Scalar:
     def _time(self, value: datetime | str | None) -> datetime | None:
         """
         ``value``, a time, or its text, as a record holds it, as the picker
-        shows it: without its zone and its fraction of a second, which are
-        kept, and the zone named in the label.
+        shows it: without its zone, which is kept and named in the label, and
+        without its fraction of a second, which is kept until the user changes
+        the time.
         """
         if isinstance(value, str):
             value = datetime.fromisoformat(value)
         if value is None:
             self._zone = UTC if self._type is AwareDatetime else None
-            self._fraction = 0
         else:
             self._zone = value.tzinfo
-            self._fraction = value.microsecond
+        self._time_set = value
         zone = 'no time zone' if self._zone is None else self._zone.tzname(value)
         self.widget.label = f'{self._label} ({zone})'
         return None if value is None else value.replace(tzinfo=None)
