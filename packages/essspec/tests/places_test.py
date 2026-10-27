@@ -6,13 +6,12 @@ from typing import Annotated, Any, Literal
 
 import pytest
 import scipp as sc
-from annotated_types import Ge, Gt, MinLen
+from annotated_types import Gt, MinLen
 from pydantic import BaseModel, Field, field_validator
 
 from ess.spec import DatasetModel, DatasetRef, OutputRef
 from ess.spec.places import (
     Rows,
-    Value,
     Ways,
     held,
     place,
@@ -84,14 +83,6 @@ def test_a_dataset_model_takes_a_reference_to_a_dataset_only() -> None:
     )
 
 
-def test_a_scalar_is_written_inline_with_its_constraints() -> None:
-    assert place(Reduction, 'bins') == Value(int, (Ge(1),))
-
-
-def test_a_value_has_the_constraints_of_its_field_then_of_its_type() -> None:
-    assert place(Reduction, 'limits') == Value(float, (Ge(1), Gt(0)))
-
-
 def test_a_group_with_a_data_value_takes_a_reference_only() -> None:
     assert place(Params, 'mask') == Ways(
         tag=None, inline={}, record=Mask, none=False, metadata=()
@@ -134,10 +125,6 @@ def test_a_list_parameter_describes_its_rows() -> None:
     assert isinstance(centres, Rows)
     assert isinstance(centres.element, Ways)
     assert centres.element.inline == {'given': GivenCentre, 'find': FindCentre}
-
-
-def test_a_list_field_of_a_group_describes_its_scalars() -> None:
-    assert place(Reduction, 'angles') == Rows(Value(float, ()), ())
 
 
 def test_a_union_without_a_discriminator_is_refused() -> None:

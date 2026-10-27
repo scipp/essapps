@@ -201,7 +201,7 @@ from pydantic_core import PydanticUndefined
 
 from . import field_types, places
 from .parameters import DatasetModel
-from .places import Place, Rows, Value, Ways
+from .places import Rows, Ways
 from .refs import AccumulatorRef, DatasetRef, Loc, OutputRef, ParamsError, Ref
 
 
@@ -841,9 +841,9 @@ def _ref_form(tp: Any) -> Any:
 
 def _field_forms(model: type[BaseModel], name: str) -> Any:
     """
-    The type of the field ``name`` of ``model`` with the type at each of its
-    places replaced by the forms it takes (see :func:`_forms`); the
-    constraints of a list, whose elements are places, on the list.
+    The type of the parameter ``name`` of ``model`` with the type at each of
+    its places replaced by the forms it takes (see :func:`_forms`); the
+    constraints of a list parameter on the list.
     """
     described = places.place(model, name)
     if isinstance(described, Rows):
@@ -853,28 +853,21 @@ def _field_forms(model: type[BaseModel], name: str) -> Any:
     return _forms(described)
 
 
-def _forms(described: Place) -> Any:
+def _forms(described: Ways) -> Any:
     """
     The forms a place takes, as :func:`~ess.spec.places.place` describes it:
-    a group or a union the forms of the fields of each group written inline
-    (see :func:`_group_forms`), and a reference if one fits, of a dataset
-    model to a dataset; a scalar itself, inline only, with its constraints,
-    which are never put on a reference.
+    the forms of the fields of each group written inline (see
+    :func:`_group_forms`), with the constraints of the place, and a reference
+    if one fits, of a dataset model to a dataset.
     """
-    match described:
-        case Value(type=tp, metadata=metadata):
-            form = Annotated[tp, *metadata] if metadata else tp
-        case Ways(tag=tag, inline=inline, record=record, none=none):
-            forms = []
-            if inline:
-                groups = [_group_forms(g, tag) for g in inline.values()]
-                forms.append(_inline_form(groups, described.metadata))
-            if record is not None:
-                forms.append(_ref_form(record))
-            form = Union[tuple(forms)]  # noqa: UP007
-            if none:
-                form = Union[form, None]  # noqa: UP007
-    return form
+    forms = []
+    if described.inline:
+        groups = [_group_forms(g, described.tag) for g in described.inline.values()]
+        forms.append(_inline_form(groups, described.metadata))
+    if described.record is not None:
+        forms.append(_ref_form(described.record))
+    form = Union[tuple(forms)]  # noqa: UP007
+    return Union[form, None] if described.none else form  # noqa: UP007
 
 
 def _inline_form(groups: Sequence[Any], metadata: Sequence[Any]) -> Any:
@@ -891,13 +884,13 @@ def _inline_form(groups: Sequence[Any], metadata: Sequence[Any]) -> Any:
 @functools.cache
 def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
     """
-    A model of the fields of a group, each replaced by the forms it takes
-    (see :func:`_field_forms`); the tag field ``tag`` of an alternative of a
-    union by itself, since a tag is written inline only, and required, since
-    a request always writes it. The title of a tag labels its alternative,
-    so a tag without one is titled by its value, as a parameter is by its
-    name; pydantic's title, made of the name of the field, would be that of
-    every alternative.
+    A model of the fields of a group, each a scalar or a list of scalars,
+    written inline only, with its constraints; the tag field ``tag`` of an
+    alternative of a union without its default, required, since a request
+    always writes it. The title of a tag labels its alternative, so a tag
+    without one is titled by its value, as a parameter is by its name;
+    pydantic's title, made of the name of the field, would be that of every
+    alternative.
     """
     fields: dict[str, Any] = {}
     for name, info in group.model_fields.items():
@@ -905,7 +898,9 @@ def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
             places.title(get_args(info.annotation)[0], info) if name == tag else None
         )
         fields[name] = (
-            info.annotation if name == tag else _field_forms(group, name),
+            Annotated[info.annotation, *info.metadata]
+            if info.metadata
+            else info.annotation,
             Field(
                 default=PydanticUndefined
                 if name == tag

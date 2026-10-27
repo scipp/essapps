@@ -6,8 +6,8 @@ Places: where a request writes either a value or a reference, by type.
 A request is a JSON object of parameter values. A *place* is a position in
 it where the request may write either a value or a reference to data that
 exist elsewhere (see :mod:`ess.spec.refs`): the value of a parameter, or an
-element of a list parameter. A group written inline holds only scalars, so
-there is no place inside it::
+element of a list parameter. A group written inline holds only scalars and
+lists of scalars, so there is no place inside it::
 
     {
         'sample': dataset(run=101),                    # sample
@@ -77,11 +77,11 @@ possibly typed ``X | None``, not a union::
     beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
                                             # typed in, or found in this graph
 
-:func:`place` describes what a request writes at a place, as the table
-above has it, for the params schema of a spec and for a form that a UI
-makes from the models: a :class:`Ways` of a group, a dataset model among
-them, or a union; of a list parameter, the :class:`Rows`; of a field of a
-group, a :class:`Value`. For the two ``beam_centre`` above::
+:func:`place` describes what a request writes at a parameter, as the
+table above has it, for the params schema of a spec and for a form that a
+UI makes from the models: the :class:`Ways` of a group, a dataset model
+among them, or a union; of a list parameter, the :class:`Rows`. For the two
+``beam_centre`` above::
 
     Ways(tag=None, inline={None: BeamCentre}, record=BeamCentre, none=False, ...)
     Ways(tag='kind', inline={'given': GivenCentre, 'find': FindCentre},
@@ -346,18 +346,6 @@ def _refused(loc: Loc, msg: str) -> ParamsError:
 
 
 @dataclass(frozen=True)
-class Value:
-    """
-    A field of a group: a scalar, which a request writes inline, as JSON, or
-    a data value, which has no JSON form, and no request writes: a group that
-    holds one is given by reference only (see :func:`unwritten`).
-    """
-
-    type: Any  # without Annotated metadata
-    metadata: tuple[Any, ...]  # of the field, then of the Annotated in its type
-
-
-@dataclass(frozen=True)
 class Ways:
     """
     A group, a union of groups, or either typed ``X | None``: the ways a
@@ -377,26 +365,23 @@ class Ways:
     metadata: tuple[Any, ...]  # of the field, then of the Annotated in its type
 
 
-type Place = Value | Ways
-
-
 @dataclass(frozen=True)
 class Rows:
     """
-    A list whose elements are places, or of a field of a group, scalars, each
-    as ``element`` describes it, and ``metadata``, the constraints of the
-    list, such as its length.
+    A list parameter: its elements, places, each as ``element`` describes
+    it, and ``metadata``, the constraints of the list, such as its length.
     """
 
-    element: Place
+    element: Ways
     metadata: tuple[Any, ...]
 
 
-def place(model: type[BaseModel], name: str) -> Place | Rows:
+def place(model: type[BaseModel], name: str) -> Ways | Rows:
     """
-    What a request writes at the field ``name`` of ``model``, a parameter or
-    a field of a group (see the table in :mod:`ess.spec.places`); of a list,
-    :class:`Rows`. Raises ``ValueError`` as :func:`alternatives` does.
+    What a request writes at the parameter ``name`` of ``model``, the params
+    model of a spec (see the table in :mod:`ess.spec.places`); of a list
+    parameter, :class:`Rows`. Raises ``ValueError`` as :func:`alternatives`
+    does.
     """
     info = model.model_fields[name]
     metadata = tuple(info.metadata)
@@ -421,19 +406,19 @@ def title(name: str, info: FieldInfo) -> str:
     return info.title or name.replace('_', ' ').title()
 
 
-def _described(annotation: Any, metadata: tuple[Any, ...]) -> Place:
-    """The description of a place of type ``annotation`` with ``metadata``."""
+def _described(annotation: Any, metadata: tuple[Any, ...]) -> Ways:
+    """
+    The description of a place of type ``annotation``, a group or a union of
+    groups, possibly typed ``X | None``, with ``metadata``.
+    """
     tp, inner, none = _unwrapped(annotation)
     metadata = (*metadata, *inner)
-    if field_types.element(tp) is None:
-        annotated = Annotated[tp, *metadata] if metadata else tp
-        if (union := alternatives(annotated)) is not None:
-            tag, groups = union
-            return Ways(tag, groups, None, none, metadata)
-        if field_types.is_group(tp):
-            inline = {} if unwritten(tp) is not None else {None: tp}
-            return Ways(None, inline, tp, none, metadata)
-    return Value(tp, metadata)
+    annotated = Annotated[tp, *metadata] if metadata else tp
+    if (union := alternatives(annotated)) is not None:
+        tag, groups = union
+        return Ways(tag, groups, None, none, metadata)
+    inline = {} if unwritten(tp) is not None else {None: tp}
+    return Ways(None, inline, tp, none, metadata)
 
 
 def _unwrapped(annotation: Any) -> tuple[Any, tuple[Any, ...], bool]:

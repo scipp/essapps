@@ -9,7 +9,7 @@ record holds them, so that a record's request can be edited and submitted
 again.
 
 The widget follows from what a request writes, as
-:func:`ess.spec.places.place` describes it, and is labelled by
+:func:`ess.spec.places.place` describes a parameter, and is labelled by
 :func:`ess.spec.places.title`, as the params schema is:
 
 =========================  ================================================
@@ -20,8 +20,8 @@ a parameter, :class:`Ways` a choice of ways: the fields of each group written
                            ``Ways.record``, or for a dataset model a dataset
                            that fits it, and ``None``. A record is offered
                            while an output fits.
-a field of a group,        an input of its type, or a picker of its values;
-:class:`Value`             for a list of scalars, a list of these
+a field of a group         an input of its type, or a picker of its values;
+                           for a list of scalars, a list of these
 =========================  ================================================
 
 A record's output fits if its type, from the record's spec, fits the place,
@@ -65,7 +65,7 @@ from ess.spec import (
     field_types,
     places,
 )
-from ess.spec.places import Rows, Value, Ways
+from ess.spec.places import Ways
 from ess.spec.refs import Loc, iter_refs
 
 
@@ -193,13 +193,13 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice:
 def _field(group: type[BaseModel], name: str) -> _Scalar | _Scalars:
     """The input of the field ``name`` of ``group``, written inline."""
     info = group.model_fields[name]
-    label = places.title(name, info)
-    match places.place(group, name):
-        case Value(type=tp):
-            return _Scalar(label, tp, _default(info), info.description)
-        case Rows(element=Value(type=tp)):
-            return _Scalars(label, tp, _default(info), info.description)
-    raise TypeError(f'{name}: not a scalar or a list of scalars')
+    widget = _Scalars if field_types.is_list(group, name) else _Scalar
+    return widget(
+        places.title(name, info),
+        field_types.value_type(info.annotation),
+        _default(info),
+        info.description,
+    )
 
 
 def _picked(widget: Any, options: Mapping[str, Any]) -> None:
