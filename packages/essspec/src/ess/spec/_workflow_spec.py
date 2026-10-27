@@ -1,162 +1,152 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Workflow specifications: implementation-independent workflow metadata.
+Workflow specifications: the interface of a workflow, without its code.
 
-A :class:`WorkflowSpec` describes a workflow's user-facing interface — identity,
-display metadata, and two pydantic models — without reference to how or
-where the workflow is computed:
+A :class:`WorkflowSpec` names a workflow and holds two pydantic models: the
+*params*, everything a request gives the workflow, and the *outputs*, the
+results it returns. A spec of an I(Q) reduction::
 
-=======  =============================  ===============  ==========================
-Model    Holds                          In a request     When the workflow runs
-=======  =============================  ===============  ==========================
-params   everything the workflow        each value       the values, and the data
-         takes: settings, files, data   inline or by     the references name
-                                        reference
-outputs  results                        (none)           the data the workflow
-                                                         returns
-=======  =============================  ===============  ==========================
+    class TransmissionRun(BaseModel):
+        file: Path                                   # a file: from a dataset
 
-A request gives the value at each *place* inline or by reference: the value
-of each parameter, each element of a list, and each field of a group, at any
-depth (see :mod:`ess.spec.places`). The type at a place decides which of the
-two it takes, with ``| None`` removed:
+    class SampleRun(BaseModel):
+        file: Path
+        transmission: TransmissionRun | None = None  # may be left out
 
-=====================================  ==========  ===========================
-The type at a place                    Inline      By reference
-=====================================  ==========  ===========================
-a file: ``Path``                       no          to a dataset
-a group                                its fields  to an output that fits and
-                                       unless one  holds no file
-                                       is a data
-                                       value
-a union of groups                      the fields  no
-                                       of one
-                                       alternative,
-                                       with its tag
-a list, ``list[X]``                    each        no
-                                       element a
-                                       place
-a *scalar*: ``int``, ``float``,        yes         no
-``str``, ``bool``, an enum, or a
-``Literal``
-has no *JSON form*, a *data value*,    no          no: it is a field of a
-such as a scipp array: pydantic makes              group
-no JSON schema of it, with the config
-of its model
-=====================================  ==========  ===========================
-
-A reference stands for a group or a file only, since a number or a scipp
-array names no role: every output of its type would fit. A value that
-another workflow computes comes as a group, which the producing workflow
-outputs, such as a found beam centre.
-
-An *inline value* is the value itself in the request, held in its JSON form;
-a reference is described in :mod:`ess.spec.refs`. A *group* is a model, such
-as ``Reduction``, written as an object of its fields, each a place, so a
-file in it comes from a dataset; a ``RootModel`` is not a group::
+    class WavelengthRange(BaseModel):
+        start: float
+        stop: float
 
     class PixelMask(BaseModel, arbitrary_types_allowed=True):
-        mask: sc.DataArray             # a data value: the group is given by reference
+        mask: sc.DataArray                    # a data value: PixelMask is
+                                              # given by reference only
+
+    class Reduction(BaseModel):
+        bins: Annotated[int, Gt(0)] = 50      # a scalar, with a constraint
+        range: WavelengthRange | None = None
+        banks: list[int] = []                 # may be empty: [], not None
+        mask: PixelMask | None = None
+
+    class GivenCentre(BaseModel):
+        kind: Literal['given'] = 'given'      # the tag of an alternative
+        x: float = 0.0
+        y: float = 0.0
+
+    class FindCentre(BaseModel):
+        kind: Literal['find'] = 'find'
+        tolerance: Annotated[float, Gt(0)] = 1e-3
+
+    class IofQParams(BaseModel):
+        reduction: Reduction = Reduction()    # a default is an instance
+        centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
+        sample_runs: list[SampleRun]          # a table: no default
+
+    class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
+        iofq: sc.DataArray
+        mask: PixelMask                       # fits Reduction.mask of a request
+
+    IOFQ = WorkflowSpec(
+        name='iofq', version=1, title='I(Q)', description='...',
+        params=IofQParams, outputs=IofQOutputs, tables=('sample_runs',),
+    )
+
+Each field of ``IofQParams`` is a *parameter*. A *group* is a model, such
+as ``Reduction``, whose fields a request writes as an object. A *data
+value* is a value without a JSON form, such as a scipp array. A request for
+``IOFQ``, with ``dataset(...)`` a reference to a dataset and
+``m.ref('mask')`` a reference to the output ``mask`` of an earlier record
+``m``::
+
+    {
+        'reduction': {'bins': 100, 'mask': m.ref('mask')},
+        'centre': {'kind': 'find'},
+        'sample_runs': [
+            {'file': dataset(run=101)},
+            {'file': dataset(run=102), 'transmission': {'file': dataset(run=99)}},
+        ],
+    }
+
+:mod:`ess.spec.places` describes what a request writes at each place by its
+type, and when each value is validated; :mod:`ess.spec.refs` describes the
+references.
+
+The models are ordinary pydantic models: what the framework needs, it reads
+from the field types (see :mod:`ess.spec.field_types`). Making a spec checks
+them. Each comment below names a rule that a spec breaks, with the fix::
+
+    class MaskedRun(BaseModel, arbitrary_types_allowed=True):
+        file: Path
+        # A group with a file is written field by field, never by reference,
+        # so no request can write a data value in it.
+        mask: sc.DataArray
+
+    class Reduction(BaseModel):
+        # No aliases: a request writes a field by its name.
+        bins: int = Field(10, alias='nbins')
+        # X | None needs X a group, which a form shows as a toggle over its
+        # fields: range: WavelengthRange | None.
+        start: float | None = None
+        # A form has no widget for a tuple, a dict, a set, a dataclass, or a
+        # RootModel: a value of several parts is a group, range: WavelengthRange.
+        limits: tuple[float, float] = (0.0, 1.0)
+        # A group does not contain itself, at any depth: its form would not end.
+        children: list[Reduction] = []
+        # Pydantic does not validate a default, so a default is the value
+        # validating it gives: WavelengthRange(start=1.0, stop=2.0).
+        range: WavelengthRange = {'start': 1.0, 'stop': 2.0}
+
+        # No serializers or computed fields: the record holds a group as the
+        # object of its fields.
+        @computed_field
+        def width(self) -> float: ...
+
+    class Centring(BaseModel):
+        # A union of groups is a parameter, or the element of a list
+        # parameter, never a field of a group.
+        centre: GivenCentre | FindCentre
 
     class Sample(BaseModel):
-        file: Path
-        mask: PixelMask | None = None  # None: no pixels masked
+        # No NewType or type alias: a spec names a role by a class.
+        run: RunNumber
 
-    {'sample': {'file': dataset(run=101), 'mask': m.ref('mask')}}
-    {'sample': {'file': dataset(run=101)}}  # defaults for the rest
+    class Params(BaseModel):
+        # A parameter is a group, a union of groups, or a list of one:
+        # bins is a field of Reduction.
+        bins: int = 10
+        run: MaskedRun
+        reduction: Reduction
+        centring: Centring
+        sample: Sample
+        # A table has no default.
+        sample_runs: list[SampleRun] = []
+        # A name is of a parameter or of an output, not both.
+        iofq: SampleRun
 
-A request lives in two phases. In the *request phase*, before any data is
-read, a value given by reference is a reference, and each place given
-inline is validated alone. A group without a reference inside is a value
-given inline: it is validated whole, and the record holds it as validated.
-Of a group with a reference inside, each field given inline is validated
-alone. In the *call phase*, the backend reads the data each reference names
-and validates each parameter's value once, whole, so every validator of
-every group runs with all its fields at hand, and every field holds the
-type it declares.
+        # The params model has model validators only: each parameter is
+        # validated alone.
+        @field_validator('bins')
+        @classmethod
+        def _positive(cls, bins: int) -> int: ...
 
-The models are ordinary pydantic models and carry no annotations for the
-framework: what the framework needs, it reads from the field types (see
-:mod:`ess.spec.field_types`). The rules on them, checked when a spec is made:
+    class Outputs(BaseModel, arbitrary_types_allowed=True):
+        iofq: sc.DataArray
+        # An output is X, X | None, list[X], or dict[str, X], not a union.
+        width: float | str
 
-- The names of params and outputs are distinct.
-- Each parameter is a group, a union of groups, or a list of one, possibly
-  typed ``X | None``; a value of another type, such as a file or a number, is
-  a field of a group. So a generated UI shows a parameter as a group of
-  fields, and
-  a ``PipelineBinding`` keys it by its class.
-- No type in the params or the outputs is a ``NewType``: a spec names a
-  role by a class, and a binding maps it to a key of its own.
-- A file is at a place only, possibly in a list: not inside a tuple, a
-  dict, or a dataclass, where no dataset gives it.
-- At a field of a group, at any depth, or at an element of a list there,
-  ``X`` in ``X | None`` is a group, such as ``range: WavelengthRange | None``,
-  not ``start: float | None`` and ``stop: float | None``. A UI shows
-  ``X | None`` as a toggle over the fields of a group. So a value that a
-  request may leave out is a field of such a group: an optional file is the
-  ``file`` of a run, ``transmission: TransmissionRun | None``, and an
-  optional data value is a field of a group given by reference,
-  ``mask: PixelMask | None``. A list that may be empty is ``[]``, not
-  ``None``.
-- A data value is a field of a group, not a parameter or the element of
-  one, since no request writes it at a place of its own. No field of a group
-  that holds a file is a data value: no reference stands for such a group,
-  so a request writes it field by field.
-- A union of groups is a parameter, or the element of a list parameter,
-  never a field of a group: a choice between ways is a parameter of its own.
-  It is discriminated by the name of its tag field, not by a callable, so
-  that the tag of a value tells its alternative. The tag field of each
-  alternative is a ``Literal`` of one string, its own, such as
-  ``Literal['find']``, without an alias. A union that holds a group holds
-  groups only, not ``GivenCentre | float``: a value of a type that is not a
-  group has no tag. A union is written inline only, and no reference fits
-  it, so that a producer need not output a tagged class. So no field of an
-  alternative is a data value.
-- A field of a group, at any depth, is a file, a group, a data value, or a
-  scalar, possibly with constraints, ``Annotated[float, Gt(0)]``, or a list
-  of one. A form has a widget for each scalar, and none for another type
-  with a JSON form, such as a tuple, a dict, a set, a ``TypedDict``, a
-  dataclass, or a ``RootModel``. No spec needs one: a value of several
-  parts is a group, ``range: WavelengthRange``, not
-  ``limits: tuple[float, float]``.
-- A group has no serializers, computed fields, or aliases: the record holds
-  a group as the object of its places, each in the JSON form of its own
-  type, and these would make the group's own JSON form differ from it. It
-  may have field and model validators of any mode, which run when the group
-  is validated whole: in the request phase if it has no reference inside,
-  else in the call phase only. So a validator that widens what a field
-  accepts works only for a group written without references. It is not at
-  a place inside itself, at any depth, such as a tree with
-  ``children: list[Node]``, since the schema of the forms at its places
-  would not end.
-- A default is a value, never a reference: what a request may write at the
-  place, in a JSON form that reads back as the value, with no ``@ref``
-  object at any depth; of a type without a JSON form, ``None`` or an empty
-  list. It is the value that validating it gives, since pydantic does not
-  validate a default: a group's default is an instance, not the object of
-  its fields, and an enum's a member, not its value.
-- No parameter sees another: each is validated alone, in every phase. So
-  the params model has no field validators, serializers, computed fields, or
-  aliases, and no ``default_factory`` that takes the other values. A list
-  parameter's field carries only length constraints, ``Field(min_length=2)``:
-  a check of one row belongs to the element type. A check of one value
-  belongs to the value's type, such as a field validator of a group; so does
-  its JSON form, which the framework stores and reads back.
-- Each output is a type, possibly typed ``X | None``, or a list or a dict of one.
-- Each table is a list parameter without a default.
+    WorkflowSpec(..., params=Params, outputs=Outputs, tables=('sample_runs',))
 
-A check across parameters is the binding's or the driver's, and fails when
-the request runs. The params model may state one as a model validator, but
-the framework never calls it: a stage and a driver never get a whole params
-instance. A binding may run it, ``IofQParams.model_validate(dict(params))``.
+A check of one value belongs to the value's type, such as a field validator
+of a group. A check across parameters belongs to the binding or the driver,
+and fails when the request runs. The params model may state one as a model
+validator, but the framework never calls it, since a stage and a driver
+never get a whole params instance. A binding may run it,
+``IofQParams.model_validate(dict(params))``.
 
 A *table* is a list parameter whose *rows* an accumulator takes a push at a
-time, such as the sample runs; its rows are distinct. A row with more than
-one value, such as a run and the values given next to it, is a group.
-``tables`` names the tables. A list parameter is a table
-only where ``tables`` names it. A request gives every table, ``[]`` for one
-without rows, so that no request leaves out a table by mistake.
+time, such as the sample runs; its rows are distinct. ``tables`` names the
+tables. A request gives every table, ``[]`` for one without rows, so that no
+request leaves out a table by mistake.
 
 Two forms exist, related by a one-way projection:
 
@@ -167,6 +157,8 @@ Two forms exist, related by a one-way projection:
   consumers. There is intentionally no inverse: validators do not round-trip
   through JSON Schema, and authoritative validation always happens in the
   process owning the model classes.
+
+Both examples are tests, in ``workflow_spec_examples_test.py``.
 """
 
 from __future__ import annotations
