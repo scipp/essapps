@@ -124,19 +124,7 @@ from pydantic import BaseModel, Discriminator, Field, ValidationError
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticSerializationError
 
-from .field_types import (
-    element,
-    has_json_form,
-    holds_file,
-    inline,
-    is_file,
-    is_group,
-    is_list,
-    model_of,
-    optional,
-    plain,
-    type_name,
-)
+from . import field_types
 from .refs import Loc, ParamsError, Ref, iter_refs, map_refs, positions, ref_at
 
 type OnRef = Callable[[Loc, Ref, Any], Any]
@@ -166,7 +154,7 @@ class _Slot:
     @property
     def is_list(self) -> bool:
         """Whether the place holds a list whose elements are places."""
-        return not self.element and is_list(self.model, self.name)
+        return not self.element and field_types.is_list(self.model, self.name)
 
     @property
     def discriminator(self) -> Any:
@@ -199,7 +187,7 @@ def held(model: type[BaseModel], name: str, value: Any, on_ref: OnRef) -> Any:
 
 
 def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
-    tp, nullable = optional(slot.annotation)
+    tp, nullable = field_types.optional(slot.annotation)
     if (ref := ref_at(loc, value)) is not None:
         if slot.is_list:
             raise _refused(
@@ -213,11 +201,11 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
                 f'{ref}: a union of groups is written inline, with the tag of an '
                 'alternative; a reference stands for a group or a file only',
             )
-        if not (is_file(tp) or is_group(tp)):
+        if not (field_types.is_file(tp) or field_types.is_group(tp)):
             raise _refused(
                 loc,
-                f'{ref}: {type_name(tp)} is given inline; a reference stands for '
-                'a group or a file only',
+                f'{ref}: {field_types.type_name(tp)} is given inline; a reference '
+                'stands for a group or a file only',
             )
         return on_ref(loc, ref, tp)
     if value is None and nullable:
@@ -226,7 +214,7 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
         if not isinstance(value, list):
             raise _refused(loc, f'{value!r} is not a list')
         return [_held((*loc, i), slot.one, v, on_ref) for i, v in enumerate(value)]
-    if is_group(tp) or alternatives(slot.annotation, slot.discriminator):
+    if field_types.is_group(tp) or alternatives(slot.annotation, slot.discriminator):
         fields = dict(value) if isinstance(value, BaseModel) else value
         if not isinstance(fields, Mapping):
             raise _refused(
@@ -240,7 +228,7 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
             return _fields(loc, group, fields, on_ref)
         _written_inside(loc, group, fields)
         return _inline(loc, slot, value)
-    if is_file(tp):
+    if field_types.is_file(tp):
         raise _refused(
             loc, f'{value!r} is not a dataset; a file is given as dataset(path=...)'
         )
@@ -250,11 +238,13 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
 def _written(loc: Loc, group: type[BaseModel]) -> None:
     """Refuse ``group`` written at ``loc`` if it is given by reference only."""
     if (data := unwritten(group)) is not None:
-        held_type = type_name(optional(group.model_fields[data].annotation)[0])
+        held_type = field_types.type_name(
+            field_types.optional(group.model_fields[data].annotation)[0]
+        )
         raise _refused(
             loc,
-            f'{type_name(group)} is given by reference: no request writes its '
-            f'field {data}, of {held_type}',
+            f'{field_types.type_name(group)} is given by reference: no request '
+            f'writes its field {data}, of {held_type}',
         )
 
 
@@ -270,7 +260,7 @@ def _written_inside(loc: Loc, group: type[BaseModel], value: Mapping[str, Any]) 
         if name not in group.model_fields or not (groups := groups_at(group, name)):
             continue
         (inner,) = groups  # a field of a group is never a union
-        if not is_list(group, name):
+        if not field_types.is_list(group, name):
             places = [((*loc, name), given)]
         elif isinstance(given, list):
             places = [((*loc, name, i), v) for i, v in enumerate(given)]
@@ -310,8 +300,8 @@ def _group(loc: Loc, slot: _Slot, value: Mapping[str, Any]) -> type[BaseModel] |
     alternative its tag names; ``None`` if the type at the place is neither
     a group nor a union of groups.
     """
-    tp, _ = optional(slot.annotation)
-    if is_group(tp):
+    tp, _ = field_types.optional(slot.annotation)
+    if field_types.is_group(tp):
         return tp
     if (union := alternatives(slot.annotation, slot.discriminator)) is None:
         return None
@@ -352,7 +342,7 @@ def validated(
     the model's strictness (see :func:`~ess.spec.field_types.inline`).
     Raises :class:`~ess.spec.refs.ParamsError` at the place of each problem.
     """
-    one = model_of(model, name)
+    one = field_types.model_of(model, name)
     if read is not None:
         value = map_refs({name: value}, read)[name]
     strict = False if read is not None else None
@@ -394,8 +384,8 @@ def _place(loc: Loc, slot: _Slot, inner: Loc) -> Loc:
         if slot.is_list and isinstance(rest[0], int):
             slot, loc = slot.one, (*loc, rest.pop(0))
             continue
-        tp, _ = optional(slot.annotation)
-        if is_group(tp):
+        tp, _ = field_types.optional(slot.annotation)
+        if field_types.is_group(tp):
             group = tp
         elif (
             union := alternatives(slot.annotation, slot.discriminator)
@@ -410,9 +400,12 @@ def _place(loc: Loc, slot: _Slot, inner: Loc) -> Loc:
 
 
 def _inline(loc: Loc, slot: _Slot, value: Any) -> Any:
-    """The JSON form of ``value`` given inline at ``loc`` (see :func:`inline`)."""
+    """
+    The JSON form of ``value`` given inline at ``loc`` (see
+    :func:`~ess.spec.field_types.inline`).
+    """
     try:
-        return inline(slot.model, slot.name, value, whole=not slot.element)
+        return field_types.inline(slot.model, slot.name, value, whole=not slot.element)
     except PydanticSerializationError as error:
         raise _refused(loc, f'cannot be stored as JSON: {error}') from None
     except ValidationError as error:
@@ -490,7 +483,7 @@ def place(model: type[BaseModel], name: str) -> Place | Rows:
     metadata = tuple(info.metadata)
     if info.discriminator is not None:
         metadata += (Field(discriminator=info.discriminator),)
-    if is_list(model, name):
+    if field_types.is_list(model, name):
         return Rows(_described(get_args(info.annotation)[0], ()), metadata)
     return _described(info.annotation, metadata)
 
@@ -513,16 +506,18 @@ def _described(annotation: Any, metadata: tuple[Any, ...]) -> Place:
     """The description of a place of type ``annotation`` with ``metadata``."""
     tp, inner, none = _unwrapped(annotation)
     metadata = (*metadata, *inner)
-    if element(tp) is None:
-        if is_file(tp):
+    if field_types.element(tp) is None:
+        if field_types.is_file(tp):
             return File(tp)
         annotated = Annotated[tp, *metadata] if metadata else tp
         if (union := alternatives(annotated)) is not None:
             tag, groups = union
             return Ways(tag, groups, None, none, metadata)
-        if is_group(tp):
+        if field_types.is_group(tp):
             inline = {} if unwritten(tp) is not None else {None: tp}
-            return Ways(None, inline, None if holds_file(tp) else tp, none, metadata)
+            return Ways(
+                None, inline, None if field_types.holds_file(tp) else tp, none, metadata
+            )
     return Value(tp, metadata)
 
 
@@ -574,10 +569,10 @@ def alternatives(
             discriminator = meta
     if get_origin(tp) not in (Union, UnionType):
         return None
-    members = [plain(arg) for arg in get_args(tp)]
-    if not any(is_group(m) for m in members):
+    members = [field_types.plain(arg) for arg in get_args(tp)]
+    if not any(field_types.is_group(m) for m in members):
         return None
-    if not all(is_group(m) for m in members):
+    if not all(field_types.is_group(m) for m in members):
         raise ValueError('a union holds groups only, or no group')
     if isinstance(discriminator, Discriminator):
         discriminator = discriminator.discriminator
@@ -623,8 +618,8 @@ def groups_at(model: type[BaseModel], name: str) -> list[type[BaseModel]]:
     any. Raises ``ValueError`` as :func:`alternatives` does.
     """
     slot = _Slot(model, name).one
-    tp, _ = optional(slot.annotation)
-    if is_group(tp):
+    tp, _ = field_types.optional(slot.annotation)
+    if field_types.is_group(tp):
         return [tp]
     union = alternatives(slot.annotation, slot.discriminator)
     return [] if union is None else list(union[1].values())
@@ -644,18 +639,18 @@ def unwritten(
     """
     seen = seen | {group}
     for name in group.model_fields:
-        tp, _ = optional(_Slot(group, name).one.annotation)
-        if is_file(tp):
+        tp, _ = field_types.optional(_Slot(group, name).one.annotation)
+        if field_types.is_file(tp):
             continue
         if groups := groups_at(group, name):
             (inner,) = groups  # a field of a group is never a union
             if (
-                holds_file(inner)
+                field_types.holds_file(inner)
                 and inner not in seen
                 and unwritten(inner, seen) is not None
             ):
                 return name
-        elif not has_json_form(group, name):
+        elif not field_types.has_json_form(group, name):
             return name
     return None
 
@@ -666,10 +661,10 @@ def file_off_place(model: type[BaseModel], name: str) -> bool:
     is not a place, such as in a tuple or a dict, where no dataset can give
     it. The fields of a group at a place are checked as the group's own.
     """
-    tp, _ = optional(_Slot(model, name).one.annotation)
-    if is_file(tp) or groups_at(model, name):
+    tp, _ = field_types.optional(_Slot(model, name).one.annotation)
+    if field_types.is_file(tp) or groups_at(model, name):
         return False
-    return holds_file(tp)
+    return field_types.holds_file(tp)
 
 
 def ref_types(
@@ -692,5 +687,5 @@ def ref_types(
                     raise _refused(loc, f'{ref} is not at a place')
                 slot = _Slot(group, key)
             value = value[key]
-        found.append((loc, ref, optional(slot.annotation)[0]))
+        found.append((loc, ref, field_types.optional(slot.annotation)[0]))
     return found

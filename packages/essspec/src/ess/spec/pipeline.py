@@ -16,10 +16,9 @@ from typing import Any, NewType
 import sciline
 from pydantic import BaseModel
 
+from . import field_types, places
 from ._workflow_spec import WorkflowSpec
 from .binding import StageCall, fixed_values
-from .field_types import optional, plain
-from .places import alternatives
 
 Key = Any
 
@@ -160,10 +159,12 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         unions = {
             n: union
             for n, f in declared.items()
-            if (union := alternatives(f.annotation, f.discriminator)) is not None
+            if (union := places.alternatives(f.annotation, f.discriminator)) is not None
         }
         own = {
-            n: tuple(unions[n][1].values()) if n in unions else (plain(f.annotation),)
+            n: tuple(unions[n][1].values())
+            if n in unions
+            else (field_types.plain(f.annotation),)
             for n, f in declared.items()
         }
         if wrong := sorted(
@@ -176,7 +177,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         if optional_params := sorted(
             n
             for n, f in declared.items()
-            if optional(f.annotation)[1] and keys.get(n) != ()
+            if field_types.optional(f.annotation)[1] and keys.get(n) != ()
         ):
             raise ValueError(
                 f'{spec.name}: {optional_params}: a parameter typed X | None sets no '
@@ -185,7 +186,8 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         all_keys = {
             **{n: keys.get(n, own[n]) for n in declared},
             **{
-                n: keys.get(n, (optional(f.annotation)[0],)) for n, f in outputs.items()
+                n: keys.get(n, (field_types.optional(f.annotation)[0],))
+                for n, f in outputs.items()
             },
         }
         names: dict[Key, list[str]] = {}

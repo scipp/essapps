@@ -217,9 +217,9 @@ from ess.spec import (
     StageBinding,
     StageCall,
     WorkflowSpec,
+    field_types,
+    places,
 )
-from ess.spec.field_types import is_group, json_form, optional
-from ess.spec.places import ref_types, validated
 from ess.spec.refs import Loc, ParamsError, iter_refs, map_refs
 
 from .checks import Checks, check_fit, distinct
@@ -282,7 +282,7 @@ def _outputs_of(
     for name, field in model.model_fields.items():
         if (value := getattr(returned, name)) is not None:
             outputs[name] = value
-        elif not optional(field.annotation)[1]:
+        elif not field_types.optional(field.annotation)[1]:
             raise _Failure(f'the workflow of {spec_id} returned None as {name}')
     return outputs
 
@@ -341,7 +341,7 @@ def _selected(value: Any, select: Selection) -> Any:
 
 def _is_array(tp: Any) -> bool:
     """Whether ``tp``, possibly typed ``X | None``, has named dimensions."""
-    tp = optional(tp)[0]
+    tp = field_types.optional(tp)[0]
     return isinstance(tp, type) and hasattr(tp, 'dims')
 
 
@@ -1026,7 +1026,9 @@ class Backend:
         ``also``, what the stage keeps, which :meth:`_check_stage` has checked
         it for; one through a stage that has staged reads only its blanks.
         """
-        for loc, ref, tp in ref_types(self._bindings[spec_id].spec.params, params):
+        for loc, ref, tp in places.ref_types(
+            self._bindings[spec_id].spec.params, params
+        ):
             if isinstance(ref, DatasetRef):
                 continue  # checked when resolved
             source = self._source_spec(ref, loc, caller, states, also)
@@ -1294,12 +1296,16 @@ class Backend:
         """
         spec = self._bindings[spec_id].spec
         read = self._reader(values)
-        typed = {n: validated(spec.params, n, v, read) for n, v in values.items()}
+        typed = {
+            n: places.validated(spec.params, n, v, read) for n, v in values.items()
+        }
         rows = {} if rows is None else rows
         for table in spec.tables:
             if table in typed and spec.has_json_form(table):
                 seen = rows.setdefault(table, {})
-                forms = [json_form(spec.params, table, v) for v in typed[table]]
+                forms = [
+                    field_types.json_form(spec.params, table, v) for v in typed[table]
+                ]
                 seen.update(distinct(table, forms, seen))
         return typed
 
@@ -2257,11 +2263,11 @@ class Backend:
             raise ValueError('select= needs the name of an output')
         declared = self._bindings[spec_id].spec.outputs.model_fields
         for name in (n for n in names if n in declared):  # others raise when read
-            tp = optional(declared[name].annotation)[0]
+            tp = field_types.optional(declared[name].annotation)[0]
             if not (
                 _is_array(tp)
                 or (
-                    is_group(tp)
+                    field_types.is_group(tp)
                     and any(_is_array(f.annotation) for f in tp.model_fields.values())
                 )
             ):

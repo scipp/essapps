@@ -75,18 +75,16 @@ from typing import Any, get_origin
 from annotated_types import MaxLen, MinLen
 from pydantic_core import to_json
 
-from ess.spec import AccumulatorRef, DatasetRef, OutputRef, Ref, WorkflowSpec
-from ess.spec.binding import fixed_values
-from ess.spec.field_types import (
-    element,
-    fits,
-    holds_file,
-    is_file,
-    is_list,
-    optional,
-    type_name,
+from ess.spec import (
+    AccumulatorRef,
+    DatasetRef,
+    OutputRef,
+    Ref,
+    WorkflowSpec,
+    field_types,
+    places,
 )
-from ess.spec.places import held
+from ess.spec.binding import fixed_values
 from ess.spec.refs import Loc, ParamsError
 
 from .datasets import DatasetSource, readable
@@ -188,7 +186,7 @@ class Checks:
         or ``None`` (see :func:`ess.spec.places.held`).
         """
         try:
-            stored = held(
+            stored = places.held(
                 self.spec.params,
                 name,
                 value,
@@ -197,7 +195,7 @@ class Checks:
         except ParamsError as error:
             raise SubmitError.of(error) from None
         if (
-            is_list(self.spec.params, name)
+            field_types.is_list(self.spec.params, name)
             and name not in self.spec.tables
             and (need := _length_problem(self.spec, name, len(stored)))
         ):
@@ -211,17 +209,18 @@ class Checks:
         file is.
         """
         if not isinstance(ref, DatasetRef):
-            if is_file(tp):
+            if field_types.is_file(tp):
                 raise SubmitError.at(
                     loc,
                     f'{ref} is not a dataset; a file, '
-                    f'{type_name(tp)}, is given by reference to a dataset',
+                    f'{field_types.type_name(tp)}, is given by reference to a dataset',
                 )
             return ref
-        if not is_file(tp):
+        if not field_types.is_file(tp):
             raise SubmitError.at(
                 loc,
-                f'dataset {ref} does not fit {type_name(tp)}, which is not a file',
+                f'dataset {ref} does not fit {field_types.type_name(tp)}, which is '
+                'not a file',
             )
         try:
             identity = self._datasets.resolve(ref)
@@ -247,9 +246,9 @@ def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, loc: Loc) ->
     field = spec.outputs.model_fields.get(ref.output)
     if field is None:
         raise SubmitError.at(loc, f'{SpecId.of(spec)} has no output {ref.output!r}')
-    data, _ = optional(field.annotation)
+    data, _ = field_types.optional(field.annotation)
     if isinstance(ref, OutputRef) and ref.key is not None:
-        if (item := element(data)) is None:
+        if (item := field_types.element(data)) is None:
             raise SubmitError.at(
                 loc, f'{ref} names an element of an output without elements'
             )
@@ -258,15 +257,17 @@ def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, loc: Loc) ->
                 loc, f'{ref}: the key of an element of a list is an integer'
             )
         data = item
-    if not fits(data, tp):
-        raise SubmitError.at(
-            loc, f'{ref}, of type {type_name(data)}, does not fit {type_name(tp)}'
-        )
-    if holds_file(data):
+    if not field_types.fits(data, tp):
         raise SubmitError.at(
             loc,
-            f'{ref}, of type {type_name(data)}, holds a file; a file is given '
-            'by reference to a dataset',
+            f'{ref}, of type {field_types.type_name(data)}, does not fit '
+            f'{field_types.type_name(tp)}',
+        )
+    if field_types.holds_file(data):
+        raise SubmitError.at(
+            loc,
+            f'{ref}, of type {field_types.type_name(data)}, holds a file; a file is '
+            'given by reference to a dataset',
         )
 
 
