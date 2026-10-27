@@ -85,12 +85,12 @@ data read in place of each reference (see
 :func:`ess.spec.places.validated`). For a plain request it makes the params
 instance from these values without validating again, so the params model's
 model validators never run; a stage or an accumulator gets the values by
-name. The rows of a table, if its element type
-has a JSON form, are distinct by the JSON forms of the rows read, as the
-element type dumps them, too: an inline value and a reference to equal data
-are one row. A table that a request, a template, or a stage call gives whole
-is compared within itself when it is read. The binding returns an instance of
-the outputs model: an output that the spec declares optional and the binding
+name. The rows of a table, if its element type has a JSON form, are
+distinct by the JSON forms of the rows read, as the element type dumps
+them, too: an inline value and a reference to equal data are one row. A
+table that a request, a template, or a stage call gives whole is compared
+within itself when it is read. The binding returns an instance of the
+outputs model: an output that the spec declares optional and the binding
 returns as ``None`` is left out, and a record whose binding returns anything
 else fails.
 

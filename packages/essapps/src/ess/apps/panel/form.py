@@ -407,10 +407,7 @@ class _Scalars:
 
 
 class _Group:
-    """
-    The fields of a group, each an input; the tag of an alternative has
-    none.
-    """
+    """The fields of a group, each an input; the tag of an alternative has none."""
 
     def __init__(self, group: type[BaseModel], tag: dict[str, str]) -> None:
         self.tag = tag
