@@ -3,7 +3,7 @@
 import re
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PosixPath, PurePosixPath
 from typing import Annotated, Any, Literal, NewType, TypedDict
 
 import pydantic
@@ -62,7 +62,7 @@ class MaskFile(DatasetModel, kind='mask'):
 
 
 class GeometryFile(DatasetModel):
-    """A dataset model without metadata."""
+    """A dataset model without keywords: it takes raw datasets."""
 
 
 class SampleRun(BaseModel):
@@ -159,6 +159,31 @@ class CalibrationFile(DatasetModel, kind='calibration'):
     """A dataset model with a field other than its path: refused."""
 
     run: int
+
+
+class XmlMaskFile(MaskFile):
+    """A dataset model that checks its path."""
+
+    @field_validator('path')
+    @classmethod
+    def _xml(cls, path: Path) -> Path:
+        if path.suffix != '.xml':
+            raise ValueError('a mask is an XML file')
+        return path
+
+
+class BeamStopMaskFile(XmlMaskFile):
+    """A subclass of a subclass of DatasetModel that keeps its path."""
+
+
+class LocalPath(Path):
+    """A subclass of Path."""
+
+
+class TimeRangeAt(TimeRange):
+    """An output type that fits a TimeRange place and holds a Path."""
+
+    where: Path
 
 
 @pydantic.dataclasses.dataclass
@@ -421,6 +446,15 @@ OUTSIDE_A_DATASET_MODEL = re.escape(
     "MaskFile(DatasetModel, kind='mask'), given by reference to a dataset"
 )
 
+KEEPS_THE_PATH = re.escape(
+    'a dataset model keeps the path of DatasetModel, path: Path, without a '
+    'default or an alias; a check of the path is a field validator'
+)
+DATASET_MODEL_OUTPUT = re.escape(
+    'is a dataset model; no output holds one, so that a file comes from a '
+    'dataset, which the dataset source checks'
+)
+
 
 class TestModelRules:
     def test_the_example_spec_is_accepted(self) -> None:
@@ -458,7 +492,6 @@ class TestModelRules:
             },
             {'outputs': model('O', iofq=(list[sc.DataArray], ...))},
             {'outputs': model('O', iofq=(dict[str, sc.DataArray | None], ...))},
-            {'outputs': model('O', path=(Path | None, None))},
             {
                 'params': model(
                     'P',
@@ -486,6 +519,8 @@ class TestModelRules:
             {'params': model('P', by=(By | None, None), each=(list[By], []))},
             {'params': model('P', centre=(validated('Centre', x=(float, ...)), ...))},
             {'params': model('P', run=(validated('Run', file=(RunFile, ...)), ...))},
+            {'params': model('P', mask=(XmlMaskFile, ...))},
+            {'params': model('P', mask=(BeamStopMaskFile | None, None))},
             {
                 'params': model(
                     'P', runs=(model('Runs', files=(list[RunFile], [])), ...)
@@ -889,6 +924,9 @@ class TestModelRules:
                     ({'path': (Path, ...)}, 'P.path'),
                     ({'paths': (list[Path], [])}, 'P.paths'),
                     ({'path': (Path | None, None)}, 'P.path'),
+                    ({'path': (PurePosixPath, ...)}, 'P.path'),
+                    ({'path': (PosixPath, ...)}, 'P.path'),
+                    ({'path': (LocalPath, ...)}, 'P.path'),
                     ({'pair': (tuple[Path, Path], ...)}, 'P.pair'),
                     ({'runs': (RunFiles, ...)}, 'P.runs: RunFiles.sample'),
                     (
@@ -902,6 +940,13 @@ class TestModelRules:
                     (
                         {'run': (model('Run', path=(Path | None, None)), ...)},
                         'P.run: Run.path',
+                    ),
+                    *(
+                        (
+                            {'run': (model('Run', path=(tp, ...)), ...)},
+                            'P.run: Run.path',
+                        )
+                        for tp in (PurePosixPath, PosixPath, LocalPath)
                     ),
                     (
                         {'run': (model('Run', paths=(list[Path], [])), ...)},
@@ -946,13 +991,63 @@ class TestModelRules:
                     ),
                 )
             ),
-            (
-                {'outputs': model('O', raw=(RunFile, ...))},
-                'O.raw: an output is not a dataset model',
+            *(
+                (
+                    {'params': model('P', mask=(mask, ...))},
+                    rf'P.mask: {mask.__name__}.path: {KEEPS_THE_PATH}',
+                )
+                for mask in (
+                    pydantic.create_model(
+                        'StrMask', __base__=MaskFile, path=(str, ...)
+                    ),
+                    pydantic.create_model(
+                        'OptionalMask', __base__=MaskFile, path=(Path | None, None)
+                    ),
+                    pydantic.create_model(
+                        'DefaultMask', __base__=MaskFile, path=(Path, Path('mask.xml'))
+                    ),
+                    pydantic.create_model(
+                        'AliasedMask',
+                        __base__=MaskFile,
+                        path=(Path, Field(alias='file')),
+                    ),
+                    pydantic.create_model(
+                        'CheckedMask',
+                        __base__=MaskFile,
+                        path=(Annotated[Path, AfterValidator(lambda p: p)], ...),
+                    ),
+                )
             ),
-            (
-                {'outputs': model('O', raws=(list[RunFile | None], []))},
-                'O.raws: an output is not a dataset model',
+            *(
+                (
+                    {'outputs': model('O', **fields)},
+                    f'{where} {DATASET_MODEL_OUTPUT}',
+                )
+                for fields, where in (
+                    ({'raw': (RunFile, ...)}, 'O.raw: RunFile'),
+                    ({'raws': (list[RunFile | None], [])}, 'O.raws: RunFile'),
+                    (
+                        {'g': (model('G', file=(RunFile, ...)), ...)},
+                        'O.g: G.file: RunFile',
+                    ),
+                    (
+                        {'g': (model('G', run=(SampleRun, ...)), ...)},
+                        'O.g: SampleRun.file: RunFile',
+                    ),
+                )
+            ),
+            *(
+                (
+                    {'outputs': model('O', **fields)},
+                    f'{where}: {OUTSIDE_A_DATASET_MODEL}',
+                )
+                for fields, where in (
+                    ({'path': (Path, ...)}, 'O.path'),
+                    ({'path': (Path | None, None)}, 'O.path'),
+                    ({'paths': (list[PurePosixPath], [])}, 'O.paths'),
+                    ({'g': (model('G', path=(Path, ...)), ...)}, 'O.g: G.path'),
+                    ({'range': (TimeRangeAt, ...)}, 'O.range: TimeRangeAt.where'),
+                )
             ),
             *(
                 (
@@ -1609,7 +1704,7 @@ class TestSerialization:
             {'type': 'null'},
         ]
         assert properties['geometry'] == {
-            **dataset_ref('GeometryFile', {}),
+            **dataset_ref('GeometryFile', {'kind': 'raw'}),
             'title': 'Geometry',
         }
         assert properties['runs']['items'] == dataset_ref('RunFile', {'kind': 'raw'})

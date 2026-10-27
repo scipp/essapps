@@ -45,7 +45,8 @@ from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerati
 from pydantic.json_schema import GenerateJsonSchema, JsonSchemaWarningKind
 from pydantic_core import PydanticCustomError, from_json, to_json
 
-from .refs import DatasetModel, Loc, ParamsError, positions
+from .parameters import DatasetModel
+from .refs import Loc, ParamsError, positions
 
 
 def plain(tp: Any) -> Any:
@@ -179,19 +180,12 @@ def _is_model(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, BaseModel)
 
 
-def holds_dataset(tp: Any, seen: frozenset[type] = frozenset()) -> bool:
+def holds_dataset(tp: Any) -> bool:
     """
-    Whether a type, or a field of a model, a dataclass, or a ``TypedDict``
-    in it, is a dataset model; ``seen`` holds the classes looked into
-    already, so that a recursive class ends.
+    Whether ``tp``, or a type it is made of (see :func:`reachable`), is a
+    dataset model.
     """
-    if is_dataset(tp):
-        return True
-    if fields := fields_of(tp):
-        if tp in seen:
-            return False
-        return any(holds_dataset(f, seen | {tp}) for f in fields.values())
-    return any(holds_dataset(arg, seen) for arg in getattr(tp, '__args__', ()))
+    return any(map(is_dataset, reachable(tp)))
 
 
 @functools.cache

@@ -9,11 +9,10 @@ framework did not compute, or, in a request not yet accepted, an output of an
 accumulator that the framework holds. A *place* is the value of a parameter,
 an element of a list, or a field of a group, at any depth (see
 :mod:`ess.spec.places`). A reference stands for a group only: a reference to
-a dataset for a :class:`DatasetModel`, a reference to an output for any
-other group.
-A reference is what a request names and what a record keeps; turning it into
-the data a workflow takes, a local path or an object, is the business of
-whatever runs the workflow.
+a dataset for a dataset model (see :class:`ess.spec.parameters.DatasetModel`),
+a reference to an output for any other group. A reference is what a request
+names and what a record keeps; turning it into the data a workflow takes, a
+local path or an object, is the business of whatever runs the workflow.
 
 The JSON form of a reference is an object with the key ``"@ref"``, which
 names its kind. The key is reserved: an object with it is a reference, at any
@@ -28,8 +27,7 @@ depth, so a reference is found in plain data without a spec::
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.config import JsonDict
@@ -82,8 +80,9 @@ class DatasetRef(_Ref, frozen=True):
     catalogue PID, an instrument and run number, a path, makes the string
     self-describing, ``pid:...`` or ``run:...``, and normalizes it before it
     enters a record, because two references are equal only when their strings
-    are. A place whose type is a :class:`DatasetModel` takes a reference to
-    a dataset, and no other place does.
+    are. A place whose type is a dataset model (see
+    :class:`ess.spec.parameters.DatasetModel`) takes a reference to a
+    dataset, and no other place does.
     """
 
     kind: Literal['dataset'] = Field(default='dataset', alias='@ref', repr=False)
@@ -91,43 +90,6 @@ class DatasetRef(_Ref, frozen=True):
 
     def __str__(self) -> str:
         return self.dataset
-
-
-class DatasetModel(BaseModel):
-    """
-    A kind of file: a group of the local path of a dataset's file, given by
-    reference to a dataset only.
-
-    A subclass names the metadata that a dataset it takes has, as keywords of
-    the class::
-
-        class MaskFile(DatasetModel, kind='mask'):
-            '''A pixel mask, as XML.'''
-
-    A dataset fits the model if its metadata has each key and value of the
-    model's metadata, with ``kind`` ``'raw'`` on either side that lacks it:
-    a model without ``kind`` takes raw datasets. A dataset picker lists the
-    datasets that fit, by the same rule. A subclass with keywords
-    merges them over its parent's metadata, one without inherits it. A
-    keyword that is a key of pydantic's ``ConfigDict``, such as ``title``,
-    ``frozen``, or ``extra``, configures the model instead, so it cannot be a
-    metadata key.
-
-    A request gives a dataset model by reference to a dataset, which the
-    backend resolves to the dataset's identity when the request is submitted,
-    and makes ``MaskFile(path=<local path>)`` of when the request runs, so
-    that a validator of the model, such as a check of the file's suffix,
-    runs with the local path. A dataset model holds only ``path``; no output
-    is one, so that every path a workflow gets comes from a dataset that the
-    dataset source checks.
-    """
-
-    metadata: ClassVar[dict[str, Any]] = {}
-    path: Path
-
-    def __init_subclass__(cls, **metadata: Any) -> None:
-        super().__init_subclass__()
-        cls.metadata = {**cls.metadata, **metadata}
 
 
 class AccumulatorRef(_Ref, frozen=True):

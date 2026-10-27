@@ -147,7 +147,8 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         iofq: sc.DataArray
         # An output is X, X | None, list[X], or dict[str, X], not a union.
         width: float | str
-        # No output is a dataset model: a file comes from a dataset.
+        # No output holds a dataset model or a Path: a file comes from a
+        # dataset.
         raw: RunFile
 
     WorkflowSpec(..., params=Params, outputs=Outputs, tables=('sample_runs',))
@@ -180,7 +181,7 @@ Both examples are tests, in ``workflow_spec_examples_test.py``.
 from __future__ import annotations
 
 import functools
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from enum import Enum
 from pathlib import PurePath
 from types import NoneType, UnionType
@@ -207,6 +208,7 @@ from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 
 from . import field_types, places
+from .parameters import DatasetModel
 from .places import Place, Rows, Value, Ways
 from .refs import AccumulatorRef, DatasetRef, Loc, OutputRef, ParamsError, Ref
 
@@ -498,28 +500,41 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
     return problems
 
 
-def _alias_problems(annotation: Any) -> list[str]:
+def _found(
+    annotation: Any,
+    test: Callable[[Any], bool],
+    skip: Callable[[Any], bool] = lambda cls: False,
+) -> list[tuple[str, Any]]:
     """
-    Refuse each ``NewType`` or type alias that ``annotation`` is made of (see
-    :func:`~ess.spec.field_types.reachable`), named by the field of the class
-    that holds it, if any: a spec names a role by a class.
+    Each type that ``annotation`` is made of (see
+    :func:`~ess.spec.field_types.reachable`) for which ``test`` holds, with
+    where it is: ``''`` in ``annotation`` itself, ``'Class.field: '`` in a
+    field of a class in it, unless ``skip`` holds for the class.
     """
-    found = [
-        ('', t) for t in field_types.arguments(annotation) if field_types.is_alias(t)
-    ]
+    found = [('', t) for t in field_types.arguments(annotation) if test(t)]
     for cls in dict.fromkeys(field_types.reachable(annotation)):
-        for name, tp in field_types.fields_of(cls).items():
+        if not skip(cls):
             found.extend(
                 (f'{cls.__name__}.{name}: ', t)
+                for name, tp in field_types.fields_of(cls).items()
                 for t in field_types.arguments(tp)
-                if field_types.is_alias(t)
+                if test(t)
             )
+    return found
+
+
+def _alias_problems(annotation: Any) -> list[str]:
+    """
+    Refuse each ``NewType`` or type alias that ``annotation`` is made of,
+    named by the field of the class that holds it, if any: a spec names a
+    role by a class.
+    """
     return [
         f'{where}{alias.__name__} is '
         f'{"a type alias" if isinstance(alias, TypeAliasType) else "a NewType"}; '
         'a spec names a role by a class, such as a group, and a binding maps it '
         'to a key of its own'
-        for where, alias in found
+        for where, alias in _found(annotation, field_types.is_alias)
     ]
 
 
@@ -530,19 +545,12 @@ def _path_problems(annotation: Any) -> list[str]:
     a dataset model, given by reference to a dataset, so that the dataset
     source checks each file a workflow reads.
     """
-    found = [''] if any(map(_is_path, field_types.arguments(annotation))) else []
-    for cls in dict.fromkeys(field_types.reachable(annotation)):
-        if not field_types.is_dataset(cls):
-            found.extend(
-                f'{cls.__name__}.{name}: '
-                for name, tp in field_types.fields_of(cls).items()
-                if any(map(_is_path, field_types.arguments(tp)))
-            )
+    found = _found(annotation, _is_path, skip=field_types.is_dataset)
     return [
-        f"{where}a Path is outside a dataset model; a file is a dataset model, "
+        f'{where}a Path is outside a dataset model; a file is a dataset model, '
         "such as class MaskFile(DatasetModel, kind='mask'), given by reference "
         'to a dataset'
-        for where in found
+        for where in dict.fromkeys(where for where, _ in found)
     ]
 
 
@@ -591,12 +599,12 @@ def _place_problems(
 ) -> list[str]:
     """
     Refuse a field of ``model`` whose places a request cannot write: a union
-    that the framework cannot
-    take apart by a value's tag, a group at a place inside itself, the
-    problems of each group at its places, each named by its group (see
-    :func:`_group_problems`). ``path`` holds the groups that hold the field,
-    and ``seen`` the problems of the groups checked already, so that a group
-    at several places is checked once, and its problems named at each.
+    that the framework cannot take apart by a value's tag, a group at a place
+    inside itself, the problems of each group at its places, each named by
+    its group (see :func:`_group_problems`). ``path`` holds the groups that
+    hold the field, and ``seen`` the problems of the groups checked already,
+    so that a group at several places is checked once, and its problems
+    named at each.
     """
     try:
         groups = places.groups_at(model, name)
@@ -628,21 +636,20 @@ def _group_problems(
     differ from the object of its places, a field with an alias, a field, or
     an element of one, typed ``X | None`` with ``X`` not a group (see
     :func:`_optional_value`), or of a type that a form cannot show (see
-    :func:`_unshown`), the problems of the places of its fields, and a default
-    that is not a value, since a field left out holds its default. Field and model
-    validators of any mode are allowed: they run whenever the group is
-    validated whole (see :mod:`ess.spec.places`). A field of a group is not a
-    ``NewType`` and not a union of groups: a choice between ways is a
-    parameter of its own. A group that holds a dataset model is refused if a
-    field of it is a data value: a request writes the group field by field,
-    and the data value it cannot write (see
-    :func:`~ess.spec.places.unwritten`). A dataset model holds only ``path``.
-    ``path`` holds the groups that hold ``group`` and itself.
+    :func:`_unshown`), the problems of the places of its fields, and a
+    default that is not a value, since a field left out holds its default.
+    Field and model validators of any mode are allowed: they run whenever the
+    group is validated whole (see :mod:`ess.spec.places`). A field of a group
+    is not a ``NewType`` and not a union of groups: a choice between ways is
+    a parameter of its own. A group that holds a dataset model is refused if
+    a field of it is a data value: a request writes the group field by
+    field, and the data value it cannot write (see
+    :func:`~ess.spec.places.unwritten`). A dataset model is checked by
+    :func:`_dataset_model_problems` alone. The argument ``path`` holds the
+    groups that hold ``group`` and itself.
     """
     if field_types.is_dataset(group):
-        if other := [n for n in group.model_fields if n != 'path']:
-            return [f'{group.__name__}: a dataset model holds only path, not {other}']
-        return []
+        return _dataset_model_problems(group)
     problems = []
     if found := _decorators(group, _SERIALIZERS):
         problems.append(f'{group.__name__}: no serializers or computed fields, {found}')
@@ -683,6 +690,25 @@ def _group_problems(
             'holds a dataset model is given field by field, never by reference'
         )
     return problems
+
+
+def _dataset_model_problems(model: type[BaseModel]) -> list[str]:
+    """
+    Refuse a dataset model with a field other than ``path``, or that declares
+    ``path`` anew, such as with another type, a default, or an alias: the
+    backend makes the model of ``{'path': <local path>}``. A field validator
+    of ``path`` is allowed.
+    """
+    if other := [n for n in model.model_fields if n != 'path']:
+        return [f'{model.__name__}: a dataset model holds only path, not {other}']
+    # The repr of a FieldInfo shows each attribute that a declaration sets.
+    if repr(model.model_fields['path']) != repr(DatasetModel.model_fields['path']):
+        return [
+            f'{model.__name__}.path: a dataset model keeps the path of '
+            'DatasetModel, path: Path, without a default or an alias; a check of '
+            'the path is a field validator'
+        ]
+    return []
 
 
 def _optional_value(group: type[BaseModel], name: str) -> bool:
@@ -757,17 +783,21 @@ def _outputs_problems(model: type[BaseModel]) -> list[str]:
     problems = []
     for name, field in model.model_fields.items():
         where = f'{model.__name__}.{name}'
-        if aliases := _alias_problems(field.annotation):
+        tp = field.annotation
+        if aliases := _alias_problems(tp):
             problems.extend(f'{where}: {problem}' for problem in aliases)
         elif not field_types.is_single(field_types.value_type(field.annotation)):
             problems.append(
                 f'{where}: an output is a type, possibly typed X | None, or a '
                 'list or a dict of one'
             )
-        elif field_types.is_dataset(field_types.value_type(field.annotation)):
-            problems.append(
-                f'{where}: an output is not a dataset model; a file comes from a '
-                'dataset, which the dataset source checks'
+        else:
+            problems.extend(f'{where}: {problem}' for problem in _path_problems(tp))
+            problems.extend(
+                f'{where}: {found}{field_types.type_name(model)} is a dataset '
+                'model; no output holds one, so that a file comes from a dataset, '
+                'which the dataset source checks'
+                for found, model in _found(tp, field_types.is_dataset)
             )
     return problems
 

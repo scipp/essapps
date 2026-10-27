@@ -3,8 +3,9 @@
 """
 Shared vocabulary of workflow parameter models.
 
-Common building blocks for workflow params models: constrained unit choices and
-range/edges models with cross-field validation. Purely declarative — no scipp;
+Common building blocks for workflow params models: the dataset model of a
+file, constrained unit choices, and range/edges models with cross-field
+validation. Purely declarative — no scipp;
 converting validated values into scipp objects is the workflow implementation's
 concern (see :mod:`ess.spec.conversions`).
 
@@ -24,6 +25,8 @@ from __future__ import annotations
 
 from abc import ABC
 from enum import StrEnum
+from pathlib import Path
+from typing import Any, ClassVar
 
 from pydantic import (
     BaseModel,
@@ -32,6 +35,51 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+
+class DatasetModel(BaseModel):
+    """
+    A kind of file: a group of the local path of a dataset's file, given by
+    reference to a dataset only.
+
+    A subclass names the metadata of the datasets it takes, as keywords of
+    the class, each a string, a number, or a bool::
+
+        class MaskFile(DatasetModel, kind='mask'):
+            '''A pixel mask, as XML.'''
+
+    A dataset fits the model if its metadata have each key and value of the
+    model's ``metadata``; a dataset without ``kind`` is raw. ``metadata`` is
+    ``{'kind': 'raw'}`` unless a subclass says otherwise: a subclass with
+    keywords merges them over its parent's metadata, one without inherits
+    them. A keyword that is a key of pydantic's ``ConfigDict``, such as
+    ``title``, ``frozen``, or ``extra``, configures the model instead, so it
+    cannot be a metadata key.
+
+    A request gives a dataset model by reference to a dataset, which the
+    backend resolves to the dataset's identity when the request is
+    submitted. When the request runs, the backend makes the model of the
+    dataset's local path, ``MaskFile(path=<local path>)``, so that a
+    validator of the model, such as a check of the file's suffix, runs with
+    the local path. A dataset model holds only ``path``, as declared here,
+    and no output holds a dataset model, so that every path a workflow gets
+    comes from a dataset that the dataset source checks.
+    """
+
+    metadata: ClassVar[dict[str, Any]] = {'kind': 'raw'}
+    path: Path
+
+    def __init_subclass__(cls, **metadata: Any) -> None:
+        super().__init_subclass__()
+        if bad := {k: v for k, v in metadata.items() if type(v) not in _SCALARS}:
+            raise TypeError(
+                f'{cls.__name__}: the metadata of a dataset model are strings, '
+                f'numbers, or bools, as JSON holds them, not {bad}'
+            )
+        cls.metadata = {**cls.metadata, **metadata}
+
+
+_SCALARS = (str, int, float, bool)
 
 
 class Scale(StrEnum):

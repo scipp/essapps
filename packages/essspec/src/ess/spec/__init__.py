@@ -31,8 +31,8 @@ from .binding import (
     StageCall,
     function_binding,
 )
-from .parameters import Quantity
-from .refs import AccumulatorRef, DatasetModel, DatasetRef, OutputRef, Ref
+from .parameters import DatasetModel, Quantity
+from .refs import AccumulatorRef, DatasetRef, OutputRef, Ref
 
 __all__ = [
     'AccumulatorBinding',

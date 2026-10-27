@@ -172,7 +172,7 @@ def refusal() -> str:
         'Sample.run: RunNumber is a NewType',
         'Geometry.file: a Path is outside a dataset model',
         "CalibrationFile: a dataset model holds only path, not ['run']",
-        'Outputs.raw: an output is not a dataset model',
+        'Outputs.raw: RunFile is a dataset model; no output holds one',
         'Params.bins: int is not a group',
         'sample_runs: a table has no default',
         'iofq: a field of both Params and Outputs',

@@ -44,11 +44,10 @@ A field of a group holds no other type: a value of several parts, such as a
 tuple, a dict, or a dataclass, is a group, so that each part is a place.
 
 A reference stands for a group only. A reference to a dataset fits a
-dataset model (see :class:`~ess.spec.refs.DatasetModel`). A reference to an
-output fits the place's type, and the output's type holds no dataset model,
-so that a file comes only from a dataset, which the dataset source checks.
-A number, a
-string, or a ``sc.DataArray`` names no role: every output of its type would
+dataset model (see :class:`~ess.spec.parameters.DatasetModel`). A reference
+to an output fits the place's type, and no output holds a dataset model, so
+that a file comes only from a dataset, which the dataset source checks. A
+number, a string, or a ``sc.DataArray`` names no role: every output of its type would
 fit, so a value computed by another workflow comes as a group, such as a
 found beam centre, and a data value is a field of one::
 
@@ -259,10 +258,9 @@ def _written_inside(loc: Loc, group: type[BaseModel], value: Mapping[str, Any]) 
     """
     Refuse a group given by reference only, a dataset model among them, at
     a place inside ``value``, the fields of ``group`` given inline, at any
-    depth. Nothing is validated, so
-    that a validator of ``group`` that widens what a field accepts still
-    works; a value that is not what its place takes is left to validating
-    ``group`` whole.
+    depth. Nothing is validated, so that a validator of ``group`` that
+    widens what a field accepts still works; a value that is not what its
+    place takes is left to validating ``group`` whole.
     """
     for name, given in value.items():
         if name not in group.model_fields or not (groups := groups_at(group, name)):

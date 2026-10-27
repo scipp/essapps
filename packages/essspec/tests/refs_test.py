@@ -1,11 +1,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-from pathlib import Path
-
-import pydantic
 import pytest
 
-from ess.spec import AccumulatorRef, DatasetModel, DatasetRef, OutputRef
+from ess.spec import AccumulatorRef, DatasetRef, OutputRef
 from ess.spec.refs import ParamsError, as_ref, iter_refs, loc_text, map_refs
 
 OUTPUT_REF = {'@ref': 'output', 'record': 'r1', 'output': 'data'}
@@ -132,42 +129,3 @@ def test_iter_refs_and_map_refs_name_the_place_of_a_malformed_reference() -> Non
     ((loc, msg),) = raised.value.errors
     assert loc == ('runs', 1)
     assert "'run' is not a kind" in msg
-
-
-class MaskFile(DatasetModel, kind='mask', instrument='loki'):
-    pass
-
-
-def test_a_dataset_model_holds_its_class_keywords_as_metadata() -> None:
-    assert DatasetModel.metadata == {}
-    assert MaskFile.metadata == {'kind': 'mask', 'instrument': 'loki'}
-    assert MaskFile(path='mask.xml').model_dump() == {'path': Path('mask.xml')}
-
-
-def test_the_keywords_of_a_subclass_are_merged_over_its_parents() -> None:
-    class BeamStopMask(MaskFile, kind='beam-stop', bank=1):
-        pass
-
-    assert BeamStopMask.metadata == {
-        'kind': 'beam-stop',
-        'instrument': 'loki',
-        'bank': 1,
-    }
-    assert MaskFile.metadata == {'kind': 'mask', 'instrument': 'loki'}
-
-
-def test_a_subclass_without_keywords_has_the_metadata_of_its_parent() -> None:
-    class OtherMask(MaskFile):
-        pass
-
-    assert OtherMask.metadata == MaskFile.metadata
-
-
-def test_a_pydantic_config_keyword_configures_the_model_and_is_no_metadata() -> None:
-    class FrozenMask(DatasetModel, frozen=True, kind='mask'):
-        pass
-
-    assert FrozenMask.metadata == {'kind': 'mask'}
-    mask = FrozenMask(path='mask.xml')
-    with pytest.raises(pydantic.ValidationError, match='frozen'):
-        mask.path = Path('other.xml')
