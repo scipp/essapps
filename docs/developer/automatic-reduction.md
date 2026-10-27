@@ -69,7 +69,7 @@ loop.status(rule).reason     # why the rule submitted nothing or skipped a datas
 loop.run()                   # steps forever
 ```
 
-The loop keeps no memory of its own. A rule has handled a dataset when a record under the rule's label holds it at the place `at`, or for a series at that place in a row of the blank table, `runs[i].file`, so a restarted or replaced loop does not reduce a dataset again, and a dataset whose file arrives again keeps its identity and is not reduced twice.
+The loop keeps no memory of its own. A rule has handled a dataset when a record under the rule's label holds it at the blank `at`, or for a series in a row of that blank table, `runs[i]`, so a restarted or replaced loop does not reduce a dataset again, and a dataset whose file arrives again keeps its identity and is not reduced twice.
 A dataset that the record holds at another place, such as an empty-beam run that a lookup fills, does not count.
 This holds while the proposal's history is kept. A running loop keeps it, since a proposal with an open client is not idle (README.md, [How long records and values are kept](README.md#how-long-records-and-values-are-kept)).
 
