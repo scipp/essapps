@@ -9,14 +9,14 @@ pieces, which these functions take apart::
 
     BeamCentre | None       optional(...)   -> (BeamCentre, True)
     list[SampleRun]         element(...)    -> SampleRun
-    list[BeamCentre | None] value_type(...) -> BeamCentre
+    dict[str, IofQ]         value_type(...) -> IofQ
 
 Each function sees through ``Annotated`` metadata, such as a validator:
 ``Annotated[X, ...]`` is ``X`` (see :func:`plain`). :func:`fits` says whether
 data of one type can be the value of a field of another, so that an output of
 one spec can feed a parameter of another. :func:`model_of` makes a model of one
 field, which validates a value, or a row of a list, by that field alone:
-:func:`inline` validates a value given inline at one place, and
+:func:`inline` validates a value given inline at one root place, and
 :func:`ess.spec.places.validated` a parameter's value whole, in the call
 phase.
 """

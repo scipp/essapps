@@ -3,11 +3,11 @@
 """
 Places: where a request writes either a value or a reference, by type.
 
-A request is a JSON object of parameter values. A *place* is a position in
-it where the request may write either a value or a reference to data that
+A request is a JSON object of parameter values. A *root place* is a position
+in it where the request may write either a value or a reference to data that
 exist elsewhere (see :mod:`ess.spec.refs`): the value of a parameter, or an
 element of a list parameter. A group written inline holds only scalars and
-lists of scalars, so there is no place inside it::
+lists of scalars, so no root place is inside it::
 
     {
         'sample': dataset(run=101),                    # sample
@@ -16,12 +16,12 @@ lists of scalars, so there is no place inside it::
         'runs': [dataset(run=102), dataset(run=103)],  # runs, runs[0], runs[1]
     }
 
-The type at a place decides what the request writes there, with ``| None``
-removed: a place of type ``X | None`` also takes ``None``. ``X`` is a group
-or a union of groups (see :mod:`ess.spec._workflow_spec`):
+The type at a root place decides what the request writes there, with
+``| None`` removed: a root place of type ``X | None`` also takes ``None``.
+``X`` is a group or a union of groups (see :mod:`ess.spec._workflow_spec`):
 
 ========================================  =====================================
-Type at the place                         The request writes
+Type at the root place                    The request writes
 ========================================  =====================================
 a dataset model                           a reference to a dataset
 a group                                   an object of its fields, unless one
@@ -30,8 +30,8 @@ a group                                   an object of its fields, unless one
 a union of groups                         an object of the fields of one
                                           alternative, with its tag, as for a
                                           group; never a reference
-a list, ``list[X]``, at a parameter       a list, each element a place of
-                                          type ``X``
+a list, ``list[X]``, at a parameter       a list, each element a root place
+                                          of type ``X``
 ========================================  =====================================
 
 A field of a group is a *scalar*, ``int``, ``float``, ``str``, ``bool``,
@@ -44,9 +44,10 @@ a ``NewType``, or a type alias, at any depth, since a file comes only from a
 dataset, and a spec names a role by a class.
 
 A reference stands for a whole group. A reference to a dataset fits a
-dataset model (see :class:`~ess.spec.parameters.DatasetModel`). A reference
-to an output fits the place's type, and no output holds a dataset model, so
-that a file comes only from a dataset, which the dataset source checks. A
+dataset model whose metadata the dataset has (see
+:class:`~ess.spec.parameters.DatasetModel`). A reference to an output fits
+the root place's type, and no output holds a dataset model, so that a file
+comes only from a dataset, which the dataset source checks. A
 number, a string, or a ``sc.DataArray`` names no role: every output of its
 type would fit, so a value computed by another workflow comes as a group,
 such as a found beam centre, and a data value is a field of one::
@@ -63,13 +64,13 @@ A *union of groups* is a pydantic discriminated union,
 alternative is a group with the *tag* field ``kind`` typed as a ``Literal``
 of one string, its own, such as ``Literal['find']``. The tag is written
 inline, never as a reference: it says which alternative's fields the object
-has, and so what each of them takes. A union that holds a group holds groups
+has. A union that holds a group holds groups
 only, since a value of another type has no tag.
 
 A union is written inline only, and no reference fits it, so that an
-output need not be of a tagged class to feed a place: the producer of a
+output need not be of a tagged class to feed a root place: the producer of a
 group need not know its consumers. So a request writes each alternative
-inline: no field of it is a data value (see :func:`unwritten`). A place
+inline: no field of it is a data value (see :func:`unwritten`). A parameter
 that takes either a value typed in or one from a record is a group,
 possibly typed ``X | None``, not a union::
 

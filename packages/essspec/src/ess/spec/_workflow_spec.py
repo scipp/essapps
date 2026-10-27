@@ -63,8 +63,8 @@ earlier record ``m``::
         'sample_runs': [dataset(run=101), dataset(run=102)],
     }
 
-:mod:`ess.spec.places` describes what a request writes at each place by its
-type, and when each value is validated; :mod:`ess.spec.refs` describes the
+:mod:`ess.spec.places` describes what a request writes at each root place by
+its type, and when each value is validated; :mod:`ess.spec.refs` describes the
 references.
 
 The models are ordinary pydantic models: what the framework needs, it reads
@@ -334,8 +334,9 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
 
         The params schema has the value at each place in the forms it takes:
         a dataset model as a reference to a dataset, with the model's
-        metadata; a group as ``anyOf`` the object of its fields, each so, and
-        a reference to an output, or one of them only; a union of groups as
+        metadata; a group as ``anyOf`` the object of its fields, each a
+        scalar or a list of scalars, and a reference to an output, or one of
+        them only; a union of groups as
         ``oneOf`` the object of the fields of each alternative, never a
         reference; a scalar as its JSON schema.
         A reference's schema is the ``@ref`` object of each kind it may be,

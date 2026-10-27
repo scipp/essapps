@@ -3,21 +3,21 @@
 """
 References: how a request names data that exist elsewhere.
 
-A request gives the value at a place by reference to data that exist
+A request gives the value at a root place by reference to data that exist
 elsewhere, or inline: an output of an earlier record, a dataset the
 framework did not compute, or, in a request not yet accepted, an output of an
-accumulator that the framework holds. A *place* is the value of a parameter,
-or an element of a list parameter (see :mod:`ess.spec.places`). A reference
-stands for a whole group: a reference to a dataset for a dataset model (see
-:class:`ess.spec.parameters.DatasetModel`), a reference to an output for any
-other group. A reference is what a request names and what a record keeps;
+accumulator that the framework holds. A *root place* is the value of a
+parameter, or an element of a list parameter (see :mod:`ess.spec.places`). A
+reference stands for a whole group: a reference to a dataset for a dataset
+model (see :class:`ess.spec.parameters.DatasetModel`), a reference to an
+output for any other group. A reference is what a request names and what a record keeps;
 turning it into the data a workflow takes, a local path or an object, is the
 business of whatever runs the workflow.
 
 The JSON form of a reference is an object with the key ``"@ref"``, which
 names its kind. The key is reserved: an object with it is a reference, at any
 depth, so a reference is found in plain data without a spec, and one that is
-not at a place is refused::
+not at a root place is refused::
 
     {"@ref": "dataset", "dataset": "run:loki/60339"}
     {"@ref": "output", "record": "r17", "output": "centre"}
@@ -200,9 +200,9 @@ def positions(loc: Loc, value: Any) -> Iterator[tuple[Loc, Any]]:
     reference, at any depth, such as ``('runs', 2)`` or
     ``('reduction', 'bins')``.
 
-    A request holds a reference only at a place, a parameter or an element
-    of a list parameter, but ``"@ref"`` is reserved at every position, so
-    that a reference is found without the spec wherever it is.
+    A request holds a reference only at a root place, a parameter or an
+    element of a list parameter, but ``"@ref"`` is reserved at every
+    position, so that a reference is found without the spec wherever it is.
     """
     yield loc, value
     if isinstance(value, list):
