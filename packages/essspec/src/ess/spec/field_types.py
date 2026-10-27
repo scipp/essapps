@@ -27,7 +27,6 @@ import dataclasses
 import functools
 import operator
 from collections.abc import Iterable, Iterator
-from pathlib import PurePath
 from types import NoneType, UnionType
 from typing import (
     Annotated,
@@ -46,7 +45,7 @@ from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerati
 from pydantic.json_schema import GenerateJsonSchema, JsonSchemaWarningKind
 from pydantic_core import PydanticCustomError, from_json, to_json
 
-from .refs import Loc, ParamsError, positions
+from .refs import DatasetModel, Loc, ParamsError, positions
 
 
 def plain(tp: Any) -> Any:
@@ -163,9 +162,9 @@ def is_single(tp: Any) -> bool:
     )
 
 
-def is_file(tp: Any) -> bool:
-    """Whether ``tp`` is a file: ``Path``, or a subclass of it."""
-    return isinstance(tp, type) and issubclass(tp, PurePath)
+def is_dataset(tp: Any) -> bool:
+    """Whether ``tp`` is a dataset model, a subclass of :class:`DatasetModel`."""
+    return isinstance(tp, type) and issubclass(tp, DatasetModel)
 
 
 def is_group(tp: Any) -> bool:
@@ -180,19 +179,19 @@ def _is_model(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, BaseModel)
 
 
-def holds_file(tp: Any, seen: frozenset[type] = frozenset()) -> bool:
+def holds_dataset(tp: Any, seen: frozenset[type] = frozenset()) -> bool:
     """
     Whether a type, or a field of a model, a dataclass, or a ``TypedDict``
-    in it, is a file; ``seen`` holds the classes looked into already, so that
-    a recursive class ends.
+    in it, is a dataset model; ``seen`` holds the classes looked into
+    already, so that a recursive class ends.
     """
-    if is_file(tp):
+    if is_dataset(tp):
         return True
     if fields := fields_of(tp):
         if tp in seen:
             return False
-        return any(holds_file(f, seen | {tp}) for f in fields.values())
-    return any(holds_file(arg, seen) for arg in getattr(tp, '__args__', ()))
+        return any(holds_dataset(f, seen | {tp}) for f in fields.values())
+    return any(holds_dataset(arg, seen) for arg in getattr(tp, '__args__', ()))
 
 
 @functools.cache
@@ -201,10 +200,11 @@ def has_json_form(model: type[BaseModel], name: str) -> bool:
     Whether the type of the field ``name`` of ``model``, with ``| None``
     removed and for a list its element type taken, has a JSON form: pydantic
     makes a JSON schema of it, with the config of ``model``, of each member
-    of a union too, and it holds no file.
+    of a union too, and it holds no dataset model, whose JSON form, read,
+    would be a local path rather than the dataset's identity.
     """
     tp = value_type(model.model_fields[name].annotation)
-    if holds_file(tp):
+    if holds_dataset(tp):
         return False
     try:
         # A field of a model of its own carries the config, which
@@ -318,8 +318,7 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
     - ``ValidationError`` if it is not valid, or if its JSON form is not,
       such as of a number that is not finite, which JSON holds as ``null``;
     - :class:`~ess.spec.refs.ParamsError` at each position inside the value,
-      without ``name``, that holds a file, which is given by reference to a
-      dataset, whose JSON form reads back as another value, such as a field
+      without ``name``, whose JSON form reads back as another value, such as a field
       of a group whose validator changes a value it has validated already,
       or whose JSON form is an object with the key ``"@ref"``, which reads
       as a reference (see :func:`ess.spec.refs.positions`).
@@ -330,8 +329,6 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
         value = value.model_dump()
     given = to_json({name: value}, inf_nan_mode='constants')
     made = getattr(one.model_validate_json(given, extra='forbid'), name)
-    if files := list(_files((), made)):
-        raise ParamsError((loc, _FILE_INLINE) for loc in files)
     stored = json_form(model, name, made, whole)
     try:
         again = getattr(one.model_validate_json(to_json({name: stored})), name)
@@ -350,7 +347,6 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
     return stored
 
 
-_FILE_INLINE = 'a file is given by reference to a dataset, dataset(path=...)'
 _NO_JSON_FORM = 'has no JSON form that reads back as the value'
 _READS_AS_REF = 'has a JSON form that reads as a reference'
 _NO_JSON_FORM_ERROR = PydanticCustomError('no_json_form', _NO_JSON_FORM)
@@ -373,18 +369,3 @@ def _differs(loc: Loc, a: Any, b: Any) -> Loc:
         if x != y:
             return _differs((*loc, at), x, y)
     return loc
-
-
-def _files(loc: Loc, value: Any) -> Iterator[Loc]:
-    """
-    The position of each file in ``value``, a validated value at ``loc``:
-    the value, a field of a group, or an element of a list, at any depth.
-    """
-    if isinstance(value, PurePath):
-        yield loc
-    elif isinstance(value, BaseModel):
-        for name in type(value).model_fields:
-            yield from _files((*loc, name), getattr(value, name))
-    elif isinstance(value, list):
-        for i, item in enumerate(value):
-            yield from _files((*loc, i), item)

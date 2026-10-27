@@ -5,7 +5,8 @@ The specs of workflows, which UIs and backends read, and the bindings that
 the backend calls to compute a spec's requests.
 
 The package exports the specs, the references a request gives data by,
-the bindings and their protocols, and :class:`Quantity`. See
+the dataset models that take references to datasets, the bindings and their
+protocols, and :class:`Quantity`. See
 :mod:`ess.spec._workflow_spec` for the design and ADR 0001
 (docs/developer/adr in the package) for the rationale. The helpers are in
 their modules: :mod:`~.field_types` for what the framework reads from field
@@ -31,12 +32,13 @@ from .binding import (
     function_binding,
 )
 from .parameters import Quantity
-from .refs import AccumulatorRef, DatasetRef, OutputRef, Ref
+from .refs import AccumulatorRef, DatasetModel, DatasetRef, OutputRef, Ref
 
 __all__ = [
     'AccumulatorBinding',
     'AccumulatorRef',
     'Binding',
+    'DatasetModel',
     'DatasetRef',
     'Driver',
     'DriverBinding',
