@@ -475,7 +475,9 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
             problems.append(
                 f'{where}: the default_factory of a parameter takes no other values'
             )
-        elif not field.is_required() and (problem := _default_problem(model, name)):
+        elif not field.is_required() and (
+            problem := _default_problem(model, name, _parameter_value)
+        ):
             problems.append(f'{where}: {problem}')
     return problems
 
@@ -610,7 +612,9 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
                 f'{where}: the default_factory of a field of a group takes no other '
                 'values'
             )
-        elif not field.is_required() and (problem := _default_problem(group, name)):
+        elif not field.is_required() and (
+            problem := _default_problem(group, name, places.field_value)
+        ):
             problems.append(f'{where}: {problem}')
     return problems
 
@@ -681,23 +685,38 @@ def _is_scalar(tp: Any) -> bool:
     )
 
 
-def _default_problem(model: type[BaseModel], name: str) -> str | None:
+def _default_problem(
+    model: type[BaseModel],
+    name: str,
+    made_of: Callable[[type[BaseModel], str, Any], Any],
+) -> str | None:
     """
     Why the default of the field ``name`` of ``model`` is not a value, or
-    ``None``: what a request may write at the place, with no reference (see
-    :func:`ess.spec.places.held`), and the value that validating it gives,
-    since pydantic does not validate a default, and a binding gets it as it
-    is. So a group's default is an instance, not the object of its fields.
+    ``None``: what a request may write, and the value that ``made_of`` it
+    gives, since pydantic does not validate a default, and a binding gets it
+    as it is. So a group's default is an instance, not the object of its
+    fields. ``made_of`` is :func:`_parameter_value` for a parameter, and
+    :func:`ess.spec.places.field_value` for a field of a group, whose default
+    is validated whole, with the length constraints of a list.
     """
     default = model.model_fields[name].get_default(call_default_factory=True)
     try:
-        places.held(model, name, default, _no_ref)
-        made = places.validated(model, name, default)
+        made = made_of(model, name, default)
     except ParamsError as error:
         return f'the default is not a value a request may write: {error}'
     if made != default:
         return f'the default {default!r} is not the value validating it gives, {made!r}'
     return None
+
+
+def _parameter_value(model: type[BaseModel], name: str, value: Any) -> Any:
+    """
+    ``value`` of the parameter ``name`` of ``model`` as validating it gives,
+    if a request may write it with no reference (see
+    :func:`ess.spec.places.held`).
+    """
+    places.held(model, name, value, _no_ref)
+    return places.validated(model, name, value)
 
 
 def _no_ref(loc: Loc, ref: Ref, tp: Any) -> Any:

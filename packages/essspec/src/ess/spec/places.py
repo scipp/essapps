@@ -125,8 +125,8 @@ raises.
 @dataclass(frozen=True)
 class _Slot:
     """
-    The type at a place: that of the field ``name`` of ``model``, or of an
-    element of it, a list, if ``element``.
+    The type of the field ``name`` of ``model``, a parameter or a field of a
+    group, or of an element of it, a list, if ``element``.
     """
 
     model: type[BaseModel]
@@ -139,20 +139,10 @@ class _Slot:
         return get_args(tp)[0] if self.element else tp
 
     @property
-    def is_list(self) -> bool:
-        """Whether the place holds a list whose elements are places."""
-        return not self.element and field_types.is_list(self.model, self.name)
-
-    @property
     def discriminator(self) -> Any:
         """The discriminator of the field, if it is not in the annotation."""
         info = self.model.model_fields[self.name]
         return None if self.element else info.discriminator
-
-    @property
-    def one(self) -> _Slot:
-        """The type at one place of the field: an element, if it is a list."""
-        return _Slot(self.model, self.name, element=self.is_list or self.element)
 
 
 def held(model: type[BaseModel], name: str, value: Any, on_ref: OnRef) -> Any:
@@ -166,13 +156,11 @@ def held(model: type[BaseModel], name: str, value: Any, on_ref: OnRef) -> Any:
 
     A group, or a row, given inline is validated whole, and held as the JSON
     form of the validated group, a field left out at its default (see
-    :func:`ess.spec.field_types.inline`). A field of a group is validated so
-    too, alone, for a check of its default. Raises
+    :func:`ess.spec.field_types.inline`). Raises
     :class:`~ess.spec.refs.ParamsError` at the place of the first problem.
     """
-    slot = _Slot(model, name)
-    if not slot.is_list:
-        return _held((name,), slot, value, on_ref)
+    if not field_types.is_list(model, name):
+        return _held((name,), _Slot(model, name), value, on_ref)
     if (ref := ref_at((name,), value)) is not None:
         raise _refused(
             (name,),
@@ -181,7 +169,8 @@ def held(model: type[BaseModel], name: str, value: Any, on_ref: OnRef) -> Any:
         )
     if not isinstance(value, list):
         raise _refused((name,), f'{value!r} is not a list')
-    return [_held((name, i), slot.one, v, on_ref) for i, v in enumerate(value)]
+    slot = _Slot(model, name, element=True)
+    return [_held((name, i), slot, v, on_ref) for i, v in enumerate(value)]
 
 
 def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
@@ -299,6 +288,23 @@ def validated(
     if field_types.is_list(model, name):
         return [check((name, i), v) for i, v in enumerate(value)]
     return check((name,), value)
+
+
+def field_value(group: type[BaseModel], name: str, value: Any) -> Any:
+    """
+    ``value`` of the field ``name`` of ``group``, a field of a group, given
+    inline, as validating the group makes it: validated whole, a list with
+    its length constraints, and its JSON form checked to read back as it (see
+    :func:`~ess.spec.field_types.inline`). A spec checks the default of a
+    field so. Raises :class:`~ess.spec.refs.ParamsError` at ``name``.
+    """
+    slot = _Slot(group, name)
+    _inline((name,), slot, value)
+    one = field_types.model_of(group, name, whole=True)
+    try:
+        return getattr(one.model_validate({name: value}), name)
+    except ValidationError as error:
+        raise _at((name,), slot, error) from None
 
 
 def _at(loc: Loc, slot: _Slot, error: ValidationError) -> ParamsError:
@@ -526,7 +532,7 @@ def groups_at(model: type[BaseModel], name: str) -> list[type[BaseModel]]:
     or the alternatives of the union, that it or each element of it is, if
     any. Raises ``ValueError`` as :func:`alternatives` does.
     """
-    slot = _Slot(model, name).one
+    slot = _Slot(model, name, element=field_types.is_list(model, name))
     tp, _ = field_types.optional(slot.annotation)
     if field_types.is_group(tp):
         return [tp]

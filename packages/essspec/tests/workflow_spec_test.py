@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal, NewType, TypedDict
 import pydantic
 import pytest
 import scipp as sc
-from annotated_types import Ge, Gt
+from annotated_types import Ge, Gt, MaxLen, MinLen
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -679,25 +679,6 @@ class TestModelRules:
                 'reference: no request writes its field centre, of BeamCentre',
             ),
             (
-                {
-                    'params': model(
-                        'P',
-                        r=(
-                            model(
-                                'R',
-                                x=(
-                                    float,
-                                    {'@ref': 'output', 'record': 'r1', 'output': 'x'},
-                                ),
-                            ),
-                            ...,
-                        ),
-                    )
-                },
-                f'P.r: R.x: {NOT_A_VALUE}: x: r1.x is a reference; a default is a '
-                'value',
-            ),
-            (
                 {'params': model('P', reduction=(dict[str, Reduction], {}))},
                 f'P.reduction: {NOT_A_PARAMETER}',
             ),
@@ -1083,25 +1064,28 @@ class TestModelRules:
                 'Extra inputs are not permitted',
             ),
             (
-                {'params': model('P', r=(model('R', kind=(str, {'@ref': 'a'})), ...))},
-                f'P.r: R.kind: {NOT_A_VALUE}: kind: .*is not a kind of reference',
-            ),
-            (
-                {
-                    'params': model(
-                        'P', r=(model('R', kind=(str, {'@ref': 'dataset'})), ...)
-                    )
-                },
-                f'P.r: R.kind: {NOT_A_VALUE}: kind: .*not a reference to dataset',
-            ),
-            (
                 {
                     'params': model(
                         'P',
-                        r=(model('R', kind=(list[str], [{'@ref': 'output'}])), ...),
+                        r=(
+                            model('R', x=(float, {'@ref': 'output', 'output': 'x'})),
+                            ...,
+                        ),
                     )
                 },
-                rf'P.r: R.kind: {NOT_A_VALUE}: kind\[0\]: .*not a reference to output',
+                f'P.r: R.x: {NOT_A_VALUE}: x: Input should be a valid number',
+            ),
+            *(
+                (
+                    {'params': model('P', r=(model('R', banks=(tp, default)), ...))},
+                    rf'P.r: R.banks: {NOT_A_VALUE}: banks: List should have at '
+                    f'{need}',
+                )
+                for tp, default, need in (
+                    (Annotated[list[int], MinLen(1)], [], 'least 1 item'),
+                    (Annotated[list[int], MaxLen(1)], [1, 2], 'most 1 item'),
+                    (list[int], Field([], min_length=1), 'least 1 item'),
+                )
             ),
             (
                 {

@@ -252,7 +252,8 @@ def model_of(model: type[BaseModel], name: str, whole: bool = False) -> type[Bas
     For a list field, the model validates one row: by its element type alone,
     with that type's metadata, without the field's length constraints, which
     hold for the whole list. A reference stands for one row. With ``whole``,
-    the model validates the whole field, a list too.
+    the model validates the whole field, a list too, as for a field of a
+    group, whose elements are not places.
     """
     info = model.model_fields[name]
     field = (
