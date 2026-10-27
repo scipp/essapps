@@ -118,6 +118,8 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         calibration: CalibrationFile
         # A list without rows is [], not None.
         transmissions: list[RunFile] | None = None
+        # A row is a value: the element of a list is not X | None.
+        masks: list[PixelMask | None] = []
         # Pydantic does not validate a default, so a default is the value
         # validating it gives: WavelengthRange(start=1.0, stop=2.0).
         range: WavelengthRange = {'start': 1.0, 'stop': 2.0}
@@ -490,25 +492,33 @@ def _shape_problem(annotation: Any) -> str | None:
     is not ``list[X] | None``, and a row is a value, so its element is not
     ``X | None``.
     """
-    tp, is_optional = field_types.optional(annotation)
-    if get_origin(tp) is list:
-        if is_optional:
-            return (
-                'a list parameter is not typed list[X] | None; a list without '
-                'rows is []'
-            )
-        tp, item_optional = field_types.optional(get_args(tp)[0])
-        if item_optional:
-            return (
-                'the element of a list parameter is not typed X | None; each row '
-                'is a value'
-            )
+    tp, is_optional, item_optional = _taken_apart(annotation)
+    if item_optional is not None and is_optional:
+        return 'a list parameter is not typed list[X] | None; a list without rows is []'
+    if item_optional:
+        return (
+            'the element of a list parameter is not typed X | None; each row is a value'
+        )
     if field_types.is_single(tp) or get_origin(tp) in (Union, UnionType):
         return None
     return (
         'a parameter is a group, a union of groups, or a list of one, possibly '
         'typed X | None'
     )
+
+
+def _taken_apart(annotation: Any) -> tuple[Any, bool, bool | None]:
+    """
+    The type of one value of ``annotation``, ``X`` of ``X``, ``X | None``,
+    ``list[X]``, ``list[X] | None``, or ``list[X | None]``; whether
+    ``annotation`` is typed ``X | None``; and for a list whether its element
+    is, else ``None``.
+    """
+    tp, is_optional = field_types.optional(annotation)
+    if get_origin(tp) is not list:
+        return tp, is_optional, None
+    tp, item_optional = field_types.optional(get_args(tp)[0])
+    return tp, is_optional, item_optional
 
 
 def _found(
@@ -640,23 +650,26 @@ def _dataset_model_problems(model: type[BaseModel]) -> list[str]:
 
 def _field_problem(annotation: Any) -> str | None:
     """
-    Why a field of ``annotation``, of a group without a data value, is not
-    *interpreted*, with the fix, or ``None``. An interpreted field is a
+    Why a field typed ``annotation``, of a group without a data value, is
+    not *interpreted*, with the fix, or ``None``. An interpreted field is a
     scalar, ``int``, ``float``, ``str``, ``bool``, ``datetime``, an enum, or a
     ``Literal``, possibly with constraints, ``Annotated[float, Gt(0)]``, or a
-    list of scalars, and never ``X | None``: a form shows each as an input
-    of its type, and a request writes it inline. Any other type, a group, a
-    union, a tuple, a dict, or a dataclass, is refused.
+    list of scalars, and never ``X | None``, nor a ``Literal`` with ``None``,
+    which is ``X | None`` too: a form shows each as an input of its type, and
+    a request writes it inline. Any other type, a group, a union, a tuple, a
+    dict, or a dataclass, is refused.
     """
-    tp, is_optional = field_types.optional(annotation)
-    if get_origin(tp) is list:
-        tp, item_optional = field_types.optional(get_args(tp)[0])
-        is_optional |= item_optional
-    if is_optional:
+    tp, is_optional, item_optional = _taken_apart(annotation)
+    if item_optional is not None and (is_optional or item_optional):
         return (
-            'a field is never typed X | None; a value that a request may leave '
-            'out is a parameter typed X | None, or a bool field, such as '
-            'limit_range: bool'
+            'a list field is never typed list[X] | None or list[X | None]; a list '
+            'without elements is [], and each element is a value'
+        )
+    if is_optional or (get_origin(tp) is Literal and None in get_args(tp)):
+        return (
+            'a field is never typed X | None, nor a Literal with None; a value '
+            'that a request may leave out is a parameter typed X | None, or a '
+            'bool field, such as limit_range: bool'
         )
     if _is_scalar(tp):
         return None

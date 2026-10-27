@@ -488,7 +488,10 @@ def alternatives(
     if not any(field_types.is_group(m) for m in members):
         return None
     if not all(field_types.is_group(m) for m in members):
-        raise ValueError('a union holds groups only, or no group')
+        raise ValueError(
+            'a union holds groups only, or no group; a value of another type is a '
+            'field of a group, such as of an alternative of the union'
+        )
     if isinstance(discriminator, Discriminator):
         discriminator = discriminator.discriminator
     if not isinstance(discriminator, str):
@@ -515,7 +518,8 @@ def alternatives(
             raise ValueError(
                 f'{member.__name__}.{data}: no request writes it, since an '
                 'alternative of a union is written inline, with its tag, and no '
-                'reference fits a union'
+                f'reference fits a union; make {member.__name__} a parameter of its '
+                'own, given by reference'
             )
         groups[tags[0]] = member  # pydantic refuses two alternatives of one tag
     return discriminator, groups

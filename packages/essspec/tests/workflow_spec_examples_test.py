@@ -71,6 +71,9 @@ def refused_spec() -> WorkflowSpec:
         start: float
         stop: float
 
+    class PixelMask(BaseModel, arbitrary_types_allowed=True):
+        mask: sc.DataArray
+
     class GivenCentre(BaseModel):
         kind: Literal['given'] = 'given'
 
@@ -109,6 +112,7 @@ def refused_spec() -> WorkflowSpec:
         geometry: Geometry
         calibration: CalibrationFile
         transmissions: list[RunFile] | None = None
+        masks: list[PixelMask | None] = []
         range: WavelengthRange = {'start': 1.0, 'stop': 2.0}
         sample_runs: list[RunFile] = []
         iofq: RunFile
@@ -158,6 +162,7 @@ def refusal() -> str:
         'Geometry.file: a Path is outside a dataset model',
         "CalibrationFile: a dataset model holds only path, not ['run']",
         'Params.transmissions: a list parameter is not typed list[X] | None',
+        'Params.masks: the element of a list parameter is not typed X | None',
         'Params.range: the default',
         'Outputs.raw: RunFile is a dataset model; no output holds one',
         'Params.bins: int is not a group',

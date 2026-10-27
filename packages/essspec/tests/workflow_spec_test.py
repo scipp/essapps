@@ -700,7 +700,8 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', by=(ByMonitor | float, ...))},
-                'P.by: a union holds groups only, or no group',
+                'P.by: a union holds groups only, or no group; a value of another '
+                'type is a field of a group, such as of an alternative of the union',
             ),
             (
                 {
@@ -714,7 +715,7 @@ class TestModelRules:
                 },
                 'P.by: ByCentre.centre: no request writes it, since an alternative '
                 'of a union is written inline, with its tag, and no reference fits a '
-                'union',
+                'union; make ByCentre a parameter of its own, given by reference',
             ),
             (
                 {
@@ -1150,8 +1151,13 @@ class TestModelRules:
 
 
 OPTIONAL_FIELD = re.escape(
-    'a field is never typed X | None; a value that a request may leave out is a '
-    'parameter typed X | None, or a bool field, such as limit_range: bool'
+    'a field is never typed X | None, nor a Literal with None; a value that a '
+    'request may leave out is a parameter typed X | None, or a bool field, such as '
+    'limit_range: bool'
+)
+OPTIONAL_LIST_FIELD = re.escape(
+    'a list field is never typed list[X] | None or list[X | None]; a list without '
+    'elements is [], and each element is a value'
 )
 NOT_A_SCALAR = re.escape(
     'is not a scalar; a field of a group is a scalar (int, float, str, bool, '
@@ -1208,14 +1214,27 @@ class TestFields:
             str | None,
             Mode | None,
             Literal['a', 'b'] | None,
-            list[float] | None,
-            list[float | None],
+            Literal['a', None],  # noqa: PYI061
+            Literal[None],  # noqa: PYI061
+            list[Literal['a', None]],  # noqa: PYI061
             Reduction | None,
-            list[Reduction | None],
         ],
     )
     def test_a_field_is_never_typed_x_or_none(self, tp: Any) -> None:
         with pytest.raises(ValueError, match=f'P.g: G.value: {OPTIONAL_FIELD}'):
+            spec(params=model('P', g=(_group_with(tp), ...)))
+
+    @pytest.mark.parametrize(
+        'tp',
+        [
+            list[float] | None,
+            list[float | None],
+            Annotated[list[float], MinLen(1)] | None,
+            list[Reduction | None],
+        ],
+    )
+    def test_a_list_field_is_never_typed_x_or_none(self, tp: Any) -> None:
+        with pytest.raises(ValueError, match=f'P.g: G.value: {OPTIONAL_LIST_FIELD}'):
             spec(params=model('P', g=(_group_with(tp), ...)))
 
     @pytest.mark.parametrize(
