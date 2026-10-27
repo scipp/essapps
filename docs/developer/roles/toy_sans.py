@@ -10,16 +10,17 @@ distance and sums them into ``bins`` groups, the Q bins (the *numerator*). It
 divides by the monitor count, times the sample's transmission for a sample run
 (the *denominator*). The can's curve is subtracted from the sample's. Numerator
 and denominator stay apart until the division, so that the runs of a sum add up
-correctly.
+correctly; the summed sample runs have one transmission.
 
 A beam centre is typed in, or found by ``FIND_CENTRE``; a transmission is typed
 in, or computed by ``TRANSMISSION`` from a transmission run. ``FORWARD`` takes
 the I(Q) that ``IOFQ`` or ``IOFQ_MULTI`` outputs, as the group ``IofQ``, since a
-reference stands for a group or a file only.
+reference stands for a group only.
 
-Each parameter is a group, and a file is a field of one: ``Sample``, ``Can``,
-or ``Run``. A ``PipelineBinding`` keys each parameter by its class, so the
-sample and the can are classes of their own.
+Each parameter is a group. A file is a dataset model, a group given by
+reference to a dataset: ``Sample``, ``Can``, or ``Run``. A ``PipelineBinding``
+keys each parameter by its class, so the sample and the can are classes of
+their own.
 
 workflow-authors.ipynb writes the specs and bindings below step by step; the other
 notebooks import them from here.
@@ -35,7 +36,7 @@ import sciline
 import scipp as sc
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ess.spec import DriverBinding, WorkflowSpec, function_binding
+from ess.spec import DatasetModel, DriverBinding, WorkflowSpec, function_binding
 from ess.spec.pipeline import PipelineBinding
 
 # The specs: what apps, clients, and the backend see.
@@ -82,25 +83,22 @@ class IofQ(BaseModel):
     intensity: sc.Variable
 
 
-class Run(BaseModel):
-    """A run: its file."""
-
-    file: Path
+class Run(DatasetModel):
+    """A run's file, of a raw dataset."""
 
 
 class Sample(Run):
-    """A sample run, and its transmission."""
-
-    transmission: TransmissionFraction
+    """A sample run's file."""
 
 
 class Can(Run):
-    """An empty-can run."""
+    """An empty-can run's file."""
 
 
 class IofQSettings(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
     beam_centre: BeamCentre = Field(default_factory=BeamCentre)
+    transmission: TransmissionFraction
 
 
 class IofQParams(IofQSettings):
@@ -257,11 +255,11 @@ or an accumulator saves."""
 
 
 def read_sample(sample: Sample) -> RunData[SampleRun]:
-    return RunData[SampleRun](json.loads(sample.file.read_text()))
+    return RunData[SampleRun](json.loads(sample.path.read_text()))
 
 
 def read_can(can: Can) -> RunData[CanRun]:
-    return RunData[CanRun](json.loads(can.file.read_text()))
+    return RunData[CanRun](json.loads(can.path.read_text()))
 
 
 def load(data: RunData[RunType]) -> Counts[RunType]:
@@ -283,9 +281,9 @@ def numerator(
 
 
 def sample_denominator(
-    data: RunData[SampleRun], sample: Sample
+    data: RunData[SampleRun], transmission: TransmissionFraction
 ) -> Denominator[SampleRun]:
-    value = data['monitor'] * sample.transmission.value
+    value = data['monitor'] * transmission.value
     return Denominator[SampleRun](sc.scalar(value, unit='counts'))
 
 
@@ -376,14 +374,14 @@ def forward(params: ForwardParams) -> ForwardOutputs:
 
 
 def find_centre(params: FindCentreParams) -> FindCentreOutputs:
-    data = json.loads(params.sample.file.read_text())
+    data = json.loads(params.sample.path.read_text())
     counts = sc.array(dims=['pixel'], values=data['counts'])
     centre = (counts * PIXELS).sum() / counts.sum()
     return FindCentreOutputs(centre=BeamCentre(x=centre.fields.x.value, y=0.0))
 
 
 def transmission(params: TransmissionParams) -> TransmissionOutputs:
-    data = json.loads(params.run.file.read_text())
+    data = json.loads(params.run.path.read_text())
     return TransmissionOutputs(
         transmission=TransmissionFraction(value=data['transmitted'] / data['monitor'])
     )
