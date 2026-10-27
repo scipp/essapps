@@ -36,9 +36,9 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from . import places
 from ._workflow_spec import WorkflowSpec
 from .binding import Binding, Driver, StageBinding, fixed_values
-from .places import validated
 
 Rows = Sequence[Any]
 """A table's rows, as a push gives them."""
@@ -89,7 +89,7 @@ def instance(spec: WorkflowSpec[Any, Any], values: Mapping[str, Any]) -> BaseMod
     """
     model: type[BaseModel] = spec.params
     return model.model_construct(
-        **{n: validated(model, n, v) for n, v in values.items()}
+        **{n: places.validated(model, n, v) for n, v in values.items()}
     )
 
 

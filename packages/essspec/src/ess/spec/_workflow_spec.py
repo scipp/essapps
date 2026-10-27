@@ -197,37 +197,8 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 
-from .field_types import (
-    arguments,
-    element,
-    fields_of,
-    has_json_form,
-    holds_file,
-    is_alias,
-    is_file,
-    is_group,
-    is_list,
-    is_single,
-    optional,
-    plain,
-    reachable,
-    type_name,
-    value_type,
-)
-from .places import (
-    File,
-    Place,
-    Rows,
-    Value,
-    Ways,
-    file_off_place,
-    groups_at,
-    held,
-    place,
-    title,
-    unwritten,
-    validated,
-)
+from . import field_types, places
+from .places import File, Place, Rows, Value, Ways
 from .refs import AccumulatorRef, DatasetRef, Loc, OutputRef, ParamsError, Ref
 
 
@@ -345,7 +316,7 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         and for a list parameter its element type taken, has a JSON form (see
         :func:`ess.spec.field_types.has_json_form`).
         """
-        return has_json_form(self.params, name)
+        return field_types.has_json_form(self.params, name)
 
     def serialize(self) -> SerializedWorkflowSpec:
         """
@@ -433,8 +404,10 @@ def _one_or_list(annotation: Any) -> bool:
     Whether ``annotation`` is ``X``, ``X | None``, ``list[X]``, or
     ``list[X | None]``: the shapes of a parameter.
     """
-    tp, is_optional = optional(annotation)
-    return element(tp) is None or (get_origin(tp) is list and not is_optional)
+    tp, is_optional = field_types.optional(annotation)
+    return field_types.element(tp) is None or (
+        get_origin(tp) is list and not is_optional
+    )
 
 
 def _decorators(model: type[BaseModel], kinds: Sequence[str]) -> dict[str, list[str]]:
@@ -468,12 +441,14 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
     problems = _model_validators_only(model)
     for name, field in model.model_fields.items():
         where = f'{model.__name__}.{name}'
-        tp = value_type(field.annotation)
+        tp = field_types.value_type(field.annotation)
         union = get_origin(tp) in (Union, UnionType)
         if aliases := _alias_problems(field.annotation):
             problems.extend(f'{where}: {problem}' for problem in aliases)
             continue
-        if not (_one_or_list(field.annotation) and (is_single(tp) or union)):
+        if not (
+            _one_or_list(field.annotation) and (field_types.is_single(tp) or union)
+        ):
             problems.append(
                 f'{where}: a parameter is a group, a union of groups, or a list of '
                 'one, possibly typed X | None'
@@ -484,7 +459,7 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
             continue
         if _has_alias(field):
             problems.append(f'{where}: a parameter has no alias')
-        if get_origin(optional(field.annotation)[0]) is list and (
+        if get_origin(field_types.optional(field.annotation)[0]) is list and (
             other := [m for m in field.metadata if not isinstance(m, MinLen | MaxLen)]
         ):
             problems.append(
@@ -493,11 +468,11 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
             )
         if place := _place_problems(model, name, (), {}):
             problems.extend(f'{where}: {problem}' for problem in place)
-        elif not groups_at(model, name):
+        elif not places.groups_at(model, name):
             problems.append(
-                f'{where}: {type_name(tp)} is not a group; a parameter is a group, '
-                'a union of groups, or a list of one, and a value of another type '
-                'is a field of a group, such as the file of a run'
+                f'{where}: {field_types.type_name(tp)} is not a group; a parameter '
+                'is a group, a union of groups, or a list of one, and a value of '
+                'another type is a field of a group, such as the file of a run'
             )
         elif field.default_factory_takes_validated_data:
             problems.append(
@@ -514,11 +489,15 @@ def _alias_problems(annotation: Any) -> list[str]:
     :func:`~ess.spec.field_types.reachable`), named by the field of the class
     that holds it, if any: a spec names a role by a class.
     """
-    found = [('', t) for t in arguments(annotation) if is_alias(t)]
-    for cls in dict.fromkeys(reachable(annotation)):
-        for name, tp in fields_of(cls).items():
+    found = [
+        ('', t) for t in field_types.arguments(annotation) if field_types.is_alias(t)
+    ]
+    for cls in dict.fromkeys(field_types.reachable(annotation)):
+        for name, tp in field_types.fields_of(cls).items():
             found.extend(
-                (f'{cls.__name__}.{name}: ', t) for t in arguments(tp) if is_alias(t)
+                (f'{cls.__name__}.{name}: ', t)
+                for t in field_types.arguments(tp)
+                if field_types.is_alias(t)
             )
     return [
         f'{where}{alias.__name__} is '
@@ -538,18 +517,20 @@ def _union_problems(annotation: Any) -> list[str]:
     return [
         f'{group.__name__}.{name}: a union of groups is a parameter, never a '
         'field of a group'
-        for group in dict.fromkeys(t for t in reachable(annotation) if is_group(t))
-        for name, tp in fields_of(group).items()
-        if any(_is_union_of_groups(t) for t in arguments(tp))
+        for group in dict.fromkeys(
+            t for t in field_types.reachable(annotation) if field_types.is_group(t)
+        )
+        for name, tp in field_types.fields_of(group).items()
+        if any(_is_union_of_groups(t) for t in field_types.arguments(tp))
     ]
 
 
 def _is_union_of_groups(tp: Any) -> bool:
-    members = [plain(a) for a in get_args(tp) if a is not NoneType]
+    members = [field_types.plain(a) for a in get_args(tp) if a is not NoneType]
     return (
         get_origin(tp) in (Union, UnionType)
         and len(members) > 1
-        and any(is_group(m) for m in members)
+        and any(field_types.is_group(m) for m in members)
     )
 
 
@@ -576,10 +557,10 @@ def _place_problems(
     at several places is checked once, and its problems named at each.
     """
     try:
-        groups = groups_at(model, name)
+        groups = places.groups_at(model, name)
     except ValueError as error:
         return [str(error)]
-    if file_off_place(model, name):
+    if places.file_off_place(model, name):
         return [
             'a file is at a place only, possibly in a list: not in a tuple, a '
             'dict, or a dataclass, where no dataset gives it'
@@ -638,10 +619,10 @@ def _group_problems(
             )
         elif (unshown := _unshown(group, name)) is not None:
             problems.append(
-                f'{where}: {type_name(unshown)} is not a scalar; a field of a group '
-                'holds a file, a group, a data value, or a scalar (int, float, str, '
-                'bool, an enum, or a Literal), or a list of one; a value of several '
-                'parts is a group, such as range: WavelengthRange, not '
+                f'{where}: {field_types.type_name(unshown)} is not a scalar; a field '
+                'of a group holds a file, a group, a data value, or a scalar (int, '
+                'float, str, bool, an enum, or a Literal), or a list of one; a value '
+                'of several parts is a group, such as range: WavelengthRange, not '
                 'limits: tuple[float, float]'
             )
         elif field.default_factory_takes_validated_data:
@@ -651,7 +632,11 @@ def _group_problems(
             )
         elif not field.is_required() and (problem := _default_problem(group, name)):
             problems.append(f'{where}: {problem}')
-    if not problems and holds_file(group) and (data := unwritten(group)) is not None:
+    if (
+        not problems
+        and field_types.holds_file(group)
+        and (data := places.unwritten(group)) is not None
+    ):
         problems.append(
             f'{group.__name__}.{data}: no request writes it, since a group that '
             'holds a file is given field by field, never by reference'
@@ -666,7 +651,8 @@ def _optional_value(group: type[BaseModel], name: str) -> bool:
     as a toggle over the fields of a group, so a field is
     ``range: WavelengthRange | None``, not ``start: float | None``.
     """
-    return optional(_one(group, name))[1] and not groups_at(group, name)
+    _, is_optional = field_types.optional(_one(group, name))
+    return is_optional and not places.groups_at(group, name)
 
 
 def _unshown(group: type[BaseModel], name: str) -> Any | None:
@@ -681,10 +667,10 @@ def _unshown(group: type[BaseModel], name: str) -> Any | None:
     ``TypedDict``, a dataclass, or a ``RootModel`` with a JSON form, is
     refused: no spec needs it, and its parts are a group's fields.
     """
-    tp, _ = optional(_one(group, name))
-    if is_file(tp) or is_group(tp) or _is_scalar(tp):
+    tp, _ = field_types.optional(_one(group, name))
+    if field_types.is_file(tp) or field_types.is_group(tp) or _is_scalar(tp):
         return None
-    if get_origin(tp) is not dict and not has_json_form(group, name):
+    if get_origin(tp) is not dict and not field_types.has_json_form(group, name):
         return None  # a data value
     return tp
 
@@ -700,7 +686,7 @@ def _is_scalar(tp: Any) -> bool:
 def _one(group: type[BaseModel], name: str) -> Any:
     """The type at one place of the field ``name``: an element, if it is a list."""
     annotation = group.model_fields[name].annotation
-    return get_args(annotation)[0] if is_list(group, name) else annotation
+    return get_args(annotation)[0] if field_types.is_list(group, name) else annotation
 
 
 def _default_problem(model: type[BaseModel], name: str) -> str | None:
@@ -713,8 +699,8 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
     """
     default = model.model_fields[name].get_default(call_default_factory=True)
     try:
-        held(model, name, default, _no_ref)
-        made = validated(model, name, default)
+        places.held(model, name, default, _no_ref)
+        made = places.validated(model, name, default)
     except ParamsError as error:
         return f'the default is not a value a request may write: {error}'
     if made != default:
@@ -732,7 +718,7 @@ def _outputs_problems(model: type[BaseModel]) -> list[str]:
         where = f'{model.__name__}.{name}'
         if aliases := _alias_problems(field.annotation):
             problems.extend(f'{where}: {problem}' for problem in aliases)
-        elif not is_single(value_type(field.annotation)):
+        elif not field_types.is_single(field_types.value_type(field.annotation)):
             problems.append(
                 f'{where}: an output is a type, possibly typed X | None, or a '
                 'list or a dict of one'
@@ -773,7 +759,7 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
             Field(
                 # Undefined, and so required, if the field is.
                 default=info.get_default(call_default_factory=True),
-                title=title(name, info),
+                title=places.title(name, info),
                 description=info.description,
             ),
         )
@@ -797,9 +783,9 @@ def _not_a_ref(schema: dict[str, Any]) -> None:
 
 def _ref_form(tp: Any) -> Any:
     """The reference a value of type ``tp`` takes, with the name of ``tp``."""
-    data_type = Field(json_schema_extra={'dataType': type_name(tp)})
+    data_type = Field(json_schema_extra={'dataType': field_types.type_name(tp)})
     return Annotated[
-        DatasetRef if is_file(tp) else OutputRef | AccumulatorRef, data_type
+        DatasetRef if field_types.is_file(tp) else OutputRef | AccumulatorRef, data_type
     ]
 
 
@@ -809,7 +795,7 @@ def _field_forms(model: type[BaseModel], name: str) -> Any:
     places replaced by the forms it takes (see :func:`_forms`); the
     constraints of a list, whose elements are places, on the list.
     """
-    described = place(model, name)
+    described = places.place(model, name)
     if isinstance(described, Rows):
         row = _forms(described.element)
         listed: Any = list[row]  # type: ignore[valid-type]
@@ -867,7 +853,9 @@ def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
     """
     fields: dict[str, Any] = {}
     for name, info in group.model_fields.items():
-        label = title(get_args(info.annotation)[0], info) if name == tag else None
+        label = (
+            places.title(get_args(info.annotation)[0], info) if name == tag else None
+        )
         fields[name] = (
             info.annotation if name == tag else _field_forms(group, name),
             Field(
@@ -914,9 +902,9 @@ def _output_property(field: FieldInfo) -> dict[str, Any]:
 
 
 def _output_type_schema(annotation: Any) -> dict[str, Any]:
-    tp, is_optional = optional(annotation)
-    if (item := element(tp)) is None:
-        schema: dict[str, Any] = {'dataType': type_name(tp)}
+    tp, is_optional = field_types.optional(annotation)
+    if (item := field_types.element(tp)) is None:
+        schema: dict[str, Any] = {'dataType': field_types.type_name(tp)}
     elif get_origin(tp) is list:
         schema = {'type': 'array', 'items': _output_type_schema(item)}
     else:

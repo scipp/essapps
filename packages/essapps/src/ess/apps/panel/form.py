@@ -52,9 +52,8 @@ from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
 from ess.apps import Client, FieldError, Selector, SubmitError
-from ess.spec import DatasetRef, OutputRef, WorkflowSpec
-from ess.spec.field_types import fits
-from ess.spec.places import File, Rows, Value, place, title
+from ess.spec import DatasetRef, OutputRef, WorkflowSpec, field_types, places
+from ess.spec.places import File, Rows, Value
 from ess.spec.refs import Loc, iter_refs
 
 
@@ -125,7 +124,9 @@ class Listing:
 
     def fitting(self, tp: Any) -> dict[str, OutputRef]:
         """The outputs a request may reference that fit ``tp``, newest first."""
-        return {label: ref for label, ref, out in self._outputs if fits(out, tp)}
+        return {
+            label: ref for label, ref, out in self._outputs if field_types.fits(out, tp)
+        }
 
 
 def _dataset_label(ref: DatasetRef, metadata: Mapping[str, Any]) -> str:
@@ -146,8 +147,8 @@ def _place(
 ) -> _File | _Scalar | _Choice:
     """The widget for the value at the place of field ``name`` of ``model``."""
     info = model.model_fields[name]
-    label = title(name, info)
-    described = place(model, name)
+    label = places.title(name, info)
+    described = places.place(model, name)
     if isinstance(described, Rows):
         raise NotImplementedError(f'{name}: a list of places (a table)')
     if isinstance(described, File):
@@ -159,7 +160,7 @@ def _place(
         if value is None or described.tag is None:
             ways['Given'] = _Group(group, listing, {})
         else:
-            way = title(value, group.model_fields[described.tag])
+            way = places.title(value, group.model_fields[described.tag])
             ways[way] = _Group(group, listing, {described.tag: value})
     if described.record is not None:
         ways[_Choice.RECORD] = _Record(described.record, listing)
