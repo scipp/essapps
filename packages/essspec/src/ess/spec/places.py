@@ -38,7 +38,10 @@ A field of a group is a *scalar*, ``int``, ``float``, ``str``, ``bool``,
 ``datetime``, an enum, or a ``Literal``, or a list of scalars, which a
 request writes inline, as JSON; or a *data value*, a type without a JSON
 form, which no request writes: a group that holds one is given by reference
-only (see :func:`unwritten`), and its other fields may be of any type.
+only (see :func:`unwritten`), to an output. So its other fields may be of
+any type that an output may hold: anything but a ``Path``, a dataset model,
+a ``NewType``, or a type alias, at any depth, since a file comes only from a
+dataset, and a spec names a role by a class.
 
 A reference stands for a whole group. A reference to a dataset fits a
 dataset model (see :class:`~ess.spec.parameters.DatasetModel`). A reference

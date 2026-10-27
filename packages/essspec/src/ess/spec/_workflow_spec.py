@@ -584,13 +584,18 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
     field left out holds its default. Field and model validators of any mode
     are allowed: they run whenever the group is validated whole (see
     :mod:`ess.spec.places`). A group with a data value is given by reference
-    only, and its fields are not looked at. A dataset model is checked by
-    :func:`_dataset_model_problems` alone.
+    only, to an output, so it holds no dataset model, as no output does (see
+    :func:`_output_dataset_problems`); its fields are not looked at
+    otherwise. A dataset model is checked by :func:`_dataset_model_problems`
+    alone.
     """
     if field_types.is_dataset(group):
         return _dataset_model_problems(group)
     if places.unwritten(group) is not None:
-        return []
+        return [
+            f'{group.__name__} is given by reference to an output only: {problem}'
+            for problem in _output_dataset_problems(group)
+        ]
     problems = []
     if found := _decorators(group, _SERIALIZERS):
         problems.append(f'{group.__name__}: no serializers or computed fields, {found}')
@@ -714,12 +719,24 @@ def _outputs_problems(model: type[BaseModel]) -> list[str]:
         else:
             problems.extend(f'{where}: {problem}' for problem in _path_problems(tp))
             problems.extend(
-                f'{where}: {found}{field_types.type_name(model)} is a dataset '
-                'model; no output holds one, so that a file comes from a dataset, '
-                'which the dataset source checks'
-                for found, model in _found(tp, field_types.is_dataset)
+                f'{where}: {problem}' for problem in _output_dataset_problems(tp)
             )
     return problems
+
+
+def _output_dataset_problems(annotation: Any) -> list[str]:
+    """
+    Refuse each dataset model that ``annotation``, of an output, is made of,
+    named by the field of the class that holds it, if any: no output holds
+    one, so that a file comes from a dataset, which the dataset source
+    checks.
+    """
+    return [
+        f'{where}{field_types.type_name(model)} is a dataset model; no output '
+        'holds one, so that a file comes from a dataset, which the dataset source '
+        'checks'
+        for where, model in _found(annotation, field_types.is_dataset)
+    ]
 
 
 def _tables_problems(spec: WorkflowSpec[Any, Any]) -> list[str]:

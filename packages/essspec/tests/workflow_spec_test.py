@@ -887,6 +887,35 @@ class TestModelRules:
             ),
             *(
                 (
+                    {'params': model('P', g=(group, ...))},
+                    f'P.g: {group.__name__} is given by reference to an output only: '
+                    f'{where} {DATASET_MODEL_OUTPUT}',
+                )
+                for group, where in (
+                    (
+                        model('Held', data=(sc.Variable, ...), file=(RunFile, ...)),
+                        'Held.file: RunFile',
+                    ),
+                    (
+                        model(
+                            'Held',
+                            data=(sc.Variable, ...),
+                            files=(list[RunFile], []),
+                        ),
+                        'Held.files: RunFile',
+                    ),
+                    (
+                        model(
+                            'Held',
+                            data=(sc.Variable, ...),
+                            inner=(model('Inner', file=(RunFile, ...)), ...),
+                        ),
+                        'Inner.file: RunFile',
+                    ),
+                )
+            ),
+            *(
+                (
                     {'outputs': model('O', **fields)},
                     f'{where} {DATASET_MODEL_OUTPUT}',
                 )
@@ -1280,15 +1309,12 @@ class TestFields:
         params = model('P', g=(_group_with(tp), ...))
         assert not _takes_inline(spec(params=params), 'g')
 
-    def test_the_other_fields_of_a_group_with_a_data_value_are_not_looked_at(
-        self,
-    ) -> None:
+    def test_a_group_with_a_data_value_holds_any_type_an_output_may(self) -> None:
         group = model(
             'G',
             data=(sc.DataArray, ...),
             limits=(tuple[float, float], (0.0, 1.0)),
             reduction=(Reduction | None, None),
-            run=(SampleRun, ...),
             any=(int | str, 1),
         )
         spec(params=model('P', g=(group, ...)))
