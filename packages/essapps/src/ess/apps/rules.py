@@ -222,14 +222,11 @@ def _check(rule: Rule, params: type[BaseModel]) -> None:
                 f'{rule.name}: {blank} is not a parameter of a dataset model'
             )
         need = Selector(**model.metadata).fields
-        if any(selector.fields.get(k, _UNSET) != v for k, v in need.items()):
+        if not need.items() <= selector.fields.items():
             raise ValueError(
                 f'{rule.name}: {selector} lists datasets that do not fit '
                 f'{model.__name__} at {blank}; a selector names each of {need}'
             )
-
-
-_UNSET = object()
 
 
 def _fills(loc: Loc, place: str, series: str | None) -> bool:
