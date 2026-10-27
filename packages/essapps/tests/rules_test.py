@@ -333,7 +333,7 @@ def _rule(template: Template, at: str, **kw: Any) -> Rule:
         (
             _rule(Template(LOAD_MASK, blanks=('mask',)), 'mask'),
             "Selector({'kind': 'raw', 'role': 'sample'}) lists datasets that do not "
-            "fit MaskFile at mask; it names each of {'kind': 'mask'}",
+            "fit MaskFile at mask; a selector names each of {'kind': 'mask'}",
         ),
         (
             _rule(
@@ -342,7 +342,7 @@ def _rule(template: Template, at: str, **kw: Any) -> Rule:
                 lookup=Lookup({'can': LastBefore(Selector(kind='mask', role='can'))}),
             ),
             "Selector({'kind': 'mask', 'role': 'can'}) lists datasets that do not "
-            "fit CanRun at can; it names each of {'kind': 'raw'}",
+            "fit CanRun at can; a selector names each of {'kind': 'raw'}",
         ),
         (
             _rule(Template(SUM_RUNS, blanks=('runs',)), 'runs'),

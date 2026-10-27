@@ -225,7 +225,7 @@ def _check(rule: Rule, params: type[BaseModel]) -> None:
         if any(selector.fields.get(k, _UNSET) != v for k, v in need.items()):
             raise ValueError(
                 f'{rule.name}: {selector} lists datasets that do not fit '
-                f'{model.__name__} at {blank}; it names each of {need}'
+                f'{model.__name__} at {blank}; a selector names each of {need}'
             )
 
 
