@@ -190,9 +190,11 @@ from typing import (
 
 from annotated_types import MaxLen, MinLen
 from pydantic import (
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
+    NaiveDatetime,
     create_model,
     model_validator,
 )
@@ -652,11 +654,12 @@ def _field_problem(annotation: Any) -> str | None:
     """
     Why a field typed ``annotation``, of a group without a data value, is
     not *interpreted*, with the fix, or ``None``. An interpreted field is a
-    scalar, ``int``, ``float``, ``str``, ``bool``, ``datetime``, an enum, or a
-    ``Literal``, possibly with constraints, ``Annotated[float, Gt(0)]``, or a
-    list of scalars, and never ``X | None``, nor a ``Literal`` with ``None``,
-    which is ``X | None`` too: a form shows each as an input of its type, and
-    a request writes it inline. Any other type, a group, a union, a tuple, a
+    scalar, ``int``, ``float``, ``str``, ``bool``, ``datetime`` (or pydantic's
+    ``AwareDatetime`` or ``NaiveDatetime``), an enum, or a ``Literal``,
+    possibly with constraints, ``Annotated[float, Gt(0)]``, or a list of
+    scalars, and never ``X | None``, nor a ``Literal`` with ``None``, which
+    is ``X | None`` too: a form shows each as an input of its type, and a
+    request writes it inline. Any other type, a group, a union, a tuple, a
     dict, or a dataclass, is refused.
     """
     tp, is_optional, item_optional = _taken_apart(annotation)
@@ -692,7 +695,7 @@ def _field_problem(annotation: Any) -> str | None:
 
 def _is_scalar(tp: Any) -> bool:
     return (
-        tp in (int, float, str, bool, datetime)
+        tp in (int, float, str, bool, datetime, AwareDatetime, NaiveDatetime)
         or get_origin(tp) is Literal
         or (isinstance(tp, type) and issubclass(tp, Enum))
     )

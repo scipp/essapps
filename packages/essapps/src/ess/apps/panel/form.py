@@ -34,13 +34,20 @@ it.
 
 The widgets follow those of esslivedata's dashboard (scipp/esslivedata#1426),
 in Panel. A place without a default starts unset, so that a value a correct
-reduction needs is never filled in for the user. A place is left out of the
-request only if it is a choice with no way chosen, which it is only without
-a default, so the backend refuses it as required. A way chosen, or an input,
+reduction needs is never filled in for the user; so does a list of scalars,
+until an element is added or removed. A place is left out of the request
+only if it is a choice with no way chosen, which it is only without a
+default, so the backend refuses it as required. A way chosen, or an input,
 with nothing given is not left out, since the backend would fill in the
 default: the params name it as missing (see :attr:`Form.params`). An empty
 text is the value ``''`` where the place has a default, and nothing given
-where it has none, since a text input cannot tell an empty text from none.
+where it has none, since a text input cannot tell an empty text from none;
+an element of a list of texts is a text, ``''`` too, since it was added.
+
+A time is picked to the second, in the zone of the value the picker was
+set to, or of the default, which its label names: ``Start (UTC)``. A time
+without a zone stays without one, and a time of ``AwareDatetime`` without a
+value is in UTC. The fraction of a second of the value is kept.
 
 Not covered: list parameters (tables, :class:`Rows`), scipp/essapps#101.
 """
@@ -48,13 +55,14 @@ Not covered: list parameters (tables, :class:`Rows`), scipp/essapps#101.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime, tzinfo
 from enum import Enum
 from typing import Any, get_args
 
 import panel as pn
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel, NaiveDatetime
 from pydantic.fields import FieldInfo
+from pydantic_core import to_jsonable_python
 
 from ess.apps import Client, FieldError, Selector, SubmitError
 from ess.spec import (
@@ -249,19 +257,25 @@ class _Dataset:
         return self.widget
 
 
+_TIMES = (datetime, AwareDatetime, NaiveDatetime)
+
+
 class _Scalar:
     """
-    A scalar: an ``int``, ``float``, or ``str`` input, or a ``datetime``
-    picker, that may be unset, or for a ``bool``, an enum, or a ``Literal``,
-    a picker of its values with an option for none, so that it may start
-    unset.
+    A scalar: an ``int``, ``float``, or ``str`` input, or a picker of a time,
+    that may be unset, or for a ``bool``, an enum, or a ``Literal``, a picker
+    of its values with an option for none, so that it may start unset. It
+    gives the JSON form of its value.
     """
 
     def __init__(
         self, label: str, tp: Any, default: Any, description: str | None = None
     ) -> None:
+        self._label = label
         self._type = tp
         self._default = default
+        self._zone: tzinfo | None = None
+        self._fraction = 0  # microseconds, which the picker of a time drops
         options: dict[str, Any] = {
             'label': label,
             'description': description,
@@ -274,7 +288,7 @@ class _Scalar:
             self.widget = pn.widgets.IntInput(**options)
         elif tp is str:
             self.widget = pn.widgets.TextInput(**options)
-        elif tp is datetime:
+        elif tp in _TIMES:
             self.widget = pn.widgets.DatetimePicker(**options)
         elif tp is bool:
             self.widget = self._picker({'True': True, 'False': False}, options)
@@ -293,7 +307,11 @@ class _Scalar:
         if value is None or (value == '' and self._default is UNSET):
             missing.append(FieldError(None, loc, 'give a value'))
             return UNSET
-        return value.value if isinstance(value, Enum) else value
+        if self._type in _TIMES:
+            # The picker gives a time without a zone, to the second.
+            fraction = value.microsecond or self._fraction
+            value = value.replace(microsecond=fraction, tzinfo=self._zone)
+        return to_jsonable_python(value)
 
     def set(self, value: Any) -> None:
         if value is UNSET:
@@ -302,9 +320,27 @@ class _Scalar:
             value = '' if self._type is str else None
         elif isinstance(self._type, type) and issubclass(self._type, Enum):
             value = self._type(value)  # a record holds an enum by its value
-        elif self._type is datetime and isinstance(value, str):
-            value = datetime.fromisoformat(value)  # a record holds it as text
+        if self._type in _TIMES:
+            value = self._time(value)
         self.widget.value = value
+
+    def _time(self, value: datetime | str | None) -> datetime | None:
+        """
+        ``value``, a time, or its text, as a record holds it, as the picker
+        shows it: without its zone and its fraction of a second, which are
+        kept, and the zone named in the label.
+        """
+        if isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        if value is None:
+            self._zone = UTC if self._type is AwareDatetime else None
+            self._fraction = 0
+        else:
+            self._zone = value.tzinfo
+            self._fraction = value.microsecond
+        zone = 'no time zone' if self._zone is None else self._zone.tzname(value)
+        self.widget.label = f'{self._label} ({zone})'
+        return None if value is None else value.replace(tzinfo=None)
 
     def panel(self) -> Any:
         return self.widget
@@ -313,7 +349,9 @@ class _Scalar:
 class _Scalars:
     """
     A list of scalars: an input per element, as :class:`_Scalar` has it, and
-    buttons that add an element and remove the last.
+    buttons that add an element and remove the last. Unset, it has no
+    element until one is added or removed: a removal gives no element, the
+    empty list.
     """
 
     def __init__(
@@ -323,32 +361,45 @@ class _Scalars:
         self._type = tp
         self._default = default
         self._description = description
-        self._elements: list[_Scalar] = []
+        self._elements: list[_Scalar] | None = None  # unset
         self._column = pn.Column(sizing_mode='stretch_width')
         add = pn.widgets.Button(label=f'Add to {label}')
-        add.on_click(lambda _: self._resize(len(self._elements) + 1))
+        add.on_click(lambda _: self._resize(len(self._elements or []) + 1))
         remove = pn.widgets.Button(label=f'Remove from {label}')
-        remove.on_click(lambda _: self._resize(len(self._elements) - 1))
+        remove.on_click(lambda _: self._resize(len(self._elements or []) - 1))
         self._panel = pn.Column(self._column, pn.Row(add, remove))
         self.set(UNSET)
 
     def _resize(self, n: int) -> None:
-        """Keep the first ``n`` elements, or add elements with nothing given."""
-        del self._elements[max(n, 0) :]
-        self._elements.extend(
-            _Scalar(f'{self._label} [{i}]', self._type, UNSET, self._description)
-            for i in range(len(self._elements), n)
+        """
+        Keep the first ``n`` elements, none for ``-1``, or add elements with
+        nothing given, but a text, which is ``''``.
+        """
+        elements = self._elements or []
+        del elements[n:]
+        default = '' if self._type is str else UNSET
+        elements.extend(
+            _Scalar(f'{self._label} [{i}]', self._type, default, self._description)
+            for i in range(len(elements), n)
         )
-        self._column.objects = [e.panel() for e in self._elements]
+        self._elements = elements
+        self._column.objects = [e.panel() for e in elements]
 
-    def value(self, loc: Loc, missing: _Missing) -> list[Any]:
+    def value(self, loc: Loc, missing: _Missing) -> Any:
+        if self._elements is None:
+            missing.append(FieldError(None, loc, 'add an element, or remove for none'))
+            return UNSET
         return [e.value((*loc, i), missing) for i, e in enumerate(self._elements)]
 
     def set(self, value: Any) -> None:
         if value is UNSET:
-            value = [] if self._default is UNSET else self._default
+            value = self._default
+        if value is UNSET:
+            self._elements = None
+            self._column.objects = []
+            return
         self._resize(len(value))
-        for element, item in zip(self._elements, value, strict=True):
+        for element, item in zip(self._elements or [], value, strict=True):
             element.set(item)
 
     def panel(self) -> Any:

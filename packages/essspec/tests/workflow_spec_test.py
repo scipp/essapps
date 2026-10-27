@@ -12,8 +12,10 @@ import scipp as sc
 from annotated_types import Ge, Gt, MaxLen, MinLen
 from pydantic import (
     AfterValidator,
+    AwareDatetime,
     BaseModel,
     Field,
+    NaiveDatetime,
     RootModel,
     computed_field,
     field_serializer,
@@ -1202,6 +1204,9 @@ class TestFields:
             list[Annotated[int, Ge(0)]],
             list[Mode],
             list[datetime],
+            AwareDatetime,
+            NaiveDatetime,
+            list[AwareDatetime],
         ],
     )
     def test_a_field_of_a_group_is_a_scalar_or_a_list_of_scalars(self, tp: Any) -> None:
