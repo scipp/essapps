@@ -16,7 +16,7 @@ Each function sees through ``Annotated`` metadata, such as a validator:
 data of one type can be the value of a field of another, so that an output of
 one spec can feed a parameter of another. :func:`model_of` makes a model of one
 field, which validates a value, or a row of a list, by that field alone:
-:func:`inline` validates a value given inline at one root place, and
+:func:`inline` validates a value written inline at one root place, and
 :func:`ess.spec.places.validated` a parameter's value whole, in the call
 phase.
 """
@@ -285,7 +285,7 @@ def json_form(
 
 def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -> Any:
     """
-    The JSON form of ``value``, given inline for the field ``name`` of
+    The JSON form of ``value``, written inline for the field ``name`` of
     ``model``, or a row of it unless ``whole`` (see :func:`model_of`), as the
     framework holds it: of a group, the JSON form of the group validated.
 

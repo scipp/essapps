@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Places: where a request writes either a value or a reference, by type.
+Root places: where a request writes either a value or a reference, by type.
 
 A request is a JSON object of parameter values. A *root place* is a position
 in it where the request may write either a value or a reference to data that
@@ -34,14 +34,14 @@ a list, ``list[X]``, at a parameter       a list, each element a root place
                                           of type ``X``
 ========================================  =====================================
 
-A field of a group is a *scalar*, ``int``, ``float``, ``str``, ``bool``,
-``datetime``, an enum, or a ``Literal``, or a list of scalars, which a
-request writes inline, as JSON; or a *data value*, a type without a JSON
-form, which no request writes: a group that holds one is given by reference
-only (see :func:`unwritten`), to an output. So its other fields may be of
-any type that an output may hold: anything but a ``Path``, a dataset model,
-a ``NewType``, or a type alias, at any depth, since a file comes only from a
-dataset, and a spec names a role by a class.
+A *scalar* is an ``int``, ``float``, ``str``, ``bool``, ``datetime``, an
+enum, or a ``Literal``, which a request writes inline, as JSON. A *data
+value* is a field without a JSON form, which no request writes. The fields
+of a group without a data value are scalars or lists of scalars, never typed
+``X | None``. A group with a data value is given by reference to an output
+only (see :func:`unwritten`); of its other fields, the framework refuses only
+a ``Path``, a dataset model, a ``NewType``, or a type alias, since no output
+could fill them.
 
 A reference stands for a whole group. A reference to a dataset fits a
 dataset model whose metadata the dataset has (see
@@ -96,7 +96,8 @@ object of its fields give one record. In the call phase, :func:`validated`
 replaces each reference by its data, and makes each value of what the record
 holds.
 
-An error inside a union names its place without the tag:
+An error names its *place*, its position in the params, such as
+``reduction.bins``; inside a union, without the tag:
 ``beam_centre.tolerance``.
 """
 
@@ -149,13 +150,13 @@ class _Slot:
 def held(model: type[BaseModel], name: str, value: Any, on_ref: OnRef) -> Any:
     """
     ``value`` of the field ``name`` of ``model``, a parameter, as a record
-    holds it: the JSON form of a value given inline, at a reference what
+    holds it: the JSON form of a value written inline, at a reference what
     ``on_ref`` returns for it, or ``None``; of a list, each element so.
     ``value`` is as a request gives it, a group as a mapping of its fields or
     an instance, a reference as a :data:`~ess.spec.refs.Ref` or its JSON
     form.
 
-    A group, or a row, given inline is validated whole, and held as the JSON
+    A group, or a row, written inline is validated whole, and held as the JSON
     form of the validated group, a field left out at its default (see
     :func:`ess.spec.field_types.inline`). Raises
     :class:`~ess.spec.refs.ParamsError` at the place of the first problem.
@@ -259,10 +260,10 @@ def validated(
     element type.
 
     With ``read`` ``None``, ``value`` is as a binding takes it, data. Else it
-    is as a record holds it: the JSON form of a value given inline, and a
+    is as a record holds it: the JSON form of a value written inline, and a
     reference at a parameter or an element of a list parameter. Each
     reference is replaced by the data ``read`` gives for it, and the value
-    made of the result. A value given inline was validated when the request
+    made of the result. A value written inline was validated when the request
     was submitted, and its JSON form reads back as it, so this fails only
     for the data of a reference, such as a dataset model whose validator
     refuses the local path. It is validated in Python mode with
@@ -327,7 +328,7 @@ def _at(loc: Loc, slot: _Slot, error: ValidationError) -> ParamsError:
 
 def _inline(loc: Loc, slot: _Slot, value: Any) -> Any:
     """
-    The JSON form of ``value`` given inline at ``loc`` (see
+    The JSON form of ``value`` written inline at ``loc`` (see
     :func:`~ess.spec.field_types.inline`).
     """
     try:
