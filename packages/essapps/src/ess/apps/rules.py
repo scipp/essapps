@@ -21,7 +21,9 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 
-from ess.spec import DatasetRef
+from pydantic import BaseModel
+
+from ess.spec import DatasetRef, field_types
 from ess.spec.refs import Loc, iter_refs
 
 from .batch import Lookup, dataset_place, run_number, try_apply
@@ -91,7 +93,20 @@ class RuleStatus:
 
 
 class TriggerLoop:
+    """
+    Steps the ``rules`` on ``client``. Raises ``ValueError`` for a rule of a
+    spec the backend runs that could not submit what it finds (see
+    :func:`_check`); a rule of a spec it does not run submits nothing, with
+    the reason in its status.
+    """
+
     def __init__(self, client: Client, rules: list[Rule]) -> None:
+        for rule in rules:
+            try:
+                spec = client.spec(rule.template.spec)
+            except KeyError:
+                continue
+            _check(rule, spec.params)
         self._client = client
         self._source = client.datasets
         self._rules = rules
@@ -175,6 +190,46 @@ class TriggerLoop:
             for value, refs in series.items()
             if any(ref in new for ref in refs)
         }
+
+
+def _check(rule: Rule, params: type[BaseModel]) -> None:
+    """
+    Refuse ``rule``, of a spec with the params model ``params``, if a dataset
+    it lists could not fill its blank: the blank ``at``, and each blank of
+    its lookup, is a parameter of a dataset model, a list one if and only if
+    the rule has ``series``, and the rule's or the lookup's selector names
+    each key and value of the model's metadata, so that every dataset it
+    lists fits the model (see :class:`~ess.spec.DatasetModel`).
+    """
+    selectors = {rule.place: rule.selector}
+    if rule.lookup is not None and rule.series is None:
+        selectors |= {b: r.selector for b, r in rule.lookup.rules.items()}
+    for blank, selector in selectors.items():
+        series = blank == rule.place and rule.series is not None
+        listed = field_types.is_list(params, blank)
+        if series and not listed:
+            raise ValueError(
+                f'{rule.name}: a series fills a list parameter, not {blank}'
+            )
+        if listed and not series:
+            fills = 'a series' if blank == rule.place else 'no lookup'
+            raise ValueError(
+                f'{rule.name}: {blank} is a list parameter; {fills} fills it'
+            )
+        model = field_types.value_type(params.model_fields[blank].annotation)
+        if not field_types.is_dataset(model):
+            raise ValueError(
+                f'{rule.name}: {blank} is not a parameter of a dataset model'
+            )
+        need = Selector(**model.metadata).fields
+        if any(selector.fields.get(k, _UNSET) != v for k, v in need.items()):
+            raise ValueError(
+                f'{rule.name}: {selector} lists datasets that do not fit '
+                f'{model.__name__} at {blank}; it names each of {need}'
+            )
+
+
+_UNSET = object()
 
 
 def _fills(loc: Loc, place: str, series: str | None) -> bool:

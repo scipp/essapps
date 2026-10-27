@@ -93,7 +93,6 @@ class LoadOutputs(BaseModel):
     transmission: MeasuredTransmission
     point: Point
     values: list[float]
-    run: Run
 
 
 class Terms(BaseModel):
@@ -310,7 +309,6 @@ def load(params: LoadParams) -> LoadOutputs:
         transmission=MeasuredTransmission(fraction=Blob(value)),
         point=Point(x=value),
         values=[value, 2.0],
-        run=Run(file=RunFile(path=params.sample.path)),
     )
 
 
@@ -517,17 +515,6 @@ def test_a_refusal_names_the_field_of_a_row_by_its_place(client: Client) -> None
     with pytest.raises(SubmitError, match="is not a kind of reference") as raised:
         client.submit(RUNS, params={'runs': rows})
     assert [e.loc for e in raised.value.errors] == [('runs', 1, 'file')]
-
-
-def test_a_reference_to_an_output_that_holds_a_dataset_model_is_refused(
-    client: Client, loaded: Record
-) -> None:
-    # The file in the output has passed no dataset check.
-    with pytest.raises(
-        SubmitError,
-        match=r'^runs\[0\]: .*, of type Run, holds a dataset model; a file is',
-    ):
-        client.submit(RUNS, params={'runs': [loaded.ref('run')]})
 
 
 def test_a_group_given_its_dataset_alone_holds_defaults_for_the_rest(
@@ -870,7 +857,7 @@ def test_the_schema_of_a_group_that_holds_a_dataset_model_is_its_fields() -> Non
     assert run['properties']['file'] == {
         '$ref': '#/$defs/DatasetRef',
         'dataType': 'RunFile',
-        'metadata': {},
+        'metadata': {'kind': 'raw'},
     }
     assert run['properties']['weights']['maxItems'] == 3
     assert run['required'] == ['file']

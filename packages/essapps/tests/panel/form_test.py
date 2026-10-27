@@ -4,6 +4,7 @@ from typing import Any
 
 import panel as pn
 import pytest
+from pydantic import BaseModel
 
 from ess.apps import Client, SubmitError
 from ess.apps.panel import Form, Listing
@@ -15,6 +16,28 @@ type Spec = WorkflowSpec[Any, Any]
 
 class Raw(DatasetModel):
     """Any raw dataset."""
+
+
+class LokiMask(DatasetModel, kind='mask', instrument='loki'):
+    """A mask of the LoKI instrument."""
+
+
+class LokiMaskParams(BaseModel):
+    mask: LokiMask
+
+
+class Value(BaseModel):
+    value: float
+
+
+LOKI_MASK: Spec = WorkflowSpec(
+    name='loki-mask',
+    version=1,
+    title='LoKI mask',
+    description='The counts of a LoKI mask.',
+    params=LokiMaskParams,
+    outputs=Value,
+)
 
 
 @pytest.fixture
@@ -300,6 +323,15 @@ def test_a_dataset_picker_lists_the_datasets_that_fit_its_model(
         'run 101 (sample)',
     ]
     assert list(picker(form, 'Mask').options) == ['(choose a dataset)', 'run 201']
+
+
+def test_a_dataset_picker_lists_the_datasets_that_fit_each_key_of_its_metadata(
+    client: Client, datasets: FakeDatasets
+) -> None:
+    datasets.measure(201, {'counts': 1.0}, kind='mask', instrument='dream')
+    datasets.measure(202, {'counts': 1.0}, kind='mask', instrument='loki')
+    form = Form(LOKI_MASK, client)
+    assert list(picker(form, 'Mask').options) == ['(choose a dataset)', 'run 202']
 
 
 def test_a_dataset_that_does_not_fit_stays_picked_when_set(

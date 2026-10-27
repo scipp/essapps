@@ -92,15 +92,10 @@ class ScaledRun(BaseModel):
     scale: Scale | None = None
 
 
-class ScaledParams(BaseModel):
-    sample: ScaledRun
-
-
-class RunOutputs(BaseModel):
-    run: ScaledRun
-
-
 class MaskFile(DatasetModel, kind='mask'): ...
+
+
+class LokiMask(DatasetModel, kind='mask', instrument='loki'): ...
 
 
 class XmlFile(DatasetModel):
@@ -116,6 +111,10 @@ class XmlFile(DatasetModel):
 
 class MaskParams(BaseModel):
     mask: MaskFile
+
+
+class LokiMaskParams(BaseModel):
+    mask: LokiMask
 
 
 class XmlParams(BaseModel):
@@ -180,8 +179,8 @@ def slow(params: ModeParams) -> ValueOutputs:
 SPLIT = _spec('split', outputs=PartsOutputs)
 PIECES = _spec('pieces', outputs=PiecesOutputs)
 BOXED = _spec('boxed', params=BoxParams)  # a box of a number
-ECHO = _spec('echo', params=ScaledParams, outputs=RunOutputs)
 MASKED = _spec('masked', params=MaskParams)
+LOKI_MASKED = _spec('loki-masked', params=LokiMaskParams)
 XML = _spec('xml', params=XmlParams)
 RUNS = _spec('runs', params=RunsParams, tables=('runs',))
 MODES = _spec('modes', params=ModeParams)
@@ -262,8 +261,8 @@ def backend(datasets: FakeDatasets, gate: Gate) -> Iterator[Backend]:
         function_binding(PIECES, pieces),
         function_binding(BOXED, lambda p: ValueOutputs(value=Amount(value=0.0))),
         StagedFunction(MODES, slow),
-        function_binding(ECHO, lambda p: RunOutputs(run=p.sample)),
         function_binding(MASKED, lambda p: ValueOutputs(value=_read(p.mask))),
+        function_binding(LOKI_MASKED, lambda p: ValueOutputs(value=_read(p.mask))),
         function_binding(XML, lambda p: ValueOutputs(value=_read(p.sample))),
         kept_rows(RUNS, runs),
     ]
@@ -541,6 +540,22 @@ def test_a_dataset_fits_a_dataset_model_by_its_kind(
     assert client.output(client.compute(load(1)), 'value') == Amount(value=1.0)
 
 
+def test_a_dataset_fits_a_dataset_model_by_each_key_of_its_metadata(
+    client: Client, datasets: FakeDatasets
+) -> None:
+    datasets.measure(5, 5.0, kind='mask', instrument='dream')
+    datasets.measure(6, 6.0, kind='mask', instrument='loki')
+
+    with pytest.raises(
+        SubmitError,
+        match=r"^mask: dataset run:5 does not fit LokiMask, which takes datasets "
+        r"with \{'instrument': 'loki', 'kind': 'mask'\}$",
+    ):
+        client.submit(LOKI_MASKED, params={'mask': dataset(run=5)})
+    masked = client.compute(LOKI_MASKED, params={'mask': dataset(run=6)})
+    assert client.output(masked, 'value') == Amount(value=6.0)
+
+
 def test_a_validator_of_a_dataset_model_runs_with_the_local_path(
     client: Client,
 ) -> None:
@@ -596,18 +611,12 @@ def test_a_dataset_model_takes_a_reference_to_a_dataset_only(client: Client) -> 
         client.stage(Template(MODES, params={'sample': by_ref}, blanks=('values',)))
 
 
-def test_a_reference_to_an_output_that_holds_a_dataset_model_is_refused(
-    client: Client,
-) -> None:
-    echoed = client.compute(ECHO, params={'sample': {'file': dataset(run=1)}})
+def test_a_spec_whose_output_holds_a_dataset_model_is_refused() -> None:
+    class RunOutputs(BaseModel):
+        run: ScaledRun
 
-    # The path in the output has passed no dataset check.
-    with pytest.raises(
-        SubmitError,
-        match=rf'^sample: {echoed.id}.run, of type ScaledRun, holds a dataset model; '
-        'a file is given by reference to a dataset$',
-    ):
-        client.submit(ECHO, params={'sample': echoed.ref('run')})
+    with pytest.raises(ValueError, match='SampleRun is a dataset model; no output'):
+        _spec('echo', outputs=RunOutputs)
 
 
 def test_a_required_parameter_left_out_is_refused(client: Client) -> None:

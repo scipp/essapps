@@ -24,24 +24,22 @@ The checks of a request; a template, a push, and a state check part of these:
   value of a parameter, an element of a list, or a field of a group, at any
   depth, through a union of groups by its tag (see :mod:`ess.spec.places`).
   A reference at a tag, for a whole list, or at a place whose type is not a
-  group, such as a scalar or a union of groups, is refused. A
-  group is written as an object of its fields; a field left out takes its
-  default.
+  group, such as a scalar or a union of groups, is refused. A group is
+  written as an object of its fields; a field left out takes its default.
 - *Inline values.* An inline value is allowed where the type at the place
   is a scalar, a group where no field of it, at any depth, is given by
   reference only, and ``None`` where it is optional; so a dataset model
-  given as a string is refused: a file is given as ``dataset(path=...)``.
-  Each inline
-  value is validated alone, by its field, or for an element of a list by its
-  element type, from its JSON form, and a field that a model lacks is
-  refused at any depth, since validating would drop it silently. A group
-  with no reference inside is an inline value, validated whole, so that its
-  validators run, an instance by its dump; of a group with a reference
-  inside, each field given inline is validated alone, and the group whole
-  in the call phase. The log holds the JSON form of each validated value,
-  and the call phase validates that, so it must read back as the value: a
-  number that is not finite has none, nor has a group whose validators
-  change a value they validated already (see
+  given inline, such as a path as a string, is refused: it is given as
+  ``dataset(path=...)``. Each inline value is validated alone, by its
+  field, or for an element of a list by its element type, from its JSON
+  form, and a field that a model lacks is refused at any depth, since
+  validating would drop it silently. A group with no reference inside is an
+  inline value, validated whole, so that its validators run, an instance by
+  its dump; of a group with a reference inside, each field given inline is
+  validated alone, and the group whole in the call phase. The log holds the
+  JSON form of each validated value, and the call phase validates that, so
+  it must read back as the value: a number that is not finite has none, nor
+  has a group whose validators change a value they validated already (see
   :func:`ess.spec.field_types.inline`). A list parameter that is not a table
   meets its length constraints.
 - *References.* A reference stands for a group. A union of groups is
@@ -54,7 +52,8 @@ The checks of a request; a template, a push, and a state check part of these:
   matches it, and the record holds its identity, to which its name is
   resolved, so it must be known. A reference to a record or an accumulator
   is checked by the backend, which knows what the client may read (see
-  :func:`check_fit`): its data fit the place, and hold no dataset model.
+  :func:`check_fit`): its data fit the place. No output holds a dataset
+  model, so a path comes only from a dataset.
 - *Table rules.* The number of rows of a table meets its length
   constraints, and its rows are distinct, compared as the record holds them:
   a dataset by its identity, a reference to an output by record, output, and
@@ -243,13 +242,11 @@ class Checks:
 
 def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, loc: Loc) -> None:
     """
-    Refuse a reference to an output that ``spec`` lacks, whose data do not
-    fit ``tp``, or whose type holds a dataset model, which would bring in a
-    path that no dataset check has passed. A reference with a key names one
-    element of an output, of the output's element type, and the key of an
-    element of a list is an integer in its canonical form, such as ``'0'``
-    or ``'12'``,
-    not ``'012'``.
+    Refuse a reference to an output that ``spec`` lacks, or whose data do
+    not fit ``tp``. A reference with a key names one element of an output, of
+    the output's element type, and the key of an element of a list is an
+    integer in its canonical form, such as ``'0'`` or ``'12'``, not
+    ``'012'``.
     """
     field = spec.outputs.model_fields.get(ref.output)
     if field is None:
@@ -270,12 +267,6 @@ def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, loc: Loc) ->
             loc,
             f'{ref}, of type {field_types.type_name(data)}, does not fit '
             f'{field_types.type_name(tp)}',
-        )
-    if field_types.holds_dataset(data):
-        raise SubmitError.at(
-            loc,
-            f'{ref}, of type {field_types.type_name(data)}, holds a dataset model; '
-            'a file is given by reference to a dataset',
         )
 
 

@@ -8,54 +8,51 @@ Its stories are S7, C1, D1 to D6, and E1 to E4 in [user-stories.md](user-stories
 
 `apply` fills a template for each dataset and returns the requests keyed by member, the value of a metadata field (by default the run number).
 It reads metadata through `client.datasets` and builds plain data; it submits nothing.
-The examples of batches, lookups, and rules reduce transmission runs with `TRANSMISSION` ([README.md](README.md#specs-and-bindings)), whose parameters `run` and `empty_beam` are groups of a run's `file`, and whose output is `transmission: ComputedTransmission`.
+The examples of batches, lookups, and rules reduce transmission runs with `TRANSMISSION` ([README.md](README.md#specs-and-bindings)), whose parameters `run` and `empty_beam` are dataset models, each a run's file given by reference to a dataset, and whose output is `transmission: ComputedTransmission`.
 
 ```python
-template = Template(TRANSMISSION, params={'empty_beam': {'file': dataset(run=60336)}}, blanks=('run',))
-requests = apply(template, runs, client.datasets, at=('run', 'file'), member_field='sample')
+template = Template(TRANSMISSION, params={'empty_beam': dataset(run=60336)}, blanks=('run',))
+requests = apply(template, runs, client.datasets, at='run', member_field='sample')
 records = client.submit(requests, label='batch', persist=True)
 ```
 
 A batch application submits with `persist=`, so its client keeps nothing, and the results are read later from the store ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 
 A lookup fills further blanks per dataset. `LastBefore(selector)` takes the matching dataset with the highest run number below the filled dataset's.
-Each dataset fills the one blank the lookup leaves, at the place `at`: the dataset reference is the value there, and `apply` fills no other parameters.
-Every parameter is a group, so `at` names the blank and the fields down to a file, such as `('run', 'file')` for the file of the group `run`.
-`fields` gives the group's other fields, the same for each dataset; a field left out takes its default, and a field without a default makes the backend refuse the requests, naming the field.
-For a spec whose sample group has a field `thickness: float`, a batch of samples in one kind of cell gives `fields={'thickness': 0.2}`.
-A lookup names its place the same way, such as `('empty_beam', 'file')` for the file of the group `empty_beam`, one place per blank.
-Its `fields` gives the other fields of each blank it fills, by blank, as `apply` takes them, such as `Lookup({('empty_beam', 'file'): LastBefore(...)}, fields={'empty_beam': {...}})`; a field left out takes its default.
+Each dataset fills the one blank the lookup leaves, `at`, a parameter of a dataset model: the dataset reference is its value, and `apply` fills no other parameters.
+A lookup names the blank it fills the same way, such as `Lookup({'empty_beam': LastBefore(...)})`.
 So each dataset that a rule or a lookup finds needs a parameter of its own in the spec, such as `run` and `empty_beam`.
 A batch whose parameters differ per dataset, such as the thickness of each sample, is a list of requests, each with its own params.
 
 ```python
-empty_beams = Lookup({('empty_beam', 'file'): LastBefore(Selector(role='empty-beam'))})
-requests = apply(Template(TRANSMISSION, blanks=('run', 'empty_beam')), runs, client.datasets, at=('run', 'file'),
+empty_beams = Lookup({'empty_beam': LastBefore(Selector(role='empty-beam'))})
+requests = apply(Template(TRANSMISSION, blanks=('run', 'empty_beam')), runs, client.datasets, at='run',
                  lookup=empty_beams)
 ```
 
 ## Rules
 
-A rule is plain data: a name, a template, a selector, a label, the place `at`, and optionally the blank's other `fields`, a `member_field`, a `lookup`, a `series`, and `persist`, the outputs it persists, every output by default.
+A rule is plain data: a name, a template, a selector, a label, the blank `at`, and optionally a `member_field`, a `lookup`, a `series`, and `persist`, the outputs it persists, every output by default.
 A record that the template references, such as a beam centre, must be persisted, since the trigger loop's client reads it.
 
 ```python
 rule = Rule('auto-transmission', Template(TRANSMISSION, blanks=('run', 'empty_beam')),
-            selector=Selector(role='transmission'), label='transmission', at=('run', 'file'), lookup=empty_beams)
+            selector=Selector(role='transmission'), label='transmission', at='run', lookup=empty_beams)
 ```
 
 With `series='sample'`, a request takes every matching dataset with the same `sample` so far, in run order, and `sample` is its member.
-The template's blank `runs` is a table with a row for each dataset, and the lookup is not used.
-`at` names the blank and the fields within a row down to the file: `at=('runs', 'file')` makes the rows `[{'file': dataset}, ...]`, and `fields` gives the other fields of each row, the same for every row, or they take their defaults.
+The template's blank `at='runs'` is a table of a dataset model, its rows the datasets, `[dataset, ...]`, and the lookup is not used.
 Each arrival of an angle submits one plain request that stitches all angles of that sample so far.
 
 ```python
 reference = dataset(run=500)                # the reference run, which divides each angle
-rule = Rule('reflectivity', Template(STITCH, params={'reference': {'file': reference}}, blanks=('runs',)),
-            selector=Selector(role='sample'), series='sample', at=('runs', 'file'), label='reflectivity')
+rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
+            selector=Selector(role='sample'), series='sample', at='runs', label='reflectivity')
 ```
 
-A rule whose template leaves no single blank for a dataset, or whose `at` is not a field of that blank, is refused when it is made.
+A rule whose template leaves no single blank for a dataset, or whose `at` is not that blank, is refused when it is made.
+`TriggerLoop` refuses a rule whose datasets could not fill their blanks: each blank it fills, `at` and the lookup's, is a parameter of a dataset model, a list one if and only if the rule has `series`, and each selector names the model's metadata, so that every dataset it lists fits the model.
+`apply` has no spec at hand, so the backend refuses its requests instead.
 
 Templates and rules are frozen dataclasses; `dataclasses.replace` changes them.
 The core keeps no store of them, and records do not name them: a record's request says everything that determines its result.

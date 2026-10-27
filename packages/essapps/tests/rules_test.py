@@ -17,9 +17,11 @@ from ess.apps import (
     Lookup,
     Rule,
     Selector,
+    SubmitError,
     Template,
     TriggerLoop,
     apply,
+    dataset,
 )
 from ess.apps.batch import try_apply
 from ess.apps.testing import FakeDatasets, FakeStore, read_dataset
@@ -64,6 +66,17 @@ class SumRunsParams(BaseModel):
     runs: list[SampleRun] = Field(min_length=1)
 
 
+class ScaledRun(BaseModel):
+    """A run and its scale: a group that holds a dataset model."""
+
+    file: SampleRun
+    factor: float = 1.0
+
+
+class ScaleParams(BaseModel):
+    sample: ScaledRun
+
+
 class ValueOutputs(BaseModel):
     value: float
 
@@ -85,6 +98,7 @@ LOAD_MASK = _spec('load-mask', LoadMaskParams)
 SUBTRACT = _spec('subtract', SubtractParams)
 NORMALIZE = _spec('normalize', NormalizeParams)
 SUM_RUNS = _spec('sum-runs', SumRunsParams, tables=('runs',))
+SCALE = _spec('scale', ScaleParams)
 
 
 def load(params: LoadParams) -> ValueOutputs:
@@ -111,6 +125,11 @@ def normalize(params: NormalizeParams) -> ValueOutputs:
     )
 
 
+def scale(params: ScaleParams) -> ValueOutputs:
+    run = params.sample
+    return ValueOutputs(value=run.factor * read_dataset(run.file.path))
+
+
 LAST_CAN = LastBefore(Selector(role='can'))
 
 
@@ -129,6 +148,7 @@ def client(datasets: FakeDatasets) -> Iterator[Client]:
             function_binding(SUBTRACT, subtract),
             function_binding(NORMALIZE, normalize),
             function_binding(SUM_RUNS, sum_runs),
+            function_binding(SCALE, scale),
         ],
         store=FakeStore(),
     )
@@ -211,15 +231,30 @@ def test_try_apply_leaves_out_a_dataset_whose_lookup_finds_nothing(
     assert 'before run 1' in str(failed[early])
 
 
+def test_apply_at_a_list_parameter_makes_requests_the_backend_refuses(
+    client: Client, datasets: FakeDatasets
+) -> None:
+    sample = datasets.measure(1, 2.0, role='sample')
+    template = Template(SUM_RUNS, blanks=('runs',))
+
+    summed = apply(template, [sample], client.datasets, at='runs')
+
+    with pytest.raises(
+        SubmitError,
+        match=r'^runs: uuid:run-1 is a reference to a whole list; a reference stands',
+    ):
+        client.submit(summed['1'])
+
+
 def test_a_rule_whose_requests_are_refused_does_not_stop_the_others(
     client: Client, datasets: FakeDatasets
 ) -> None:
-    misplaced = Rule(
-        'misplaced',
-        Template(LOAD_MASK, blanks=('mask',)),
-        selector=Selector(role='sample'),  # raw datasets, which no mask fits
-        label='misplaced',
-        at='mask',
+    unknown = Rule(
+        'unknown',
+        Template(NORMALIZE, params={'reference': dataset(run=9)}, blanks=('sample',)),
+        selector=Selector(role='sample'),
+        label='normalized',
+        at='sample',
     )
     load = Rule(
         'load',
@@ -228,16 +263,13 @@ def test_a_rule_whose_requests_are_refused_does_not_stop_the_others(
         label='loaded',
         at='sample',
     )
-    loop = TriggerLoop(client, rules=[misplaced, load])
+    loop = TriggerLoop(client, rules=[unknown, load])
     datasets.measure(2, 5.0, role='sample')
 
     (loaded,) = loop.step()
 
     assert loaded.label == 'loaded'
-    assert loop.status(misplaced).reason == (
-        "2: mask: dataset uuid:run-2 does not fit MaskFile, which takes datasets "
-        "with {'kind': 'mask'}"
-    )
+    assert loop.status(unknown).reason == '2: reference: unknown dataset run:9'
     assert loop.status(load).reason is None
 
 
@@ -288,6 +320,66 @@ def test_a_rule_that_no_dataset_fills_is_refused_when_made(
             at=at,
             series=series,
         )
+
+
+def _rule(template: Template, at: str, **kw: Any) -> Rule:
+    kw.setdefault('selector', Selector(role='sample'))
+    return Rule('rule', template, label='rule', at=at, **kw)
+
+
+@pytest.mark.parametrize(
+    ('rule', 'reason'),
+    [
+        (
+            _rule(Template(LOAD_MASK, blanks=('mask',)), 'mask'),
+            "Selector({'kind': 'raw', 'role': 'sample'}) lists datasets that do not "
+            "fit MaskFile at mask; it names each of {'kind': 'mask'}",
+        ),
+        (
+            _rule(
+                Template(SUBTRACT, blanks=('sample', 'can')),
+                'sample',
+                lookup=Lookup({'can': LastBefore(Selector(kind='mask', role='can'))}),
+            ),
+            "Selector({'kind': 'mask', 'role': 'can'}) lists datasets that do not "
+            "fit CanRun at can; it names each of {'kind': 'raw'}",
+        ),
+        (
+            _rule(Template(SUM_RUNS, blanks=('runs',)), 'runs'),
+            'runs is a list parameter; a series fills it',
+        ),
+        (
+            _rule(Template(LOAD, blanks=('sample',)), 'sample', series='sample'),
+            'a series fills a list parameter, not sample',
+        ),
+        (
+            _rule(Template(SCALE, blanks=('sample',)), 'sample'),
+            'sample is not a parameter of a dataset model',
+        ),
+    ],
+    ids=['selector', 'lookup-selector', 'list', 'series', 'not-a-dataset-model'],
+)
+def test_a_rule_that_could_not_submit_what_it_finds_is_refused_by_the_loop(
+    client: Client, rule: Rule, reason: str
+) -> None:
+    with pytest.raises(ValueError, match=f'^rule: {re.escape(reason)}$'):
+        TriggerLoop(client, rules=[rule])
+
+
+def test_a_rule_may_select_by_more_than_the_metadata_of_its_dataset_model(
+    client: Client, datasets: FakeDatasets
+) -> None:
+    rule = _rule(
+        Template(LOAD_MASK, blanks=('mask',)),
+        'mask',
+        selector=Selector(kind='mask', instrument='loki'),
+    )
+    datasets.measure(1, 5.0, kind='mask', instrument='dream')
+    loki = datasets.measure(2, 3.0, kind='mask', instrument='loki')
+
+    (loaded,) = TriggerLoop(client, rules=[rule]).step()
+
+    assert loaded.request.params == {'mask': loki}
 
 
 def test_a_dataset_fills_the_blank_at(client: Client, datasets: FakeDatasets) -> None:

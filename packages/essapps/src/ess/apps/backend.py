@@ -1367,9 +1367,9 @@ class Backend:
 
     def _stored(self, ref: Ref) -> Any:
         """
-        A dataset as the fields of its dataset model, its local path, which
-        validating makes the model of; or the value of a written output, or its
-        element if ``ref`` has a key; needs no lock.
+        For a dataset, ``{'path': <local path>}``, of which validating makes
+        the dataset model; for an output, its written value, or its element
+        if ``ref`` has a key. Needs no lock.
         """
         if isinstance(ref, DatasetRef):
             return {'path': self._datasets.path(ref)}

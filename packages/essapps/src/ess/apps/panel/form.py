@@ -207,7 +207,8 @@ def _pick(widget: Any, value: Any) -> None:
 class _Dataset:
     """
     A dataset model: a picker of the datasets that fit it. A dataset that the
-    listing lacks stays picked, labelled by its identity.
+    form is set to and the listing lacks stays picked, labelled by its
+    reference as given, an identity or a name such as ``run:101``.
     """
 
     def __init__(self, model: type[DatasetModel], listing: Listing) -> None:
@@ -241,9 +242,9 @@ class _Dataset:
 class _Scalar:
     """
     A scalar, the value at any place of a valid spec that is not a group or a
-    union: an ``int``, ``float``, or ``str`` input that may be
-    unset, or for a ``bool``, an enum, or a ``Literal``, a picker of its
-    values with an option for none, so that it may start unset.
+    union: an ``int``, ``float``, or ``str`` input that may be unset, or for
+    a ``bool``, an enum, or a ``Literal``, a picker of its values with an
+    option for none, so that it may start unset.
     """
 
     def __init__(self, label: str, info: FieldInfo, tp: Any) -> None:
