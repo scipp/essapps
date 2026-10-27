@@ -27,7 +27,7 @@ def test_a_place_with_nothing_given_is_shown_and_nothing_is_submitted(
 
     assert app.compute() is None
     assert app.message.object == (
-        'Refused:\n\n- sample.file: choose a dataset\n- sample.thickness: give a value'
+        'Refused:\n\n- run: choose a dataset\n- sample.thickness: give a value'
     )
     assert client.records() == []
 
@@ -44,7 +44,7 @@ def test_a_refused_request_shows_each_reason_by_its_place(app: App) -> None:
 
 def test_a_failed_record_shows_why(app: App, run: DatasetRef) -> None:
     app.picker.value = 'Reduce'
-    app.form.set({'sample': {'file': run, 'thickness': 0.0}})
+    app.form.set({'run': run, 'sample': {'thickness': 0.0}})
 
     assert app.compute() is not None
     assert app.message.object == 'Failed: ZeroDivisionError: float division by zero'

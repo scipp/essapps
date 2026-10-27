@@ -76,15 +76,16 @@ A request lives in two phases. In the *request phase*, when it is submitted,
 the backend checks what it can without data (see ``checks.py``), and, under
 its lock, what depends on history and on what the client keeps: each reference
 to a record or an accumulator is one the client may read, and its data fit the
-type at its place and hold no dataset model. In the *call phase*, on a worker,
-the backend reads the data each reference names, for a dataset the dataset
-model of its local path, and validates each value once, whole, by its field, a
-row of a list by its element type: the JSON form the log holds, with the data
-read in place of each reference, so that every validator of every group runs
-once, with all its fields at hand (see :func:`ess.spec.places.validated`). For
-a plain request it makes the params instance from these values without validating
-again, so the params model's model validators never run; a stage or an
-accumulator gets the values by name. The rows of a table, if its element type
+type at its place. Each group given inline is validated whole then, so that
+its validators run. In the *call phase*, on a worker, the backend reads the
+data each reference names, an output, or for a dataset the dataset model of
+its local path, whose validators run then, and makes each value by its field,
+a row of a list by its element type, of the JSON form the log holds, with the
+data read in place of each reference (see
+:func:`ess.spec.places.validated`). For a plain request it makes the params
+instance from these values without validating again, so the params model's
+model validators never run; a stage or an accumulator gets the values by
+name. The rows of a table, if its element type
 has a JSON form, are distinct by the JSON forms of the rows read, as the
 element type dumps them, too: an inline value and a reference to equal data
 are one row. A table that a request, a template, or a stage call gives whole
@@ -1283,8 +1284,8 @@ class Backend:
     ) -> dict[str, Any]:
         """
         ``values`` of a request by name as the binding takes them; no lock.
-        The data each reference names is read, and each value is validated
-        once, whole, by its field, a row of a list by its element type (see
+        The data each reference names is read, and each value is made by its
+        field, a row of a list by its element type (see
         :func:`ess.spec.places.validated`). A plain request makes the
         params instance from them, and a stage or a driver takes them by name.
 

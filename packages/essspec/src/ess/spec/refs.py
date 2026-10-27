@@ -7,16 +7,17 @@ A request gives the value at a place by reference to data that exist
 elsewhere, or inline: an output of an earlier record, a dataset the
 framework did not compute, or, in a request not yet accepted, an output of an
 accumulator that the framework holds. A *place* is the value of a parameter,
-an element of a list, or a field of a group, at any depth (see
-:mod:`ess.spec.places`). A reference stands for a group only: a reference to
-a dataset for a dataset model (see :class:`ess.spec.parameters.DatasetModel`),
-a reference to an output for any other group. A reference is what a request
-names and what a record keeps; turning it into the data a workflow takes, a
-local path or an object, is the business of whatever runs the workflow.
+or an element of a list parameter (see :mod:`ess.spec.places`). A reference
+stands for a whole group: a reference to a dataset for a dataset model (see
+:class:`ess.spec.parameters.DatasetModel`), a reference to an output for any
+other group. A reference is what a request names and what a record keeps;
+turning it into the data a workflow takes, a local path or an object, is the
+business of whatever runs the workflow.
 
 The JSON form of a reference is an object with the key ``"@ref"``, which
 names its kind. The key is reserved: an object with it is a reference, at any
-depth, so a reference is found in plain data without a spec::
+depth, so a reference is found in plain data without a spec, and one that is
+not at a place is refused::
 
     {"@ref": "dataset", "dataset": "run:loki/60339"}
     {"@ref": "output", "record": "r17", "output": "centre"}
@@ -154,14 +155,14 @@ def as_ref(value: Any) -> Ref | None:
 
 type Loc = tuple[str | int, ...]
 """
-A place in the params of a request, as pydantic's errors give one: the
+A position in the params of a request, as pydantic's errors give one: the
 parameter's name, then the index of an element of a list or the name of a
-field of a group, at any depth, such as ``('runs', 2, 'transmission')``.
+field of a group, at any depth, such as ``('runs', 2, 'thickness')``.
 """
 
 
 def loc_text(loc: Loc) -> str:
-    """A place as a message names it, such as ``runs[2].transmission``."""
+    """A position as a message names it, such as ``runs[2].thickness``."""
     return ''.join(
         f'[{part}]' if isinstance(part, int) else f'.{part}' if i else part
         for i, part in enumerate(loc)
@@ -196,10 +197,12 @@ def positions(loc: Loc, value: Any) -> Iterator[tuple[Loc, Any]]:
     """
     Each position in ``value``, at ``loc``, with what it holds: the value,
     and each element of a list and each field of an object that is not a
-    reference, at any depth, such as ``('runs', 2, 'transmission')``.
+    reference, at any depth, such as ``('runs', 2)`` or
+    ``('reduction', 'bins')``.
 
-    These are the places where a request may hold a reference, found
-    without the spec, since ``"@ref"`` is reserved at each of them.
+    A request holds a reference only at a place, a parameter or an element
+    of a list parameter, but ``"@ref"`` is reserved at every position, so
+    that a reference is found without the spec wherever it is.
     """
     yield loc, value
     if isinstance(value, list):
@@ -217,8 +220,8 @@ def _is_object(value: Any) -> bool:
 
 def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[Loc, Ref]]:
     """
-    Each reference in the params of a request, with its place, such as
-    ``('sample', 'run')``, ``('runs', 2)``, or ``('runs', 2, 'transmission')``.
+    Each reference in the params of a request, with its position, such as
+    ``('sample',)`` or ``('runs', 2)``.
 
     The params are by name. A reference is a :data:`Ref` or its plain (JSON)
     form, and is looked for at every position (see :func:`positions`). Any

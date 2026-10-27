@@ -81,17 +81,6 @@ UNTYPED = _spec('untyped')  # its workflow returns a dict
 COUNTS = _spec('counts')  # its workflow looks up a key that is not there
 
 
-class Scale(BaseModel):
-    factor: float = 1.0
-
-
-class ScaledRun(BaseModel):
-    """A run and its scale, if given: a group that holds a dataset model."""
-
-    file: SampleRun
-    scale: Scale | None = None
-
-
 class MaskFile(DatasetModel, kind='mask'): ...
 
 
@@ -125,8 +114,13 @@ class RunsParams(BaseModel):
     runs: list[SampleRun] = Field(min_length=1)
 
 
+class Term(BaseModel):
+    value: float
+    factor: float = 1.0
+
+
 class SumParams(BaseModel):
-    sample: list[ScaledRun] = Field(min_length=1)
+    terms: list[Term] = Field(min_length=1)
 
 
 class PartsOutputs(BaseModel):
@@ -137,12 +131,8 @@ class PiecesOutputs(BaseModel):
     pieces: list[Amount]
 
 
-class Item(BaseModel):
-    value: float = 0.0
-
-
 class Box(BaseModel):
-    item: Item = Field(default_factory=Item)
+    value: float = 0.0
 
 
 class BoxParams(BaseModel):
@@ -161,7 +151,7 @@ class Mode(Enum):
 
 class Strict(BaseModel, strict=True):
     mode: Mode = Mode.fast
-    factor: Amount = Amount(value=1.0)
+    factor: float = 1.0
 
 
 class ModeParams(BaseModel):
@@ -172,7 +162,7 @@ class ModeParams(BaseModel):
 
 def slow(params: ModeParams) -> ValueOutputs:
     strict = params.strict
-    value = float(strict.mode is Mode.slow) * strict.factor.value
+    value = float(strict.mode is Mode.slow) * strict.factor
     return ValueOutputs(value=Amount(value=value))
 
 
@@ -184,7 +174,7 @@ LOKI_MASKED = _spec('loki-masked', params=LokiMaskParams)
 XML = _spec('xml', params=XmlParams)
 RUNS = _spec('runs', params=RunsParams, tables=('runs',))
 MODES = _spec('modes', params=ModeParams)
-SUM = _spec('sum', params=SumParams, tables=('sample',))
+SUM = _spec('sum', params=SumParams, tables=('terms',))
 
 
 def add(params: AddParams) -> ValueOutputs:
@@ -193,10 +183,7 @@ def add(params: AddParams) -> ValueOutputs:
 
 
 def total(params: SumParams) -> ValueOutputs:
-    value = sum(
-        (1.0 if run.scale is None else run.scale.factor) * read_dataset(run.file.path)
-        for run in params.sample
-    )
+    value = sum(term.factor * term.value for term in params.terms)
     return ValueOutputs(value=Amount(value=value))
 
 
@@ -375,7 +362,7 @@ def test_one_refused_request_refuses_the_submission(client: Client) -> None:
 def _boxed(value: Any) -> Request:
     return Request(
         BOXED,
-        params={'box': {'item': {'value': value}}, 'sample': dataset(run=1)},
+        params={'box': {'value': value}, 'sample': dataset(run=1)},
     )
 
 
@@ -391,7 +378,7 @@ def test_a_value_whose_json_form_reads_back_as_another_is_refused(
 ) -> None:
     with pytest.raises(
         SubmitError,
-        match=r'^box\.item\.value: has no JSON form that reads back as the value$',
+        match=r'^box\.value: has no JSON form that reads back as the value$',
     ):
         client.submit(_boxed(value))
 
@@ -415,7 +402,7 @@ def test_a_strict_group_is_validated_from_its_json_form(client: Client) -> None:
     stage = client.stage(Template(MODES, params=strict, blanks=('sample',)))
     staged = client.compute(stage, params={'sample': dataset(run=1)})
 
-    assert plain.request.params['strict'] == {'mode': 'slow', 'factor': {'value': 1.0}}
+    assert plain.request.params['strict'] == {'mode': 'slow', 'factor': 1.0}
     assert (
         client.output(plain, 'value')
         == client.output(staged, 'value')
@@ -423,31 +410,11 @@ def test_a_strict_group_is_validated_from_its_json_form(client: Client) -> None:
     )
 
 
-def test_a_strict_group_with_a_reference_passes_the_call_phase(
-    client: Client, gate: Gate
-) -> None:
-    # The call phase validates the group from JSON values and data, in Python
-    # mode, where only strict=False takes the enum from its string.
-    gate.open.set()
-    loaded = client.compute(load(2))
-    strict = {'strict': {'mode': Mode.slow, 'factor': loaded.ref('value')}}
-    plain = client.compute(MODES, params={**strict, 'sample': dataset(run=1)})
-
-    assert plain.request.params['strict'] == {
-        'mode': 'slow',
-        'factor': loaded.ref('value'),
-    }
-    assert client.output(plain, 'value') == Amount(value=2.0)
-
-
-def test_a_field_a_nested_group_lacks_is_refused(client: Client) -> None:
-    typo = Request(
-        BOXED,
-        params={'box': {'item': {'unknown': 1}}, 'sample': dataset(run=1)},
-    )
+def test_a_field_a_group_lacks_is_refused(client: Client) -> None:
+    typo = Request(BOXED, params={'box': {'unknown': 1}, 'sample': dataset(run=1)})
 
     with pytest.raises(
-        SubmitError, match=r"box\.item\.unknown: Extra inputs are not permitted"
+        SubmitError, match=r"box\.unknown: Extra inputs are not permitted"
     ):
         client.submit(typo)
 
@@ -566,8 +533,8 @@ def test_a_validator_of_a_dataset_model_runs_with_the_local_path(
 
 
 def test_a_table_takes_a_list_of_rows(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r'^sample: .* is not a list$'):
-        client.submit(SUM, params={'sample': {'file': dataset(run=1)}})
+    with pytest.raises(SubmitError, match=r'^terms: .* is not a list$'):
+        client.submit(SUM, params={'terms': {'value': 1.0}})
 
 
 def test_a_dataset_model_given_inline_is_refused(client: Client) -> None:
@@ -605,15 +572,15 @@ def test_a_dataset_model_takes_a_reference_to_a_dataset_only(client: Client) -> 
 
     with pytest.raises(SubmitError, match=rf'^sample: {loaded.id}.value {refused}$'):
         client.submit(LOAD, params={'sample': by_ref})
-    with pytest.raises(SubmitError, match=rf'^sample\[0\]\.file: .* {refused}$'):
-        client.submit(SUM, params={'sample': [{'file': by_ref}]})
+    with pytest.raises(SubmitError, match=rf'^runs\[0\]: .* {refused}$'):
+        client.submit(RUNS, params={'runs': [by_ref]})
     with pytest.raises(SubmitError, match=rf'^sample: .* {refused}$'):
         client.stage(Template(MODES, params={'sample': by_ref}, blanks=('values',)))
 
 
 def test_a_spec_whose_output_holds_a_dataset_model_is_refused() -> None:
     class RunOutputs(BaseModel):
-        run: ScaledRun
+        run: SampleRun
 
     with pytest.raises(ValueError, match='SampleRun is a dataset model; no output'):
         _spec('echo', outputs=RunOutputs)
@@ -809,7 +776,7 @@ def test_a_refusal_lists_each_problem_of_a_value(client: Client) -> None:
     typo = Request(
         BOXED,
         params={
-            'box': {'item': {'valeu': 1, 'other': 2}},
+            'box': {'valeu': 1, 'other': 2},
             'sample': dataset(run=1),
         },
     )
@@ -817,51 +784,42 @@ def test_a_refusal_lists_each_problem_of_a_value(client: Client) -> None:
     with pytest.raises(SubmitError) as raised:
         client.submit({'typo': typo})
     assert [(e.entry, e.loc) for e in raised.value.errors] == [
-        ('typo', ('box', 'item', 'valeu')),
-        ('typo', ('box', 'item', 'other')),
+        ('typo', ('box', 'valeu')),
+        ('typo', ('box', 'other')),
     ]
-    assert str(raised.value).count('typo: box.item.') == 2
+    assert str(raised.value).count('typo: box.') == 2
 
 
 # Tables in a plain request
 
 
-def test_a_row_is_a_group_of_a_run_and_its_scale(client: Client) -> None:
+def test_a_row_is_a_group(client: Client) -> None:
     summed = client.compute(
-        SUM,
-        params={
-            'sample': [
-                {'file': dataset(run=1), 'scale': Scale(factor=10.0)},
-                {'file': dataset(run=2)},
-            ]
-        },
+        SUM, params={'terms': [{'value': 1.0, 'factor': 10.0}, Term(value=2.0)]}
     )
 
     assert client.output(summed, 'value') == Amount(value=12.0)
 
 
 def test_a_table_that_needs_a_row_is_refused_without_one(client: Client) -> None:
-    with pytest.raises(SubmitError, match='sample'):
-        client.submit(SUM, params={'sample': []})
+    with pytest.raises(SubmitError, match='terms'):
+        client.submit(SUM, params={'terms': []})
 
 
 def test_a_row_given_twice_is_refused(client: Client, datasets: FakeDatasets) -> None:
     path = datasets.path(datasets.resolve(dataset(run=1)))
 
-    with pytest.raises(SubmitError, match=r'sample\[1\]: repeats sample\[0\]'):
-        client.submit(
-            SUM,
-            params={'sample': [{'file': dataset(run=1)}, {'file': dataset(path=path)}]},
-        )
+    with pytest.raises(SubmitError, match=r'runs\[1\]: repeats runs\[0\]'):
+        client.submit(RUNS, params={'runs': [dataset(run=1), dataset(path=path)]})
 
 
 def test_rows_are_distinct_as_a_whole(client: Client) -> None:
-    scaled = {'file': dataset(run=1), 'scale': Scale(factor=2.0)}
-    summed = client.compute(SUM, params={'sample': [{'file': dataset(run=1)}, scaled]})
+    scaled = {'value': 1.0, 'factor': 2.0}
+    summed = client.compute(SUM, params={'terms': [{'value': 1.0}, scaled]})
 
     assert client.output(summed, 'value') == Amount(value=3.0)
-    with pytest.raises(SubmitError, match=r'sample\[1\]: repeats sample\[0\]'):
-        client.submit(SUM, params={'sample': [scaled, dict(scaled)]})
+    with pytest.raises(SubmitError, match=r'terms\[1\]: repeats terms\[0\]'):
+        client.submit(SUM, params={'terms': [scaled, dict(scaled)]})
 
 
 def test_rows_of_dataset_models_are_distinct_by_identity_not_by_path(

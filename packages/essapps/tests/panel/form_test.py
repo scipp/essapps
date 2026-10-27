@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+from datetime import UTC, datetime
 from typing import Any
 
 import panel as pn
@@ -86,10 +87,11 @@ def missing(form: Form) -> set[tuple[tuple[str | int, ...], str]]:
 
 
 def test_params_are_the_defaults_and_what_is_given(form: Form, run: DatasetRef) -> None:
-    form.set({'sample': {'file': run, 'thickness': 2.0}})
+    form.set({'run': run, 'sample': {'thickness': 2.0}})
     assert form.params == {
         'reduction': {'bins': 2, 'norm': 'monitor'},
-        'sample': {'file': run, 'thickness': 2.0},
+        'run': run,
+        'sample': {'thickness': 2.0},
         'beam_centre': {'x': 0.0, 'y': 0.0},
         'detector': {'kind': 'front', 'distance': 1.0},
         'mask': None,
@@ -98,7 +100,7 @@ def test_params_are_the_defaults_and_what_is_given(form: Form, run: DatasetRef) 
 
 def test_an_input_without_a_default_starts_with_nothing_given(form: Form) -> None:
     assert missing(form) == {
-        (('sample', 'file'), 'choose a dataset'),
+        (('run',), 'choose a dataset'),
         (('sample', 'thickness'), 'give a value'),
     }
 
@@ -116,6 +118,7 @@ def test_values_of_each_type_start_at_their_default_or_with_nothing_given(
         widget(options, 'Note').value == ''
     )  # an empty text with a default is a value
     assert widget(options, 'Mode').value == 'fast'
+    assert widget(options, 'Start').value == datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def test_values_of_each_type_round_trip_through_a_record(
@@ -129,6 +132,8 @@ def test_values_of_each_type_round_trip_through_a_record(
             'note': '',
             'count': 3,
             'mode': 'slow',
+            'start': '2026-03-04T05:06:07Z',
+            'banks': [3, 1],
         },
         'direct_beam': None,
     }
@@ -138,10 +143,21 @@ def test_values_of_each_type_round_trip_through_a_record(
     assert record.request.params == params
 
 
+def test_a_list_of_scalars_is_a_list_of_inputs(options: Form) -> None:
+    options.set({'settings': {'flag': False, 'count': 1, 'banks': [3, 1]}})
+    assert widget(options, 'Banks [1]').value == 1
+    widget(options, 'Remove from Banks').clicks += 1
+    assert options.params['settings']['banks'] == [3]
+    widget(options, 'Add to Banks').clicks += 1
+    assert missing(options) == {(('settings', 'banks', 1), 'give a value')}
+    widget(options, 'Banks [1]').value = 4
+    assert options.params['settings']['banks'] == [3, 4]
+
+
 def test_a_cleared_input_of_a_value_with_a_default_is_not_given_the_default(
     form: Form, options: Form, run: DatasetRef
 ) -> None:
-    form.set({'sample': {'file': run, 'thickness': 2.0}})
+    form.set({'run': run, 'sample': {'thickness': 2.0}})
     widget(form, 'Bins').value = None
     assert missing(form) == {(('reduction', 'bins'), 'give a value')}
 
@@ -168,7 +184,7 @@ def test_a_dataset_model_typed_x_or_none_offers_a_dataset_and_none(
     assert options.params['direct_beam'] is None
 
 
-def test_a_group_typed_x_or_none_in_a_group_without_a_default_starts_unset(
+def test_a_group_typed_x_or_none_without_a_default_starts_unset(
     client: Client, subtract: Form, subtract_spec: Spec
 ) -> None:
     assert way(subtract, 'Centre').options == ['Given', 'None']
@@ -176,10 +192,10 @@ def test_a_group_typed_x_or_none_in_a_group_without_a_default_starts_unset(
     assert subtract.params == {'background': {'scale': 1.0}}
     with pytest.raises(SubmitError) as refused:
         client.submit(subtract_spec, params=subtract.params)
-    assert [e.loc for e in refused.value.errors] == [('background', 'centre')]
+    assert [e.loc for e in refused.value.errors] == [('centre',)]
 
 
-def test_a_group_typed_x_or_none_in_a_group_is_given_each_way(
+def test_a_group_typed_x_or_none_is_given_each_way(
     client: Client,
     subtract: Form,
     subtract_spec: Spec,
@@ -191,7 +207,7 @@ def test_a_group_typed_x_or_none_in_a_group_is_given_each_way(
     assert way(subtract, 'Centre').options == ['Given', 'From a record', 'None']
 
     for centre in (None, {'x': 2.0, 'y': 0.0}, found.ref('centre')):
-        params = {'background': {'scale': 1.0, 'centre': centre}}
+        params = {'background': {'scale': 1.0}, 'centre': centre}
         subtract.set(params)
         assert subtract.params == params
         record = client.compute(subtract_spec, params=subtract.params)
@@ -217,7 +233,7 @@ def test_a_group_offers_a_record_while_a_fitting_output_is_readable(
 ) -> None:
     assert form.ways('beam_centre') == ['Given']
 
-    client.compute(reduce_spec, params={'sample': {'file': run, 'thickness': 2.0}})
+    client.compute(reduce_spec, params={'run': run, 'sample': {'thickness': 2.0}})
     form.refresh()
     assert form.ways('beam_centre') == ['Given']  # its output does not fit
 
@@ -230,15 +246,11 @@ def test_a_group_offers_a_record_while_a_fitting_output_is_readable(
     assert form.ways('beam_centre') == ['Given']
 
 
-def test_a_group_that_holds_a_file_offers_no_record(form: Form) -> None:
-    assert form.ways('sample') == ['Given']
-
-
 def test_the_way_of_a_record_with_no_record_picked_is_not_given_the_default(
     client: Client, form: Form, find_spec: Spec, run: DatasetRef
 ) -> None:
     client.compute(find_spec, params={'run': run})
-    form.set({'sample': {'file': run, 'thickness': 2.0}})
+    form.set({'run': run, 'sample': {'thickness': 2.0}})
     way(form, 'Beam Centre').value = 'From a record'
     assert missing(form) == {(('beam_centre',), 'choose a record')}
 
@@ -248,7 +260,11 @@ def test_a_picked_record_that_is_released_is_not_given_the_default(
 ) -> None:
     found = client.compute(find_spec, params={'run': run})
     form.set(
-        {'sample': {'file': run, 'thickness': 2.0}, 'beam_centre': found.ref('centre')}
+        {
+            'run': run,
+            'sample': {'thickness': 2.0},
+            'beam_centre': found.ref('centre'),
+        }
     )
     assert form.params['beam_centre'] == found.ref('centre')
 
@@ -263,7 +279,11 @@ def test_set_with_a_reference_the_client_may_not_read_picks_no_record(
     found = client.compute(find_spec, params={'run': run})
     client.release(found)
     form.set(
-        {'sample': {'file': run, 'thickness': 2.0}, 'beam_centre': found.ref('centre')}
+        {
+            'run': run,
+            'sample': {'thickness': 2.0},
+            'beam_centre': found.ref('centre'),
+        }
     )
     assert missing(form) == {(('beam_centre',), 'choose a record')}
 
@@ -282,7 +302,8 @@ def test_set_shows_params_as_a_record_holds_them(
         reduce_spec,
         params={
             'reduction': {'bins': 4, 'norm': 'none'},
-            'sample': {'file': run, 'thickness': 2.0},
+            'run': run,
+            'sample': {'thickness': 2.0},
             'beam_centre': found.ref('centre'),
             'detector': {'kind': 'rear', 'tilt': 0.5},
             'mask': mask,
@@ -298,14 +319,14 @@ def test_the_dataset_picker_lists_a_dataset_measured_after_the_form_was_made(
     datasets: FakeDatasets, form: Form, run: DatasetRef
 ) -> None:
     form.refresh()
-    assert list(picker(form, 'File').options) == [
+    assert list(picker(form, 'Run').options) == [
         '(choose a dataset)',
         'run 101 (sample)',
     ]
 
     datasets.measure(102, {'counts': 1.0, 'x': 0.0}, role='sample')
     form.refresh()
-    assert list(picker(form, 'File').options) == [
+    assert list(picker(form, 'Run').options) == [
         '(choose a dataset)',
         'run 101 (sample)',
         'run 102 (sample)',
@@ -318,7 +339,7 @@ def test_a_dataset_picker_lists_the_datasets_that_fit_its_model(
     datasets.measure(201, {'counts': 1.0}, kind='mask')
     form.refresh()
     assert form.ways('mask') == ['A dataset', 'None']
-    assert list(picker(form, 'File').options) == [
+    assert list(picker(form, 'Run').options) == [
         '(choose a dataset)',
         'run 101 (sample)',
     ]
@@ -338,23 +359,23 @@ def test_a_dataset_that_does_not_fit_stays_picked_when_set(
     datasets: FakeDatasets, form: Form, run: DatasetRef
 ) -> None:
     mask = datasets.measure(201, {'counts': 1.0}, kind='mask')
-    form.set({'sample': {'file': mask, 'thickness': 2.0}})
-    assert picker(form, 'File').options == {
+    form.set({'run': mask, 'sample': {'thickness': 2.0}})
+    assert picker(form, 'Run').options == {
         '(choose a dataset)': None,
         'run 101 (sample)': run,
         str(mask): mask,
     }
-    assert form.params['sample'] == {'file': mask, 'thickness': 2.0}
+    assert form.params['run'] == mask
 
 
 def test_a_picked_dataset_that_no_longer_fits_stays_picked(
     datasets: FakeDatasets, form: Form, run: DatasetRef
 ) -> None:
-    form.set({'sample': {'file': run, 'thickness': 2.0}})
+    form.set({'run': run, 'sample': {'thickness': 2.0}})
     datasets.correct(run, kind='mask')
     form.refresh()
-    assert list(picker(form, 'File').options) == ['(choose a dataset)', str(run)]
-    assert form.params['sample'] == {'file': run, 'thickness': 2.0}
+    assert list(picker(form, 'Run').options) == ['(choose a dataset)', str(run)]
+    assert form.params['run'] == run
 
 
 def test_a_listing_labels_each_record_and_the_outputs_that_fit(

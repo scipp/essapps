@@ -5,61 +5,55 @@ Places: where a request writes either a value or a reference, by type.
 
 A request is a JSON object of parameter values. A *place* is a position in
 it where the request may write either a value or a reference to data that
-exist elsewhere (see :mod:`ess.spec.refs`). The places are the value of each
-parameter, each element of a list, and each field of a group, at any depth::
+exist elsewhere (see :mod:`ess.spec.refs`): the value of a parameter, or an
+element of a list parameter. A group written inline holds only scalars, so
+there is no place inside it::
 
     {
-        'sample': {                                    # sample
-            'file': dataset(run=101),                  # sample.file
-            'transmission': t.ref('transmission'),     # sample.transmission
-        },
-        'reduction': {'bins': 50, 'mask': m.ref('mask')},  # reduction, .bins, .mask
-        'runs': [{'file': dataset(run=102)}],          # runs, runs[0], runs[0].file
+        'sample': dataset(run=101),                    # sample
+        'centre': finder.ref('centre'),                # centre
+        'reduction': {'bins': 50, 'banks': [1, 2]},    # reduction
+        'runs': [dataset(run=102), dataset(run=103)],  # runs, runs[0], runs[1]
     }
 
 The type at a place decides what the request writes there, with ``| None``
-removed: a place of type ``X | None`` also takes ``None``. At a field of a
-group, and at an element of a list there, ``X`` is a group (see
-:mod:`ess.spec._workflow_spec`):
+removed: a place of type ``X | None`` also takes ``None``. ``X`` is a group
+or a union of groups (see :mod:`ess.spec._workflow_spec`):
 
 ========================================  =====================================
 Type at the place                         The request writes
 ========================================  =====================================
 a dataset model                           a reference to a dataset
-a group                                   an object of its fields, each a
-                                          place, unless one is a data value;
-                                          or a reference to an output
+a group                                   an object of its fields, unless one
+                                          is a data value; or a reference to
+                                          an output
 a union of groups                         an object of the fields of one
                                           alternative, with its tag, as for a
                                           group; never a reference
-a list, ``list[X]``                       a list, each element a place of
+a list, ``list[X]``, at a parameter       a list, each element a place of
                                           type ``X``
-a *scalar*: ``int``, ``float``, ``str``,  the value as JSON (*inline*)
-``bool``, an enum, or a ``Literal``
-a type without a JSON form, a *data       nothing: it is a field of a group
-value*
 ========================================  =====================================
 
-A field of a group holds no other type: a value of several parts, such as a
-tuple, a dict, or a dataclass, is a group, so that each part is a place.
+A field of a group is a *scalar*, ``int``, ``float``, ``str``, ``bool``,
+``datetime``, an enum, or a ``Literal``, or a list of scalars, which a
+request writes inline, as JSON; or a *data value*, a type without a JSON
+form, which no request writes: a group that holds one is given by reference
+only (see :func:`unwritten`), and its other fields may be of any type.
 
-A reference stands for a group only. A reference to a dataset fits a
+A reference stands for a whole group. A reference to a dataset fits a
 dataset model (see :class:`~ess.spec.parameters.DatasetModel`). A reference
 to an output fits the place's type, and no output holds a dataset model, so
 that a file comes only from a dataset, which the dataset source checks. A
-number, a string, or a ``sc.DataArray`` names no role: every output of its type would
-fit, so a value computed by another workflow comes as a group, such as a
-found beam centre, and a data value is a field of one::
+number, a string, or a ``sc.DataArray`` names no role: every output of its
+type would fit, so a value computed by another workflow comes as a group,
+such as a found beam centre, and a data value is a field of one::
 
     class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):
         transmission: sc.DataArray  # a data value: given by reference only
 
-No field of a group that holds a dataset model is a data value: no
-reference stands for such a group, so a request writes it field by field
-(see :func:`unwritten`).
-
 ``"@ref"`` is reserved at every depth, so that a reference is found
-without the spec (see :func:`ess.spec.refs.positions`).
+without the spec (see :func:`ess.spec.refs.positions`), and one inside a
+group written inline is refused.
 
 A *union of groups* is a pydantic discriminated union,
 ``Annotated[A | B, Field(discriminator='kind')]``, in which each
@@ -82,34 +76,24 @@ possibly typed ``X | None``, not a union::
 
 :func:`place` describes what a request writes at a place, as the table
 above has it, for the params schema of a spec and for a form that a UI
-makes from the models: a :class:`Value`, or the :class:`Ways` of a group,
-a dataset model among them, or a union; of a list whose elements are places,
-the :class:`Rows`. For the two ``beam_centre`` above::
+makes from the models: a :class:`Ways` of a group, a dataset model among
+them, or a union; of a list parameter, the :class:`Rows`; of a field of a
+group, a :class:`Value`. For the two ``beam_centre`` above::
 
     Ways(tag=None, inline={None: BeamCentre}, record=BeamCentre, none=False, ...)
     Ways(tag='kind', inline={'given': GivenCentre, 'find': FindCentre},
          record=None, none=False, ...)
 
-A group with no reference inside, at any depth, is an inline value. In the
-request phase, :func:`held` validates it whole, from its JSON form, so that
-its validators run, and the record holds the JSON form of the validated
-group, which must read back as it (see :func:`ess.spec.field_types.inline`).
-An instance of the group and the object of its fields give one record. A
-group with a reference inside is checked field by field: each field given
-inline alone, by its own type and constraints, and each group in it as a
-place of its own. Its validators run in the call phase, when each
-parameter's value is validated once, whole, with the data of its references
-(see :func:`validated`). So a validator that widens what a field of a group
-accepts, such as a ``mode='before'`` validator that parses a string, works
-only for a group written without references, and a value that only a
-validator of a group refuses fails the record, or the push, in the call
-phase if the group has a reference inside::
-
-    {'range': {'start': 10.0, 'stop': 5.0}}         # refused at range.stop
-    {'range': {'start': 10.0, 'stop': r.ref('x')}}  # with x 5.0, fails at range.stop
+In the request phase, :func:`held` validates each group, or row, given
+inline whole, from its JSON form, so that its validators run, and the record
+holds the JSON form of the validated group, which must read back as it (see
+:func:`ess.spec.field_types.inline`). An instance of the group and the
+object of its fields give one record. In the call phase, :func:`validated`
+replaces each reference by its data, and makes each value of what the record
+holds.
 
 An error inside a union names its place without the tag:
-``beam_centre.tolerance``, whichever phase finds it.
+``beam_centre.tolerance``.
 """
 
 from __future__ import annotations
@@ -170,53 +154,53 @@ class _Slot:
 
 def held(model: type[BaseModel], name: str, value: Any, on_ref: OnRef) -> Any:
     """
-    ``value`` of the field ``name`` of ``model``, a parameter or a field of
-    a group, as a record holds it: the JSON form of each place given inline,
-    and at each other place what ``on_ref`` returns for its reference, or
-    ``None``. A group holds each of its fields, a field left out its default.
+    ``value`` of the field ``name`` of ``model``, a parameter, as a record
+    holds it: the JSON form of a value given inline, at a reference what
+    ``on_ref`` returns for it, or ``None``; of a list, each element so.
     ``value`` is as a request gives it, a group as a mapping of its fields or
-    an instance, a reference as a :data:`~ess.spec.refs.Ref` or its JSON form.
+    an instance, a reference as a :data:`~ess.spec.refs.Ref` or its JSON
+    form.
 
-    A group with no reference inside is given inline: validated whole, and
-    held as the JSON form of the validated group. A group with a reference
-    inside holds each of its fields so, each place given inline validated
-    alone, by its field (see :func:`ess.spec.field_types.inline`). Raises
+    A group, or a row, given inline is validated whole, and held as the JSON
+    form of the validated group, a field left out at its default (see
+    :func:`ess.spec.field_types.inline`). A field of a group is validated so
+    too, alone, for a check of its default. Raises
     :class:`~ess.spec.refs.ParamsError` at the place of the first problem.
     """
-    return _held((name,), _Slot(model, name), value, on_ref)
+    slot = _Slot(model, name)
+    if not slot.is_list:
+        return _held((name,), slot, value, on_ref)
+    if (ref := ref_at((name,), value)) is not None:
+        raise _refused(
+            (name,),
+            f'{ref} is a reference to a whole list; a reference stands for one '
+            'element of a list',
+        )
+    if not isinstance(value, list):
+        raise _refused((name,), f'{value!r} is not a list')
+    return [_held((name, i), slot.one, v, on_ref) for i, v in enumerate(value)]
 
 
 def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
     tp, nullable = field_types.optional(slot.annotation)
+    union = alternatives(slot.annotation, slot.discriminator)
     if (ref := ref_at(loc, value)) is not None:
-        if slot.is_list:
-            raise _refused(
-                loc,
-                f'{ref} is a reference to a whole list; a reference stands for '
-                'a group only',
-            )
-        if alternatives(slot.annotation, slot.discriminator) is not None:
+        if union is not None:
             raise _refused(
                 loc,
                 f'{ref}: a union of groups is written inline, with the tag of an '
-                'alternative; a reference stands for a group only',
-            )
-        if not field_types.is_group(tp):
-            raise _refused(
-                loc,
-                f'{ref}: {field_types.type_name(tp)} is given inline; a reference '
-                'stands for a group only',
+                'alternative; no reference fits it',
             )
         return on_ref(loc, ref, tp)
     if value is None and nullable:
         return None
-    if slot.is_list:
-        if not isinstance(value, list):
-            raise _refused(loc, f'{value!r} is not a list')
-        return [_held((*loc, i), slot.one, v, on_ref) for i, v in enumerate(value)]
     if field_types.is_dataset(tp):
-        raise _not_a_dataset(loc, value, tp)
-    if field_types.is_group(tp) or alternatives(slot.annotation, slot.discriminator):
+        raise _refused(
+            loc,
+            f'{value!r} is not a dataset; {field_types.type_name(tp)} is given by '
+            'reference to a dataset, such as dataset(path=...)',
+        )
+    if union is not None or field_types.is_group(tp):
         fields = dict(value) if isinstance(value, BaseModel) else value
         if not isinstance(fields, Mapping):
             raise _refused(
@@ -224,21 +208,15 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
                 f'{value!r} is not an object; a group is written as an object '
                 'of its fields',
             )
-        group = _group(loc, slot, fields)
-        _written(loc, group)
-        if any(ref_at(at, v) is not None for at, v in positions(loc, fields)):
-            return _fields(loc, group, fields, on_ref)
-        _written_inside(loc, group, fields)
-        return _inline(loc, slot, value)
+        _written(loc, _group(loc, slot, fields))
+        for at, item in positions(loc, fields):
+            if at != loc and (ref := ref_at(at, item)) is not None:
+                raise _refused(
+                    at,
+                    f'{ref}: a reference stands for a whole group, at a parameter '
+                    'or an element of a list parameter, never inside a group',
+                )
     return _inline(loc, slot, value)
-
-
-def _not_a_dataset(loc: Loc, value: Any, model: type[BaseModel]) -> ParamsError:
-    return _refused(
-        loc,
-        f'{value!r} is not a dataset; {field_types.type_name(model)} is given by '
-        'reference to a dataset, such as dataset(path=...)',
-    )
 
 
 def _written(loc: Loc, group: type[BaseModel]) -> None:
@@ -254,65 +232,13 @@ def _written(loc: Loc, group: type[BaseModel]) -> None:
         )
 
 
-def _written_inside(loc: Loc, group: type[BaseModel], value: Mapping[str, Any]) -> None:
+def _group(loc: Loc, slot: _Slot, value: Mapping[str, Any]) -> type[BaseModel]:
     """
-    Refuse a group given by reference only, a dataset model among them, at
-    a place inside ``value``, the fields of ``group`` given inline, at any
-    depth. Nothing is validated, so that a validator of ``group`` that
-    widens what a field accepts still works; a value that is not what its
-    place takes is left to validating ``group`` whole.
+    The group whose fields ``value`` at ``loc`` gives: the group at the
+    place, or of a union the alternative its tag names.
     """
-    for name, given in value.items():
-        if name not in group.model_fields or not (groups := groups_at(group, name)):
-            continue
-        (inner,) = groups  # a field of a group is never a union
-        if not field_types.is_list(group, name):
-            places = [((*loc, name), given)]
-        elif isinstance(given, list):
-            places = [((*loc, name, i), v) for i, v in enumerate(given)]
-        else:
-            continue
-        for at, item in places:
-            if field_types.is_dataset(inner) and item is not None:
-                raise _not_a_dataset(at, item, inner)
-            fields = dict(item) if isinstance(item, BaseModel) else item
-            if isinstance(fields, Mapping):
-                _written(at, inner)
-                _written_inside(at, inner, fields)
-
-
-def _fields(
-    loc: Loc, group: type[BaseModel], value: Mapping[str, Any], on_ref: OnRef
-) -> dict[str, Any]:
-    """The fields of ``group`` at ``loc`` as a record holds them (see :func:`held`)."""
-    if unknown := [f for f in value if f not in group.model_fields]:
-        raise ParamsError(
-            ((*loc, f), 'Extra inputs are not permitted') for f in unknown
-        )
-    fields: dict[str, Any] = {}
-    for name, info in group.model_fields.items():
-        at = (*loc, name)
-        if name in value:
-            given = value[name]
-        elif info.is_required():
-            raise _refused(at, 'Field required')
-        else:
-            given = info.get_default(call_default_factory=True)
-        fields[name] = _held(at, _Slot(group, name), given, on_ref)
-    return fields
-
-
-def _group(loc: Loc, slot: _Slot, value: Mapping[str, Any]) -> type[BaseModel] | None:
-    """
-    The group whose fields ``value`` at ``loc`` gives, of a union the
-    alternative its tag names; ``None`` if the type at the place is neither
-    a group nor a union of groups.
-    """
-    tp, _ = field_types.optional(slot.annotation)
-    if field_types.is_group(tp):
-        return tp
     if (union := alternatives(slot.annotation, slot.discriminator)) is None:
-        return None
+        return field_types.optional(slot.annotation)[0]
     tag, groups = union
     if tag not in value:
         raise _refused(
@@ -335,36 +261,41 @@ def validated(
     read: Callable[[Ref], Any] | None = None,
 ) -> Any:
     """
-    ``value`` of the field ``name`` of ``model``, validated once, whole (see
+    ``value`` of the field ``name`` of ``model``, validated by its field (see
     :func:`~ess.spec.field_types.model_of`): each row of a list field by its
     element type.
 
     With ``read`` ``None``, ``value`` is as a binding takes it, data. Else it
-    is as a record holds it: the JSON form of each place given inline, and a
-    reference at each other place. Each reference, at any depth, is replaced
-    by the data ``read`` gives for it, and the result validated whole, so
-    that every validator of every group in it runs once, with all its fields
-    at hand. It is validated in Python mode with ``strict=False``: a strict
-    model takes an enum from its string only from JSON, and the request phase
-    has already validated each place given inline from its JSON form, with
-    the model's strictness (see :func:`~ess.spec.field_types.inline`).
-    Raises :class:`~ess.spec.refs.ParamsError` at the place of each problem.
+    is as a record holds it: the JSON form of a value given inline, and a
+    reference at a parameter or an element of a list parameter. Each
+    reference is replaced by the data ``read`` gives for it, and the value
+    made of the result. A value given inline was validated when the request
+    was submitted, and its JSON form reads back as it, so this fails only
+    for the data of a reference, such as a dataset model whose validator
+    refuses the local path. It is validated in Python mode with
+    ``strict=False``: a strict model takes an enum from its string only from
+    JSON, and the request phase has already validated each value given
+    inline from its JSON form, with the model's strictness (see
+    :func:`~ess.spec.field_types.inline`). Raises
+    :class:`~ess.spec.refs.ParamsError` at the place of each problem, with
+    the position inside the value that pydantic gives.
     """
     one = field_types.model_of(model, name)
     if read is not None:
         value = map_refs({name: value}, read)[name]
     strict = False if read is not None else None
 
-    def check(loc: Loc, slot: _Slot, v: Any) -> Any:
+    def check(loc: Loc, v: Any) -> Any:
         try:
             return getattr(one.model_validate({name: v}, strict=strict), name)
         except ValidationError as error:
-            raise _at(loc, slot, error) from None
+            raise ParamsError(
+                ((*loc, *e['loc'][1:]), e['msg']) for e in error.errors()
+            ) from None
 
-    slot = _Slot(model, name)
-    if slot.is_list:
-        return [check((name, i), slot.one, v) for i, v in enumerate(value)]
-    return check((name,), slot, value)
+    if field_types.is_list(model, name):
+        return [check((name, i), v) for i, v in enumerate(value)]
+    return check((name,), value)
 
 
 def _at(loc: Loc, slot: _Slot, error: ValidationError) -> ParamsError:
@@ -375,36 +306,13 @@ def _at(loc: Loc, slot: _Slot, error: ValidationError) -> ParamsError:
     which is left out, ``beam_centre.tolerance``, so that the place is the
     same whichever way the alternative is chosen.
     """
-    return ParamsError(
-        (_place(loc, slot, e['loc'][1:]), e['msg']) for e in error.errors()
-    )
+    union = alternatives(slot.annotation, slot.discriminator)
+    tags = {} if union is None else union[1]
 
+    def place(inner: Loc) -> Loc:
+        return (*loc, *(inner[1:] if inner and inner[0] in tags else inner))
 
-def _place(loc: Loc, slot: _Slot, inner: Loc) -> Loc:
-    """
-    The place ``inner`` inside a value at ``loc`` of the type ``slot``, as
-    pydantic gives it, without the tag after each union place. A position
-    that is not a place, such as a field that a group lacks, is kept as it
-    is.
-    """
-    rest = list(inner)
-    while rest:
-        if slot.is_list and isinstance(rest[0], int):
-            slot, loc = slot.one, (*loc, rest.pop(0))
-            continue
-        tp, _ = field_types.optional(slot.annotation)
-        if field_types.is_group(tp):
-            group = tp
-        elif (
-            union := alternatives(slot.annotation, slot.discriminator)
-        ) is not None and rest[0] in union[1]:
-            group = union[1][rest.pop(0)]
-        else:
-            break
-        if not rest or rest[0] not in group.model_fields:
-            break
-        slot, loc = _Slot(group, str(rest[0])), (*loc, rest.pop(0))
-    return (*loc, *rest)
+    return ParamsError((place(e['loc'][1:]), e['msg']) for e in error.errors())
 
 
 def _inline(loc: Loc, slot: _Slot, value: Any) -> Any:
@@ -431,9 +339,9 @@ def _refused(loc: Loc, msg: str) -> ParamsError:
 @dataclass(frozen=True)
 class Value:
     """
-    A scalar, which a request writes inline, as JSON, or a data value, which
-    has no JSON form, and no request writes: a group that holds one is given
-    by reference only (see :func:`unwritten`).
+    A field of a group: a scalar, which a request writes inline, as JSON, or
+    a data value, which has no JSON form, and no request writes: a group that
+    holds one is given by reference only (see :func:`unwritten`).
     """
 
     type: Any  # without Annotated metadata
@@ -445,12 +353,12 @@ class Ways:
     """
     A group, a union of groups, or either typed ``X | None``: the ways a
     request writes it. ``inline`` holds the groups that a request writes as
-    an object of their fields, each a place: the alternatives of a union by
-    the value of its tag field ``tag``; a group by ``None``, unless it holds
-    a data value. ``record`` is the type that the data of a reference must
-    fit: an output's type, or for a dataset model, which a request gives by
-    reference to a dataset only, the model; ``None`` for a union and for a
-    group that holds a dataset model, which no reference fits.
+    an object of their fields: the alternatives of a union by the value of
+    its tag field ``tag``; a group by ``None``, unless it holds a data value.
+    ``record`` is the type that the data of a reference must fit: an
+    output's type, or for a dataset model, which a request gives by
+    reference to a dataset only, the model; ``None`` for a union, which no
+    reference fits.
     """
 
     tag: str | None
@@ -466,8 +374,9 @@ type Place = Value | Ways
 @dataclass(frozen=True)
 class Rows:
     """
-    A list whose elements are places, each as ``element`` describes it, and
-    ``metadata``, the constraints of the list, such as its length.
+    A list whose elements are places, or of a field of a group, scalars, each
+    as ``element`` describes it, and ``metadata``, the constraints of the
+    list, such as its length.
     """
 
     element: Place
@@ -477,9 +386,8 @@ class Rows:
 def place(model: type[BaseModel], name: str) -> Place | Rows:
     """
     What a request writes at the field ``name`` of ``model``, a parameter or
-    a field of a group (see the table in :mod:`ess.spec.places`); of a list
-    whose elements are places, :class:`Rows`. Raises ``ValueError`` as
-    :func:`alternatives` does.
+    a field of a group (see the table in :mod:`ess.spec.places`); of a list,
+    :class:`Rows`. Raises ``ValueError`` as :func:`alternatives` does.
     """
     info = model.model_fields[name]
     metadata = tuple(info.metadata)
@@ -515,8 +423,7 @@ def _described(annotation: Any, metadata: tuple[Any, ...]) -> Place:
             return Ways(tag, groups, None, none, metadata)
         if field_types.is_group(tp):
             inline = {} if unwritten(tp) is not None else {None: tp}
-            fits = field_types.is_dataset(tp) or not field_types.holds_dataset(tp)
-            return Ways(None, inline, tp if fits else None, none, metadata)
+            return Ways(None, inline, tp, none, metadata)
     return Value(tp, metadata)
 
 
@@ -625,36 +532,19 @@ def groups_at(model: type[BaseModel], name: str) -> list[type[BaseModel]]:
 
 
 @functools.cache
-def unwritten(
-    group: type[BaseModel], seen: frozenset[type[BaseModel]] = frozenset()
-) -> str | None:
+def unwritten(group: type[BaseModel]) -> str | None:
     """
-    The first field of ``group`` at which a request writes nothing, ``None``
-    aside, or ``None`` if there is none. Such a field is a data value, which
-    has no JSON form and takes no reference, or a group that holds a dataset
-    model and such a field; of a dataset model, its ``path``, since a request
-    gives a dataset model by reference to a dataset only. A group with such
-    a field is given by reference only. ``seen`` holds the groups looked
-    into already, so that a group at a place inside itself ends.
+    The first field of ``group`` that a request does not write, or ``None``
+    if there is none: a data value, a field without a JSON form; of a dataset
+    model, its ``path``, since a request gives a dataset model by reference
+    to a dataset only. A group with such a field is given by reference only.
     """
     if field_types.is_dataset(group):
         return 'path'
-    seen = seen | {group}
-    for name in group.model_fields:
-        tp, _ = field_types.optional(_Slot(group, name).one.annotation)
-        if field_types.is_dataset(tp):
-            continue
-        if groups := groups_at(group, name):
-            (inner,) = groups  # a field of a group is never a union
-            if (
-                field_types.holds_dataset(inner)
-                and inner not in seen
-                and unwritten(inner, seen) is not None
-            ):
-                return name
-        elif not field_types.has_json_form(group, name):
-            return name
-    return None
+    return next(
+        (n for n in group.model_fields if not field_types.has_json_form(group, n)),
+        None,
+    )
 
 
 def ref_types(
@@ -662,20 +552,10 @@ def ref_types(
 ) -> list[tuple[Loc, Ref, Any]]:
     """
     Each reference in ``params``, by name, as a record holds them, with its
-    place and the type at the place, with ``| None`` removed: the type of the
-    data it must fit.
+    place, a parameter or an element of a list parameter, and the type at the
+    place, with ``| None`` removed: the type of the data it must fit.
     """
-    found = []
-    for loc, ref in iter_refs(params):
-        name, *keys = loc
-        slot, value = _Slot(model, str(name)), params[str(name)]
-        for i, key in enumerate(keys):
-            if isinstance(key, int):
-                slot = slot.one
-            else:
-                if (group := _group(loc[: i + 1], slot, value)) is None:
-                    raise _refused(loc, f'{ref} is not at a place')
-                slot = _Slot(group, key)
-            value = value[key]
-        found.append((loc, ref, field_types.optional(slot.annotation)[0]))
-    return found
+    return [
+        (loc, ref, field_types.value_type(model.model_fields[str(loc[0])].annotation))
+        for loc, ref in iter_refs(params)
+    ]

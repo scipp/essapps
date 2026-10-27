@@ -49,22 +49,19 @@ def test_i2_beam_centre_typed_in_or_computed(client: Client, measure: Measure) -
     can = measure(620, [1.0, 1.0])
     finder = client.compute(FIND_CENTRE, params={'direct_beam': direct_beam})
     t611 = client.compute(CONTRIBUTE, params={'sample': sample})
-    computed = client.accumulator(
-        Template(
-            CENTRED_MULTI,
-            params={'centre': finder.ref('centre')},
-            blanks=('sample', 'can'),
+    transmission = t611.ref('transmission')
+    computed, typed = (
+        client.accumulator(
+            Template(
+                CENTRED_MULTI,
+                params={'centre': centre, 'transmission': transmission},
+                blanks=('sample', 'can'),
+            )
         )
-    )
-    typed = client.accumulator(
-        Template(
-            CENTRED_MULTI, params={'centre': Centre(x=1.0)}, blanks=('sample', 'can')
-        )
+        for centre in (finder.ref('centre'), Centre(x=1.0))
     )
     for accumulator in (computed, typed):
-        accumulator.push(
-            sample=[{'file': sample, 'transmission': t611.ref('transmission')}]
-        )
+        accumulator.push(sample=[sample])
         accumulator.push(can=[can])
 
     assert client.output(finder, 'centre') == Centre(x=1.0)
@@ -76,25 +73,22 @@ def test_i2_beam_centre_typed_in_or_computed(client: Client, measure: Measure) -
     assert client.provenance(typed).request.params['centre'] == {'x': 1.0}
 
 
-def test_i3_a_transmission_computed_for_each_run(
+def test_i3_a_transmission_computed_for_the_summed_runs(
     client: Client, measure: Measure
 ) -> None:
     runs = [measure(611, [1.0, 3.0]), measure(612, [4.0, 4.0])]
     can = measure(620, [1.0, 1.0])
-    # transmissions 1/4 and 1/2
-    t611, t612 = (client.compute(CONTRIBUTE, params={'sample': run}) for run in runs)
+    t = client.compute(CONTRIBUTE, params={'sample': measure(630, [1.0, 3.0])})
     total = client.accumulator(
         Template(
-            CENTRED_MULTI, params={'centre': Centre(x=0.0)}, blanks=('sample', 'can')
+            CENTRED_MULTI,
+            params={'centre': Centre(x=0.0), 'transmission': t.ref('transmission')},
+            blanks=('sample', 'can'),
         )
     )
-    total.push(
-        sample=[
-            {'file': run, 'transmission': t.ref('transmission')}
-            for run, t in zip(runs, (t611, t612), strict=True)
-        ]
-    )
+    total.push(sample=runs)
     total.push(can=[can])
 
-    assert client.output(total, 'centred').values.tolist() == [1.25, 1.75]
-    assert client.provenance(total).records() == [t611, t612]
+    # ([1, 3] + [4, 4]) / 4 - [1, 1]
+    assert client.output(total, 'centred').values.tolist() == [0.25, 0.75]
+    assert client.provenance(total).records() == [t]

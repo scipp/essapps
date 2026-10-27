@@ -66,15 +66,13 @@ class SumRunsParams(BaseModel):
     runs: list[SampleRun] = Field(min_length=1)
 
 
-class ScaledRun(BaseModel):
-    """A run and its scale: a group that holds a dataset model."""
-
-    file: SampleRun
+class Scale(BaseModel):
     factor: float = 1.0
 
 
 class ScaleParams(BaseModel):
-    sample: ScaledRun
+    sample: SampleRun
+    scale: Scale = Field(default_factory=Scale)
 
 
 class ValueOutputs(BaseModel):
@@ -126,8 +124,7 @@ def normalize(params: NormalizeParams) -> ValueOutputs:
 
 
 def scale(params: ScaleParams) -> ValueOutputs:
-    run = params.sample
-    return ValueOutputs(value=run.factor * read_dataset(run.file.path))
+    return ValueOutputs(value=params.scale.factor * read_dataset(params.sample.path))
 
 
 LAST_CAN = LastBefore(Selector(role='can'))
@@ -353,8 +350,8 @@ def _rule(template: Template, at: str, **kw: Any) -> Rule:
             'a series fills a list parameter, not sample',
         ),
         (
-            _rule(Template(SCALE, blanks=('sample',)), 'sample'),
-            'sample is not a parameter of a dataset model',
+            _rule(Template(SCALE, blanks=('scale',)), 'scale'),
+            'scale is not a parameter of a dataset model',
         ),
     ],
     ids=['selector', 'lookup-selector', 'list', 'series', 'not-a-dataset-model'],
