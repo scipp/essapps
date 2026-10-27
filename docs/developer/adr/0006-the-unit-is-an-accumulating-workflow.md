@@ -50,36 +50,35 @@ So no later submission can reference it ([ADR 0002](0002-a-value-lives-while-som
 This is why no wait goes round in a circle ([ADR 0003](0003-accumulators-add-in-place.md)).
 
 **What the framework sees is flat.**
-A row is what the reduction repeats per run: a run, or a group that holds a run and the values given next to it, such as that run's own transmission run.
+A row is what the reduction repeats: a dataset reference to a run, or a group written inline, such as a time slice.
 Structure below a row, such as detector banks, belongs to the driver, so that the per-run work runs once per row, not once per bank.
 The framework cannot tell a bank index from a per-run value, so nothing checks this rule for workflow authors.
 Records, checks, pushes, and the forms of apps stay the same for every technique.
 
 **Two examples.**
 *One table of groups.*
-Suppose each sample run had its own transmission run, unlike in esssans, given to `IOFQ` with the parameter `sample: Sample`:
+A slicing reduction sums the events of one run within each time slice, a group of the slice's start and stop:
 
 ```python
-class Sample(BaseModel):
-    file: Path                   # the sample run's file
-    transmission: Path           # the file of its transmission run
+class TimeRange(BaseModel):
+    start: float                 # s after the run's start
+    stop: float
+
+class SlicesParams(IofQSettings):        # the settings that IofQParams has too
+    sample: Sample                       # Sample, Can: dataset models
+    can: Can
+    time_range: list[TimeRange] = Field(min_length=1)
+
+SLICES = WorkflowSpec(name='sans-slices', version=1, title='I(Q) of time slices', description='...',
+                      params=SlicesParams, outputs=IofQOutputs, tables=('time_range',))
+acc = client.accumulator(Template(SLICES, params={'sample': dataset(run=611), 'can': dataset(run=614)},
+                                  blanks=('time_range',)))
+acc.push(time_range=[TimeRange(start=0, stop=60)])
+acc.push(time_range=[TimeRange(start=60, stop=120)])
 ```
 
-In the multi-run spec, each row of the table `sample` is such a group.
-So the two are in one row, and one push gives both to the driver.
+Start and stop of a slice are in one row, so one push gives both to the driver.
 Two tables of their own could be paired wrongly.
-
-```python
-class IofQMultiParams(IofQSettings):     # the settings that IofQParams has too
-    sample: list[Sample] = Field(min_length=1)
-    can: list[Can] = Field(min_length=1)       # Can: a group of the run's file: Path
-
-IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title='I(Q) of summed runs', description='...',
-                          params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
-iofq = client.accumulator(Template(IOFQ_MULTI, params={'can': cans}, blanks=('sample',)))  # can runs fixed
-iofq.push(sample=[{'file': dataset(run=611), 'transmission': dataset(run=610)}])
-iofq.push(sample=[{'file': dataset(run=613), 'transmission': dataset(run=612)}])
-```
 
 *Two independent tables.*
 Sample and can runs are two blanks, pushed as they arrive.
@@ -91,11 +90,17 @@ So a driver over esssans cannot sum the can runs on their own.
 Masks per run type would fix this in esssans.
 
 ```python
-iofq = client.accumulator(Template(IOFQ_MULTI, blanks=('sample', 'can')))
-iofq.push(sample=[{'file': dataset(run=611), 'transmission': dataset(run=610)}])
-iofq.push(can=[{'file': dataset(run=614)}])
-iofq.push(sample=[{'file': dataset(run=613), 'transmission': dataset(run=612)},
-                  {'file': dataset(run=615), 'transmission': dataset(run=616)}])   # one push, one state
+class IofQMultiParams(IofQSettings):     # IofQSettings holds the transmission, one for all sample runs
+    sample: list[Sample] = Field(min_length=1)
+    can: list[Can] = Field(min_length=1)
+
+IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title='I(Q) of summed runs', description='...',
+                          params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
+iofq = client.accumulator(Template(IOFQ_MULTI, params={'transmission': t.ref('transmission')},
+                                   blanks=('sample', 'can')))
+iofq.push(sample=[dataset(run=611)])
+iofq.push(can=[dataset(run=614)])
+iofq.push(sample=[dataset(run=613), dataset(run=615)])   # one push, one state
 ```
 
 ## Alternatives considered

@@ -78,33 +78,36 @@ factories in another under the same name, are the natural fit for the
 requirement above and are expected to become the convention once the first
 service adopts this spec.
 
-### Params inline or by reference
+### Params written inline or given by reference
 
 A request goes through two phases. The *request phase* is what the client and
 the backend do with a request before any data is read: validate, log, record,
 pin. The *call phase* starts when the backend reads data for the binding.
 
 A field of the params model is a *parameter*. A request gives each value in one
-of two forms: *inline* or *by reference*. An *inline value* is the value itself
-in the request; the record holds its JSON form. A *reference* names data that
-exist elsewhere: a dataset, an output of a record, or an output of an
-accumulator. In the request phase a value given by reference is the reference;
-in the call phase it is the data. The params model types the call phase only.
-The backend reads each reference and builds the params instance from the inline
-values and the data, so every field of it holds the type it declares. The
-binding gets that instance: `compute(params) -> outputs`.
+of two forms: *written inline* or *given by reference*. A value written inline
+is the value itself in the request; the record holds its JSON form. A
+*reference* names data that exist elsewhere: a dataset, an output of a record,
+or an output of an accumulator. In the request phase a value given by reference
+is the reference; in the call phase it is the data. The params model types the
+call phase only. The backend reads each reference and builds the params
+instance from the values written inline and the data, so every field of it
+holds the type it declares. The binding gets that instance:
+`compute(params) -> outputs`.
 
 | Model | Holds | In a request | When the workflow runs |
 |---|---|---|---|
-| params | everything the workflow takes: settings, files, data | each value given inline or by reference | the values, and the data the references name |
+| params | everything the workflow takes: settings, files, data | each value written inline or given by reference | the values, and the data the references name |
 | outputs | results | (none) | the data the workflow returns |
 
 Which form a value takes is the request's choice, at each *root place*, since
 the same value is typed in by one user and computed by another: a beam centre
 is typed in, or found by a first reduction; the time slices of a slicing
 reduction are typed in, or found from a log. A root place is the value of a
-parameter, or an element of a list parameter. The type at a root place decides
-which forms it accepts, with `| None` removed. A type has a *JSON form* when
+parameter, or an element of a list parameter. A *place* is any position in the
+params, named by its path, such as `reduction.bins`; a field of a group is a
+place, not a root place. The type at a root place decides which forms it
+accepts, with `| None` removed. A type has a *JSON form* when
 pydantic makes a JSON schema of it with its model's config. A value
 *round-trips* when its JSON form reads back as the value.
 
@@ -118,15 +121,17 @@ pydantic makes a JSON schema of it with its model's config. A value
 
 **Only the first level is interpreted.** A *group* is a pydantic model, written
 as an object of its fields; a `RootModel` is not a group. Each parameter is a
-group, a union of groups, or a list of one, possibly typed `X | None`. A field
-of a group is a *scalar*, `int`, `float`, `str`, `bool`, `datetime`, an enum,
-or a `Literal`, possibly constrained, such as `Annotated[float, Gt(0)]`, or a
-list of scalars. A field is never typed `X | None`. A *data value* is a field
-without a JSON form, such as a scipp array. No request can write it, so a group
-with a data value is given by reference to an output only, and its other fields
-may be of any type that an output may hold. The framework looks no deeper.
+group, a union of groups, or a list of one, possibly typed `X | None`. A
+*scalar* is an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a
+`Literal`, possibly constrained, such as `Annotated[float, Gt(0)]`. A *data
+value* is a field without a JSON form, such as a scipp array, which no request
+can write. The fields of a group without a data value are scalars or lists of
+scalars, never typed `X | None`. A group with a data value is given by
+reference to an output only; of its other fields, the framework refuses only a
+`Path`, a dataset model, a `NewType`, or a type alias, since no output could
+fill them. The framework looks no deeper.
 
-This buys three things:
+This buys two things:
 
 - No group written inline holds a reference, so each is validated whole when
   the request arrives, and every validator of the group runs then, with all
@@ -144,14 +149,11 @@ This buys three things:
   | a list | rows, added and edited; each row the widget of its element |
   | `X \| None` | a toggle over the widget of `X` |
 
-- A `PipelineBinding` keys each parameter by its class, so a group is one
-  sciline key.
-
 A value of several parts is a group, a parameter of its own:
 `range: WavelengthRange`, not `limits: tuple[float, float]`. A value that a
-request may leave out is a parameter typed `X | None`, or a `bool` field of a
-group, such as `limit_range: bool` next to `start` and `stop`. Why a choice
-between ways is a union, and what `X | None` means, is
+workflow may go without is a parameter typed `X | None`, or a `bool` field of a
+group, such as `limit_range: bool` next to `start` and `stop`. Which of the
+two, why a choice between modes is a union, and what `X | None` means, is
 [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
 **Files are dataset models.** A file is a parameter, or the element of a list
@@ -172,8 +174,8 @@ let a picker offer only the datasets that fit. A field of the model for a
 metadata value, such as the run number, waits for a workflow that needs it.
 
 **References stand for whole groups.** A number or a scipp array names no role:
-every output of its type fits a place of that type, so a UI that offers the
-outputs that fit would list every number, or every array, that any record
+every output of its type fits a root place of that type, so a UI that offers
+the outputs that fit would list every number, or every array, that any record
 holds. A group names its role by its class. So a value that another workflow
 computes comes as a group, which that workflow outputs, such as a found beam
 centre, and a data value is a field of a group, such as
@@ -192,11 +194,11 @@ JSON form is an object with the key `@ref`, which names its kind:
 {"@ref": "output", "record": "r17", "output": "slices", "key": "2"}
 ```
 
-The key `@ref` is reserved at every depth: an object with it is a reference.
-So a framework finds the references of a request without the spec, as a remote
-client that holds only the serialized spec must, and an inline value never
-reads as a reference. With the spec, the framework refuses a reference inside
-a group written inline, and a default whose JSON form holds the key.
+The key `@ref` is reserved at every depth: an object with it is a reference. So
+a framework finds the references of a request without the spec, as a remote
+client that holds only the serialized spec must, and a value written inline
+never reads as a reference. With the spec, the framework refuses a reference
+inside a group written inline, and a default whose JSON form holds the key.
 
 The identity string of a `DatasetRef` is opaque to the spec and interpreted
 only by the framework that minted it, which makes it self-describing where it
@@ -221,9 +223,10 @@ a root place that takes one role only is typed by that role's class. A framework
 checks fit in the request phase, so that a chain of requests is refused before
 anything runs. `ess.spec.field_types.fits` states the rule.
 
-A root place takes a file or an output of another workflow, not either. A value
-that some users read from a file and others compute is a group given by
-reference, and a workflow that reads the file outputs the group.
+A root place takes a file or an output of another workflow, as its type says;
+never a choice between the two. A value that some users read from a file and
+others compute is a group given by reference, and a workflow that reads the
+file outputs the group.
 
 ```python
 class Sample(DatasetModel, kind='raw'): ...       # the file of a sample run
@@ -232,7 +235,7 @@ class Can(DatasetModel, kind='raw'): ...
 class Reduction(BaseModel):                       # a group of scalars
     bins: int = 2
 
-class BeamCentre(BaseModel):                      # inline, or a finder's output
+class BeamCentre(BaseModel):                      # written inline, or a finder's output
     x: float = 0.0
     y: float = 0.0
 
@@ -262,7 +265,7 @@ is the record of a transmission reduction:
 
 ```python
 runs = {'sample': dataset(run=60339), 'can': dataset(run=60338), 'transmission': t.ref('transmission')}
-client.submit(IOFQ, params={**runs, 'beam_centre': BeamCentre(x=0.012, y=-0.003)})  # inline
+client.submit(IOFQ, params={**runs, 'beam_centre': BeamCentre(x=0.012, y=-0.003)})  # written inline
 client.submit(IOFQ, params={**runs, 'beam_centre': finder.ref('centre')})          # a reference
 ```
 
@@ -275,8 +278,11 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
   typed `X | None`. A list parameter is not typed `list[X] | None`, since a
   list without rows is `[]`, and its element is not typed `X | None`, since
   each row is a value.
-- A field of a group without a data value is a scalar or a list of scalars,
-  never typed `X | None`.
+- The fields of a group without a data value are scalars or lists of
+  scalars, never typed `X | None`. A group with a data value is given by
+  reference to an output only; of its other fields, the framework refuses
+  only a `Path`, a dataset model, a `NewType`, or a type alias, since no
+  output could fill them.
 - A dataset model holds only `path`, as `DatasetModel` declares it; a field
   validator of `path` is allowed. A `Path` outside a dataset model is refused.
 - Each output's type is a type, possibly typed `X | None`, or a list or a dict
@@ -290,7 +296,7 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
   callable. The tag field of each alternative is a `Literal` of one string,
   its own, such as `Literal['find']`, without an alias. A union that holds a
   group holds groups only: a value of a type that is not a group has no tag.
-  No alternative has a data value: a request writes a union inline.
+  No alternative has a data value: a request writes a union inline only.
 - A group has no serializers, computed fields, or aliases, which would make
   its JSON form differ from the object of its fields. It may have field and
   model validators of any mode.
@@ -321,16 +327,16 @@ and the detector can reach, is the binding's or the driver's, and fails when
 the request runs. A binding may run the model validators,
 `IofQParams.model_validate(dict(params))`, where it has the whole instance.
 
-A request that leaves out a parameter, or a field of a group, never leaves out
-a correction that a correct reduction needs. The default of `reduction` is a
-setting. The can run has no default, so a request or a template that leaves it
-out is refused. A correction that a correct reduction needs, but that a
-request may still leave out, is typed `X | None` with no default, such as
-`direct_beam: DirectBeam | None`: the request writes `None`, and its record
-says so. The output is I(Q) either way, and the params of its record say
-which corrections were applied. A step whose omission changes what a
-reader of the output must do with it, such as a normalization without which
-I(Q) is in counts, makes another output type, and so another spec. What
+A request that leaves out a parameter, or a field of a group, so that it takes
+its default, never skips a correction that a correct reduction needs. The
+default of `reduction` is a setting. The can run has no default, so a request
+or a template that leaves it out is refused. A correction that a correct
+reduction needs, but that a request may still go without, is typed `X | None`
+with no default, such as `direct_beam: DirectBeam | None`: the request writes
+`None`, and its record says so. The output is I(Q) either way, and the params
+of its record say which corrections were applied. A step whose omission changes
+what a reader of the output must do with it, such as a normalization without
+which I(Q) is in counts, makes another output type, and so another spec. What
 `None` means, and when a union names the ways instead, is
 [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
@@ -382,11 +388,12 @@ declaration or in a unit field beside it, as the edges models do; a data value
 carries its own unit.
 
 A *table* is a list parameter whose *rows* an accumulator takes a push at a
-time, such as the sample runs. Each row is a root place, given inline or by
-reference, as its type allows. The rows of a table are distinct. A *single-run spec* takes one
-run per parameter. A *multi-run spec* of the same reduction takes a table in
-place of such a parameter. Its params model is a plain model, and the fields
-the two models have in common are shared by inheritance:
+time, such as the sample runs. Each row is a root place, written inline or
+given by reference, as its type allows. The rows of a table are distinct. A
+*single-run spec* takes one run per parameter. A *multi-run spec* of the same
+reduction takes a table in place of such a parameter. Its params model is a
+plain model, and the fields the two models have in common are shared by
+inheritance:
 
 ```python
 class IofQSettings(BaseModel):
@@ -406,28 +413,29 @@ IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title=..., descript
                           params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
 ```
 
-Each table is a `list` of the single-run type, without a default, so a
-request gives every table, `[]` for one without rows, and a template that
-forgets a table is refused. `Field(min_length=1)` states that a table needs a
-row. The model states the length constraints, so that the model, its schema, and the
-backend agree that the table has a row. The field `tables` of `WorkflowSpec`
-is a tuple of the names of the tables. A list parameter makes a table only when
+Each table is a `list` of the single-run type, without a default, so a request
+gives every table, `[]` for one without rows, and a template that forgets a
+table is refused. `Field(min_length=1)` states that a table needs a row. The
+model states the length constraints, so that the model, its schema, and the
+backend agree that the table has a row. The field `tables` of `WorkflowSpec` is
+a tuple of the names of the tables. A list parameter makes a table only when
 `tables` names it. A spec whose outputs differ from those of a single-run spec,
 such as a stitch of all angles, or that has no single-run spec, such as a sum
 of counts over the runs of a scan, is written the same way:
 `runs: list[Run] = Field(min_length=1)`, with `tables=('runs',)` and `Run` a
 dataset model.
 
-The runs of one sum are reduced with one set of settings, the parameters next
-to the tables, such as one transmission for the summed sample runs. A value
-that differs per run, such as a motor position, is in the run's file. A row of
-a table of a dataset model is a dataset reference only, so runs that need
-different values that their files lack are different requests.
+A value that differs per run, such as a motor position, is in the run's file.
+A row of a table of runs is a dataset reference and nothing else. A value that
+differs between runs, such as a thickness, makes the runs separate requests; a
+value shared by all runs of a request is a parameter, such as one transmission
+for the summed sample runs (see the alternative "A dataset model at a field of
+a group").
 
 The framework compares rows whole, as the record holds them. For a table whose
-element type has a JSON form and is not a dataset model, it also compares the rows read, so that a time slice is never summed
-twice (the essapps README, `docs/developer/README.md`, section Stages and
-accumulators).
+rows a request may write inline, it also compares the rows read, so that a time
+slice is never summed twice (the essapps README, `docs/developer/README.md`,
+section Stages and accumulators).
 
 With one row in each table, a request of the multi-run spec is a request of the
 single-run spec. `ess.spec.testing.check_one_row` checks that a package's
@@ -493,16 +501,15 @@ semantics (`name`, `version`, `title`, `description`, `params`, `outputs`) are
 those of esslivedata's for exactly this reason, and esslivedata already
 declares outputs as a model class with title and description as field metadata.
 
-esslivedata's params model holds settings only, each given inline: its specs
-are the special case of this one in which every value is given inline, so a
+esslivedata's params model holds settings only, each written inline: its specs
+are the special case of this one in which every value is written inline, so a
 request may give their params as an instance of the model. Its data arrive as
 streams, which this spec does not model. A value that changes during a stream,
 such as a motor position, arrives on a stream of its own and is set as a
 *context key* of `StreamProcessor`, never taken from the params; here, such a
-value comes with the run. esslivedata's outputs are
-`sc.DataArray` fields with default-factory templates used for plotter
-selection. Here each output has a type of its own, such as the group `IofQ`,
-with no template.
+value comes with the run. esslivedata's outputs are `sc.DataArray` fields with
+default-factory templates used for plotter selection. Here each output has a
+type of its own, such as the group `IofQ`, with no template.
 
 The import edge is small: essspec depends only on pydantic, and the esslivedata
 dashboard is decoupled via the serialized-spec announcement, not via imports.
@@ -540,7 +547,7 @@ output, and dims and units of an output for a UI.
   came from, or a spec per form; and moving a field between the models breaks
   every client.
 - **Inputs that also take a value inline.** Keeps two models, but the inputs
-  then hold inline values, which removes the reason for two.
+  then hold values written inline, which removes the reason for two.
 - **A constant spec per typed value**, which outputs the value typed in, for a
   request to reference. Needs no framework change, but a submission per typed
   value.
@@ -552,8 +559,8 @@ output, and dims and units of an output for a UI.
   holds a reference where its type says a group, and every validator runs on
   references in the request phase.
 - **Every value tagged**, `{"value": ...}` and `{"ref": ...}`. Unambiguous
-  without a reserved key, but every inline value in requests, the log, and
-  esslivedata's params gets a wrapper.
+  without a reserved key, but every value written inline in requests, the log,
+  and esslivedata's params gets a wrapper.
 - **`$ref` as the key of a reference.** It is the JSON Schema keyword for a
   reference within a schema, so a reference held in a schema, as a default or
   an example, would be read as one.
@@ -575,29 +582,29 @@ output, and dims and units of an output for a UI.
   the groups, and two parameters of one type need `keys=` for distinct sciline
   keys.
 - **A field of a group of any type with a JSON form**, such as
-  `limits: tuple[float, float]` or `scales: dict[str, float]`, given inline
+  `limits: tuple[float, float]` or `scales: dict[str, float]`, written inline
   as one value. A form has no widget for it, and no spec needs one: its parts
   are the fields of a group, a parameter of its own.
-- **Any place at any depth inline or by reference**: groups inside groups,
-  unions and `X | None` at fields, each field a place of its own. A group with
-  a reference inside cannot be validated whole when the request arrives, so it
-  is checked field by field, and its validators run only once the data are
-  read, in the call phase. The framework recurses over places, with cycle
-  detection, and a form nests widgets. The cases found in the requirements
-  and the ess reduction packages are written with parameters of their own, or
-  as separate requests, at the cost of prefixed names, such as for the
-  settings of each of several He3 cells.
+- **Any place at any depth written inline or given by reference**: groups
+  inside groups, unions and `X | None` at fields, each field a place of its
+  own. A group with a reference inside cannot be validated whole when the
+  request arrives, so it is checked field by field, and its validators run only
+  once the data are read, in the call phase. The framework recurses over
+  places, with cycle detection, and a form nests widgets. The cases found in
+  the requirements and the ess reduction packages are written with parameters
+  of their own, or as separate requests, at the cost of prefixed names, such as
+  for the settings of each of several He3 cells.
 - **A file as a `Path` field of a group**, given by reference to a dataset.
   A group that holds a file then has a reference inside, and a picker cannot
   tell which kind of dataset a field takes.
 - **A dataset model at a field of a group**, such as
-  `Sample(run: SampleRun, thickness: float)`, so that a table holds runs each
-  with settings of its own. The group could be validated at submission with an
-  unvalidated stand-in for the dataset, but a validator of the group that
-  reads the path would check the stand-in, never the local path, and batch and
-  rules would name places inside groups. An output reference cannot be handled
-  so, since its record may be pending at submission. Left out until a workflow
-  needs it; adding it later breaks nothing.
+  `SampleSettings(run: SampleRun, thickness: float)`, so that a table holds
+  runs each with settings of its own. The group could be validated at
+  submission with an unvalidated stand-in for the dataset, but a validator of
+  the group that reads the path would check the stand-in, never the local path,
+  and batch and rules would name places inside groups. An output reference
+  cannot be handled so, since its record may be pending at submission. Left out
+  until a workflow needs it; adding it later breaks nothing.
 - **A reference to a whole list** filling a list parameter. The table rules,
   such as distinct rows, could then be checked only in the call phase.
 - **`@ref` reserved at root places only**, plain data deeper. A reference

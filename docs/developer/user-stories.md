@@ -780,7 +780,7 @@ System story only; see [system-stories.md](system-stories.md).
 
 ## I. Values typed in or computed
 
-One user types a value in and another computes it; the request gives each value, or each row, inline or by reference.
+A value is typed in by one user and computed by another, or computed by an earlier request; the request writes each value, or each row, inline or gives it by reference.
 
 ### I1. Time slices found by a first reduction
 
@@ -837,8 +837,8 @@ assert client.provenance(typed).request.params['centre'] == {'x': 1.0}
 ```
 
 Both drivers get a `Centre`; neither sees whether it was typed in or computed.
-The record of the typed-in centre holds the inline value in its JSON form, and that of the computed one holds the reference, so its provenance reaches the finder.
-Both accumulators give the transmission by reference to `t611`, as in I3.
+The record of the typed-in centre holds the value written inline in its JSON form, and that of the computed one holds the reference, so its provenance reaches the finder.
+Both accumulators give the transmission by reference, as in I3.
 `IOFQ`'s `beam_centre`, a `BeamCentre`, has a field that is a data value, so it takes a reference only (C1).
 
 ### I3. A transmission computed for the summed runs

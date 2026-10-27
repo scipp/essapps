@@ -178,8 +178,8 @@ can: Run | None = None
     <div class="cell plain">
 <pre>client.submit(IOFQ, {
     **shared,
-    'sample': {'file': 611},
-    'can': {'file': 614},
+    'sample': 611,
+    'can': 614,
 })</pre>
       <div class="out">→ record</div>
     </div>
@@ -188,8 +188,8 @@ can: Run | None = None
       <div class="ctitle">stage <span>blanks: params, <b>replaced</b> per call</span></div>
 <pre>s = client.stage(Template(
     IOFQ,
-    {**shared, 'sample': {'file': 611},
-     'can': {'file': 614}},
+    {**shared, 'sample': 611,
+     'can': 614},
     blanks=('reduction',),
 ))
 client.submit(s, {'reduction': {'bins': 50}})
@@ -213,8 +213,8 @@ can: list[Run] = []
     <div class="cell plain">
 <pre>client.submit(IOFQ_MULTI, {
     **shared,
-    'sample': [{'file': 611}],
-    'can': [{'file': 614}],
+    'sample': [611],
+    'can': [614],
 })</pre>
       <div class="out">→ record</div>
     </div>
@@ -226,8 +226,8 @@ can: list[Run] = []
     shared,
     blanks=('sample', 'can'),
 ))
-acc.push('sample', [{'file': 611}])
-acc.push('can', [{'file': 614}])
+acc.push('sample', [611])
+acc.push('can', [614])
 client.output(acc, 'iofq')</pre>
       <div class="out">→ state n; a request reads it through a record of its plain request</div>
       <div class="s4"><b>order</b>: pushes into different tables commute</div>
@@ -296,18 +296,18 @@ client.output(acc, 'iofq')</pre>
 
 <span class="c"># each group of pushes on a new accumulator</span>
 
-submit(IOFQ, {**shared, 'sample': {'file': 611},
-                        'can': {'file': 614}})
+submit(IOFQ, {**shared, 'sample': 611,
+                        'can': 614})
 
 submit(IOFQ_MULTI, {**shared,                    <span class="c"># one-row</span>
-                    'sample': [{'file': 611}],
-                    'can': [{'file': 614}]})
+                    'sample': [611],
+                    'can': [614]})
 
-acc.push('sample', [{'file': 611}])              <span class="c"># arrival:</span>
-acc.push('can', [{'file': 614}])                 <span class="c"># state 2</span>
+acc.push('sample', [611])                        <span class="c"># arrival:</span>
+acc.push('can', [614])                           <span class="c"># state 2</span>
 
-acc.push('can', [{'file': 614}])                 <span class="c"># order:</span>
-acc.push('sample', [{'file': 611}])              <span class="c"># state 2</span></code></pre>
+acc.push('can', [614])                           <span class="c"># order:</span>
+acc.push('sample', [611])                        <span class="c"># state 2</span></code></pre>
     </div>
     <div>
       <div class="eyebrow" style="margin-bottom:6px">Not symmetric, on purpose</div>
@@ -455,15 +455,15 @@ acc.push('sample', [{'file': 611}])              <span class="c"># state 2</span
       <rect x="290" y="290" width="330" height="118" rx="4" style="fill: var(--plain-soft); stroke: var(--plain)"/>
       <text x="304" y="312" style="font-size:12px; font-weight:600">state 2 ≡ plain request (arrival)</text>
       <text x="304" y="334" class="mono" style="font-size:11px">submit(IOFQ_MULTI, {**shared,</text>
-      <text x="304" y="352" class="mono" style="font-size:11px">  'sample': [{'file': 611}],</text>
-      <text x="304" y="370" class="mono" style="font-size:11px">  'can':    [{'file': 614}]})</text>
+      <text x="304" y="352" class="mono" style="font-size:11px">  'sample': [611],</text>
+      <text x="304" y="370" class="mono" style="font-size:11px">  'can':    [614]})</text>
       <text x="304" y="396" style="font-size:11px; fill: var(--stage)">a record of this request; EXPORT reads it</text>
 
       <rect x="640" y="290" width="330" height="118" rx="4" style="fill: var(--plain-soft); stroke: var(--plain)"/>
       <text x="654" y="312" style="font-size:12px; font-weight:600">state 3 ≡ plain request (arrival)</text>
       <text x="654" y="334" class="mono" style="font-size:11px">submit(IOFQ_MULTI, {**shared,</text>
-      <text x="654" y="352" class="mono" style="font-size:11px">  'sample': [{'file': 611}, {'file': 612}],</text>
-      <text x="654" y="370" class="mono" style="font-size:11px">  'can':    [{'file': 614}]})</text>
+      <text x="654" y="352" class="mono" style="font-size:11px">  'sample': [611, 612],</text>
+      <text x="654" y="370" class="mono" style="font-size:11px">  'can':    [614]})</text>
       <text x="654" y="396" class="muted" style="font-size:11px">client.provenance(acc) reports this request</text>
 
       <text x="120" y="320" class="muted" style="font-size:11px">States 0 and 1 are</text>
@@ -493,8 +493,7 @@ acc.push('sample', [{'file': 611}])              <span class="c"># state 2</span
   <h2>A single-run and a multi-run spec over one per-run sciline graph</h2>
   <div class="cols">
     <div style="display:flex; flex-direction:column; gap:10px; min-width:0">
-<pre><code><span class="k-pkg">class</span> Run(BaseModel):                <span class="c"># a group, and a row of a table</span>
-    file: NexusFile
+<pre><code><span class="k-pkg">class</span> Run(DatasetModel): ...      <span class="c"># a dataset model, and a row of a table</span>
 
 <span class="k-pkg">class</span> IofQParams(BaseModel):         <span class="c"># single-run: one run of each kind</span>
     sample: Run
@@ -514,8 +513,8 @@ IOFQ_MULTI = WorkflowSpec(..., params=MultiIofQParams, outputs=IofQOutputs)
 
 <span class="c"># bindings: one per spec</span>
 single = PipelineBinding(IOFQ, sans,   <span class="c"># a sciline graph of ONE run of each kind</span>
-    params={<span class="k-stage">'sample.file'</span>: Filename[SampleRun],
-            <span class="k-stage">'can.file'</span>: Filename[BackgroundRun], ...},
+    params={<span class="k-stage">'sample'</span>: Filename[SampleRun],
+            <span class="k-stage">'can'</span>: Filename[BackgroundRun], ...},
     outputs={<span class="k-stage">'iofq'</span>: BackgroundSubtractedIofQ})
 multi = DriverBinding(IOFQ_MULTI, IofQDriver)   <span class="c"># sums each table's runs</span>
 client = local(..., bind=[single, multi])</code></pre>

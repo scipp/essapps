@@ -59,17 +59,17 @@ The framework is essapps (`ess.apps`) and essspec (`ess.spec`), in this reposito
 | spec | a workflow's name, version, params, and outputs |
 | params, outputs | the two models of a spec: everything the workflow takes, and its results (see Specs and bindings) |
 | parameter | a field of the params model |
-| inline value | the value itself in the request, such as `Reduction(bins=100)`; the record holds its JSON form. A request gives each value in one of two forms: inline, or by reference. A type has a *JSON form* when pydantic makes a JSON schema of it with the params model's config. |
+| written inline | a value written inline is the value itself in the request, such as `Reduction(bins=100)`; the record holds its JSON form. A request gives each value in one of two forms: written inline, or given by reference. A type has a *JSON form* when pydantic makes a JSON schema of it with the params model's config. |
 | reference | names data that exist elsewhere: a dataset, an output of a record, or an output of an accumulator. It stands for a whole group. |
 | group | a pydantic model, such as `Reduction`, the settings of one reduction step. A request writes a group as an object of its fields. A `RootModel` is not a group. |
 | root place | the value of a parameter, or an element of a list parameter: where a request writes a value or a reference. The type at a root place decides which (see Specs and bindings). |
 | place | a position in a request's params, named by its path, such as `reduction.bins` or `sample[2]`. A field of a group is a place, not a root place. |
-| scalar | an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a `Literal`, possibly with constraints, such as `Annotated[float, Gt(0)]`. A field of a group is a scalar or a list of scalars, which a request writes inline. |
+| scalar | an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a `Literal`, possibly with constraints, such as `Annotated[float, Gt(0)]`. The fields of a group without a data value are scalars or lists of scalars, which a request writes inline. |
 | data value | a field of a group without a JSON form, such as a scipp array. A group that holds one is given by reference to an output only. |
 | dataset model | a group that stands for a file: a subclass of `DatasetModel`, which holds only `path`, given by reference to a dataset only |
 | fits | a reference fits a root place when the data it names can be the value there (see References) |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
-| request | a spec and its params, each value given inline or by reference |
+| request | a spec and its params, each value written inline or given by reference |
 | request phase, call phase | the *request phase* is what the client and the backend do with a request before any data is read: validate, log, record, pin. The *call phase* starts when the backend reads data for the binding. |
 | logged | recorded by the backend in the proposal's *history*. `submit` and the other calls that start work return once logged. |
 | record | a request as the backend logged it. A record never changes, only its status. |
@@ -113,7 +113,7 @@ A spec has two pydantic models:
 
 | Model | Holds | In a request | When the workflow runs |
 |---|---|---|---|
-| params | everything the workflow takes: settings, files, data | each value given inline or by reference | the values, and the data the references name |
+| params | everything the workflow takes: settings, files, data | each value written inline or given by reference | the values, and the data the references name |
 | outputs | results | (none) | the data the workflow returns |
 
 ```python
@@ -126,7 +126,7 @@ class Can(DatasetModel, kind='raw'):              # the file of the empty-can ru
 class Reduction(BaseModel):                       # a group of scalars
     bins: int = 100
 
-class BeamCentre(BaseModel):                      # a group: inline, or an output of a first reduction
+class BeamCentre(BaseModel):                      # a group: written inline, or an output of a first reduction
     x: float = 0.0
     y: float = 0.0
 
@@ -152,10 +152,10 @@ IOFQ = WorkflowSpec(name='sans-iofq', version=1, title='I(Q)', description='...'
                     params=IofQParams, outputs=IofQOutputs)
 ```
 
-A request for `IOFQ` gives each parameter in one of two ways, written inline or by reference:
+A request for `IOFQ` gives each parameter in one of two ways, written inline or given by reference:
 
 ```python
-{'reduction': {'bins': 50},                       # inline: the group's JSON form
+{'reduction': {'bins': 50},                       # written inline: the group's JSON form
  'sample': dataset(run=611),                      # a reference to a dataset
  'can': dataset(run=614),
  'transmission': t611.ref('transmission')}        # a reference to an output of the record t611
@@ -177,10 +177,9 @@ The type at a root place decides which of the two it takes, with `| None` remove
 | a list, `list[X]` | `sample: list[Sample]` (see Combining runs: tables) | a list, each element a root place of type `X` | no |
 
 **Fields of a group.** The framework interprets the parameters and the fields of each group written inline, nothing deeper.
-A field of a group is a *scalar*, or a list of scalars.
-A scalar is an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a `Literal`, possibly constrained, such as `Annotated[float, Gt(0)]`.
+A *scalar* is an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a `Literal`, possibly constrained, such as `Annotated[float, Gt(0)]`.
+The fields of a group without a data value are scalars or lists of scalars, never typed `X | None`.
 A form shows an input for each, and a request writes it inline.
-A field of a group is never `X | None`.
 `WorkflowSpec` refuses any other field, with the fix:
 
 ```python
@@ -193,8 +192,7 @@ class Reduction(BaseModel):
 ```
 
 A *data value* is a field without a JSON form, such as a scipp array.
-No request can write it, so a group with a data value is given by reference to an output only, and the framework does not look at its other fields.
-They may be of any type that an output may hold.
+No request can write it, so a group with a data value is given by reference to an output only; of its other fields, the framework refuses only a `Path`, a dataset model, a `NewType`, or a type alias, since no output could fill them.
 
 **References stand for groups.** A reference stands for a whole group, at a root place.
 A number or an `sc.DataArray` names no role: every output of its type would fit, so a picker of records would list unrelated outputs.
@@ -221,7 +219,7 @@ The binding gets the model with a local path, `MaskFile(path=...)`.
 A `Path` anywhere else in the params is refused, and so is an output that is or holds a dataset model or a `Path`: every path a workflow gets has passed the access check.
 A validator of a dataset model, such as one that checks the suffix, runs when the backend makes the model, in the call phase (see Requests and records, Validation).
 
-A root place takes a file or an output of another workflow, not either.
+A root place takes a file or an output of another workflow, as its type says; never a choice between the two.
 A value that is read from a file by some users and computed by others is a group, given by reference, and a workflow that reads the file outputs the group: a published normalization is read by a workflow whose output another request references ([user-stories.md](user-stories.md), story C2).
 
 **Parameters.** Each parameter is a group, a union of groups, or a list of one, possibly typed `X | None`.
@@ -292,7 +290,9 @@ beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = 
 
 `DirectBeam` is a dataset model of the direct-beam run.
 `direct_beam` has no default (see Defaults below), so a UI shows its toggle with neither state chosen until the user picks one.
-A value that a group may go without is a parameter of its own, typed `X | None`, or a `bool` field of the group, such as `limit_range: bool` next to `start` and `stop`.
+A choice between modes is a union of groups.
+An optional part with fields that need values is a parameter typed `X | None`.
+A `bool` field switches one optional part of a group whose fields all have defaults, such as `limit_range: bool` next to `start` and `stop`, both with defaults.
 The reasons are [ADR 0008](../../packages/essspec/docs/developer/adr/0008-a-choice-between-ways-is-a-union-of-groups.md).
 
 The module that defines a spec imports pydantic, `ess.spec`, and scipp for the types of data values, but no workflow package.
@@ -305,8 +305,7 @@ A value *round-trips* when its JSON form reads back as the value.
 
 - The names of params and outputs are distinct.
 - Each parameter is a group, a union of groups, or a list of one, possibly typed `X | None`. A list parameter is not typed `list[X] | None`, since a list without rows is `[]`, and its element is not typed `X | None`, since each row is a value.
-- A field of a group without a data value is a scalar or a list of scalars, never typed `X | None`.
-- A group with a data value is given by reference to an output only, so it holds what an output may hold.
+- The fields of a group without a data value are scalars or lists of scalars, never typed `X | None`. A group with a data value is given by reference to an output only; of its other fields, the framework refuses only a `Path`, a dataset model, a `NewType`, or a type alias, since no output could fill them.
 - A dataset model holds only `path`, as `DatasetModel` declares it; a field validator of `path` is allowed. A `Path` outside a dataset model is refused.
 - Each output is a type, possibly typed `X | None`, or a list or a dict of one. No output is or holds a dataset model or a `Path`, at any depth.
 - No type in the params or the outputs is a `NewType` or a type alias, at any depth: a spec names a role by a class, and a binding maps it to a key of its own.
@@ -322,10 +321,10 @@ A group written inline is validated whole at submission, with all its fields at 
 A check across parameters, such as a Q range that the wavelength band and the detector can reach, is the binding's or the driver's, and fails when the request runs.
 A binding may run the model validators, `IofQParams.model_validate(dict(params))`.
 
-**Defaults.** A request that leaves out a parameter, or a field of a group, never leaves out a correction that a correct reduction needs.
+**Defaults.** A request that leaves out a parameter, or a field of a group, so that it takes its default, never skips a correction that a correct reduction needs.
 `reduction` has a default, a setting.
 The can run has none, so a request or a template that leaves it out is refused, instead of computing I(Q) without the can subtracted.
-A correction that a correct reduction needs, but that a request may still leave out, is typed `X | None` with no default, such as `direct_beam: DirectBeam | None`, where `None` means no direct-beam correction: the request writes `None` to leave it out, and its record says so.
+A correction that a correct reduction needs, but that a request may still go without, is typed `X | None` with no default, such as `direct_beam: DirectBeam | None`, where `None` means no direct-beam correction: the request writes `None` to go without it, and its record says so.
 A mask, which a correct reduction does not need, may default to `None`.
 The output is I(Q) either way, and the params of its record say which corrections were applied.
 A step whose omission changes what a reader of the output must do with it, such as its unit or its dimensions, makes another output type, and so another spec.
@@ -365,13 +364,13 @@ client.output(result, 'iofq')            # raises RecordFailed if the record fai
 client.output(result, 'iofq', select={'Q': slice(0, 10)})
 ```
 
-`params` is a dict by name: each value given inline or as a reference, or a list of these for a list parameter (see Specs and bindings).
-An inline value is the value, such as `Reduction(bins=100)`, or its JSON form, `{'bins': 100}`: both give the same request.
-`params` may also be an instance of the params model, if every value is given inline; a spec with a dataset model takes a dict.
+`params` is a dict by name: each value written inline or given by reference, or a list of these for a list parameter (see Specs and bindings).
+A value written inline is the value, such as `Reduction(bins=100)`, or its JSON form, `{'bins': 100}`: both give the same request.
+`params` may also be an instance of the params model, if every value is written inline; a spec with a dataset model takes a dict.
 It may be left out when every parameter has a default.
 
 Submitting a request returns a *record*.
-The record holds the request with every value filled in, defaults included, and the names of its outputs: `record.request.params` holds the JSON form of each inline value, and each reference.
+The record holds the request with every value filled in, defaults included, and the names of its outputs: `record.request.params` holds the JSON form of each value written inline, and each reference.
 It holds no output values.
 Running the same request again makes a new record.
 Its *status* is `pending`, then `completed`, `failed`, or `cancelled`.
@@ -413,7 +412,7 @@ Every validator of a group written inline runs then, with all its fields at hand
 {'reduction': {'bins': r.ref('bins')}}            # refused at submission: a reference inside a group
 ```
 
-An inline value must round-trip, since the log holds its JSON form: a number that is not finite does not.
+A value written inline must round-trip, since the log holds its JSON form: a number that is not finite does not.
 The record holds the JSON form of the validated group, so `Reduction(bins=100)` and `{'bins': 100}` give one record, and a group whose validator changes a value it has validated already, such as one that converts millimetres to metres, does not round-trip and is refused.
 The call phase makes each value of the JSON form the record holds, with `strict=False`, so that a strict model takes an enum from its string, as the request phase took it from JSON.
 It fails only for the data of a reference, such as a dataset model whose validator refuses the local path, which fails the record, or the push.
@@ -435,7 +434,7 @@ The same beam centre is typed in by one user and computed by another:
 
 ```python
 runs = {'sample': dataset(run=60339), 'can': dataset(run=60338), 'transmission': t.ref('transmission')}
-result = client.submit(IOFQ, params={**runs, 'beam_centre': BeamCentre(x=0.012, y=-0.003)})  # inline
+result = client.submit(IOFQ, params={**runs, 'beam_centre': BeamCentre(x=0.012, y=-0.003)})  # written inline
 centre = client.submit(BEAM_CENTRE, params={'direct_beam': dataset(run=60330)})             # pending
 result = client.submit(IOFQ, params={**runs, 'beam_centre': centre.ref('centre')})          # a reference
 ```
@@ -510,7 +509,7 @@ template = Template(IOFQ, params={'reduction': Reduction(bins=100), 'can': datas
                     blanks=('sample',))
 ```
 
-`Template` validates each fixed inline value by the type at its root place, and checks that each fixed reference is readable and fits its root place.
+`Template` validates each fixed value written inline by the type at its root place, and checks that each fixed reference is readable and fits its root place.
 A required parameter may be a blank.
 
 A template can also be made from any request's values.
@@ -628,7 +627,7 @@ client.datasets.metadata(run)['sample']                       # the source's cur
 Many reductions combine several runs, such as the sample and can runs of SANS.
 A spec takes them as *tables*, next to the values that all runs share.
 A table is a list parameter whose *rows* an accumulator takes a push at a time, such as the sample runs.
-Each row is a root place, given inline or by reference, as its type allows.
+Each row is a root place, written inline or given by reference, as its type allows.
 The rows of a table are distinct.
 
 A *multi-run spec* combines the runs of the *single-run spec* of the same reduction.
@@ -654,10 +653,9 @@ result = client.compute(IOFQ_MULTI, params={'sample': [dataset(run=611), dataset
                                              'transmission': t.ref('transmission')})
 ```
 
-**Values of the runs.** The runs of one sum share one set of settings, such as one transmission for the summed sample runs: a parameter next to the tables.
-A value that differs per run, such as a motor position, is in the run's file.
-A row of a table of a dataset model is a dataset reference, and nothing else.
-A value that belongs to one run and that its file lacks, such as the thickness of a sample, is a parameter of the single-run spec, so runs with different such values are different requests.
+**Values of the runs.** A value that differs per run, such as a motor position, is in the run's file.
+A row of a table of runs is a dataset reference and nothing else.
+A value that differs between runs, such as a thickness, makes the runs separate requests; a value shared by all runs of a request is a parameter, such as one transmission for the summed sample runs.
 
 A multi-run spec may have outputs of its own, such as `STITCH`, a stitch of all angles, or no single-run spec, such as `VOLUME`, which sums counts over runs.
 It is written the same way: `runs: list[Run] = Field(min_length=1)`, a table of the dataset model `Run`, with `WorkflowSpec(..., tables=('runs',))`, so the model, its schema, and the backend agree that the table has a row.
@@ -742,7 +740,7 @@ Only the client that made an accumulator pins it.
 
 | What | Request phase | Call phase |
 |---|---|---|
-| a template | each fixed inline value, whole, by the type at its root place; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the rows of fixed tables read distinct |
+| a template | each fixed value written inline, whole, by the type at its root place; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the rows of fixed tables read distinct |
 | a stage call | the same, for the values given; the table rules on given tables | each given value read; the rows of given tables read distinct |
 | a push | each row written inline, whole, by the table's element type; each reference readable and fitting; the table rules on the table with the push | the data of each reference read and checked by the table's element type; the rows read distinct from those read before, before the driver gets them |
 | a state, at a pin | the number of rows of each table, by its length constraints | (none) |
@@ -751,14 +749,14 @@ A value that fails its check at a push stops the accumulator, as any failing pus
 
 **Distinct rows.** A push refuses a row that the table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
 Rows are compared in two ways.
-In the request phase, they are compared whole, as the record holds them: an inline value by its JSON form, a dataset by the identity the dataset source gives it, and a reference to an output by record, output, and key, each at its place.
+In the request phase, they are compared whole, as the record holds them: a value written inline by its JSON form, a dataset by the identity the dataset source gives it, and a reference to an output by record, output, and key, each at its place.
 So `dataset(run=611)` and `dataset(path=...)` of the same file are one row.
 A push checks this against the pushes logged, since a pin that refused the repeat would refuse every later state.
 A plain request with a repeated row is refused too, including one in a template.
 
-In the call phase, for a table whose element type has a JSON form, rows are also compared by the JSON form of each row read.
+In the call phase, for a table whose rows a request may write inline, rows are also compared by the JSON form of each row read.
 The backend keeps the rows read so far for each blank table, and compares each push's rows with them before the driver gets the rows.
-So an inline value and a reference to an output whose value is equal are one row, and a time slice is never summed twice.
+So a value written inline and a reference to an output whose value is equal are one row, and a time slice is never summed twice.
 `SLICES` is a spec like `IOFQ`, with the table `time_range: list[TimeRange] = Field(min_length=1)`:
 
 ```python
@@ -774,7 +772,7 @@ acc.push(time_range=[TimeRange(start=0, stop=60)])    # equal to slice 0: the pu
 A repeat found in the call phase fails the push, which stops the accumulator.
 The client reads how many slices there are, since a reference names one row.
 Running again a cell that computes a record and pushes its output pushes a reference to a new record.
-Only the call phase catches that repeat, and only for a table whose element type has a JSON form.
+Only the call phase catches that repeat, and only for a table whose rows a request may write inline.
 
 The accumulator *stops* if
 

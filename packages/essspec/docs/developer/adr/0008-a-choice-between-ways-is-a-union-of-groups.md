@@ -9,7 +9,7 @@
 A workflow often takes a value that the user obtains in one of several ways.
 A beam centre is typed in, or found from a run with a tolerance.
 A transmission is the one in the sample run's file, typed in, or computed from a transmission run.
-A workflow also often has a step that a request may leave out, such as a mask or a direct-beam correction.
+A workflow also often has a step that a request may go without, such as a mask or a direct-beam correction.
 
 The spec must state these choices so that:
 
@@ -20,10 +20,10 @@ The spec must state these choices so that:
 
 Terms from [ADR 0001](0001-minimal-workflow-spec.md) and the developer README:
 
-- A *group* is a pydantic model, written as an object of its fields. A field of a group is a *scalar*, such as a `float` or a `Literal`, or a list of scalars.
+- A *group* is a pydantic model, written as an object of its fields. The fields of a group without a data value are *scalars*, such as a `float` or a `Literal`, or lists of scalars, never typed `X | None`.
 - A *root place* is the value of a parameter, or an element of a list parameter. A request writes a value or a reference there, and nowhere else.
 - A *reference* names data that exist elsewhere: an output of a record, `finder.ref('centre')`, or a dataset. It *fits* a root place when the data it names can be the value there.
-- A *data value* is a field of a group without a JSON form, such as an `sc.DataArray`. A group that holds one is given by reference only, since no request can write a data value inline.
+- A *data value* is a field of a group without a JSON form, such as an `sc.DataArray`. A group with a data value is given by reference to an output only, since no request can write a data value inline; of its other fields, the framework refuses only a `Path`, a dataset model, a `NewType`, or a type alias, since no output could fill them.
 - A *dataset model* is a group that stands for a file, given by reference to a dataset only.
 - A *template* is a request with some parameters left open, its *blanks*; the values it gives are its *fixed values*. A *plain request* gives every value.
 - A *stage* is a template that the backend keeps: it computes what does not depend on the blanks once, and the rest at each call.
@@ -114,6 +114,8 @@ transmission: ComputedTransmission        # a group with a data value, by refere
                                           # or the output of a workflow that reads the sample's file
 ```
 
+A transmission computed from a transmission run is not an alternative of the union, since an alternative holds scalars only: a spec that computes it takes the run as a parameter of a dataset model, `transmission_run: TransmissionRun`, in place of the union, and computes the transmission in a step of its workflow.
+
 **`X | None` means *without X*.**
 `mask: PixelMask | None = None` applies no mask for `None`; `direct_beam: DirectBeam | None`, a dataset model of the direct-beam run, applies no direct-beam correction.
 A value obtained in one of several ways that a request writes inline is a union that names each way, not `None` for one of them:
@@ -140,14 +142,15 @@ That `None` means *without X* is a guideline, not a rule the framework checks.
 It has no exception for data values: `None` in `transmission: ComputedTransmission | None` does not mean "the one in the run's file".
 
 **Only a parameter is typed `X | None`.**
-A field of a group is never typed `X | None`, so each toggle is over the widget of a whole parameter, as in esslivedata's dashboard, which shows `range_filter: TOARange | None` as a card with a switch (scipp/esslivedata#1426).
-A value that a request may leave out is a parameter typed `X | None`: an optional file is a dataset model, `transmission_run: TransmissionRun | None`, and an optional data value is a group of it, `mask: PixelMask | None`.
-A part of a group that a request may switch off is a `bool` field next to the fields it switches, `limit_range: bool` next to `start` and `stop`; the form shows its fields either way.
+A field of a group without a data value is never typed `X | None`, so each toggle is over the widget of a whole parameter.
+A choice between modes is a union of groups.
+An optional part with fields that need values is a parameter typed `X | None`: an optional file is a dataset model, `direct_beam: DirectBeam | None`, and an optional data value is a group of it, `mask: PixelMask | None`.
+A `bool` field switches one optional part of a group whose fields all have defaults, such as `limit_range: bool` next to `start` and `stop`, both with defaults; the form shows those fields either way.
 A list that may be empty is `[]`, not `None`: a list parameter is not typed `list[X] | None`, and its element is not typed `X | None`.
 
-**A default never leaves out a correction that a correct reduction needs.**
-A request that forgets a parameter, or a field of a group, must not get a reduction with a step silently left out.
-So a correction that a correct reduction needs, but that a request may still leave out, is typed `X | None` with no default, `direct_beam: DirectBeam | None`, and the request writes `None`.
+**A default never skips a correction that a correct reduction needs.**
+A request that forgets a parameter, or a field of a group, must not get a reduction with a step silently skipped.
+So a correction that a correct reduction needs, but that a request may still go without, is typed `X | None` with no default, `direct_beam: DirectBeam | None`, and the request writes `None`.
 The output is I(Q) either way; the params of its record say which corrections were applied.
 A correction that a correct reduction does not need, such as a mask, may default to `None`.
 A step whose omission changes what a reader of the output must do with it, such as a normalization without which I(Q) is in counts, makes another output type, and so another spec.
@@ -212,7 +215,7 @@ A value held at a key that a parameter's key leads to has the same effect, but t
 
 ## Alternatives considered
 
-- **A selector field next to the fields of every mode**, `enabled: bool` or `mode: Literal[...]`, as esslivedata's detector and monitor views do. A request can then hold values that mean nothing, `{'enabled': False, 'tolerance': 0.05}`, and a required field must be given even for a mode that does not use it. A `bool` field that switches a part of a group, `limit_range: bool`, has the first cost; it is allowed where the part does not warrant a parameter of its own, since many optional parameters make a workflow harder to use.
+- **A selector field next to the fields of every mode**, `enabled: bool` or `mode: Literal[...]`, as esslivedata's detector and monitor views do. Used to choose between modes, it lets a request hold values that mean nothing, `{'enabled': False, 'tolerance': 0.05}`, and a required field must be given even for a mode that does not use it.
 - **A union of groups given by reference only**, such as `mask: MaskFile | ComputedMask`, filled by a reference to a dataset or to an output. No value is written inline, so no tag is needed: the reference picks the alternative, and every reference fits exactly one. Such a union is untagged and always a reference, unlike a union written inline, which is tagged and never a reference. Left out until a workflow needs it, since it brings back a place that takes a file, or the record that computed it.
 - **A union held by a wrapper group.** The binding sets the wrapper's key, so a provider takes the union apart instead of sciline choosing providers by key.
 - **A reference that fits a union when the output fits an alternative.** One parameter then offers a value typed in, computed in this graph, or taken from a record. But an output fits only if its class is an alternative, with its tag, so the workflow that computes it knows the specs that take it. A centre finder outputs a tagged `GivenCentre`, a second class next to the `BeamCentre` that a parameter typed `BeamCentre` takes, and an alternative given only by reference, such as a computed transmission, carries a tag that no request writes.
