@@ -41,7 +41,9 @@ class FakeDatasets:
     file of its own, which a workflow reads with :func:`read_dataset`. A run
     measured again keeps its identity and its place in the order of
     measurement, and its file is written again. A dataset is named by its
-    run, its PID, or its path.
+    run, its PID, or its path. Its metadata are the proposal, the run, and
+    the fields :meth:`measure` is given, such as ``kind='mask'``; a dataset
+    without ``kind`` is raw (see :class:`~.datasets.Selector`).
     """
 
     def __init__(self, proposal: str, directory: Path) -> None:

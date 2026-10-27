@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ess.apps import Client, SubmitError, Template, dataset, local
 from ess.apps.testing import FakeDatasets, read_dataset
-from ess.spec import DriverBinding, WorkflowSpec
+from ess.spec import DatasetModel, DriverBinding, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
 
 SampleNumerator = NewType('SampleNumerator', np.ndarray)
@@ -37,12 +37,10 @@ CanDenominator = NewType('CanDenominator', float)
 IofQ = NewType('IofQ', sc.Variable)
 
 
-class SampleRun(BaseModel):
-    file: Path
+class SampleRun(DatasetModel): ...
 
 
-class CanRun(BaseModel):
-    file: Path
+class CanRun(DatasetModel): ...
 
 
 class Reduction(BaseModel):
@@ -88,7 +86,7 @@ IOFQ_MULTI = WorkflowSpec(
 
 def _counts(run: SampleRun | CanRun) -> np.ndarray:
     """A run's counts per pixel."""
-    return np.asarray(read_dataset(run.file), dtype=float)
+    return np.asarray(read_dataset(run.path), dtype=float)
 
 
 def sample_numerator(run: SampleRun, reduction: Reduction) -> SampleNumerator:
@@ -167,8 +165,8 @@ def client(tmp_path: Path) -> Iterator[Client]:
         yield client
 
 
-SAMPLE, CAN = {'file': dataset(run=611)}, {'file': dataset(run=614)}
-SAMPLES = [SAMPLE, {'file': dataset(run=612)}]
+SAMPLE, CAN = dataset(run=611), dataset(run=614)
+SAMPLES = [SAMPLE, dataset(run=612)]
 
 
 def _single(client: Client, **params: Any) -> sc.Variable:

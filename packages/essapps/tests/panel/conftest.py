@@ -5,12 +5,13 @@ Toy specs with each kind of place, bound on a client of ``local()``.
 
 ``FIND`` outputs a ``BeamCentre``, a plain group, which ``REDUCE`` takes
 typed in or from a record. ``REDUCE`` also takes a group with defaults, a
-group with a file and no default, and a union of groups. It divides the
-counts of its sample run by the sample's thickness, so a thickness of 0
-fails the record. ``OPTIONS`` takes a value of each type that has an input,
-and a group typed ``X | None`` without a default. ``SUBTRACT`` takes a group
-with such a group as a field, a ``BeamCentre``, which an output of ``FIND``
-fits.
+group with a file and no default, a union of groups, and a mask, a dataset
+model of mask datasets typed ``X | None`` with a default. It divides the
+counts of its sample run, less those of the mask, by the sample's thickness,
+so a thickness of 0 fails the record. ``OPTIONS`` takes a value of each type
+that has an input, and a dataset model typed ``X | None`` without a default.
+``SUBTRACT`` takes a group with a group typed ``X | None`` without a default
+as a field, a ``BeamCentre``, which an output of ``FIND`` fits.
 """
 
 from collections.abc import Iterator
@@ -23,11 +24,15 @@ from pydantic import BaseModel, Field
 
 from ess.apps import Client, local
 from ess.apps.testing import FakeDatasets, read_dataset
-from ess.spec import DatasetRef, WorkflowSpec, function_binding
+from ess.spec import DatasetModel, DatasetRef, WorkflowSpec, function_binding
 
 
-class Run(BaseModel):
-    file: Path
+class Run(DatasetModel):
+    """A raw run."""
+
+
+class Mask(DatasetModel, kind='mask'):
+    """Counts to leave out of a sample run."""
 
 
 class BeamCentre(BaseModel):
@@ -54,7 +59,7 @@ class Reduction(BaseModel):
 
 
 class Sample(BaseModel):
-    file: Path
+    file: Run
     thickness: float
 
 
@@ -73,6 +78,7 @@ class ReduceParams(BaseModel):
     sample: Sample
     beam_centre: BeamCentre = Field(default_factory=BeamCentre)
     detector: Annotated[Front | Rear, Field(discriminator='kind')] = Front()
+    mask: Mask | None = None
 
 
 class Total(BaseModel):
@@ -143,11 +149,13 @@ SUBTRACT: Spec = WorkflowSpec(
 
 
 def find(params: FindParams) -> FindOutputs:
-    return FindOutputs(centre=BeamCentre(x=read_dataset(params.run.file)['x']))
+    return FindOutputs(centre=BeamCentre(x=read_dataset(params.run.path)['x']))
 
 
 def reduce(params: ReduceParams) -> ReduceOutputs:
-    counts = read_dataset(params.sample.file)['counts']
+    counts = read_dataset(params.sample.file.path)['counts']
+    if params.mask is not None:
+        counts -= read_dataset(params.mask.path)['counts']
     return ReduceOutputs(total=Total(value=counts / params.sample.thickness))
 
 

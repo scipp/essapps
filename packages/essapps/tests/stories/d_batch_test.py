@@ -33,7 +33,7 @@ def test_d1_temperature_scan(
         template,
         runs,
         client.datasets,
-        at=('sample', 'file'),
+        at='sample',
         member_field='temperature',
     )
     scan = client.compute(requests, label='scan', persist=True)
@@ -63,7 +63,7 @@ def test_d2_overnight_cluster_batch(
     for member, run in runs.items():
         client.submit(
             IOFQ,
-            params={'sample': {'file': run}, 'normalization': None},
+            params={'sample': run, 'normalization': None},
             label='night',
             member=member,
             persist=True,
@@ -105,7 +105,7 @@ def test_d3_cancel_and_resubmit(client: Client, measure: Measure) -> None:
         blanks=('sample',),
     )
     first = client.submit(
-        apply(wrong, runs, client.datasets, at=('sample', 'file'), member_field='run'),
+        apply(wrong, runs, client.datasets, at='sample', member_field='run'),
         label='scan',
         persist=True,
     )
@@ -115,7 +115,7 @@ def test_d3_cancel_and_resubmit(client: Client, measure: Measure) -> None:
         params={'reduction': Reduction(threshold=0.5), 'normalization': None},
     )
     second = client.compute(
-        apply(fixed, runs, client.datasets, at=('sample', 'file'), member_field='run'),
+        apply(fixed, runs, client.datasets, at='sample', member_field='run'),
         label='scan',
         persist=True,
     )
@@ -134,9 +134,7 @@ def test_d4_typo_caught_before_500_failures(client: Client, measure: Measure) ->
         params={'reduction': {'threshold': '2,5'}, 'normalization': None},
         blanks=('sample',),
     )
-    requests = apply(
-        typo, runs, client.datasets, at=('sample', 'file'), member_field='run'
-    )
+    requests = apply(typo, runs, client.datasets, at='sample', member_field='run')
 
     with pytest.raises(SubmitError, match=r'reduction\.threshold'):
         client.submit(requests, label='scan')
@@ -153,20 +151,18 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
     )
     runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
     client.compute(
-        apply(
-            template, runs, client.datasets, at=('sample', 'file'), member_field='run'
-        ),
+        apply(template, runs, client.datasets, at='sample', member_field='run'),
         label='scan',
         persist=True,
     )
 
     before = client.records(label='scan')
-    runs = [r.request.params['sample']['file'] for r in before]
+    runs = [r.request.params['sample'] for r in before]
     renamed = apply(
         replace(template, spec=IOFQ_V2),
         runs,
         client.datasets,
-        at=('sample', 'file'),
+        at='sample',
         member_field='run',
     )
     with pytest.raises(SubmitError, match=r'reduction\.threshold: Extra inputs'):
@@ -176,9 +172,7 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
         spec=IOFQ_V2,
         params={'reduction': ReductionV2(mask_below=1.5), 'normalization': None},
     )
-    requests = apply(
-        moved, runs, client.datasets, at=('sample', 'file'), member_field='run'
-    )
+    requests = apply(moved, runs, client.datasets, at='sample', member_field='run')
     after = list(client.compute(requests, label='scan', persist=True).values())
 
     assert [
@@ -205,8 +199,8 @@ def test_d7_rotation_scan_over_three_hundred_angles(
     cuts, pushed = [], []
     scan = client.accumulator(Template(VOLUME, blanks=('runs',)))
     for run in islice(client.datasets.watch(Selector(scan='17')), 300):
-        scan.push(runs=[{'file': run}])  # added once the previous cut is copied
-        pushed.append({'file': run})
+        scan.push(runs=[run])  # added once the previous cut is copied
+        pushed.append(run)
         cuts.append(client.output(scan, 'volume', select={'q': 0}))  # no record
     total = client.freeze(scan, persist=True)
 

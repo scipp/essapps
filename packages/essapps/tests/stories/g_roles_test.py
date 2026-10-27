@@ -21,7 +21,7 @@ def test_g2_developer_iterates_on_a_workflow(
     result = dev.compute(
         IOFQ,
         params={
-            'sample': {'file': measure(1, [1.0, 2.0, 3.0, 4.0])},
+            'sample': measure(1, [1.0, 2.0, 3.0, 4.0]),
             'normalization': None,
         },
     )
@@ -36,7 +36,7 @@ def test_g5_reference_across_proposals_refused(
     mine = connect(proposal='p2', user='eve')
     centre = theirs.compute(
         BEAM_CENTRE,
-        params={'direct_beam': {'file': measure(1, [1.0, 1.0], proposal='p1')}},
+        params={'direct_beam': measure(1, [1.0, 1.0], proposal='p1')},
     )
     sample = measure(2, [2.0, 2.0], proposal='p2')
 
@@ -44,7 +44,7 @@ def test_g5_reference_across_proposals_refused(
         mine.compute(
             IOFQ,
             params={
-                'sample': {'file': sample},
+                'sample': sample,
                 'beam_centre': centre.ref('centre'),
                 'normalization': None,
             },

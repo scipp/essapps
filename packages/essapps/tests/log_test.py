@@ -37,11 +37,16 @@ from ess.apps.log import (
     Submitted,
 )
 from ess.apps.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
-from ess.spec import AccumulatorRef, DatasetRef, OutputRef, WorkflowSpec
+from ess.spec import (
+    AccumulatorRef,
+    DatasetModel,
+    DatasetRef,
+    OutputRef,
+    WorkflowSpec,
+)
 
 
-class SampleRun(BaseModel):
-    file: Path
+class SampleRun(DatasetModel): ...
 
 
 class Window(BaseModel):
@@ -99,6 +104,29 @@ def total(params: TotalParams) -> ValueOutputs:
     return ValueOutputs(value=Amount(value=factor * sum(p.value for p in params.part)))
 
 
+class RunsParams(BaseModel):
+    cans: list[SampleRun]
+    runs: list[SampleRun] = Field(min_length=1)
+
+
+RUNS = WorkflowSpec(
+    name='runs',
+    version=1,
+    title='runs',
+    description='the sum of runs less the sum of cans',
+    params=RunsParams,
+    outputs=ValueOutputs,
+    tables=('cans', 'runs'),
+)
+
+
+def runs(params: RunsParams) -> ValueOutputs:
+    value = sum(read_dataset(r.path) for r in params.runs) - sum(
+        read_dataset(c.path) for c in params.cans
+    )
+    return ValueOutputs(value=Amount(value=value))
+
+
 @pytest.fixture
 def datasets(tmp_path: Path) -> FakeDatasets:
     datasets = FakeDatasets(proposal='p1', directory=tmp_path)
@@ -133,11 +161,15 @@ def start(
         window = params.window
         windows.append(window)
         loading.wait(timeout=5)
-        value = read_dataset(params.sample.file) * (window.stop - window.start)
+        value = read_dataset(params.sample.path) * (window.stop - window.start)
         return ValueOutputs(value=Amount(value=value))
 
     def start(path: Path) -> Client:
-        bind = [StagedFunction(LOAD, load), kept_rows(TOTAL, total)]
+        bind = [
+            StagedFunction(LOAD, load),
+            kept_rows(TOTAL, total),
+            kept_rows(RUNS, runs),
+        ]
         backends.append(Backend(datasets, bind, log=Log(path)))
         return Client(backends[-1], proposal='p1', submitter='anna')
 
@@ -176,7 +208,7 @@ def _submitted(record_id: str, request: Request) -> Submitted:
 
 
 def _sample(n: int) -> dict[str, Any]:
-    return {'sample': {'file': dataset(run=n)}}
+    return {'sample': dataset(run=n)}
 
 
 def _total(client: Client) -> Accumulator:
@@ -298,11 +330,32 @@ def test_a_push_is_logged_as_its_rows_by_table_with_references_as_written(
     assert client.output(total, 'value') == Amount(value=3.0)
 
 
+def test_rows_of_datasets_are_logged_and_are_the_provenance_of_a_state(
+    tmp_path: Path, start: Callable[[Path], Client], datasets: FakeDatasets
+) -> None:
+    client = start(tmp_path / 'log')
+    can, *samples = (datasets.resolve(dataset(run=n)) for n in (3, 1, 2))
+    acc = client.accumulator(
+        Template(RUNS, params={'cans': [dataset(run=3)]}, blanks=('runs',))
+    )
+    acc.push(runs=[dataset(run=1)])
+    acc.push(runs=[dataset(run=2)])
+    read = client.compute(TOTAL, params=_read(acc))
+
+    opened, *pushed = [
+        e for e in Log.read(tmp_path / 'log') if isinstance(e, Opened | Pushed)
+    ]
+    assert opened.params == {'cans': [can], 'runs': []}
+    assert pushed == [Pushed(accumulator=acc.id, params={'runs': [s]}) for s in samples]
+    assert client.provenance(read).datasets() == [can, *samples]
+    assert client.output(read, 'value') == Amount(value=0.0)
+
+
 def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) -> None:
     sample = DatasetRef(dataset='uuid:run-1')
     part = OutputRef(record='r1', output='values', key='0')
     events: list[Event] = [
-        _submitted('r2', Request(LOAD, params={'sample': {'file': sample}})),
+        _submitted('r2', Request(LOAD, params={'sample': sample})),
         Pushed(
             accumulator='a1',
             params={'part': [part]},
@@ -311,7 +364,7 @@ def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) ->
     _write(tmp_path / 'log', *events)
 
     submitted, pushed = (tmp_path / 'log').read_text().splitlines()
-    assert '"sample":{"file":{"@ref":"dataset","dataset":"uuid:run-1"}}' in submitted
+    assert '"sample":{"@ref":"dataset","dataset":"uuid:run-1"}' in submitted
     assert '{"@ref":"output","record":"r1","output":"values","key":"0"}' in pushed
     assert Log.read(tmp_path / 'log') == events
 
@@ -423,9 +476,7 @@ def test_a_write_that_fails_leaves_the_log_as_it_was(
 ) -> None:
     resource = pytest.importorskip('resource')
     path = tmp_path / 'log'
-    request = Request(
-        LOAD, params={'sample': {'file': datasets.resolve(dataset(run=1))}}
-    )
+    request = Request(LOAD, params={'sample': datasets.resolve(dataset(run=1))})
     with Log(path) as log:
         log.append(_submitted('load', request))
         soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
@@ -452,9 +503,7 @@ def test_a_last_line_cut_short_is_dropped(
     tmp_path: Path, datasets: FakeDatasets
 ) -> None:
     path = tmp_path / 'log'
-    request = Request(
-        LOAD, params={'sample': {'file': datasets.resolve(dataset(run=1))}}
-    )
+    request = Request(LOAD, params={'sample': datasets.resolve(dataset(run=1))})
     _write(path, _submitted('load', request))
     with path.open('ab') as file:
         file.write(b'{"kind":"finish')  # the backend stopped while writing

@@ -6,7 +6,7 @@ Toy specs and fixtures of the user stories (docs/developer/user-stories.md).
 A dataset made by ``measure`` is a file of a list of counts. The toy specs
 compute what the table in user-stories.md says, so that every number can be
 checked by hand. Each toy workflow takes an instance of its spec's params model,
-where each run is a group with the path of its file, and reads the counts of
+where each run is a dataset model, the path of its file, and reads the counts of
 each file.
 
 After each story, every record whose outputs a client of the story still keeps
@@ -45,6 +45,7 @@ from ess.apps.testing import (
 )
 from ess.spec import (
     Binding,
+    DatasetModel,
     DatasetRef,
     DriverBinding,
     NoParams,
@@ -89,10 +90,8 @@ def _array(values: Any) -> sc.Variable:
     return sc.array(dims=['q'], values=np.asarray(values, dtype=float))
 
 
-class Run(BaseModel):
+class Run(DatasetModel):
     """A measured run, by its file; each role of a run is a subclass."""
-
-    file: Path
 
 
 class Sample(Run):
@@ -144,10 +143,8 @@ class ComputedNormalization(Data):
     factor: sc.Variable
 
 
-class PublishedNormalization(BaseModel):
+class PublishedNormalization(DatasetModel):
     """A normalization published to the catalogue, as a file of its factor (C2)."""
-
-    file: Path
 
 
 class IofQParams(Data):
@@ -166,7 +163,7 @@ IOFQ = _spec('sans-iofq', IofQOutputs, params=IofQParams)
 
 
 def iofq(params: IofQParams) -> IofQOutputs:
-    return _reduce(params, _counts(params.sample.file))
+    return _reduce(params, _counts(params.sample.path))
 
 
 def _reduce(params: IofQParams, counts: np.ndarray) -> IofQOutputs:
@@ -191,7 +188,7 @@ IOFQ_CAN = _spec('sans-iofq-can', IofQOutputs, params=IofQCanParams)
 
 
 def iofq_can(params: IofQCanParams) -> IofQOutputs:
-    return _reduce(params, _counts(params.sample.file) - _counts(params.can.file))
+    return _reduce(params, _counts(params.sample.path) - _counts(params.can.path))
 
 
 class ReductionV2(BaseModel):
@@ -236,7 +233,7 @@ BEAM_CENTRE = _spec('beam-centre', CentreOutputs, params=BeamCentreParams)
 def beam_centre(params: BeamCentreParams) -> CentreOutputs:
     return CentreOutputs(
         centre=BeamCentre(
-            position=sc.scalar(float(_counts(params.direct_beam.file).mean()))
+            position=sc.scalar(float(_counts(params.direct_beam.path).mean()))
         )
     )
 
@@ -260,7 +257,7 @@ VANADIUM = _spec('vanadium', VanadiumOutputs, params=VanadiumParams)
 
 
 def vanadium(params: VanadiumParams) -> VanadiumOutputs:
-    total = float(_counts(params.vanadium.file).sum())
+    total = float(_counts(params.vanadium.path).sum())
     return VanadiumOutputs(
         normalization=ComputedNormalization(
             factor=sc.scalar(total * params.scaling.scale)
@@ -279,7 +276,7 @@ LOAD_NORMALIZATION = _spec(
 
 def load_normalization(params: LoadNormalizationParams) -> VanadiumOutputs:
     """The normalization of a published file of its factor (C2)."""
-    factor = sc.scalar(float(read_dataset(params.published.file)))
+    factor = sc.scalar(float(read_dataset(params.published.path)))
     return VanadiumOutputs(normalization=ComputedNormalization(factor=factor))
 
 
@@ -350,7 +347,7 @@ CONTRIBUTE = _spec('sans-contribute', ContributeOutputs, params=ContributeParams
 
 
 def contribute(params: ContributeParams) -> ContributeOutputs:
-    counts = _counts(params.sample.file)
+    counts = _counts(params.sample.path)
     return ContributeOutputs(
         parts=Parts(
             numerator=_array(counts), denominator=sc.scalar(float(counts.sum()))
@@ -397,7 +394,7 @@ class Summing:
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
         for run in rows:
-            self._sums[table] += _counts(run.file)  # in place from the second row
+            self._sums[table] += _counts(run.path)  # in place from the second row
 
     def outputs(self) -> BaseModel:
         return self._finalize(**self._sums, **self._fixed)
@@ -433,7 +430,7 @@ VOLUME = _spec('volume', VolumeOutputs, params=RunsParams, tables=('runs',))
 
 
 def angle(params: AngleParams) -> VolumeOutputs:
-    return VolumeOutputs(volume=Volume(counts=_array(_counts(params.sample.file))))
+    return VolumeOutputs(volume=Volume(counts=_array(_counts(params.sample.path))))
 
 
 def volume(runs: np.ndarray) -> VolumeOutputs:
@@ -480,8 +477,8 @@ STITCH = _spec('stitch', StitchOutputs, params=StitchParams, tables=('runs',))
 
 
 def stitch(params: StitchParams) -> StitchOutputs:
-    reference = _counts(params.reference.file)
-    curves = [_counts(run.file) / reference for run in params.runs]
+    reference = _counts(params.reference.path)
+    curves = [_counts(run.path) / reference for run in params.runs]
     scaled = [curves[0]]
     for curve in curves[1:]:
         scaled.append(curve * scaled[-1][-1] / curve[0])
@@ -523,7 +520,7 @@ SLICER = _spec('slicer', SlicerOutputs, params=SlicerParams)
 
 def slicer(params: SlicerParams) -> SlicerOutputs:
     """A slice of every two bins of the log of the sample run."""
-    n = len(_counts(params.sample.file))
+    n = len(_counts(params.sample.path))
     return SlicerOutputs(
         slices=[TimeRange(start=i, stop=min(i + 2, n)) for i in range(0, n, 2)]
     )
@@ -543,7 +540,7 @@ SLICES = _spec('slices', SlicedOutputs, params=SlicesParams, tables=('time_range
 
 def sliced(params: SlicesParams) -> SlicedOutputs:
     """The counts of the sample in every time range, summed."""
-    counts = _counts(params.sample.file)
+    counts = _counts(params.sample.path)
     total = sum(float(counts[r.start : r.stop].sum()) for r in params.time_range)
     return SlicedOutputs(sliced=sc.scalar(total))
 
@@ -570,12 +567,13 @@ FIND_CENTRE = _spec('find-centre', FoundCentre, params=FindCentreParams)
 
 
 def find_centre(params: FindCentreParams) -> FoundCentre:
-    return FoundCentre(centre=Centre(x=float(_counts(params.direct_beam.file).mean())))
+    return FoundCentre(centre=Centre(x=float(_counts(params.direct_beam.path).mean())))
 
 
-class SampleWithTransmission(Sample):
+class SampleWithTransmission(BaseModel):
     """A sample run and its transmission: a group that holds a file."""
 
+    file: Sample
     transmission: Transmission
 
 
@@ -603,9 +601,9 @@ def centred(params: CentredParams) -> CentredOutputs:
     centre.
     """
     samples = sum(
-        _counts(s.file) * s.transmission.fraction.value for s in params.sample
+        _counts(s.file.path) * s.transmission.fraction.value for s in params.sample
     )
-    cans = sum((_counts(c.file) for c in params.can), 0.0)
+    cans = sum((_counts(c.path) for c in params.can), 0.0)
     return CentredOutputs(centred=_array(samples - cans - params.centre.x))
 
 

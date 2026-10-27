@@ -53,7 +53,7 @@ def test_a_failed_record_shows_why(app: App, run: DatasetRef) -> None:
 def test_a_computed_record_is_shown_and_offered_by_the_forms(
     app: App, client: Client, run: DatasetRef
 ) -> None:
-    app.form.set({'run': {'file': run}})
+    app.form.set({'run': run})
 
     record = app.compute()
     assert record is not None

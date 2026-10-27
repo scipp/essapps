@@ -34,7 +34,7 @@ def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
         IOFQ,
         params={
             'reduction': Reduction(threshold=1.5),
-            'sample': {'file': run},
+            'sample': run,
             'normalization': None,
         },
     )
@@ -49,7 +49,7 @@ def test_s2_tune_one_parameter(client: Client, measure: Measure) -> None:
     tune = client.stage(
         Template(
             IOFQ,
-            params={'sample': {'file': run}, 'normalization': None},
+            params={'sample': run, 'normalization': None},
             blanks=('reduction',),
         )
     )
@@ -72,7 +72,7 @@ def test_s3_look_at_a_value_inside_a_reduction(
         IOFQ,
         params={
             'reduction': Reduction(threshold=2.5),
-            'sample': {'file': run},
+            'sample': run,
             'normalization': None,
         },
     )
@@ -84,7 +84,7 @@ def test_s3_look_at_a_value_inside_a_reduction(
 def test_s4_submit_a_chain_without_waiting(client: Client, measure: Measure) -> None:
     r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0])
     parts = client.submit(
-        [Request(CONTRIBUTE, params={'sample': {'file': run}}) for run in (r611, r612)]
+        [Request(CONTRIBUTE, params={'sample': run}) for run in (r611, r612)]
     )
     summed = client.submit(
         PARTS_SUM,
@@ -98,14 +98,14 @@ def test_s5_sum_runs(client: Client, measure: Measure) -> None:
     runs = [measure(1, [1.0, 2.0]), measure(2, [1.0, 2.0]), measure(3, [0.0, 2.0])]
     total = client.compute(
         NORMALIZE,
-        params={'scaling': Scaling(scale=2.0), 'runs': [{'file': r} for r in runs]},
+        params={'scaling': Scaling(scale=2.0), 'runs': runs},
     )
     backgrounds = [measure(4, [1.0, 1.0]), measure(5, [0.0, 1.0])]
     result = client.compute(
         BACKGROUND,
         params={
-            'sample_runs': [{'file': r} for r in runs],
-            'background_runs': [{'file': r} for r in backgrounds],
+            'sample_runs': runs,
+            'background_runs': backgrounds,
         },
     )
 
@@ -125,13 +125,13 @@ def test_s7_reduce_each_sample_with_the_can_measured_before_it(
     template = Template(
         IOFQ_CAN, params={'normalization': None}, blanks=('sample', 'can')
     )
-    cans = Lookup({('can', 'file'): LastBefore(Selector(role='can'))})
+    cans = Lookup({'can': LastBefore(Selector(role='can'))})
 
     requests = apply(
         template,
         [first, second],
         client.datasets,
-        at=('sample', 'file'),
+        at='sample',
         member_field='run',
         lookup=cans,
     )
@@ -151,12 +151,12 @@ def test_s8_trace_a_result_to_raw_data(client: Client, measure: Measure) -> None
     vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
     vanadium = client.compute(
         VANADIUM,
-        params={'scaling': Scaling(scale=2.0), 'vanadium': {'file': vanadium_run}},
+        params={'scaling': Scaling(scale=2.0), 'vanadium': vanadium_run},
     )
     result = client.compute(
         IOFQ,
         params={
-            'sample': {'file': sample},
+            'sample': sample,
             'normalization': vanadium.ref('normalization'),
         },
     )
