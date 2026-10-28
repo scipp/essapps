@@ -5,16 +5,17 @@ Toy specs with each kind of place, bound on a client of ``local()``.
 
 ``FIND`` outputs a ``BeamCentre``, a plain group, which ``REDUCE`` takes
 typed in or from a record. ``REDUCE`` also takes a group with defaults, a
-group with a file and no default, a union of groups, and a mask, a dataset
-model of mask datasets typed ``X | None`` with a default. It divides the
-counts of its sample run, less those of the mask, by the sample's thickness,
-so a thickness of 0 fails the record. ``OPTIONS`` takes a value of each type
-that has an input, and a dataset model typed ``X | None`` without a default.
-``SUBTRACT`` takes a group with a group typed ``X | None`` without a default
-as a field, a ``BeamCentre``, which an output of ``FIND`` fits.
+dataset model and a group without a default, a union of groups, and a mask, a
+dataset model of mask datasets typed ``X | None`` with a default. It divides
+the counts of its run, less those of the mask, by the sample's thickness, so
+a thickness of 0 fails the record. ``OPTIONS`` takes a value of each type
+that has an input, a list of numbers, and a dataset model typed ``X | None``
+without a default. ``SUBTRACT`` takes a group, and a ``BeamCentre`` typed
+``X | None`` without a default, which an output of ``FIND`` fits.
 """
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -59,7 +60,6 @@ class Reduction(BaseModel):
 
 
 class Sample(BaseModel):
-    file: Run
     thickness: float
 
 
@@ -75,6 +75,7 @@ class Rear(BaseModel):
 
 class ReduceParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
+    run: Run
     sample: Sample
     beam_centre: BeamCentre = Field(default_factory=BeamCentre)
     detector: Annotated[Front | Rear, Field(discriminator='kind')] = Front()
@@ -96,6 +97,8 @@ class Settings(BaseModel):
     note: str = ''
     count: int
     mode: Literal['fast', 'slow'] = 'fast'
+    start: datetime = datetime(2026, 1, 1, tzinfo=UTC)
+    banks: list[int] = []
 
 
 class OptionsParams(BaseModel):
@@ -105,11 +108,11 @@ class OptionsParams(BaseModel):
 
 class Background(BaseModel):
     scale: float = 1.0
-    centre: BeamCentre | None
 
 
 class SubtractParams(BaseModel):
     background: Background
+    centre: BeamCentre | None
 
 
 type Spec = WorkflowSpec[Any, Any]
@@ -153,7 +156,7 @@ def find(params: FindParams) -> FindOutputs:
 
 
 def reduce(params: ReduceParams) -> ReduceOutputs:
-    counts = read_dataset(params.sample.file.path)['counts']
+    counts = read_dataset(params.run.path)['counts']
     if params.mask is not None:
         counts -= read_dataset(params.mask.path)['counts']
     return ReduceOutputs(total=Total(value=counts / params.sample.thickness))
@@ -164,8 +167,7 @@ def options(params: OptionsParams) -> ReduceOutputs:
 
 
 def subtract(params: SubtractParams) -> ReduceOutputs:
-    centre = params.background.centre
-    shift = 0.0 if centre is None else centre.x
+    shift = 0.0 if params.centre is None else params.centre.x
     return ReduceOutputs(total=Total(value=params.background.scale + shift))
 
 

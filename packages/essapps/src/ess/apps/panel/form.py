@@ -8,20 +8,20 @@ inline, and a reference at each other place. It is filled from params as a
 record holds them, so that a record's request can be edited and submitted
 again.
 
-The widget at a place follows from what a request writes there, as
-:func:`ess.spec.places.place` describes it, and is labelled by
+The widget follows from what a request writes, as
+:func:`ess.spec.places.place` describes a parameter, and is labelled by
 :func:`ess.spec.places.title`, as the params schema is:
 
 =========================  ================================================
-Place                      Widget
+Where                      Widget
 =========================  ================================================
-:class:`Ways`              a choice of ways: the fields of each group written
+a parameter, :class:`Ways` a choice of ways: the fields of each group written
                            inline, an output of a record that fits
                            ``Ways.record``, or for a dataset model a dataset
                            that fits it, and ``None``. A record is offered
                            while an output fits.
-:class:`Value`             an input for the scalar, or a picker of its
-                           values
+a field of a group         an input of its type, or a picker of its values;
+                           for a list of scalars, a list of these
 =========================  ================================================
 
 A record's output fits if its type, from the record's spec, fits the place,
@@ -34,13 +34,20 @@ it.
 
 The widgets follow those of esslivedata's dashboard (scipp/esslivedata#1426),
 in Panel. A place without a default starts unset, so that a value a correct
-reduction needs is never filled in for the user. A place is left out of the
-request only if it is a choice with no way chosen, which it is only without
-a default, so the backend refuses it as required. A way chosen, or an input,
+reduction needs is never filled in for the user; so does a list of scalars,
+until an element is added or removed. A place is left out of the request
+only if it is a choice with no way chosen, which it is only without a
+default, so the backend refuses it as required. A way chosen, or an input,
 with nothing given is not left out, since the backend would fill in the
 default: the params name it as missing (see :attr:`Form.params`). An empty
 text is the value ``''`` where the place has a default, and nothing given
-where it has none, since a text input cannot tell an empty text from none.
+where it has none, since a text input cannot tell an empty text from none;
+an element of a list of texts is a text, ``''`` too, since it was added.
+
+A time is picked to the second, in the zone of the value the picker was
+set to, or of the default, which its label names: ``Start (UTC)``. A time
+without a zone stays without one, and a time of ``AwareDatetime`` without a
+value is in UTC. The fraction of a second of the value is kept.
 
 Not covered: list parameters (tables, :class:`Rows`), scipp/essapps#101.
 """
@@ -48,12 +55,14 @@ Not covered: list parameters (tables, :class:`Rows`), scipp/essapps#101.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime, tzinfo
 from enum import Enum
 from typing import Any, get_args
 
 import panel as pn
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel, NaiveDatetime
 from pydantic.fields import FieldInfo
+from pydantic_core import to_jsonable_python
 
 from ess.apps import Client, FieldError, Selector, SubmitError
 from ess.spec import (
@@ -64,7 +73,7 @@ from ess.spec import (
     field_types,
     places,
 )
-from ess.spec.places import Rows, Value
+from ess.spec.places import Ways
 from ess.spec.refs import Loc, iter_refs
 
 
@@ -167,29 +176,38 @@ def _default(info: FieldInfo) -> Any:
     return UNSET if info.is_required() else info.get_default(call_default_factory=True)
 
 
-def _place(model: type[BaseModel], name: str, listing: Listing) -> _Scalar | _Choice:
-    """The widget for the value at the place of field ``name`` of ``model``."""
+def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice:
+    """The widget of the parameter ``name`` of ``model``, the params model."""
     info = model.model_fields[name]
-    label = places.title(name, info)
     described = places.place(model, name)
-    if isinstance(described, Rows):
-        raise NotImplementedError(f'{name}: a list of places (a table)')
-    if isinstance(described, Value):
-        return _Scalar(label, info, described.type)
+    if not isinstance(described, Ways):
+        raise NotImplementedError(f'{name}: a list parameter (a table)')
     ways: dict[str, _Way] = {}
     for value, group in described.inline.items():
         if value is None or described.tag is None:
-            ways['Given'] = _Group(group, listing, {})
+            ways['Given'] = _Group(group, {})
         else:
             way = places.title(value, group.model_fields[described.tag])
-            ways[way] = _Group(group, listing, {described.tag: value})
+            ways[way] = _Group(group, {described.tag: value})
     if field_types.is_dataset(described.record):
         ways[_Choice.DATASET] = _Dataset(described.record, listing)
     elif described.record is not None:
         ways[_Choice.RECORD] = _Record(described.record, listing)
     if described.none:
         ways[_Choice.NONE] = _Nothing()
-    return _Choice(label, ways, described.tag, _default(info))
+    return _Choice(places.title(name, info), ways, described.tag, _default(info))
+
+
+def _field(group: type[BaseModel], name: str) -> _Scalar | _Scalars:
+    """The input of the field ``name`` of ``group``, written inline."""
+    info = group.model_fields[name]
+    widget = _Scalars if field_types.is_list(group, name) else _Scalar
+    return widget(
+        places.title(name, info),
+        field_types.value_type(info.annotation),
+        _default(info),
+        info.description,
+    )
 
 
 def _picked(widget: Any, options: Mapping[str, Any]) -> None:
@@ -239,20 +257,28 @@ class _Dataset:
         return self.widget
 
 
+_TIMES = (datetime, AwareDatetime, NaiveDatetime)
+
+
 class _Scalar:
     """
-    A scalar, the value at any place of a valid spec that is not a group or a
-    union: an ``int``, ``float``, or ``str`` input that may be unset, or for
-    a ``bool``, an enum, or a ``Literal``, a picker of its values with an
-    option for none, so that it may start unset.
+    A scalar: an ``int``, ``float``, or ``str`` input, or a picker of a time,
+    that may be unset, or for a ``bool``, an enum, or a ``Literal``, a picker
+    of its values with an option for none, so that it may start unset. It
+    gives the JSON form of its value.
     """
 
-    def __init__(self, label: str, info: FieldInfo, tp: Any) -> None:
+    def __init__(
+        self, label: str, tp: Any, default: Any, description: str | None = None
+    ) -> None:
+        self._label = label
         self._type = tp
-        self._default = _default(info)
+        self._default = default
+        self._zone: tzinfo | None = None
+        self._time_set: datetime | None = None  # with the zone and fraction
         options: dict[str, Any] = {
             'label': label,
-            'description': info.description,
+            'description': description,
             'sizing_mode': 'stretch_width',
         }
         self.widget: Any
@@ -262,6 +288,8 @@ class _Scalar:
             self.widget = pn.widgets.IntInput(**options)
         elif tp is str:
             self.widget = pn.widgets.TextInput(**options)
+        elif tp in _TIMES:
+            self.widget = pn.widgets.DatetimePicker(**options)
         elif tp is bool:
             self.widget = self._picker({'True': True, 'False': False}, options)
         elif isinstance(tp, type) and issubclass(tp, Enum):
@@ -279,7 +307,15 @@ class _Scalar:
         if value is None or (value == '' and self._default is UNSET):
             missing.append(FieldError(None, loc, 'give a value'))
             return UNSET
-        return value.value if isinstance(value, Enum) else value
+        if self._type in _TIMES:
+            # The picker gives a time without a zone, to the second: the time
+            # set, unless the user changed it.
+            value = value.replace(tzinfo=self._zone)
+            if (set_ := self._time_set) is not None and value == set_.replace(
+                microsecond=0
+            ):
+                value = set_
+        return to_jsonable_python(value)
 
     def set(self, value: Any) -> None:
         if value is UNSET:
@@ -288,26 +324,99 @@ class _Scalar:
             value = '' if self._type is str else None
         elif isinstance(self._type, type) and issubclass(self._type, Enum):
             value = self._type(value)  # a record holds an enum by its value
+        if self._type in _TIMES:
+            value = self._time(value)
         self.widget.value = value
 
-    def refresh(self, listing: Listing) -> None:
-        pass
+    def _time(self, value: datetime | str | None) -> datetime | None:
+        """
+        ``value``, a time, or its text, as a record holds it, as the picker
+        shows it: without its zone, which is kept and named in the label, and
+        without its fraction of a second, which is kept until the user changes
+        the time.
+        """
+        if isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        if value is None:
+            self._zone = UTC if self._type is AwareDatetime else None
+        else:
+            self._zone = value.tzinfo
+        self._time_set = value
+        zone = 'no time zone' if self._zone is None else self._zone.tzname(value)
+        self.widget.label = f'{self._label} ({zone})'
+        return None if value is None else value.replace(tzinfo=None)
 
     def panel(self) -> Any:
         return self.widget
 
 
-class _Group:
-    """The fields of a group, each a place; the tag of an alternative has none."""
+class _Scalars:
+    """
+    A list of scalars: an input per element, as :class:`_Scalar` has it, and
+    buttons that add an element and remove the last. Unset, it has no
+    element until one is added or removed: a removal gives no element, the
+    empty list.
+    """
 
     def __init__(
-        self, group: type[BaseModel], listing: Listing, tag: dict[str, str]
+        self, label: str, tp: Any, default: Any, description: str | None = None
     ) -> None:
+        self._label = label
+        self._type = tp
+        self._default = default
+        self._description = description
+        self._elements: list[_Scalar] | None = None  # unset
+        self._column = pn.Column(sizing_mode='stretch_width')
+        add = pn.widgets.Button(label=f'Add to {label}')
+        add.on_click(lambda _: self._resize(len(self._elements or []) + 1))
+        remove = pn.widgets.Button(label=f'Remove from {label}')
+        remove.on_click(lambda _: self._resize(len(self._elements or []) - 1))
+        self._panel = pn.Column(self._column, pn.Row(add, remove))
+        self.set(UNSET)
+
+    def _resize(self, n: int) -> None:
+        """
+        Keep the first ``n`` elements, none for ``-1``, or add elements with
+        nothing given, but a text, which is ``''``.
+        """
+        elements = self._elements or []
+        del elements[n:]
+        default = '' if self._type is str else UNSET
+        elements.extend(
+            _Scalar(f'{self._label} [{i}]', self._type, default, self._description)
+            for i in range(len(elements), n)
+        )
+        self._elements = elements
+        self._column.objects = [e.panel() for e in elements]
+
+    def value(self, loc: Loc, missing: _Missing) -> Any:
+        if self._elements is None:
+            missing.append(FieldError(None, loc, 'add an element, or remove for none'))
+            return UNSET
+        return [e.value((*loc, i), missing) for i, e in enumerate(self._elements)]
+
+    def set(self, value: Any) -> None:
+        if value is UNSET:
+            value = self._default
+        if value is UNSET:
+            self._elements = None
+            self._column.objects = []
+            return
+        self._resize(len(value))
+        for element, item in zip(self._elements or [], value, strict=True):
+            element.set(item)
+
+    def panel(self) -> Any:
+        return self._panel
+
+
+class _Group:
+    """The fields of a group, each an input; the tag of an alternative has none."""
+
+    def __init__(self, group: type[BaseModel], tag: dict[str, str]) -> None:
         self.tag = tag
         self._fields = {
-            name: _place(group, name, listing)
-            for name in group.model_fields
-            if name not in tag
+            name: _field(group, name) for name in group.model_fields if name not in tag
         }
         self._panel = pn.Column(
             *(w.panel() for w in self._fields.values()), sizing_mode='stretch_width'
@@ -323,8 +432,7 @@ class _Group:
             field.set(given.get(name, UNSET))
 
     def refresh(self, listing: Listing) -> None:
-        for widget in self._fields.values():
-            widget.refresh(listing)
+        pass
 
     def panel(self) -> Any:
         return self._panel
@@ -484,7 +592,7 @@ class Form:
         self._client = client
         listing = Listing(client)
         self._params = {
-            name: _place(spec.params, name, listing)
+            name: _parameter(spec.params, name, listing)
             for name in spec.params.model_fields
         }
         self._panel = pn.Column(
@@ -528,10 +636,7 @@ class Form:
         The ways offered at the parameter ``name``, a group or a union, such
         as ``['Given', 'From a record']``.
         """
-        widget = self._params[name]
-        if not isinstance(widget, _Choice):
-            raise TypeError(f'{name} is not a group or a union')
-        return widget.offered
+        return self._params[name].offered
 
     def refresh(self, listing: Listing | None = None) -> None:
         """

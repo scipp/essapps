@@ -14,7 +14,6 @@ from ess.spec.field_types import (
     element,
     fields_of,
     fits,
-    holds_dataset,
     is_alias,
     is_dataset,
     is_single,
@@ -122,18 +121,6 @@ def test_a_dataset_model_is_a_subclass_of_dataset_model() -> None:
     assert not is_dataset(Parts)
     assert not is_dataset(RunFile | None)
     assert not is_dataset(list[RunFile])
-
-
-@pytest.mark.parametrize(
-    'tp', [RunFile, RunFile | None, list[RunFile], FindCentre, list[FindCentre]]
-)
-def test_a_type_holds_a_dataset_model_at_any_depth(tp: Any) -> None:
-    assert holds_dataset(tp)
-
-
-@pytest.mark.parametrize('tp', [Path, list[Path], Parts, BeamCentre])
-def test_a_type_without_a_dataset_model_holds_none(tp: Any) -> None:
-    assert not holds_dataset(tp)
 
 
 def test_a_newtype_and_a_type_alias_are_aliases() -> None:

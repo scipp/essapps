@@ -21,28 +21,24 @@ The checks of a request; a template, a push, and a state check part of these:
 - *Names.* Each name is a parameter of the spec. A required parameter must
   be given; one left out takes its default.
 - *Places.* A request writes a value or a reference at each place: the
-  value of a parameter, an element of a list, or a field of a group, at any
-  depth, through a union of groups by its tag (see :mod:`ess.spec.places`).
-  A reference at a tag, for a whole list, or at a place whose type is not a
-  group, such as a scalar or a union of groups, is refused. A group is
-  written as an object of its fields; a field left out takes its default.
+  value of a parameter, or an element of a list parameter (see
+  :mod:`ess.spec.places`). A reference at a tag, inside a group, for a whole
+  list, or at a union of groups is refused. A group is written as an object
+  of its fields; a field left out takes its default.
 - *Inline values.* An inline value is allowed where the type at the place
-  is a scalar, a group where no field of it, at any depth, is given by
-  reference only, and ``None`` where it is optional; so a dataset model
-  given inline, such as a path as a string, is refused: it is given as
-  ``dataset(path=...)``. Each inline value is validated alone, by its
-  field, or for an element of a list by its element type, from its JSON
-  form, and a field that a model lacks is refused at any depth, since
-  validating would drop it silently. A group with no reference inside is an
-  inline value, validated whole, so that its validators run, an instance by
-  its dump; of a group with a reference inside, each field given inline is
-  validated alone, and the group whole in the call phase. The log holds the
-  JSON form of each validated value, and the call phase validates that, so
-  it must read back as the value: a number that is not finite has none, nor
-  has a group whose validators change a value they validated already (see
-  :func:`ess.spec.field_types.inline`). A list parameter that is not a table
-  meets its length constraints.
-- *References.* A reference stands for a group. A union of groups is
+  is a group without a data value, or a union of groups, and ``None`` where
+  it is optional; so a dataset model given inline, such as a path as a
+  string, is refused: it is given as ``dataset(path=...)``. Each group, or
+  row of a list, given inline is validated whole, so that its validators
+  run, by its field, or for an element of a list by its element type, from
+  its JSON form, an instance by its dump, and a field that a model lacks is
+  refused, since validating would drop it silently. The log holds the JSON
+  form of each validated value, and the call phase makes the value of that,
+  so it must read back as the value: a number that is not finite has none,
+  nor has a group whose validators change a value they validated already
+  (see :func:`ess.spec.field_types.inline`). A list parameter that is not a
+  table meets its length constraints.
+- *References.* A reference stands for a whole group. A union of groups is
   written inline only, with the tag of an alternative: no reference fits
   it, so that a producer need not output a tagged class to feed it. A
   dataset model is given by reference to a dataset, and only a dataset
@@ -276,8 +272,8 @@ def distinct(
     """
     The ``rows`` of ``table`` after the rows ``seen``, each by its JSON form,
     with its index. Refuses a row equal to one seen or to an earlier one: a
-    reference by its fields, such as a dataset's identity, an inline value by
-    its JSON form, and a group by each of its fields so.
+    reference by its fields, such as a dataset's identity, and a value given
+    inline by its JSON form.
     """
     new: dict[bytes, int] = {}
     for i, row in enumerate(rows, start=len(seen)):

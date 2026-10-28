@@ -7,15 +7,8 @@ A :class:`WorkflowSpec` names a workflow and holds two pydantic models: the
 *params*, everything a request gives the workflow, and the *outputs*, the
 results it returns. A spec of an I(Q) reduction::
 
-    class RunFile(DatasetModel, kind='raw'):         # a file: from a dataset
+    class RunFile(DatasetModel, kind='raw'):  # a file: from a dataset
         ...
-
-    class TransmissionRun(BaseModel):
-        file: RunFile
-
-    class SampleRun(BaseModel):
-        file: RunFile
-        transmission: TransmissionRun | None = None  # may be left out
 
     class WavelengthRange(BaseModel):
         start: float
@@ -27,9 +20,7 @@ results it returns. A spec of an I(Q) reduction::
 
     class Reduction(BaseModel):
         bins: Annotated[int, Gt(0)] = 50      # a scalar, with a constraint
-        range: WavelengthRange | None = None
         banks: list[int] = []                 # may be empty: [], not None
-        mask: PixelMask | None = None
 
     class GivenCentre(BaseModel):
         kind: Literal['given'] = 'given'      # the tag of an alternative
@@ -42,12 +33,15 @@ results it returns. A spec of an I(Q) reduction::
 
     class IofQParams(BaseModel):
         reduction: Reduction = Reduction()    # a default is an instance
+        range: WavelengthRange | None = None  # may be left out
+        mask: PixelMask | None = None
         centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
-        sample_runs: list[SampleRun]          # a table: no default
+        transmission: RunFile
+        sample_runs: list[RunFile]            # a table: no default
 
     class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
         iofq: sc.DataArray
-        mask: PixelMask                       # fits Reduction.mask of a request
+        pixel_mask: PixelMask                 # fits IofQParams.mask of a request
 
     IOFQ = WorkflowSpec(
         name='iofq', version=1, title='I(Q)', description='...',
@@ -58,16 +52,15 @@ Each field of ``IofQParams`` is a *parameter*. A *group* is a model, such
 as ``Reduction``, whose fields a request writes as an object. A *data
 value* is a value without a JSON form, such as a scipp array. A request for
 ``IOFQ``, with ``dataset(...)`` a reference to a dataset and
-``m.ref('mask')`` a reference to the output ``mask`` of an earlier record
-``m``::
+``m.ref('pixel_mask')`` a reference to the output ``pixel_mask`` of an
+earlier record ``m``::
 
     {
-        'reduction': {'bins': 100, 'mask': m.ref('mask')},
+        'reduction': {'bins': 100},
+        'mask': m.ref('pixel_mask'),
         'centre': {'kind': 'find'},
-        'sample_runs': [
-            {'file': dataset(run=101)},
-            {'file': dataset(run=102), 'transmission': {'file': dataset(run=99)}},
-        ],
+        'transmission': dataset(run=99),
+        'sample_runs': [dataset(run=101), dataset(run=102)],
     }
 
 :mod:`ess.spec.places` describes what a request writes at each place by its
@@ -78,15 +71,10 @@ The models are ordinary pydantic models: what the framework needs, it reads
 from the field types (see :mod:`ess.spec.field_types`). Making a spec checks
 them. Each comment below names a rule that a spec breaks, with the fix::
 
-    class MaskedRun(BaseModel, arbitrary_types_allowed=True):
-        file: RunFile
-        # A group with a dataset model is written field by field, never by
-        # reference, so no request can write a data value in it.
-        mask: sc.DataArray
-
     class Geometry(BaseModel):
-        # A file is a dataset model, given by reference to a dataset:
-        # file: GeometryFile, with class GeometryFile(DatasetModel, ...).
+        # A file is a parameter of a dataset model, given by reference to a
+        # dataset: geometry: GeometryFile, with class
+        # GeometryFile(DatasetModel, ...).
         file: Path
 
     class CalibrationFile(DatasetModel, kind='calibration'):
@@ -96,17 +84,14 @@ them. Each comment below names a rule that a spec breaks, with the fix::
     class Reduction(BaseModel):
         # No aliases: a request writes a field by its name.
         bins: int = Field(10, alias='nbins')
-        # X | None needs X a group, which a form shows as a toggle over its
-        # fields: range: WavelengthRange | None.
+        # A field is never X | None: a value that a request may leave out is
+        # a parameter typed X | None, or a bool field, such as limit_range: bool.
         start: float | None = None
-        # A form has no widget for a tuple, a dict, a set, a dataclass, or a
-        # RootModel: a value of several parts is a group, range: WavelengthRange.
+        # A field of a group is a scalar or a list of scalars: a value of
+        # several parts is a group, a parameter of its own.
         limits: tuple[float, float] = (0.0, 1.0)
-        # A group does not contain itself, at any depth: its form would not end.
-        children: list[Reduction] = []
-        # Pydantic does not validate a default, so a default is the value
-        # validating it gives: WavelengthRange(start=1.0, stop=2.0).
-        range: WavelengthRange = {'start': 1.0, 'stop': 2.0}
+        # A group is not a field of a group: it is a parameter of its own.
+        range: WavelengthRange
 
         # No serializers or computed fields: the record holds a group as the
         # object of its fields.
@@ -126,16 +111,22 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         # A parameter is a group, a union of groups, or a list of one:
         # bins is a field of Reduction.
         bins: int = 10
-        run: MaskedRun
         reduction: Reduction
         centring: Centring
         sample: Sample
         geometry: Geometry
         calibration: CalibrationFile
+        # A list without rows is [], not None.
+        transmissions: list[RunFile] | None = None
+        # A row is a value: the element of a list is not X | None.
+        masks: list[PixelMask | None] = []
+        # Pydantic does not validate a default, so a default is the value
+        # validating it gives: WavelengthRange(start=1.0, stop=2.0).
+        range: WavelengthRange = {'start': 1.0, 'stop': 2.0}
         # A table has no default.
-        sample_runs: list[SampleRun] = []
+        sample_runs: list[RunFile] = []
         # A name is of a parameter or of an output, not both.
-        iofq: SampleRun
+        iofq: RunFile
 
         # The params model has model validators only: each parameter is
         # validated alone.
@@ -182,9 +173,10 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable, Sequence
+from datetime import datetime
 from enum import Enum
 from pathlib import PurePath
-from types import NoneType, UnionType
+from types import UnionType
 from typing import (
     Annotated,
     Any,
@@ -198,9 +190,11 @@ from typing import (
 
 from annotated_types import MaxLen, MinLen
 from pydantic import (
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
+    NaiveDatetime,
     create_model,
     model_validator,
 )
@@ -209,7 +203,7 @@ from pydantic_core import PydanticUndefined
 
 from . import field_types, places
 from .parameters import DatasetModel
-from .places import Place, Rows, Value, Ways
+from .places import Rows, Ways
 from .refs import AccumulatorRef, DatasetRef, Loc, OutputRef, ParamsError, Ref
 
 
@@ -325,9 +319,14 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         """
         Whether the type of the parameter ``name``, with ``| None`` removed
         and for a list parameter its element type taken, has a JSON form (see
-        :func:`ess.spec.field_types.has_json_form`).
+        :func:`ess.spec.field_types.has_json_form`) and is not a dataset
+        model, whose JSON form, read, would be a local path rather than the
+        dataset's identity.
         """
-        return field_types.has_json_form(self.params, name)
+        tp = field_types.value_type(self.params.model_fields[name].annotation)
+        return not field_types.is_dataset(tp) and field_types.has_json_form(
+            self.params, name
+        )
 
     def serialize(self) -> SerializedWorkflowSpec:
         """
@@ -413,17 +412,6 @@ def _distinct(params: type[BaseModel], outputs: type[BaseModel]) -> list[str]:
     ]
 
 
-def _one_or_list(annotation: Any) -> bool:
-    """
-    Whether ``annotation`` is ``X``, ``X | None``, ``list[X]``, or
-    ``list[X | None]``: the shapes of a parameter.
-    """
-    tp, is_optional = field_types.optional(annotation)
-    return field_types.element(tp) is None or (
-        get_origin(tp) is list and not is_optional
-    )
-
-
 def _decorators(model: type[BaseModel], kinds: Sequence[str]) -> dict[str, list[str]]:
     """The decorators of ``model`` itself of each of ``kinds``, by kind."""
     decorators = model.__pydantic_decorators__
@@ -455,24 +443,14 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
     problems = _model_validators_only(model)
     for name, field in model.model_fields.items():
         where = f'{model.__name__}.{name}'
-        tp = field_types.value_type(field.annotation)
-        union = get_origin(tp) in (Union, UnionType)
         if aliases := _alias_problems(field.annotation):
             problems.extend(f'{where}: {problem}' for problem in aliases)
             continue
         if paths := _path_problems(field.annotation):
             problems.extend(f'{where}: {problem}' for problem in paths)
             continue
-        if not (
-            _one_or_list(field.annotation) and (field_types.is_single(tp) or union)
-        ):
-            problems.append(
-                f'{where}: a parameter is a group, a union of groups, or a list of '
-                'one, possibly typed X | None'
-            )
-            continue
-        if unions := _union_problems(field.annotation):
-            problems.extend(f'{where}: {problem}' for problem in unions)
+        if (shape := _shape_problem(field.annotation)) is not None:
+            problems.append(f'{where}: {shape}')
             continue
         if _has_alias(field):
             problems.append(f'{where}: a parameter has no alias')
@@ -483,21 +461,66 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
                 f'{where}: a list parameter carries only length constraints, '
                 f'not {other}; a check of one row belongs to the element type'
             )
-        if place := _place_problems(model, name, (), {}):
-            problems.extend(f'{where}: {problem}' for problem in place)
-        elif not places.groups_at(model, name):
+        try:
+            groups = places.groups_at(model, name)
+        except ValueError as error:
+            problems.append(f'{where}: {error}')
+            continue
+        if not groups:
+            tp = field_types.value_type(field.annotation)
             problems.append(
                 f'{where}: {field_types.type_name(tp)} is not a group; a parameter '
                 'is a group, a union of groups, or a list of one, and a value of '
                 'another type is a field of a group, such as the bins of a reduction'
             )
+        elif inside := [p for group in groups for p in _group_problems(group)]:
+            problems.extend(f'{where}: {problem}' for problem in inside)
         elif field.default_factory_takes_validated_data:
             problems.append(
                 f'{where}: the default_factory of a parameter takes no other values'
             )
-        elif not field.is_required() and (problem := _default_problem(model, name)):
+        elif not field.is_required() and (
+            problem := _default_problem(model, name, _parameter_value)
+        ):
             problems.append(f'{where}: {problem}')
     return problems
+
+
+def _shape_problem(annotation: Any) -> str | None:
+    """
+    Why ``annotation`` is not the shape of a parameter, or ``None``: ``X``,
+    ``X | None``, or ``list[X]``, with ``X`` a type, not a list, a dict, or
+    ``None``, or a union. A list without rows is ``[]``, so a list parameter
+    is not ``list[X] | None``, and a row is a value, so its element is not
+    ``X | None``.
+    """
+    tp, is_optional, item_optional = _taken_apart(annotation)
+    if item_optional is not None and is_optional:
+        return 'a list parameter is not typed list[X] | None; a list without rows is []'
+    if item_optional:
+        return (
+            'the element of a list parameter is not typed X | None; each row is a value'
+        )
+    if field_types.is_single(tp) or get_origin(tp) in (Union, UnionType):
+        return None
+    return (
+        'a parameter is a group, a union of groups, or a list of one, possibly '
+        'typed X | None'
+    )
+
+
+def _taken_apart(annotation: Any) -> tuple[Any, bool, bool | None]:
+    """
+    The type of one value of ``annotation``, ``X`` of ``X``, ``X | None``,
+    ``list[X]``, ``list[X] | None``, or ``list[X | None]``; whether
+    ``annotation`` is typed ``X | None``; and for a list whether its element
+    is, else ``None``.
+    """
+    tp, is_optional = field_types.optional(annotation)
+    if get_origin(tp) is not list:
+        return tp, is_optional, None
+    tp, item_optional = field_types.optional(get_args(tp)[0])
+    return tp, is_optional, item_optional
 
 
 def _found(
@@ -542,46 +565,20 @@ def _path_problems(annotation: Any) -> list[str]:
     """
     Refuse each ``Path`` that ``annotation`` is made of outside a dataset
     model, named by the field of the class that holds it, if any: a file is
-    a dataset model, given by reference to a dataset, so that the dataset
-    source checks each file a workflow reads.
+    a parameter of a dataset model, given by reference to a dataset, so that
+    the dataset source checks each file a workflow reads.
     """
     found = _found(annotation, _is_path, skip=field_types.is_dataset)
     return [
-        f'{where}a Path is outside a dataset model; a file is a dataset model, '
-        "such as class MaskFile(DatasetModel, kind='mask'), given by reference "
-        'to a dataset'
+        f'{where}a Path is outside a dataset model; a file is a parameter of a '
+        "dataset model, such as mask: MaskFile with class MaskFile(DatasetModel, "
+        "kind='mask'), given by reference to a dataset"
         for where in dict.fromkeys(where for where, _ in found)
     ]
 
 
 def _is_path(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, PurePath)
-
-
-def _union_problems(annotation: Any) -> list[str]:
-    """
-    Refuse each field of a group that ``annotation`` is made of whose type
-    holds a union of groups at any depth, such as ``list[A | B]``: a
-    choice between ways is a parameter of its own.
-    """
-    return [
-        f'{group.__name__}.{name}: a union of groups is a parameter, never a '
-        'field of a group'
-        for group in dict.fromkeys(
-            t for t in field_types.reachable(annotation) if field_types.is_group(t)
-        )
-        for name, tp in field_types.fields_of(group).items()
-        if any(_is_union_of_groups(t) for t in field_types.arguments(tp))
-    ]
-
-
-def _is_union_of_groups(tp: Any) -> bool:
-    members = [field_types.plain(a) for a in get_args(tp) if a is not NoneType]
-    return (
-        get_origin(tp) in (Union, UnionType)
-        and len(members) > 1
-        and any(field_types.is_group(m) for m in members)
-    )
 
 
 def _has_alias(field: FieldInfo) -> bool:
@@ -591,65 +588,28 @@ def _has_alias(field: FieldInfo) -> bool:
     )
 
 
-def _place_problems(
-    model: type[BaseModel],
-    name: str,
-    path: tuple[type[BaseModel], ...],
-    seen: dict[type[BaseModel], list[str]],
-) -> list[str]:
+def _group_problems(group: type[BaseModel]) -> list[str]:
     """
-    Refuse a field of ``model`` whose places a request cannot write: a union
-    that the framework cannot take apart by a value's tag, a group at a place
-    inside itself, the problems of each group at its places, each named by
-    its group (see :func:`_group_problems`). ``path`` holds the groups that
-    hold the field, and ``seen`` the problems of the groups checked already,
-    so that a group at several places is checked once, and its problems
-    named at each.
-    """
-    try:
-        groups = places.groups_at(model, name)
-    except ValueError as error:
-        return [str(error)]
-    problems = []
-    for group in groups:
-        if group in path:
-            problems.append(
-                f'{group.__name__}: a group is not at a place inside itself'
-            )
-        elif group in seen:
-            problems.extend(seen[group])
-        else:
-            seen[group] = []
-            seen[group] = _group_problems(group, (*path, group), seen)
-            problems.extend(seen[group])
-    return problems
-
-
-def _group_problems(
-    group: type[BaseModel],
-    path: tuple[type[BaseModel], ...],
-    seen: dict[type[BaseModel], list[str]],
-) -> list[str]:
-    """
-    Refuse a group whose fields a request cannot write each at its place: a
-    serializer or a computed field, which would make the group's JSON form
-    differ from the object of its places, a field with an alias, a field, or
-    an element of one, typed ``X | None`` with ``X`` not a group (see
-    :func:`_optional_value`), or of a type that a form cannot show (see
-    :func:`_unshown`), the problems of the places of its fields, and a
-    default that is not a value, since a field left out holds its default.
-    Field and model validators of any mode are allowed: they run whenever the
-    group is validated whole (see :mod:`ess.spec.places`). A field of a group
-    is not a ``NewType`` and not a union of groups: a choice between ways is
-    a parameter of its own. A group that holds a dataset model is refused if
-    a field of it is a data value: a request writes the group field by
-    field, and the data value it cannot write (see
-    :func:`~ess.spec.places.unwritten`). A dataset model is checked by
-    :func:`_dataset_model_problems` alone. The argument ``path`` holds the
-    groups that hold ``group`` and itself.
+    Refuse a group at a parameter whose fields a request cannot write: of a
+    group without a data value, a serializer or a computed field, which
+    would make the group's JSON form differ from the object of its fields, a
+    field with an alias, a field that is not interpreted (see
+    :func:`_field_problem`), and a default that is not a value, since a
+    field left out holds its default. Field and model validators of any mode
+    are allowed: they run whenever the group is validated whole (see
+    :mod:`ess.spec.places`). A group with a data value is given by reference
+    only, to an output, so it holds no dataset model, as no output does (see
+    :func:`_output_dataset_problems`); its fields are not looked at
+    otherwise. A dataset model is checked by :func:`_dataset_model_problems`
+    alone.
     """
     if field_types.is_dataset(group):
         return _dataset_model_problems(group)
+    if places.unwritten(group) is not None:
+        return [
+            f'{group.__name__} is given by reference to an output only: {problem}'
+            for problem in _output_dataset_problems(group)
+        ]
     problems = []
     if found := _decorators(group, _SERIALIZERS):
         problems.append(f'{group.__name__}: no serializers or computed fields, {found}')
@@ -657,38 +617,17 @@ def _group_problems(
         where = f'{group.__name__}.{name}'
         if _has_alias(field):
             problems.append(f'{where}: a field of a group has no alias')
-        elif place := _place_problems(group, name, path, seen):
-            problems.extend(f'{where}: {problem}' for problem in place)
-        elif _optional_value(group, name):
-            problems.append(
-                f'{where}: typed X | None with X not a group; a value that a request '
-                'may leave out is a field of a group typed X | None, such as '
-                'range: WavelengthRange | None'
-            )
-        elif (unshown := _unshown(group, name)) is not None:
-            problems.append(
-                f'{where}: {field_types.type_name(unshown)} is not a scalar; a field '
-                'of a group holds a group, a data value, or a scalar (int, '
-                'float, str, bool, an enum, or a Literal), or a list of one; a value '
-                'of several parts is a group, such as range: WavelengthRange, not '
-                'limits: tuple[float, float]'
-            )
+        elif (problem := _field_problem(field.annotation)) is not None:
+            problems.append(f'{where}: {problem}')
         elif field.default_factory_takes_validated_data:
             problems.append(
                 f'{where}: the default_factory of a field of a group takes no other '
                 'values'
             )
-        elif not field.is_required() and (problem := _default_problem(group, name)):
+        elif not field.is_required() and (
+            problem := _default_problem(group, name, places.field_value)
+        ):
             problems.append(f'{where}: {problem}')
-    if (
-        not problems
-        and field_types.holds_dataset(group)
-        and (data := places.unwritten(group)) is not None
-    ):
-        problems.append(
-            f'{group.__name__}.{data}: no request writes it, since a group that '
-            'holds a dataset model is given field by field, never by reference'
-        )
     return problems
 
 
@@ -711,68 +650,89 @@ def _dataset_model_problems(model: type[BaseModel]) -> list[str]:
     return []
 
 
-def _optional_value(group: type[BaseModel], name: str) -> bool:
+def _field_problem(annotation: Any) -> str | None:
     """
-    Whether the field ``name`` of ``group``, or each element of it if it is a
-    list, is typed ``X | None`` with ``X`` not a group. A UI shows ``X | None``
-    as a toggle over the fields of a group, so a field is
-    ``range: WavelengthRange | None``, not ``start: float | None``.
+    Why a field typed ``annotation``, of a group without a data value, is
+    not *interpreted*, with the fix, or ``None``. An interpreted field is a
+    scalar, ``int``, ``float``, ``str``, ``bool``, ``datetime`` (or pydantic's
+    ``AwareDatetime`` or ``NaiveDatetime``), an enum, or a ``Literal``,
+    possibly with constraints, ``Annotated[float, Gt(0)]``, or a list of
+    scalars, and never ``X | None``, nor a ``Literal`` with ``None``, which
+    is ``X | None`` too: a form shows each as an input of its type, and a
+    request writes it inline. Any other type, a group, a union, a tuple, a
+    dict, or a dataclass, is refused.
     """
-    _, is_optional = field_types.optional(_one(group, name))
-    return is_optional and not places.groups_at(group, name)
-
-
-def _unshown(group: type[BaseModel], name: str) -> Any | None:
-    """
-    The type of the field ``name`` of ``group``, or of each element of it if
-    it is a list, with ``| None`` removed, if a form cannot show it, else
-    ``None``. A form shows a group, and a scalar: ``int``, ``float``,
-    ``str``, ``bool``, an enum, or a ``Literal``, possibly with constraints,
-    ``Annotated[float, Gt(0)]``. A *data value*, a type without a JSON form
-    but a dict, such as ``sc.DataArray``, no request writes: the group is
-    given by reference. Any other type, such as a tuple, a dict, a set, a
-    ``TypedDict``, a dataclass, or a ``RootModel`` with a JSON form, is
-    refused: no spec needs it, and its parts are a group's fields.
-    """
-    tp, _ = field_types.optional(_one(group, name))
-    if field_types.is_group(tp) or _is_scalar(tp):
+    tp, is_optional, item_optional = _taken_apart(annotation)
+    if item_optional is not None and (is_optional or item_optional):
+        return (
+            'a list field is never typed list[X] | None or list[X | None]; a list '
+            'without elements is [], and each element is a value'
+        )
+    if is_optional or (get_origin(tp) is Literal and None in get_args(tp)):
+        return (
+            'a field is never typed X | None, nor a Literal with None; a value '
+            'that a request may leave out is a parameter typed X | None, or a '
+            'bool field, such as limit_range: bool'
+        )
+    if _is_scalar(tp):
         return None
-    if get_origin(tp) is not dict and not field_types.has_json_form(group, name):
-        return None  # a data value
-    return tp
+    union = get_origin(tp) in (Union, UnionType)
+    if field_types.is_group(tp) or (
+        union and any(map(field_types.is_group, get_args(tp)))
+    ):
+        kind = 'a union of groups' if union else 'a group'
+        return (
+            f'{field_types.type_name(tp)} is {kind}; a field of a group is a '
+            'scalar or a list of scalars: make it a parameter of its own'
+        )
+    return (
+        f'{field_types.type_name(tp)} is not a scalar; a field of a group is a '
+        'scalar (int, float, str, bool, datetime, an enum, or a Literal) or a '
+        'list of scalars: a value of several parts is a group, a parameter of '
+        'its own, such as range: WavelengthRange, not limits: tuple[float, float]'
+    )
 
 
 def _is_scalar(tp: Any) -> bool:
     return (
-        tp in (int, float, str, bool)
+        tp in (int, float, str, bool, datetime, AwareDatetime, NaiveDatetime)
         or get_origin(tp) is Literal
         or (isinstance(tp, type) and issubclass(tp, Enum))
     )
 
 
-def _one(group: type[BaseModel], name: str) -> Any:
-    """The type at one place of the field ``name``: an element, if it is a list."""
-    annotation = group.model_fields[name].annotation
-    return get_args(annotation)[0] if field_types.is_list(group, name) else annotation
-
-
-def _default_problem(model: type[BaseModel], name: str) -> str | None:
+def _default_problem(
+    model: type[BaseModel],
+    name: str,
+    made_of: Callable[[type[BaseModel], str, Any], Any],
+) -> str | None:
     """
     Why the default of the field ``name`` of ``model`` is not a value, or
-    ``None``: what a request may write at the place, with no reference (see
-    :func:`ess.spec.places.held`), and the value that validating it gives,
-    since pydantic does not validate a default, and a binding gets it as it
-    is. So a group's default is an instance, not the object of its fields.
+    ``None``: what a request may write, and the value that ``made_of`` it
+    gives, since pydantic does not validate a default, and a binding gets it
+    as it is. So a group's default is an instance, not the object of its
+    fields. ``made_of`` is :func:`_parameter_value` for a parameter, and
+    :func:`ess.spec.places.field_value` for a field of a group, whose default
+    is validated whole, with the length constraints of a list.
     """
     default = model.model_fields[name].get_default(call_default_factory=True)
     try:
-        places.held(model, name, default, _no_ref)
-        made = places.validated(model, name, default)
+        made = made_of(model, name, default)
     except ParamsError as error:
         return f'the default is not a value a request may write: {error}'
     if made != default:
         return f'the default {default!r} is not the value validating it gives, {made!r}'
     return None
+
+
+def _parameter_value(model: type[BaseModel], name: str, value: Any) -> Any:
+    """
+    ``value`` of the parameter ``name`` of ``model`` as validating it gives,
+    if a request may write it with no reference (see
+    :func:`ess.spec.places.held`).
+    """
+    places.held(model, name, value, _no_ref)
+    return places.validated(model, name, value)
 
 
 def _no_ref(loc: Loc, ref: Ref, tp: Any) -> Any:
@@ -794,12 +754,24 @@ def _outputs_problems(model: type[BaseModel]) -> list[str]:
         else:
             problems.extend(f'{where}: {problem}' for problem in _path_problems(tp))
             problems.extend(
-                f'{where}: {found}{field_types.type_name(model)} is a dataset '
-                'model; no output holds one, so that a file comes from a dataset, '
-                'which the dataset source checks'
-                for found, model in _found(tp, field_types.is_dataset)
+                f'{where}: {problem}' for problem in _output_dataset_problems(tp)
             )
     return problems
+
+
+def _output_dataset_problems(annotation: Any) -> list[str]:
+    """
+    Refuse each dataset model that ``annotation``, of an output, is made of,
+    named by the field of the class that holds it, if any: no output holds
+    one, so that a file comes from a dataset, which the dataset source
+    checks.
+    """
+    return [
+        f'{where}{field_types.type_name(model)} is a dataset model; no output '
+        'holds one, so that a file comes from a dataset, which the dataset source '
+        'checks'
+        for where, model in _found(annotation, field_types.is_dataset)
+    ]
 
 
 def _tables_problems(spec: WorkflowSpec[Any, Any]) -> list[str]:
@@ -872,9 +844,9 @@ def _ref_form(tp: Any) -> Any:
 
 def _field_forms(model: type[BaseModel], name: str) -> Any:
     """
-    The type of the field ``name`` of ``model`` with the type at each of its
-    places replaced by the forms it takes (see :func:`_forms`); the
-    constraints of a list, whose elements are places, on the list.
+    The type of the parameter ``name`` of ``model`` with the type at each of
+    its places replaced by the forms it takes (see :func:`_forms`); the
+    constraints of a list parameter on the list.
     """
     described = places.place(model, name)
     if isinstance(described, Rows):
@@ -884,28 +856,21 @@ def _field_forms(model: type[BaseModel], name: str) -> Any:
     return _forms(described)
 
 
-def _forms(described: Place) -> Any:
+def _forms(described: Ways) -> Any:
     """
     The forms a place takes, as :func:`~ess.spec.places.place` describes it:
-    a group or a union the forms of the fields of each group written inline
-    (see :func:`_group_forms`), and a reference if one fits, of a dataset
-    model to a dataset; a scalar itself, inline only, with its constraints,
-    which are never put on a reference.
+    the forms of the fields of each group written inline (see
+    :func:`_group_forms`), with the constraints of the place, and a reference
+    if one fits, of a dataset model to a dataset.
     """
-    match described:
-        case Value(type=tp, metadata=metadata):
-            form = Annotated[tp, *metadata] if metadata else tp
-        case Ways(tag=tag, inline=inline, record=record, none=none):
-            forms = []
-            if inline:
-                groups = [_group_forms(g, tag) for g in inline.values()]
-                forms.append(_inline_form(groups, described.metadata))
-            if record is not None:
-                forms.append(_ref_form(record))
-            form = Union[tuple(forms)]  # noqa: UP007
-            if none:
-                form = Union[form, None]  # noqa: UP007
-    return form
+    forms = []
+    if described.inline:
+        groups = [_group_forms(g, described.tag) for g in described.inline.values()]
+        forms.append(_inline_form(groups, described.metadata))
+    if described.record is not None:
+        forms.append(_ref_form(described.record))
+    form = Union[tuple(forms)]  # noqa: UP007
+    return Union[form, None] if described.none else form  # noqa: UP007
 
 
 def _inline_form(groups: Sequence[Any], metadata: Sequence[Any]) -> Any:
@@ -922,13 +887,13 @@ def _inline_form(groups: Sequence[Any], metadata: Sequence[Any]) -> Any:
 @functools.cache
 def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
     """
-    A model of the fields of a group, each replaced by the forms it takes
-    (see :func:`_field_forms`); the tag field ``tag`` of an alternative of a
-    union by itself, since a tag is written inline only, and required, since
-    a request always writes it. The title of a tag labels its alternative,
-    so a tag without one is titled by its value, as a parameter is by its
-    name; pydantic's title, made of the name of the field, would be that of
-    every alternative.
+    A model of the fields of a group, each a scalar or a list of scalars,
+    written inline only, with its constraints; the tag field ``tag`` of an
+    alternative of a union without its default, required, since a request
+    always writes it. The title of a tag labels its alternative, so a tag
+    without one is titled by its value, as a parameter is by its name;
+    pydantic's title, made of the name of the field, would be that of every
+    alternative.
     """
     fields: dict[str, Any] = {}
     for name, info in group.model_fields.items():
@@ -936,7 +901,9 @@ def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
             places.title(get_args(info.annotation)[0], info) if name == tag else None
         )
         fields[name] = (
-            info.annotation if name == tag else _field_forms(group, name),
+            Annotated[info.annotation, *info.metadata]
+            if info.metadata
+            else info.annotation,
             Field(
                 default=PydanticUndefined
                 if name == tag

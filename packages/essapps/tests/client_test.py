@@ -140,46 +140,28 @@ class Labels(BaseModel):
     tags: list[str] = []
 
 
-class Tag(BaseModel):
-    tags: list[str] = []
-
-
-class TaggedRun(BaseModel):
-    """A run and its tag, if given: a group that holds a dataset model."""
-
-    file: RunFile
-    tag: Tag | None = None
-
-
 class SumParams(BaseModel):
     scale: Factor = Field(default_factory=Factor)
     labels: Labels = Field(default_factory=Labels)
-    runs: list[TaggedRun]
+    runs: list[RunFile]
     offset: Amount | None = None
 
 
 SUM = _spec('sum', params=SumParams, tables=('runs',))
 
 
-class Weight(BaseModel):
+class WeightedPart(BaseModel):
+    """A value and its weight, which has no default."""
+
     value: float
-
-
-class WeightedRun(BaseModel):
-    """
-    A run and its weight, which has no default: a group that holds a dataset
-    model.
-    """
-
-    file: RunFile
-    weight: Weight
+    weight: float
 
 
 class WeightedParams(BaseModel):
-    runs: list[WeightedRun] = Field(min_length=1)
+    parts: list[WeightedPart] = Field(min_length=1)
 
 
-WEIGHTED = _spec('weighted', params=WeightedParams, tables=('runs',))
+WEIGHTED = _spec('weighted', params=WeightedParams, tables=('parts',))
 
 
 class MeanAndSpread(BaseModel):
@@ -296,8 +278,8 @@ def scale(params: ScaleParams) -> Value:
 
 
 def weighted(params: Any) -> Value:
-    """WEIGHTED as a plain function: each run times its weight, summed."""
-    return _value(sum(r.weight.value * read_dataset(r.file.path) for r in params.runs))
+    """WEIGHTED as a plain function: each value times its weight, summed."""
+    return _value(sum(p.weight * p.value for p in params.parts))
 
 
 def stitch(params: StitchParams) -> Curve:
@@ -366,17 +348,17 @@ class Averaging:
 
 
 class _ScaledTotal:
-    """``offset`` plus each run times ``scale``; ``tags`` lists the tags pushed."""
+    """``offset`` plus each run times ``scale``; ``runs`` lists the runs pushed."""
 
     def __init__(self, fixed: Mapping[str, Any]) -> None:
         self._factor = fixed['scale'].factor
         self.total = 0.0 if fixed['offset'] is None else fixed['offset'].value
-        self.tags: list[Any] = []
+        self.runs: list[Any] = []
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
         for run in rows:
-            self.tags.append(run.tag)
-            self.total += self._factor * read_dataset(run.file.path)
+            self.runs.append(run)
+            self.total += self._factor * read_dataset(run.path)
 
     def outputs(self) -> Value:
         return _value(self.total)
@@ -892,7 +874,7 @@ def test_a_template_and_its_calls_take_models(client: Client) -> None:
 
 
 def test_a_group_with_a_field_its_model_lacks_is_refused(client: Client) -> None:
-    acc = client.accumulator(Template(SUM, blanks=('runs',)))
+    walk = client.accumulator(Template(WALK, blanks=('steps',)))
 
     with pytest.raises(SubmitError, match=r'scaling\.speed: Extra inputs are not'):
         client.submit(
@@ -902,10 +884,8 @@ def test_a_group_with_a_field_its_model_lacks_is_refused(client: Client) -> None
                 'sample': dataset(run=1),
             },
         )
-    with pytest.raises(
-        SubmitError, match=r'runs\[0\]\.tag\.speed: Extra inputs are not'
-    ):
-        acc.push(runs=[{'file': dataset(run=1), 'tag': {'speed': 2.0}}])
+    with pytest.raises(SubmitError, match=r'steps\[0\]\.speed: Extra inputs are not'):
+        walk.push(steps=[{'size': 1.0, 'speed': 2.0}])
 
 
 def test_a_dataset_reaches_the_workflow_as_its_dataset_model(
@@ -1239,8 +1219,7 @@ def test_an_accumulator_waits_for_its_fixed_values_and_reads_them_once(
     threading.Timer(0.05, loading.set).start()
     fixed = {'offset': offset.ref('value')}  # and the default scale and labels
     total = client.accumulator(Template(SUM, params=fixed, blanks=('runs',)))
-    files = [dataset(run=n) for n in (1, 2)]
-    runs = [{'file': file} for file in files]
+    runs = [dataset(run=n) for n in (1, 2)]
     for run in runs:
         total.push(runs=[run])
     read = client.compute(_read(total))
@@ -1257,7 +1236,7 @@ def test_an_accumulator_waits_for_its_fixed_values_and_reads_them_once(
     state = _state(client, read)
     assert state.request == plain.request
     assert client.provenance(read).records() == [state, offset]
-    resolved = {datasets.resolve(file) for file in files}
+    resolved = {datasets.resolve(run) for run in runs}
     assert set(client.provenance(read).datasets()) == resolved  # offset's run too
     provenance = client.provenance(total)  # of the state after the pushes so far
     assert provenance == client.provenance(plain)
@@ -1334,20 +1313,20 @@ def test_a_table_that_needs_two_rows_takes_them_one_push_at_a_time(
 
 
 def test_an_accumulator_s_values_reach_the_driver_as_the_log_holds_them(
-    client: Client, scaled_sum: ScaledSum
+    client: Client, scaled_sum: ScaledSum, datasets: FakeDatasets
 ) -> None:
     acc = client.accumulator(
         Template(SUM, params={'labels': Labels(tags=['a', 'b'])}, blanks=('runs',))
     )
-    acc.push(runs=[{'file': dataset(run=1), 'tag': Tag(tags=['c', 'd'])}])
+    acc.push(runs=[dataset(run=1)])
     read = client.compute(_read(acc))
 
     assert client.output(read, 'value') == Amount(value=1.0)
     assert acc.template.params == {'labels': {'tags': ['a', 'b']}}
     (run,) = _state(client, read).request.params['runs']
-    assert run['tag'] == {'tags': ['c', 'd']}
+    assert run == datasets.resolve(dataset(run=1))
     assert scaled_sum.opened[0]['labels'] == Labels(tags=['a', 'b'])
-    assert scaled_sum.held[0].tags == [Tag(tags=['c', 'd'])]
+    assert scaled_sum.held[0].runs == [RunFile(path=datasets.path(run))]
 
 
 def test_an_optional_output_left_out_is_not_read(client: Client) -> None:
@@ -1416,7 +1395,7 @@ def test_the_blanks_of_an_accumulator_are_its_tables(client: Client) -> None:
         r"tables, \['runs'\], not \[\]$": Template(SUM),
         r"not \['scale'\]$": Template(SUM, blanks=('scale',)),
         r"not \['runs', 'scale'\]$": Template(SUM, blanks=('runs', 'scale')),
-        r"not \['tag'\]$": Template(SUM, blanks=('tag',)),  # a field of a row
+        r"not \['size'\]$": Template(WALK, blanks=('size',)),  # a field of a row
         r"tables, \['low', 'high'\], not \[\]$": Template(STITCH),
         r"not \['reference'\]$": Template(STITCH, blanks=('reference',)),
     }
@@ -1507,15 +1486,12 @@ def test_a_template_that_fixes_a_repeated_row_is_refused(
 
 
 def test_a_push_takes_rows_as_a_request_does(client: Client) -> None:
-    rows = [
-        {'file': dataset(run=1), 'weight': Weight(value=3.0)},
-        {'file': dataset(run=2), 'weight': {'value': 1.0}},
-    ]
-    weighted = client.accumulator(Template(WEIGHTED, blanks=('runs',)))
+    rows = [WeightedPart(value=1.0, weight=3.0), {'value': 2.0, 'weight': 1.0}]
+    weighted = client.accumulator(Template(WEIGHTED, blanks=('parts',)))
     for row in rows:
-        weighted.push(runs=[row])
+        weighted.push(parts=[row])
     read = client.compute(_read(weighted))
-    plain = client.compute(WEIGHTED, params={'runs': rows})
+    plain = client.compute(WEIGHTED, params={'parts': rows})
 
     assert (
         client.output(read, 'value')
@@ -1529,21 +1505,21 @@ def test_a_push_takes_rows_as_a_request_does(client: Client) -> None:
 
 def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
     load = client.compute(_load(1))
-    run, weight = dataset(run=1), Weight(value=1.0)
     rows = [
-        run,  # a dataset for a group whose weight has no default
-        {'file': run, 'weight': load.ref('value')},  # a reference, no fit
-        {'file': run, 'weight': {'value': 'x'}},  # an invalid inline value
-        {'file': run, 'weight': dataset(run=2)},  # a dataset, no dataset model
-        {'file': run, 'weight': {'@ref': 'run'}},  # no kind of reference
-        {'file': run, 'weight': weight, 'speed': 1.0},  # a field the group lacks
+        dataset(run=1),  # a dataset for a group that holds no dataset model
+        load.ref('value'),  # a reference, no fit
+        {'value': 1.0},  # a field without a default left out
+        {'value': 1.0, 'weight': 'x'},  # an invalid inline value
+        {'value': 1.0, 'weight': load.ref('value')},  # a reference inside a group
+        {'@ref': 'run'},  # no kind of reference
+        {'value': 1.0, 'weight': 1.0, 'speed': 1.0},  # a field the group lacks
     ]
-    weighted = client.accumulator(Template(WEIGHTED, blanks=('runs',)))
+    weighted = client.accumulator(Template(WEIGHTED, blanks=('parts',)))
     for row in rows:
         with pytest.raises(SubmitError) as refused:
-            client.submit(WEIGHTED, params={'runs': [row]})
+            client.submit(WEIGHTED, params={'parts': [row]})
         with pytest.raises(SubmitError) as pushed:
-            weighted.push(runs=[row])
+            weighted.push(parts=[row])
         assert str(pushed.value) == str(refused.value)
 
 
@@ -1556,14 +1532,14 @@ def test_a_push_takes_lists_of_rows(client: Client) -> None:
             total.push(parts=rows)  # type: ignore[arg-type]
 
 
-def test_a_reference_in_a_push_must_fit_its_field(client: Client) -> None:
+def test_a_reference_in_a_push_must_fit_its_row(client: Client) -> None:
     load = client.submit(_load(1))
-    weighted = client.accumulator(Template(WEIGHTED, blanks=('runs',)))
+    weighted = client.accumulator(Template(WEIGHTED, blanks=('parts',)))
 
     with pytest.raises(
-        SubmitError, match=r'^runs\[0\]\.weight: .*, of type Amount, does not fit'
+        SubmitError, match=r'^parts\[0\]: .*, of type Amount, does not fit'
     ):
-        weighted.push(runs=[{'file': dataset(run=1), 'weight': load.ref('value')}])
+        weighted.push(parts=[load.ref('value')])
 
 
 def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(

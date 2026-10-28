@@ -21,13 +21,6 @@ from ess.spec import DatasetModel, WorkflowSpec
 def allowed_spec() -> WorkflowSpec:
     class RunFile(DatasetModel, kind='raw'): ...
 
-    class TransmissionRun(BaseModel):
-        file: RunFile
-
-    class SampleRun(BaseModel):
-        file: RunFile
-        transmission: TransmissionRun | None = None
-
     class WavelengthRange(BaseModel):
         start: float
         stop: float
@@ -37,9 +30,7 @@ def allowed_spec() -> WorkflowSpec:
 
     class Reduction(BaseModel):
         bins: Annotated[int, Gt(0)] = 50
-        range: WavelengthRange | None = None
         banks: list[int] = []
-        mask: PixelMask | None = None
 
     class GivenCentre(BaseModel):
         kind: Literal['given'] = 'given'
@@ -52,12 +43,15 @@ def allowed_spec() -> WorkflowSpec:
 
     class IofQParams(BaseModel):
         reduction: Reduction = Reduction()
+        range: WavelengthRange | None = None
+        mask: PixelMask | None = None
         centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
-        sample_runs: list[SampleRun]
+        transmission: RunFile
+        sample_runs: list[RunFile]
 
     class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
         iofq: sc.DataArray
-        mask: PixelMask
+        pixel_mask: PixelMask
 
     return WorkflowSpec(
         name='iofq',
@@ -73,12 +67,12 @@ def allowed_spec() -> WorkflowSpec:
 def refused_spec() -> WorkflowSpec:
     class RunFile(DatasetModel, kind='raw'): ...
 
-    class SampleRun(BaseModel):
-        file: RunFile
-
     class WavelengthRange(BaseModel):
         start: float
         stop: float
+
+    class PixelMask(BaseModel, arbitrary_types_allowed=True):
+        mask: sc.DataArray
 
     class GivenCentre(BaseModel):
         kind: Literal['given'] = 'given'
@@ -87,10 +81,6 @@ def refused_spec() -> WorkflowSpec:
         kind: Literal['find'] = 'find'
 
     RunNumber = NewType('RunNumber', int)
-
-    class MaskedRun(BaseModel, arbitrary_types_allowed=True):
-        file: RunFile
-        mask: sc.DataArray
 
     class Geometry(BaseModel):
         file: Path
@@ -102,8 +92,7 @@ def refused_spec() -> WorkflowSpec:
         bins: int = Field(10, alias='nbins')
         start: float | None = None
         limits: tuple[float, float] = (0.0, 1.0)
-        children: list[Reduction] = []
-        range: WavelengthRange = {'start': 1.0, 'stop': 2.0}
+        range: WavelengthRange
 
         @computed_field
         def width(self) -> float:
@@ -117,14 +106,16 @@ def refused_spec() -> WorkflowSpec:
 
     class Params(BaseModel):
         bins: int = 10
-        run: MaskedRun
         reduction: Reduction
         centring: Centring
         sample: Sample
         geometry: Geometry
         calibration: CalibrationFile
-        sample_runs: list[SampleRun] = []
-        iofq: SampleRun
+        transmissions: list[RunFile] | None = None
+        masks: list[PixelMask | None] = []
+        range: WavelengthRange = {'start': 1.0, 'stop': 2.0}
+        sample_runs: list[RunFile] = []
+        iofq: RunFile
 
         @field_validator('bins')
         @classmethod
@@ -161,17 +152,18 @@ def refusal() -> str:
 @pytest.mark.parametrize(
     'rule',
     [
-        'MaskedRun.mask: no request writes it',
         'Reduction.bins: a field of a group has no alias',
-        'Reduction.start: typed X | None with X not a group',
+        'Reduction.start: a field is never typed X | None',
         'Reduction.limits: tuple is not a scalar',
-        'Reduction.children: Reduction: a group is not at a place inside itself',
-        'Reduction.range: the default',
+        'Reduction.range: WavelengthRange is a group',
         "Reduction: no serializers or computed fields, {'computed_fields'",
-        'Centring.centre: a union of groups is a parameter',
+        'Centring.centre: GivenCentre | FindCentre is a union of groups',
         'Sample.run: RunNumber is a NewType',
         'Geometry.file: a Path is outside a dataset model',
         "CalibrationFile: a dataset model holds only path, not ['run']",
+        'Params.transmissions: a list parameter is not typed list[X] | None',
+        'Params.masks: the element of a list parameter is not typed X | None',
+        'Params.range: the default',
         'Outputs.raw: RunFile is a dataset model; no output holds one',
         'Params.bins: int is not a group',
         'sample_runs: a table has no default',

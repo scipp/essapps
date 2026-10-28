@@ -24,12 +24,8 @@ class Reduction(BaseModel):
     bins: int = 2
 
 
-class CountsFile(DatasetModel):
+class Run(DatasetModel):
     """A text file of counts."""
-
-
-class Run(BaseModel):
-    file: CountsFile
 
 
 class SampleRun(Run):
@@ -121,12 +117,12 @@ def loaded() -> list[Path]:
 @pytest.fixture
 def make_pipeline(loaded: list[Path]) -> MakePipeline:
     def load_sample(run: SampleRun) -> SampleCounts:
-        loaded.append(run.file.path)
-        return SampleCounts(np.loadtxt(run.file.path))
+        loaded.append(run.path)
+        return SampleCounts(np.loadtxt(run.path))
 
     def load_can(run: CanRun) -> CanCounts:
-        loaded.append(run.file.path)
-        return CanCounts(np.loadtxt(run.file.path))
+        loaded.append(run.path)
+        return CanCounts(np.loadtxt(run.path))
 
     def make(fixed: Mapping[str, Any]) -> sciline.Pipeline:
         sample = [load_sample, sample_numerator, sample_denominator, sample_iofq]
@@ -188,22 +184,22 @@ SAMPLES = [[1.0, 3.0, 2.0, 6.0], [2.0, 2.0, 0.0, 4.0]]
 CANS = [[1.0, 1.0, 1.0, 1.0], [0.0, 2.0, 2.0, 0.0]]
 
 
-def write(tmp_path: Path, name: str, counts: list[float]) -> CountsFile:
+def write(tmp_path: Path, name: str, counts: list[float]) -> Path:
     path = tmp_path / f'{name}.txt'
     np.savetxt(path, counts)
-    return CountsFile(path=path)
+    return path
 
 
 @pytest.fixture
 def samples(tmp_path: Path) -> list[SampleRun]:
     return [
-        SampleRun(file=write(tmp_path, f'sample{i}', c)) for i, c in enumerate(SAMPLES)
+        SampleRun(path=write(tmp_path, f'sample{i}', c)) for i, c in enumerate(SAMPLES)
     ]
 
 
 @pytest.fixture
 def cans(tmp_path: Path) -> list[CanRun]:
-    return [CanRun(file=write(tmp_path, f'can{i}', c)) for i, c in enumerate(CANS)]
+    return [CanRun(path=write(tmp_path, f'can{i}', c)) for i, c in enumerate(CANS)]
 
 
 def reduction(bins: int) -> dict[str, Reduction]:
@@ -248,7 +244,7 @@ def test_a_stage_loads_each_run_once(
         np.testing.assert_allclose(
             tune(reduction(bins)).iofq, iofq(SAMPLES[0], bins) - iofq(CANS[0], bins)
         )
-    assert sorted(loaded) == sorted([samples[0].file.path, cans[0].file.path])
+    assert sorted(loaded) == sorted([samples[0].path, cans[0].path])
 
 
 def test_a_stage_call_takes_the_blanks_exactly(
@@ -288,8 +284,8 @@ def test_summing_the_rows_gives_the_reduction_of_the_summed_runs(
     tmp_path: Path,
 ) -> None:
     summed = IofQParams(
-        sample=SampleRun(file=write(tmp_path, 'samples', np.sum(SAMPLES, axis=0))),
-        can=CanRun(file=write(tmp_path, 'cans', np.sum(CANS, axis=0))),
+        sample=SampleRun(path=write(tmp_path, 'samples', np.sum(SAMPLES, axis=0))),
+        can=CanRun(path=write(tmp_path, 'cans', np.sum(CANS, axis=0))),
     )
     rows = IOFQ_MULTI.params(sample=samples, can=cans)
     np.testing.assert_allclose(multi.compute(rows).iofq, single.compute(summed).iofq)
@@ -305,7 +301,7 @@ def test_a_driver_with_fixed_rows_loads_each_run_once_across_reads(
     for sample in samples:
         driver.push('sample', [sample])
         driver.outputs()
-    assert loaded == [run.file.path for run in cans + samples]
+    assert loaded == [run.path for run in cans + samples]
 
 
 def test_keys_give_the_key_of_each_field(single: PipelineBinding) -> None:
@@ -354,7 +350,7 @@ TOTAL_MULTI = _spec(
 
 
 def load(run: Run) -> Counts:
-    return Counts(np.loadtxt(run.file.path))
+    return Counts(np.loadtxt(run.path))
 
 
 def total(counts: Counts, reduction: Reduction) -> Total:
@@ -408,7 +404,7 @@ def test_a_table_sets_the_key_of_its_type_to_its_list(
     samples: list[SampleRun],
 ) -> None:
     def load_all(runs: list[SampleRun]) -> Counts:
-        return Counts(sum(np.loadtxt(run.file.path) for run in runs))
+        return Counts(sum(np.loadtxt(run.path) for run in runs))
 
     binding = PipelineBinding(
         TOTAL_MULTI,
@@ -475,9 +471,7 @@ Difference = NewType('Difference', float)
 
 
 def difference(first: FirstRun, second: SecondRun) -> Difference:
-    return Difference(
-        np.loadtxt(first.file.path).sum() - np.loadtxt(second.file.path).sum()
-    )
+    return Difference(np.loadtxt(first.path).sum() - np.loadtxt(second.path).sum())
 
 
 def test_two_parameters_of_one_class_need_a_key_each(
@@ -625,7 +619,7 @@ CENTRED = _spec('centred', params=CentredParams, outputs=CentredOutputs)
 
 
 def load_counts(run: SampleRun) -> SampleCounts:
-    return SampleCounts(np.loadtxt(run.file.path))
+    return SampleCounts(np.loadtxt(run.path))
 
 
 def centred(counts: SampleCounts, centre: BeamCentre) -> Centred:

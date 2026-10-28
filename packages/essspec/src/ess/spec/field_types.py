@@ -180,26 +180,15 @@ def _is_model(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, BaseModel)
 
 
-def holds_dataset(tp: Any) -> bool:
-    """
-    Whether ``tp``, or a type it is made of (see :func:`reachable`), is a
-    dataset model.
-    """
-    return any(map(is_dataset, reachable(tp)))
-
-
 @functools.cache
 def has_json_form(model: type[BaseModel], name: str) -> bool:
     """
     Whether the type of the field ``name`` of ``model``, with ``| None``
     removed and for a list its element type taken, has a JSON form: pydantic
     makes a JSON schema of it, with the config of ``model``, of each member
-    of a union too, and it holds no dataset model, whose JSON form, read,
-    would be a local path rather than the dataset's identity.
+    of a union too.
     """
     tp = value_type(model.model_fields[name].annotation)
-    if holds_dataset(tp):
-        return False
     try:
         # A field of a model of its own carries the config, which
         # TypeAdapter refuses for a model type.
@@ -258,16 +247,13 @@ def model_of(model: type[BaseModel], name: str, whole: bool = False) -> type[Bas
     config and without the decorators of ``model``: it validates one value by
     its own field. The params model has no decorators but model validators,
     which the framework never calls; a check of one value belongs to the
-    value's type. A field of a group is validated so only in the request
-    phase, at a place given inline in a group with a reference inside; the
-    group's validators run when the group is validated whole (see
-    :mod:`ess.spec.places`).
+    value's type.
 
     For a list field, the model validates one row: by its element type alone,
     with that type's metadata, without the field's length constraints, which
     hold for the whole list. A reference stands for one row. With ``whole``,
-    as for a field of a group, the model validates the whole field, a list
-    too.
+    the model validates the whole field, a list too, as for a field of a
+    group, whose elements are not places.
     """
     info = model.model_fields[name]
     field = (

@@ -181,16 +181,16 @@ class Accumulator:
             acc.push(sample=[dataset(run=615)], can=[dataset(run=614)])
 
         Each row is given inline, such as a group as a model or a dict, or by
-        reference, as its type allows, and so is each place in it, such as a
-        field of a group. A push gives rows of one or more tables, side by side
-        as in a request, never paired: rows of different tables have nothing to
-        do with each other. A table the template fixes is refused, and so are a
-        row the table holds already or that the push repeats, and a push of no
-        rows into a table. Rows are compared as the record holds them: a
+        reference, as its type allows; a field of a group is given inline
+        only. A push gives rows of one or more tables, side by side as in a
+        request, never paired: rows of different tables have nothing to do
+        with each other. A table the template fixes is refused, and so are a
+        row the table holds already or that the push repeats, and a push of
+        no rows into a table. Rows are compared as the record holds them: a
         dataset by its identity, a reference to an output by record, output,
-        and key, and an inline value by its JSON form, each at its place; for a
-        table whose element type has a JSON form, also by the rows read, before
-        the driver gets them.
+        and key, and an inline value by its JSON form; for a table whose
+        element type has a JSON form, also by the rows read, before the
+        driver gets them.
 
         A push is one push into the binding's driver per table, in the
         order given, and one state. A push references
@@ -326,16 +326,16 @@ class Client:
 
         A spec takes its params, a dict by name or an instance of its params
         model if every value is given inline. The value at each place, a
-        parameter, an element of a list, or a field of a group, is given as
-        its type allows (see :mod:`ess.spec.places`):
+        parameter or an element of a list parameter, is given as its type
+        allows (see :mod:`ess.spec.places`):
 
         - a dataset model, by reference to a dataset;
         - any other group, as a model or a dict of its fields, unless a field
-          is a data value; or by reference to an output that fits and holds no
-          dataset model;
+          is a data value; or by reference to an output that fits;
         - a union of groups, as a model or a dict of the fields of one
-          alternative, with its tag, never by reference;
-        - any other type, inline::
+          alternative, with its tag, never by reference.
+
+        A field of a group is given inline only::
 
             client.submit(IOFQ, params={'reduction': Reduction(bins=4),
                                         'sample': dataset(run=60339),
@@ -351,8 +351,8 @@ class Client:
         in place of the spec gets the same checks. A request that cannot run
         raises ``SubmitError``: an invalid value, an unknown spec or dataset,
         an inline group with a field that is a data value, a reference where
-        none may stand, such as at a number, at a union, or to a whole list,
-        a reference the client may not read, or one whose data do not fit its
+        none may stand, inside a group, at a union, or to a whole list, a
+        reference the client may not read, or one whose data do not fit its
         field. Each of its ``errors`` names the field at fault by its place,
         ``loc``, and the request by its key or index, ``entry``, if several
         are given (see :class:`~ess.apps.errors.FieldError`)::

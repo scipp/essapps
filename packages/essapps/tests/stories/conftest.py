@@ -570,16 +570,10 @@ def find_centre(params: FindCentreParams) -> FoundCentre:
     return FoundCentre(centre=Centre(x=float(_counts(params.direct_beam.path).mean())))
 
 
-class SampleWithTransmission(BaseModel):
-    """A sample run and its transmission: a group that holds a file."""
-
-    file: Sample
-    transmission: Transmission
-
-
 class CentredParams(Data):
     centre: Centre
-    sample: list[SampleWithTransmission] = Field(min_length=1)
+    transmission: Transmission  # of the summed sample runs
+    sample: list[Sample] = Field(min_length=1)
     can: list[Can] = Field(min_length=1)
 
 
@@ -597,12 +591,11 @@ CENTRED_MULTI = _spec(
 
 def centred(params: CentredParams) -> CentredOutputs:
     """
-    The sample runs, each times its transmission, minus the cans, minus the
+    The sample runs, times their transmission, minus the cans, minus the
     centre.
     """
-    samples = sum(
-        _counts(s.file.path) * s.transmission.fraction.value for s in params.sample
-    )
+    fraction = params.transmission.fraction.value
+    samples = sum(_counts(s.path) for s in params.sample) * fraction
     cans = sum((_counts(c.path) for c in params.can), 0.0)
     return CentredOutputs(centred=_array(samples - cans - params.centre.x))
 
