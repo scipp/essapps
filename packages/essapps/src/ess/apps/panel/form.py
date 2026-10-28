@@ -109,7 +109,9 @@ class Listing:
     What a request of ``client`` may name now, looked up once for a refresh
     of any number of forms: the files of each file model and the
     client's records, each by a label, and the outputs a request may
-    reference.
+    reference. ``specs`` holds the spec of each record by its id, and
+    ``readable`` the names of the outputs of each record that a request may
+    reference, by record id.
 
     It stands in for two queries the client lacks (scipp/essapps#95). The
     client lists no records by the type of their outputs (gap 1), so
@@ -127,27 +129,29 @@ class Listing:
         def source(ref: Any) -> str:
             if not isinstance(ref, FileRef):
                 return str(ref.record[:6])
-            return _file_label(ref, self._known(ref))
+            return self.file_label(ref)
 
         self.records = client.records()
         specs = {s: client.spec(s) for s in {r.spec for r in self.records}}
+        self.specs = {r.id: specs[r.spec] for r in self.records}
         self.labels: dict[str, str] = {}
         for record in self.records:
             refs = iter_refs(record.request.params)
             sources = ', '.join(source(ref) for _, ref in refs)
-            label = f'{record.id[:6]} {specs[record.spec].title}'
+            label = f'{record.id[:6]} {self.specs[record.id].title}'
             self.labels[record.id] = f'{label}, from {sources}' if sources else label
         readable = client.readable(self.records)
+        self.readable = {
+            r.id: names for r, names in zip(self.records, readable, strict=True)
+        }
         self._outputs = [
             (
                 self.output_label(record.ref(name)),
                 record.ref(name),
-                specs[record.spec].outputs.model_fields[name].annotation,
+                self.specs[record.id].outputs.model_fields[name].annotation,
             )
-            for record, names in reversed(
-                list(zip(self.records, readable, strict=True))
-            )
-            for name in names
+            for record in reversed(self.records)
+            for name in self.readable[record.id]
         ]
 
     def files(self, model: type[FileModel]) -> dict[str, FileRef]:
@@ -167,6 +171,10 @@ class Listing:
         if ref not in self._metadata:
             self._metadata[ref] = self._client.files.metadata(ref)
         return self._metadata[ref]
+
+    def file_label(self, ref: FileRef) -> str:
+        """The label of a file, as :meth:`files` gives it, without its role."""
+        return _file_label(ref, self._known(ref))
 
     def output_label(self, ref: OutputRef) -> str:
         """

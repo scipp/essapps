@@ -2,14 +2,19 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 A minimal app on a client: a form for each spec the backend runs, a button
-that computes, and the client's records.
+that submits, and the outputs of the client's records.
 
 The app needs a client only. It submits the shown form's request through the
 client and shows what the backend says: each reason a request is refused, by
 its place, or why a record failed. Each place of the form with nothing given
-is shown as such a reason, and nothing is submitted. After each computation
-the forms list the records again, so a place that takes a reference offers
-the new record.
+is shown as such a reason, and nothing is submitted. A submission returns
+once the backend has logged it, so the app lists the new record pending.
+
+The client tells no one that a record has finished, so the app asks:
+:meth:`App.poll` lists the records again once one listed pending has
+finished, and a periodic callback of Panel calls it while the app is served.
+Each time the records are listed again, the forms are too, so a place that
+takes a reference offers each new record, pending or not.
 """
 
 from __future__ import annotations
@@ -18,30 +23,37 @@ from typing import Any
 
 import panel as pn
 
-from ess.apps import Client, NotReadable, Record, RecordFailed, SubmitError
+from ess.apps import Client, Record, Status, SubmitError
 
 from .form import Form, Listing
+from .outputs import Outputs
 
 
 class App:
     """
-    A form per spec, a button that computes, and the client's records.
+    A form per spec, a button that submits, and the outputs of the client's
+    records.
 
     ``forms`` holds the forms by spec title, and ``picker`` picks the one
-    shown. ``message`` shows the outcome of the last computation.
+    shown. ``message`` shows the outcome of the last submission, once its
+    record has finished. ``outputs`` lists the outputs of the records.
     """
 
     def __init__(self, client: Client) -> None:
         self.client = client
         self.forms = {s.title: Form(s, client) for s in client.specs()}
         self.picker = pn.widgets.RadioButtonGroup(options=list(self.forms))
-        self.button = pn.widgets.Button(label='Compute', color='primary')
-        self.button.on_click(lambda _: self.compute())
+        self.button = pn.widgets.Button(label='Submit', color='primary')
+        self.button.on_click(lambda _: self.submit())
         self.message = pn.pane.Markdown('')
-        self.results = pn.pane.Str('', sizing_mode='stretch_width')
+        self._listing = Listing(client)
+        self.outputs = Outputs(client, self._listing)
         self._form = pn.Column(sizing_mode='stretch_width')
+        self._submitted: Record | None = None  # until it has finished
         self.picker.param.watch(lambda _: self._show(), 'value')
         self._show()
+        # Outside a server or a notebook, nothing runs the callback.
+        pn.state.add_periodic_callback(self.poll, period=500)  # ms
 
     @property
     def form(self) -> Form:
@@ -51,46 +63,54 @@ class App:
     def _show(self) -> None:
         self._form.objects = [self.form.panel()]
 
-    def compute(self) -> Record | None:
+    def submit(self) -> Record | None:
         """
-        Compute the shown form's request; its record, or ``None`` if it is
-        refused, or if a place of the form has nothing given.
+        Submit the shown form's request; its record, pending, or ``None`` if
+        it is refused, or if a place of the form has nothing given.
         """
         try:
-            record = self.client.compute(self.form.spec, params=self.form.params)
+            record = self.client.submit(self.form.spec, params=self.form.params)
         except SubmitError as error:
             self.message.object = 'Refused:\n\n' + '\n'.join(
                 f'- {e}' for e in error.errors
             )
             return None
-        failure = self.client.failure(record)
+        self._submitted = record
         listing = self.refresh()
+        self.message.object = f'Submitted {listing.labels[record.id]}.'
+        self.poll()  # in case it has finished already
+        return record
+
+    def poll(self) -> None:
+        """
+        List the records again if one that was listed pending has finished,
+        and show the outcome of the last submission once it is listed
+        finished.
+        """
+        pending = self.outputs.pending
+        if any(s is not Status.PENDING for s in self.client.status(pending)):
+            self.refresh()
+        record = self._submitted
+        if record is None or record in self.outputs.pending:
+            return
+        failure = self.client.failure(record)
         self.message.object = (
-            f'Computed {listing.labels[record.id]}.'
+            f'Computed {self._listing.labels[record.id]}.'
             if failure is None
             else f'Failed: {failure}'
         )
-        return record
+        self._submitted = None
 
     def refresh(self) -> Listing:
         """
-        List the records again, in the pickers and below the forms; what is
+        List the records again, in the pickers and in the outputs; what is
         listed.
         """
-        listing = Listing(self.client)
+        self._listing = Listing(self.client)
         for form in self.forms.values():
-            form.refresh(listing)
-        self.results.object = '\n'.join(
-            f'{listing.labels[r.id]}\n  {self._outputs(r)}' for r in listing.records
-        )
-        return listing
-
-    def _outputs(self, record: Record) -> str:
-        """The outputs of ``record``, or why they cannot be read."""
-        try:
-            return repr(self.client.output(record))
-        except (NotReadable, RecordFailed) as error:
-            return str(error)
+            form.refresh(self._listing)
+        self.outputs.refresh(self._listing)
+        return self._listing
 
     def panel(self) -> Any:
         return pn.Column(
@@ -98,7 +118,7 @@ class App:
             self._form,
             self.button,
             self.message,
-            pn.pane.Markdown('**Records**'),
-            self.results,
+            pn.pane.Markdown('**Outputs**'),
+            self.outputs.panel(),
             sizing_mode='stretch_width',
         )
