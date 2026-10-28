@@ -192,7 +192,7 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice:
         else:
             way = places.title(value, group.model_fields[described.tag])
             ways[way] = _Group(group, {described.tag: value}, listing)
-    if field_types.is_file(described.record):
+    if field_types.is_file_model(described.record):
         ways[_Choice.FILE] = _File(described.record, listing)
     elif described.record is not None:
         ways[_Choice.RECORD] = _Record(described.record, listing)

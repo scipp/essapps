@@ -217,7 +217,7 @@ def _check(rule: Rule, params: type[BaseModel]) -> None:
                 f'{rule.name}: {blank} is a list parameter; {fills} fills it'
             )
         model = field_types.value_type(params.model_fields[blank].annotation)
-        if not field_types.is_file(model):
+        if not field_types.is_file_model(model):
             raise ValueError(f'{rule.name}: {blank} is not a parameter of a file model')
         need = Selector(**model.metadata).fields
         if not need.items() <= selector.fields.items():

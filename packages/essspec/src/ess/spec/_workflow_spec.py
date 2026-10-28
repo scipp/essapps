@@ -558,7 +558,7 @@ def _path_problems(annotation: Any) -> list[str]:
     parameter or a field that takes a file is typed a file model and given by
     reference, so that the file source checks each file a workflow reads.
     """
-    found = _found(annotation, _is_path, skip=field_types.is_file)
+    found = _found(annotation, _is_path, skip=field_types.is_file_model)
     return [
         f'{where}a Path is outside a file model; a parameter or a field that '
         "takes a file is typed a file model, such as mask: MaskFile with class "
@@ -595,7 +595,7 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
     otherwise. A file model is checked by :func:`_file_model_problems`
     alone.
     """
-    if field_types.is_file(group):
+    if field_types.is_file_model(group):
         return _file_model_problems(group)
     if places.unwritten(group) is not None:
         return [
@@ -734,7 +734,7 @@ def _field_problem(annotation: Any) -> str | None:
             'a list field is never typed list[X] | None or list[X | None]; a list '
             'without elements is [], and each element is a value'
         )
-    if field_types.is_file(tp):
+    if field_types.is_file_model(tp):
         return None
     if is_optional or (get_origin(tp) is Literal and None in get_args(tp)):
         return (
@@ -839,7 +839,7 @@ def _output_file_problems(annotation: Any) -> list[str]:
         f'{where}{field_types.type_name(model)} is a file model; no output '
         'holds one, so that every file comes from the file source, which '
         'checks it'
-        for where, model in _found(annotation, field_types.is_file)
+        for where, model in _found(annotation, field_types.is_file_model)
     ]
 
 
@@ -904,7 +904,7 @@ def _ref_form(tp: Any) -> Any:
     file model, a reference to a file, with the model's metadata, so
     that a file picker lists the files that fit.
     """
-    if field_types.is_file(tp):
+    if field_types.is_file_model(tp):
         extra = {'dataType': field_types.type_name(tp), 'metadata': tp.metadata}
         return Annotated[FileRef, Field(json_schema_extra=extra)]
     data_type = Field(json_schema_extra={'dataType': field_types.type_name(tp)})
@@ -998,7 +998,7 @@ def _file_field_form(annotation: Any) -> Any:
     of a list of one, replaced by the reference it takes.
     """
     tp, is_optional, _ = _taken_apart(annotation)
-    if not field_types.is_file(tp):
+    if not field_types.is_file_model(tp):
         return annotation
     form = _ref_form(tp)
     if get_origin(field_types.optional(annotation)[0]) is list:

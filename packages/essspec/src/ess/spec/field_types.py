@@ -163,7 +163,7 @@ def is_single(tp: Any) -> bool:
     )
 
 
-def is_file(tp: Any) -> bool:
+def is_file_model(tp: Any) -> bool:
     """Whether ``tp`` is a file model, a subclass of :class:`FileModel`."""
     return isinstance(tp, type) and issubclass(tp, FileModel)
 
@@ -174,7 +174,7 @@ def file_model(annotation: Any) -> Any:
     or ``list[X]`` of one, or ``None``.
     """
     tp = value_type(annotation)
-    return tp if is_file(tp) else None
+    return tp if is_file_model(tp) else None
 
 
 def is_group(tp: Any) -> bool:

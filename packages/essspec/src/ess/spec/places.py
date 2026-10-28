@@ -201,7 +201,7 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
         return on_ref(loc, ref, tp)
     if value is None and nullable:
         return None
-    if field_types.is_file(tp):
+    if field_types.is_file_model(tp):
         raise _not_a_file_ref(loc, tp, value)
     if union is not None or field_types.is_group(tp):
         fields = value
@@ -258,7 +258,7 @@ def _files_held(
 
 
 def _file_held(loc: Loc, tp: Any, value: Any, on_ref: OnRef) -> Any:
-    if field_types.is_file(type(value)):
+    if field_types.is_file_model(type(value)):
         value = value.model_dump()
     if (ref := ref_at(loc, value)) is None:
         if value is None:
@@ -497,7 +497,7 @@ def _holds_file(group: Any) -> bool:
     Whether ``group`` has a field typed a file model: no output holds one,
     so no output fits it.
     """
-    return not field_types.is_file(group) and any(
+    return not field_types.is_file_model(group) and any(
         _file_field(group, n) is not None for n in group.model_fields
     )
 
@@ -619,7 +619,7 @@ def unwritten(group: type[BaseModel]) -> str | None:
     reference to a file only. A group with such a field is given by
     reference only.
     """
-    if field_types.is_file(group):
+    if field_types.is_file_model(group):
         return 'file'
     return next(
         (n for n in group.model_fields if not field_types.has_json_form(group, n)),

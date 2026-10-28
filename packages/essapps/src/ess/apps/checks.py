@@ -208,13 +208,13 @@ class Checks:
         """
         name = field_types.type_name(tp)
         if not isinstance(ref, FileRef):
-            if field_types.is_file(tp):
+            if field_types.is_file_model(tp):
                 raise SubmitError.at(
                     loc,
                     f'{ref} is not a file; {name} is given by reference to a file',
                 )
             return ref
-        if not field_types.is_file(tp):
+        if not field_types.is_file_model(tp):
             raise SubmitError.at(
                 loc, f'file {ref} does not fit {name}, which is not a file model'
             )

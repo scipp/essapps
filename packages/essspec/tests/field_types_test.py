@@ -15,7 +15,7 @@ from ess.spec.field_types import (
     fields_of,
     fits,
     is_alias,
-    is_file,
+    is_file_model,
     is_single,
     optional,
     plain,
@@ -115,12 +115,12 @@ def test_lists_dicts_and_unions_are_not_data_values(tp: Any) -> None:
 
 
 def test_a_file_model_is_a_subclass_of_file_model() -> None:
-    assert is_file(RunFile)
-    assert is_file(FileModel)
-    assert not is_file(Path)
-    assert not is_file(Parts)
-    assert not is_file(RunFile | None)
-    assert not is_file(list[RunFile])
+    assert is_file_model(RunFile)
+    assert is_file_model(FileModel)
+    assert not is_file_model(Path)
+    assert not is_file_model(Parts)
+    assert not is_file_model(RunFile | None)
+    assert not is_file_model(list[RunFile])
 
 
 def test_a_newtype_and_a_type_alias_are_aliases() -> None:
