@@ -1153,9 +1153,8 @@ class TestModelRules:
 
 
 OPTIONAL_FIELD = re.escape(
-    'a field is never typed X | None, nor a Literal with None; a value that a '
-    'request may leave out is a parameter typed X | None, or a bool field, such as '
-    'limit_range: bool'
+    'a field is never typed X | None, nor a Literal with None; a value that may be '
+    'absent is a parameter typed X | None, or a bool field, such as limit_range: bool'
 )
 OPTIONAL_LIST_FIELD = re.escape(
     'a list field is never typed list[X] | None or list[X | None]; a list without '

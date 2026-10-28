@@ -33,7 +33,7 @@ results it returns. A spec of an I(Q) reduction::
 
     class IofQParams(BaseModel):
         reduction: Reduction = Reduction()    # a default is an instance
-        range: WavelengthRange | None = None  # may be left out
+        range: WavelengthRange | None = None  # may be absent
         mask: PixelMask | None = None
         centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
         transmission: RunFile
@@ -63,8 +63,8 @@ earlier record ``m``::
         'sample_runs': [dataset(run=101), dataset(run=102)],
     }
 
-:mod:`ess.spec.places` describes what a request writes at each place by its
-type, and when each value is validated; :mod:`ess.spec.refs` describes the
+:mod:`ess.spec.places` describes what a request writes at each root place by
+its type, and when each value is validated; :mod:`ess.spec.refs` describes the
 references.
 
 The models are ordinary pydantic models: what the framework needs, it reads
@@ -84,8 +84,8 @@ them. Each comment below names a rule that a spec breaks, with the fix::
     class Reduction(BaseModel):
         # No aliases: a request writes a field by its name.
         bins: int = Field(10, alias='nbins')
-        # A field is never X | None: a value that a request may leave out is
-        # a parameter typed X | None, or a bool field, such as limit_range: bool.
+        # A field is never X | None: a value that may be absent is a
+        # parameter typed X | None, or a bool field, such as limit_range: bool.
         start: float | None = None
         # A field of a group is a scalar or a list of scalars: a value of
         # several parts is a group, a parameter of its own.
@@ -332,12 +332,13 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         """
         Project to the plain-data form.
 
-        The params schema has the value at each place in the forms it takes:
-        a dataset model as a reference to a dataset, with the model's
-        metadata; a group as ``anyOf`` the object of its fields, each so, and
-        a reference to an output, or one of them only; a union of groups as
-        ``oneOf`` the object of the fields of each alternative, never a
-        reference; a scalar as its JSON schema.
+        The params schema has the value at each *place*, a parameter, an
+        element of a list parameter, or a field of a group, in the forms it
+        takes: a dataset model as a reference to a dataset, with the model's
+        metadata; a group as ``anyOf`` the object of its fields, each a
+        scalar or a list of scalars, and a reference to an output, or one of
+        them only; a union of groups as ``oneOf`` the object of the fields of
+        each alternative, never a reference; a scalar as its JSON schema.
         A reference's schema is the ``@ref`` object of each kind it may be,
         with the name of the data type it must fit in ``dataType``, as the
         outputs schema has each output.
@@ -671,8 +672,8 @@ def _field_problem(annotation: Any) -> str | None:
     if is_optional or (get_origin(tp) is Literal and None in get_args(tp)):
         return (
             'a field is never typed X | None, nor a Literal with None; a value '
-            'that a request may leave out is a parameter typed X | None, or a '
-            'bool field, such as limit_range: bool'
+            'that may be absent is a parameter typed X | None, or a bool field, '
+            'such as limit_range: bool'
         )
     if _is_scalar(tp):
         return None
@@ -825,7 +826,7 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
 
 
 def _not_a_ref(schema: dict[str, Any]) -> None:
-    """An inline value's schema: an object with the key ``@ref`` is a reference."""
+    """The schema of a value written inline: an object with ``@ref`` is a reference."""
     schema['not'] = {'required': ['@ref']}
 
 

@@ -13,7 +13,7 @@ their modules: :mod:`~.field_types` for what the framework reads from field
 types, such as :func:`~.field_types.fits`, and how it validates a value by
 its field, :mod:`~.refs` for finding the
 references of a request, :mod:`~.places` for what a request writes at each
-place by its type, and :mod:`~.binding` for the values a binding is made
+root place by its type, and :mod:`~.binding` for the values a binding is made
 with.
 
 The package does not import :mod:`~.conversions` (needs scipp),

@@ -6,7 +6,7 @@
 
 ## Context
 
-A record names a spec, every parameter value, each given inline or by reference, and its outputs.
+A record names a spec, every parameter value, each written inline or given by reference, and its outputs.
 A record never changes, only its status, which is set once.
 Pushes, persist requests, and writes are only added.
 So history only grows until it is dropped.
