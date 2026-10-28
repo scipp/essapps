@@ -127,7 +127,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
 
     A stage cuts :meth:`pipeline` of the fixed values at the keys of the
     blanks with ``sciline.Stage``, which computes what does not depend on
-    them on the first call and holds it. A plain request is a stage with no
+    them on the first call and caches it. A plain request is a stage with no
     blanks, called once. ``make_pipeline`` gets no blank, so a field that
     changes the graph cannot be a blank. A key that no output depends on is
     not fed: its value cannot change the outputs. An optional output is
@@ -335,4 +335,4 @@ class _Cut:
         self._stage = sciline.Stage(pipeline, outputs=outputs, inputs=inputs)
 
     def __call__(self, values: Mapping[Key, Any]) -> dict[Key, Any]:
-        return self._stage.compute({k: values[k] for k in self._inputs})
+        return self._stage.apply({k: values[k] for k in self._inputs})

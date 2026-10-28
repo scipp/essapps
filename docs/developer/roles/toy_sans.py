@@ -355,7 +355,7 @@ class IofQDriver:
         stage = self._contribute[table]
         (key,) = single.keys[table]
         for row in rows:
-            parts = stage.compute({key: row})
+            parts = stage.apply({key: row})
             old = self._sums.get(table)
             self._sums[table] = (
                 parts if old is None else {k: old[k] + v for k, v in parts.items()}
@@ -365,7 +365,7 @@ class IofQDriver:
         if empty := sorted(self._contribute.keys() - self._sums.keys()):
             raise ValueError(f'no rows in {empty} yet')
         sums = {k: v for parts in self._sums.values() for k, v in parts.items()}
-        return IofQOutputs(iofq=self._finalize.compute(sums)[IofQ])
+        return IofQOutputs(iofq=self._finalize.apply(sums)[IofQ])
 
 
 multi = DriverBinding(IOFQ_MULTI, IofQDriver)

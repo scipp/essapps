@@ -163,11 +163,11 @@ class IofQDriver:
     def push(self, table: str, rows: Sequence[Any]) -> None:
         key, stage = self._contribute[table]
         for run in rows:
-            for k, part in stage.compute({key: run}).items():
+            for k, part in stage.apply({key: run}).items():
                 self._sums[k] = self._sums[k] + part if k in self._sums else part
 
     def outputs(self) -> IofQOutputs:
-        results = self._finalize.compute(self._sums)
+        results = self._finalize.apply(self._sums)
         iofq, can_iofq = self._outputs
         return IofQOutputs(iofq=results[iofq], can_iofq=results[can_iofq])
 
