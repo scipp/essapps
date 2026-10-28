@@ -786,8 +786,10 @@ class _Rows:
             columns[self._ref] = [
                 '' if isinstance(r, Mapping) else text(r, self._model) for r in rows
             ]
+        # Of text, since Tabulator formats a column by its type when first
+        # shown, and a column without rows would be one of numbers.
         self._table.value = pd.DataFrame(
-            columns, index=pd.RangeIndex(len(rows), name='#')
+            columns, index=pd.RangeIndex(len(rows), name='#'), dtype=str
         )
 
     def value(self, loc: Loc, missing: _Missing) -> Any:
