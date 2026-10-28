@@ -8,10 +8,11 @@ elsewhere, or inline: an output of an earlier record, a dataset the
 framework did not compute, or, in a request not yet accepted, an output of an
 accumulator that the framework holds. A *place* is the value of a parameter,
 an element of a list, or a field of a group, at any depth (see
-:mod:`ess.spec.places`). A reference stands for a group or a file only.
-A reference is what a request names and what a record keeps; turning it into
-the data a workflow takes, a local path or an object, is the business of
-whatever runs the workflow.
+:mod:`ess.spec.places`). A reference stands for a group only: a reference to
+a dataset for a dataset model (see :class:`ess.spec.parameters.DatasetModel`),
+a reference to an output for any other group. A reference is what a request
+names and what a record keeps; turning it into the data a workflow takes, a
+local path or an object, is the business of whatever runs the workflow.
 
 The JSON form of a reference is an object with the key ``"@ref"``, which
 names its kind. The key is reserved: an object with it is a reference, at any
@@ -79,8 +80,9 @@ class DatasetRef(_Ref, frozen=True):
     catalogue PID, an instrument and run number, a path, makes the string
     self-describing, ``pid:...`` or ``run:...``, and normalizes it before it
     enters a record, because two references are equal only when their strings
-    are. A place whose type is a file takes a reference to a dataset, and no
-    other place does (see :func:`ess.spec.field_types.is_file`).
+    are. A place whose type is a dataset model (see
+    :class:`ess.spec.parameters.DatasetModel`) takes a reference to a
+    dataset, and no other place does.
     """
 
     kind: Literal['dataset'] = Field(default='dataset', alias='@ref', repr=False)

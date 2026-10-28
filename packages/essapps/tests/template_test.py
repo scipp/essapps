@@ -24,7 +24,14 @@ from ess.apps import (
     local,
 )
 from ess.apps.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
-from ess.spec import DriverBinding, NoParams, StageCall, WorkflowSpec, function_binding
+from ess.spec import (
+    DatasetModel,
+    DriverBinding,
+    NoParams,
+    StageCall,
+    WorkflowSpec,
+    function_binding,
+)
 
 
 class Amount(BaseModel):
@@ -39,10 +46,13 @@ class Weight(BaseModel):
     value: float = 1.0
 
 
-class WeightedRun(BaseModel):
-    """A run and its weight, if given: a group that holds a file."""
+class RunFile(DatasetModel): ...
 
-    file: Path
+
+class WeightedRun(BaseModel):
+    """A run and its weight, if given: a group that holds a dataset model."""
+
+    file: RunFile
     weight: Weight | None = None
 
 
@@ -127,7 +137,9 @@ def total(params: TotalParams) -> Value:
 
 
 def _weighted(run: WeightedRun) -> float:
-    return read_dataset(run.file) * (1.0 if run.weight is None else run.weight.value)
+    return read_dataset(run.file.path) * (
+        1.0 if run.weight is None else run.weight.value
+    )
 
 
 def make(params: NoParams) -> Made:

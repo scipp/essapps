@@ -1,15 +1,86 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
 import pydantic
 import pytest
 
 from ess.spec.parameters import (
+    DatasetModel,
     Quantity,
     Scale,
     WavelengthEdges,
     WavelengthRange,
     WavelengthUnit,
 )
+
+
+class MaskFile(DatasetModel, kind='mask', instrument='loki'):
+    pass
+
+
+class Kind(Enum):
+    MASK = 'mask'
+
+
+class TestDatasetModel:
+    def test_a_dataset_model_without_keywords_takes_raw_datasets(self) -> None:
+        class RunFile(DatasetModel):
+            pass
+
+        assert DatasetModel.metadata == {'kind': 'raw'}
+        assert RunFile.metadata == {'kind': 'raw'}
+
+    def test_a_dataset_model_holds_its_class_keywords_as_metadata(self) -> None:
+        assert MaskFile.metadata == {'kind': 'mask', 'instrument': 'loki'}
+        assert MaskFile(path='mask.xml').model_dump() == {'path': Path('mask.xml')}
+
+    def test_the_keywords_of_a_subclass_are_merged_over_its_parents(self) -> None:
+        class BeamStopMask(MaskFile, kind='beam-stop', bank=1):
+            pass
+
+        assert BeamStopMask.metadata == {
+            'kind': 'beam-stop',
+            'instrument': 'loki',
+            'bank': 1,
+        }
+        assert MaskFile.metadata == {'kind': 'mask', 'instrument': 'loki'}
+        assert DatasetModel.metadata == {'kind': 'raw'}
+
+    def test_a_subclass_without_keywords_has_the_metadata_of_its_parent(
+        self,
+    ) -> None:
+        class OtherMask(MaskFile):
+            pass
+
+        assert OtherMask.metadata == MaskFile.metadata
+
+    @pytest.mark.parametrize('value', ['loki', 1, 0.5, True])
+    def test_a_metadata_value_is_a_string_a_number_or_a_bool(self, value: Any) -> None:
+        class File(DatasetModel, kind='mask', key=value):
+            pass
+
+        assert File.metadata == {'kind': 'mask', 'key': value}
+
+    @pytest.mark.parametrize('value', [Kind.MASK, Path('mask'), ['mask'], None])
+    def test_a_metadata_value_of_another_type_is_refused(self, value: Any) -> None:
+        with pytest.raises(TypeError, match='File: the metadata of a dataset model'):
+
+            class File(DatasetModel, kind=value):
+                pass
+
+    def test_a_pydantic_config_keyword_configures_the_model_and_is_no_metadata(
+        self,
+    ) -> None:
+        class FrozenMask(DatasetModel, frozen=True, kind='mask'):
+            pass
+
+        assert FrozenMask.metadata == {'kind': 'mask'}
+        mask = FrozenMask(path='mask.xml')
+        with pytest.raises(pydantic.ValidationError, match='frozen'):
+            mask.path = Path('other.xml')
 
 
 class TestQuantity:

@@ -3,7 +3,7 @@
 import re
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PosixPath, PurePosixPath
 from typing import Annotated, Any, Literal, NewType, TypedDict
 
 import pydantic
@@ -24,6 +24,7 @@ from pydantic_core import to_jsonable_python
 
 from ess.spec import (
     AccumulatorRef,
+    DatasetModel,
     DatasetRef,
     NoParams,
     OutputRef,
@@ -52,15 +53,27 @@ class TimeRange(BaseModel):
     stop: float
 
 
+class RunFile(DatasetModel, kind='raw'):
+    pass
+
+
+class MaskFile(DatasetModel, kind='mask'):
+    pass
+
+
+class GeometryFile(DatasetModel):
+    """A dataset model without keywords: it takes raw datasets."""
+
+
 class SampleRun(BaseModel):
     """A sample run and the geometry given next to it: a group that holds a file."""
 
-    file: Path
+    file: RunFile
     geometry: SampleGeometry | None = None
 
 
 class CanRun(BaseModel):
-    file: Path
+    file: RunFile
 
 
 class Node(BaseModel):
@@ -103,7 +116,7 @@ By = Annotated[ByMonitor | ByTime, Field(discriminator='mode')]
 
 class ByRun(BaseModel):
     mode: Literal['run'] = 'run'
-    run: Path
+    run: RunFile
 
 
 class ByWindow(BaseModel):
@@ -114,12 +127,12 @@ class ByWindow(BaseModel):
 
 
 # A spec refuses a NewType and a type alias: it names a role by a class.
-SampleFile = NewType('SampleFile', Path)
+SampleFile = NewType('SampleFile', RunFile)
 ReductionOfCan = NewType('ReductionOfCan', Reduction)
 TimeOfCan = NewType('TimeOfCan', ByTime)
 IofQ = NewType('IofQ', sc.DataArray)
 Seconds = NewType('Seconds', float)
-type RunFile = Path
+type RawFile = RunFile
 
 
 class RoleRun(BaseModel):
@@ -138,19 +151,50 @@ class Exposure:
 class CentredRun(BaseModel, arbitrary_types_allowed=True):
     """A group that holds a file and a data value, which no request writes."""
 
-    file: Path
+    file: RunFile
     centre: sc.Variable
+
+
+class CalibrationFile(DatasetModel, kind='calibration'):
+    """A dataset model with a field other than its path: refused."""
+
+    run: int
+
+
+class XmlMaskFile(MaskFile):
+    """A dataset model that checks its path."""
+
+    @field_validator('path')
+    @classmethod
+    def _xml(cls, path: Path) -> Path:
+        if path.suffix != '.xml':
+            raise ValueError('a mask is an XML file')
+        return path
+
+
+class BeamStopMaskFile(XmlMaskFile):
+    """A subclass of a subclass of DatasetModel that keeps its path."""
+
+
+class LocalPath(Path):
+    """A subclass of Path."""
+
+
+class TimeRangeAt(TimeRange):
+    """An output type that fits a TimeRange place and holds a Path."""
+
+    where: Path
 
 
 @pydantic.dataclasses.dataclass
 class RunFiles:
-    """A dataclass that holds a file."""
+    """A dataclass that holds a Path."""
 
     sample: Path
 
 
 class RunPaths(TypedDict):
-    """A TypedDict that holds a file."""
+    """A TypedDict that holds a Path."""
 
     sample: Path
 
@@ -302,6 +346,16 @@ RUNS = spec(
     params=model('P', sample=(list[SampleRun], Field(min_length=1))),
     tables=('sample',),
 )
+DATASETS = spec(
+    name='sans-datasets',
+    params=model(
+        'P',
+        mask=(MaskFile | None, None),
+        geometry=(GeometryFile, ...),
+        runs=(list[RunFile], Field(min_length=1)),
+    ),
+    tables=('runs',),
+)
 
 
 class TestMetadata:
@@ -387,6 +441,19 @@ NOT_A_PARAMETER = re.escape(
 NOT_AN_OUTPUT = re.escape(
     'an output is a type, possibly typed X | None, or a list or a dict of one'
 )
+OUTSIDE_A_DATASET_MODEL = re.escape(
+    "a Path is outside a dataset model; a file is a dataset model, such as class "
+    "MaskFile(DatasetModel, kind='mask'), given by reference to a dataset"
+)
+
+KEEPS_THE_PATH = re.escape(
+    'a dataset model keeps the path of DatasetModel, path: Path, without a '
+    'default or an alias; a check of the path is a field validator'
+)
+DATASET_MODEL_OUTPUT = re.escape(
+    'is a dataset model; no output holds one, so that a file comes from a '
+    'dataset, which the dataset source checks'
+)
 
 
 class TestModelRules:
@@ -401,8 +468,9 @@ class TestModelRules:
             {'params': model('P', reduction=(list[Reduction | None], []))},
             {'params': model('P', reduction=(Reduction, Reduction(bins=3)))},
             {'params': model('P', runs=(list[SampleRun], []))},
-            {'params': model('P', run=(model('Run', path=(Path, ...)), ...))},
+            {'params': model('P', run=(model('Run', file=(RunFile, ...)), ...))},
             {'params': model('P', runs=(list[SampleRun | None], []))},
+            {'params': model('P', mask=(MaskFile | None, None))},
             {'params': model('P', parts=(BaseModel, ...))},
             {'params': model('P', a=(SampleRun, ...), b=(list[CanRun], []))},
             {'params': model('P', steps=(list[TimeRange], Field(min_length=2)))},
@@ -424,7 +492,6 @@ class TestModelRules:
             },
             {'outputs': model('O', iofq=(list[sc.DataArray], ...))},
             {'outputs': model('O', iofq=(dict[str, sc.DataArray | None], ...))},
-            {'outputs': model('O', path=(Path | None, None))},
             {
                 'params': model(
                     'P',
@@ -451,13 +518,19 @@ class TestModelRules:
             },
             {'params': model('P', by=(By | None, None), each=(list[By], []))},
             {'params': model('P', centre=(validated('Centre', x=(float, ...)), ...))},
-            {'params': model('P', run=(validated('Run', path=(Path, ...)), ...))},
-            {'params': model('P', runs=(model('Runs', paths=(list[Path], [])), ...))},
+            {'params': model('P', run=(validated('Run', file=(RunFile, ...)), ...))},
+            {'params': model('P', mask=(XmlMaskFile, ...))},
+            {'params': model('P', mask=(BeamStopMaskFile | None, None))},
+            {
+                'params': model(
+                    'P', runs=(model('Runs', files=(list[RunFile], [])), ...)
+                )
+            },
             {
                 'params': model(
                     'P',
                     run=(
-                        model('Run', geometry=(model('G', path=(Path, ...)), ...)),
+                        model('Run', geometry=(model('G', file=(RunFile, ...)), ...)),
                         ...,
                     ),
                 )
@@ -470,7 +543,10 @@ class TestModelRules:
             {
                 'params': model(
                     'P',
-                    run=(model('Run', path=(Path, ...), centre=(BeamCentre, ...)), ...),
+                    run=(
+                        model('Run', file=(RunFile, ...), centre=(BeamCentre, ...)),
+                        ...,
+                    ),
                 )
             },
             {
@@ -496,7 +572,10 @@ class TestModelRules:
         assert IofQParams.__pydantic_decorators__.model_validators
         with pytest.raises(pydantic.ValidationError, match='the sample run is not'):
             IofQParams.model_validate(
-                {'sample': {'file': 'a.nxs'}, 'can': {'file': 'a.nxs'}}
+                {
+                    'sample': {'file': {'path': 'a.nxs'}},
+                    'can': {'file': {'path': 'a.nxs'}},
+                }
             )
 
     @pytest.mark.parametrize(
@@ -513,9 +592,6 @@ class TestModelRules:
                     'union of groups, or a list of one',
                 )
                 for value, name in (
-                    ((Path, ...), 'Path'),
-                    ((list[Path], []), 'Path'),
-                    ((Path | None, None), 'Path'),
                     ((int, ...), 'int'),
                     ((int | float, 1), 'int | float'),
                     ((Mode, Mode.fast), 'Mode'),
@@ -637,8 +713,8 @@ class TestModelRules:
                 )
             ),
             (
-                {'params': model('P', run=(model('Run', file=(RunFile, ...)), ...))},
-                'P.run: Run.file: RunFile is a type alias; a spec names a role by a '
+                {'params': model('P', run=(model('Run', file=(RawFile, ...)), ...))},
+                'P.run: Run.file: RawFile is a type alias; a spec names a role by a '
                 'class',
             ),
             (
@@ -722,17 +798,17 @@ class TestModelRules:
                     )
                 },
                 f'P.r: R.x: {NOT_A_VALUE}: x: r1.x: float is given inline; a '
-                'reference stands for a group or a file only',
+                'reference stands for a group only',
             ),
             *(
                 (
                     {
                         'params': model(
-                            'P', run=(model('Run', path=(Path, ...), **centre), ...)
+                            'P', run=(model('Run', file=(RunFile, ...), **centre), ...)
                         )
                     },
                     f'P.run: {where}: no request writes it, since a group that holds '
-                    'a file is given field by field',
+                    'a dataset model is given field by field',
                 )
                 for centre, where in (
                     ({'centre': (sc.Variable, ...)}, 'Run.centre'),
@@ -741,7 +817,9 @@ class TestModelRules:
                         {
                             'can': (
                                 model(
-                                    'Can', path=(Path, ...), centre=(sc.Variable, ...)
+                                    'Can',
+                                    file=(RunFile, ...),
+                                    centre=(sc.Variable, ...),
                                 ),
                                 ...,
                             )
@@ -837,38 +915,139 @@ class TestModelRules:
                 'P.tree: Tree.branch: Branch.tree: Tree: a group is not at a place '
                 'inside itself',
             ),
-            (
-                {'params': model('P', pair=(tuple[Path, Path], ...))},
-                'P.pair: a file is at a place only',
+            *(
+                (
+                    {'params': model('P', **fields)},
+                    f'{where}: {OUTSIDE_A_DATASET_MODEL}',
+                )
+                for fields, where in (
+                    ({'path': (Path, ...)}, 'P.path'),
+                    ({'paths': (list[Path], [])}, 'P.paths'),
+                    ({'path': (Path | None, None)}, 'P.path'),
+                    ({'path': (PurePosixPath, ...)}, 'P.path'),
+                    ({'path': (PosixPath, ...)}, 'P.path'),
+                    ({'path': (LocalPath, ...)}, 'P.path'),
+                    ({'pair': (tuple[Path, Path], ...)}, 'P.pair'),
+                    ({'runs': (RunFiles, ...)}, 'P.runs: RunFiles.sample'),
+                    (
+                        {'runs': (RootModel[list[Path]], ...)},
+                        r'P.runs: RootModel\[.*\]\.root',
+                    ),
+                    (
+                        {'run': (model('Run', path=(Path, ...)), ...)},
+                        'P.run: Run.path',
+                    ),
+                    (
+                        {'run': (model('Run', path=(Path | None, None)), ...)},
+                        'P.run: Run.path',
+                    ),
+                    *(
+                        (
+                            {'run': (model('Run', path=(tp, ...)), ...)},
+                            'P.run: Run.path',
+                        )
+                        for tp in (PurePosixPath, PosixPath, LocalPath)
+                    ),
+                    (
+                        {'run': (model('Run', paths=(list[Path], [])), ...)},
+                        'P.run: Run.paths',
+                    ),
+                    (
+                        {'run': (model('Run', files=(RunPaths, ...)), ...)},
+                        'P.run: RunPaths.sample',
+                    ),
+                    (
+                        {'run': (model('Run', file=(tuple[Path, float], ...)), ...)},
+                        'P.run: Run.file',
+                    ),
+                    (
+                        {'run': (model('Run', files=(dict[str, Path], {})), ...)},
+                        'P.run: Run.files',
+                    ),
+                    (
+                        {
+                            'run': (
+                                model(
+                                    'Run', geometry=(model('G', path=(Path, ...)), ...)
+                                ),
+                                ...,
+                            )
+                        },
+                        'P.run: G.path',
+                    ),
+                )
             ),
-            (
-                {'params': model('P', runs=(RunFiles, ...))},
-                'P.runs: a file is at a place only',
+            *(
+                (
+                    {'params': model('P', **fields)},
+                    rf"{where}: CalibrationFile: a dataset model holds only path, not "
+                    r"\['run'\]",
+                )
+                for fields, where in (
+                    ({'calibration': (CalibrationFile, ...)}, 'P.calibration'),
+                    (
+                        {'run': (model('Run', file=(CalibrationFile, ...)), ...)},
+                        'P.run: Run.file',
+                    ),
+                )
             ),
-            (
-                {'params': model('P', runs=(RootModel[list[Path]], ...))},
-                'P.runs: a file is at a place only',
+            *(
+                (
+                    {'params': model('P', mask=(mask, ...))},
+                    rf'P.mask: {mask.__name__}.path: {KEEPS_THE_PATH}',
+                )
+                for mask in (
+                    pydantic.create_model(
+                        'StrMask', __base__=MaskFile, path=(str, ...)
+                    ),
+                    pydantic.create_model(
+                        'OptionalMask', __base__=MaskFile, path=(Path | None, None)
+                    ),
+                    pydantic.create_model(
+                        'DefaultMask', __base__=MaskFile, path=(Path, Path('mask.xml'))
+                    ),
+                    pydantic.create_model(
+                        'AliasedMask',
+                        __base__=MaskFile,
+                        path=(Path, Field(alias='file')),
+                    ),
+                    pydantic.create_model(
+                        'CheckedMask',
+                        __base__=MaskFile,
+                        path=(Annotated[Path, AfterValidator(lambda p: p)], ...),
+                    ),
+                )
             ),
-            (
-                {'params': model('P', run=(model('Run', files=(RunPaths, ...)), ...))},
-                'P.run: Run.files: a file is at a place only',
+            *(
+                (
+                    {'outputs': model('O', **fields)},
+                    f'{where} {DATASET_MODEL_OUTPUT}',
+                )
+                for fields, where in (
+                    ({'raw': (RunFile, ...)}, 'O.raw: RunFile'),
+                    ({'raws': (list[RunFile | None], [])}, 'O.raws: RunFile'),
+                    (
+                        {'g': (model('G', file=(RunFile, ...)), ...)},
+                        'O.g: G.file: RunFile',
+                    ),
+                    (
+                        {'g': (model('G', run=(SampleRun, ...)), ...)},
+                        'O.g: SampleRun.file: RunFile',
+                    ),
+                )
             ),
-            (
-                {
-                    'params': model(
-                        'P', run=(model('Run', file=(tuple[Path, float], ...)), ...)
-                    )
-                },
-                'P.run: Run.file: a file is at a place only',
-            ),
-            (
-                {
-                    'params': model(
-                        'P',
-                        run=(model('Run', files=(dict[str, Path], {})), ...),
-                    )
-                },
-                'P.run: Run.files: a file is at a place only',
+            *(
+                (
+                    {'outputs': model('O', **fields)},
+                    f'{where}: {OUTSIDE_A_DATASET_MODEL}',
+                )
+                for fields, where in (
+                    ({'path': (Path, ...)}, 'O.path'),
+                    ({'path': (Path | None, None)}, 'O.path'),
+                    ({'paths': (list[PurePosixPath], [])}, 'O.paths'),
+                    ({'g': (model('G', path=(Path, ...)), ...)}, 'O.g: G.path'),
+                    ({'range': (TimeRangeAt, ...)}, 'O.range: TimeRangeAt.where'),
+                )
             ),
             *(
                 (
@@ -903,7 +1082,9 @@ class TestModelRules:
                         'P',
                         run=(
                             model(
-                                'Run', path=(Path, ...), bins=(int, Field(1, alias='b'))
+                                'Run',
+                                file=(RunFile, ...),
+                                bins=(int, Field(1, alias='b')),
                             ),
                             ...,
                         ),
@@ -1055,7 +1236,9 @@ class TestModelRules:
                     'params': model(
                         'P',
                         run=(
-                            model('Run', path=(Path, ...), kind=(str, {'@ref': 'a'})),
+                            model(
+                                'Run', file=(RunFile, ...), kind=(str, {'@ref': 'a'})
+                            ),
                             ...,
                         ),
                     )
@@ -1081,19 +1264,23 @@ class TestModelRules:
             (
                 {
                     'params': model(
-                        'P', sample=(SampleRun, SampleRun(file=Path('run.nxs')))
+                        'P', sample=(SampleRun, SampleRun(file=RunFile(path='run.nxs')))
                     )
                 },
-                f'P.sample: {NOT_A_VALUE}: sample.file: a file is given by reference '
-                r'to a dataset, dataset\(path=...\)',
+                f'P.sample: {NOT_A_VALUE}: sample.file: .* is not a dataset; RunFile '
+                r'is given by reference to a dataset, such as dataset\(path=...\)',
             ),
             (
                 {
                     'params': model(
-                        'P', runs=(list[SampleRun], [SampleRun(file=Path('run.nxs'))])
+                        'P',
+                        runs=(
+                            list[SampleRun],
+                            [SampleRun(file=RunFile(path='run.nxs'))],
+                        ),
                     )
                 },
-                rf'P.runs: {NOT_A_VALUE}: runs\[0\].file: a file is given by reference',
+                rf'P.runs: {NOT_A_VALUE}: runs\[0\].file: .* is not a dataset',
             ),
             (
                 {'outputs': model('O', iofq=(sc.DataArray | sc.Variable, ...))},
@@ -1113,7 +1300,7 @@ class TestModelRules:
         params = model(
             'P',
             centre=(sc.Variable, sc.scalar(1.0)),
-            sample=(SampleRun, SampleRun(file=Path('a'))),
+            sample=(SampleRun, SampleRun(file=RunFile(path='a'))),
         )
         with pytest.raises(ValueError, match=r'P\.centre: .*; P\.sample: '):
             spec(params=params)
@@ -1135,12 +1322,10 @@ class TestOptionalFields:
             str | None,
             Mode | None,
             Literal['a', 'b'] | None,
-            Path | None,
             list[float] | None,
             list[Reduction] | None,
             sc.DataArray | None,
             list[float | None],
-            list[Path | None],
         ],
     )
     def test_a_field_of_a_group_is_typed_x_or_none_only_where_x_is_a_group(
@@ -1203,7 +1388,7 @@ class Pair:
 
 
 NOT_A_SCALAR = re.escape(
-    'is not a scalar; a field of a group holds a file, a group, a data value, or a '
+    'is not a scalar; a field of a group holds a group, a data value, or a '
     'scalar (int, float, str, bool, an enum, or a Literal), or a list of one'
 )
 
@@ -1273,8 +1458,9 @@ class TestFieldKinds:
             list[float],
             list[Annotated[int, Ge(0)]],
             list[Mode],
-            Path,
-            list[Path],
+            RunFile,
+            list[RunFile],
+            RunFile | None,
             Reduction,
             Reduction | None,
             list[Reduction],
@@ -1283,7 +1469,7 @@ class TestFieldKinds:
             sc.Variable | sc.DataArray,
         ],
     )
-    def test_a_field_of_a_group_holds_a_file_a_group_a_scalar_or_a_data_value(
+    def test_a_field_of_a_group_holds_a_group_a_scalar_or_a_data_value(
         self, tp: Any
     ) -> None:
         spec(params=model('P', g=(_group_with(tp), ...)))
@@ -1328,17 +1514,17 @@ class TestTables:
                 'sample: a table is a list parameter',
             ),
             (
-                {'sample': (list[SampleFile], Field(min_length=1))},
+                {'sample': (list[RunFile], Field(min_length=1))},
                 ['run'],
                 'run: not a parameter of sans-iofq',
             ),
             (
-                {'sample': (list[SampleFile], Field(min_length=1))},
+                {'sample': (list[RunFile], Field(min_length=1))},
                 ['sample', 'sample'],
                 'sample: a table named twice',
             ),
             (
-                {'sample': (list[SampleFile], Field(default_factory=list))},
+                {'sample': (list[RunFile], Field(default_factory=list))},
                 ['sample'],
                 'sample: a table has no default',
             ),
@@ -1348,12 +1534,18 @@ class TestTables:
         with pytest.raises(ValueError, match=reason):
             spec(params=model('P', **params), tables=tables)
 
-    def test_a_table_may_be_of_groups_that_hold_a_file(self) -> None:
+    def test_a_table_may_be_of_dataset_models(self) -> None:
+        assert DATASETS.tables == ('runs',)
+        assert not _takes_inline(DATASETS, 'runs')
+        assert not DATASETS.has_json_form('runs')
+        assert IOFQ_MULTI.has_json_form('time_range')
+
+    def test_a_table_may_be_of_groups_that_hold_a_dataset_model(self) -> None:
         assert _takes_inline(RUNS, 'sample')
         params = RUNS.params(
             sample=[
-                {'file': Path('a.nxs')},
-                {'file': Path('b.nxs'), 'geometry': {'thickness': 0.2}},
+                {'file': {'path': Path('a.nxs')}},
+                {'file': {'path': Path('b.nxs')}, 'geometry': {'thickness': 0.2}},
             ]
         )
         assert [row.geometry for row in params.sample] == [
@@ -1364,12 +1556,14 @@ class TestTables:
     def test_the_field_validators_of_a_group_check_each_row(self) -> None:
         with pytest.raises(pydantic.ValidationError, match='thickness must be'):
             RUNS.params(
-                sample=[{'file': Path('a.nxs'), 'geometry': {'thickness': -1.0}}]
+                sample=[
+                    {'file': {'path': Path('a.nxs')}, 'geometry': {'thickness': -1.0}}
+                ]
             )
 
     def test_the_validators_of_the_element_type_check_each_row(self) -> None:
         def known[R: SampleRun | CanRun](run: R) -> R:
-            if run.file.name != 'run.nxs':
+            if run.file.path.name != 'run.nxs':
                 raise ValueError('unknown run')
             return run
 
@@ -1379,7 +1573,8 @@ class TestTables:
             can=(list[Annotated[CanRun, AfterValidator(known)]], ...),
         )
         runs = spec(params=params, tables=('sample', 'can'))
-        row, other = {'file': Path('run.nxs')}, {'file': Path('other.nxs')}
+        row = {'file': {'path': Path('run.nxs')}}
+        other = {'file': {'path': Path('other.nxs')}}
         known_rows = {'sample': [row], 'can': [row]}
         runs.params(**known_rows)
         for rows in ({'sample': [other]}, {'can': [other]}):
@@ -1390,9 +1585,9 @@ class TestTables:
         )
 
 
-def file_ref(data_type: str) -> dict[str, Any]:
-    """The schema of a reference to a file, a dataset."""
-    return {'$ref': '#/$defs/DatasetRef', 'dataType': data_type}
+def dataset_ref(data_type: str, metadata: dict[str, Any]) -> dict[str, Any]:
+    """The schema of a reference to a dataset, of a dataset model."""
+    return {'$ref': '#/$defs/DatasetRef', 'dataType': data_type, 'metadata': metadata}
 
 
 def data_ref(data_type: str) -> dict[str, Any]:
@@ -1477,7 +1672,7 @@ class TestSerialization:
             'title': 'Time',
         }
 
-    def test_a_file_or_a_group_that_holds_a_data_value_is_a_reference_to_its_type(
+    def test_a_dataset_model_or_a_group_with_a_data_value_is_a_reference_to_its_type(
         self,
     ) -> None:
         schema = IOFQ.serialize().params_schema
@@ -1491,8 +1686,28 @@ class TestSerialization:
                 'title': 'Beam Centre',
             },
         }
-        assert schema['$defs']['CanRun']['properties'] == {'file': file_ref('Path')}
+        assert schema['$defs']['CanRun']['properties'] == {
+            'file': dataset_ref('RunFile', {'kind': 'raw'})
+        }
         assert 'BeamCentre' not in schema['$defs']
+
+    def test_a_dataset_model_is_a_reference_to_a_dataset_with_its_metadata(
+        self,
+    ) -> None:
+        properties = DATASETS.serialize().params_schema['properties']
+        assert properties['mask']['anyOf'] == [
+            {
+                '$ref': '#/$defs/DatasetRef',
+                'dataType': 'MaskFile',
+                'metadata': {'kind': 'mask'},
+            },
+            {'type': 'null'},
+        ]
+        assert properties['geometry'] == {
+            **dataset_ref('GeometryFile', {'kind': 'raw'}),
+            'title': 'Geometry',
+        }
+        assert properties['runs']['items'] == dataset_ref('RunFile', {'kind': 'raw'})
 
     def test_a_union_is_its_alternatives_inline_never_a_reference(self) -> None:
         params = model('P', by=(By, ...), maybe=(By | None, None), each=(list[By], []))
@@ -1590,6 +1805,7 @@ class TestSerialization:
         'params',
         [
             {'sample': {'file': 'run.nxs'}},
+            {'sample': {'file': {'path': 'run.nxs'}}},
             {'sample': SAMPLE, 'reduction': {'bins': 'x'}},
             {'sample': {'file': {'@ref': 'dataset'}}},
             {'sample': {'file': {'dataset': 'run:loki/1'}}},

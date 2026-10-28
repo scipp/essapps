@@ -19,14 +19,14 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
 
-from ess.spec import DatasetRef
+from pydantic import BaseModel
+
+from ess.spec import DatasetRef, field_types
 from ess.spec.refs import Loc, iter_refs
 
-from .batch import Lookup, dataset_place, holding, run_number, try_apply
+from .batch import Lookup, dataset_place, run_number, try_apply
 from .client import Client
 from .datasets import Selector
 from .errors import SubmitError
@@ -38,48 +38,43 @@ class Rule:
     """
     Apply a template to each new dataset the selector matches.
 
-    A dataset fills the place ``at`` in the blank the lookup leaves, as
-    :func:`apply` fills it: a file field of the blank, a group, such as
-    ``('sample', 'file')``, and ``fields`` gives the blank's other fields, as
-    :func:`apply` takes them; for a series, of each row. A dataset is new
-    until a record under the label holds it at that place: a dataset that a
-    request holds elsewhere, such as a can that the lookup fills, is not
-    handled by it.
+    A dataset fills the blank ``at`` that the lookup leaves, a parameter of
+    a dataset model, as :func:`apply` fills it, such as ``'sample'``. A
+    dataset is new until a record under the label holds it there: a dataset
+    that a request holds elsewhere, such as a can that the lookup fills, is
+    not handled by it.
 
     With ``series``, a request instead takes every dataset with the same
     value of that metadata field so far, in run order, and that value is its
-    member. The blank is then a table with a row for each dataset, and the
-    lookup is not used. ``at`` names the place in each row, the blank and
-    the fields within a row down to the file: ``at=('runs', 'file')`` makes
-    the rows ``[{'file': dataset}, ...]``. A dataset is new until a record
-    under the label holds it at that place in a row, ``runs[i].file``.
+    member. The blank ``at`` is then a table of a dataset model, with a row
+    for each dataset, and the lookup is not used: ``at='runs'`` makes the
+    rows ``[dataset, ...]``. A dataset is new until a record under the label
+    holds it in a row, ``runs[i]``.
 
     ``persist`` names the outputs the loop persists, or is ``None`` for every
     one; the loop always persists, so that its client keeps nothing. What the
     template references must be persisted for the same reason.
 
     Raises ``ValueError`` when made if no single blank is left for a dataset,
-    if ``at`` is not in it (see :func:`dataset_place`), or if ``fields``
-    gives the place ``at`` (see :func:`~ess.apps.batch.holding`).
+    or if ``at`` is not that blank (see :func:`dataset_place`).
     """
 
     name: str
     template: Template
     selector: Selector
     label: str
-    at: tuple[str, ...]
-    fields: Mapping[str, Any] | None = None
+    at: str
     member_field: str = 'run'
     lookup: Lookup | None = None
     series: str | None = None
     persist: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
-        holding(self.place, None, self.fields)  # refuses an at that none fills
+        _ = self.place  # refuses an at that no dataset fills
 
     @property
-    def place(self) -> tuple[str, ...]:
-        """The place a dataset fills, in a row of the blank for a series."""
+    def place(self) -> str:
+        """The blank a dataset fills, a row of it for a series."""
         lookup = self.lookup if self.series is None else None
         return dataset_place(self.template, lookup, self.at)
 
@@ -98,7 +93,20 @@ class RuleStatus:
 
 
 class TriggerLoop:
+    """
+    Steps the ``rules`` on ``client``. Raises ``ValueError`` for a rule of a
+    spec the backend runs that could not submit what it finds (see
+    :func:`_check`); a rule of a spec it does not run submits nothing, with
+    the reason in its status.
+    """
+
     def __init__(self, client: Client, rules: list[Rule]) -> None:
+        for rule in rules:
+            try:
+                spec = client.spec(rule.template.spec)
+            except KeyError:
+                continue
+            _check(rule, spec.params)
         self._client = client
         self._source = client.datasets
         self._rules = rules
@@ -162,7 +170,6 @@ class TriggerLoop:
                 new,
                 self._source,
                 at=place,
-                fields=rule.fields,
                 member_field=rule.member_field,
                 lookup=rule.lookup,
             )
@@ -171,7 +178,7 @@ class TriggerLoop:
     def _series_requests(
         self,
         rule: Rule,
-        place: tuple[str, ...],
+        place: str,
         matching: list[DatasetRef],
         new: list[DatasetRef],
     ) -> dict[str, Request]:
@@ -179,26 +186,55 @@ class TriggerLoop:
         for ref in sorted(matching, key=lambda r: run_number(r, self._source)):
             series[str(self._source.metadata(ref)[rule.series])].append(ref)
         return {
-            value: rule.template.fill(
-                params={place[0]: [holding(place, ref, rule.fields) for ref in refs]}
-            )
+            value: rule.template.fill(params={place: refs})
             for value, refs in series.items()
             if any(ref in new for ref in refs)
         }
 
 
-def _fills(loc: Loc, place: tuple[str, ...], series: str | None) -> bool:
+def _check(rule: Rule, params: type[BaseModel]) -> None:
+    """
+    Refuse ``rule``, of a spec with the params model ``params``, if a dataset
+    it lists could not fill its blank: the blank ``at``, and each blank of
+    its lookup, is a parameter of a dataset model, a list one if and only if
+    the rule has ``series``, and the rule's or the lookup's selector names
+    each key and value of the model's metadata, so that every dataset it
+    lists fits the model (see :class:`~ess.spec.DatasetModel`).
+    """
+    selectors = {rule.place: rule.selector}
+    if rule.lookup is not None and rule.series is None:
+        selectors |= {b: r.selector for b, r in rule.lookup.rules.items()}
+    for blank, selector in selectors.items():
+        series = blank == rule.place and rule.series is not None
+        listed = field_types.is_list(params, blank)
+        if series and not listed:
+            raise ValueError(
+                f'{rule.name}: a series fills a list parameter, not {blank}'
+            )
+        if listed and not series:
+            fills = 'a series' if blank == rule.place else 'no lookup'
+            raise ValueError(
+                f'{rule.name}: {blank} is a list parameter; {fills} fills it'
+            )
+        model = field_types.value_type(params.model_fields[blank].annotation)
+        if not field_types.is_dataset(model):
+            raise ValueError(
+                f'{rule.name}: {blank} is not a parameter of a dataset model'
+            )
+        need = Selector(**model.metadata).fields
+        if not need.items() <= selector.fields.items():
+            raise ValueError(
+                f'{rule.name}: {selector} lists datasets that do not fit '
+                f'{model.__name__} at {blank}; a selector names each of {need}'
+            )
+
+
+def _fills(loc: Loc, place: str, series: str | None) -> bool:
     """
     Whether a dataset at ``loc`` in a request of a rule fills the rule's
-    ``place``: is at it, or for a series, at it in a row of the blank table,
-    such as ``('runs', 2, 'file')`` for the place ``('runs', 'file')``.
+    ``place``: is it, or for a series, a row of it, such as ``('runs', 2)``
+    for the place ``'runs'``.
     """
     if series is None:
-        return loc == place
-    blank, *row = place
-    return (
-        len(loc) == len(place) + 1
-        and loc[0] == blank
-        and isinstance(loc[1], int)
-        and list(loc[2:]) == row
-    )
+        return loc == (place,)
+    return len(loc) == 2 and loc[0] == place and isinstance(loc[1], int)

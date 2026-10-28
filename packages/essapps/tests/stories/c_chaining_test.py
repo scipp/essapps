@@ -27,7 +27,7 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
 ) -> None:
     centre_run = measure(1, [1.0, 1.0, 1.0, 1.0])
     centre = client.compute(
-        BEAM_CENTRE, params={'direct_beam': {'file': centre_run}}, label='beam-centre'
+        BEAM_CENTRE, params={'direct_beam': centre_run}, label='beam-centre'
     )
     samples = [
         measure(2, [2.0, 3.0, 4.0, 5.0], role='sample'),
@@ -40,7 +40,7 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
     )
 
     requests = apply(
-        template, samples, client.datasets, at=('sample', 'file'), member_field='run'
+        template, samples, client.datasets, at='sample', member_field='run'
     )
     reduced = list(client.compute(requests, label='iofq').values())
 
@@ -61,20 +61,18 @@ def test_c2_vanadium_from_the_catalogue(
         VANADIUM,
         params={
             'scaling': Scaling(scale=2.0),
-            'vanadium': {'file': measure(1, [1.0, 1.0])},
+            'vanadium': measure(1, [1.0, 1.0]),
         },
     )
     pid = other.publish(vanadium.ref('normalization'), 'scicat')
     published = datasets.add_published(scicat.entries[pid])
 
-    loaded = client.compute(
-        LOAD_NORMALIZATION, params={'published': {'file': dataset(pid=pid)}}
-    )
+    loaded = client.compute(LOAD_NORMALIZATION, params={'published': dataset(pid=pid)})
     sample = measure(2, [4.0, 8.0])
     result = client.compute(
         IOFQ,
         params={
-            'sample': {'file': sample},
+            'sample': sample,
             'normalization': loaded.ref('normalization'),
         },
     )
@@ -95,8 +93,8 @@ def test_c4_reflectometry_angle_series(client: Client, measure: Measure) -> None
     series = client.submit(
         STITCH,
         params={
-            'runs': [{'file': angle} for angle in angles],
-            'reference': {'file': reference},
+            'runs': angles,
+            'reference': reference,
         },
     )
     exported = client.compute(EXPORT, params={'result': series.ref('stitched')})
@@ -114,17 +112,17 @@ def test_c4_angle_series_accumulated_reads_as_the_plain_request(
         for n, counts in [(11, [8.0, 4.0]), (12, [2.0, 1.0]), (13, [4.0, 2.0])]
     ]
     series = client.accumulator(
-        Template(STITCH, params={'reference': {'file': reference}}, blanks=('runs',))
+        Template(STITCH, params={'reference': reference}, blanks=('runs',))
     )
     reads, plains = [], []
     for n, run in enumerate(runs, start=1):
         # STITCH keeps the rows and stitches at each read
-        series.push(runs=[{'file': run}])
+        series.push(runs=[run])
         plain = client.compute(
             STITCH,
             params={
-                'runs': [{'file': run} for run in runs[:n]],
-                'reference': {'file': reference},
+                'runs': runs[:n],
+                'reference': reference,
             },
         )
         reads.append(client.output(series, 'stitched').curve)
@@ -139,12 +137,10 @@ def test_c5_vanadium_and_sample_tuned_together(
 ) -> None:
     vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
     vanadium = client.stage(
-        Template(
-            VANADIUM, params={'vanadium': {'file': vanadium_run}}, blanks=('scaling',)
-        )
+        Template(VANADIUM, params={'vanadium': vanadium_run}, blanks=('scaling',))
     )
     reduce = client.stage(
-        Template(IOFQ, params={'sample': {'file': sample}}, blanks=('normalization',))
+        Template(IOFQ, params={'sample': sample}, blanks=('normalization',))
     )
     reduced = []
     for scale in (1.0, 2.0):

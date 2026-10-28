@@ -8,13 +8,15 @@ import pytest
 import scipp as sc
 from pydantic import BaseModel
 
+from ess.spec import DatasetModel
 from ess.spec.field_types import (
     arguments,
     element,
     fields_of,
     fits,
+    holds_dataset,
     is_alias,
-    is_file,
+    is_dataset,
     is_single,
     optional,
     plain,
@@ -22,6 +24,10 @@ from ess.spec.field_types import (
     type_name,
     value_type,
 )
+
+
+class RunFile(DatasetModel, kind='raw'):
+    pass
 
 
 class Parts(BaseModel, arbitrary_types_allowed=True):
@@ -44,7 +50,7 @@ class BeamCentre(BaseModel):
 
 class FindCentre(BaseModel):
     kind: Literal['find'] = 'find'
-    run: Path
+    run: RunFile
 
 
 def test_optional_removes_none_and_says_whether_it_was_there() -> None:
@@ -109,11 +115,25 @@ def test_lists_dicts_and_unions_are_not_data_values(tp: Any) -> None:
     assert not is_single(tp)
 
 
-def test_a_file_is_a_path_or_a_subclass_of_it() -> None:
-    assert is_file(Path)
-    assert is_file(PosixPath)
-    assert not is_file(str)
-    assert not is_file(list[Path])
+def test_a_dataset_model_is_a_subclass_of_dataset_model() -> None:
+    assert is_dataset(RunFile)
+    assert is_dataset(DatasetModel)
+    assert not is_dataset(Path)
+    assert not is_dataset(Parts)
+    assert not is_dataset(RunFile | None)
+    assert not is_dataset(list[RunFile])
+
+
+@pytest.mark.parametrize(
+    'tp', [RunFile, RunFile | None, list[RunFile], FindCentre, list[FindCentre]]
+)
+def test_a_type_holds_a_dataset_model_at_any_depth(tp: Any) -> None:
+    assert holds_dataset(tp)
+
+
+@pytest.mark.parametrize('tp', [Path, list[Path], Parts, BeamCentre])
+def test_a_type_without_a_dataset_model_holds_none(tp: Any) -> None:
+    assert not holds_dataset(tp)
 
 
 def test_a_newtype_and_a_type_alias_are_aliases() -> None:
@@ -143,14 +163,14 @@ def test_fields_of_a_model_a_dataclass_or_a_typeddict() -> None:
 
 
 class Node(BaseModel):
-    file: Path
+    file: RunFile
     children: list['Node'] = []
 
 
 def test_reachable_looks_through_arguments_and_fields_and_ends_on_recursion() -> None:
     found = list(reachable(Annotated[list[Node] | None, 'a validator']))
     assert Node in found
-    assert Path in found
+    assert RunFile in found
     assert 'a validator' not in found  # not the metadata
     assert sc.DataArray in list(reachable(dict[str, SampleParts]))
 

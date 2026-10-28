@@ -15,10 +15,10 @@ The widget at a place follows from what a request writes there, as
 =========================  ================================================
 Place                      Widget
 =========================  ================================================
-:class:`File`              a picker of the client's datasets
 :class:`Ways`              a choice of ways: the fields of each group written
                            inline, an output of a record that fits
-                           ``Ways.record``, and ``None``. A record is offered
+                           ``Ways.record``, or for a dataset model a dataset
+                           that fits it, and ``None``. A record is offered
                            while an output fits.
 :class:`Value`             an input for the scalar, or a picker of its
                            values
@@ -26,7 +26,11 @@ Place                      Widget
 
 A record's output fits if its type, from the record's spec, fits the place,
 and a request of the client may reference it now (``client.readable``), so a
-pending record is offered too.
+pending record is offered too. A dataset fits a dataset model if a
+:class:`~ess.apps.Selector` of the model's metadata matches it, as the
+backend checks when the request is submitted. A dataset that the form is set
+to, such as one a record names, stays picked when the listing no longer has
+it.
 
 The widgets follow those of esslivedata's dashboard (scipp/esslivedata#1426),
 in Panel. A place without a default starts unset, so that a value a correct
@@ -52,8 +56,15 @@ from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
 from ess.apps import Client, FieldError, Selector, SubmitError
-from ess.spec import DatasetRef, OutputRef, WorkflowSpec, field_types, places
-from ess.spec.places import File, Rows, Value
+from ess.spec import (
+    DatasetModel,
+    DatasetRef,
+    OutputRef,
+    WorkflowSpec,
+    field_types,
+    places,
+)
+from ess.spec.places import Rows, Value
 from ess.spec.refs import Loc, iter_refs
 
 
@@ -75,8 +86,9 @@ type _Missing = list[FieldError]
 class Listing:
     """
     What a request of ``client`` may name now, looked up once for a refresh
-    of any number of forms: the datasets and the client's records, each by a
-    label, and the outputs a request may reference.
+    of any number of forms: the datasets of each dataset model and the
+    client's records, each by a label, and the outputs a request may
+    reference.
 
     It stands in for two queries the client lacks (scipp/essapps#95). The
     client lists no records by the type of their outputs (gap 1), so
@@ -87,19 +99,14 @@ class Listing:
     """
 
     def __init__(self, client: Client) -> None:
-        metadata = {
-            r: client.datasets.metadata(r) for r in client.datasets.list(Selector())
-        }
-        self.datasets: dict[str, DatasetRef] = {}
-        for ref, fields in metadata.items():
-            role = f' ({fields["role"]})' if 'role' in fields else ''
-            self.datasets[_dataset_label(ref, fields) + role] = ref
+        self._client = client
+        self._metadata: dict[DatasetRef, dict[str, Any]] = {}
+        self._datasets: dict[str, dict[str, DatasetRef]] = {}
 
         def source(ref: Any) -> str:
             if not isinstance(ref, DatasetRef):
                 return str(ref.record[:6])
-            known = metadata[ref] if ref in metadata else client.datasets.metadata(ref)
-            return _dataset_label(ref, known)
+            return _dataset_label(ref, self._known(ref))
 
         self.records = client.records()
         specs = {s: client.spec(s) for s in {r.spec for r in self.records}}
@@ -122,6 +129,24 @@ class Listing:
             for name in names
         ]
 
+    def datasets(self, model: type[DatasetModel]) -> dict[str, DatasetRef]:
+        """The datasets that fit ``model``, each by a label, in the order measured."""
+        selector = Selector(**model.metadata)
+        if (key := repr(selector)) not in self._datasets:
+            listed = self._client.datasets.list(selector)
+            self._datasets[key] = {}
+            for ref in listed:
+                fields = self._known(ref)
+                role = f' ({fields["role"]})' if 'role' in fields else ''
+                self._datasets[key][_dataset_label(ref, fields) + role] = ref
+        return self._datasets[key]
+
+    def _known(self, ref: DatasetRef) -> dict[str, Any]:
+        """The metadata of a dataset, looked up once."""
+        if ref not in self._metadata:
+            self._metadata[ref] = self._client.datasets.metadata(ref)
+        return self._metadata[ref]
+
     def fitting(self, tp: Any) -> dict[str, OutputRef]:
         """The outputs a request may reference that fit ``tp``, newest first."""
         return {
@@ -142,17 +167,13 @@ def _default(info: FieldInfo) -> Any:
     return UNSET if info.is_required() else info.get_default(call_default_factory=True)
 
 
-def _place(
-    model: type[BaseModel], name: str, listing: Listing
-) -> _File | _Scalar | _Choice:
+def _place(model: type[BaseModel], name: str, listing: Listing) -> _Scalar | _Choice:
     """The widget for the value at the place of field ``name`` of ``model``."""
     info = model.model_fields[name]
     label = places.title(name, info)
     described = places.place(model, name)
     if isinstance(described, Rows):
         raise NotImplementedError(f'{name}: a list of places (a table)')
-    if isinstance(described, File):
-        return _File(label, listing)
     if isinstance(described, Value):
         return _Scalar(label, info, described.type)
     ways: dict[str, _Way] = {}
@@ -162,7 +183,9 @@ def _place(
         else:
             way = places.title(value, group.model_fields[described.tag])
             ways[way] = _Group(group, listing, {described.tag: value})
-    if described.record is not None:
+    if field_types.is_dataset(described.record):
+        ways[_Choice.DATASET] = _Dataset(described.record, listing)
+    elif described.record is not None:
         ways[_Choice.RECORD] = _Record(described.record, listing)
     if described.none:
         ways[_Choice.NONE] = _Nothing()
@@ -181,15 +204,22 @@ def _pick(widget: Any, value: Any) -> None:
     widget.value = value if value in widget.options.values() else None
 
 
-class _File:
-    """A file: a picker of datasets."""
+class _Dataset:
+    """
+    A dataset model: a picker of the datasets that fit it. A dataset that the
+    form is set to and the listing lacks stays picked, labelled by its
+    reference as given, an identity or a name such as ``run:101``.
+    """
 
-    def __init__(self, label: str, listing: Listing) -> None:
-        self.widget = pn.widgets.Select(label=label, sizing_mode='stretch_width')
+    def __init__(self, model: type[DatasetModel], listing: Listing) -> None:
+        self._model = model
+        self._listed: dict[str, Any] = {}
+        self.widget = pn.widgets.Select(sizing_mode='stretch_width')
         self.refresh(listing)
 
     def refresh(self, listing: Listing) -> None:
-        _picked(self.widget, {'(choose a dataset)': None, **listing.datasets})
+        self._listed = {'(choose a dataset)': None, **listing.datasets(self._model)}
+        self.set(self.widget.value)
 
     def value(self, loc: Loc, missing: _Missing) -> Any:
         if self.widget.value is None:
@@ -198,7 +228,12 @@ class _File:
         return self.widget.value
 
     def set(self, value: Any) -> None:
-        _pick(self.widget, value)
+        picked = value if isinstance(value, DatasetRef) else None
+        options = dict(self._listed)
+        if picked is not None and picked not in options.values():
+            options[str(picked)] = picked
+        self.widget.options = options
+        self.widget.value = picked
 
     def panel(self) -> Any:
         return self.widget
@@ -206,10 +241,10 @@ class _File:
 
 class _Scalar:
     """
-    A scalar, the value at any place of a valid spec that is not a file, a
-    group, or a union: an ``int``, ``float``, or ``str`` input that may be
-    unset, or for a ``bool``, an enum, or a ``Literal``, a picker of its
-    values with an option for none, so that it may start unset.
+    A scalar, the value at any place of a valid spec that is not a group or a
+    union: an ``int``, ``float``, or ``str`` input that may be unset, or for
+    a ``bool``, an enum, or a ``Literal``, a picker of its values with an
+    option for none, so that it may start unset.
     """
 
     def __init__(self, label: str, info: FieldInfo, tp: Any) -> None:
@@ -339,7 +374,7 @@ class _Nothing:
         return pn.Spacer(height=0)
 
 
-_Way = _Group | _Record | _Nothing
+_Way = _Group | _Record | _Dataset | _Nothing
 
 
 class _Choice:
@@ -355,6 +390,7 @@ class _Choice:
     """
 
     RECORD = 'From a record'
+    DATASET = 'A dataset'
     NONE = 'None'
 
     def __init__(
@@ -417,13 +453,16 @@ class _Choice:
     def _label(self, value: Any) -> str | None:
         """The label of the way that writes ``value``, or ``None`` if unset."""
         if value is UNSET:
-            first = [label for label, w in self._ways.items() if isinstance(w, _Group)]
-            first = first or [self.RECORD]
+            groups = [label for label, w in self._ways.items() if isinstance(w, _Group)]
+            refs = [w for w in (self.RECORD, self.DATASET) if w in self._ways]
+            first = groups or refs
             return first[0] if len(first) == 1 and self.NONE not in self._ways else None
         if value is None:
             return self.NONE
         if isinstance(value, OutputRef):
             return self.RECORD
+        if isinstance(value, DatasetRef):
+            return self.DATASET
         tag = {} if self._tag is None else {self._tag: dict(value)[self._tag]}
         for label, way in self._ways.items():
             if isinstance(way, _Group) and way.tag == tag:
@@ -476,7 +515,7 @@ class Form:
         ``record.request.params``; a place left out is as it starts, at its
         default or unset. A reference that the client may not read now
         chooses the way of a record, with no record picked; a dataset that
-        is not listed is not picked.
+        is not listed stays picked.
         """
         if unknown := set(params) - set(self._params):
             raise KeyError(f'{self.spec.title} has no parameters {sorted(unknown)}')

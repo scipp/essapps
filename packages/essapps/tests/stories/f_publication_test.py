@@ -20,12 +20,12 @@ def test_f1_publish_then_trace_six_months_later(
     client: Client, measure: Measure
 ) -> None:
     centre_run, run = measure(1, [1.0, 1.0, 1.0, 1.0]), measure(2, [2.0, 3.0, 4.0, 5.0])
-    centre = client.compute(BEAM_CENTRE, params={'direct_beam': {'file': centre_run}})
+    centre = client.compute(BEAM_CENTRE, params={'direct_beam': centre_run})
     tune = client.stage(
         Template(
             IOFQ,
             params={
-                'sample': {'file': run},
+                'sample': run,
                 'beam_centre': centre.ref('centre'),
                 'normalization': None,
             },
@@ -54,7 +54,7 @@ def test_f2_reproduce_after_two_upgrades(
         IOFQ,
         params={
             'reduction': Reduction(threshold=1.5),
-            'sample': {'file': measure(1, [1.0, 2.0, 3.0, 4.0])},
+            'sample': measure(1, [1.0, 2.0, 3.0, 4.0]),
             'normalization': None,
         },
     )

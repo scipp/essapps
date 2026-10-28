@@ -35,20 +35,19 @@ from ess.apps.testing import (
     kept_rows,
     read_dataset,
 )
-from ess.spec import Binding, WorkflowSpec, function_binding
+from ess.spec import Binding, DatasetModel, WorkflowSpec, function_binding
 
 
 class Amount(BaseModel):
     """
     A number that one workflow outputs and another takes: a group, since a
-    reference stands for a group or a file only.
+    reference stands for a group only.
     """
 
     value: float
 
 
-class SampleRun(BaseModel):
-    file: Path
+class SampleRun(DatasetModel): ...
 
 
 class Box:
@@ -128,7 +127,7 @@ OFFSET = _spec('offset', OffsetParams, Value)
 
 
 def _sample(n: int) -> dict[str, Any]:
-    return {'sample': {'file': dataset(run=n)}}
+    return {'sample': dataset(run=n)}
 
 
 class GatedStore(FakeStore):
@@ -187,12 +186,12 @@ def boxes() -> list[weakref.ref[Box]]:
 @pytest.fixture
 def bind(loading: threading.Event, boxes: list[weakref.ref[Box]]) -> list[Binding]:
     def load(params: RunParams) -> Loaded:
-        run = read_dataset(params.sample.file)
+        run = read_dataset(params.sample.path)
         loading.wait(timeout=5)
         return Loaded(value=Amount(value=run), extra=Amount(value=-run))
 
     def box(params: RunParams) -> BoxOutputs:
-        boxes.append(weakref.ref(value := Box(read_dataset(params.sample.file))))
+        boxes.append(weakref.ref(value := Box(read_dataset(params.sample.path))))
         return BoxOutputs(value=Boxed(box=value))
 
     def total(params: TotalParams) -> Value:
@@ -208,7 +207,7 @@ def bind(loading: threading.Event, boxes: list[weakref.ref[Box]]) -> list[Bindin
         function_binding(LOAD, load),
         function_binding(SHIFT, shift),
         kept_rows(TOTAL, total),
-        function_binding(LIST, lambda p: Listed(value=[read_dataset(p.sample.file)])),
+        function_binding(LIST, lambda p: Listed(value=[read_dataset(p.sample.path)])),
         function_binding(BOX, box),
         function_binding(
             UNBOX, lambda p: Value(value=Amount(value=p.source.box.value))

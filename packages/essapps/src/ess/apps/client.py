@@ -176,11 +176,9 @@ class Accumulator:
         Add rows to blank tables of the template, by the name of each, the
         rows entering one state in order::
 
-            acc.push(sample=[{'file': dataset(run=611), 'transmission': t611.ref('t')},
-                             {'file': dataset(run=612), 'transmission': t612.ref('t')}])
-            acc.push(sample=[{'file': dataset(run=613), 'transmission': t613.ref('t')}])
-            acc.push(sample=[{'file': dataset(run=615), 'transmission': t615.ref('t')}],
-                     can=[{'file': dataset(run=614)}])
+            acc.push(sample=[dataset(run=611), dataset(run=612)])
+            acc.push(sample=[dataset(run=613)])
+            acc.push(sample=[dataset(run=615)], can=[dataset(run=614)])
 
         Each row is given inline, such as a group as a model or a dict, or by
         reference, as its type allows, and so is each place in it, such as a
@@ -331,17 +329,17 @@ class Client:
         parameter, an element of a list, or a field of a group, is given as
         its type allows (see :mod:`ess.spec.places`):
 
-        - a file, by reference to a dataset;
-        - a group, as a model or a dict of its fields, unless a field is a
-          data value; or by reference to an output that fits and holds no
-          file;
+        - a dataset model, by reference to a dataset;
+        - any other group, as a model or a dict of its fields, unless a field
+          is a data value; or by reference to an output that fits and holds no
+          dataset model;
         - a union of groups, as a model or a dict of the fields of one
           alternative, with its tag, never by reference;
         - any other type, inline::
 
             client.submit(IOFQ, params={'reduction': Reduction(bins=4),
-                                        'sample': {'file': dataset(run=60339),
-                                                   'transmission': t.ref('t')}})
+                                        'sample': dataset(run=60339),
+                                        'transmission': t.ref('t')})
 
         A stage takes the values of its blanks the same way. Requests may be
         one, a list, or a dict. The records come back pending, in the shape

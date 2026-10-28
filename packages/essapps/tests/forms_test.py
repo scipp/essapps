@@ -20,7 +20,7 @@ from pydantic import (
 from ess.apps import Backend, Client, Record, Status, SubmitError, Template
 from ess.apps import dataset as dataset_ref
 from ess.apps.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
-from ess.spec import OutputRef, WorkflowSpec, function_binding
+from ess.spec import DatasetModel, OutputRef, WorkflowSpec, function_binding
 
 
 class Blob:
@@ -56,8 +56,13 @@ class Tagged(Enum):
     output = {'@ref': 'output'}  # noqa: RUF012
 
 
-class SampleRun(BaseModel):
-    file: Path
+class SampleRun(DatasetModel): ...
+
+
+class RunFile(DatasetModel): ...
+
+
+class MaskFile(DatasetModel, kind='mask'): ...
 
 
 class LoadParams(BaseModel):
@@ -65,9 +70,9 @@ class LoadParams(BaseModel):
 
 
 class Run(BaseModel, arbitrary_types_allowed=True):
-    """A run and what is given next to it: a group that holds a file."""
+    """A run and what is given next to it: a group that holds a dataset model."""
 
-    file: Path
+    file: RunFile
     shift: Shift = Field(default_factory=Shift)
     offset: float = 0.0
     weights: list[float] = Field(default_factory=list, max_length=3)
@@ -88,7 +93,6 @@ class LoadOutputs(BaseModel):
     transmission: MeasuredTransmission
     point: Point
     values: list[float]
-    run: Run
 
 
 class Terms(BaseModel):
@@ -153,10 +157,10 @@ class Reduction(BaseModel):
 
 
 class ByRun(BaseModel):
-    """An alternative of a union that holds a file."""
+    """An alternative of a union that holds a dataset model."""
 
     kind: Literal['run'] = 'run'
-    run: Path
+    run: RunFile
 
 
 class Given(BaseModel):
@@ -274,6 +278,17 @@ class CorrectionParams(BaseModel):
     correction: Correction = Field(default_factory=Correction)
 
 
+class MaskedRun(BaseModel):
+    """A run and its mask, two dataset models that take different datasets."""
+
+    file: RunFile
+    mask: MaskFile
+
+
+class MaskedParams(BaseModel):
+    run: MaskedRun
+
+
 DEEP = _spec('deep', DeepParams, Value)
 RANGE = _spec('range', RangeParams, Value)
 EDGES = _spec('edges', EdgesParams, Value, tables=('edges',))
@@ -281,10 +296,11 @@ LENGTH = _spec('length', LengthParams, Value)
 CENTRED = _spec('centred', CentredParams, Value)
 FIND = _spec('find', LoadParams, CentreOutputs)
 CORRECTION = _spec('correction', CorrectionParams, Value)
+MASKED = _spec('masked', MaskedParams, Value)
 
 
 def load(params: LoadParams) -> LoadOutputs:
-    value = read_dataset(params.sample.file)
+    value = read_dataset(params.sample.path)
     return LoadOutputs(
         value=value,
         shift=Shift(offset=value),
@@ -293,7 +309,6 @@ def load(params: LoadParams) -> LoadOutputs:
         transmission=MeasuredTransmission(fraction=Blob(value)),
         point=Point(x=value),
         values=[value, 2.0],
-        run=Run(file=params.sample.file),
     )
 
 
@@ -311,7 +326,7 @@ def runs(params: RunsParams) -> Value:
     rows = [*params.runs, *([] if params.extra is None else [params.extra])]
     return Value(
         value=sum(
-            read_dataset(run.file)
+            read_dataset(run.file.path)
             + run.shift.offset
             + run.offset
             + (0.0 if run.transmission is None else run.transmission.fraction.value)
@@ -326,7 +341,9 @@ def total(params: Any) -> Value:
 
 def deep(params: DeepParams) -> Value:
     by = params.centre
-    centre = read_dataset(by.run) if isinstance(by, ByRun) else by.x + by.shift.offset
+    centre = (
+        read_dataset(by.run.path) if isinstance(by, ByRun) else by.x + by.shift.offset
+    )
     transmission = params.reduction.transmission
     return Value(
         value=params.reduction.bins
@@ -339,12 +356,17 @@ def centred(params: CentredParams) -> Value:
     centre = params.beam_centre
     if isinstance(centre, BeamCentre):
         return Value(value=centre.x)
-    run = 0.0 if centre.run is None else read_dataset(centre.run.file)
+    run = 0.0 if centre.run is None else read_dataset(centre.run.path)
     return Value(value=run * centre.tolerance)
 
 
 def find(params: LoadParams) -> CentreOutputs:
-    return CentreOutputs(centre=BeamCentre(x=read_dataset(params.sample.file)))
+    return CentreOutputs(centre=BeamCentre(x=read_dataset(params.sample.path)))
+
+
+def masked(params: MaskedParams) -> Value:
+    run = params.run
+    return Value(value=read_dataset(run.file.path) + read_dataset(run.mask.path))
 
 
 @pytest.fixture
@@ -352,6 +374,7 @@ def client(tmp_path: Path) -> Iterator[Client]:
     datasets = FakeDatasets(proposal='p1', directory=tmp_path)
     datasets.measure(1, 1.0)
     datasets.measure(2, 2.0)
+    datasets.measure(3, 10.0, kind='mask')
     backend = Backend(
         datasets,
         [
@@ -370,6 +393,7 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(CENTRED, centred),
             function_binding(FIND, find),
             function_binding(CORRECTION, lambda p: Value(value=0.0)),
+            function_binding(MASKED, masked),
         ],
     )
     yield Client(backend, proposal='p1', submitter='anna')
@@ -379,7 +403,7 @@ def client(tmp_path: Path) -> Iterator[Client]:
 @pytest.fixture
 def loaded(client: Client) -> Record:
     """LOAD of run 1, whose value is 1.0."""
-    return client.compute(LOAD, params={'sample': {'file': dataset_ref(run=1)}})
+    return client.compute(LOAD, params={'sample': dataset_ref(run=1)})
 
 
 def test_a_group_is_given_by_value_or_by_reference(
@@ -417,8 +441,7 @@ def test_a_reference_at_a_number_is_refused(
     with pytest.raises(SubmitError) as raised:
         client.submit(ADD, params=params(ref))
     assert str(raised.value) == (
-        f'{place}: {ref}: float is given inline; a reference stands for a group or '
-        'a file only'
+        f'{place}: {ref}: float is given inline; a reference stands for a group only'
     )
 
 
@@ -456,7 +479,8 @@ def test_each_field_of_a_group_is_given_inline_or_by_reference(
         ({'offset': 1.0}, r'runs\[0\]\.file: Field required'),
         (
             {'file': 'a.nxs'},
-            r'runs\[0\]\.file: a file is given by reference to a dataset',
+            r"runs\[0\]\.file: 'a.nxs' is not a dataset; RunFile is given by "
+            'reference to a dataset',
         ),
         (
             {'file': dataset_ref(run=1), 'label': 'x'},
@@ -493,17 +517,7 @@ def test_a_refusal_names_the_field_of_a_row_by_its_place(client: Client) -> None
     assert [e.loc for e in raised.value.errors] == [('runs', 1, 'file')]
 
 
-def test_a_reference_to_an_output_that_holds_a_file_is_refused(
-    client: Client, loaded: Record
-) -> None:
-    # The file in the output has passed no dataset check.
-    with pytest.raises(
-        SubmitError, match=r'^runs\[0\]: .*, of type Run, holds a file; a file is'
-    ):
-        client.submit(RUNS, params={'runs': [loaded.ref('run')]})
-
-
-def test_a_group_given_its_file_alone_holds_defaults_for_the_rest(
+def test_a_group_given_its_dataset_alone_holds_defaults_for_the_rest(
     client: Client,
 ) -> None:
     computed = client.compute(
@@ -535,7 +549,8 @@ def test_a_dataset_for_a_whole_group_is_refused(
 ) -> None:
     with pytest.raises(
         SubmitError,
-        match=rf'^{place}: dataset run:\d does not fit Run, which is not a file',
+        match=rf'^{place}: dataset run:\d does not fit Run, which is not a dataset '
+        'model',
     ):
         client.submit(RUNS, params=params)
 
@@ -704,17 +719,23 @@ def test_a_group_whose_validator_changes_a_validated_value_is_refused(
     assert error.msg == 'has no JSON form that reads back as the value'
 
 
-def test_a_file_in_a_group_given_inline_is_refused(client: Client) -> None:
-    centre = {'kind': 'run', 'run': '/data/run1.nxs'}
+@pytest.mark.parametrize('inline', ['/data/run1.nxs', {'path': '/data/run1.nxs'}])
+def test_a_dataset_model_in_a_group_given_inline_is_refused(
+    client: Client, inline: Any
+) -> None:
+    centre = {'kind': 'run', 'run': inline}
 
     with pytest.raises(SubmitError) as raised:
         client.submit(DEEP, params={'centre': centre})
     (error,) = raised.value.errors
     assert error.loc == ('centre', 'run')
-    assert error.msg.startswith('a file is given by reference to a dataset')
+    assert error.msg == (
+        f'{inline!r} is not a dataset; RunFile is given by reference to a dataset, '
+        'such as dataset(path=...)'
+    )
 
 
-def test_a_file_given_inline_next_to_a_reference_is_refused(
+def test_a_dataset_model_given_inline_next_to_a_reference_is_refused(
     client: Client, loaded: Record
 ) -> None:
     # With a reference in the group, each field is validated alone.
@@ -725,7 +746,8 @@ def test_a_file_given_inline_next_to_a_reference_is_refused(
     (error,) = raised.value.errors
     assert error.loc == ('runs', 0, 'file')
     assert error.msg == (
-        "'/data/run1.nxs' is not a dataset; a file is given as dataset(path=...)"
+        "'/data/run1.nxs' is not a dataset; RunFile is given by reference to a "
+        'dataset, such as dataset(path=...)'
     )
 
 
@@ -746,7 +768,7 @@ def test_a_group_with_a_reference_is_validated_whole_in_the_call_phase(
 
 
 def test_a_union_parameter_takes_either_alternative(client: Client) -> None:
-    find = {'kind': 'find', 'run': {'file': dataset_ref(run=2)}, 'tolerance': 0.5}
+    find = {'kind': 'find', 'run': dataset_ref(run=2), 'tolerance': 0.5}
     found = client.compute(CENTRED, params={'beam_centre': find})
     given = client.compute(CENTRED, params={'beam_centre': {'kind': 'given', 'x': 3.0}})
     default = client.compute(CENTRED, params={})
@@ -757,7 +779,7 @@ def test_a_union_parameter_takes_either_alternative(client: Client) -> None:
         0.0,
     ]
     (run,) = found.request.datasets()
-    assert found.request.params['beam_centre'] == {**find, 'run': {'file': run}}
+    assert found.request.params['beam_centre'] == {**find, 'run': run}
 
 
 @pytest.mark.parametrize(
@@ -774,7 +796,7 @@ def test_no_reference_fits_a_union(
     place: tuple[str | int, ...],
 ) -> None:
     # Not even an output of an alternative's type.
-    centre = client.compute(FIND, params={'sample': {'file': dataset_ref(run=2)}})
+    centre = client.compute(FIND, params={'sample': dataset_ref(run=2)})
     ref = centre.ref('centre')
     with pytest.raises(SubmitError) as raised:
         client.submit(CENTRED, params=params(ref))
@@ -782,7 +804,7 @@ def test_no_reference_fits_a_union(
     assert error.loc == place
     assert error.msg == (
         f'{ref}: a union of groups is written inline, with the tag of an '
-        'alternative; a reference stands for a group or a file only'
+        'alternative; a reference stands for a group only'
     )
 
 
@@ -798,7 +820,7 @@ def test_an_error_inside_a_union_names_its_place_without_the_tag(
     assert error.loc == ('beam_centre', 'tolerance')
 
     computed = client.submit(
-        CENTRED, params={'beam_centre': {**find, 'run': {'file': dataset_ref(run=1)}}}
+        CENTRED, params={'beam_centre': {**find, 'run': dataset_ref(run=1)}}
     )
     assert _failed(client, computed) == (
         'beam_centre.tolerance: Value error, tolerance must be between 0 and 1'
@@ -827,14 +849,15 @@ def test_the_schema_of_a_union_requires_the_tag_of_each_alternative() -> None:
         assert 'default' not in form['properties']['kind']
 
 
-def test_the_schema_of_a_group_that_holds_a_file_is_its_fields() -> None:
+def test_the_schema_of_a_group_that_holds_a_dataset_model_is_its_fields() -> None:
     schema = RUNS.serialize().params_schema
     row, run = schema['properties']['runs']['items'], schema['$defs']['Run']
 
     assert row == {'$ref': '#/$defs/Run', 'not': {'required': ['@ref']}}
     assert run['properties']['file'] == {
         '$ref': '#/$defs/DatasetRef',
-        'dataType': 'Path',
+        'dataType': 'RunFile',
+        'metadata': {'kind': 'raw'},
     }
     assert run['properties']['weights']['maxItems'] == 3
     assert run['required'] == ['file']
@@ -940,11 +963,52 @@ def test_a_reference_must_fit_its_parameter(
         client.submit(ADD, params={name: loaded.ref(output)})
 
 
-def test_a_dataset_fits_a_file_only(client: Client) -> None:
+def test_a_dataset_fits_a_dataset_model_only(client: Client) -> None:
     with pytest.raises(
         SubmitError, match=r'^shift: dataset run:1 does not fit Shift, which is not'
     ):
         client.submit(ADD, params={'shift': dataset_ref(run=1)})
+
+
+def test_a_dataset_fits_a_dataset_model_by_its_metadata(client: Client) -> None:
+    computed = client.compute(
+        MASKED, params={'run': {'file': dataset_ref(run=1), 'mask': dataset_ref(run=3)}}
+    )
+
+    assert client.output(computed, 'value') == 1.0 + 10.0
+
+
+@pytest.mark.parametrize(
+    ('run', 'refused'),
+    [
+        (
+            {'file': dataset_ref(run=3), 'mask': dataset_ref(run=3)},
+            "run.file: dataset run:3 does not fit RunFile, which takes datasets with "
+            "{'kind': 'raw'}",
+        ),
+        (
+            {'file': dataset_ref(run=1), 'mask': dataset_ref(run=2)},
+            "run.mask: dataset run:2 does not fit MaskFile, which takes datasets "
+            "with {'kind': 'mask'}",
+        ),
+    ],
+)
+def test_a_dataset_that_does_not_fit_a_dataset_model_is_refused(
+    client: Client, run: dict[str, Any], refused: str
+) -> None:
+    with pytest.raises(SubmitError) as raised:
+        client.submit(MASKED, params={'run': run})
+    assert str(raised.value) == refused
+
+
+def test_the_schema_of_a_dataset_model_holds_its_metadata() -> None:
+    run = MASKED.serialize().params_schema['$defs']['MaskedRun']
+
+    assert run['properties']['mask'] == {
+        '$ref': '#/$defs/DatasetRef',
+        'dataType': 'MaskFile',
+        'metadata': {'kind': 'mask'},
+    }
 
 
 def test_a_reference_to_a_whole_list_is_refused(client: Client, loaded: Record) -> None:
@@ -983,7 +1047,7 @@ def test_an_inline_value_and_a_reference_to_equal_data_are_one_row(
 def test_references_to_two_records_with_equal_data_are_one_row(
     client: Client, loaded: Record
 ) -> None:
-    again = client.compute(LOAD, params={'sample': {'file': dataset_ref(run=1)}})
+    again = client.compute(LOAD, params={'sample': dataset_ref(run=1)})
     plain = client.submit(
         SUM, params={'part': [loaded.ref('shift'), again.ref('shift')]}
     )

@@ -52,7 +52,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
             if fixed['direct_beam'] is None:
                 pipeline[sans.DirectBeam] = None  # esssans' providers take None
             else:
-                pipeline[sans.DirectBeamFilename] = fixed['direct_beam'].file
+                pipeline[sans.DirectBeamFilename] = fixed['direct_beam'].path
             return pipeline
 
         PipelineBinding(SPEC, make_pipeline, keys={'direct_beam': ()})

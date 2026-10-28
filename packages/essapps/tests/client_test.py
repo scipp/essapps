@@ -45,6 +45,7 @@ from ess.apps.testing import FakeDatasets, StagedFunction, kept_rows, read_datas
 from ess.spec import (
     AccumulatorRef,
     Binding,
+    DatasetModel,
     DriverBinding,
     WorkflowSpec,
     function_binding,
@@ -52,7 +53,7 @@ from ess.spec import (
 
 type Spec = WorkflowSpec[Any, Any]
 
-# The toy specs over numbers. A reference stands for a group or a file only,
+# The toy specs over numbers. A reference stands for a group only,
 # so a number that one workflow outputs and another takes is the field of a
 # group, Amount.
 
@@ -65,8 +66,10 @@ def _add(a: Amount, b: Amount) -> Amount:
     return Amount(value=a.value + b.value)
 
 
-class SampleRun(BaseModel):
-    file: Path
+class SampleRun(DatasetModel): ...
+
+
+class RunFile(DatasetModel): ...
 
 
 class Shift(BaseModel):
@@ -142,9 +145,9 @@ class Tag(BaseModel):
 
 
 class TaggedRun(BaseModel):
-    """A run and its tag, if given: a group that holds a file."""
+    """A run and its tag, if given: a group that holds a dataset model."""
 
-    file: Path
+    file: RunFile
     tag: Tag | None = None
 
 
@@ -163,9 +166,12 @@ class Weight(BaseModel):
 
 
 class WeightedRun(BaseModel):
-    """A run and its weight, which has no default: a group that holds a file."""
+    """
+    A run and its weight, which has no default: a group that holds a dataset
+    model.
+    """
 
-    file: Path
+    file: RunFile
     weight: Weight
 
 
@@ -277,7 +283,7 @@ def _value(value: float) -> Value:
 
 
 def load_run(params: Sample) -> LoadOutputs:
-    run = read_dataset(params.sample.file)
+    run = read_dataset(params.sample.path)
     return LoadOutputs(value=Amount(value=run), extra=Amount(value=-run))
 
 
@@ -286,12 +292,12 @@ def shift(params: ShiftParams) -> ShiftOutputs:
 
 
 def scale(params: ScaleParams) -> Value:
-    return _value(read_dataset(params.sample.file) * params.scaling.factor)
+    return _value(read_dataset(params.sample.path) * params.scaling.factor)
 
 
 def weighted(params: Any) -> Value:
     """WEIGHTED as a plain function: each run times its weight, summed."""
-    return _value(sum(r.weight.value * read_dataset(r.file) for r in params.runs))
+    return _value(sum(r.weight.value * read_dataset(r.file.path) for r in params.runs))
 
 
 def stitch(params: StitchParams) -> Curve:
@@ -370,7 +376,7 @@ class _ScaledTotal:
     def push(self, table: str, rows: Sequence[Any]) -> None:
         for run in rows:
             self.tags.append(run.tag)
-            self.total += self._factor * read_dataset(run.file)
+            self.total += self._factor * read_dataset(run.file.path)
 
     def outputs(self) -> Value:
         return _value(self.total)
@@ -447,7 +453,7 @@ def _start(call: Callable[[], Any]) -> Future[Any]:
 
 
 def _load(n: int) -> Request:
-    return Request(LOAD, params={'sample': {'file': dataset(run=n)}})
+    return Request(LOAD, params={'sample': dataset(run=n)})
 
 
 def _read(accumulator: Accumulator | Record, output: str = 'value') -> Request:
@@ -626,9 +632,7 @@ def test_a_stage_keeps_the_dataset_its_name_resolved_to_when_it_was_made(
 ) -> None:
     run = datasets.resolve(dataset(run=1))
     stage = client.stage(
-        Template(
-            SCALE, params={'sample': {'file': dataset(run=1)}}, blanks=('scaling',)
-        )
+        Template(SCALE, params={'sample': dataset(run=1)}, blanks=('scaling',))
     )
     twice = {'scaling': Factor(factor=2.0)}
     before = client.compute(stage, params=twice)
@@ -637,7 +641,7 @@ def test_a_stage_keeps_the_dataset_its_name_resolved_to_when_it_was_made(
     after = client.compute(stage, params=twice)
 
     assert datasets.resolve(dataset(run=1)) != run
-    assert stage.template.params == {'sample': {'file': run}}
+    assert stage.template.params == {'sample': run}
     assert after.request == before.request
     assert [client.output(r, 'value') for r in (before, after)] == [
         Amount(value=v) for v in (2.0, 2.0)
@@ -650,9 +654,7 @@ def test_a_stage_whose_staging_fails_stops(
 ) -> None:
     scaling.fail_next = True
     stage = client.stage(
-        Template(
-            SCALE, params={'sample': {'file': dataset(run=2)}}, blanks=('scaling',)
-        )
+        Template(SCALE, params={'sample': dataset(run=2)}, blanks=('scaling',))
     )
     twice = {'scaling': Factor(factor=2.0)}
     failed = client.compute(stage, params=twice)
@@ -687,16 +689,14 @@ def test_a_request_through_a_stage_must_have_the_stage_s_values(
     client = backend.open_client('p1', 'anna')
     (load,) = backend.submit([Entry(_load(1))], client=client)
     stage, template = backend.open_stage(
-        Template(
-            SCALE, params={'sample': {'file': dataset(run=1)}}, blanks=('scaling',)
-        ),
+        Template(SCALE, params={'sample': dataset(run=1)}, blanks=('scaling',)),
         client=client,
     )
     twice = {'scaling': {'factor': 2.0}}
     refused = {
         'the stage holds scale': _read(load),
         r"\['sample'\]: differ from the stage's values": Request(
-            SCALE, params={**twice, 'sample': {'file': dataset(run=2)}}
+            SCALE, params={**twice, 'sample': dataset(run=2)}
         ),
     }
     for reason, request in refused.items():
@@ -736,8 +736,8 @@ def test_a_stage_refuses_a_template_that_a_request_would_refuse(
     released = client.compute(_load(1))
     client.release(released)
     refused = {
-        r'sample\.file: unknown dataset run:9': Template(
-            SCALE, params={'sample': {'file': dataset(run=9)}}, blanks=('scaling',)
+        r'sample: unknown dataset run:9': Template(
+            SCALE, params={'sample': dataset(run=9)}, blanks=('scaling',)
         ),
         r'source: dataset .* does not fit Amount': Template(
             SHIFT, params={'source': dataset(run=1)}, blanks=('shift',)
@@ -792,7 +792,7 @@ def test_bind_is_a_list_of_bindings(datasets: FakeDatasets) -> None:
 
 def test_values_go_with_a_spec_or_a_stage(client: Client) -> None:
     with pytest.raises(TypeError, match='params go with a spec or a stage'):
-        client.submit(_load(1), params={'sample': {'file': dataset(run=2)}})
+        client.submit(_load(1), params={'sample': dataset(run=2)})
 
 
 def test_a_params_model_makes_the_request_of_its_dict() -> None:
@@ -899,13 +899,45 @@ def test_a_group_with_a_field_its_model_lacks_is_refused(client: Client) -> None
             SCALE,
             params={
                 'scaling': {'factor': 2.0, 'speed': 2.0},
-                'sample': {'file': dataset(run=1)},
+                'sample': dataset(run=1),
             },
         )
     with pytest.raises(
         SubmitError, match=r'runs\[0\]\.tag\.speed: Extra inputs are not'
     ):
         acc.push(runs=[{'file': dataset(run=1), 'tag': {'speed': 2.0}}])
+
+
+def test_a_dataset_reaches_the_workflow_as_its_dataset_model(
+    datasets: FakeDatasets,
+) -> None:
+    received = []
+
+    def load(params: Sample) -> LoadOutputs:
+        received.append(params.sample)
+        return load_run(params)
+
+    bind = [function_binding(LOAD, load)]
+    with local(proposal='p1', datasets=datasets, bind=bind) as client:
+        client.compute(_load(2))
+
+    path = datasets.path(datasets.resolve(dataset(run=2)))
+    assert received == [SampleRun(path=path)]
+
+
+@pytest.mark.parametrize(
+    'inline',
+    ['/data/run-1.json', {'path': '/data/run-1.json'}, SampleRun(path='/data/x')],
+)
+def test_a_dataset_model_given_inline_is_refused(client: Client, inline: Any) -> None:
+    with pytest.raises(SubmitError) as raised:
+        client.submit(LOAD, params={'sample': inline})
+    (error,) = raised.value.errors
+    assert error.loc == ('sample',)
+    assert error.msg.endswith(
+        ' is not a dataset; SampleRun is given by reference to a dataset, such as '
+        'dataset(path=...)'
+    )
 
 
 # What a client keeps
@@ -1115,7 +1147,7 @@ def test_closing_a_local_client_closes_its_backend_once_its_workflows_return(
     def load(params: Sample) -> LoadOutputs:
         started.set()
         loading.wait(timeout=5)
-        loaded.append(read_dataset(params.sample.file))
+        loaded.append(read_dataset(params.sample.path))
         return load_run(params)
 
     loading.clear()
@@ -1502,7 +1534,7 @@ def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
         run,  # a dataset for a group whose weight has no default
         {'file': run, 'weight': load.ref('value')},  # a reference, no fit
         {'file': run, 'weight': {'value': 'x'}},  # an invalid inline value
-        {'file': run, 'weight': dataset(run=2)},  # a dataset, no file
+        {'file': run, 'weight': dataset(run=2)},  # a dataset, no dataset model
         {'file': run, 'weight': {'@ref': 'run'}},  # no kind of reference
         {'file': run, 'weight': weight, 'speed': 1.0},  # a field the group lacks
     ]
@@ -1631,9 +1663,7 @@ def test_concurrent_pushes_add_in_the_order_they_are_logged(
     client: Client, datasets: FakeDatasets
 ) -> None:
     runs = [datasets.measure(n, float(n)) for n in range(3, 10)]
-    loads = client.compute(
-        [Request(LOAD, params={'sample': {'file': run}}) for run in runs]
-    )
+    loads = client.compute([Request(LOAD, params={'sample': run}) for run in runs])
     digits = client.accumulator(Template(DIGITS, blanks=('parts',)))
     pushes = [
         threading.Thread(target=lambda x=x: digits.push(parts=[x.ref('value')]))
@@ -1983,7 +2013,7 @@ BOTH = _spec(
 
 def array(params: Sample) -> ArrayValue:
     """A run as an array of one value."""
-    values = [read_dataset(params.sample.file)]
+    values = [read_dataset(params.sample.path)]
     return ArrayValue(value=Counts(counts=sc.array(dims=['x'], values=values)))
 
 
@@ -2108,7 +2138,7 @@ def in_place(
 def loads(in_place: Client) -> list[Record]:
     """The arrays of runs 1 and 2."""
     return in_place.compute(
-        [Request(ARRAY, params={'sample': {'file': dataset(run=n)}}) for n in (1, 2)]
+        [Request(ARRAY, params={'sample': dataset(run=n)}) for n in (1, 2)]
     )
 
 
@@ -2143,7 +2173,7 @@ def test_a_stage_lets_go_of_what_its_template_references_once_staged(
 
     bind = [function_binding(ARRAY, array), KeepsTheSum()]
     with local(proposal='p1', datasets=datasets, bind=bind) as client:
-        loaded = client.compute(ARRAY, params={'sample': {'file': dataset(run=2)}})
+        loaded = client.compute(ARRAY, params={'sample': dataset(run=2)})
         value = weakref.ref(client.output(loaded, 'value'))
         stage = client.stage(Template(COPY, params={'source': loaded.ref('value')}))
         client.release(loaded)
@@ -2283,9 +2313,7 @@ def test_references_in_one_submission_pin_one_state_while_rows_are_pushed(
 ) -> None:
     client = in_place
     runs = [datasets.measure(n, float(n)) for n in range(3, 23)]
-    loads = client.compute(
-        [Request(ARRAY, params={'sample': {'file': run}}) for run in runs]
-    )
+    loads = client.compute([Request(ARRAY, params={'sample': run}) for run in runs])
     total = _array_total(client)
     total.push(parts=[loads[0].ref('value')])
     pushing = threading.Thread(
@@ -2630,7 +2658,7 @@ def test_readers_of_a_state_of_kept_rows_compute_the_plain_request_once(
         kept_rows(SIDES, sides),
     ]
     with local(proposal='p1', datasets=datasets, bind=bind) as client:
-        load = client.compute(ARRAY, params={'sample': {'file': dataset(run=1)}})
+        load = client.compute(ARRAY, params={'sample': dataset(run=1)})
         kept = client.accumulator(
             Template(SIDES, params={'backgrounds': []}, blanks=('samples',))
         )
@@ -2855,7 +2883,7 @@ GRID_TOTAL = _spec('grid-total', params=GridParts, outputs=GridTotal, tables=('p
 
 
 def grid(params: Sample) -> GridOutputs:
-    values = np.arange(6.0).reshape(3, 2) * read_dataset(params.sample.file)
+    values = np.arange(6.0).reshape(3, 2) * read_dataset(params.sample.path)
     counts = sc.array(dims=['x', 'y'], values=values)
     axis = Axis(edges=sc.array(dims=['x'], values=[0.0, 1.0, 2.0, 3.0]))
     return GridOutputs(
@@ -2884,7 +2912,7 @@ def grids(datasets: FakeDatasets) -> Iterator[Client]:
 
 
 def _grid(client: Client, n: int) -> Record:
-    return client.compute(GRID, params={'sample': {'file': dataset(run=n)}})
+    return client.compute(GRID, params={'sample': dataset(run=n)})
 
 
 def _grid_total(client: Client) -> Accumulator:

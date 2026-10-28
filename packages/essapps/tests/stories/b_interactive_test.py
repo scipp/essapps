@@ -23,7 +23,7 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
     tune = client.stage(
         Template(
             IOFQ,
-            params={'sample': {'file': run}, 'normalization': None},
+            params={'sample': run, 'normalization': None},
             blanks=('reduction',),
         )
     )
@@ -38,9 +38,7 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
         blanks=('sample',),
     )
     new = measure(2, [2.0, 1.0, 4.0, 3.0])
-    requests = apply(
-        beamtime, [new], client.datasets, at=('sample', 'file'), member_field='run'
-    )
+    requests = apply(beamtime, [new], client.datasets, at='sample', member_field='run')
     (reduced,) = client.compute(requests, label='iofq-beamtime').values()
 
     assert len(client.records(label='tuning')) == 4
@@ -60,17 +58,17 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
         Template(NORMALIZE, params={'scaling': Scaling(scale=2.0)}, blanks=('runs',))
     )
     for run in (r611, r612):
-        total.push(runs=[{'file': run}])
+        total.push(runs=[run])
     first = client.output(total, 'normalized')  # runs 611 and 612
 
-    total.push(runs=[{'file': r613}])  # 611 and 612 are not reduced again
+    total.push(runs=[r613])  # 611 and 612 are not reduced again
     added = client.output(total, 'normalized')  # all three
 
     again = client.compute(
         NORMALIZE,
         params={
             'scaling': Scaling(scale=2.0),
-            'runs': [{'file': r611}, {'file': r613}],
+            'runs': [r611, r613],
         },
     )
 
@@ -85,7 +83,7 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
 
 def test_b4_explore_a_4d_volume(client: Client, measure: Measure) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
-    angle = client.compute(ANGLE, params={'sample': {'file': run}})
+    angle = client.compute(ANGLE, params={'sample': run})
     cuts = [client.output(angle, 'volume', select={'q': i}) for i in range(4)]
     fit = client.compute(
         CUT,

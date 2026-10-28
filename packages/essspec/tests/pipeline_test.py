@@ -9,7 +9,7 @@ import pytest
 import sciline
 from pydantic import BaseModel, Field
 
-from ess.spec import DriverBinding, WorkflowSpec
+from ess.spec import DatasetModel, DriverBinding, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
 from ess.spec.testing import check_arrival_and_order, check_caching, check_one_row
 
@@ -24,10 +24,12 @@ class Reduction(BaseModel):
     bins: int = 2
 
 
-class Run(BaseModel):
-    """A run, a text file of counts."""
+class CountsFile(DatasetModel):
+    """A text file of counts."""
 
-    file: Path
+
+class Run(BaseModel):
+    file: CountsFile
 
 
 class SampleRun(Run):
@@ -119,12 +121,12 @@ def loaded() -> list[Path]:
 @pytest.fixture
 def make_pipeline(loaded: list[Path]) -> MakePipeline:
     def load_sample(run: SampleRun) -> SampleCounts:
-        loaded.append(run.file)
-        return SampleCounts(np.loadtxt(run.file))
+        loaded.append(run.file.path)
+        return SampleCounts(np.loadtxt(run.file.path))
 
     def load_can(run: CanRun) -> CanCounts:
-        loaded.append(run.file)
-        return CanCounts(np.loadtxt(run.file))
+        loaded.append(run.file.path)
+        return CanCounts(np.loadtxt(run.file.path))
 
     def make(fixed: Mapping[str, Any]) -> sciline.Pipeline:
         sample = [load_sample, sample_numerator, sample_denominator, sample_iofq]
@@ -186,10 +188,10 @@ SAMPLES = [[1.0, 3.0, 2.0, 6.0], [2.0, 2.0, 0.0, 4.0]]
 CANS = [[1.0, 1.0, 1.0, 1.0], [0.0, 2.0, 2.0, 0.0]]
 
 
-def write(tmp_path: Path, name: str, counts: list[float]) -> Path:
+def write(tmp_path: Path, name: str, counts: list[float]) -> CountsFile:
     path = tmp_path / f'{name}.txt'
     np.savetxt(path, counts)
-    return path
+    return CountsFile(path=path)
 
 
 @pytest.fixture
@@ -246,7 +248,7 @@ def test_a_stage_loads_each_run_once(
         np.testing.assert_allclose(
             tune(reduction(bins)).iofq, iofq(SAMPLES[0], bins) - iofq(CANS[0], bins)
         )
-    assert sorted(loaded) == sorted([samples[0].file, cans[0].file])
+    assert sorted(loaded) == sorted([samples[0].file.path, cans[0].file.path])
 
 
 def test_a_stage_call_takes_the_blanks_exactly(
@@ -303,7 +305,7 @@ def test_a_driver_with_fixed_rows_loads_each_run_once_across_reads(
     for sample in samples:
         driver.push('sample', [sample])
         driver.outputs()
-    assert loaded == [run.file for run in cans + samples]
+    assert loaded == [run.file.path for run in cans + samples]
 
 
 def test_keys_give_the_key_of_each_field(single: PipelineBinding) -> None:
@@ -352,7 +354,7 @@ TOTAL_MULTI = _spec(
 
 
 def load(run: Run) -> Counts:
-    return Counts(np.loadtxt(run.file))
+    return Counts(np.loadtxt(run.file.path))
 
 
 def total(counts: Counts, reduction: Reduction) -> Total:
@@ -406,7 +408,7 @@ def test_a_table_sets_the_key_of_its_type_to_its_list(
     samples: list[SampleRun],
 ) -> None:
     def load_all(runs: list[SampleRun]) -> Counts:
-        return Counts(sum(np.loadtxt(run.file) for run in runs))
+        return Counts(sum(np.loadtxt(run.file.path) for run in runs))
 
     binding = PipelineBinding(
         TOTAL_MULTI,
@@ -473,7 +475,9 @@ Difference = NewType('Difference', float)
 
 
 def difference(first: FirstRun, second: SecondRun) -> Difference:
-    return Difference(np.loadtxt(first.file).sum() - np.loadtxt(second.file).sum())
+    return Difference(
+        np.loadtxt(first.file.path).sum() - np.loadtxt(second.file.path).sum()
+    )
 
 
 def test_two_parameters_of_one_class_need_a_key_each(
@@ -621,7 +625,7 @@ CENTRED = _spec('centred', params=CentredParams, outputs=CentredOutputs)
 
 
 def load_counts(run: SampleRun) -> SampleCounts:
-    return SampleCounts(np.loadtxt(run.file))
+    return SampleCounts(np.loadtxt(run.file.path))
 
 
 def centred(counts: SampleCounts, centre: BeamCentre) -> Centred:

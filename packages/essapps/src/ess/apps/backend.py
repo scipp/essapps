@@ -76,13 +76,13 @@ A request lives in two phases. In the *request phase*, when it is submitted,
 the backend checks what it can without data (see ``checks.py``), and, under
 its lock, what depends on history and on what the client keeps: each reference
 to a record or an accumulator is one the client may read, and its data fit the
-type at its place and hold no file. In the *call phase*, on a worker, the
-backend reads the data each reference names, a local path for a dataset, and
-validates each value once, whole, by its field, a row of a list by its element
-type: the JSON form the log holds, with the data read in place of each
-reference, so that every validator of every group runs once, with all its
-fields at hand (see :func:`ess.spec.places.validated`). For a plain
-request it makes the params instance from these values without validating
+type at its place and hold no dataset model. In the *call phase*, on a worker,
+the backend reads the data each reference names, for a dataset the dataset
+model of its local path, and validates each value once, whole, by its field, a
+row of a list by its element type: the JSON form the log holds, with the data
+read in place of each reference, so that every validator of every group runs
+once, with all its fields at hand (see :func:`ess.spec.places.validated`). For
+a plain request it makes the params instance from these values without validating
 again, so the params model's model validators never run; a stage or an
 accumulator gets the values by name. The rows of a table, if its element type
 has a JSON form, are distinct by the JSON forms of the rows read, as the
@@ -1292,7 +1292,9 @@ class Backend:
         form are distinct by the JSON forms of the rows read, as the element
         type dumps them, so an inline value and a reference to equal data are
         one row. They are compared with those in ``rows``, the rows read
-        before by table, which they join (see :func:`.checks.distinct`).
+        before by table, which they join (see :func:`.checks.distinct`). A
+        table of dataset models has no JSON form: its rows are distinct by the
+        identities of their datasets, as given, not by their local paths.
         """
         spec = self._bindings[spec_id].spec
         read = self._reader(values)
@@ -1365,11 +1367,12 @@ class Backend:
 
     def _stored(self, ref: Ref) -> Any:
         """
-        The local path of a dataset, or the value of a written output, or its
-        element if ``ref`` has a key; needs no lock.
+        For a dataset, ``{'path': <local path>}``, of which validating makes
+        the dataset model; for an output, its written value, or its element
+        if ``ref`` has a key. Needs no lock.
         """
         if isinstance(ref, DatasetRef):
-            return self._datasets.path(ref)
+            return {'path': self._datasets.path(ref)}
         if isinstance(ref, AccumulatorRef):
             raise TypeError(f'{ref}: a record never reads an accumulator')
         if self._store is None:

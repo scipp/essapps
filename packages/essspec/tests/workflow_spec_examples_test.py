@@ -15,15 +15,17 @@ import scipp as sc
 from annotated_types import Gt
 from pydantic import BaseModel, Field, computed_field, field_validator
 
-from ess.spec import WorkflowSpec
+from ess.spec import DatasetModel, WorkflowSpec
 
 
 def allowed_spec() -> WorkflowSpec:
+    class RunFile(DatasetModel, kind='raw'): ...
+
     class TransmissionRun(BaseModel):
-        file: Path
+        file: RunFile
 
     class SampleRun(BaseModel):
-        file: Path
+        file: RunFile
         transmission: TransmissionRun | None = None
 
     class WavelengthRange(BaseModel):
@@ -69,8 +71,10 @@ def allowed_spec() -> WorkflowSpec:
 
 
 def refused_spec() -> WorkflowSpec:
+    class RunFile(DatasetModel, kind='raw'): ...
+
     class SampleRun(BaseModel):
-        file: Path
+        file: RunFile
 
     class WavelengthRange(BaseModel):
         start: float
@@ -85,8 +89,14 @@ def refused_spec() -> WorkflowSpec:
     RunNumber = NewType('RunNumber', int)
 
     class MaskedRun(BaseModel, arbitrary_types_allowed=True):
-        file: Path
+        file: RunFile
         mask: sc.DataArray
+
+    class Geometry(BaseModel):
+        file: Path
+
+    class CalibrationFile(DatasetModel, kind='calibration'):
+        run: int
 
     class Reduction(BaseModel):
         bins: int = Field(10, alias='nbins')
@@ -111,6 +121,8 @@ def refused_spec() -> WorkflowSpec:
         reduction: Reduction
         centring: Centring
         sample: Sample
+        geometry: Geometry
+        calibration: CalibrationFile
         sample_runs: list[SampleRun] = []
         iofq: SampleRun
 
@@ -122,6 +134,7 @@ def refused_spec() -> WorkflowSpec:
     class Outputs(BaseModel, arbitrary_types_allowed=True):
         iofq: sc.DataArray
         width: float | str
+        raw: RunFile
 
     return WorkflowSpec(
         name='bad',
@@ -157,6 +170,9 @@ def refusal() -> str:
         "Reduction: no serializers or computed fields, {'computed_fields'",
         'Centring.centre: a union of groups is a parameter',
         'Sample.run: RunNumber is a NewType',
+        'Geometry.file: a Path is outside a dataset model',
+        "CalibrationFile: a dataset model holds only path, not ['run']",
+        'Outputs.raw: RunFile is a dataset model; no output holds one',
         'Params.bins: int is not a group',
         'sample_runs: a table has no default',
         'iofq: a field of both Params and Outputs',
