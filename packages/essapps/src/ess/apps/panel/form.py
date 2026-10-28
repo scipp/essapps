@@ -8,9 +8,11 @@ inline, and a reference at each other place. It is filled from params as a
 record holds them, so that a record's request can be edited and submitted
 again.
 
-The widget follows from what a request writes, as
-:func:`ess.spec.places.place` describes a parameter, and is labelled by
-:func:`ess.spec.places.title`, as the params schema is:
+The form has a tab per parameter, with the tabs on the left, as
+esslivedata's dashboard has. The widget follows from what a request writes,
+as :func:`ess.spec.places.place` describes a parameter, and is labelled by
+:func:`ess.spec.places.title`, as the params schema is, a parameter by the
+title of its tab:
 
 =========================  ================================================
 Where                      Widget
@@ -20,7 +22,7 @@ a parameter, :class:`Ways` a choice of ways: the fields of each group written
                            ``Ways.record``, or for a file model a file
                            that fits it, and ``None``. A record is offered
                            while an output fits.
-a list parameter,          a box of rows, each labelled by its position and
+a list parameter,          a row per element, labelled by its position:
 :class:`Rows`              the choice of ways of the element, as at a
                            parameter of its type, side by side; and
                            buttons that add a row and remove the last
@@ -558,9 +560,10 @@ _Way = _Group | _Record | _File | _Nothing
 
 class _Choice:
     """
-    A group, or a union of groups, possibly typed ``X | None``: a box with a
-    radio button per way that is offered, and the widget of the chosen way;
-    in a ``row`` of a table, these side by side, after the label.
+    A group, or a union of groups, possibly typed ``X | None``: a radio
+    button per way that is offered, and the widget of the chosen way, in the
+    tab of a parameter titled ``label``; in a ``row`` of a table, these side
+    by side, after the label.
 
     It starts at its default's way. Without a default, it starts unset,
     unless there is no ``None`` and one way only is written inline, or none
@@ -590,7 +593,7 @@ class _Choice:
         self._panel = (
             pn.Row(pn.pane.Markdown(label, width=100), *widgets)
             if row
-            else pn.Card(*widgets, title=label, collapsible=False)
+            else pn.Column(*widgets, name=label)
         )
         self._panel.sizing_mode = 'stretch_width'
         self.set(UNSET)
@@ -660,7 +663,7 @@ class _Choice:
 
 class _Rows(_List):
     """
-    A list parameter: a box titled by its name, with a row per element,
+    A list parameter: in its tab, titled by its name, a row per element,
     labelled by its position, ``Sample [0]``: the choice of ways of the
     element, as a parameter of its type has it, with the widgets side by
     side, as the columns of a table. A row added starts as such a parameter
@@ -676,12 +679,8 @@ class _Rows(_List):
         self._element_ways = element
         self._listing = listing
         super().__init__(label, default)
-        self._panel = pn.Card(
-            self._column,
-            self._buttons,
-            title=label,
-            collapsible=False,
-            sizing_mode='stretch_width',
+        self._panel = pn.Column(
+            self._column, self._buttons, name=label, sizing_mode='stretch_width'
         )
 
     def _element(self, label: str) -> _Choice:
@@ -713,7 +712,11 @@ class Form:
         }
         self._panel = pn.Column(
             pn.pane.Markdown(f'**{spec.title}**: {spec.description}'),
-            *(w.panel() for w in self._params.values()),
+            pn.Tabs(
+                *(w.panel() for w in self._params.values()),
+                tabs_location='left',
+                sizing_mode='stretch_width',
+            ),
             sizing_mode='stretch_width',
         )
 

@@ -131,35 +131,35 @@ def widget(form: Form, label: str) -> Any:
     return found
 
 
-def box(form: Form, title: str) -> Any:
-    """The box titled ``title``, or the row of a table labelled ``title``."""
-    boxes = [c for c in form.panel().select(pn.Card) if c.title == title]
+def tab(form: Form, title: str) -> Any:
+    """The tab titled ``title``, or the row of a table labelled ``title``."""
+    (tabs,) = form.panel().select(pn.Tabs)
     rows = [
         r
         for r in form.panel().select(pn.Row)
         if r.objects and getattr(r.objects[0], 'object', None) == title
     ]
-    (found,) = boxes + rows
+    (found,) = [t for t in tabs.objects if t.name == title] + rows
     return found
 
 
 def widget_in(form: Form, title: str, label: str) -> Any:
-    """The input labelled ``label`` in the box or row ``title``."""
+    """The input labelled ``label`` in the tab or row ``title``."""
     (found,) = (
-        w for w in box(form, title).select(pn.widgets.Widget) if w.label == label
+        w for w in tab(form, title).select(pn.widgets.Widget) if w.label == label
     )
     return found
 
 
 def way(form: Form, title: str) -> Any:
-    """The radio buttons of the ways of the box or row ``title``."""
-    (found,) = box(form, title).select(pn.widgets.RadioBoxGroup)
+    """The radio buttons of the ways of the tab or row ``title``."""
+    (found,) = tab(form, title).select(pn.widgets.RadioBoxGroup)
     return found
 
 
 def picker(form: Form, title: str) -> Any:
-    """The picker of a file, or of a record, of the box or row ``title``."""
-    (found,) = box(form, title).select(pn.widgets.Select)
+    """The picker of a file, or of a record, of the tab or row ``title``."""
+    (found,) = tab(form, title).select(pn.widgets.Select)
     return found
 
 
@@ -579,7 +579,7 @@ def measured(client: Client, files: FakeFiles, run: FileRef) -> Form:
     return Form(MEASURED, client)
 
 
-def test_a_file_at_a_field_of_a_group_is_a_picker_in_its_card(
+def test_a_file_at_a_field_of_a_group_is_a_picker_in_its_tab(
     measured: Form, run: FileRef
 ) -> None:
     assert measured.ways('measured') == ['Given']
