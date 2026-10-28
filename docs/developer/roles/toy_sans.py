@@ -13,7 +13,10 @@ and denominator stay apart until the division, so that the runs of a sum add up
 correctly; the summed sample runs have one transmission.
 
 A beam centre is typed in, or found by ``FIND_CENTRE``; a transmission is typed
-in, or computed by ``TRANSMISSION`` from a transmission run. ``FORWARD`` takes
+in, or computed by ``TRANSMISSION`` from a transmission run. ``COUNTS`` puts
+the counts of several runs side by side, a 2-D output, and takes
+``SECONDS_PER_RUN`` per run, so that an app shows its record pending.
+``FORWARD`` takes
 the I(Q) that ``IOFQ`` or ``IOFQ_MULTI`` outputs, as the group ``IofQ``, since a
 reference stands for a group only.
 
@@ -27,6 +30,7 @@ notebooks import them from here.
 """
 
 import json
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, NewType, TypeVar
@@ -189,6 +193,32 @@ TRANSMISSION = WorkflowSpec(
     outputs=TransmissionOutputs,
 )
 
+
+class CountsParams(BaseModel):
+    runs: list[Run] = Field(min_length=1)
+
+
+class RunCounts(BaseModel):
+    """The counts per pixel of each run, by run and pixel position."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    counts: sc.DataArray
+
+
+class CountsOutputs(BaseModel):
+    counts: RunCounts
+
+
+COUNTS = WorkflowSpec(
+    name='toy-sans-counts',
+    version=1,
+    title='Counts per run',
+    description='The counts per pixel of each run, side by side.',
+    params=CountsParams,
+    outputs=CountsOutputs,
+)
+
 # The toy runs, as their files hold them.
 
 SAMPLE_RUNS = {
@@ -203,6 +233,8 @@ CAN_RUNS = {
 TRANSMISSION_RUNS = {
     120: {'monitor': 10.0, 'transmitted': 9.0},
 }
+SECONDS_PER_RUN = 1.0
+"""How long ``COUNTS`` takes per run, a stand-in for a costly reduction."""
 PIXELS = sc.vectors(
     dims=['pixel'], values=[[x, 0.0, 0.0] for x in range(PIXEL_COUNT)], unit='mm'
 )
@@ -387,8 +419,26 @@ def transmission(params: TransmissionParams) -> TransmissionOutputs:
     )
 
 
+def counts(params: CountsParams) -> CountsOutputs:
+    rows = []
+    for run in params.runs:
+        time.sleep(SECONDS_PER_RUN)
+        rows.append(json.loads(run.path.read_text())['counts'])
+    data = sc.array(dims=['run', 'pixel'], values=rows, unit='counts')
+    counts = sc.DataArray(data, coords={'x': PIXELS.fields.x.copy()})
+    return CountsOutputs(counts=RunCounts(counts=counts))
+
+
 forward_binding = function_binding(FORWARD, forward)
 find_centre_binding = function_binding(FIND_CENTRE, find_centre)
 transmission_binding = function_binding(TRANSMISSION, transmission)
+counts_binding = function_binding(COUNTS, counts)
 
-BINDINGS = [single, multi, forward_binding, find_centre_binding, transmission_binding]
+BINDINGS = [
+    single,
+    multi,
+    forward_binding,
+    find_centre_binding,
+    transmission_binding,
+    counts_binding,
+]

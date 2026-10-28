@@ -4,12 +4,17 @@
 
 try:
     import panel  # noqa: F401
+    import plopp  # noqa: F401
 except ImportError as error:
     raise ImportError(
-        "ess.apps.panel needs Panel: pip install 'essapps[panel]'"
+        "ess.apps.panel needs Panel and plopp: pip install 'essapps[panel]'"
     ) from error
 
 from .app import App
-from .form import Form, Listing
+from .form import Form
+from .graph import Graph
+from .listing import Listing
+from .outputs import Outputs
+from .records import Records
 
-__all__ = ['App', 'Form', 'Listing']
+__all__ = ['App', 'Form', 'Graph', 'Listing', 'Outputs', 'Records']

@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 import pytest
 
-from ess.apps import Client
+from ess.apps import Client, Record
 from ess.apps.panel import App, Listing
 from ess.spec import FileRef
 
@@ -10,6 +10,13 @@ from ess.spec import FileRef
 @pytest.fixture
 def app(client: Client) -> App:
     return App(client)
+
+
+def finish(app: App, record: Record | None) -> None:
+    """Wait for ``record``, then poll, as the app's periodic callback does."""
+    assert record is not None
+    app.client.wait(record)
+    app.poll()
 
 
 def test_the_app_has_a_form_per_spec_and_shows_the_one_picked(app: App) -> None:
@@ -25,7 +32,7 @@ def test_a_place_with_nothing_given_is_shown_and_nothing_is_submitted(
 ) -> None:
     app.picker.value = 'Reduce'
 
-    assert app.compute() is None
+    assert app.submit() is None
     assert app.message.object == (
         'Refused:\n\n- run: choose a file\n- sample.thickness: give a value'
     )
@@ -36,7 +43,7 @@ def test_a_refused_request_shows_each_reason_by_its_place(app: App) -> None:
     app.picker.value = 'Options'
     app.form.set({'settings': {'flag': True, 'count': 1}})
 
-    assert app.compute() is None
+    assert app.submit() is None
     assert app.message.object == (
         'Refused:\n\n- direct_beam: a required parameter, not given'
     )
@@ -46,18 +53,19 @@ def test_a_failed_record_shows_why(app: App, run: FileRef) -> None:
     app.picker.value = 'Reduce'
     app.form.set({'run': run, 'sample': {'thickness': 0.0}})
 
-    assert app.compute() is not None
+    finish(app, app.submit())
     assert app.message.object == 'Failed: ZeroDivisionError: float division by zero'
 
 
-def test_a_computed_record_is_shown_and_offered_by_the_forms(
+def test_a_computed_record_is_listed_and_offered_by_the_forms(
     app: App, client: Client, run: FileRef
 ) -> None:
     app.form.set({'run': run})
 
-    record = app.compute()
+    record = app.submit()
+    finish(app, record)
     assert record is not None
     label = Listing(client).labels[record.id]
     assert app.message.object == f'Computed {label}.'
-    assert label in app.results.object
+    assert app.records.table.widget.value['Record'].tolist() == [label]
     assert app.forms['Reduce'].ways('beam_centre') == ['Given', 'From a record']

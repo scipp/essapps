@@ -489,10 +489,10 @@ def test_a_listing_labels_each_record_and_the_outputs_that_fit(
 ) -> None:
     found = client.compute(find_spec, params={'run': run})
     listing = Listing(client)
-    label = f'{found.id[:6]} Find centre, from run 101'
-    assert listing.labels == {found.id: label}
+    at = f'{found.created.astimezone():%H:%M}'
+    assert listing.labels == {found.id: f'Find centre ({at})'}
     centre = find_spec.outputs.model_fields['centre'].annotation
-    assert listing.fitting(centre) == {f'{label}: centre': found.ref('centre')}
+    assert listing.fitting(centre) == {f'BeamCentre ({at})': found.ref('centre')}
     assert listing.files(Raw) == {'run 101 (sample)': run}
 
 
@@ -735,7 +735,7 @@ def test_a_row_may_be_an_output_of_a_record_that_fits(
     click(stack, 'Runs', 'Remove')
     click(stack, 'Shots', 'Remove')
     assert stack.params['centres'] == [{'x': 1.0, 'y': 0.0}, found.ref('centre')]
-    label = f'{found.id[:6]} Find centre, from run 101: centre'
+    label = f'BeamCentre ({found.created.astimezone():%H:%M})'
     assert rows(stack, 'Centres')[1] == {'X': '', 'Y': '', 'Record': label}
 
 

@@ -76,7 +76,7 @@ from pydantic import AwareDatetime, BaseModel, NaiveDatetime
 from pydantic.fields import FieldInfo
 from pydantic_core import to_jsonable_python
 
-from ess.apps import Client, FieldError, Selector, SubmitError
+from ess.apps import Client, FieldError, SubmitError
 from ess.spec import (
     FileModel,
     FileRef,
@@ -86,7 +86,9 @@ from ess.spec import (
     places,
 )
 from ess.spec.places import Ways
-from ess.spec.refs import Loc, as_ref, iter_refs
+from ess.spec.refs import Loc, as_ref
+
+from .listing import Listing
 
 
 class _Unset:
@@ -102,94 +104,6 @@ place as it starts, at its default or unset.
 
 type _Missing = list[FieldError]
 """The places with nothing given, each with what the user is to do."""
-
-
-class Listing:
-    """
-    What a request of ``client`` may name now, looked up once for a refresh
-    of any number of forms: the files of each file model and the
-    client's records, each by a label, and the outputs a request may
-    reference.
-
-    It stands in for two queries the client lacks (scipp/essapps#95). The
-    client lists no records by the type of their outputs (gap 1), so
-    :meth:`fitting` checks the type of each readable output. A record has no
-    short name (gap 4), so its label is the start of its id, its spec, and
-    the files and records its request names: ``2f9c01 Find centre, from
-    run 101``.
-    """
-
-    def __init__(self, client: Client) -> None:
-        self._client = client
-        self._metadata: dict[FileRef, dict[str, Any]] = {}
-        self._files: dict[str, dict[str, FileRef]] = {}
-
-        def source(ref: Any) -> str:
-            if not isinstance(ref, FileRef):
-                return str(ref.record[:6])
-            return _file_label(ref, self._known(ref))
-
-        self.records = client.records()
-        specs = {s: client.spec(s) for s in {r.spec for r in self.records}}
-        self.labels: dict[str, str] = {}
-        for record in self.records:
-            refs = iter_refs(record.request.params)
-            sources = ', '.join(source(ref) for _, ref in refs)
-            label = f'{record.id[:6]} {specs[record.spec].title}'
-            self.labels[record.id] = f'{label}, from {sources}' if sources else label
-        readable = client.readable(self.records)
-        self._outputs = [
-            (
-                self.output_label(record.ref(name)),
-                record.ref(name),
-                specs[record.spec].outputs.model_fields[name].annotation,
-            )
-            for record, names in reversed(
-                list(zip(self.records, readable, strict=True))
-            )
-            for name in names
-        ]
-
-    def files(self, model: type[FileModel]) -> dict[str, FileRef]:
-        """The files that fit ``model``, each by a label, in the order measured."""
-        selector = Selector(**model.metadata)
-        if (key := repr(selector)) not in self._files:
-            listed = self._client.files.list(selector)
-            self._files[key] = {}
-            for ref in listed:
-                fields = self._known(ref)
-                role = f' ({fields["role"]})' if 'role' in fields else ''
-                self._files[key][_file_label(ref, fields) + role] = ref
-        return self._files[key]
-
-    def _known(self, ref: FileRef) -> dict[str, Any]:
-        """The metadata of a file, looked up once."""
-        if ref not in self._metadata:
-            self._metadata[ref] = self._client.files.metadata(ref)
-        return self._metadata[ref]
-
-    def output_label(self, ref: OutputRef) -> str:
-        """
-        The label of an output, as :meth:`fitting` gives it; the reference if
-        its record is not listed.
-        """
-        record = self.labels.get(ref.record)
-        return str(ref) if record is None else f'{record}: {ref.output}'
-
-    def fitting(self, tp: Any) -> dict[str, OutputRef]:
-        """The outputs a request may reference that fit ``tp``, newest first."""
-        return {
-            label: ref for label, ref, out in self._outputs if field_types.fits(out, tp)
-        }
-
-
-def _file_label(ref: FileRef, metadata: Mapping[str, Any]) -> str:
-    """
-    ``run 101`` where the metadata has a run, else the file's identity:
-    the contract of a file source names no field but ``proposal``.
-    """
-    run = metadata.get('run')
-    return str(ref) if run is None else f'run {run}'
 
 
 def _default(info: FieldInfo) -> Any:
