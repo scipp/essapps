@@ -41,6 +41,26 @@ LOKI_MASK: Spec = WorkflowSpec(
 )
 
 
+class Measured(BaseModel):
+    run: Raw
+    thickness: float = 1.0
+    mask: LokiMask | None = None
+
+
+class MeasuredParams(BaseModel):
+    measured: Measured
+
+
+MEASURED: Spec = WorkflowSpec(
+    name='measured',
+    version=1,
+    title='Measured',
+    description='A run with its settings and its mask.',
+    params=MeasuredParams,
+    outputs=Value,
+)
+
+
 class Times(BaseModel):
     at: datetime
     naive: NaiveDatetime
@@ -514,3 +534,31 @@ def test_an_empty_text_in_a_list_of_texts_is_a_text(times_and_lists: Form) -> No
     assert times_and_lists.params == params
     widget(times_and_lists, 'Add to Names').clicks += 1
     assert times_and_lists.params['lists']['names'] == ['', 'a', '']
+
+
+@pytest.fixture
+def measured(client: Client, datasets: FakeDatasets, run: DatasetRef) -> Form:
+    datasets.measure(202, {'counts': 1.0}, kind='mask', instrument='loki')
+    return Form(MEASURED, client)
+
+
+def test_a_dataset_at_a_field_of_a_group_is_a_picker_in_its_card(
+    measured: Form, run: DatasetRef
+) -> None:
+    assert measured.ways('measured') == ['Given']
+    assert list(widget(measured, 'Run').options) == [
+        '(choose a dataset)',
+        'run 101 (sample)',
+    ]
+    assert list(widget(measured, 'Mask').options) == ['(none)', 'run 202']
+    assert missing(measured) == {(('measured', 'run'), 'choose a dataset')}
+    widget(measured, 'Run').value = run
+    assert measured.params == {'measured': {'run': run, 'thickness': 1.0, 'mask': None}}
+
+
+def test_a_group_holding_a_dataset_is_set_as_a_record_holds_it(
+    measured: Form, run: DatasetRef
+) -> None:
+    held = {'run': run.model_dump(by_alias=True), 'thickness': 2.0, 'mask': None}
+    measured.set({'measured': held})
+    assert measured.params == {'measured': {'run': run, 'thickness': 2.0, 'mask': None}}

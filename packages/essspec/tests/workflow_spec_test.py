@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from enum import Enum
 from pathlib import Path, PosixPath, PurePosixPath
-from typing import Annotated, Any, Literal, NewType, TypedDict
+from typing import Annotated, Any, Literal, NewType, Self, TypedDict
 
 import pydantic
 import pytest
@@ -127,19 +127,34 @@ class CalibrationFile(DatasetModel, kind='calibration'):
     run: int
 
 
-class XmlMaskFile(MaskFile):
-    """A dataset model that checks its path."""
+class CheckedMaskFile(MaskFile):
+    """A dataset model with a validator of its own: refused."""
 
-    @field_validator('path')
+    @field_validator('dataset')
     @classmethod
-    def _xml(cls, path: Path) -> Path:
-        if path.suffix != '.xml':
+    def _xml(cls, dataset: str) -> str:
+        if not dataset.endswith('.xml'):
             raise ValueError('a mask is an XML file')
-        return path
+        return dataset
 
 
-class BeamStopMaskFile(XmlMaskFile):
-    """A subclass of a subclass of DatasetModel that keeps its path."""
+class AttachingMaskFile(MaskFile):
+    """A dataset model that declares a validator of DatasetModel anew: refused."""
+
+    @model_validator(mode='after')
+    def _with_path(self) -> Self:
+        return self
+
+
+class InitMaskFile(MaskFile):
+    """A dataset model with a model_post_init of its own: refused."""
+
+    def model_post_init(self, context: Any) -> None:
+        pass
+
+
+class BeamStopMaskFile(MaskFile):
+    """A subclass of a subclass of DatasetModel that keeps its dataset."""
 
 
 class LocalPath(Path):
@@ -427,9 +442,8 @@ OUTSIDE_A_DATASET_MODEL = re.escape(
     "by reference to a dataset"
 )
 
-KEEPS_THE_PATH = re.escape(
-    'a dataset model keeps the path of DatasetModel, path: Path, without a '
-    'default or an alias; a check of the path is a field validator'
+KEEPS_THE_DATASET = re.escape(
+    'a dataset model keeps the dataset of DatasetModel, without a default or an alias'
 )
 DATASET_MODEL_OUTPUT = re.escape(
     'is a dataset model; no output holds one, so that a file comes from a '
@@ -487,7 +501,7 @@ class TestModelRules:
             },
             {'params': model('P', by=(By | None, None), each=(list[By], []))},
             {'params': model('P', centre=(validated('Centre', x=(float, ...)), ...))},
-            {'params': model('P', mask=(XmlMaskFile, ...))},
+            {'params': model('P', mask=(MaskFile, ...))},
             {'params': model('P', mask=(BeamStopMaskFile | None, None))},
             {
                 'params': model(
@@ -506,7 +520,7 @@ class TestModelRules:
         assert IofQParams.__pydantic_decorators__.model_validators
         with pytest.raises(pydantic.ValidationError, match='the sample run is not'):
             IofQParams.model_validate(
-                {'sample': {'path': 'a.nxs'}, 'can': {'path': 'a.nxs'}}
+                {'sample': SampleRun.local('a.nxs'), 'can': CanRun.local('a.nxs')}
             )
 
     @pytest.mark.parametrize(
@@ -839,35 +853,74 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', calibration=(CalibrationFile, ...))},
-                r"P.calibration: CalibrationFile: a dataset model holds only path, not "
-                r"\['run'\]",
+                r"P.calibration: CalibrationFile: a dataset model holds only "
+                r"dataset, not \['run'\]",
             ),
             *(
                 (
                     {'params': model('P', mask=(mask, ...))},
-                    rf'P.mask: {mask.__name__}.path: {KEEPS_THE_PATH}',
+                    rf'P.mask: {mask.__name__}.dataset: {KEEPS_THE_DATASET}',
                 )
                 for mask in (
                     pydantic.create_model(
-                        'StrMask', __base__=MaskFile, path=(str, ...)
+                        'IntMask', __base__=MaskFile, dataset=(int, ...)
                     ),
                     pydantic.create_model(
-                        'OptionalMask', __base__=MaskFile, path=(Path | None, None)
+                        'OptionalMask', __base__=MaskFile, dataset=(str | None, None)
                     ),
                     pydantic.create_model(
-                        'DefaultMask', __base__=MaskFile, path=(Path, Path('mask.xml'))
+                        'DefaultMask', __base__=MaskFile, dataset=(str, 'run:loki/1')
                     ),
                     pydantic.create_model(
                         'AliasedMask',
                         __base__=MaskFile,
-                        path=(Path, Field(alias='file')),
+                        dataset=(str, Field(alias='file')),
                     ),
                     pydantic.create_model(
-                        'CheckedMask',
+                        'AnnotatedMask',
                         __base__=MaskFile,
-                        path=(Annotated[Path, AfterValidator(lambda p: p)], ...),
+                        dataset=(Annotated[str, AfterValidator(lambda p: p)], ...),
                     ),
                 )
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        mask=(
+                            pydantic.create_model(
+                                'LabelledMask', __base__=MaskFile, label=(str, ...)
+                            ),
+                            ...,
+                        ),
+                    )
+                },
+                r"P.mask: LabelledMask: a dataset model holds only dataset, not "
+                r"\['label'\]",
+            ),
+            (
+                {'params': model('P', mask=(CheckedMaskFile, ...))},
+                r"P.mask: CheckedMaskFile: a dataset model has no validators or "
+                r"serializers of its own",
+            ),
+            (
+                {'params': model('P', mask=(AttachingMaskFile, ...))},
+                r"P.mask: AttachingMaskFile: a dataset model has no validators or "
+                r"serializers of its own, \{'model_validators': \['_with_path'\]\}",
+            ),
+            (
+                {'params': model('P', mask=(InitMaskFile, ...))},
+                r"P.mask: InitMaskFile: a dataset model keeps the model_post_init, "
+                r"__eq__, and __hash__ of DatasetModel, not its own "
+                r"\['model_post_init'\]",
+            ),
+            (
+                {
+                    'params': model(
+                        'P', mask=(type('Mutable', (MaskFile,), {}, frozen=False), ...)
+                    )
+                },
+                'P.mask: Mutable: a dataset model keeps the config of DatasetModel',
             ),
             *(
                 (
@@ -1063,8 +1116,8 @@ class TestModelRules:
                         'P', loose=(Loose, Loose(**{'@ref': 'dataset', 'dataset': 'a'}))
                     )
                 },
-                rf'P.loose: {NOT_A_VALUE}: loose.@ref: '
-                'Extra inputs are not permitted',
+                f'P.loose: {NOT_A_VALUE}: loose: a is a reference; a default is a '
+                'value',
             ),
             (
                 {
@@ -1116,17 +1169,18 @@ class TestModelRules:
                 f'P.runs: {NOT_A_PARAMETER}',
             ),
             (
-                {'params': model('P', sample=(SampleRun, SampleRun(path='run.nxs')))},
-                f'P.sample: {NOT_A_VALUE}: sample: .* is not a dataset; SampleRun '
-                r'is given by reference to a dataset, such as dataset\(path=...\)',
+                {'params': model('P', sample=(SampleRun, SampleRun.local('run.nxs')))},
+                f'P.sample: {NOT_A_VALUE}: sample: path:run.nxs is a reference; a '
+                'default is a value',
             ),
             (
                 {
                     'params': model(
-                        'P', runs=(list[SampleRun], [SampleRun(path='run.nxs')])
+                        'P', runs=(list[SampleRun], [SampleRun.local('run.nxs')])
                     )
                 },
-                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: .* is not a dataset',
+                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: path:run.nxs is a reference; '
+                'a default is a value',
             ),
             (
                 {'outputs': model('O', iofq=(sc.DataArray | sc.Variable, ...))},
@@ -1146,7 +1200,7 @@ class TestModelRules:
         params = model(
             'P',
             centre=(sc.Variable, sc.scalar(1.0)),
-            sample=(SampleRun, SampleRun(path='a')),
+            sample=(SampleRun, SampleRun.local('a')),
         )
         with pytest.raises(ValueError, match=r'P\.centre: .*; P\.sample: '):
             spec(params=params)
@@ -1162,12 +1216,12 @@ OPTIONAL_LIST_FIELD = re.escape(
 )
 NOT_A_SCALAR = re.escape(
     'is not a scalar; a field of a group is a scalar (int, float, str, bool, '
-    'datetime, an enum, or a Literal) or a list of scalars: a value of several '
-    'parts is a group, a parameter of its own'
+    'datetime, an enum, or a Literal), a dataset model, or a list of one: a value '
+    'of several parts is a group, a parameter of its own'
 )
 A_PARAMETER_OF_ITS_OWN = re.escape(
-    'a field of a group is a scalar or a list of scalars: make it a parameter of '
-    'its own'
+    'a field of a group is a scalar, a dataset model, or a list of one: make it a '
+    'parameter of its own'
 )
 
 
@@ -1211,6 +1265,27 @@ class TestFields:
     def test_a_field_of_a_group_is_a_scalar_or_a_list_of_scalars(self, tp: Any) -> None:
         spec(params=model('P', g=(_group_with(tp), ...)))
 
+    @pytest.mark.parametrize('tp', [SampleRun, list[SampleRun], SampleRun | None])
+    def test_a_field_of_a_group_is_a_dataset_model(self, tp: Any) -> None:
+        spec(params=model('P', g=(_group_with(tp), ...)))
+
+    @pytest.mark.parametrize(
+        ('tp', 'default'),
+        [
+            (SampleRun | None, SampleRun.local('run.nxs')),
+            (list[SampleRun], [SampleRun.local('run.nxs')]),
+        ],
+    )
+    def test_a_dataset_model_at_a_field_has_no_default_dataset(
+        self, tp: Any, default: Any
+    ) -> None:
+        group = model('G', value=(tp, default))
+        with pytest.raises(
+            ValueError,
+            match=r'P\.g: G\.value: a dataset model at a field has no default but None',
+        ):
+            spec(params=model('P', g=(group, ...)))
+
     @pytest.mark.parametrize(
         'tp',
         [
@@ -1246,8 +1321,6 @@ class TestFields:
         [
             (Reduction, 'Reduction is a group'),
             (list[Reduction], 'Reduction is a group'),
-            (SampleRun, 'SampleRun is a group'),
-            (list[SampleRun], 'SampleRun is a group'),
             (By, 'ByMonitor | ByTime is a union of groups'),
             (list[By], 'ByMonitor | ByTime is a union of groups'),
             (ByMonitor | ByTime, 'ByMonitor | ByTime is a union of groups'),
@@ -1383,8 +1456,6 @@ class TestTables:
     def test_a_table_may_be_of_dataset_models(self) -> None:
         assert DATASETS.tables == ('runs',)
         assert not _takes_inline(DATASETS, 'runs')
-        assert not DATASETS.has_json_form('runs')
-        assert IOFQ_MULTI.has_json_form('time_range')
 
     def test_the_field_validators_of_a_group_check_each_row(self) -> None:
         assert _takes_inline(GEOMETRIES, 'geometry')
@@ -1403,11 +1474,15 @@ class TestTables:
             can=(list[Annotated[CanRun, AfterValidator(known)]], ...),
         )
         runs = spec(params=params, tables=('sample', 'can'))
-        row = {'path': Path('run.nxs')}
-        other = {'path': Path('other.nxs')}
-        known_rows = {'sample': [row], 'can': [row]}
+        known_rows = {
+            'sample': [SampleRun.local('run.nxs')],
+            'can': [CanRun.local('run.nxs')],
+        }
         runs.params(**known_rows)
-        for rows in ({'sample': [other]}, {'can': [other]}):
+        for rows in (
+            {'sample': [SampleRun.local('other.nxs')]},
+            {'can': [CanRun.local('other.nxs')]},
+        ):
             with pytest.raises(pydantic.ValidationError, match='unknown run'):
                 runs.params(**{**known_rows, **rows})
         assert runs.serialize().params_schema['properties']['sample']['items'] == (
@@ -1538,6 +1613,23 @@ class TestSerialization:
             'title': 'Geometry',
         }
         assert properties['runs']['items'] == dataset_ref('RunFile', {'kind': 'raw'})
+
+    def test_a_dataset_model_at_a_field_is_a_reference_to_a_dataset(self) -> None:
+        group = model(
+            'G',
+            run=(SampleRun, ...),
+            masks=(list[MaskFile], []),
+            thickness=(float, 1.0),
+        )
+        schema = spec(params=model('P', g=(group, ...))).serialize().params_schema
+        assert schema['properties']['g'] == {
+            '$ref': '#/$defs/G',
+            'not': {'required': ['@ref']},
+            'title': 'G',
+        }
+        properties = schema['$defs']['G']['properties']
+        assert properties['run'] == dataset_ref('SampleRun', {'kind': 'raw'})
+        assert properties['masks']['items'] == dataset_ref('MaskFile', {'kind': 'mask'})
 
     def test_a_union_is_its_alternatives_inline_never_a_reference(self) -> None:
         params = model('P', by=(By, ...), maybe=(By | None, None), each=(list[By], []))

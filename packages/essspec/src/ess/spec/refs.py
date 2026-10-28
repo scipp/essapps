@@ -9,15 +9,16 @@ framework did not compute, or, in a request not yet accepted, an output of an
 accumulator that the framework holds. A *root place* is the value of a
 parameter, or an element of a list parameter (see :mod:`ess.spec.places`). A
 reference stands for a whole group: a reference to a dataset for a dataset
-model (see :class:`ess.spec.parameters.DatasetModel`), a reference to an
-output for any other group. A reference is what a request names and what a record keeps;
+model (see :class:`ess.spec.parameters.DatasetModel`), at a root place or at a
+field of a group typed one, a reference to an output for any other group, at a
+root place. A reference is what a request names and what a record keeps;
 turning it into the data a workflow takes, a local path or an object, is the
 business of whatever runs the workflow.
 
 The JSON form of a reference is an object with the key ``"@ref"``, which
 names its kind. The key is reserved: an object with it is a reference, at any
 depth, so a reference is found in plain data without a spec, and one that is
-not at a root place is refused::
+not at a root place, or at a field typed a dataset model, is refused::
 
     {"@ref": "dataset", "dataset": "run:loki/60339"}
     {"@ref": "output", "record": "r17", "output": "centre"}

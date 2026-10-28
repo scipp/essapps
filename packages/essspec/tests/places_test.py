@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -27,12 +26,7 @@ class RunFile(DatasetModel, kind='raw'):
 
 
 class MaskFile(DatasetModel, kind='mask'):
-    @field_validator('path')
-    @classmethod
-    def _xml(cls, path: Path) -> Path:
-        if path.suffix != '.xml':
-            raise ValueError('a mask is an XML file')
-        return path
+    pass
 
 
 class Mask(BaseModel, arbitrary_types_allowed=True):
@@ -77,10 +71,57 @@ class MaskParams(BaseModel):
     runs: list[RunFile] = []
 
 
+class Measured(BaseModel):
+    run: RunFile
+    thickness: float = Field(1.0, gt=0)
+    masks: list[MaskFile] = []
+
+
+class MeasuredParams(BaseModel):
+    measured: Measured
+
+
 def test_a_dataset_model_takes_a_reference_to_a_dataset_only() -> None:
     assert place(MaskParams, 'mask') == Ways(
         tag=None, inline={}, record=MaskFile, none=True, metadata=()
     )
+
+
+def test_a_group_holding_a_dataset_model_is_written_inline_only() -> None:
+    assert place(MeasuredParams, 'measured') == Ways(
+        tag=None, inline={None: Measured}, record=None, none=False, metadata=()
+    )
+
+
+def test_a_dataset_in_a_group_is_held_as_on_ref_gives_it() -> None:
+    other = DatasetRef(dataset='pid-2')
+
+    def resolved(loc: Loc, ref: Ref, tp: Any) -> Ref:
+        assert (loc, tp) in {
+            (('measured', 'run'), RunFile),
+            (('measured', 'masks', 0), MaskFile),
+        }
+        return other
+
+    value = {'run': DATASET, 'masks': [DATASET]}
+    form = other.model_dump(by_alias=True)
+    assert held(MeasuredParams, 'measured', value, resolved) == {
+        'run': form,
+        'thickness': 1.0,
+        'masks': [form],
+    }
+
+
+def test_a_dataset_model_in_a_group_gets_its_local_path_from_paths() -> None:
+    form = DATASET.model_dump(by_alias=True)
+    measured = validated(
+        MeasuredParams,
+        'measured',
+        {'run': form, 'thickness': 2.0, 'masks': []},
+        read=lambda ref: ref,
+        paths={DATASET.dataset: Path('run.nxs')},
+    )
+    assert measured.run.path == Path('run.nxs')
 
 
 def test_a_group_with_a_data_value_takes_a_reference_only() -> None:
@@ -136,7 +177,7 @@ def test_a_union_without_a_discriminator_is_refused() -> None:
 
 
 def test_a_request_writes_no_field_of_a_dataset_model_or_a_data_value() -> None:
-    assert unwritten(MaskFile) == 'path'
+    assert unwritten(MaskFile) == 'dataset'
     assert unwritten(Mask) == 'mask'
     assert unwritten(Sample) is None
 
@@ -206,7 +247,8 @@ def test_a_reference_inside_a_group_is_refused(name: str, value: Any, loc: Loc) 
     assert at == loc
     assert msg.endswith(
         'a reference stands for a whole group, at a parameter or an element of a '
-        'list parameter, never inside a group'
+        'list parameter; inside a group, only a field typed a dataset model takes '
+        'one, a reference to a dataset'
     )
 
 
@@ -250,12 +292,20 @@ def test_an_error_inside_a_union_names_its_place_without_the_tag() -> None:
     assert at == ('beam_centre', 'tolerance')
 
 
+def test_a_dataset_model_instance_is_held_as_the_reference_to_its_dataset() -> None:
+    ref = DatasetRef(dataset='path:mask.xml')
+    assert held(MaskParams, 'mask', MaskFile.local('mask.xml'), _found) == (
+        ('mask',),
+        ref,
+        MaskFile,
+    )
+
+
 @pytest.mark.parametrize(
     ('name', 'value', 'loc'),
     [
         ('mask', 'mask.xml', ('mask',)),
         ('mask', {'path': 'mask.xml'}, ('mask',)),
-        ('mask', MaskFile(path='mask.xml'), ('mask',)),
         ('runs', ['run.nxs'], ('runs', 0)),
     ],
 )
@@ -292,30 +342,29 @@ def test_each_reference_has_the_type_of_its_parameter_or_element() -> None:
     ]
 
 
-def _read(path: str) -> Callable[[Ref], dict[str, Path]]:
-    return lambda ref: {'path': Path(path)}
+def _read(ref: Ref) -> Ref:
+    return ref
 
 
-def test_a_dataset_model_is_made_of_the_path_read_for_its_reference() -> None:
-    assert validated(MaskParams, 'mask', DATASET, _read('mask.xml')) == MaskFile(
-        path=Path('mask.xml')
-    )
-    assert validated(MaskParams, 'runs', [DATASET], _read('run.nxs')) == [
-        RunFile(path=Path('run.nxs'))
-    ]
+def test_a_dataset_model_is_made_of_the_reference_and_the_path_given_for_it() -> None:
+    paths = {DATASET.dataset: Path('mask.xml')}
+    made = validated(MaskParams, 'mask', DATASET, _read, paths)
+    assert made == MaskFile(dataset=DATASET.dataset)
+    assert made.path == Path('mask.xml')
+    (run,) = validated(MaskParams, 'runs', [DATASET], _read, paths)
+    assert run == RunFile(dataset=DATASET.dataset)
+    assert run.path == Path('mask.xml')
 
 
-def test_a_validator_of_a_dataset_model_refuses_the_path_at_its_place() -> None:
-    with pytest.raises(ParamsError) as raised:
-        validated(MaskParams, 'mask', DATASET, _read('mask.nxs'))
-    ((at, msg),) = raised.value.errors
-    assert at == ('mask', 'path')
-    assert 'a mask is an XML file' in msg
+def test_a_dataset_model_without_a_path_given_has_none() -> None:
+    made = validated(MaskParams, 'mask', DATASET, _read)
+    with pytest.raises(ValueError, match='only when the request runs'):
+        made.path
 
 
 def test_a_value_held_inline_is_made_of_its_json_form() -> None:
     stored = held(Params, 'reduction', {'bins': 3}, _found)
-    assert validated(Params, 'reduction', stored, _read('unused')) == Reduction(bins=3)
+    assert validated(Params, 'reduction', stored, _read) == Reduction(bins=3)
 
 
 def test_an_output_read_for_a_reference_is_kept_as_it_is() -> None:
@@ -328,6 +377,5 @@ def test_an_output_read_for_a_reference_is_kept_as_it_is() -> None:
 
 
 def test_a_binding_gives_a_dataset_model_as_data() -> None:
-    assert validated(MaskParams, 'mask', {'path': Path('mask.xml')}) == MaskFile(
-        path=Path('mask.xml')
-    )
+    given = validated(MaskParams, 'mask', {'dataset': 'pid-1'})
+    assert given == MaskFile(dataset='pid-1')

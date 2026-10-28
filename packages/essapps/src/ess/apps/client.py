@@ -181,8 +181,9 @@ class Accumulator:
             acc.push(sample=[dataset(run=615)], can=[dataset(run=614)])
 
         Each row is given inline, such as a group as a model or a dict, or by
-        reference, as its type allows; a field of a group is given inline
-        only. A push gives rows of one or more tables, side by side as in a
+        reference, as its type allows; a field of a group is given inline,
+        except a dataset at a field typed a dataset model, which is given by
+        reference. A push gives rows of one or more tables, side by side as in a
         request, never paired: rows of different tables have nothing to do
         with each other. A table the template fixes is refused, and so are a
         row the table holds already or that the push repeats, and a push of
@@ -335,7 +336,8 @@ class Client:
         - a union of groups, as a model or a dict of the fields of one
           alternative, with its tag, never by reference.
 
-        A field of a group is given inline only::
+        A scalar field of a group is given inline, and a dataset model field
+        by reference to a dataset::
 
             client.submit(IOFQ, params={'reduction': Reduction(bins=4),
                                         'sample': dataset(run=60339),
@@ -351,7 +353,8 @@ class Client:
         in place of the spec gets the same checks. A request that cannot run
         raises ``SubmitError``: an invalid value, an unknown spec or dataset,
         an inline group with a field that is a data value, a reference where
-        none may stand, inside a group, at a union, or to a whole list, a
+        none may stand, inside a group (except a dataset at a field typed a
+        dataset model), at a union, or to a whole list, a
         reference the client may not read, or one whose data do not fit its
         field. Each of its ``errors`` names the field at fault by its place,
         ``loc``, and the request by its key or index, ``entry``, if several

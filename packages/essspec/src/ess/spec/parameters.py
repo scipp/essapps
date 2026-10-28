@@ -24,23 +24,28 @@ authors set them at the use site, next to the field's title and description::
 from __future__ import annotations
 
 from abc import ABC
+from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
 
 from pydantic import (
     BaseModel,
     Field,
+    PrivateAttr,
     ValidationInfo,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
+from .refs import DatasetRef
 
-class DatasetModel(BaseModel):
+
+class DatasetModel(BaseModel, frozen=True, extra='forbid'):
     """
-    A kind of file: a group of the local path of a dataset's file, given by
-    reference to a dataset only.
+    A kind of file: the identity of a dataset, given by reference to a
+    dataset only, and the local path of its file when the request runs.
 
     A subclass names the metadata of the datasets it takes, as keywords of
     the class, each a string, a number, or a bool::
@@ -56,18 +61,28 @@ class DatasetModel(BaseModel):
     ``title``, ``frozen``, or ``extra``, configures the model instead, so it
     cannot be a metadata key.
 
-    A request gives a dataset model by reference to a dataset, which the
-    backend resolves to the dataset's identity when the request is
-    submitted. When the request runs, the backend makes the model of the
-    dataset's local path, ``MaskFile(path=<local path>)``, so that a
-    validator of the model, such as a check of the file's suffix, runs with
-    the local path. A dataset model holds only ``path``, as declared here,
-    and no output holds a dataset model, so that every path a workflow gets
-    comes from a dataset that the dataset source checks.
+    The value of a dataset model is ``dataset``, the dataset's identity,
+    which the backend resolves when the request is submitted, so that
+    everything a request gives is known then. Its JSON form is the reference
+    to the dataset, ``{'@ref': 'dataset', 'dataset': ...}``, of which it is
+    also validated, so that a reference is found in a record without the
+    spec. Two dataset models are equal if they are of one class and name one
+    dataset.
+
+    The local path of the dataset's file exists only when the request runs:
+    the backend validates the model with the context ``{'paths': {identity:
+    local path}}``, and :attr:`path` raises before. A dataset model holds
+    only ``dataset``, as declared here, and has no validators of its own,
+    since what it would check of a file is either metadata, which the fit
+    check covers when the request is submitted, or the workflow's to read.
+    No output holds a dataset model, so that every path a workflow gets
+    comes from a dataset that the dataset source checks. A program without a
+    backend makes a dataset model of a local file with :meth:`local`.
     """
 
     metadata: ClassVar[dict[str, Any]] = {'kind': 'raw'}
-    path: Path
+    dataset: str = Field(min_length=1)
+    _path: Path | None = PrivateAttr(None)
 
     def __init_subclass__(cls, **metadata: Any) -> None:
         super().__init_subclass__()
@@ -77,6 +92,60 @@ class DatasetModel(BaseModel):
                 f'numbers, or bools, as JSON holds them, not {bad}'
             )
         cls.metadata = {**cls.metadata, **metadata}
+
+    @classmethod
+    def local(cls, path: Path | str) -> Self:
+        """
+        The model of the local file ``path``, named ``path:<path>``, as
+        ``dataset(path=...)`` names it, a name that a backend resolves to the
+        dataset's identity.
+        """
+        identity = f'path:{path}'
+        return cls.model_validate(
+            {'dataset': identity}, context={'paths': {identity: Path(path)}}
+        )
+
+    @property
+    def path(self) -> Path:
+        """
+        The local path of the dataset's file, when the request runs; raises
+        ``ValueError`` before, so that a validator that reads it refuses the
+        request when it arrives.
+        """
+        if self._path is None:
+            raise ValueError(
+                f'{self.dataset}: a dataset has a local path only when the request '
+                'runs, or if made of a local file with .local(path)'
+            )
+        return self._path
+
+    @model_validator(mode='before')
+    @classmethod
+    def _of_ref(cls, value: Any) -> Any:
+        if isinstance(value, DatasetRef):
+            return {'dataset': value.dataset}
+        if isinstance(value, Mapping) and value.get('@ref') == 'dataset':
+            return {k: v for k, v in value.items() if k != '@ref'}
+        return value
+
+    @model_validator(mode='after')
+    def _with_path(self, info: ValidationInfo) -> Self:
+        paths = (info.context or {}).get('paths', {})
+        if self.dataset in paths:
+            self._path = Path(paths[self.dataset])
+        return self
+
+    @model_serializer
+    def _as_ref(self) -> dict[str, str]:
+        return {'@ref': 'dataset', 'dataset': self.dataset}
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DatasetModel):
+            return NotImplemented
+        return type(self) is type(other) and self.dataset == other.dataset
+
+    def __hash__(self) -> int:
+        return hash((type(self), self.dataset))
 
 
 _SCALARS = (str, int, float, bool)

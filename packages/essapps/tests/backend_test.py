@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from ess.apps import (
     Backend,
@@ -87,27 +87,12 @@ class MaskFile(DatasetModel, kind='mask'): ...
 class LokiMask(DatasetModel, kind='mask', instrument='loki'): ...
 
 
-class XmlFile(DatasetModel):
-    """A raw dataset whose file is XML."""
-
-    @field_validator('path')
-    @classmethod
-    def _xml(cls, path: Path) -> Path:
-        if path.suffix != '.xml':
-            raise ValueError(f'{path.name} is not XML')
-        return path
-
-
 class MaskParams(BaseModel):
     mask: MaskFile
 
 
 class LokiMaskParams(BaseModel):
     mask: LokiMask
-
-
-class XmlParams(BaseModel):
-    sample: XmlFile
 
 
 class RunsParams(BaseModel):
@@ -171,7 +156,6 @@ PIECES = _spec('pieces', outputs=PiecesOutputs)
 BOXED = _spec('boxed', params=BoxParams)  # a box of a number
 MASKED = _spec('masked', params=MaskParams)
 LOKI_MASKED = _spec('loki-masked', params=LokiMaskParams)
-XML = _spec('xml', params=XmlParams)
 RUNS = _spec('runs', params=RunsParams, tables=('runs',))
 MODES = _spec('modes', params=ModeParams)
 SUM = _spec('sum', params=SumParams, tables=('terms',))
@@ -250,7 +234,6 @@ def backend(datasets: FakeDatasets, gate: Gate) -> Iterator[Backend]:
         StagedFunction(MODES, slow),
         function_binding(MASKED, lambda p: ValueOutputs(value=_read(p.mask))),
         function_binding(LOKI_MASKED, lambda p: ValueOutputs(value=_read(p.mask))),
-        function_binding(XML, lambda p: ValueOutputs(value=_read(p.sample))),
         kept_rows(RUNS, runs),
     ]
     backend = Backend(datasets, bindings)
@@ -521,15 +504,6 @@ def test_a_dataset_fits_a_dataset_model_by_each_key_of_its_metadata(
         client.submit(LOKI_MASKED, params={'mask': dataset(run=5)})
     masked = client.compute(LOKI_MASKED, params={'mask': dataset(run=6)})
     assert client.output(masked, 'value') == Amount(value=6.0)
-
-
-def test_a_validator_of_a_dataset_model_runs_with_the_local_path(
-    client: Client,
-) -> None:
-    failed = client.compute(XML, params={'sample': dataset(run=1)})
-
-    assert client.status(failed) is Status.FAILED
-    assert client.failure(failed) == 'sample.path: Value error, run-1.json is not XML'
 
 
 def test_a_table_takes_a_list_of_rows(client: Client) -> None:

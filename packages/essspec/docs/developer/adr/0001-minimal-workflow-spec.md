@@ -115,6 +115,7 @@ pydantic makes a JSON schema of it with its model's config. A value
 |---|---|---|---|
 | a dataset model | `Sample`, `MaskFile` | no | to a dataset that fits |
 | a group without a data value | `Reduction`, `BeamCentre` | an object of its fields | to an output of its class |
+| a group holding a dataset model | `Sample(run, thickness)` | an object of its fields, each dataset by reference | no |
 | a group with a data value | `ComputedTransmission` | no | to an output of its class |
 | a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag | no |
 | a list, `list[X]` | a list parameter | a list, each element a root place of type `X` | no |
@@ -125,24 +126,43 @@ group, a union of groups, or a list of one, possibly typed `X | None`. A
 *scalar* is an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a
 `Literal`, possibly constrained, such as `Annotated[float, Gt(0)]`. A *data
 value* is a field without a JSON form, such as a scipp array, which no request
-can write. The fields of a group without a data value are scalars or lists of
-scalars, never typed `X | None`. A group with a data value is given by
-reference to an output only; of its other fields, the framework refuses only a
-`Path`, a dataset model, a `NewType`, or a type alias, since no output could
-fill them. The framework looks no deeper.
+can write. The fields of a group without a data value are scalars, dataset
+models, or lists of one of these; a scalar is never typed `X | None`, a dataset
+model may be, for a file that may be left out. A group with a data value is
+given by reference to an output only; of its other fields, the framework
+refuses only a `Path`, a dataset model, a `NewType`, or a type alias, since no
+output could fill them. The framework looks no deeper.
+
+**A group is validated whole, once, when the request arrives.** So a group
+holds only what is known then: values typed in, and datasets, named by their
+identity. A value that another request computes may not exist yet; it fills a
+whole parameter. So a file picker sits next to a checkbox, and a picker of
+records fills a whole card:
+
+```python
+class Sample(BaseModel):
+    run: SampleRun                         # a dataset, known by its identity
+    thickness: float = Field(1.0, gt=0)    # checked when the request arrives
+    mask: MaskFile | None = None
+
+class IofQParams(BaseModel):
+    samples: list[Sample]                  # a table, each row with its run
+    transmission: ComputedTransmission     # another request's output: a parameter
+```
 
 This buys two things:
 
-- No group written inline holds a reference, so each is validated whole when
-  the request arrives, and every validator of the group runs then, with all
-  its fields at hand. A reference only has to fit its type, and the call phase
-  only resolves the references at root places.
-- A UI needs one widget per root place and one input per scalar, with no
+- Each group written inline is validated whole when the request arrives, and
+  every validator of the group runs then, with all its fields at hand, such as
+  one that the runs of four spin channels are distinct. A reference to an
+  output only has to fit its type, and the call phase only reads the data of
+  the references and attaches the local paths of the datasets.
+- A UI needs one widget per root place and one input per field, with no
   recursion:
 
   | Root place | Widget |
   |---|---|
-  | a group without a data value | a form of its fields, and a picker of records whose output is of its class |
+  | a group without a data value | a form of its fields, a dataset picker for a dataset model, and a picker of records whose output is of its class, unless it holds a dataset model |
   | a group with a data value | a picker of records whose output is of its class |
   | a dataset model | a picker of datasets of its kind |
   | a union of groups | a choice of alternatives, each a form of its fields |
@@ -156,10 +176,10 @@ group, such as `limit_range: bool` next to `start` and `stop`. Which of the
 two, why a choice between modes is a union, and what `X | None` means, is
 [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
-**Files are dataset models.** A file is a parameter, or the element of a list
-parameter, whose type is a *dataset model*: a subclass of
-`ess.spec.DatasetModel`, which holds only `path: Path`. Its class keywords name
-the metadata that a fitting dataset has:
+**Files are dataset models.** A file is a parameter, the element of a list
+parameter, or a field of a group, whose type is a *dataset model*: a subclass of
+`ess.spec.DatasetModel`, which holds only `dataset: str`, the dataset's
+identity. Its class keywords name the metadata that a fitting dataset has:
 
 ```python
 class MaskFile(DatasetModel, kind='mask'):
@@ -167,9 +187,14 @@ class MaskFile(DatasetModel, kind='mask'):
 ```
 
 A dataset model is given by reference to a dataset only, so that the dataset
-source checks access and the record holds the dataset's identity; the binding
-gets the model with a local path. No output is or holds a dataset model or a
-`Path`, so every path a workflow gets has passed the access check. The metadata
+source checks access and the record holds the dataset's identity. The identity
+is the model's value, and its JSON form is the reference, so a dataset model is
+known when the request arrives, as a value typed in is. The local path of its
+file exists only when the request runs: the backend attaches it then, and the
+binding reads it as `run.path`, which raises before. A program without a
+backend makes the model of a local file with `MaskFile.local(path)`. No output
+is or holds a dataset model or a `Path`, so every path a workflow gets has
+passed the access check. The metadata
 let a picker offer only the datasets that fit. A field of the model for a
 metadata value, such as the run number, waits for a workflow that needs it.
 
@@ -198,7 +223,8 @@ The key `@ref` is reserved at every depth: an object with it is a reference. So
 a framework finds the references of a request without the spec, as a remote
 client that holds only the serialized spec must, and a value written inline
 never reads as a reference. With the spec, the framework refuses a reference
-inside a group written inline, and a default whose JSON form holds the key.
+inside a group written inline, but one to a dataset at a field typed a dataset
+model, and a default whose JSON form holds the key.
 
 The identity string of a `DatasetRef` is opaque to the spec and interpreted
 only by the framework that minted it, which makes it self-describing where it
@@ -210,7 +236,7 @@ Output references and dataset references work the same way:
 
 | | Reference to an output | Reference to a dataset |
 |---|---|---|
-| Root place | a parameter, or an element of a list parameter | the same |
+| Place | a parameter, or an element of a list parameter | the same, or a field of a group typed a dataset model, or an element of a list field of one |
 | Stands for | a whole group, not a dataset model | a whole dataset model |
 | Fits if | the output's class is the group's class or a subclass of it | the dataset's metadata has the model's metadata |
 | Resolved in the call phase to | the stored output | the dataset model with the local path |
@@ -278,13 +304,18 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
   typed `X | None`. A list parameter is not typed `list[X] | None`, since a
   list without rows is `[]`, and its element is not typed `X | None`, since
   each row is a value.
-- The fields of a group without a data value are scalars or lists of
-  scalars, never typed `X | None`. A group with a data value is given by
+- The fields of a group without a data value are scalars, dataset models, or
+  lists of one of these. A scalar is never typed `X | None`; a dataset model
+  may be, and has no default but `None`, or `[]` for a list. A group with a
+  dataset model is written inline only, since no output holds one. A group
+  with a data value is given by
   reference to an output only; of its other fields, the framework refuses
   only a `Path`, a dataset model, a `NewType`, or a type alias, since no
   output could fill them.
-- A dataset model holds only `path`, as `DatasetModel` declares it; a field
-  validator of `path` is allowed. A `Path` outside a dataset model is refused.
+- A dataset model holds only `dataset`, as `DatasetModel` declares it, and
+  has no validators or serializers of its own: what it would check of a file
+  is metadata, which the fit check covers, or the workflow's to read. A `Path`
+  outside a dataset model is refused.
 - Each output's type is a type, possibly typed `X | None`, or a list or a dict
   of one. No output is or holds a dataset model or a `Path`, at any depth.
 - No type in the params or the outputs is a `NewType` or a type alias, at any
@@ -590,21 +621,30 @@ output, and dims and units of an output for a UI.
   own. A group with a reference inside cannot be validated whole when the
   request arrives, so it is checked field by field, and its validators run only
   once the data are read, in the call phase. The framework recurses over
-  places, with cycle detection, and a form nests widgets. The cases found in
-  the requirements and the ess reduction packages are written with parameters
-  of their own, or as separate requests, at the cost of prefixed names, such as
-  for the settings of each of several He3 cells.
+  places, with cycle detection, and a form nests widgets. Settings used for
+  several roles, such as those of two He3 cells, are one generic group,
+  `He3Cell[Polarizer]` and `He3Cell[Analyzer]`, as sciline names a role by a
+  type parameter.
 - **A file as a `Path` field of a group**, given by reference to a dataset.
   A group that holds a file then has a reference inside, and a picker cannot
   tell which kind of dataset a field takes.
-- **A dataset model at a field of a group**, such as
-  `SampleSettings(run: SampleRun, thickness: float)`, so that a table holds
-  runs each with settings of its own. The group could be validated at
-  submission with an unvalidated stand-in for the dataset, but a validator of
-  the group that reads the path would check the stand-in, never the local path,
-  and batch and rules would name places inside groups. An output reference
-  cannot be handled so, since its record may be pending at submission. Left out
-  until a workflow needs it; adding it later breaks nothing.
+- **A reference to an output at a field of a group**, such as a sample's
+  computed transmission next to its run and thickness. The record may still be
+  pending when the request arrives, so the group could be validated only in the
+  call phase, and `thickness=-1` would be refused only when the request runs.
+  Making such a group a namespace instead, each field a parameter, moves its
+  checks across fields to the binding, and a binding takes the same class
+  apart at a field but whole as a row of a table. Showing a computed value in
+  the card of the parameters it belongs to is a matter of display.
+- **A dataset model holding its local path**, made in the call phase. A group
+  holding one could be validated when the request arrives only with a
+  stand-in for the path, which a validator of the group would check instead of
+  the file.
+- **A group inside a group**, written inline. It is known when the request
+  arrives, so the outer group would still be validated whole. Left out because
+  no workflow needs it: the inner group would lose its picker of records, the
+  checks of fields and the fit check of datasets would recurse, and a cell of
+  a table would hold a group. Adding it later breaks nothing.
 - **A reference to a whole list** filling a list parameter. The table rules,
   such as distinct rows, could then be checked only in the call phase.
 - **`@ref` reserved at root places only**, plain data deeper. A reference
