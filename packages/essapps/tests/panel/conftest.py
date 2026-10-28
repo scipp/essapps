@@ -11,7 +11,9 @@ the counts of its run, less those of the mask, by the sample's thickness, so
 a thickness of 0 fails the record. ``OPTIONS`` takes a value of each type
 that has an input, a list of numbers, and a file model typed ``X | None``
 without a default. ``SUBTRACT`` takes a group, and a ``BeamCentre`` typed
-``X | None`` without a default, which an output of ``FIND`` fits.
+``X | None`` without a default, which an output of ``FIND`` fits. ``STACK``
+takes two tables, of a file model and of a group with a file, and a list
+of ``BeamCentre`` with a default, whose row an output of ``FIND`` fits.
 """
 
 from collections.abc import Iterator
@@ -115,6 +117,17 @@ class SubtractParams(BaseModel):
     centre: BeamCentre | None
 
 
+class Shot(BaseModel):
+    run: Run
+    thickness: float = 1.0
+
+
+class StackParams(BaseModel):
+    runs: list[Run] = Field(min_length=1)
+    shots: list[Shot]
+    centres: list[BeamCentre] = [BeamCentre(x=1.0)]
+
+
 type Spec = WorkflowSpec[Any, Any]
 
 FIND: Spec = WorkflowSpec(
@@ -149,6 +162,15 @@ SUBTRACT: Spec = WorkflowSpec(
     params=SubtractParams,
     outputs=ReduceOutputs,
 )
+STACK: Spec = WorkflowSpec(
+    name='stack',
+    version=1,
+    title='Stack',
+    description='The counts of the runs and the shots, shifted by the centres.',
+    params=StackParams,
+    outputs=ReduceOutputs,
+    tables=('runs', 'shots'),
+)
 
 
 def find(params: FindParams) -> FindOutputs:
@@ -171,6 +193,12 @@ def subtract(params: SubtractParams) -> ReduceOutputs:
     return ReduceOutputs(total=Total(value=params.background.scale + shift))
 
 
+def stack(params: StackParams) -> ReduceOutputs:
+    counts = sum(read_file(r.path)['counts'] for r in params.runs)
+    counts += sum(read_file(s.run.path)['counts'] / s.thickness for s in params.shots)
+    return ReduceOutputs(total=Total(value=counts + sum(c.x for c in params.centres)))
+
+
 @pytest.fixture
 def files(tmp_path: Path) -> FakeFiles:
     return FakeFiles('p1', tmp_path)
@@ -188,6 +216,7 @@ def client(files: FakeFiles) -> Iterator[Client]:
         function_binding(REDUCE, reduce),
         function_binding(OPTIONS, options),
         function_binding(SUBTRACT, subtract),
+        function_binding(STACK, stack),
     ]
     with local(proposal='p1', files=files, bind=bind) as client:
         yield client
@@ -211,3 +240,8 @@ def options_spec() -> Spec:
 @pytest.fixture
 def subtract_spec() -> Spec:
     return SUBTRACT
+
+
+@pytest.fixture
+def stack_spec() -> Spec:
+    return STACK

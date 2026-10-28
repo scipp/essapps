@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-panel = ["panel>=1.10"]
+panel = ["panel>=1.10", "pandas"]
 test = [
     "essapps[panel]",
     "essspec[scipp,sciline]",
@@ -64,6 +64,9 @@ faulthandler_timeout = 120
 xfail_strict = true
 filterwarnings = [
   "error",
+  # Panel 1.10's Tabulator calls DataFrame.reset_index(inplace=True), which
+  # pandas 3.1 deprecates.
+  "ignore:The inplace keyword in DataFrame.reset_index",
 ]
 
 [tool.mypy]
