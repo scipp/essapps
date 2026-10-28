@@ -13,7 +13,7 @@ So history only grows until it is dropped.
 
 The stories need four things from history:
 
-- Records outlive the backend process (B6, H2, H3). The trigger loop knows which datasets a rule has handled only from the records under the rule's label.
+- Records outlive the backend process (B6, H2, H3). The trigger loop knows which files a rule has handled only from the records under the rule's label.
 - A submission is stored whole or not at all.
 - The order of the records under a label, and of the pushes into an accumulator, is kept.
 - Persisted values are found again.
@@ -50,15 +50,15 @@ History is six lists, each only appended to:
 
 - **History defined as one event log, with records and labels as views**, indexes rebuilt from the log. The lists hold the same history. The log adds one order across all lists, and nothing outside storage reads that order. It would tie a hosted backend to a log.
 - **History kept as long as the proposal.** That may be forever, a second record of what ran next to SciCat.
-- **Each record dropped by age, keeping the older records that a kept record reads.** The trigger loop would reduce again every dataset whose records were dropped. It would need a memory of its own, such as a set of handled datasets per rule.
-- **A proposal's history dropped a fixed time after its last record.** A trigger loop that sees no new dataset for that long loses its rule's records and then reduces every dataset again. An open client would lose the records it still uses.
+- **Each record dropped by age, keeping the older records that a kept record reads.** The trigger loop would reduce again every file whose records were dropped. It would need a memory of its own, such as a set of handled files per rule.
+- **A proposal's history dropped a fixed time after its last record.** A trigger loop that sees no new file for that long loses its rule's records and then reduces every file again. An open client would lose the records it still uses.
 - **The record of a state stored with every row, in storage that shares repeated rows.** Sharing saves bytes, but every layer above the store still handles every row, and that grows with the square of the number of pins.
 - **Output values kept with their records.** This stores one output per state, and makes a catalogue of outputs next to SciCat, which is a non-goal.
 
 ## Consequences
 
 - Dropping a proposal's history leaves no dangling reference. No other proposal reads its records (system story G5), and an idle proposal has no open client and no pending record.
-- A running trigger loop keeps a client of its proposal open, so the proposal is not idle. A loop started for a proposal whose history was dropped reduces its datasets again.
+- A running trigger loop keeps a client of its proposal open, so the proposal is not idle. A loop started for a proposal whose history was dropped reduces its files again.
 - A proposal that is never idle, such as one whose automatic reduction runs all year, keeps all its history.
 - A client whose process ended without closing it keeps its proposal from being idle until its lease runs out ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)).
 - A backend that restarts does not know when its earlier clients ended, so it counts idle time from its start.

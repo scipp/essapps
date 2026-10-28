@@ -2,40 +2,36 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 import pytest
 
-from ess.spec import AccumulatorRef, DatasetRef, OutputRef
+from ess.spec import AccumulatorRef, FileRef, OutputRef
 from ess.spec.refs import ParamsError, as_ref, iter_refs, loc_text, map_refs
 
 OUTPUT_REF = {'@ref': 'output', 'record': 'r1', 'output': 'data'}
-DATASET_REF = {'@ref': 'dataset', 'dataset': 'pid-1'}
+FILE_REF = {'@ref': 'file', 'file': 'pid-1'}
 ACCUMULATOR_REF = {'@ref': 'accumulator', 'accumulator': 'a1', 'output': 'data'}
 
 
 def test_references_print_what_they_name() -> None:
     assert str(OutputRef(record='r1', output='data')) == 'r1.data'
     assert str(OutputRef(record='r1', output='banks', key='a')) == 'r1.banks[a]'
-    assert str(DatasetRef(dataset='run:dream/1')) == 'run:dream/1'
+    assert str(FileRef(file='run:dream/1')) == 'run:dream/1'
     assert str(AccumulatorRef(accumulator='a1', output='data')) == 'a1.data'
 
 
-def test_dataset_identity_is_an_opaque_string() -> None:
+def test_file_identity_is_an_opaque_string() -> None:
     # The spec does not normalize: the framework that minted the identity is
     # the one that knows a run number and the PID minted from it are one
-    # dataset.
-    assert DatasetRef(dataset='pid:20.500.12269/abc') == DatasetRef(
-        dataset='pid:20.500.12269/abc'
-    )
-    assert DatasetRef(dataset='run:dream/1') != DatasetRef(
-        dataset='pid:20.500.12269/abc'
-    )
+    # file.
+    assert FileRef(file='pid:20.500.12269/abc') == FileRef(file='pid:20.500.12269/abc')
+    assert FileRef(file='run:dream/1') != FileRef(file='pid:20.500.12269/abc')
 
 
 PARAMS = {
     'sample': OUTPUT_REF,
-    'runs': [DATASET_REF, None, {'@ref': 'output', 'record': 'f2', 'output': 'file'}],
+    'runs': [FILE_REF, None, {'@ref': 'output', 'record': 'f2', 'output': 'file'}],
     'can': None,
     'sum': AccumulatorRef(accumulator='a1', output='data'),
     'centre': 'not a reference',
-    'rows': [{'file': DATASET_REF, 'shift': {'offset': OUTPUT_REF}}],
+    'rows': [{'file': FILE_REF, 'shift': {'offset': OUTPUT_REF}}],
     'group': {'centre': OUTPUT_REF, 'x': 1.0},
     'deep': {'mask': {'by': [{'kind': 'given', 'data': ACCUMULATOR_REF}]}},
 }
@@ -77,7 +73,7 @@ def test_the_json_form_of_a_reference_names_its_kind() -> None:
         **OUTPUT_REF,
         'key': None,
     }
-    assert DatasetRef(dataset='pid-1').model_dump() == DATASET_REF
+    assert FileRef(file='pid-1').model_dump() == FILE_REF
     assert AccumulatorRef(accumulator='a1', output='data').model_dump() == (
         ACCUMULATOR_REF
     )
@@ -92,10 +88,10 @@ def test_as_ref_decides_what_a_reference_is_by_its_kind() -> None:
     ref = OutputRef(record='r', output='o')
     assert as_ref(ref) is ref
     assert as_ref(OUTPUT_REF) == OutputRef(record='r1', output='data')
-    assert as_ref(DATASET_REF) == DatasetRef(dataset='pid-1')
+    assert as_ref(FILE_REF) == FileRef(file='pid-1')
     assert as_ref(ACCUMULATOR_REF) == AccumulatorRef(accumulator='a1', output='data')
     assert as_ref({'record': 'r1', 'output': 'data'}) is None
-    assert as_ref({'dataset': 'pid-1'}) is None
+    assert as_ref({'file': 'pid-1'}) is None
     assert as_ref({'value': 1.0}) is None
     assert as_ref('r1.data') is None
 
@@ -104,11 +100,11 @@ def test_as_ref_decides_what_a_reference_is_by_its_kind() -> None:
     ('value', 'error'),
     [
         ({'@ref': 'record', 'record': 'r1'}, "'record' is not a kind of reference"),
-        ({'@ref': None, 'dataset': 'pid-1'}, 'None is not a kind of reference'),
+        ({'@ref': None, 'file': 'pid-1'}, 'None is not a kind of reference'),
         ({'@ref': 'output', 'record': 'r1'}, 'output: Field required'),
-        ({**DATASET_REF, 'run': 1}, 'run: Extra inputs are not permitted'),
+        ({**FILE_REF, 'run': 1}, 'run: Extra inputs are not permitted'),
         ({**ACCUMULATOR_REF, 'record': 'r1'}, 'record: Extra inputs'),
-        ({**DATASET_REF, 'dataset': ''}, 'dataset: String should have at least'),
+        ({**FILE_REF, 'file': ''}, 'file: String should have at least'),
     ],
 )
 def test_as_ref_refuses_an_unknown_kind_or_malformed_fields(
@@ -119,7 +115,7 @@ def test_as_ref_refuses_an_unknown_kind_or_malformed_fields(
 
 
 def test_iter_refs_and_map_refs_name_the_place_of_a_malformed_reference() -> None:
-    inputs = {'runs': [DATASET_REF, {'@ref': 'run'}]}
+    inputs = {'runs': [FILE_REF, {'@ref': 'run'}]}
     with pytest.raises(ValueError, match=r"^runs\[1\]: .*'run' is not a kind"):
         list(iter_refs(inputs))
     with pytest.raises(

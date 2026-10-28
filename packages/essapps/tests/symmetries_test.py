@@ -25,9 +25,9 @@ import scipp as sc
 import scipp.testing
 from pydantic import BaseModel, ConfigDict, Field
 
-from ess.apps import Client, SubmitError, Template, dataset, local
-from ess.apps.testing import FakeDatasets, read_dataset
-from ess.spec import DatasetModel, DriverBinding, WorkflowSpec
+from ess.apps import Client, SubmitError, Template, file, local
+from ess.apps.testing import FakeFiles, read_file
+from ess.spec import DriverBinding, FileModel, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
 
 SampleNumerator = NewType('SampleNumerator', np.ndarray)
@@ -37,10 +37,10 @@ CanDenominator = NewType('CanDenominator', float)
 IofQ = NewType('IofQ', sc.Variable)
 
 
-class SampleRun(DatasetModel): ...
+class SampleRun(FileModel): ...
 
 
-class CanRun(DatasetModel): ...
+class CanRun(FileModel): ...
 
 
 class Reduction(BaseModel):
@@ -86,7 +86,7 @@ IOFQ_MULTI = WorkflowSpec(
 
 def _counts(run: SampleRun | CanRun) -> np.ndarray:
     """A run's counts per pixel."""
-    return np.asarray(read_dataset(run.path), dtype=float)
+    return np.asarray(read_file(run.path), dtype=float)
 
 
 def sample_numerator(run: SampleRun, reduction: Reduction) -> SampleNumerator:
@@ -157,16 +157,16 @@ MULTI = DriverBinding(IOFQ_MULTI, IofQDriver)
 
 @pytest.fixture
 def client(tmp_path: Path) -> Iterator[Client]:
-    datasets = FakeDatasets(proposal='p1', directory=tmp_path)
-    datasets.measure(611, [1.0, 3.0, 2.0, 6.0])
-    datasets.measure(612, [2.0, 6.0, 4.0, 12.0])  # twice 611: the same I(Q)
-    datasets.measure(614, [1.0, 1.0, 1.0, 1.0])
-    with local(proposal='p1', datasets=datasets, bind=[SINGLE, MULTI]) as client:
+    files = FakeFiles(proposal='p1', directory=tmp_path)
+    files.measure(611, [1.0, 3.0, 2.0, 6.0])
+    files.measure(612, [2.0, 6.0, 4.0, 12.0])  # twice 611: the same I(Q)
+    files.measure(614, [1.0, 1.0, 1.0, 1.0])
+    with local(proposal='p1', files=files, bind=[SINGLE, MULTI]) as client:
         yield client
 
 
-SAMPLE, CAN = dataset(run=611), dataset(run=614)
-SAMPLES = [SAMPLE, dataset(run=612)]
+SAMPLE, CAN = file(run=611), file(run=614)
+SAMPLES = [SAMPLE, file(run=612)]
 
 
 def _single(client: Client, **params: Any) -> sc.Variable:

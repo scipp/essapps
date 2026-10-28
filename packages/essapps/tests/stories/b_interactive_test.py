@@ -38,7 +38,7 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
         blanks=('sample',),
     )
     new = measure(2, [2.0, 1.0, 4.0, 3.0])
-    requests = apply(beamtime, [new], client.datasets, at='sample', member_field='run')
+    requests = apply(beamtime, [new], client.files, at='sample', member_field='run')
     (reduced,) = client.compute(requests, label='iofq-beamtime').values()
 
     assert len(client.records(label='tuning')) == 4
@@ -76,8 +76,8 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
         value.values.tolist()
         for value in (first, added, client.output(again, 'normalized'))
     ] == [[0.5, 1.5], [0.75, 1.25], [1.0, 1.0]]
-    assert client.provenance(total).datasets() == [r611, r612, r613]
-    assert client.provenance(again).datasets() == [r611, r613]
+    assert client.provenance(total).files() == [r611, r612, r613]
+    assert client.provenance(again).files() == [r611, r613]
     assert client.records() == [again]
 
 

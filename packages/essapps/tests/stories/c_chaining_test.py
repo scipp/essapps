@@ -7,8 +7,8 @@
 import pytest
 import scipp as sc
 
-from ess.apps import Client, Template, apply, dataset
-from ess.apps.testing import FakeDatasets
+from ess.apps import Client, Template, apply, file
+from ess.apps.testing import FakeFiles
 
 from .conftest import (
     BEAM_CENTRE,
@@ -39,23 +39,21 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
         blanks=('sample',),
     )
 
-    requests = apply(
-        template, samples, client.datasets, at='sample', member_field='run'
-    )
+    requests = apply(template, samples, client.files, at='sample', member_field='run')
     reduced = list(client.compute(requests, label='iofq').values())
 
     assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [
         [3.0, 7.0],
         [7.0, 3.0],
     ]
-    assert set(client.provenance(reduced[0]).datasets()) == {samples[0], centre_run}
+    assert set(client.provenance(reduced[0]).files()) == {samples[0], centre_run}
 
 
 @pytest.mark.xfail(
-    reason='publish, scicat, and datasets.add_published are not implemented'
+    reason='publish, scicat, and files.add_published are not implemented'
 )
 def test_c2_vanadium_from_the_catalogue(
-    client: Client, measure: Measure, datasets: FakeDatasets
+    client: Client, measure: Measure, files: FakeFiles
 ) -> None:
     vanadium = other.compute(
         VANADIUM,
@@ -65,9 +63,9 @@ def test_c2_vanadium_from_the_catalogue(
         },
     )
     pid = other.publish(vanadium.ref('normalization'), 'scicat')
-    published = datasets.add_published(scicat.entries[pid])
+    published = files.add_published(scicat.entries[pid])
 
-    loaded = client.compute(LOAD_NORMALIZATION, params={'published': dataset(pid=pid)})
+    loaded = client.compute(LOAD_NORMALIZATION, params={'published': file(pid=pid)})
     sample = measure(2, [4.0, 8.0])
     result = client.compute(
         IOFQ,
@@ -78,7 +76,7 @@ def test_c2_vanadium_from_the_catalogue(
     )
 
     assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]
-    assert set(client.provenance(result).datasets()) == {sample, published}
+    assert set(client.provenance(result).files()) == {sample, published}
     assert client.records() == [loaded, result]
 
 
@@ -100,7 +98,7 @@ def test_c4_reflectometry_angle_series(client: Client, measure: Measure) -> None
     exported = client.compute(EXPORT, params={'result': series.ref('stitched')})
 
     assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
-    assert set(client.provenance(exported).datasets()) == {reference, *angles}
+    assert set(client.provenance(exported).files()) == {reference, *angles}
 
 
 def test_c4_angle_series_accumulated_reads_as_the_plain_request(

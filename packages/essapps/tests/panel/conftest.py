@@ -5,11 +5,11 @@ Toy specs with each kind of place, bound on a client of ``local()``.
 
 ``FIND`` outputs a ``BeamCentre``, a plain group, which ``REDUCE`` takes
 typed in or from a record. ``REDUCE`` also takes a group with defaults, a
-dataset model and a group without a default, a union of groups, and a mask, a
-dataset model of mask datasets typed ``X | None`` with a default. It divides
+file model and a group without a default, a union of groups, and a mask, a
+file model of mask files typed ``X | None`` with a default. It divides
 the counts of its run, less those of the mask, by the sample's thickness, so
 a thickness of 0 fails the record. ``OPTIONS`` takes a value of each type
-that has an input, a list of numbers, and a dataset model typed ``X | None``
+that has an input, a list of numbers, and a file model typed ``X | None``
 without a default. ``SUBTRACT`` takes a group, and a ``BeamCentre`` typed
 ``X | None`` without a default, which an output of ``FIND`` fits.
 """
@@ -24,15 +24,15 @@ import pytest
 from pydantic import BaseModel, Field
 
 from ess.apps import Client, local
-from ess.apps.testing import FakeDatasets, read_dataset
-from ess.spec import DatasetModel, DatasetRef, WorkflowSpec, function_binding
+from ess.apps.testing import FakeFiles, read_file
+from ess.spec import FileModel, FileRef, WorkflowSpec, function_binding
 
 
-class Run(DatasetModel):
+class Run(FileModel):
     """A raw run."""
 
 
-class Mask(DatasetModel, kind='mask'):
+class Mask(FileModel, kind='mask'):
     """Counts to leave out of a sample run."""
 
 
@@ -152,13 +152,13 @@ SUBTRACT: Spec = WorkflowSpec(
 
 
 def find(params: FindParams) -> FindOutputs:
-    return FindOutputs(centre=BeamCentre(x=read_dataset(params.run.path)['x']))
+    return FindOutputs(centre=BeamCentre(x=read_file(params.run.path)['x']))
 
 
 def reduce(params: ReduceParams) -> ReduceOutputs:
-    counts = read_dataset(params.run.path)['counts']
+    counts = read_file(params.run.path)['counts']
     if params.mask is not None:
-        counts -= read_dataset(params.mask.path)['counts']
+        counts -= read_file(params.mask.path)['counts']
     return ReduceOutputs(total=Total(value=counts / params.sample.thickness))
 
 
@@ -172,24 +172,24 @@ def subtract(params: SubtractParams) -> ReduceOutputs:
 
 
 @pytest.fixture
-def datasets(tmp_path: Path) -> FakeDatasets:
-    return FakeDatasets('p1', tmp_path)
+def files(tmp_path: Path) -> FakeFiles:
+    return FakeFiles('p1', tmp_path)
 
 
 @pytest.fixture
-def run(datasets: FakeDatasets) -> DatasetRef:
-    return datasets.measure(101, {'counts': 6.0, 'x': 1.5}, role='sample')
+def run(files: FakeFiles) -> FileRef:
+    return files.measure(101, {'counts': 6.0, 'x': 1.5}, role='sample')
 
 
 @pytest.fixture
-def client(datasets: FakeDatasets) -> Iterator[Client]:
+def client(files: FakeFiles) -> Iterator[Client]:
     bind = [
         function_binding(FIND, find),
         function_binding(REDUCE, reduce),
         function_binding(OPTIONS, options),
         function_binding(SUBTRACT, subtract),
     ]
-    with local(proposal='p1', datasets=datasets, bind=bind) as client:
+    with local(proposal='p1', files=files, bind=bind) as client:
         yield client
 
 

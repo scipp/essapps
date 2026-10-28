@@ -41,7 +41,7 @@ def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
 
     assert client.output(result, 'iofq').values.tolist() == [2.0, 7.0]
     assert result.request.params['reduction']['bins'] == 2
-    assert result.request.datasets() == [run]
+    assert result.request.files() == [run]
 
 
 def test_s2_tune_one_parameter(client: Client, measure: Measure) -> None:
@@ -110,9 +110,9 @@ def test_s5_sum_runs(client: Client, measure: Measure) -> None:
     )
 
     assert client.output(total, 'normalized').values.tolist() == [0.5, 1.5]
-    assert total.request.datasets() == runs
+    assert total.request.files() == runs
     assert client.output(result, 'subtracted').values.tolist() == [1.0, 4.0]
-    assert result.request.datasets() == runs + backgrounds
+    assert result.request.files() == runs + backgrounds
 
 
 def test_s7_reduce_each_sample_with_the_can_measured_before_it(
@@ -130,7 +130,7 @@ def test_s7_reduce_each_sample_with_the_can_measured_before_it(
     requests = apply(
         template,
         [first, second],
-        client.datasets,
+        client.files,
         at='sample',
         member_field='run',
         lookup=cans,
@@ -141,7 +141,7 @@ def test_s7_reduce_each_sample_with_the_can_measured_before_it(
         [4.0, 5.0],
         [4.0, 7.0],
     ]
-    assert [r.request.datasets() for r in reduced] == [
+    assert [r.request.files() for r in reduced] == [
         [first, can_1],
         [second, can_3],
     ]
@@ -162,7 +162,7 @@ def test_s8_trace_a_result_to_raw_data(client: Client, measure: Measure) -> None
     )
 
     provenance = client.provenance(result)
-    assert set(provenance.datasets()) == {sample, vanadium_run}
+    assert set(provenance.files()) == {sample, vanadium_run}
     (upstream,) = provenance.records()
     assert upstream.request.params['scaling'] == {'scale': 2.0}
     assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]

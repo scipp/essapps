@@ -21,27 +21,27 @@ from ess.apps import (
     Template,
     TriggerLoop,
     apply,
-    dataset,
+    file,
 )
 from ess.apps.batch import try_apply
-from ess.apps.testing import FakeDatasets, FakeStore, read_dataset
-from ess.spec import DatasetModel, WorkflowSpec, function_binding
+from ess.apps.testing import FakeFiles, FakeStore, read_file
+from ess.spec import FileModel, WorkflowSpec, function_binding
 
 
-class SampleRun(DatasetModel):
+class SampleRun(FileModel):
     """A run of a sample."""
 
 
-class CanRun(DatasetModel):
+class CanRun(FileModel):
     """A run of the empty can, subtracted from a sample run."""
 
 
-class ReferenceRun(DatasetModel):
+class ReferenceRun(FileModel):
     """A run of a reference, which a sample run is divided by."""
 
 
-class MaskFile(DatasetModel, kind='mask'):
-    """A mask, which takes mask datasets only."""
+class MaskFile(FileModel, kind='mask'):
+    """A mask, which takes mask files only."""
 
 
 class LoadParams(BaseModel):
@@ -100,45 +100,45 @@ SCALE = _spec('scale', ScaleParams)
 
 
 def load(params: LoadParams) -> ValueOutputs:
-    return ValueOutputs(value=read_dataset(params.sample.path))
+    return ValueOutputs(value=read_file(params.sample.path))
 
 
 def load_mask(params: LoadMaskParams) -> ValueOutputs:
-    return ValueOutputs(value=read_dataset(params.mask.path))
+    return ValueOutputs(value=read_file(params.mask.path))
 
 
 def subtract(params: SubtractParams) -> ValueOutputs:
     return ValueOutputs(
-        value=read_dataset(params.sample.path) - read_dataset(params.can.path)
+        value=read_file(params.sample.path) - read_file(params.can.path)
     )
 
 
 def sum_runs(params: SumRunsParams) -> ValueOutputs:
-    return ValueOutputs(value=sum(read_dataset(run.path) for run in params.runs))
+    return ValueOutputs(value=sum(read_file(run.path) for run in params.runs))
 
 
 def normalize(params: NormalizeParams) -> ValueOutputs:
     return ValueOutputs(
-        value=read_dataset(params.sample.path) / read_dataset(params.reference.path)
+        value=read_file(params.sample.path) / read_file(params.reference.path)
     )
 
 
 def scale(params: ScaleParams) -> ValueOutputs:
-    return ValueOutputs(value=params.scale.factor * read_dataset(params.sample.path))
+    return ValueOutputs(value=params.scale.factor * read_file(params.sample.path))
 
 
 LAST_CAN = LastBefore(Selector(role='can'))
 
 
 @pytest.fixture
-def datasets(tmp_path: Path) -> FakeDatasets:
-    return FakeDatasets(proposal='p1', directory=tmp_path)
+def files(tmp_path: Path) -> FakeFiles:
+    return FakeFiles(proposal='p1', directory=tmp_path)
 
 
 @pytest.fixture
-def client(datasets: FakeDatasets) -> Iterator[Client]:
+def client(files: FakeFiles) -> Iterator[Client]:
     backend = Backend(
-        datasets,
+        files,
         [
             function_binding(LOAD, load),
             function_binding(LOAD_MASK, load_mask),
@@ -153,8 +153,8 @@ def client(datasets: FakeDatasets) -> Iterator[Client]:
     backend.close()
 
 
-def test_a_dataset_whose_lookup_finds_nothing_is_skipped_until_it_does(
-    client: Client, datasets: FakeDatasets
+def test_a_file_whose_lookup_finds_nothing_is_skipped_until_it_does(
+    client: Client, files: FakeFiles
 ) -> None:
     subtract = Rule(
         'subtract',
@@ -165,18 +165,18 @@ def test_a_dataset_whose_lookup_finds_nothing_is_skipped_until_it_does(
         lookup=Lookup({'can': LAST_CAN}),
     )
     loop = TriggerLoop(client, rules=[subtract])
-    datasets.measure(2, 5.0, role='sample')  # no can measured before it
-    datasets.measure(3, 1.0, role='can')
-    datasets.measure(4, 7.0, role='sample')
+    files.measure(2, 5.0, role='sample')  # no can measured before it
+    files.measure(3, 1.0, role='can')
+    files.measure(4, 7.0, role='sample')
 
     (first,) = loop.step()
     skipped = loop.status(subtract).reason
-    datasets.measure(1, 2.0, role='can')  # an earlier can arrives late
+    files.measure(1, 2.0, role='can')  # an earlier can arrives late
     (second,) = loop.step()
 
     assert (first.member, client.output(first, 'value')) == ('4', 6.0)
     assert skipped == (
-        "skipped uuid:run-2: no dataset matching "
+        "skipped uuid:run-2: no file matching "
         "Selector({'kind': 'raw', 'role': 'can'}) before run 2"
     )
     assert (second.member, client.output(second, 'value')) == ('2', 3.0)
@@ -184,41 +184,41 @@ def test_a_dataset_whose_lookup_finds_nothing_is_skipped_until_it_does(
 
 
 def test_apply_fills_the_blank_at_and_the_blank_the_lookup_fills(
-    client: Client, datasets: FakeDatasets
+    client: Client, files: FakeFiles
 ) -> None:
-    can = datasets.measure(1, 2.0, role='can')
-    sample = datasets.measure(2, 5.0, role='sample')
+    can = files.measure(1, 2.0, role='can')
+    sample = files.measure(2, 5.0, role='sample')
     template = Template(SUBTRACT, blanks=('sample', 'can'))
     cans = Lookup({'can': LAST_CAN})
 
-    subtracted = apply(template, [sample], client.datasets, at='sample', lookup=cans)
+    subtracted = apply(template, [sample], client.files, at='sample', lookup=cans)
 
     assert subtracted['2'].params == {'sample': sample, 'can': can}
     assert client.output(client.compute(subtracted['2']), 'value') == 3.0
 
 
-def test_apply_raises_for_a_dataset_whose_lookup_finds_nothing(
-    client: Client, datasets: FakeDatasets
+def test_apply_raises_for_a_file_whose_lookup_finds_nothing(
+    client: Client, files: FakeFiles
 ) -> None:
-    sample = datasets.measure(2, 5.0, role='sample')
+    sample = files.measure(2, 5.0, role='sample')
     template = Template(SUBTRACT, blanks=('sample', 'can'))
     cans = Lookup({'can': LAST_CAN})
 
     with pytest.raises(LookupError, match='before run 2'):
-        apply(template, [sample], client.datasets, at='sample', lookup=cans)
+        apply(template, [sample], client.files, at='sample', lookup=cans)
 
 
-def test_try_apply_leaves_out_a_dataset_whose_lookup_finds_nothing(
-    client: Client, datasets: FakeDatasets
+def test_try_apply_leaves_out_a_file_whose_lookup_finds_nothing(
+    client: Client, files: FakeFiles
 ) -> None:
-    early = datasets.measure(1, 5.0, role='sample')
-    can = datasets.measure(2, 1.0, role='can')
-    later = datasets.measure(3, 7.0, role='sample')
+    early = files.measure(1, 5.0, role='sample')
+    can = files.measure(2, 1.0, role='can')
+    later = files.measure(3, 7.0, role='sample')
     template = Template(SUBTRACT, blanks=('sample', 'can'))
     cans = Lookup({'can': LAST_CAN})
 
     requests, failed = try_apply(
-        template, [early, later], client.datasets, at='sample', lookup=cans
+        template, [early, later], client.files, at='sample', lookup=cans
     )
 
     assert {m: r.params for m, r in requests.items()} == {
@@ -229,12 +229,12 @@ def test_try_apply_leaves_out_a_dataset_whose_lookup_finds_nothing(
 
 
 def test_apply_at_a_list_parameter_makes_requests_the_backend_refuses(
-    client: Client, datasets: FakeDatasets
+    client: Client, files: FakeFiles
 ) -> None:
-    sample = datasets.measure(1, 2.0, role='sample')
+    sample = files.measure(1, 2.0, role='sample')
     template = Template(SUM_RUNS, blanks=('runs',))
 
-    summed = apply(template, [sample], client.datasets, at='runs')
+    summed = apply(template, [sample], client.files, at='runs')
 
     with pytest.raises(
         SubmitError,
@@ -244,11 +244,11 @@ def test_apply_at_a_list_parameter_makes_requests_the_backend_refuses(
 
 
 def test_a_rule_whose_requests_are_refused_does_not_stop_the_others(
-    client: Client, datasets: FakeDatasets
+    client: Client, files: FakeFiles
 ) -> None:
     unknown = Rule(
         'unknown',
-        Template(NORMALIZE, params={'reference': dataset(run=9)}, blanks=('sample',)),
+        Template(NORMALIZE, params={'reference': file(run=9)}, blanks=('sample',)),
         selector=Selector(role='sample'),
         label='normalized',
         at='sample',
@@ -261,17 +261,17 @@ def test_a_rule_whose_requests_are_refused_does_not_stop_the_others(
         at='sample',
     )
     loop = TriggerLoop(client, rules=[unknown, load])
-    datasets.measure(2, 5.0, role='sample')
+    files.measure(2, 5.0, role='sample')
 
     (loaded,) = loop.step()
 
     assert loaded.label == 'loaded'
-    assert loop.status(unknown).reason == '2: reference: unknown dataset run:9'
+    assert loop.status(unknown).reason == '2: reference: unknown file run:9'
     assert loop.status(load).reason is None
 
 
-def test_a_rule_fills_a_dataset_model_with_the_datasets_that_fit_it(
-    client: Client, datasets: FakeDatasets
+def test_a_rule_fills_a_file_model_with_the_files_that_fit_it(
+    client: Client, files: FakeFiles
 ) -> None:
     rule = Rule(
         'mask',
@@ -280,8 +280,8 @@ def test_a_rule_fills_a_dataset_model_with_the_datasets_that_fit_it(
         label='masks',
         at='mask',
     )
-    datasets.measure(1, 5.0, role='sample')
-    mask = datasets.measure(2, 3.0, kind='mask')
+    files.measure(1, 5.0, role='sample')
+    mask = files.measure(2, 3.0, kind='mask')
 
     (loaded,) = TriggerLoop(client, rules=[rule]).step()
 
@@ -295,17 +295,17 @@ def test_a_rule_fills_a_dataset_model_with_the_datasets_that_fit_it(
         (
             ('sample', 'reference'),
             'sample',
-            "a dataset fills one blank; ('sample', 'reference') leave",
+            "a file fills one blank; ('sample', 'reference') leave",
         ),
         (
             ('sample',),
             'reference',
-            "a dataset fills the blank 'sample', not 'reference'",
+            "a file fills the blank 'sample', not 'reference'",
         ),
     ],
 )
 @pytest.mark.parametrize('series', [None, 'sample'])
-def test_a_rule_that_no_dataset_fills_is_refused_when_made(
+def test_a_rule_that_no_file_fills_is_refused_when_made(
     blanks: tuple[str, ...], at: str, reason: str, series: str | None
 ) -> None:
     with pytest.raises(ValueError, match=re.escape(reason)):
@@ -329,7 +329,7 @@ def _rule(template: Template, at: str, **kw: Any) -> Rule:
     [
         (
             _rule(Template(LOAD_MASK, blanks=('mask',)), 'mask'),
-            "Selector({'kind': 'raw', 'role': 'sample'}) lists datasets that do not "
+            "Selector({'kind': 'raw', 'role': 'sample'}) lists files that do not "
             "fit MaskFile at mask; a selector names each of {'kind': 'mask'}",
         ),
         (
@@ -338,7 +338,7 @@ def _rule(template: Template, at: str, **kw: Any) -> Rule:
                 'sample',
                 lookup=Lookup({'can': LastBefore(Selector(kind='mask', role='can'))}),
             ),
-            "Selector({'kind': 'mask', 'role': 'can'}) lists datasets that do not "
+            "Selector({'kind': 'mask', 'role': 'can'}) lists files that do not "
             "fit CanRun at can; a selector names each of {'kind': 'raw'}",
         ),
         (
@@ -351,10 +351,10 @@ def _rule(template: Template, at: str, **kw: Any) -> Rule:
         ),
         (
             _rule(Template(SCALE, blanks=('scale',)), 'scale'),
-            'scale is not a parameter of a dataset model',
+            'scale is not a parameter of a file model',
         ),
     ],
-    ids=['selector', 'lookup-selector', 'list', 'series', 'not-a-dataset-model'],
+    ids=['selector', 'lookup-selector', 'list', 'series', 'not-a-file-model'],
 )
 def test_a_rule_that_could_not_submit_what_it_finds_is_refused_by_the_loop(
     client: Client, rule: Rule, reason: str
@@ -363,55 +363,53 @@ def test_a_rule_that_could_not_submit_what_it_finds_is_refused_by_the_loop(
         TriggerLoop(client, rules=[rule])
 
 
-def test_a_rule_may_select_by_more_than_the_metadata_of_its_dataset_model(
-    client: Client, datasets: FakeDatasets
+def test_a_rule_may_select_by_more_than_the_metadata_of_its_file_model(
+    client: Client, files: FakeFiles
 ) -> None:
     rule = _rule(
         Template(LOAD_MASK, blanks=('mask',)),
         'mask',
         selector=Selector(kind='mask', instrument='loki'),
     )
-    datasets.measure(1, 5.0, kind='mask', instrument='dream')
-    loki = datasets.measure(2, 3.0, kind='mask', instrument='loki')
+    files.measure(1, 5.0, kind='mask', instrument='dream')
+    loki = files.measure(2, 3.0, kind='mask', instrument='loki')
 
     (loaded,) = TriggerLoop(client, rules=[rule]).step()
 
     assert loaded.request.params == {'mask': loki}
 
 
-def test_a_dataset_fills_the_blank_at(client: Client, datasets: FakeDatasets) -> None:
-    sample = datasets.measure(1, 6.0, role='sample')
-    reference = datasets.measure(2, 2.0, role='reference')
+def test_a_file_fills_the_blank_at(client: Client, files: FakeFiles) -> None:
+    sample = files.measure(1, 6.0, role='sample')
+    reference = files.measure(2, 2.0, role='reference')
     template = Template(NORMALIZE, params={'reference': reference}, blanks=('sample',))
 
-    normalized = apply(template, [sample], client.datasets, at='sample')
+    normalized = apply(template, [sample], client.files, at='sample')
 
     assert normalized['1'].params == {'sample': sample, 'reference': reference}
     assert client.output(client.compute(normalized['1']), 'value') == 3.0
     with pytest.raises(
-        ValueError, match="a dataset fills the blank 'sample', not 'reference'"
+        ValueError, match="a file fills the blank 'sample', not 'reference'"
     ):
-        apply(template, [sample], client.datasets, at='reference')
+        apply(template, [sample], client.files, at='reference')
 
 
 def test_apply_refuses_an_at_that_the_lookup_fills(
-    client: Client, datasets: FakeDatasets
+    client: Client, files: FakeFiles
 ) -> None:
-    sample = datasets.measure(2, 5.0, role='sample')
+    sample = files.measure(2, 5.0, role='sample')
     template = Template(SUBTRACT, blanks=('sample', 'can'))
     cans = Lookup({'can': LAST_CAN})
 
-    with pytest.raises(
-        ValueError, match="a dataset fills the blank 'sample', not 'can'"
-    ):
-        apply(template, [sample], client.datasets, at='can', lookup=cans)
+    with pytest.raises(ValueError, match="a file fills the blank 'sample', not 'can'"):
+        apply(template, [sample], client.files, at='can', lookup=cans)
 
 
-def test_a_rule_has_handled_a_dataset_only_at_the_place_it_fills(
-    client: Client, datasets: FakeDatasets
+def test_a_rule_has_handled_a_file_only_at_the_place_it_fills(
+    client: Client, files: FakeFiles
 ) -> None:
-    first = datasets.measure(1, 6.0, role='sample')
-    second = datasets.measure(2, 2.0, role='sample')
+    first = files.measure(1, 6.0, role='sample')
+    second = files.measure(2, 2.0, role='sample')
     template = Template(NORMALIZE, params={'reference': second}, blanks=('sample',))
     rule = Rule(
         'normalize',
@@ -441,13 +439,13 @@ def summed() -> Rule:
     )
 
 
-def test_a_series_fills_a_row_of_the_blank_with_each_dataset(
-    client: Client, datasets: FakeDatasets, summed: Rule
+def test_a_series_fills_a_row_of_the_blank_with_each_file(
+    client: Client, files: FakeFiles, summed: Rule
 ) -> None:
     loop = TriggerLoop(client, rules=[summed])
-    first = datasets.measure(1, 2.0, role='sample', sample='si')
+    first = files.measure(1, 2.0, role='sample', sample='si')
     (one,) = loop.step()
-    second = datasets.measure(2, 3.0, role='sample', sample='si')
+    second = files.measure(2, 3.0, role='sample', sample='si')
     (two,) = loop.step()
 
     assert one.request.params['runs'] == [first]
@@ -456,11 +454,11 @@ def test_a_series_fills_a_row_of_the_blank_with_each_dataset(
     assert loop.step() == []  # both handled, each in a row
 
 
-def test_a_series_has_handled_a_dataset_that_a_record_holds_in_a_row(
-    client: Client, datasets: FakeDatasets, summed: Rule
+def test_a_series_has_handled_a_file_that_a_record_holds_in_a_row(
+    client: Client, files: FakeFiles, summed: Rule
 ) -> None:
-    first = datasets.measure(1, 2.0, role='sample', sample='si')
-    second = datasets.measure(2, 3.0, role='sample', sample='si')
+    first = files.measure(1, 2.0, role='sample', sample='si')
+    second = files.measure(2, 3.0, role='sample', sample='si')
     client.submit(
         summed.template.fill(params={'runs': [first, second]}), label='summed'
     )

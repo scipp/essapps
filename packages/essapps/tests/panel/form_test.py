@@ -9,17 +9,17 @@ from pydantic import AwareDatetime, BaseModel, NaiveDatetime
 
 from ess.apps import Client, SubmitError
 from ess.apps.panel import Form, Listing
-from ess.apps.testing import FakeDatasets
-from ess.spec import DatasetModel, DatasetRef, WorkflowSpec
+from ess.apps.testing import FakeFiles
+from ess.spec import FileModel, FileRef, WorkflowSpec
 
 type Spec = WorkflowSpec[Any, Any]
 
 
-class Raw(DatasetModel):
-    """Any raw dataset."""
+class Raw(FileModel):
+    """Any raw file."""
 
 
-class LokiMask(DatasetModel, kind='mask', instrument='loki'):
+class LokiMask(FileModel, kind='mask', instrument='loki'):
     """A mask of the LoKI instrument."""
 
 
@@ -121,7 +121,7 @@ def way(form: Form, title: str) -> Any:
 
 
 def picker(form: Form, title: str) -> Any:
-    """The dataset picker of the box titled ``title``."""
+    """The file picker of the box titled ``title``."""
     (found,) = card(form, title).select(pn.widgets.Select)
     return found
 
@@ -144,7 +144,7 @@ def missing(form: Form) -> set[tuple[tuple[str | int, ...], str]]:
     return {(e.loc, e.msg) for e in refused.value.errors}
 
 
-def test_params_are_the_defaults_and_what_is_given(form: Form, run: DatasetRef) -> None:
+def test_params_are_the_defaults_and_what_is_given(form: Form, run: FileRef) -> None:
     form.set({'run': run, 'sample': {'thickness': 2.0}})
     assert form.params == {
         'reduction': {'bins': 2, 'norm': 'monitor'},
@@ -158,7 +158,7 @@ def test_params_are_the_defaults_and_what_is_given(form: Form, run: DatasetRef) 
 
 def test_an_input_without_a_default_starts_with_nothing_given(form: Form) -> None:
     assert missing(form) == {
-        (('run',), 'choose a dataset'),
+        (('run',), 'choose a file'),
         (('sample', 'thickness'), 'give a value'),
     }
 
@@ -213,7 +213,7 @@ def test_a_list_of_scalars_is_a_list_of_inputs(options: Form) -> None:
 
 
 def test_a_cleared_input_of_a_value_with_a_default_is_not_given_the_default(
-    form: Form, options: Form, run: DatasetRef
+    form: Form, options: Form, run: FileRef
 ) -> None:
     form.set({'run': run, 'sample': {'thickness': 2.0}})
     widget(form, 'Bins').value = None
@@ -234,10 +234,10 @@ def test_a_choice_without_a_default_starts_unset_and_the_backend_refuses_it(
     assert [e.loc for e in refused.value.errors] == [('direct_beam',)]
 
 
-def test_a_dataset_model_typed_x_or_none_offers_a_dataset_and_none(
+def test_a_file_model_typed_x_or_none_offers_a_file_and_none(
     options: Form,
 ) -> None:
-    assert options.ways('direct_beam') == ['A dataset', 'None']
+    assert options.ways('direct_beam') == ['A file', 'None']
     options.set({'settings': {'flag': False, 'count': 1}, 'direct_beam': None})
     assert options.params['direct_beam'] is None
 
@@ -258,7 +258,7 @@ def test_a_group_typed_x_or_none_is_given_each_way(
     subtract: Form,
     subtract_spec: Spec,
     find_spec: Spec,
-    run: DatasetRef,
+    run: FileRef,
 ) -> None:
     found = client.compute(find_spec, params={'run': run})
     subtract.refresh()
@@ -274,7 +274,7 @@ def test_a_group_typed_x_or_none_is_given_each_way(
 
 
 def test_a_union_offers_its_alternatives_and_no_record(
-    client: Client, form: Form, find_spec: Spec, run: DatasetRef
+    client: Client, form: Form, find_spec: Spec, run: FileRef
 ) -> None:
     client.compute(find_spec, params={'run': run})
     form.refresh()
@@ -287,7 +287,7 @@ def test_set_refuses_a_tag_of_no_alternative(form: Form) -> None:
 
 
 def test_a_group_offers_a_record_while_a_fitting_output_is_readable(
-    client: Client, form: Form, find_spec: Spec, reduce_spec: Spec, run: DatasetRef
+    client: Client, form: Form, find_spec: Spec, reduce_spec: Spec, run: FileRef
 ) -> None:
     assert form.ways('beam_centre') == ['Given']
 
@@ -305,7 +305,7 @@ def test_a_group_offers_a_record_while_a_fitting_output_is_readable(
 
 
 def test_the_way_of_a_record_with_no_record_picked_is_not_given_the_default(
-    client: Client, form: Form, find_spec: Spec, run: DatasetRef
+    client: Client, form: Form, find_spec: Spec, run: FileRef
 ) -> None:
     client.compute(find_spec, params={'run': run})
     form.set({'run': run, 'sample': {'thickness': 2.0}})
@@ -314,7 +314,7 @@ def test_the_way_of_a_record_with_no_record_picked_is_not_given_the_default(
 
 
 def test_a_picked_record_that_is_released_is_not_given_the_default(
-    client: Client, form: Form, find_spec: Spec, run: DatasetRef
+    client: Client, form: Form, find_spec: Spec, run: FileRef
 ) -> None:
     found = client.compute(find_spec, params={'run': run})
     form.set(
@@ -332,7 +332,7 @@ def test_a_picked_record_that_is_released_is_not_given_the_default(
 
 
 def test_set_with_a_reference_the_client_may_not_read_picks_no_record(
-    client: Client, form: Form, find_spec: Spec, run: DatasetRef
+    client: Client, form: Form, find_spec: Spec, run: FileRef
 ) -> None:
     found = client.compute(find_spec, params={'run': run})
     client.release(found)
@@ -348,14 +348,14 @@ def test_set_with_a_reference_the_client_may_not_read_picks_no_record(
 
 def test_set_shows_params_as_a_record_holds_them(
     client: Client,
-    datasets: FakeDatasets,
+    files: FakeFiles,
     form: Form,
     find_spec: Spec,
     reduce_spec: Spec,
-    run: DatasetRef,
+    run: FileRef,
 ) -> None:
     found = client.compute(find_spec, params={'run': run})
-    mask = datasets.measure(201, {'counts': 2.0}, kind='mask')
+    mask = files.measure(201, {'counts': 2.0}, kind='mask')
     record = client.compute(
         reduce_spec,
         params={
@@ -373,71 +373,71 @@ def test_set_shows_params_as_a_record_holds_them(
     assert form.ways('beam_centre') == ['Given', 'From a record']
 
 
-def test_the_dataset_picker_lists_a_dataset_measured_after_the_form_was_made(
-    datasets: FakeDatasets, form: Form, run: DatasetRef
+def test_the_file_picker_lists_a_file_measured_after_the_form_was_made(
+    files: FakeFiles, form: Form, run: FileRef
 ) -> None:
     form.refresh()
     assert list(picker(form, 'Run').options) == [
-        '(choose a dataset)',
+        '(choose a file)',
         'run 101 (sample)',
     ]
 
-    datasets.measure(102, {'counts': 1.0, 'x': 0.0}, role='sample')
+    files.measure(102, {'counts': 1.0, 'x': 0.0}, role='sample')
     form.refresh()
     assert list(picker(form, 'Run').options) == [
-        '(choose a dataset)',
+        '(choose a file)',
         'run 101 (sample)',
         'run 102 (sample)',
     ]
 
 
-def test_a_dataset_picker_lists_the_datasets_that_fit_its_model(
-    datasets: FakeDatasets, form: Form, run: DatasetRef
+def test_a_file_picker_lists_the_files_that_fit_its_model(
+    files: FakeFiles, form: Form, run: FileRef
 ) -> None:
-    datasets.measure(201, {'counts': 1.0}, kind='mask')
+    files.measure(201, {'counts': 1.0}, kind='mask')
     form.refresh()
-    assert form.ways('mask') == ['A dataset', 'None']
+    assert form.ways('mask') == ['A file', 'None']
     assert list(picker(form, 'Run').options) == [
-        '(choose a dataset)',
+        '(choose a file)',
         'run 101 (sample)',
     ]
-    assert list(picker(form, 'Mask').options) == ['(choose a dataset)', 'run 201']
+    assert list(picker(form, 'Mask').options) == ['(choose a file)', 'run 201']
 
 
-def test_a_dataset_picker_lists_the_datasets_that_fit_each_key_of_its_metadata(
-    client: Client, datasets: FakeDatasets
+def test_a_file_picker_lists_the_files_that_fit_each_key_of_its_metadata(
+    client: Client, files: FakeFiles
 ) -> None:
-    datasets.measure(201, {'counts': 1.0}, kind='mask', instrument='dream')
-    datasets.measure(202, {'counts': 1.0}, kind='mask', instrument='loki')
+    files.measure(201, {'counts': 1.0}, kind='mask', instrument='dream')
+    files.measure(202, {'counts': 1.0}, kind='mask', instrument='loki')
     form = Form(LOKI_MASK, client)
-    assert list(picker(form, 'Mask').options) == ['(choose a dataset)', 'run 202']
+    assert list(picker(form, 'Mask').options) == ['(choose a file)', 'run 202']
 
 
-def test_a_dataset_that_does_not_fit_stays_picked_when_set(
-    datasets: FakeDatasets, form: Form, run: DatasetRef
+def test_a_file_that_does_not_fit_stays_picked_when_set(
+    files: FakeFiles, form: Form, run: FileRef
 ) -> None:
-    mask = datasets.measure(201, {'counts': 1.0}, kind='mask')
+    mask = files.measure(201, {'counts': 1.0}, kind='mask')
     form.set({'run': mask, 'sample': {'thickness': 2.0}})
     assert picker(form, 'Run').options == {
-        '(choose a dataset)': None,
+        '(choose a file)': None,
         'run 101 (sample)': run,
         str(mask): mask,
     }
     assert form.params['run'] == mask
 
 
-def test_a_picked_dataset_that_no_longer_fits_stays_picked(
-    datasets: FakeDatasets, form: Form, run: DatasetRef
+def test_a_picked_file_that_no_longer_fits_stays_picked(
+    files: FakeFiles, form: Form, run: FileRef
 ) -> None:
     form.set({'run': run, 'sample': {'thickness': 2.0}})
-    datasets.correct(run, kind='mask')
+    files.correct(run, kind='mask')
     form.refresh()
-    assert list(picker(form, 'Run').options) == ['(choose a dataset)', str(run)]
+    assert list(picker(form, 'Run').options) == ['(choose a file)', str(run)]
     assert form.params['run'] == run
 
 
 def test_a_listing_labels_each_record_and_the_outputs_that_fit(
-    client: Client, find_spec: Spec, run: DatasetRef
+    client: Client, find_spec: Spec, run: FileRef
 ) -> None:
     found = client.compute(find_spec, params={'run': run})
     listing = Listing(client)
@@ -445,14 +445,14 @@ def test_a_listing_labels_each_record_and_the_outputs_that_fit(
     assert listing.labels == {found.id: label}
     centre = find_spec.outputs.model_fields['centre'].annotation
     assert listing.fitting(centre) == {f'{label}: centre': found.ref('centre')}
-    assert listing.datasets(Raw) == {'run 101 (sample)': run}
+    assert listing.files(Raw) == {'run 101 (sample)': run}
 
 
-def test_a_dataset_without_a_run_is_labelled_by_its_identity(
-    client: Client, datasets: FakeDatasets, run: DatasetRef
+def test_a_file_without_a_run_is_labelled_by_its_identity(
+    client: Client, files: FakeFiles, run: FileRef
 ) -> None:
-    datasets.correct(run, run=None)
-    assert Listing(client).datasets(Raw) == {f'{run} (sample)': run}
+    files.correct(run, run=None)
+    assert Listing(client).files(Raw) == {f'{run} (sample)': run}
 
 
 @pytest.fixture
@@ -537,27 +537,27 @@ def test_an_empty_text_in_a_list_of_texts_is_a_text(times_and_lists: Form) -> No
 
 
 @pytest.fixture
-def measured(client: Client, datasets: FakeDatasets, run: DatasetRef) -> Form:
-    datasets.measure(202, {'counts': 1.0}, kind='mask', instrument='loki')
+def measured(client: Client, files: FakeFiles, run: FileRef) -> Form:
+    files.measure(202, {'counts': 1.0}, kind='mask', instrument='loki')
     return Form(MEASURED, client)
 
 
-def test_a_dataset_at_a_field_of_a_group_is_a_picker_in_its_card(
-    measured: Form, run: DatasetRef
+def test_a_file_at_a_field_of_a_group_is_a_picker_in_its_card(
+    measured: Form, run: FileRef
 ) -> None:
     assert measured.ways('measured') == ['Given']
     assert list(widget(measured, 'Run').options) == [
-        '(choose a dataset)',
+        '(choose a file)',
         'run 101 (sample)',
     ]
     assert list(widget(measured, 'Mask').options) == ['(none)', 'run 202']
-    assert missing(measured) == {(('measured', 'run'), 'choose a dataset')}
+    assert missing(measured) == {(('measured', 'run'), 'choose a file')}
     widget(measured, 'Run').value = run
     assert measured.params == {'measured': {'run': run, 'thickness': 1.0, 'mask': None}}
 
 
-def test_a_group_holding_a_dataset_is_set_as_a_record_holds_it(
-    measured: Form, run: DatasetRef
+def test_a_group_holding_a_file_is_set_as_a_record_holds_it(
+    measured: Form, run: FileRef
 ) -> None:
     held = {'run': run.model_dump(by_alias=True), 'thickness': 2.0, 'mask': None}
     measured.set({'measured': held})

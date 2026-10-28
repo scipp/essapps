@@ -7,7 +7,7 @@ A :class:`WorkflowSpec` names a workflow and holds two pydantic models: the
 *params*, everything a request gives the workflow, and the *outputs*, the
 results it returns. A spec of an I(Q) reduction::
 
-    class RunFile(DatasetModel, kind='raw'):  # a file: from a dataset
+    class RunFile(FileModel, kind='raw'):  # a file: given by reference
         ...
 
     class WavelengthRange(BaseModel):
@@ -51,7 +51,7 @@ results it returns. A spec of an I(Q) reduction::
 Each field of ``IofQParams`` is a *parameter*. A *group* is a model, such
 as ``Reduction``, whose fields a request writes as an object. A *data
 value* is a value without a JSON form, such as a scipp array. A request for
-``IOFQ``, with ``dataset(...)`` a reference to a dataset and
+``IOFQ``, with ``file(...)`` a reference to a file and
 ``m.ref('pixel_mask')`` a reference to the output ``pixel_mask`` of an
 earlier record ``m``::
 
@@ -59,8 +59,8 @@ earlier record ``m``::
         'reduction': {'bins': 100},
         'mask': m.ref('pixel_mask'),
         'centre': {'kind': 'find'},
-        'transmission': dataset(run=99),
-        'sample_runs': [dataset(run=101), dataset(run=102)],
+        'transmission': file(run=99),
+        'sample_runs': [file(run=101), file(run=102)],
     }
 
 :mod:`ess.spec.places` describes what a request writes at each root place by
@@ -72,13 +72,13 @@ from the field types (see :mod:`ess.spec.field_types`). Making a spec checks
 them. Each comment below names a rule that a spec breaks, with the fix::
 
     class Geometry(BaseModel):
-        # A file is a parameter of a dataset model, given by reference to a
-        # dataset: geometry: GeometryFile, with class
-        # GeometryFile(DatasetModel, ...).
+        # A parameter or a field that takes a file is typed a file model:
+        # geometry: GeometryFile, with class GeometryFile(FileModel, ...).
         file: Path
 
-    class CalibrationFile(DatasetModel, kind='calibration'):
-        # A dataset model holds only dataset: the dataset's metadata say the rest.
+    class CalibrationFile(FileModel, kind='calibration'):
+        # A file model holds only the file's identity: the file's metadata
+        # say the rest.
         run: int
 
     class Reduction(BaseModel):
@@ -87,7 +87,7 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         # A field is never X | None: a value that may be absent is a
         # parameter typed X | None, or a bool field, such as limit_range: bool.
         start: float | None = None
-        # A field of a group is a scalar, a dataset model, or a list of one: a
+        # A field of a group is a scalar, a file model, or a list of one: a
         # value of several parts is a group, a parameter of its own.
         limits: tuple[float, float] = (0.0, 1.0)
         # A group is not a field of a group: it is a parameter of its own.
@@ -138,8 +138,8 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         iofq: sc.DataArray
         # An output is X, X | None, list[X], or dict[str, X], not a union.
         width: float | str
-        # No output holds a dataset model or a Path: a file comes from a
-        # dataset.
+        # No output holds a file model or a Path: every file comes from the
+        # file source.
         raw: RunFile
 
     WorkflowSpec(..., params=Params, outputs=Outputs, tables=('sample_runs',))
@@ -202,9 +202,9 @@ from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 
 from . import field_types, places
-from .parameters import DatasetModel
+from .parameters import FileModel
 from .places import Rows, Ways
-from .refs import AccumulatorRef, DatasetRef, Loc, OutputRef, ParamsError, Ref
+from .refs import AccumulatorRef, FileRef, Loc, OutputRef, ParamsError, Ref
 
 
 class NoParams(BaseModel):
@@ -321,9 +321,9 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
 
         The params schema has the value at each *place*, a parameter, an
         element of a list parameter, or a field of a group, in the forms it
-        takes: a dataset model as a reference to a dataset, with the model's
+        takes: a file model as a reference to a file, with the model's
         metadata; a group as ``anyOf`` the object of its fields, each a
-        scalar, a dataset model, or a list of one, and a reference to an
+        scalar, a file model, or a list of one, and a reference to an
         output, or one of them only; a union of groups as ``oneOf`` the
         object of the fields of each alternative, never a reference; a scalar
         as its JSON schema.
@@ -357,7 +357,7 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     ==================================  =================================
     Forms at the place                  Widget
     ==================================  =================================
-    a reference to a dataset only       a dataset picker (a dataset model)
+    a reference to a file only          a file picker (a file model)
     the object of a group's fields      the group's fields
     a reference to an output only       a record picker (a group that
                                         holds a data value)
@@ -373,14 +373,14 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     of its alternatives, each the object of its fields with its tag, and has
     no reference form, since no reference fits a union. A list is an array
     of these, and an optional value has ``null`` in ``anyOf``. The metadata
-    of a dataset model, under ``metadata``, say which datasets fit. The forms
+    of a file model, under ``metadata``, say which files fit. The forms
     at three places, the parameter ``reduction``, a parameter ``mask`` of a
-    dataset model ``MaskFile``, and the field ``Reduction.bins``::
+    file model ``MaskFile``, and the field ``Reduction.bins``::
 
         "reduction": {"anyOf": [{"$ref": "#/$defs/Reduction", ...},
                                 {"anyOf": [OutputRef, AccumulatorRef],
                                  "dataType": "Reduction"}]}
-        "mask":      {"$ref": "#/$defs/DatasetRef", "dataType": "MaskFile",
+        "mask":      {"$ref": "#/$defs/FileRef", "dataType": "MaskFile",
                       "metadata": {"kind": "mask"}}
         "bins":      {"type": "integer", "default": 10}
     """
@@ -553,16 +553,16 @@ def _alias_problems(annotation: Any) -> list[str]:
 
 def _path_problems(annotation: Any) -> list[str]:
     """
-    Refuse each ``Path`` that ``annotation`` is made of outside a dataset
-    model, named by the field of the class that holds it, if any: a file is
-    a parameter of a dataset model, given by reference to a dataset, so that
-    the dataset source checks each file a workflow reads.
+    Refuse each ``Path`` that ``annotation`` is made of outside a file
+    model, named by the field of the class that holds it, if any: a
+    parameter or a field that takes a file is typed a file model and given by
+    reference, so that the file source checks each file a workflow reads.
     """
-    found = _found(annotation, _is_path, skip=field_types.is_dataset)
+    found = _found(annotation, _is_path, skip=field_types.is_file_model)
     return [
-        f'{where}a Path is outside a dataset model; a file is a parameter of a '
-        "dataset model, such as mask: MaskFile with class MaskFile(DatasetModel, "
-        "kind='mask'), given by reference to a dataset"
+        f'{where}a Path is outside a file model; a parameter or a field that '
+        "takes a file is typed a file model, such as mask: MaskFile with class "
+        "MaskFile(FileModel, kind='mask'), and given by reference"
         for where in dict.fromkeys(where for where, _ in found)
     ]
 
@@ -585,22 +585,22 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
     would make the group's JSON form differ from the object of its fields, a
     field with an alias, a field that is not interpreted (see
     :func:`_field_problem`), a default that is not a value, since a field
-    left out holds its default, and of a dataset model a default but
-    ``None``, or ``[]`` for a list, since a request gives each dataset by
+    left out holds its default, and of a file model a default but
+    ``None``, or ``[]`` for a list, since a request gives each file by
     reference. Field and model validators of any mode
     are allowed: they run whenever the group is validated whole (see
     :mod:`ess.spec.places`). A group with a data value is given by reference
-    only, to an output, so it holds no dataset model, as no output does (see
-    :func:`_output_dataset_problems`); its fields are not looked at
-    otherwise. A dataset model is checked by :func:`_dataset_model_problems`
+    only, to an output, so it holds no file model, as no output does (see
+    :func:`_output_file_problems`); its fields are not looked at
+    otherwise. A file model is checked by :func:`_file_model_problems`
     alone.
     """
-    if field_types.is_dataset(group):
-        return _dataset_model_problems(group)
+    if field_types.is_file_model(group):
+        return _file_model_problems(group)
     if places.unwritten(group) is not None:
         return [
             f'{group.__name__} is given by reference to an output only: {problem}'
-            for problem in _output_dataset_problems(group)
+            for problem in _output_file_problems(group)
         ]
     problems = []
     if found := _decorators(group, _SERIALIZERS):
@@ -621,35 +621,35 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
         ):
             problems.append(f'{where}: {problem}')
         elif (
-            field_types.dataset_model(field.annotation) is not None
+            field_types.file_model(field.annotation) is not None
             and not field.is_required()
             and field.get_default(call_default_factory=True) not in (None, [])
         ):
             problems.append(
-                f'{where}: a dataset model at a field has no default but None or '
-                '[]: a request gives each dataset by reference'
+                f'{where}: a file model at a field has no default but None or '
+                '[]: a request gives each file by reference'
             )
     return problems
 
 
-def _dataset_model_problems(model: type[BaseModel]) -> list[str]:
+def _file_model_problems(model: type[BaseModel]) -> list[str]:
     """
-    Refuse a dataset model with a field other than ``dataset``, that
-    declares ``dataset`` anew, such as with another type, a default, or an
+    Refuse a file model with a field other than ``file``, that
+    declares ``file`` anew, such as with another type, a default, or an
     alias, with a validator, a serializer, ``model_post_init``, ``__eq__``,
     or ``__hash__`` of its own, or with another config but its title: the
-    value of a dataset model is the identity of a dataset, and the backend
-    attaches its local path (see :class:`~ess.spec.parameters.DatasetModel`).
+    value of a file model is the identity of a file, and the backend
+    attaches its local path (see :class:`~ess.spec.parameters.FileModel`).
     """
-    if other := [n for n in model.model_fields if n != 'dataset']:
-        return [f'{model.__name__}: a dataset model holds only dataset, not {other}']
-    # The repr of a FieldInfo shows each attribute that a declaration sets.
-    if repr(model.model_fields['dataset']) != repr(
-        DatasetModel.model_fields['dataset']
-    ):
+    if other := [n for n in model.model_fields if n != 'file']:
         return [
-            f'{model.__name__}.dataset: a dataset model keeps the dataset of '
-            'DatasetModel, without a default or an alias'
+            f'{model.__name__}: a file model holds only the field file, not {other}'
+        ]
+    # The repr of a FieldInfo shows each attribute that a declaration sets.
+    if repr(model.model_fields['file']) != repr(FileModel.model_fields['file']):
+        return [
+            f'{model.__name__}.file: a file model keeps the field file of '
+            'FileModel, without a default or an alias'
         ]
     own = {
         kind: found
@@ -658,19 +658,19 @@ def _dataset_model_problems(model: type[BaseModel]) -> list[str]:
     }
     if methods := _own_methods(model):
         return [
-            f'{model.__name__}: a dataset model keeps the model_post_init, __eq__, '
-            f'and __hash__ of DatasetModel, not its own {methods}'
+            f'{model.__name__}: a file model keeps the model_post_init, __eq__, '
+            f'and __hash__ of FileModel, not its own {methods}'
         ]
     if own:
         return [
-            f'{model.__name__}: a dataset model has no validators or serializers '
+            f'{model.__name__}: a file model has no validators or serializers '
             f'of its own, {own}; what it would check of a file is metadata of '
-            "the model, such as class MaskFile(DatasetModel, kind='mask'), or "
+            "the model, such as class MaskFile(FileModel, kind='mask'), or "
             "the workflow's to read"
         ]
-    if _config(model) != _config(DatasetModel):
+    if _config(model) != _config(FileModel):
         return [
-            f'{model.__name__}: a dataset model keeps the config of DatasetModel, '
+            f'{model.__name__}: a file model keeps the config of FileModel, '
             'but its title'
         ]
     return []
@@ -678,10 +678,10 @@ def _dataset_model_problems(model: type[BaseModel]) -> list[str]:
 
 def _own_decorators(model: type[BaseModel], kind: str) -> list[str]:
     """
-    The decorators of ``kind`` of ``model`` that are not DatasetModel's, by
+    The decorators of ``kind`` of ``model`` that are not FileModel's, by
     function, so that one declared anew under the same name is found.
     """
-    inherited = getattr(DatasetModel.__pydantic_decorators__, kind)
+    inherited = getattr(FileModel.__pydantic_decorators__, kind)
     return sorted(
         name
         for name, d in getattr(model.__pydantic_decorators__, kind).items()
@@ -700,7 +700,7 @@ def _own_methods(model: type[BaseModel]) -> list[str]:
     found = [
         m
         for m in ('__eq__', '__hash__')
-        if getattr(model, m) is not getattr(DatasetModel, m)
+        if getattr(model, m) is not getattr(FileModel, m)
     ]
     # pydantic puts a model_post_init of its own in each class with private
     # attributes, which sets them.
@@ -721,9 +721,9 @@ def _field_problem(annotation: Any) -> str | None:
     then: a scalar, ``int``, ``float``, ``str``, ``bool``, ``datetime`` (or
     pydantic's ``AwareDatetime`` or ``NaiveDatetime``), an enum, or a
     ``Literal``, possibly with constraints, ``Annotated[float, Gt(0)]``, a
-    dataset model, which a request gives by reference to a dataset, or a list
+    file model, which a request gives by reference to a file, or a list
     of one of these. A scalar is never typed ``X | None``, nor a ``Literal``
-    with ``None``, which is ``X | None`` too; a dataset model may be, for a
+    with ``None``, which is ``X | None`` too; a file model may be, for a
     file that may be left out: a form shows each as an input of its type, or
     a picker. Any other type, a group, a union, a tuple, a dict, or a
     dataclass, is refused.
@@ -734,7 +734,7 @@ def _field_problem(annotation: Any) -> str | None:
             'a list field is never typed list[X] | None or list[X | None]; a list '
             'without elements is [], and each element is a value'
         )
-    if field_types.is_dataset(tp):
+    if field_types.is_file_model(tp):
         return None
     if is_optional or (get_origin(tp) is Literal and None in get_args(tp)):
         return (
@@ -751,13 +751,13 @@ def _field_problem(annotation: Any) -> str | None:
         kind = 'a union of groups' if union else 'a group'
         return (
             f'{field_types.type_name(tp)} is {kind}; a field of a group is a '
-            'scalar, a dataset model, or a list of one: make it a parameter of '
+            'scalar, a file model, or a list of one: make it a parameter of '
             'its own'
         )
     return (
         f'{field_types.type_name(tp)} is not a scalar; a field of a group is a '
         'scalar (int, float, str, bool, datetime, an enum, or a Literal), a '
-        'dataset model, or a list of one: a value of several parts is a group, '
+        'file model, or a list of one: a value of several parts is a group, '
         'a parameter of its own, such as range: WavelengthRange, not limits: '
         'tuple[float, float]'
     )
@@ -824,23 +824,22 @@ def _outputs_problems(model: type[BaseModel]) -> list[str]:
         else:
             problems.extend(f'{where}: {problem}' for problem in _path_problems(tp))
             problems.extend(
-                f'{where}: {problem}' for problem in _output_dataset_problems(tp)
+                f'{where}: {problem}' for problem in _output_file_problems(tp)
             )
     return problems
 
 
-def _output_dataset_problems(annotation: Any) -> list[str]:
+def _output_file_problems(annotation: Any) -> list[str]:
     """
-    Refuse each dataset model that ``annotation``, of an output, is made of,
+    Refuse each file model that ``annotation``, of an output, is made of,
     named by the field of the class that holds it, if any: no output holds
-    one, so that a file comes from a dataset, which the dataset source
-    checks.
+    one, so that every file comes from the file source, which checks it.
     """
     return [
-        f'{where}{field_types.type_name(model)} is a dataset model; no output '
-        'holds one, so that a file comes from a dataset, which the dataset source '
-        'checks'
-        for where, model in _found(annotation, field_types.is_dataset)
+        f'{where}{field_types.type_name(model)} is a file model; no output '
+        'holds one, so that every file comes from the file source, which '
+        'checks it'
+        for where, model in _found(annotation, field_types.is_file_model)
     ]
 
 
@@ -902,12 +901,12 @@ def _not_a_ref(schema: dict[str, Any]) -> None:
 def _ref_form(tp: Any) -> Any:
     """
     The reference a value of type ``tp`` takes, with the name of ``tp``; of a
-    dataset model, a reference to a dataset, with the model's metadata, so
-    that a dataset picker lists the datasets that fit.
+    file model, a reference to a file, with the model's metadata, so
+    that a file picker lists the files that fit.
     """
-    if field_types.is_dataset(tp):
+    if field_types.is_file_model(tp):
         extra = {'dataType': field_types.type_name(tp), 'metadata': tp.metadata}
-        return Annotated[DatasetRef, Field(json_schema_extra=extra)]
+        return Annotated[FileRef, Field(json_schema_extra=extra)]
     data_type = Field(json_schema_extra={'dataType': field_types.type_name(tp)})
     return Annotated[OutputRef | AccumulatorRef, data_type]
 
@@ -931,7 +930,7 @@ def _forms(described: Ways) -> Any:
     The forms a place takes, as :func:`~ess.spec.places.place` describes it:
     the forms of the fields of each group written inline (see
     :func:`_group_forms`), with the constraints of the place, and a reference
-    if one fits, of a dataset model to a dataset.
+    if one fits, of a file model to a file.
     """
     forms = []
     if described.inline:
@@ -958,7 +957,7 @@ def _inline_form(groups: Sequence[Any], metadata: Sequence[Any]) -> Any:
 def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
     """
     A model of the fields of a group, each a scalar or a list of scalars,
-    written inline, or of a dataset model, a reference to a dataset
+    written inline, or of a file model, a reference to a file
     (see :func:`_ref_form`), with its constraints; the tag field ``tag`` of an
     alternative of a union without its default, required, since a request
     always writes it. The title of a tag labels its alternative, so a tag
@@ -971,7 +970,7 @@ def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
         label = (
             places.title(get_args(info.annotation)[0], info) if name == tag else None
         )
-        annotation = _dataset_field_form(info.annotation)
+        annotation = _file_field_form(info.annotation)
         fields[name] = (
             Annotated[annotation, *info.metadata] if info.metadata else annotation,
             Field(
@@ -993,13 +992,13 @@ def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
     )
 
 
-def _dataset_field_form(annotation: Any) -> Any:
+def _file_field_form(annotation: Any) -> Any:
     """
-    ``annotation`` of a field of a group, with a dataset model, or the element
+    ``annotation`` of a field of a group, with a file model, or the element
     of a list of one, replaced by the reference it takes.
     """
     tp, is_optional, _ = _taken_apart(annotation)
-    if not field_types.is_dataset(tp):
+    if not field_types.is_file_model(tp):
         return annotation
     form = _ref_form(tp)
     if get_origin(field_types.optional(annotation)[0]) is list:

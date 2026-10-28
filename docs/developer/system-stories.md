@@ -17,12 +17,12 @@ Property: a call through a stage does not load the run again, whether it changes
 ### A1. Browse a local folder next to a catalogue reference
 
 Actor: user of a local application. Goal: browse a folder and the catalogue without waiting for transfers.
-Property: listing a folder or the catalogue reads no data. A catalogue dataset is fetched only when a request reads it, and a local file is read where it is, not copied.
+Property: listing a folder or the catalogue reads no data. A catalogue file is fetched only when a request reads it, and a local file is read where it is, not copied.
 
 ### A3. Work without the facility mount
 
-Actor: user on a laptop. Goal: reduce a catalogue dataset twice without the facility file system.
-Property: the backend fetches the dataset from the catalogue once, and the second request reads the fetched copy.
+Actor: user on a laptop. Goal: reduce a catalogue file twice without the facility file system.
+Property: the backend fetches the file from the catalogue once, and the second request reads the fetched copy.
 
 ### A4. Mistaken copy into the shared service
 
@@ -114,4 +114,4 @@ Property: every record pending at the upgrade with a persist request finishes wi
 ### H3. History ends when the work does
 
 Actor: user. Goal: the records of a proposal are there while the user works with them, and for days to weeks after; what was published lasts.
-Property: once a proposal has been idle for the retention period, with no client open, no record pending, and no write pending, its history is dropped as a whole, never in part. So a kept record's provenance is complete. A running trigger loop keeps its proposal from being idle, so it never reduces a handled dataset again. A published entry still answers what produced it after the history behind it is dropped.
+Property: once a proposal has been idle for the retention period, with no client open, no record pending, and no write pending, its history is dropped as a whole, never in part. So a kept record's provenance is complete. A running trigger loop keeps its proposal from being idle, so it never reduces a handled file again. A published entry still answers what produced it after the history behind it is dropped.

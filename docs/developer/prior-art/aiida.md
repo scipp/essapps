@@ -50,7 +50,7 @@ AiiDA shows the demand is real; keeping such a result a copy, never an input, ke
 Export mirrors this: exporting a calculation exports its inputs and outputs, and exporting a data node does not export the calculations that used it ([consistency.rst L57-61][consistency]).
 We need no traversal: [ADR 0004](../adr/0004-history-is-append-only-lists.md) drops a proposal's history as a whole, and no other proposal reads it (system story G5).
 Output values are not history ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)), so dropping stored values (H1) or a mistaken file (A4) leaves every record intact; in AiiDA a node's files are part of the immutable node.
-AiiDA's export default is what `client.provenance` and `client.publish` do: everything upstream, stopping at datasets, nothing downstream.
+AiiDA's export default is what `client.provenance` and `client.publish` do: everything upstream, stopping at files, nothing downstream.
 
 ## Running unattended
 
@@ -58,7 +58,7 @@ AiiDA's export default is what `client.provenance` and `client.publish` do: ever
 `Finished` says only that the engine ran it to the end. A non-zero `exit_status` is a failure the process declared, such as `spec.exit_code(418, 'ERROR_I_AM_A_TEAPOT', '...')` ([concepts.rst L74-90][states], [usage.rst L231-255][exit]).
 `BaseRestartWorkChain` keys handlers on exit codes and retries up to `max_iterations` (default 5), then aborts or pauses for a person ([workchains_restart.rst L76-115][restart]).
 Our records end `completed`, `failed`, or `cancelled`, and `client.failure` returns a message ([README, Requests and records](../README.md#requests-and-records)).
-`failed` covers a workflow that raised, an unreadable dataset, and a failed write.
+`failed` covers a workflow that raised, an unreadable file, and a failed write.
 If rules move into applications (scipp/essapps#33), the application decides retries, and today it can only match on a message.
 AiiDA's split is the minimum it would need: the workflow reported a failure, the workflow code raised, or the framework could not run it.
 

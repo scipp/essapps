@@ -3,11 +3,11 @@
 """
 Toy specs and fixtures of the user stories (docs/developer/user-stories.md).
 
-A dataset made by ``measure`` is a file of a list of counts. The toy specs
-compute what the table in user-stories.md says, so that every number can be
-checked by hand. Each toy workflow takes an instance of its spec's params model,
-where each run is a dataset model, the path of its file, and reads the counts of
-each file.
+A file made by ``measure`` holds a list of counts. The toy specs compute
+what the table in user-stories.md says, so that every number can be checked
+by hand. Each toy workflow takes an instance of its spec's params model,
+where each run is a file model with the file's local path, and reads the
+counts of each file.
 
 After each story, every record whose outputs a client of the story still keeps
 is run again as its request by that client, and must give the same outputs
@@ -37,17 +37,17 @@ from ess.apps import (
 )
 from ess.apps.log import Log
 from ess.apps.testing import (
-    FakeDatasets,
+    FakeFiles,
     FakeStore,
     StagedFunction,
     kept_rows,
-    read_dataset,
+    read_file,
 )
 from ess.spec import (
     Binding,
-    DatasetModel,
-    DatasetRef,
     DriverBinding,
+    FileModel,
+    FileRef,
     NoParams,
     OutputRef,
     Ref,
@@ -83,14 +83,14 @@ def _spec(
 
 
 def _counts(path: Path) -> np.ndarray:
-    return np.asarray(read_dataset(path), dtype=float)
+    return np.asarray(read_file(path), dtype=float)
 
 
 def _array(values: Any) -> sc.Variable:
     return sc.array(dims=['q'], values=np.asarray(values, dtype=float))
 
 
-class Run(DatasetModel):
+class Run(FileModel):
     """A measured run, by its file; each role of a run is a subclass."""
 
 
@@ -136,15 +136,18 @@ class BeamCentre(Data):
 class ComputedNormalization(Data):
     """
     The normalization that ``VANADIUM`` computes from a vanadium run, or that
-    ``LOAD_NORMALIZATION`` reads from a published file: a group that holds a
+    ``LOAD_NORMALIZATION`` reads from the catalogue: a group that holds a
     data value, so a request gives it by reference only.
     """
 
     factor: sc.Variable
 
 
-class PublishedNormalization(DatasetModel):
-    """A normalization published to the catalogue, as a file of its factor (C2)."""
+class PublishedNormalization(FileModel):
+    """
+    A normalization published to the catalogue, read back as a file that holds
+    its factor (C2).
+    """
 
 
 class IofQParams(Data):
@@ -275,8 +278,8 @@ LOAD_NORMALIZATION = _spec(
 
 
 def load_normalization(params: LoadNormalizationParams) -> VanadiumOutputs:
-    """The normalization of a published file of its factor (C2)."""
-    factor = sc.scalar(float(read_dataset(params.published.path)))
+    """The normalization read from a published file that holds its factor (C2)."""
+    factor = sc.scalar(float(read_file(params.published.path)))
     return VanadiumOutputs(normalization=ComputedNormalization(factor=factor))
 
 
@@ -628,8 +631,8 @@ TOYS: dict[SpecId, Binding[Any, Any]] = {
 
 
 @pytest.fixture
-def datasets(tmp_path: Path) -> FakeDatasets:
-    return FakeDatasets(proposal='p1', directory=tmp_path)
+def files(tmp_path: Path) -> FakeFiles:
+    return FakeFiles(proposal='p1', directory=tmp_path)
 
 
 @pytest.fixture
@@ -645,10 +648,10 @@ def history() -> Log:
 
 @pytest.fixture
 def backends(
-    datasets: FakeDatasets, store: FakeStore, history: Log
+    files: FakeFiles, store: FakeStore, history: Log
 ) -> Iterator[list[Backend]]:
     """The backend, and those that upgrades started after it; the current one last."""
-    backends = [Backend(datasets, list(TOYS.values()), log=history, store=store)]
+    backends = [Backend(files, list(TOYS.values()), log=history, store=store)]
     yield backends
     for backend in backends:
         backend.close()
@@ -662,14 +665,14 @@ def clients() -> list[Client]:
 
 @pytest.fixture
 def upgrade(
-    datasets: FakeDatasets,
+    files: FakeFiles,
     store: FakeStore,
     history: Log,
     backends: list[Backend],
     clients: list[Client],
 ) -> Callable[..., Client]:
     """
-    A client of a new backend over the same datasets, history, and store,
+    A client of a new backend over the same files, history, and store,
     which offers the given toy specs, every one by default; ``connect`` then
     makes clients of it. The upgrade ends every client of the backend before
     it, and that backend once its persisted work is done.
@@ -684,7 +687,7 @@ def upgrade(
             if specs is None
             else [TOYS[SpecId.of(s)] for s in specs]
         )
-        backends.append(Backend(datasets, bind, log=history, store=store))
+        backends.append(Backend(files, bind, log=history, store=store))
         clients.append(Client(backends[-1], proposal='p1', submitter='anna'))
         return clients[-1]
 
@@ -707,30 +710,30 @@ def client(connect: Callable[..., Client]) -> Client:
     return connect()
 
 
-Measure = Callable[..., DatasetRef]
+Measure = Callable[..., FileRef]
 
 
 @pytest.fixture
-def measure(datasets: FakeDatasets) -> Measure:
+def measure(files: FakeFiles) -> Measure:
     """
-    Make run ``n`` appear as a file of the given counts, with the given
-    metadata; return its identity.
+    Make run ``n`` appear as a file that holds the given counts, with the
+    given metadata; return its identity.
     """
 
-    def measure(n: int, counts: list[float], **fields: Any) -> DatasetRef:
-        return datasets.measure(n, counts, **fields)
+    def measure(n: int, counts: list[float], **fields: Any) -> FileRef:
+        return files.measure(n, counts, **fields)
 
     return measure
 
 
 @pytest.fixture
-def corrupt(datasets: FakeDatasets) -> Callable[..., None]:
-    return datasets.corrupt
+def corrupt(files: FakeFiles) -> Callable[..., None]:
+    return files.corrupt
 
 
 @pytest.fixture
-def repair(datasets: FakeDatasets) -> Callable[..., None]:
-    return datasets.repair
+def repair(files: FakeFiles) -> Callable[..., None]:
+    return files.repair
 
 
 @pytest.fixture(autouse=True)

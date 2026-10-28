@@ -38,7 +38,7 @@ def test_f1_publish_then_trace_six_months_later(
 
     provenance = scicat.entries[pid].provenance
     assert provenance == client.provenance(result) == client.provenance(plain)
-    assert set(provenance.datasets()) == {centre_run, run}
+    assert set(provenance.files()) == {centre_run, run}
     assert [r.request.params for r in provenance.records()] == [centre.request.params]
     assert {'essapps', 'scipp'} <= provenance.software.keys()
 

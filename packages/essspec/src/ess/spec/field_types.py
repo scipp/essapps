@@ -45,7 +45,7 @@ from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerati
 from pydantic.json_schema import GenerateJsonSchema, JsonSchemaWarningKind
 from pydantic_core import PydanticCustomError, from_json, to_json
 
-from .parameters import DatasetModel
+from .parameters import FileModel
 from .refs import Loc, ParamsError, positions
 
 
@@ -163,18 +163,18 @@ def is_single(tp: Any) -> bool:
     )
 
 
-def is_dataset(tp: Any) -> bool:
-    """Whether ``tp`` is a dataset model, a subclass of :class:`DatasetModel`."""
-    return isinstance(tp, type) and issubclass(tp, DatasetModel)
+def is_file_model(tp: Any) -> bool:
+    """Whether ``tp`` is a file model, a subclass of :class:`FileModel`."""
+    return isinstance(tp, type) and issubclass(tp, FileModel)
 
 
-def dataset_model(annotation: Any) -> Any:
+def file_model(annotation: Any) -> Any:
     """
-    The dataset model of a field typed ``annotation``, ``X``, ``X | None``,
+    The file model of a field typed ``annotation``, ``X``, ``X | None``,
     or ``list[X]`` of one, or ``None``.
     """
     tp = value_type(annotation)
-    return tp if is_dataset(tp) else None
+    return tp if is_file_model(tp) else None
 
 
 def is_group(tp: Any) -> bool:
@@ -311,7 +311,7 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
       of a group whose validator changes a value it has validated already,
       or whose JSON form is an object with the key ``"@ref"``, which reads
       as a reference (see :func:`ess.spec.refs.positions`), unless it is a
-      dataset model, whose JSON form is the reference to its dataset.
+      file model, whose JSON form is the reference to its file.
     """
     one = model_of(model, name, whole)
     if isinstance(value, BaseModel):
@@ -333,20 +333,20 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
     if refs := [
         loc
         for loc, v in positions((), stored)
-        if isinstance(v, dict) and '@ref' in v and not _is_dataset_at(made, loc)
+        if isinstance(v, dict) and '@ref' in v and not _is_file_at(made, loc)
     ]:
         raise ParamsError((loc, _READS_AS_REF) for loc in refs)
     return stored
 
 
-def _is_dataset_at(value: Any, loc: Loc) -> bool:
-    """Whether ``value`` holds a dataset model at ``loc``, a position inside it."""
+def _is_file_at(value: Any, loc: Loc) -> bool:
+    """Whether ``value`` holds a file model at ``loc``, a position inside it."""
     for at in loc:
         if isinstance(at, int):
             value = value[at]
         else:
             value = getattr(value, at, None)
-    return isinstance(value, DatasetModel)
+    return isinstance(value, FileModel)
 
 
 _NO_JSON_FORM = 'has no JSON form that reads back as the value'

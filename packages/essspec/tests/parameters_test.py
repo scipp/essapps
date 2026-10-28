@@ -7,9 +7,9 @@ from typing import Any
 import pydantic
 import pytest
 
-from ess.spec import DatasetRef
+from ess.spec import FileRef
 from ess.spec.parameters import (
-    DatasetModel,
+    FileModel,
     Quantity,
     Scale,
     WavelengthEdges,
@@ -18,11 +18,11 @@ from ess.spec.parameters import (
 )
 
 
-class MaskFile(DatasetModel, kind='mask', instrument='loki'):
+class MaskFile(FileModel, kind='mask', instrument='loki'):
     pass
 
 
-class RunFile(DatasetModel):
+class RunFile(FileModel):
     pass
 
 
@@ -30,41 +30,39 @@ class Kind(Enum):
     MASK = 'mask'
 
 
-class TestDatasetModel:
-    def test_a_dataset_model_without_keywords_takes_raw_datasets(self) -> None:
-        class RunFile(DatasetModel):
+class TestFileModel:
+    def test_a_file_model_without_keywords_takes_raw_files(self) -> None:
+        class RunFile(FileModel):
             pass
 
-        assert DatasetModel.metadata == {'kind': 'raw'}
+        assert FileModel.metadata == {'kind': 'raw'}
         assert RunFile.metadata == {'kind': 'raw'}
 
-    def test_a_dataset_model_holds_its_class_keywords_as_metadata(self) -> None:
+    def test_a_file_model_holds_its_class_keywords_as_metadata(self) -> None:
         assert MaskFile.metadata == {'kind': 'mask', 'instrument': 'loki'}
         assert MaskFile.local('mask.xml').model_dump() == {
-            '@ref': 'dataset',
-            'dataset': 'path:mask.xml',
+            '@ref': 'file',
+            'file': 'path:mask.xml',
         }
 
-    def test_a_dataset_model_validates_from_a_reference_or_its_identity(self) -> None:
-        ref = {'@ref': 'dataset', 'dataset': 'run:loki/1'}
-        for given in (ref, {'dataset': 'run:loki/1'}, DatasetRef(dataset='run:loki/1')):
+    def test_a_file_model_validates_from_a_reference_or_its_identity(self) -> None:
+        ref = {'@ref': 'file', 'file': 'run:loki/1'}
+        for given in (ref, {'file': 'run:loki/1'}, FileRef(file='run:loki/1')):
             assert MaskFile.model_validate(given).model_dump() == ref
 
     def test_the_path_is_attached_by_the_validation_context(self) -> None:
         paths = {'run:loki/1': Path('/data/1.nxs')}
-        mask = MaskFile.model_validate(
-            {'dataset': 'run:loki/1'}, context={'paths': paths}
-        )
+        mask = MaskFile.model_validate({'file': 'run:loki/1'}, context={'paths': paths})
         assert mask.path == Path('/data/1.nxs')
         with pytest.raises(ValueError, match='only when the request runs'):
-            MaskFile(dataset='run:loki/1').path
+            MaskFile(file='run:loki/1').path
 
-    def test_two_dataset_models_are_equal_by_class_and_dataset(self) -> None:
-        assert MaskFile(dataset='a') == MaskFile.model_validate(
-            {'dataset': 'a'}, context={'paths': {'a': Path('x')}}
+    def test_two_file_models_are_equal_by_class_and_file(self) -> None:
+        assert MaskFile(file='a') == MaskFile.model_validate(
+            {'file': 'a'}, context={'paths': {'a': Path('x')}}
         )
-        assert MaskFile(dataset='a') != MaskFile(dataset='b')
-        assert MaskFile(dataset='a') != RunFile(dataset='a')
+        assert MaskFile(file='a') != MaskFile(file='b')
+        assert MaskFile(file='a') != RunFile(file='a')
 
     def test_the_keywords_of_a_subclass_are_merged_over_its_parents(self) -> None:
         class BeamStopMask(MaskFile, kind='beam-stop', bank=1):
@@ -76,7 +74,7 @@ class TestDatasetModel:
             'bank': 1,
         }
         assert MaskFile.metadata == {'kind': 'mask', 'instrument': 'loki'}
-        assert DatasetModel.metadata == {'kind': 'raw'}
+        assert FileModel.metadata == {'kind': 'raw'}
 
     def test_a_subclass_without_keywords_has_the_metadata_of_its_parent(
         self,
@@ -88,28 +86,28 @@ class TestDatasetModel:
 
     @pytest.mark.parametrize('value', ['loki', 1, 0.5, True])
     def test_a_metadata_value_is_a_string_a_number_or_a_bool(self, value: Any) -> None:
-        class File(DatasetModel, kind='mask', key=value):
+        class File(FileModel, kind='mask', key=value):
             pass
 
         assert File.metadata == {'kind': 'mask', 'key': value}
 
     @pytest.mark.parametrize('value', [Kind.MASK, Path('mask'), ['mask'], None])
     def test_a_metadata_value_of_another_type_is_refused(self, value: Any) -> None:
-        with pytest.raises(TypeError, match='File: the metadata of a dataset model'):
+        with pytest.raises(TypeError, match='File: the metadata of a file model'):
 
-            class File(DatasetModel, kind=value):
+            class File(FileModel, kind=value):
                 pass
 
     def test_a_pydantic_config_keyword_configures_the_model_and_is_no_metadata(
         self,
     ) -> None:
-        class FrozenMask(DatasetModel, frozen=True, kind='mask'):
+        class FrozenMask(FileModel, frozen=True, kind='mask'):
             pass
 
         assert FrozenMask.metadata == {'kind': 'mask'}
         mask = FrozenMask.local('mask.xml')
         with pytest.raises(pydantic.ValidationError, match='frozen'):
-            mask.dataset = 'path:other.xml'
+            mask.file = 'path:other.xml'
 
 
 class TestQuantity:

@@ -10,7 +10,7 @@ worker, the backend reads the data each reference names and validates them
 (see ``backend.py``). :class:`Checks` holds the checks of one spec, one
 method for each thing checked::
 
-    checks = Checks(IOFQ, datasets)
+    checks = Checks(IOFQ, files)
     request = checks.request(request, proposal)            # a plain request
     template, fixed = checks.template(template, proposal)  # a stage or an accumulator
     rows = checks.push(blanks, rows, proposal)
@@ -23,13 +23,13 @@ The checks of a request; a template, a push, and a state check part of these:
 - *Places.* A request writes a value or a reference at each place: the
   value of a parameter, or an element of a list parameter (see
   :mod:`ess.spec.places`). A reference at a tag, for a whole list, at a
-  union of groups, or inside a group is refused, but one to a dataset at a
-  field typed a dataset model. A group is written as an object of its
+  union of groups, or inside a group is refused, but one to a file at a
+  field typed a file model. A group is written as an object of its
   fields; a field left out takes its default.
 - *Inline values.* An inline value is allowed where the type at the place
   is a group without a data value, or a union of groups, and ``None`` where
-  it is optional; so a dataset model given inline, such as a path as a
-  string, is refused: it is given as ``dataset(path=...)``. Each group, or
+  it is optional; so a file model given inline, such as a path as a
+  string, is refused: it is given as ``file(path=...)``. Each group, or
   row of a list, given inline is validated whole, so that its validators
   run, by its field, or for an element of a list by its element type, from
   its JSON form, an instance by its dump, and a field that a model lacks is
@@ -42,18 +42,18 @@ The checks of a request; a template, a push, and a state check part of these:
 - *References.* A reference to an output stands for a whole group. A union of groups is
   written inline only, with the tag of an alternative: no reference fits
   it, so that a producer need not output a tagged class to feed it. A
-  dataset model is given by reference to a dataset, and only a dataset
-  model is (see :class:`ess.spec.DatasetModel`): the dataset source checks
-  that the proposal may read it, the dataset fits the model by its
-  metadata, as a :class:`~.datasets.Selector` of the model's metadata
+  file model is given by reference to a file, and only a file
+  model is (see :class:`ess.spec.FileModel`): the file source checks
+  that the proposal may read it, the file fits the model by its
+  metadata, as a :class:`~.files.Selector` of the model's metadata
   matches it, and the record holds its identity, to which its name is
   resolved, so it must be known. A reference to a record or an accumulator
   is checked by the backend, which knows what the client may read (see
-  :func:`check_fit`): its data fit the place. No output holds a dataset
-  model, so a path comes only from a dataset.
+  :func:`check_fit`): its data fit the place. No output holds a file
+  model, so a path comes only from a file.
 - *Table rules.* The number of rows of a table meets its length
   constraints, and its rows are distinct, compared as the record holds them:
-  a dataset by its identity, a reference to an output by record, output, and
+  a file by its identity, a reference to an output by record, output, and
   key, and an inline value by its JSON form, each at its place (see
   :func:`distinct`).
 
@@ -75,7 +75,7 @@ from pydantic_core import to_json
 
 from ess.spec import (
     AccumulatorRef,
-    DatasetRef,
+    FileRef,
     OutputRef,
     Ref,
     WorkflowSpec,
@@ -85,8 +85,8 @@ from ess.spec import (
 from ess.spec.binding import fixed_values
 from ess.spec.refs import Loc, ParamsError
 
-from .datasets import DatasetSource, Selector, readable
 from .errors import SubmitError
+from .files import FileSource, Selector, readable
 from .records import Request, SpecId, Template, read_refs
 
 type Spec = WorkflowSpec[Any, Any]
@@ -98,10 +98,10 @@ class Checks:
     and the state of an accumulator.
     """
 
-    def __init__(self, spec: Spec, datasets: DatasetSource) -> None:
+    def __init__(self, spec: Spec, files: FileSource) -> None:
         self.spec = spec
         self.id = SpecId.of(spec)
-        self._datasets = datasets
+        self._files = files
 
     def request(self, request: Request, proposal: str) -> Request:
         """
@@ -117,7 +117,7 @@ class Checks:
         self, template: Template, proposal: str
     ) -> tuple[Template, dict[str, Any]]:
         """
-        The template as given, with dataset names resolved, as the stage or
+        The template as given, with file names resolved, as the stage or
         the accumulator holds it, and its fixed values by name, defaults
         filled in.
 
@@ -180,7 +180,7 @@ class Checks:
     def _value(self, name: str, value: Any, proposal: str) -> Any:
         """
         The value of parameter ``name`` as the record holds it: at each place,
-        the JSON form of an inline value, a reference, a dataset's resolved,
+        the JSON form of an inline value, a reference, a file's resolved,
         or ``None`` (see :func:`ess.spec.places.held`).
         """
         try:
@@ -202,36 +202,35 @@ class Checks:
 
     def _ref(self, loc: Loc, ref: Ref, tp: Any, proposal: str) -> Ref:
         """
-        The reference ``ref`` at ``loc``, a dataset's resolved. A dataset
-        model is given by reference to a dataset, one the proposal may read
-        and that fits the model, and only a dataset model is.
+        The reference ``ref`` at ``loc``, a file's resolved. A file
+        model is given by reference to a file, one the proposal may read
+        and that fits the model, and only a file model is.
         """
         name = field_types.type_name(tp)
-        if not isinstance(ref, DatasetRef):
-            if field_types.is_dataset(tp):
+        if not isinstance(ref, FileRef):
+            if field_types.is_file_model(tp):
                 raise SubmitError.at(
                     loc,
-                    f'{ref} is not a dataset; {name} is given by reference to a '
-                    'dataset',
+                    f'{ref} is not a file; {name} is given by reference to a file',
                 )
             return ref
-        if not field_types.is_dataset(tp):
+        if not field_types.is_file_model(tp):
             raise SubmitError.at(
-                loc, f'dataset {ref} does not fit {name}, which is not a dataset model'
+                loc, f'file {ref} does not fit {name}, which is not a file model'
             )
         try:
-            identity = self._datasets.resolve(ref)
+            identity = self._files.resolve(ref)
         except KeyError:
-            raise SubmitError.at(loc, f'unknown dataset {ref}') from None
-        metadata = self._datasets.metadata(identity)
+            raise SubmitError.at(loc, f'unknown file {ref}') from None
+        metadata = self._files.metadata(identity)
         if not readable(metadata, proposal):
             raise SubmitError.at(
-                loc, f'dataset {ref} belongs to proposal {metadata["proposal"]}'
+                loc, f'file {ref} belongs to proposal {metadata["proposal"]}'
             )
         if not (selector := Selector(**tp.metadata)).matches(metadata):
             raise SubmitError.at(
                 loc,
-                f'dataset {ref} does not fit {name}, which takes datasets with '
+                f'file {ref} does not fit {name}, which takes files with '
                 f'{selector.fields}',
             )
         return identity
@@ -273,7 +272,7 @@ def distinct(
     """
     The ``rows`` of ``table`` after the rows ``seen``, each by its JSON form,
     with its index. Refuses a row equal to one seen or to an earlier one: a
-    reference by its fields, such as a dataset's identity, and a value given
+    reference by its fields, such as a file's identity, and a value given
     inline by its JSON form.
     """
     new: dict[bytes, int] = {}

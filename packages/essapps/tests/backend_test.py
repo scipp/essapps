@@ -22,14 +22,14 @@ from ess.apps import (
     Status,
     SubmitError,
     Template,
-    dataset,
+    file,
 )
 from ess.apps.log import Event, Log
-from ess.apps.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
-from ess.spec import DatasetModel, WorkflowSpec, function_binding
+from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
+from ess.spec import FileModel, WorkflowSpec, function_binding
 
 
-class SampleRun(DatasetModel): ...
+class SampleRun(FileModel): ...
 
 
 class Amount(BaseModel):
@@ -81,10 +81,10 @@ UNTYPED = _spec('untyped')  # its workflow returns a dict
 COUNTS = _spec('counts')  # its workflow looks up a key that is not there
 
 
-class MaskFile(DatasetModel, kind='mask'): ...
+class MaskFile(FileModel, kind='mask'): ...
 
 
-class LokiMask(DatasetModel, kind='mask', instrument='loki'): ...
+class LokiMask(FileModel, kind='mask', instrument='loki'): ...
 
 
 class MaskParams(BaseModel):
@@ -171,24 +171,24 @@ def total(params: SumParams) -> ValueOutputs:
     return ValueOutputs(value=Amount(value=value))
 
 
-def _read(dataset: DatasetModel) -> Amount:
-    return Amount(value=read_dataset(dataset.path))
+def _read(model: FileModel) -> Amount:
+    return Amount(value=read_file(model.path))
 
 
 def runs(params: RunsParams) -> ValueOutputs:
-    value = sum(read_dataset(run.path) for run in params.runs)
+    value = sum(read_file(run.path) for run in params.runs)
     return ValueOutputs(value=Amount(value=value))
 
 
 def split(params: LoadParams) -> PartsOutputs:
-    value = read_dataset(params.sample.path)
+    value = read_file(params.sample.path)
     return PartsOutputs(
         parts={'whole': Amount(value=value), 'half': Amount(value=value / 2)}
     )
 
 
 def pieces(params: LoadParams) -> PiecesOutputs:
-    value = read_dataset(params.sample.path)
+    value = read_file(params.sample.path)
     return PiecesOutputs(pieces=[Amount(value=value), Amount(value=value / 2)])
 
 
@@ -199,7 +199,7 @@ class Gate:
         self.open = threading.Event()
 
     def load(self, params: LoadParams) -> ValueOutputs:
-        run = read_dataset(params.sample.path)
+        run = read_file(params.sample.path)
         self.open.wait(timeout=5)
         if run < 0:
             raise ValueError('negative run')
@@ -212,15 +212,15 @@ def gate() -> Gate:
 
 
 @pytest.fixture
-def datasets(tmp_path: Path) -> FakeDatasets:
-    datasets = FakeDatasets(proposal='p1', directory=tmp_path)
+def files(tmp_path: Path) -> FakeFiles:
+    files = FakeFiles(proposal='p1', directory=tmp_path)
     for n, value in ((1, 1.0), (2, 2.0), (3, -1.0)):
-        datasets.measure(n, value)
-    return datasets
+        files.measure(n, value)
+    return files
 
 
 @pytest.fixture
-def backend(datasets: FakeDatasets, gate: Gate) -> Iterator[Backend]:
+def backend(files: FakeFiles, gate: Gate) -> Iterator[Backend]:
     bindings = [
         function_binding(LOAD, gate.load),
         function_binding(ADD, add),
@@ -236,7 +236,7 @@ def backend(datasets: FakeDatasets, gate: Gate) -> Iterator[Backend]:
         function_binding(LOKI_MASKED, lambda p: ValueOutputs(value=_read(p.mask))),
         kept_rows(RUNS, runs),
     ]
-    backend = Backend(datasets, bindings)
+    backend = Backend(files, bindings)
     yield backend
     gate.open.set()
     backend.close()
@@ -248,7 +248,7 @@ def client(backend: Backend) -> Client:
 
 
 def load(n: int) -> Request:
-    return Request(LOAD, params={'sample': dataset(run=n)})
+    return Request(LOAD, params={'sample': file(run=n)})
 
 
 def operands(a: Any, b: Any) -> dict[str, Any]:
@@ -288,9 +288,9 @@ class FullDisk(Log):
         return super().append(event)
 
 
-def test_a_failed_append_stops_the_backend(datasets: FakeDatasets, gate: Gate) -> None:
+def test_a_failed_append_stops_the_backend(files: FakeFiles, gate: Gate) -> None:
     log = FullDisk()
-    backend = Backend(datasets, [function_binding(LOAD, gate.load)], log=log)
+    backend = Backend(files, [function_binding(LOAD, gate.load)], log=log)
     client = Client(backend, proposal='p1', submitter='anna')
     record = client.submit(load(1))
     log.full = True
@@ -345,7 +345,7 @@ def test_one_refused_request_refuses_the_submission(client: Client) -> None:
 def _boxed(value: Any) -> Request:
     return Request(
         BOXED,
-        params={'box': {'value': value}, 'sample': dataset(run=1)},
+        params={'box': {'value': value}, 'sample': file(run=1)},
     )
 
 
@@ -374,16 +374,16 @@ def test_a_number_that_is_not_finite_is_refused_in_a_list(client: Client) -> Non
             MODES,
             params={
                 'values': {'values': [1.0, float('inf')]},
-                'sample': dataset(run=1),
+                'sample': file(run=1),
             },
         )
 
 
 def test_a_strict_group_is_validated_from_its_json_form(client: Client) -> None:
     strict = {'strict': Strict(mode=Mode.slow)}
-    plain = client.compute(MODES, params={**strict, 'sample': dataset(run=1)})
+    plain = client.compute(MODES, params={**strict, 'sample': file(run=1)})
     stage = client.stage(Template(MODES, params=strict, blanks=('sample',)))
-    staged = client.compute(stage, params={'sample': dataset(run=1)})
+    staged = client.compute(stage, params={'sample': file(run=1)})
 
     assert plain.request.params['strict'] == {'mode': 'slow', 'factor': 1.0}
     assert (
@@ -394,7 +394,7 @@ def test_a_strict_group_is_validated_from_its_json_form(client: Client) -> None:
 
 
 def test_a_field_a_group_lacks_is_refused(client: Client) -> None:
-    typo = Request(BOXED, params={'box': {'unknown': 1}, 'sample': dataset(run=1)})
+    typo = Request(BOXED, params={'box': {'unknown': 1}, 'sample': file(run=1)})
 
     with pytest.raises(
         SubmitError, match=r"box\.unknown: Extra inputs are not permitted"
@@ -422,12 +422,12 @@ def test_a_reference_of_an_unknown_kind_is_refused(client: Client) -> None:
 def test_a_malformed_reference_is_refused(client: Client) -> None:
     for malformed, problem in [
         ({'@ref': 'output', 'record': 'r1'}, 'output: Field required'),
-        ({'@ref': 'dataset', 'dataset': 'run:1', 'run': 1}, 'run: Extra inputs'),
+        ({'@ref': 'file', 'file': 'run:1', 'run': 1}, 'run: Extra inputs'),
     ]:
         with pytest.raises(
             SubmitError, match=rf'^b: .*: not a reference to .*{problem}'
         ):
-            client.submit(ADD, params=operands(dataset(run=1), malformed))
+            client.submit(ADD, params=operands(file(run=1), malformed))
 
 
 def test_a_reference_to_a_missing_output_is_refused(client: Client, gate: Gate) -> None:
@@ -451,58 +451,58 @@ def test_a_reference_to_another_proposal_is_refused(
         theirs.submit(ADD, params=operands(loaded.ref('value'), loaded.ref('value')))
 
 
-def test_an_unknown_dataset_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match='unknown dataset run:9'):
+def test_an_unknown_file_is_refused(client: Client) -> None:
+    with pytest.raises(SubmitError, match='unknown file run:9'):
         client.submit(load(9))
 
 
-def test_a_dataset_of_another_proposal_is_refused(
-    client: Client, datasets: FakeDatasets
+def test_a_file_of_another_proposal_is_refused(
+    client: Client, files: FakeFiles
 ) -> None:
-    datasets.measure(4, 4.0, proposal='p2')
+    files.measure(4, 4.0, proposal='p2')
 
     with pytest.raises(
-        SubmitError, match=r'^sample: dataset run:4 belongs to proposal p2$'
+        SubmitError, match=r'^sample: file run:4 belongs to proposal p2$'
     ):
         client.submit(load(4))
 
 
-def test_a_dataset_fits_a_dataset_model_by_its_kind(
-    client: Client, datasets: FakeDatasets, gate: Gate
+def test_a_file_fits_a_file_model_by_its_kind(
+    client: Client, files: FakeFiles, gate: Gate
 ) -> None:
     gate.open.set()
-    datasets.measure(5, 5.0, kind='mask')
+    files.measure(5, 5.0, kind='mask')
 
     with pytest.raises(
         SubmitError,
-        match=r"^mask: dataset run:1 does not fit MaskFile, which takes datasets "
+        match=r"^mask: file run:1 does not fit MaskFile, which takes files "
         r"with \{'kind': 'mask'\}$",
     ):
-        client.submit(MASKED, params={'mask': dataset(run=1)})
+        client.submit(MASKED, params={'mask': file(run=1)})
     with pytest.raises(
         SubmitError,
-        match=r"^sample: dataset run:5 does not fit SampleRun, which takes datasets "
+        match=r"^sample: file run:5 does not fit SampleRun, which takes files "
         r"with \{'kind': 'raw'\}$",
     ):
         client.submit(load(5))
-    masked = client.compute(MASKED, params={'mask': dataset(run=5)})
+    masked = client.compute(MASKED, params={'mask': file(run=5)})
     assert client.output(masked, 'value') == Amount(value=5.0)
     assert client.output(client.compute(load(1)), 'value') == Amount(value=1.0)
 
 
-def test_a_dataset_fits_a_dataset_model_by_each_key_of_its_metadata(
-    client: Client, datasets: FakeDatasets
+def test_a_file_fits_a_file_model_by_each_key_of_its_metadata(
+    client: Client, files: FakeFiles
 ) -> None:
-    datasets.measure(5, 5.0, kind='mask', instrument='dream')
-    datasets.measure(6, 6.0, kind='mask', instrument='loki')
+    files.measure(5, 5.0, kind='mask', instrument='dream')
+    files.measure(6, 6.0, kind='mask', instrument='loki')
 
     with pytest.raises(
         SubmitError,
-        match=r"^mask: dataset run:5 does not fit LokiMask, which takes datasets "
+        match=r"^mask: file run:5 does not fit LokiMask, which takes files "
         r"with \{'instrument': 'loki', 'kind': 'mask'\}$",
     ):
-        client.submit(LOKI_MASKED, params={'mask': dataset(run=5)})
-    masked = client.compute(LOKI_MASKED, params={'mask': dataset(run=6)})
+        client.submit(LOKI_MASKED, params={'mask': file(run=5)})
+    masked = client.compute(LOKI_MASKED, params={'mask': file(run=6)})
     assert client.output(masked, 'value') == Amount(value=6.0)
 
 
@@ -511,8 +511,8 @@ def test_a_table_takes_a_list_of_rows(client: Client) -> None:
         client.submit(SUM, params={'terms': {'value': 1.0}})
 
 
-def test_a_dataset_model_given_inline_is_refused(client: Client) -> None:
-    refused = 'is not a dataset; SampleRun is given by reference to a dataset'
+def test_a_file_model_given_inline_is_refused(client: Client) -> None:
+    refused = 'is not a reference; SampleRun is given by reference to a file'
 
     with pytest.raises(SubmitError, match=rf"^sample: '/data/run-1.json' {refused}"):
         client.submit(LOAD, params={'sample': '/data/run-1.json'})
@@ -520,28 +520,28 @@ def test_a_dataset_model_given_inline_is_refused(client: Client) -> None:
         client.submit(LOAD, params={'sample': {'path': '/data/run-1.json'}})
 
 
-def test_a_file_given_by_path_is_the_dataset_of_that_path(
-    client: Client, datasets: FakeDatasets, gate: Gate
+def test_a_path_names_the_file_at_that_path(
+    client: Client, files: FakeFiles, gate: Gate
 ) -> None:
     gate.open.set()
-    path = datasets.path(datasets.resolve(dataset(run=1)))
-    by_path = client.compute(LOAD, params={'sample': dataset(path=path)})
+    path = files.path(files.resolve(file(run=1)))
+    by_path = client.compute(LOAD, params={'sample': file(path=path)})
 
     assert by_path.request == client.compute(load(1)).request
     assert client.output(by_path, 'value') == Amount(value=1.0)
 
 
-def test_a_dataset_fits_a_dataset_model_only(client: Client) -> None:
+def test_a_file_fits_a_file_model_only(client: Client) -> None:
     with pytest.raises(
         SubmitError,
-        match=r'^a: dataset run:1 does not fit Amount, which is not a dataset model$',
+        match=r'^a: file run:1 does not fit Amount, which is not a file model$',
     ):
-        client.submit(ADD, params=operands(dataset(run=1), dataset(run=2)))
+        client.submit(ADD, params=operands(file(run=1), file(run=2)))
 
 
-def test_a_dataset_model_takes_a_reference_to_a_dataset_only(client: Client) -> None:
+def test_a_file_model_takes_a_reference_to_a_file_only(client: Client) -> None:
     loaded = client.submit(load(1))
-    refused = 'is not a dataset; SampleRun is given by reference to a dataset'
+    refused = 'is not a file; SampleRun is given by reference to a file'
     by_ref = loaded.ref('value')
 
     with pytest.raises(SubmitError, match=rf'^sample: {loaded.id}.value {refused}$'):
@@ -552,11 +552,11 @@ def test_a_dataset_model_takes_a_reference_to_a_dataset_only(client: Client) -> 
         client.stage(Template(MODES, params={'sample': by_ref}, blanks=('values',)))
 
 
-def test_a_spec_whose_output_holds_a_dataset_model_is_refused() -> None:
+def test_a_spec_whose_output_holds_a_file_model_is_refused() -> None:
     class RunOutputs(BaseModel):
         run: SampleRun
 
-    with pytest.raises(ValueError, match='SampleRun is a dataset model; no output'):
+    with pytest.raises(ValueError, match='SampleRun is a file model; no output'):
         _spec('echo', outputs=RunOutputs)
 
 
@@ -570,22 +570,22 @@ def test_a_required_parameter_left_out_is_refused(client: Client) -> None:
     )
 
 
-def test_a_client_sees_only_the_datasets_of_its_proposal(
-    backend: Backend, datasets: FakeDatasets
+def test_a_client_sees_only_the_files_of_its_proposal(
+    backend: Backend, files: FakeFiles
 ) -> None:
     mine = Client(backend, proposal='p1', submitter='anna')
     theirs = Client(backend, proposal='p2', submitter='eve')
-    other = datasets.measure(4, 4.0, proposal='p2')
-    later = datasets.measure(5, 5.0)
+    other = files.measure(4, 4.0, proposal='p2')
+    later = files.measure(5, 5.0)
 
-    assert mine.datasets.list(Selector()) == [
-        datasets.resolve(dataset(run=n)) for n in (1, 2, 3, 5)
+    assert mine.files.list(Selector()) == [
+        files.resolve(file(run=n)) for n in (1, 2, 3, 5)
     ]
-    assert theirs.datasets.list(Selector()) == [other]
-    assert list(islice(mine.datasets.watch(Selector()), 4))[-1] == later
-    assert theirs.datasets.metadata(other)['run'] == 4
+    assert theirs.files.list(Selector()) == [other]
+    assert list(islice(mine.files.watch(Selector()), 4))[-1] == later
+    assert theirs.files.metadata(other)['run'] == 4
     with pytest.raises(KeyError, match='in proposal p1'):
-        mine.datasets.metadata(other)
+        mine.files.metadata(other)
 
 
 def test_the_keys_of_a_dict_become_members(client: Client, gate: Gate) -> None:
@@ -624,11 +624,11 @@ def test_reading_an_output_of_a_failed_record_raises(
 
 def test_an_unknown_parameter_is_refused(client: Client) -> None:
     with pytest.raises(SubmitError, match='scale: not a parameter of'):
-        client.submit(LOAD, params={'scale': {}, 'sample': dataset(run=1)})
+        client.submit(LOAD, params={'scale': {}, 'sample': file(run=1)})
 
 
 def test_a_failure_names_the_type_of_the_workflow_s_error(client: Client) -> None:
-    failed = client.compute(COUNTS, params={'sample': dataset(run=1)})
+    failed = client.compute(COUNTS, params={'sample': file(run=1)})
 
     assert client.failure(failed) == "KeyError: 'counts'"
 
@@ -636,7 +636,7 @@ def test_a_failure_names_the_type_of_the_workflow_s_error(client: Client) -> Non
 def test_a_workflow_that_returns_none_as_a_required_output_fails(
     client: Client,
 ) -> None:
-    nothing = client.compute(NOTHING, params={'sample': dataset(run=1)})
+    nothing = client.compute(NOTHING, params={'sample': file(run=1)})
 
     assert (
         client.failure(nothing) == 'the workflow of nothing/v1 returned None as value'
@@ -644,7 +644,7 @@ def test_a_workflow_that_returns_none_as_a_required_output_fails(
 
 
 def test_a_workflow_that_returns_no_outputs_instance_fails(client: Client) -> None:
-    untyped = client.compute(UNTYPED, params={'sample': dataset(run=1)})
+    untyped = client.compute(UNTYPED, params={'sample': file(run=1)})
 
     assert client.failure(untyped) == (
         'the workflow of untyped/v1 returned dict, not ValueOutputs'
@@ -686,7 +686,7 @@ def test_a_record_holds_its_request_with_defaults_filled_in(
 
 
 def test_a_reference_with_a_key_reads_an_element_of_an_output(client: Client) -> None:
-    split = client.submit(SPLIT, params={'sample': dataset(run=2)})
+    split = client.submit(SPLIT, params={'sample': file(run=2)})
     whole, half = (
         split.ref('parts').model_copy(update={'key': k}) for k in ('whole', 'half')
     )
@@ -704,7 +704,7 @@ def test_a_reference_to_an_element_of_an_output_without_elements_is_refused(
 
 
 def test_a_reference_with_a_key_into_a_list_is_by_integer(client: Client) -> None:
-    split = client.submit(PIECES, params={'sample': dataset(run=2)})
+    split = client.submit(PIECES, params={'sample': file(run=2)})
     whole, half = (split.ref('pieces', key=k) for k in ('0', '1'))
 
     assert client.output(client.compute(ADD, params=operands(whole, half))) == {
@@ -738,12 +738,12 @@ def test_a_reference_to_a_failed_record_is_refused(client: Client, gate: Gate) -
 
 
 def test_a_refusal_names_the_request_and_the_field(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r'^second: sample: unknown dataset run:9$'):
+    with pytest.raises(SubmitError, match=r'^second: sample: unknown file run:9$'):
         client.submit({'first': load(1), 'second': load(9)})
     with pytest.raises(SubmitError) as raised:
         client.submit([load(1), load(9)])
-    assert raised.value.errors == (FieldError(1, ('sample',), 'unknown dataset run:9'),)
-    assert str(raised.value) == '[1]: sample: unknown dataset run:9'
+    assert raised.value.errors == (FieldError(1, ('sample',), 'unknown file run:9'),)
+    assert str(raised.value) == '[1]: sample: unknown file run:9'
 
 
 def test_a_refusal_lists_each_problem_of_a_value(client: Client) -> None:
@@ -751,7 +751,7 @@ def test_a_refusal_lists_each_problem_of_a_value(client: Client) -> None:
         BOXED,
         params={
             'box': {'valeu': 1, 'other': 2},
-            'sample': dataset(run=1),
+            'sample': file(run=1),
         },
     )
 
@@ -780,11 +780,11 @@ def test_a_table_that_needs_a_row_is_refused_without_one(client: Client) -> None
         client.submit(SUM, params={'terms': []})
 
 
-def test_a_row_given_twice_is_refused(client: Client, datasets: FakeDatasets) -> None:
-    path = datasets.path(datasets.resolve(dataset(run=1)))
+def test_a_row_given_twice_is_refused(client: Client, files: FakeFiles) -> None:
+    path = files.path(files.resolve(file(run=1)))
 
     with pytest.raises(SubmitError, match=r'runs\[1\]: repeats runs\[0\]'):
-        client.submit(RUNS, params={'runs': [dataset(run=1), dataset(path=path)]})
+        client.submit(RUNS, params={'runs': [file(run=1), file(path=path)]})
 
 
 def test_rows_are_distinct_as_a_whole(client: Client) -> None:
@@ -796,22 +796,22 @@ def test_rows_are_distinct_as_a_whole(client: Client) -> None:
         client.submit(SUM, params={'terms': [scaled, dict(scaled)]})
 
 
-def test_rows_of_dataset_models_are_distinct_by_identity_not_by_path(
-    client: Client, datasets: FakeDatasets
+def test_rows_of_file_models_are_distinct_by_identity_not_by_path(
+    client: Client, files: FakeFiles
 ) -> None:
-    # Two datasets of one run, by PID, share the run's file.
-    a = datasets.measure(7, 1.0, pid='x')
-    b = datasets.measure(7, 2.0, pid='y')
-    assert datasets.path(a) == datasets.path(b)
+    # Two files of one run, by PID, share the run's local path.
+    a = files.measure(7, 1.0, pid='x')
+    b = files.measure(7, 2.0, pid='y')
+    assert files.path(a) == files.path(b)
 
     summed = client.compute(RUNS, params={'runs': [a, b]})
     assert client.output(summed, 'value') == Amount(value=4.0)
     with pytest.raises(SubmitError, match=r'^runs\[1\]: repeats runs\[0\]'):
-        client.submit(RUNS, params={'runs': [a, dataset(pid='x')]})
+        client.submit(RUNS, params={'runs': [a, file(pid='x')]})
 
     acc = client.accumulator(Template(RUNS, blanks=('runs',)))
     acc.push(runs=[a])
     acc.push(runs=[b])
     assert client.output(acc, 'value') == Amount(value=4.0)
     with pytest.raises(SubmitError, match=r'^runs\[2\]: repeats runs\[0\]'):
-        acc.push(runs=[dataset(pid='x')])
+        acc.push(runs=[file(pid='x')])

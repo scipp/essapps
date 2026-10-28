@@ -15,7 +15,7 @@ and :meth:`Client.freeze`. It checks models and the references it names
 against what the backend knows now, and leaves reading data and computing to
 the backend's workers. Only the calls that read results wait for that work:
 :meth:`Client.wait`, :meth:`Client.compute`, and :meth:`Client.output`; and
-:meth:`Datasets.watch` waits for new datasets. So a GUI application can make
+:meth:`Files.watch` waits for new files. So a GUI application can make
 every other call from its UI thread.
 
 A client is the lifetime of what it keeps: the outputs of the records it
@@ -39,10 +39,10 @@ from typing import Any, Self
 
 from pydantic import BaseModel
 
-from ess.spec import AccumulatorRef, Binding, DatasetRef, WorkflowSpec
+from ess.spec import AccumulatorRef, Binding, FileRef, WorkflowSpec
 
 from .backend import Backend, Entry, Selection
-from .datasets import DatasetSource, Selector
+from .files import FileSource, Selector
 from .records import Record, Request, SpecId, Template, as_values
 from .store import Store
 
@@ -76,12 +76,12 @@ def _names(what: Any) -> list[str | int | None]:
 
 class Provenance(BaseModel, frozen=True):
     """
-    Where a record came from: what it ran, what it read, and their datasets.
+    Where a record came from: what it ran, what it read, and their files.
 
     ``request`` is the record's request, or for the state of an accumulator,
     the plain request over the rows pushed so far. ``records`` lists every
     record read through all references, nearest first, the records of the states
-    of accumulators among them; it stops at datasets.
+    of accumulators among them; it stops at files.
     """
 
     request: Request
@@ -90,34 +90,34 @@ class Provenance(BaseModel, frozen=True):
     def records(self) -> list[Record]:
         return list(self.upstream)
 
-    def datasets(self) -> list[DatasetRef]:
+    def files(self) -> list[FileRef]:
         ran = (self.request, *(r.request for r in self.upstream))
-        return list(dict.fromkeys(d for r in ran for d in r.datasets()))
+        return list(dict.fromkeys(d for r in ran for d in r.files()))
 
 
-class Datasets:
+class Files:
     """
-    The datasets of the backend's dataset source that the proposal may read.
+    The files of the backend's file source that the proposal may read.
 
-    Forms and controllers find datasets here: they list them, wait for new ones,
-    and read their metadata. A request names a dataset with ``dataset(...)``.
+    Forms and controllers find files here: they list them, wait for new ones,
+    and read their metadata. A request names a file with ``file(...)``.
     """
 
     def __init__(self, backend: Backend, client: str) -> None:
         self._backend = backend
         self._client = client
 
-    def list(self, selector: Selector) -> list[DatasetRef]:
-        """The datasets the selector matches, in the order they were measured."""
-        return self._backend.datasets(selector, self._client)
+    def list(self, selector: Selector) -> list[FileRef]:
+        """The files the selector matches, in the order they were measured."""
+        return self._backend.files(selector, self._client)
 
-    def watch(self, selector: Selector) -> Iterator[DatasetRef]:
-        """Matching datasets: the existing ones first, then new ones, each once."""
-        return self._backend.watch_datasets(selector, self._client)
+    def watch(self, selector: Selector) -> Iterator[FileRef]:
+        """Matching files: the existing ones first, then new ones, each once."""
+        return self._backend.watch_files(selector, self._client)
 
-    def metadata(self, ref: DatasetRef) -> dict[str, Any]:
-        """The dataset's current metadata; raises ``KeyError`` if not readable."""
-        return self._backend.dataset_metadata(ref, self._client)
+    def metadata(self, ref: FileRef) -> dict[str, Any]:
+        """The file's current metadata; raises ``KeyError`` if not readable."""
+        return self._backend.file_metadata(ref, self._client)
 
 
 @dataclass(frozen=True)
@@ -176,26 +176,26 @@ class Accumulator:
         Add rows to blank tables of the template, by the name of each, the
         rows entering one state in order::
 
-            acc.push(sample=[dataset(run=611), dataset(run=612)])
-            acc.push(sample=[dataset(run=613)])
-            acc.push(sample=[dataset(run=615)], can=[dataset(run=614)])
+            acc.push(sample=[file(run=611), file(run=612)])
+            acc.push(sample=[file(run=613)])
+            acc.push(sample=[file(run=615)], can=[file(run=614)])
 
         Each row is given inline, such as a group as a model or a dict, or by
         reference, as its type allows; a field of a group is given inline,
-        except a dataset at a field typed a dataset model, which is given by
+        except a file at a field typed a file model, which is given by
         reference. A push gives rows of one or more tables, side by side as in a
         request, never paired: rows of different tables have nothing to do
         with each other. A table the template fixes is refused, and so are a
         row the table holds already or that the push repeats, and a push of
         no rows into a table. Rows are compared as the record holds them: a
-        dataset by its identity, a reference to an output by record, output,
+        file by its identity, a reference to an output by record, output,
         and key, and an inline value by its JSON form; for a table whose
         element type has a JSON form, also by the rows read, before the
         driver gets them.
 
         A push is one push into the binding's driver per table, in the
         order given, and one state. A push references
-        datasets or outputs of records, never an accumulator. Each row is
+        files or outputs of records, never an accumulator. Each row is
         checked by the table's element type; the number of rows of a table,
         such as a row in a table that needs one, is checked when a state is
         pinned. When the push is added, its rows read, if the table's element
@@ -271,7 +271,7 @@ class Client:
         self._id = backend.open_client(proposal, submitter)
         self.proposal = proposal
         self.submitter = submitter
-        self.datasets = Datasets(backend, self._id)
+        self.files = Files(backend, self._id)
 
     def __enter__(self) -> Self:
         return self
@@ -330,17 +330,17 @@ class Client:
         parameter or an element of a list parameter, is given as its type
         allows (see :mod:`ess.spec.places`):
 
-        - a dataset model, by reference to a dataset;
+        - a file model, by reference to a file;
         - any other group, as a model or a dict of its fields, unless a field
           is a data value; or by reference to an output that fits;
         - a union of groups, as a model or a dict of the fields of one
           alternative, with its tag, never by reference.
 
-        A scalar field of a group is given inline, and a dataset model field
-        by reference to a dataset::
+        A scalar field of a group is given inline, and a file model field
+        by reference to a file::
 
             client.submit(IOFQ, params={'reduction': Reduction(bins=4),
-                                        'sample': dataset(run=60339),
+                                        'sample': file(run=60339),
                                         'transmission': t.ref('t')})
 
         A stage takes the values of its blanks the same way. Requests may be
@@ -351,10 +351,10 @@ class Client:
 
         The backend checks the values against its own spec, so a ``SpecId``
         in place of the spec gets the same checks. A request that cannot run
-        raises ``SubmitError``: an invalid value, an unknown spec or dataset,
+        raises ``SubmitError``: an invalid value, an unknown spec or file,
         an inline group with a field that is a data value, a reference where
-        none may stand, inside a group (except a dataset at a field typed a
-        dataset model), at a union, or to a whole list, a
+        none may stand, inside a group (except a file at a field typed a
+        file model), at a union, or to a whole list, a
         reference the client may not read, or one whose data do not fit its
         field. Each of its ``errors`` names the field at fault by its place,
         ``loc``, and the request by its key or index, ``entry``, if several
@@ -437,8 +437,8 @@ class Client:
         fail, and later ones are refused.
 
         A template a request would refuse is refused here. The stage's
-        template holds the values as the backend resolved them, so a dataset
-        name stays the dataset it named when the stage was made.
+        template holds the values as the backend resolved them, so a file
+        name stays the file it named when the stage was made.
         """
         stage_id, resolved = self._backend.open_stage(template, client=self._id)
         return Stage(resolved, stage_id)
@@ -621,7 +621,7 @@ class Client:
 def local(
     *,
     proposal: str,
-    datasets: DatasetSource,
+    files: FileSource,
     bind: Sequence[Binding],
     submitter: str = 'user',
     store: Store | None = None,
@@ -637,7 +637,7 @@ def local(
     history in memory, so its records end with the process.
     """
     return Client(
-        Backend(datasets, bind, store=store),
+        Backend(files, bind, store=store),
         proposal=proposal,
         submitter=submitter,
         owns_backend=True,

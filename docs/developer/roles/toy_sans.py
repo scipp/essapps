@@ -17,10 +17,10 @@ in, or computed by ``TRANSMISSION`` from a transmission run. ``FORWARD`` takes
 the I(Q) that ``IOFQ`` or ``IOFQ_MULTI`` outputs, as the group ``IofQ``, since a
 reference stands for a group only.
 
-Each parameter is a group. A file is a dataset model, a group given by
-reference to a dataset: ``Sample``, ``Can``, or ``Run``. A ``PipelineBinding``
-keys each parameter by its class, so the sample and the can are classes of
-their own.
+Each parameter is a group. A parameter that takes a file is typed a file
+model, a group given by reference to a file: ``Sample``, ``Can``, or ``Run``. A
+``PipelineBinding`` keys each parameter by its class, so the sample and the can
+are classes of their own.
 
 workflow-authors.ipynb writes the specs and bindings below step by step; the other
 notebooks import them from here.
@@ -36,7 +36,7 @@ import sciline
 import scipp as sc
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ess.spec import DatasetModel, DriverBinding, WorkflowSpec, function_binding
+from ess.spec import DriverBinding, FileModel, WorkflowSpec, function_binding
 from ess.spec.pipeline import PipelineBinding
 
 # The specs: what apps, clients, and the backend see.
@@ -83,8 +83,8 @@ class IofQ(BaseModel):
     intensity: sc.Variable
 
 
-class Run(DatasetModel):
-    """A run's file, of a raw dataset."""
+class Run(FileModel):
+    """A run's raw file."""
 
 
 class Sample(Run):

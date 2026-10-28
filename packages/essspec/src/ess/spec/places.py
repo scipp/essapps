@@ -6,17 +6,17 @@ Root places: where a request writes either a value or a reference, by type.
 A request is a JSON object of parameter values. A *root place* is a position
 in it where the request may write either a value or a reference to data that
 exist elsewhere (see :mod:`ess.spec.refs`): the value of a parameter, or an
-element of a list parameter. A group written inline holds scalars, dataset
+element of a list parameter. A group written inline holds scalars, file
 models, and lists of these, which are not root places. A request gives a
-dataset at a field typed a dataset model by reference, but a field is not a
+file at a field typed a file model by reference, but a field is not a
 place for a reference to an output::
 
     {
-        'sample': dataset(run=101),                    # sample
-        'centre': finder.ref('centre'),                # centre
-        'reduction': {'bins': 50, 'banks': [1, 2]},    # reduction
-        'runs': [dataset(run=102), dataset(run=103)],  # runs, runs[0], runs[1]
-        'specimen': {'run': dataset(run=104), 'thickness': 2.0},  # specimen
+        'sample': file(run=101),                     # sample
+        'centre': finder.ref('centre'),              # centre
+        'reduction': {'bins': 50, 'banks': [1, 2]},  # reduction
+        'runs': [file(run=102), file(run=103)],      # runs, runs[0], runs[1]
+        'specimen': {'run': file(run=104), 'thickness': 2.0},  # specimen
     }
 
 The type at a root place decides what the request writes there, with
@@ -26,10 +26,10 @@ The type at a root place decides what the request writes there, with
 ========================================  =====================================
 Type at the root place                    The request writes
 ========================================  =====================================
-a dataset model                           a reference to a dataset
+a file model                              a reference to a file
 a group                                   an object of its fields, unless one
                                           is a data value, with a reference to
-                                          a dataset at a field typed a dataset
+                                          a file at a field typed a file
                                           model; or a reference to an output
 a union of groups                         an object of the fields of one
                                           alternative, with its tag, as for a
@@ -42,31 +42,31 @@ A *scalar* is an ``int``, ``float``, ``str``, ``bool``, ``datetime``, an
 enum, or a ``Literal``, which a request writes inline, as JSON. A *data
 value* is a field without a JSON form, which no request writes. A group is
 validated whole, once, when the request arrives, so it holds only what is known
-then: values typed in, and datasets, named by their identity. A value that
+then: values typed in, and files, named by their identity. A value that
 another request computes may not exist yet; it fills a whole parameter. So the
-fields of a group without a data value are scalars, dataset models, or lists of
-one of these. A scalar is never typed ``X | None``; a dataset model may be. A
+fields of a group without a data value are scalars, file models, or lists of
+one of these. A scalar is never typed ``X | None``; a file model may be. A
 group with a data value is given by reference to an output
 only (see :func:`unwritten`); of its other fields, the framework refuses only
-a ``Path``, a dataset model, a ``NewType``, or a type alias, since no output
+a ``Path``, a file model, a ``NewType``, or a type alias, since no output
 could fill them.
 
-A reference to an output stands for a whole group. A reference to a dataset
-fits a dataset model whose metadata the dataset has (see
-:class:`~ess.spec.parameters.DatasetModel`). A reference to an output fits
-the root place's type, and no output holds a dataset model, so that a file
-comes only from a dataset, which the dataset source checks. A
-number, a string, or a ``sc.DataArray`` names no role: every output of its
-type would fit, so a value computed by another workflow comes as a group,
-such as a found beam centre, and a data value is a field of one::
+A reference to an output stands for a whole group. A reference to a file
+fits a file model whose metadata the file has (see
+:class:`~ess.spec.parameters.FileModel`). A reference to an output fits
+the root place's type, and no output holds a file model, so that every
+file comes from the file source, which checks it. A number, a string, or a
+``sc.DataArray`` names no role: every output of its type would fit, so a
+value computed by another workflow comes as a group, such as a found beam
+centre, and a data value is a field of one::
 
     class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):
         transmission: sc.DataArray  # a data value: given by reference only
 
 ``"@ref"`` is reserved at every depth, so that a reference is found
 without the spec (see :func:`ess.spec.refs.positions`), and one inside a
-group written inline is refused, but one to a dataset at a field typed a
-dataset model.
+group written inline is refused, but one to a file at a field typed a
+file model.
 
 A *union of groups* is a pydantic discriminated union,
 ``Annotated[A | B, Field(discriminator='kind')]``, in which each
@@ -89,7 +89,7 @@ possibly typed ``X | None``, not a union::
 
 :func:`place` describes what a request writes at a parameter, as the
 table above has it, for the params schema of a spec and for a form that a
-UI makes from the models: the :class:`Ways` of a group, a dataset model
+UI makes from the models: the :class:`Ways` of a group, a file model
 among them, or a union; of a list parameter, the :class:`Rows`. For the two
 ``beam_centre`` above::
 
@@ -187,7 +187,7 @@ def held(model: type[BaseModel], name: str, value: Any, on_ref: OnRef) -> Any:
 
 def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
     if isinstance(value, BaseModel) and not isinstance(value, Ref):
-        # A dataset model, in it or as it, as the reference to its dataset.
+        # A file model, in it or as it, as the reference to its file.
         value = value.model_dump()
     tp, nullable = field_types.optional(slot.annotation)
     union = alternatives(slot.annotation, slot.discriminator)
@@ -201,8 +201,8 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
         return on_ref(loc, ref, tp)
     if value is None and nullable:
         return None
-    if field_types.is_dataset(tp):
-        raise _not_a_dataset(loc, tp, value)
+    if field_types.is_file_model(tp):
+        raise _not_a_file_ref(loc, tp, value)
     if union is not None or field_types.is_group(tp):
         fields = value
         if not isinstance(fields, Mapping):
@@ -213,67 +213,66 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
             )
         group = _group(loc, slot, fields)
         _written(loc, group)
-        value = _datasets_held(loc, group, fields, on_ref)
+        value = _files_held(loc, group, fields, on_ref)
         for at, item in positions(loc, value):
             if (
                 at != loc
                 and (ref := ref_at(at, item)) is not None
-                and _dataset_field(group, at[len(loc)]) is None
+                and _file_field(group, at[len(loc)]) is None
             ):
                 raise _refused(
                     at,
                     f'{ref}: a reference stands for a whole group, at a parameter '
                     'or an element of a list parameter; inside a group, only a field '
-                    'typed a dataset model takes one, a reference to a dataset',
+                    'typed a file model takes one, a reference to a file',
                 )
     return _inline(loc, slot, value)
 
 
-def _dataset_field(group: type[BaseModel], name: str | int) -> Any:
-    """The dataset model at the field ``name`` of ``group``, or ``None``."""
+def _file_field(group: type[BaseModel], name: str | int) -> Any:
+    """The file model at the field ``name`` of ``group``, or ``None``."""
     field = group.model_fields.get(str(name))
-    return None if field is None else field_types.dataset_model(field.annotation)
+    return None if field is None else field_types.file_model(field.annotation)
 
 
-def _datasets_held(
+def _files_held(
     loc: Loc, group: type[BaseModel], fields: Mapping[str, Any], on_ref: OnRef
 ) -> dict[str, Any]:
     """
     ``fields`` of ``group`` at ``loc``, with each reference at a field typed
-    a dataset model, or at an element of a list of one, replaced by what
+    a file model, or at an element of a list of one, replaced by what
     ``on_ref`` returns for it, in its JSON form, so that the group is
-    validated whole with the datasets resolved.
+    validated whole with the files resolved.
     """
     held = dict(fields)
     for name, item in fields.items():
-        if (tp := _dataset_field(group, name)) is None:
+        if (tp := _file_field(group, name)) is None:
             continue
         if field_types.is_list(group, name) and isinstance(item, list):
             held[name] = [
-                _dataset_held((*loc, name, i), tp, v, on_ref)
-                for i, v in enumerate(item)
+                _file_held((*loc, name, i), tp, v, on_ref) for i, v in enumerate(item)
             ]
         else:
-            held[name] = _dataset_held((*loc, name), tp, item, on_ref)
+            held[name] = _file_held((*loc, name), tp, item, on_ref)
     return held
 
 
-def _dataset_held(loc: Loc, tp: Any, value: Any, on_ref: OnRef) -> Any:
-    if field_types.is_dataset(type(value)):
+def _file_held(loc: Loc, tp: Any, value: Any, on_ref: OnRef) -> Any:
+    if field_types.is_file_model(type(value)):
         value = value.model_dump()
     if (ref := ref_at(loc, value)) is None:
         if value is None:
             return value  # refused when the group is validated, unless X | None
-        raise _not_a_dataset(loc, tp, value)
+        raise _not_a_file_ref(loc, tp, value)
     held = on_ref(loc, ref, tp)
     return held.model_dump(by_alias=True) if isinstance(held, BaseModel) else held
 
 
-def _not_a_dataset(loc: Loc, tp: Any, value: Any) -> ParamsError:
+def _not_a_file_ref(loc: Loc, tp: Any, value: Any) -> ParamsError:
     return _refused(
         loc,
-        f'{value!r} is not a dataset; {field_types.type_name(tp)} is given by '
-        'reference to a dataset, such as dataset(path=...)',
+        f'{value!r} is not a reference; {field_types.type_name(tp)} is given by '
+        'reference to a file, such as file(path=...)',
     )
 
 
@@ -328,9 +327,9 @@ def validated(
     is as a record holds it: the JSON form of a value written inline, and a
     reference at a parameter or an element of a list parameter. Each
     reference is replaced by the data ``read`` gives for it, and the value
-    made of the result: of a reference to a dataset, ``read`` gives the
-    reference, and the dataset model made of it gets its local path from
-    ``paths``, by identity (see :class:`~ess.spec.parameters.DatasetModel`).
+    made of the result: of a reference to a file, ``read`` gives the
+    reference, and the file model made of it gets its local path from
+    ``paths``, by identity (see :class:`~ess.spec.parameters.FileModel`).
     A value written inline was validated when the request was submitted, and
     its JSON form reads back as it, so this fails only for the data of a
     reference to an output. It is validated in Python mode with
@@ -424,8 +423,8 @@ class Ways:
     an object of their fields: the alternatives of a union by the value of
     its tag field ``tag``; a group by ``None``, unless it holds a data value.
     ``record`` is the type that the data of a reference must fit: an
-    output's type, or for a dataset model, which a request gives by
-    reference to a dataset only, the model; ``None`` for a union, which no
+    output's type, or for a file model, which a request gives by
+    reference to a file only, the model; ``None`` for a union, which no
     reference fits.
     """
 
@@ -489,17 +488,17 @@ def _described(annotation: Any, metadata: tuple[Any, ...]) -> Ways:
         tag, groups = union
         return Ways(tag, groups, None, none, metadata)
     inline = {} if unwritten(tp) is not None else {None: tp}
-    record = None if _holds_dataset(tp) else tp
+    record = None if _holds_file(tp) else tp
     return Ways(None, inline, record, none, metadata)
 
 
-def _holds_dataset(group: Any) -> bool:
+def _holds_file(group: Any) -> bool:
     """
-    Whether ``group`` has a field typed a dataset model: no output holds one,
+    Whether ``group`` has a field typed a file model: no output holds one,
     so no output fits it.
     """
-    return not field_types.is_dataset(group) and any(
-        _dataset_field(group, n) is not None for n in group.model_fields
+    return not field_types.is_file_model(group) and any(
+        _file_field(group, n) is not None for n in group.model_fields
     )
 
 
@@ -615,13 +614,13 @@ def groups_at(model: type[BaseModel], name: str) -> list[type[BaseModel]]:
 def unwritten(group: type[BaseModel]) -> str | None:
     """
     The first field of ``group`` that a request does not write, or ``None``
-    if there is none: a data value, a field without a JSON form; of a dataset
-    model, its ``dataset``, since a request gives a dataset model by
-    reference to a dataset only. A group with such a field is given by
+    if there is none: a data value, a field without a JSON form; of a file
+    model, its ``file``, since a request gives a file model by
+    reference to a file only. A group with such a field is given by
     reference only.
     """
-    if field_types.is_dataset(group):
-        return 'dataset'
+    if field_types.is_file_model(group):
+        return 'file'
     return next(
         (n for n in group.model_fields if not field_types.has_json_form(group, n)),
         None,
@@ -635,8 +634,8 @@ def ref_types(
     Each reference at a root place in ``params``, by name, as a record holds
     them, with its place, a parameter or an element of a list parameter, and
     the type at the place, with ``| None`` removed: the type of the data it
-    must fit. A reference inside a group, to a dataset at a field typed a
-    dataset model, is left out: it is checked when it is resolved.
+    must fit. A reference inside a group, to a file at a field typed a
+    file model, is left out: it is checked when it is resolved.
     """
     found = []
     for loc, ref in iter_refs(params):
