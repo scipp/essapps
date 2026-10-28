@@ -14,7 +14,9 @@ from ess.spec.field_types import (
     element,
     fields_of,
     fits,
+    has_array,
     is_alias,
+    is_array,
     is_file_model,
     is_single,
     optional,
@@ -112,6 +114,24 @@ def test_a_data_value_is_one_value(tp: Any) -> None:
 )
 def test_lists_dicts_and_unions_are_not_data_values(tp: Any) -> None:
     assert not is_single(tp)
+
+
+@pytest.mark.parametrize('tp', [sc.Variable, sc.DataArray, sc.DataArray | None])
+def test_a_type_with_dims_is_an_array(tp: Any) -> None:
+    assert is_array(tp)
+    assert has_array(tp)
+
+
+@pytest.mark.parametrize('tp', [float, Parts, list[sc.DataArray], BeamCentre])
+def test_a_group_a_list_and_a_scalar_are_not_arrays(tp: Any) -> None:
+    assert not is_array(tp)
+
+
+def test_a_group_has_an_array_if_a_field_is_one() -> None:
+    assert has_array(Parts)
+    assert has_array(Parts | None)
+    assert not has_array(BeamCentre)
+    assert not has_array(list[sc.DataArray])
 
 
 def test_a_file_model_is_a_subclass_of_file_model() -> None:
