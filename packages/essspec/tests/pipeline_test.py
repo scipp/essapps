@@ -9,7 +9,7 @@ import pytest
 import sciline
 from pydantic import BaseModel, Field
 
-from ess.spec import DatasetModel, DriverBinding, WorkflowSpec
+from ess.spec import DriverBinding, FileModel, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
 from ess.spec.testing import check_arrival_and_order, check_caching, check_one_row
 
@@ -24,7 +24,7 @@ class Reduction(BaseModel):
     bins: int = 2
 
 
-class Run(DatasetModel):
+class Run(FileModel):
     """A text file of counts."""
 
 

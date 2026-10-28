@@ -9,7 +9,7 @@ A story that needs what the design leaves open or defers says so in a "Gap" line
 ## Toy specs
 
 Toy specs stand in for instrument workflows, so that a story's numbers can be checked by hand.
-A dataset made by `measure` holds a list of counts.
+A file made by `measure` holds a list of counts.
 Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate record is made only for a result worth keeping by itself, for a value that one user types in and another computes (section I), or for a value that a workflow computes and a file also holds, which a loader workflow reads (C2).
 
 | Spec | Params | Outputs | Computes | Stands in for |
@@ -38,7 +38,7 @@ The type at a root place, the value of a parameter or an element of a list param
 
 | The type at a root place | In the toy specs | Given as |
 |---|---|---|
-| a dataset model | the runs, such as `Sample`; `PublishedNormalization` | a dataset reference |
+| a file model | the runs, such as `Sample`; `PublishedNormalization` | a file reference |
 | a group without a data value | `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre` | an object of its fields, or a reference to an output of its class |
 | a group with a data value | `BeamCentre`, `ComputedNormalization`, `Transmission`, `Parts`, `Volume`, `Reflectivity` | a reference to an output of its class |
 | a list, `list[X]` | each list parameter, such as `runs` and `parts` | a list, each element given as an `X` |
@@ -46,21 +46,21 @@ The type at a root place, the value of a parameter or an element of a list param
 
 Each parameter of a toy spec is a group or a list of groups, possibly `X | None`.
 Each field of these groups is a scalar, such as `bins` and `scale`, or a data value, such as the `sc.Variable` of `Volume.counts`.
-Each run is a dataset model, with a class for each role: `Sample`, `Can`, `DirectBeam`, `Vanadium`, `Background`, and `Reference`, each a subclass of `Run`:
+Each run is a file model, with a class for each role: `Sample`, `Can`, `DirectBeam`, `Vanadium`, `Background`, and `Reference`, each a subclass of `Run`:
 
 ```python
-class Run(DatasetModel): ...    # dataset: str, from DatasetModel
+class Run(FileModel): ...    # file: str, from FileModel
 
 class Sample(Run): ...
 class Can(Run): ...
 
-{'sample': run, 'can': can}     # IOFQ_CAN, each a dataset reference
+{'sample': run, 'can': can}     # IOFQ_CAN, each a file reference
 ```
 
-A request gives a table of runs as a list of dataset references, such as `runs`.
+A request gives a table of runs as a list of file references, such as `runs`.
 An output without a type in the list of toy specs is a `sc.Variable`.
 `BeamCentre`, `Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each, named by its role: `position`, `fraction`, `counts`, and `curve`.
-`ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` is a dataset model, a file of it.
+`ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` is a file model, a file of it.
 `Parts` is a group of two `sc.Variable`s.
 A reference to an output fits a root place when the output is of the class of the group there: `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `VANADIUM`'s and `LOAD_NORMALIZATION`'s `normalization` fit `IOFQ`'s `normalization`, `FIND_CENTRE`'s `centre` and `CONTRIBUTE`'s `transmission` fit `CENTRED_MULTI`'s `centre` and `transmission`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
@@ -81,26 +81,26 @@ A story may add a toy spec to the list of toy specs; it must take runs directly,
 ## Conventions
 
 Fixtures: `client` is a client for proposal `p1`.
-In the notebook stories it is `local(proposal='p1', datasets=datasets, bind=...)`, a backend in the user's process ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
+In the notebook stories it is `local(proposal='p1', files=files, bind=...)`, a backend in the user's process ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 In the batch and automatic stories, sections D and E, it is `connect(url, proposal='p1')`, a client of the service at `url` ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)), which is designed and not implemented.
 The story tests make a `Client` of one in-process `Backend` for both, with a fake store in memory.
 In the stories, `connect(proposal=..., user=...)` is `connect(url, ...)` to the same service, by default for `client`'s proposal and user; `user=` stands for logging in as another user.
 `other` is a client of a second backend.
-Every backend in the stories reads the same datasets and publishes to the same `scicat`.
-`measure(n, counts, **fields)` makes run `n` appear as a raw dataset with the given counts and metadata, and returns its reference.
-The metadata of such a dataset also holds its run number, as `run`; `measure(..., proposal=...)` makes the dataset belong to another proposal.
-`datasets` is the fake dataset source of every backend; stories query it through `client.datasets` as in README.md.
-It has a helper for tests: `datasets.add_published(entry)` lists a published entry as a derived dataset, as SciCat does, and returns its reference.
+Every backend in the stories reads the same files and publishes to the same `scicat`.
+`measure(n, counts, **fields)` makes run `n` appear as a raw file with the given counts and metadata, and returns its reference.
+The metadata of such a file also holds its run number, as `run`; `measure(..., proposal=...)` makes the file belong to another proposal.
+`files` is the fake file source of every backend; stories query it through `client.files` as in README.md.
+It has a helper for tests: `files.add_published(entry)` lists a published entry as a derived file, as SciCat does, and returns its reference.
 `scicat` is a fake publisher; `scicat.entries[pid]` is a published entry, with `.provenance`.
-`folder` is a directory with files that hold counts, as `measure` datasets do.
-`corrupt(run)` makes a dataset unreadable, with the failure message `'file signature not found'`; `repair(run)` undoes it.
-`upgrade(specs=..., versions=...)` returns a client of an upgraded backend over the same datasets, history, and store: the specs it offers, every one by default, and the software versions its records name. The upgrade ends every client of the backend before it, and `connect` then makes clients of the upgraded backend.
+`folder` is a directory with files that hold counts, as `measure` files do.
+`corrupt(run)` makes a file unreadable, with the failure message `'file signature not found'`; `repair(run)` undoes it.
+`upgrade(specs=..., versions=...)` returns a client of an upgraded backend over the same files, history, and store: the specs it offers, every one by default, and the software versions its records name. The upgrade ends every client of the backend before it, and `connect` then makes clients of the upgraded backend.
 `replace` is `dataclasses.replace`.
 
 Besides the calls in README.md, the stories use this one:
 
 ```python
-record.request.datasets()    # the datasets the request names directly
+record.request.files()    # the files the request names directly
 ```
 
 The trigger loop belongs to the sub-design for batch and automatic reduction.
@@ -108,7 +108,7 @@ The stories use two of its calls:
 
 ```python
 loop.step()                  # handles what arrived since the last step; returns the records it made
-loop.status(rule).reason     # why a rule submitted nothing or skipped a dataset
+loop.status(rule).reason     # why a rule submitted nothing or skipped a file
 ```
 
 ## S. Small stories
@@ -126,7 +126,7 @@ result = client.compute(IOFQ, params={'reduction': Reduction(threshold=1.5),
 
 assert client.output(result, 'iofq').values.tolist() == [2.0, 7.0]   # [0, 2, 3, 4] in 2 groups
 assert result.request.params['reduction']['bins'] == 2                # default, recorded
-assert result.request.datasets() == [run]
+assert result.request.files() == [run]
 ```
 
 ### S2. Tune one parameter
@@ -188,9 +188,9 @@ backgrounds = [measure(4, [1.0, 1.0]), measure(5, [0.0, 1.0])]
 result = client.compute(BACKGROUND, params={'sample_runs': runs, 'background_runs': backgrounds})
 
 assert client.output(total, 'normalized').values.tolist() == [0.5, 1.5]   # [2, 6] / 8 * 2
-assert total.request.datasets() == runs
+assert total.request.files() == runs
 assert client.output(result, 'subtracted').values.tolist() == [1.0, 4.0]  # [2, 6] - [1, 2]
-assert result.request.datasets() == runs + backgrounds
+assert result.request.files() == runs + backgrounds
 ```
 
 This is a plain request over tables (README.md, "Combining runs: tables"): `NORMALIZE` takes one table of runs, and `BACKGROUND` two, as `IOFQ_MULTI` does. B2 sums with an accumulator.
@@ -207,14 +207,14 @@ second = measure(4, [6.0, 9.0], role='sample')
 template = Template(IOFQ_CAN, params={'normalization': None}, blanks=('sample', 'can'))
 cans = Lookup({'can': LastBefore(Selector(role='can'))})   # the latest can measured before the run
 
-requests = apply(template, [first, second], client.datasets, at='sample', member_field='run', lookup=cans)
+requests = apply(template, [first, second], client.files, at='sample', member_field='run', lookup=cans)
 reduced = list(client.compute(requests, label='iofq').values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [[4.0, 5.0], [4.0, 7.0]]
-assert [r.request.datasets() for r in reduced] == [[first, can_1], [second, can_3]]
+assert [r.request.files() for r in reduced] == [[first, can_1], [second, can_3]]
 ```
 
-Each dataset fills `sample`, the one blank the lookup leaves.
+Each file fills `sample`, the one blank the lookup leaves.
 
 ### S8. Trace a result to raw data
 
@@ -226,7 +226,7 @@ vanadium = client.compute(VANADIUM, params={'scaling': Scaling(scale=2.0), 'vana
 result = client.compute(IOFQ, params={'sample': sample, 'normalization': vanadium.ref('normalization')})
 
 provenance = client.provenance(result)
-assert set(provenance.datasets()) == {sample, vanadium_run}
+assert set(provenance.files()) == {sample, vanadium_run}
 (upstream,) = provenance.records()             # the records `result` reads, through all its references
 assert upstream.request.params['scaling'] == {'scale': 2.0}
 assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]   # [4, 8] / ((1 + 1) * 2)
@@ -241,27 +241,27 @@ Actor: user of a local application. Goal: list the files in a folder, add a refe
 ```python
 files = sorted(folder.glob('*.h5'))                      # two files, counts [1, 2] and [3, 4]
 vanadium = measure(9, [5.0, 6.0], pid='20.500.12269/vanadium')
-named = [dataset(path=f) for f in files] + [dataset(pid='20.500.12269/vanadium')]
+named = [file(path=f) for f in files] + [file(pid='20.500.12269/vanadium')]
 plots = [client.compute(IOFQ, params={'sample': d, 'normalization': None}) for d in named]
 
 assert [client.output(p, 'iofq').values.tolist() for p in plots] == [
     [1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]
-assert plots[2].request.datasets() == [vanadium]
+assert plots[2].request.files() == [vanadium]
 ```
 
 Listing the folder is plain Python and makes no record. What is fetched, and when, is system story A1.
 
 ### A2. Run number instead of file
 
-Actor: user at the instrument. Goal: type a run number and get the dataset.
+Actor: user at the instrument. Goal: type a run number and get the file.
 
 ```python
 run = measure(4711, [1.0, 2.0])
-result = client.compute(IOFQ, params={'sample': dataset(run=4711), 'normalization': None})
+result = client.compute(IOFQ, params={'sample': file(run=4711), 'normalization': None})
 
-assert result.request.datasets() == [run]              # the dataset itself, not the number
+assert result.request.files() == [run]              # the file itself, not the number
 with pytest.raises(SubmitError):                        # no run 4712 exists
-    client.compute(IOFQ, params={'sample': dataset(run=4712), 'normalization': None})
+    client.compute(IOFQ, params={'sample': file(run=4712), 'normalization': None})
 assert client.records() == [result]
 ```
 
@@ -290,7 +290,7 @@ for bins, threshold in [(1, 0.0), (4, 0.0), (4, 1.5), (2, 1.5)]:
 final = client.latest('tuning')
 beamtime = Template(final.request.spec, params=final.request.params, blanks=('sample',))
 new = measure(2, [2.0, 1.0, 4.0, 3.0])
-requests = apply(beamtime, [new], client.datasets, at='sample', member_field='run')
+requests = apply(beamtime, [new], client.files, at='sample', member_field='run')
 (reduced,) = client.compute(requests, label='iofq-beamtime').values()
 
 assert len(client.records(label='tuning')) == 4
@@ -318,8 +318,8 @@ again = client.compute(NORMALIZE, params={'scaling': Scaling(scale=2.0), 'runs':
 
 assert [value.values.tolist() for value in (first, added, client.output(again, 'normalized'))] == [
     [0.5, 1.5], [0.75, 1.25], [1.0, 1.0]]      # [3, 9] / 12 * 2; [6, 10] / 16 * 2; [4, 4] / 8 * 2
-assert client.provenance(total).datasets() == [r611, r612, r613]
-assert client.provenance(again).datasets() == [r611, r613]
+assert client.provenance(total).files() == [r611, r612, r613]
+assert client.provenance(again).files() == [r611, r613]
 assert client.records() == [again]
 ```
 
@@ -365,11 +365,11 @@ samples = [measure(2, [2.0, 3.0, 4.0, 5.0], role='sample'),
 template = Template(IOFQ, params={'beam_centre': centre.ref('centre'), 'normalization': None},
                     blanks=('sample',))
 
-requests = apply(template, samples, client.datasets, at='sample', member_field='run')
+requests = apply(template, samples, client.files, at='sample', member_field='run')
 reduced = list(client.compute(requests, label='iofq').values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [[3.0, 7.0], [7.0, 3.0]]
-assert set(client.provenance(reduced[0]).datasets()) == {samples[0], centre_run}
+assert set(client.provenance(reduced[0]).files()) == {samples[0], centre_run}
 ```
 
 A beam centre found again later is a new record under `beam-centre`; the template keeps the reference it was made with until someone changes it.
@@ -382,20 +382,20 @@ Actor: user. Goal: use a vanadium result that another backend published to SciCa
 vanadium = other.compute(VANADIUM, params={'scaling': Scaling(scale=2.0),
                                            'vanadium': measure(1, [1.0, 1.0])})
 pid = other.publish(vanadium.ref('normalization'), 'scicat')
-published = datasets.add_published(scicat.entries[pid])
+published = files.add_published(scicat.entries[pid])
 
 sample = measure(2, [4.0, 8.0])
-loaded = client.compute(LOAD_NORMALIZATION, params={'published': dataset(pid=pid)})
+loaded = client.compute(LOAD_NORMALIZATION, params={'published': file(pid=pid)})
 result = client.compute(IOFQ, params={'sample': sample,
                                       'normalization': loaded.ref('normalization')})
 
 assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]    # [4, 8] / ((1 + 1) * 2)
-assert set(client.provenance(result).datasets()) == {sample, published}
+assert set(client.provenance(result).files()) == {sample, published}
 assert client.records() == [loaded, result]      # the vanadium record is on the other backend
 ```
 
-Provenance stops at the published dataset, since what lies behind a dataset belongs to its source. How the backend reads the published output is system story C2.
-The published normalization is a file of its factor, and a dataset reference fits a dataset model only. So `LOAD_NORMALIZATION` reads the file and outputs a `ComputedNormalization`, which `IOFQ`'s `normalization` takes by reference, as it takes the output of `VANADIUM`. `normalization` is a group, not a union of the two ways, since no reference fits a union (README.md, Specs and bindings).
+Provenance stops at the published file, since what lies behind a file belongs to its source. How the backend reads the published output is system story C2.
+The published normalization is a file of its factor, and a file reference fits a file model only. So `LOAD_NORMALIZATION` reads the file and outputs a `ComputedNormalization`, which `IOFQ`'s `normalization` takes by reference, as it takes the output of `VANADIUM`. `normalization` is a group, not a union of the two ways, since no reference fits a union (README.md, Specs and bindings).
 A result of another proposal, such as a direct-beam function an instrument scientist prepared for the users of later proposals, is read the same way, never through the other proposal's records (G5).
 
 ### C4. Reflectometry angle series
@@ -410,7 +410,7 @@ series = client.submit(STITCH, params={'runs': angles, 'reference': reference})
 exported = client.compute(EXPORT, params={'result': series.ref('stitched')})
 
 assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
-assert set(client.provenance(exported).datasets()) == {reference, *angles}
+assert set(client.provenance(exported).files()) == {reference, *angles}
 ```
 
 The stitch fits scale factors over all angles at once, so it cannot add one angle at a time. An accumulator over `STITCH` still gives what the plain request gives at each read: its driver keeps the rows and stitches them again at each read (README.md, "What a binding provides").
@@ -449,7 +449,7 @@ temperatures = ['250K', '260K', '270K', '280K', '290K']
 runs = [measure(n, [float(n)] * 4, temperature=t) for n, t in enumerate(temperatures, start=1)]
 corrupt(runs[1])                                                     # 260K
 template = Template(IOFQ, params={'reduction': Reduction(bins=1), 'normalization': None}, blanks=('sample',))
-requests = apply(template, runs, client.datasets, at='sample', member_field='temperature')
+requests = apply(template, runs, client.files, at='sample', member_field='temperature')
 scan = client.compute(requests, label='scan', persist=True)         # keyed by temperature
 
 assert [client.output(scan[t], 'iofq').values.tolist() for t in ('250K', '270K', '290K')] == [
@@ -506,11 +506,11 @@ Actor: user of the shared service. Goal: cancel a running batch of 500 with a wr
 runs = [measure(n, [1.0, 1.0, 1.0, 1.0]) for n in range(1, 501)]
 wrong = Template(IOFQ, params={'reduction': Reduction(threshold=20.0), 'normalization': None},
                 blanks=('sample',))
-first = client.submit(apply(wrong, runs, client.datasets, at='sample', member_field='run'),
+first = client.submit(apply(wrong, runs, client.files, at='sample', member_field='run'),
                       label='scan', persist=True)
 client.cancel(first)
 fixed = replace(wrong, params={'reduction': Reduction(threshold=0.5), 'normalization': None})
-second = client.compute(apply(fixed, runs, client.datasets, at='sample', member_field='run'),
+second = client.compute(apply(fixed, runs, client.files, at='sample', member_field='run'),
                         label='scan', persist=True)
 
 assert set(client.wait(first).values()) <= {'completed', 'cancelled'}
@@ -527,7 +527,7 @@ Actor: user filling in a batch form. Goal: a parameter the params model rejects 
 ```python
 runs = [measure(n, [1.0, 1.0]) for n in range(1, 501)]
 typo = Template(IOFQ, params={'reduction': {'threshold': '2,5'}, 'normalization': None}, blanks=('sample',))
-requests = apply(typo, runs, client.datasets, at='sample', member_field='run')
+requests = apply(typo, runs, client.files, at='sample', member_field='run')
 
 with pytest.raises(SubmitError, match=r'reduction\.threshold'):
     client.submit(requests, label='scan')
@@ -542,17 +542,17 @@ Actor: instrument scientist. Goal: reduce an earlier batch of the proposal again
 template = Template(IOFQ, params={'reduction': Reduction(threshold=1.5), 'normalization': None},
                     blanks=('sample',))
 runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
-client.compute(apply(template, runs, client.datasets, at='sample', member_field='run'),
+client.compute(apply(template, runs, client.files, at='sample', member_field='run'),
                label='scan', persist=True)
 
 # weeks later, version 2 of the spec is released
 before = client.records(label='scan')
 runs = [r.request.params['sample'] for r in before]
-renamed = apply(replace(template, spec=IOFQ_V2), runs, client.datasets, at='sample', member_field='run')
+renamed = apply(replace(template, spec=IOFQ_V2), runs, client.files, at='sample', member_field='run')
 with pytest.raises(SubmitError, match=r'reduction\.threshold: Extra inputs'):
     client.submit(renamed, label='scan')
 moved = replace(template, spec=IOFQ_V2, params={'reduction': ReductionV2(mask_below=1.5), 'normalization': None})
-requests = apply(moved, runs, client.datasets, at='sample', member_field='run')
+requests = apply(moved, runs, client.files, at='sample', member_field='run')
 after = list(client.compute(requests, label='scan', persist=True).values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in (before[0], after[0])] == [
@@ -577,7 +577,7 @@ for n in range(1, 301):
 
 cuts, pushed = [], []
 scan = client.accumulator(Template(VOLUME, blanks=('runs',)))
-for run in islice(client.datasets.watch(Selector(scan='17')), 300):
+for run in islice(client.files.watch(Selector(scan='17')), 300):
     scan.push(runs=[run])                                      # added once the previous cut is copied
     pushed.append(run)
     cuts.append(client.output(scan, 'volume', select={'q': 0}))     # a copy of the cut; no record
@@ -587,7 +587,7 @@ assert [c.counts.value for c in cuts] == [float(k) for k in range(1, 301)]
 assert client.output(total, 'volume').counts.values.tolist() == [300.0, 45150.0]
 assert total.request == Request(VOLUME, params={'runs': pushed})   # push order
 assert client.records() == [total]                             # the cuts made no record
-assert len(client.provenance(total).datasets()) == 300         # run 5, measured again, once
+assert len(client.provenance(total).files()) == 300         # run 5, measured again, once
 ```
 
 `watch` yields run 5 once, although its file arrives twice.
@@ -646,21 +646,21 @@ assert loop.status(rule).reason == '1: unknown spec sans-iofq/v1'   # member 1
 
 ### E3. Reduction of our own output
 
-Actor: none; a failure mode. Goal: a published result that SciCat lists as a dataset does not trigger the rule.
+Actor: none; a failure mode. Goal: a published result that SciCat lists as a file does not trigger the rule.
 
 ```python
-rule = Rule('auto-iofq', Template(IOFQ, params={'normalization': None}, blanks=('sample',)), selector=Selector(),   # every raw dataset
+rule = Rule('auto-iofq', Template(IOFQ, params={'normalization': None}, blanks=('sample',)), selector=Selector(),   # every raw file
             at='sample', label='iofq')
 loop = TriggerLoop(client, rules=[rule])
 measure(1, [1.0, 2.0, 3.0, 4.0])
 (reduced,) = loop.step()
 pid = client.publish(reduced.ref('iofq'), 'scicat')
-datasets.add_published(scicat.entries[pid])
+files.add_published(scicat.entries[pid])
 
 assert loop.step() == []
 ```
 
-A published entry is a derived dataset, and a selector matches only raw datasets unless it names another kind.
+A published entry is a derived file, and a selector matches only raw files unless it names another kind.
 
 ### E4. Template improved during a beamtime
 
@@ -678,11 +678,11 @@ second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
 (after,) = TriggerLoop(client, rules=[improved]).step()
 
 user = connect()                                                # any client of the proposal
-assert after.request.datasets() == [second]                     # run 1 is not reduced again
+assert after.request.files() == [second]                     # run 1 is not reduced again
 assert [user.output(r, 'iofq').values.tolist() for r in (before, after)] == [
     [3.0, 7.0], [2.0, 7.0]]
 stale = [r for r in user.records(label='iofq') if r.request.params['reduction']['threshold'] != 1.5]
-assert [r.request.datasets() for r in stale] == [[first]]       # to reprocess, if the user wants
+assert [r.request.files() for r in stale] == [[first]]       # to reprocess, if the user wants
 ```
 
 The second loop stands in for a running trigger loop whose rule is replaced. It learns that run 1 is handled from the records under `iofq`.
@@ -704,7 +704,7 @@ plain = client.compute(IOFQ, params=result.request.params)   # without a stage
 
 provenance = scicat.entries[pid].provenance                    # read without the client
 assert provenance == client.provenance(result) == client.provenance(plain)
-assert set(provenance.datasets()) == {centre_run, run}
+assert set(provenance.files()) == {centre_run, run}
 assert [r.request.params for r in provenance.records()] == [centre.request.params]
 assert {'essapps', 'scipp'} <= provenance.software.keys()
 ```
@@ -740,7 +740,7 @@ Actor: workflow developer. Goal: run a workflow defined in a notebook without in
 
 ```python
 draft = iofq                                                  # IOFQ's function, being edited
-dev = local(proposal='p1', datasets=datasets, bind=[function_binding(IOFQ, draft)])   # a backend in this process
+dev = local(proposal='p1', files=files, bind=[function_binding(IOFQ, draft)])   # a backend in this process
 result = dev.compute(IOFQ, params={'sample': measure(1, [1.0, 2.0, 3.0, 4.0])})
 
 assert dev.output(result, 'iofq').values.tolist() == [3.0, 7.0]
@@ -859,7 +859,7 @@ assert client.output(total, 'centred').values.tolist() == [0.25, 0.75]   # ([1, 
 assert client.provenance(total).records() == [t]
 ```
 
-Each row of `sample` is a dataset model, which holds only the path of its file.
+Each row of `sample` is a file model, which holds only the path of its file.
 The transmission applies to the summed runs, so it is a parameter of its own, given by reference to the record that computed it.
 `Transmission` has a field that is a data value, so a transmission takes a reference only.
 The provenance of the sum reaches that record.
@@ -868,7 +868,7 @@ The provenance of the sum reaches that record.
 
 What the design leaves open or defers, with the stories each item affects.
 
-- **Removing a dataset** (system story A4): deferred, together with whether the outputs derived from it go too.
+- **Removing a file** (system story A4): deferred, together with whether the outputs derived from it go too.
 - **The service** (sections D and E): designed and not implemented; the format of each persisted output type and the layout of the store are open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 - **Looks that compute** (B4, D7): a selection only indexes; a projection or a thick slice summed waits for the plotting work; README.md open question 4.
 - **Persist at submission** (D1, D2, D3, D6, E1 to E4): whether `persist=` should also keep the values for the client; README.md open question 6.

@@ -87,7 +87,7 @@ pin. The *call phase* starts when the backend reads data for the binding.
 A field of the params model is a *parameter*. A request gives each value in one
 of two forms: *written inline* or *given by reference*. A value written inline
 is the value itself in the request; the record holds its JSON form. A
-*reference* names data that exist elsewhere: a dataset, an output of a record,
+*reference* names data that exist elsewhere: a file, an output of a record,
 or an output of an accumulator. In the request phase a value given by reference
 is the reference; in the call phase it is the data. The params model types the
 call phase only. The backend reads each reference and builds the params
@@ -113,9 +113,9 @@ pydantic makes a JSON schema of it with its model's config. A value
 
 | The type at a root place | Example | Inline | By reference |
 |---|---|---|---|
-| a dataset model | `Sample`, `MaskFile` | no | to a dataset that fits |
+| a file model | `Sample`, `MaskFile` | no | to a file that fits |
 | a group without a data value | `Reduction`, `BeamCentre` | an object of its fields | to an output of its class |
-| a group holding a dataset model | `Sample(run, thickness)` | an object of its fields, each dataset by reference | no |
+| a group holding a file model | `Sample(run, thickness)` | an object of its fields, each file by reference | no |
 | a group with a data value | `ComputedTransmission` | no | to an output of its class |
 | a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag | no |
 | a list, `list[X]` | a list parameter | a list, each element a root place of type `X` | no |
@@ -126,22 +126,22 @@ group, a union of groups, or a list of one, possibly typed `X | None`. A
 *scalar* is an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a
 `Literal`, possibly constrained, such as `Annotated[float, Gt(0)]`. A *data
 value* is a field without a JSON form, such as a scipp array, which no request
-can write. The fields of a group without a data value are scalars, dataset
-models, or lists of one of these; a scalar is never typed `X | None`, a dataset
+can write. The fields of a group without a data value are scalars, file
+models, or lists of one of these; a scalar is never typed `X | None`, a file
 model may be, for a file that may be left out. A group with a data value is
 given by reference to an output only; of its other fields, the framework
-refuses only a `Path`, a dataset model, a `NewType`, or a type alias, since no
+refuses only a `Path`, a file model, a `NewType`, or a type alias, since no
 output could fill them. The framework looks no deeper.
 
 **A group is validated whole, once, when the request arrives.** So a group
-holds only what is known then: values typed in, and datasets, named by their
+holds only what is known then: values typed in, and files, named by their
 identity. A value that another request computes may not exist yet; it fills a
 whole parameter. So a file picker sits next to a checkbox, and a picker of
 records fills a whole card:
 
 ```python
 class Sample(BaseModel):
-    run: SampleRun                         # a dataset, known by its identity
+    run: SampleRun                         # a file, known by its identity
     thickness: float = Field(1.0, gt=0)    # checked when the request arrives
     mask: MaskFile | None = None
 
@@ -156,15 +156,15 @@ This buys two things:
   every validator of the group runs then, with all its fields at hand, such as
   one that the runs of four spin channels are distinct. A reference to an
   output only has to fit its type, and the call phase only reads the data of
-  the references and attaches the local paths of the datasets.
+  the references and attaches the local paths of the files.
 - A UI needs one widget per root place and one input per field, with no
   recursion:
 
   | Root place | Widget |
   |---|---|
-  | a group without a data value | a form of its fields, a dataset picker for a dataset model, and a picker of records whose output is of its class, unless it holds a dataset model |
+  | a group without a data value | a form of its fields, a file picker for a file model, and a picker of records whose output is of its class, unless it holds a file model |
   | a group with a data value | a picker of records whose output is of its class |
-  | a dataset model | a picker of datasets of its kind |
+  | a file model | a picker of files of its kind |
   | a union of groups | a choice of alternatives, each a form of its fields |
   | a list | rows, added and edited; each row the widget of its element |
   | `X \| None` | a toggle over the widget of `X` |
@@ -176,26 +176,26 @@ group, such as `limit_range: bool` next to `start` and `stop`. Which of the
 two, why a choice between modes is a union, and what `X | None` means, is
 [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
-**Files are dataset models.** A file is a parameter, the element of a list
-parameter, or a field of a group, whose type is a *dataset model*: a subclass of
-`ess.spec.DatasetModel`, which holds only `dataset: str`, the dataset's
-identity. Its class keywords name the metadata that a fitting dataset has:
+**Files are file models.** A file is a parameter, the element of a list
+parameter, or a field of a group, whose type is a *file model*: a subclass of
+`ess.spec.FileModel`, which holds only `file: str`, the file's
+identity. Its class keywords name the metadata that a fitting file has:
 
 ```python
-class MaskFile(DatasetModel, kind='mask'):
+class MaskFile(FileModel, kind='mask'):
     """A pixel mask, as XML."""
 ```
 
-A dataset model is given by reference to a dataset only, so that the dataset
-source checks access and the record holds the dataset's identity. The identity
-is the model's value, and its JSON form is the reference, so a dataset model is
+A file model is given by reference to a file only, so that the file
+source checks access and the record holds the file's identity. The identity
+is the model's value, and its JSON form is the reference, so a file model is
 known when the request arrives, as a value typed in is. The local path of its
 file exists only when the request runs: the backend attaches it then, and the
 binding reads it as `run.path`, which raises before. A program without a
 backend makes the model of a local file with `MaskFile.local(path)`. No output
-is or holds a dataset model or a `Path`, so every path a workflow gets has
+is or holds a file model or a `Path`, so every path a workflow gets has
 passed the access check. The metadata
-let a picker offer only the datasets that fit. A field of the model for a
+let a picker offer only the files that fit. A field of the model for a
 metadata value, such as the run number, waits for a workflow that needs it.
 
 **References stand for whole groups.** A number or a scipp array names no role:
@@ -208,14 +208,14 @@ centre, and a data value is a field of a group, such as
 
 A reference names an output of an earlier record (`OutputRef`: record, output
 name, and optionally the key of one element of a list or dict output), a
-dataset the framework did not compute (`DatasetRef`: one identity string), or
+file the framework did not compute (`FileRef`: one identity string), or
 an output of an accumulator (`AccumulatorRef`: accumulator and output name).
 Only a request holds an `AccumulatorRef`: the framework replaces it, when it
 accepts the request, by an output of a record of the accumulator's state. Its
 JSON form is an object with the key `@ref`, which names its kind:
 
 ```json
-{"@ref": "dataset", "dataset": "run:loki/60339"}
+{"@ref": "file", "file": "run:loki/60339"}
 {"@ref": "output", "record": "r17", "output": "slices", "key": "2"}
 ```
 
@@ -223,25 +223,25 @@ The key `@ref` is reserved at every depth: an object with it is a reference. So
 a framework finds the references of a request without the spec, as a remote
 client that holds only the serialized spec must, and a value written inline
 never reads as a reference. With the spec, the framework refuses a reference
-inside a group written inline, but one to a dataset at a field typed a dataset
+inside a group written inline, but one to a file at a field typed a file
 model, and a default whose JSON form holds the key.
 
-The identity string of a `DatasetRef` is opaque to the spec and interpreted
+The identity string of a `FileRef` is opaque to the spec and interpreted
 only by the framework that minted it, which makes it self-describing where it
 has several kinds of identity, as a URI does with its scheme:
 `pid:20.500.12269/abc`, `run:dream/1`. It compares as a string, so the
 framework normalizes it before a reference enters a record.
 
-Output references and dataset references work the same way:
+Output references and file references work the same way:
 
-| | Reference to an output | Reference to a dataset |
+| | Reference to an output | Reference to a file |
 |---|---|---|
-| Place | a parameter, or an element of a list parameter | the same, or a field of a group typed a dataset model, or an element of a list field of one |
-| Stands for | a whole group, not a dataset model | a whole dataset model |
-| Fits if | the output's class is the group's class or a subclass of it | the dataset's metadata has the model's metadata |
-| Resolved in the call phase to | the stored output | the dataset model with the local path |
+| Place | a parameter, or an element of a list parameter | the same, or a field of a group typed a file model, or an element of a list field of one |
+| Stands for | a whole group, not a file model | a whole file model |
+| Fits if | the output's class is the group's class or a subclass of it | the file's metadata has the model's metadata |
+| Resolved in the call phase to | the stored output | the file model with the local path |
 | Found in a record | by its `@ref` key, without the spec | the same |
-| Access check at submission | records the client may read | datasets the proposal may read |
+| Access check at submission | records the client may read | files the proposal may read |
 
 No reference fits a union, and no single reference fills a list parameter. A
 subclass that names a role fits a root place typed by its base class too, so
@@ -255,8 +255,8 @@ others compute is a group given by reference, and a workflow that reads the
 file outputs the group.
 
 ```python
-class Sample(DatasetModel, kind='raw'): ...       # the file of a sample run
-class Can(DatasetModel, kind='raw'): ...
+class Sample(FileModel, kind='raw'): ...       # the file of a sample run
+class Can(FileModel, kind='raw'): ...
 
 class Reduction(BaseModel):                       # a group of scalars
     bins: int = 2
@@ -285,12 +285,12 @@ IOFQ = WorkflowSpec(name='sans-iofq', version=1, ..., params=IofQParams, outputs
 ```
 
 Two requests, written with essapps: `client` connects to a backend,
-`dataset(...)` names a dataset, `finder` is the record of a request that finds
+`file(...)` names a file, `finder` is the record of a request that finds
 the beam centre, so `finder.ref('centre')` names its output `centre`, and `t`
 is the record of a transmission reduction:
 
 ```python
-runs = {'sample': dataset(run=60339), 'can': dataset(run=60338), 'transmission': t.ref('transmission')}
+runs = {'sample': file(run=60339), 'can': file(run=60338), 'transmission': t.ref('transmission')}
 client.submit(IOFQ, params={**runs, 'beam_centre': BeamCentre(x=0.012, y=-0.003)})  # written inline
 client.submit(IOFQ, params={**runs, 'beam_centre': finder.ref('centre')})          # a reference
 ```
@@ -304,20 +304,20 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
   typed `X | None`. A list parameter is not typed `list[X] | None`, since a
   list without rows is `[]`, and its element is not typed `X | None`, since
   each row is a value.
-- The fields of a group without a data value are scalars, dataset models, or
-  lists of one of these. A scalar is never typed `X | None`; a dataset model
+- The fields of a group without a data value are scalars, file models, or
+  lists of one of these. A scalar is never typed `X | None`; a file model
   may be, and has no default but `None`, or `[]` for a list. A group with a
-  dataset model is written inline only, since no output holds one. A group
+  file model is written inline only, since no output holds one. A group
   with a data value is given by
   reference to an output only; of its other fields, the framework refuses
-  only a `Path`, a dataset model, a `NewType`, or a type alias, since no
+  only a `Path`, a file model, a `NewType`, or a type alias, since no
   output could fill them.
-- A dataset model holds only `dataset`, as `DatasetModel` declares it, and
+- A file model holds only `file`, as `FileModel` declares it, and
   has no validators or serializers of its own: what it would check of a file
   is metadata, which the fit check covers, or the workflow's to read. A `Path`
-  outside a dataset model is refused.
+  outside a file model is refused.
 - Each output's type is a type, possibly typed `X | None`, or a list or a dict
-  of one. No output is or holds a dataset model or a `Path`, at any depth.
+  of one. No output is or holds a file model or a `Path`, at any depth.
 - No type in the params or the outputs is a `NewType` or a type alias, at any
   depth. A class names a role. A `NewType` of a shared type would name one only
   if the fit check looked through it. A `NewType` that a sciline graph needs
@@ -352,7 +352,7 @@ phase, each group, or row, written inline is validated whole, from its JSON
 form, and the record holds the JSON form of the validated group, which must
 read back as it. The call phase makes each value of the JSON form the record
 holds, with the data read in place of each reference; it fails only for the
-data of a reference, such as a dataset model whose validator refuses the local
+data of a reference, such as a file model whose validator refuses the local
 path. A check across parameters, such as a Q range that the wavelength band
 and the detector can reach, is the binding's or the driver's, and fails when
 the request runs. A binding may run the model validators,
@@ -454,13 +454,13 @@ a tuple of the names of the tables. A list parameter makes a table only when
 such as a stitch of all angles, or that has no single-run spec, such as a sum
 of counts over the runs of a scan, is written the same way:
 `runs: list[Run] = Field(min_length=1)`, with `tables=('runs',)` and `Run` a
-dataset model.
+file model.
 
 A value that differs per run, such as a motor position, is in the run's file.
-A row of a table of runs is a dataset reference and nothing else. A value that
+A row of a table of runs is a file reference and nothing else. A value that
 differs between runs, such as a thickness, makes the runs separate requests; a
 value shared by all runs of a request is a parameter, such as one transmission
-for the summed sample runs (see the alternative "A dataset model at a field of
+for the summed sample runs (see the alternative "A file model at a field of
 a group").
 
 The framework compares rows whole, as the record holds them. For a table whose
@@ -481,9 +481,9 @@ plain-data pydantic model that round-trips through JSON and is what a service
 announces to remote consumers. It holds a schema of the params
 (`params_schema`), one of the outputs (`outputs_schema`), and the tables. The
 params schema gives each parameter the forms it takes, so that a UI renders
-the widget of each root place, as the table above has it; at a dataset model,
+the widget of each root place, as the table above has it; at a file model,
 the schema names the model's metadata, so that a remote picker offers only the
-datasets that fit. `SerializedWorkflowSpec` states the forms and the widget of
+files that fit. `SerializedWorkflowSpec` states the forms and the widget of
 each.
 
 There is deliberately no inverse. Validators do not survive JSON Schema, so a
@@ -503,7 +503,7 @@ meaningless for technique-level batch workflows, and a spec cannot guarantee
 global uniqueness of anything — only the context that enumerates or deploys
 specs can. esslivedata keeps keying workflows by `(instrument, name, version)`,
 supplying the instrument from its registration context. Data-provenance
-identity (which spec, parameter values, and datasets produced a dataset) similarly
+identity (which spec, parameter values, and files produced a file) similarly
 composes spec identity with deployment context; the spec's contribution is
 being serializable and versioned.
 
@@ -625,9 +625,9 @@ output, and dims and units of an output for a UI.
   several roles, such as those of two He3 cells, are one generic group,
   `He3Cell[Polarizer]` and `He3Cell[Analyzer]`, as sciline names a role by a
   type parameter.
-- **A file as a `Path` field of a group**, given by reference to a dataset.
+- **A file as a `Path` field of a group**, given by reference to a file.
   A group that holds a file then has a reference inside, and a picker cannot
-  tell which kind of dataset a field takes.
+  tell which kind of file a field takes.
 - **A reference to an output at a field of a group**, such as a sample's
   computed transmission next to its run and thickness. The record may still be
   pending when the request arrives, so the group could be validated only in the
@@ -636,14 +636,14 @@ output, and dims and units of an output for a UI.
   checks across fields to the binding, and a binding takes the same class
   apart at a field but whole as a row of a table. Showing a computed value in
   the card of the parameters it belongs to is a matter of display.
-- **A dataset model holding its local path**, made in the call phase. A group
+- **A file model holding its local path**, made in the call phase. A group
   holding one could be validated when the request arrives only with a
   stand-in for the path, which a validator of the group would check instead of
   the file.
 - **A group inside a group**, written inline. It is known when the request
   arrives, so the outer group would still be validated whole. Left out because
   no workflow needs it: the inner group would lose its picker of records, the
-  checks of fields and the fit check of datasets would recurse, and a cell of
+  checks of fields and the fit check of files would recurse, and a cell of
   a table would hold a group. Adding it later breaks nothing.
 - **A reference to a whole list** filling a list parameter. The table rules,
   such as distinct rows, could then be checked only in the call phase.

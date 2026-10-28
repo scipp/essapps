@@ -20,13 +20,13 @@ from ess.apps import (
     NotReadable,
     SubmitError,
     Template,
-    dataset,
+    file,
     local,
 )
-from ess.apps.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
+from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
 from ess.spec import (
-    DatasetModel,
     DriverBinding,
+    FileModel,
     NoParams,
     StageCall,
     WorkflowSpec,
@@ -42,7 +42,7 @@ class Factor(BaseModel):
     factor: float = 1.0
 
 
-class RunFile(DatasetModel): ...
+class RunFile(FileModel): ...
 
 
 class ScaleParams(BaseModel):
@@ -117,11 +117,11 @@ UNSCALED = Template(TOTAL, params={'scaling': []}, blanks=('sample',))
 
 def scale(params: ScaleParams) -> Value:
     factor = 1.0 if params.scaling is None else params.scaling.factor
-    return Value(value=read_dataset(params.sample.path) * factor)
+    return Value(value=read_file(params.sample.path) * factor)
 
 
 def total(params: TotalParams) -> Value:
-    summed = sum(read_dataset(run.path) for run in params.sample)
+    summed = sum(read_file(run.path) for run in params.sample)
     return Value(value=summed * math.prod(f.factor for f in params.scaling))
 
 
@@ -161,18 +161,18 @@ class Counting(DriverBinding):
 
 
 @pytest.fixture
-def datasets(tmp_path: Path) -> FakeDatasets:
-    datasets = FakeDatasets(proposal='p1', directory=tmp_path)
+def files(tmp_path: Path) -> FakeFiles:
+    files = FakeFiles(proposal='p1', directory=tmp_path)
     for n in (1, 2):
-        datasets.measure(n, float(n))
-    return datasets
+        files.measure(n, float(n))
+    return files
 
 
 @pytest.fixture
-def client(datasets: FakeDatasets) -> Iterator[Client]:
+def client(files: FakeFiles) -> Iterator[Client]:
     with local(
         proposal='p1',
-        datasets=datasets,
+        files=files,
         bind=[
             StagedFunction(SCALE, scale),
             kept_rows(TOTAL, total),
@@ -192,19 +192,19 @@ def test_a_stage_takes_a_required_value_as_a_blank(client: Client) -> None:
     stage = client.stage(
         Template(SCALE, params={'scaling': Factor(factor=10.0)}, blanks=('sample',))
     )
-    records = [client.compute(stage, params={'sample': dataset(run=n)}) for n in (1, 2)]
+    records = [client.compute(stage, params={'sample': file(run=n)}) for n in (1, 2)]
 
     assert [client.output(r, 'value') for r in records] == [10.0, 20.0]
 
 
 def test_a_call_through_a_stage_records_the_plain_request(client: Client) -> None:
     tune = client.stage(
-        Template(SCALE, params={'sample': dataset(run=2)}, blanks=('scaling',))
+        Template(SCALE, params={'sample': file(run=2)}, blanks=('scaling',))
     )
     tuned = client.compute(tune, params={'scaling': Factor(factor=3.0)})
     plain = client.compute(
         SCALE,
-        params={'scaling': Factor(factor=3.0), 'sample': dataset(run=2)},
+        params={'scaling': Factor(factor=3.0), 'sample': file(run=2)},
     )
 
     assert tuned.request == plain.request
@@ -216,7 +216,7 @@ def test_a_template_drops_the_values_given_for_its_blanks() -> None:
 
     assert Template(
         SCALE,
-        params={'scaling': factor, 'sample': dataset(run=1)},
+        params={'scaling': factor, 'sample': file(run=1)},
         blanks=('sample',),
     ) == Template(SCALE, params={'scaling': {'factor': 10.0}}, blanks=('sample',))
 
@@ -230,7 +230,7 @@ def test_a_fill_gives_each_blank_and_no_fixed_value() -> None:
         FieldError(None, ('sample',), 'a blank, not filled'),
     )
     with pytest.raises(SubmitError, match='fixed by the template') as raised:
-        template.fill(params={'scaling': Factor(), 'sample': dataset(run=1)})
+        template.fill(params={'scaling': Factor(), 'sample': file(run=1)})
     assert [e.loc for e in raised.value.errors] == [('scaling',)]
 
 
@@ -251,7 +251,7 @@ def test_a_fixed_value_is_checked_by_its_own_field(client: Client) -> None:
 def test_a_misspelt_name_is_refused(client: Client) -> None:
     with pytest.raises(SubmitError, match='sampel: not a parameter of'):
         client.stage(
-            Template(SCALE, params={'sampel': dataset(run=1)}, blanks=('scaling',))
+            Template(SCALE, params={'sampel': file(run=1)}, blanks=('scaling',))
         )
     with pytest.raises(SubmitError, match='sampel: not a parameter of'):
         client.stage(Template(SCALE, blanks=('sampel',)))
@@ -265,21 +265,21 @@ def test_a_required_value_neither_fixed_nor_blank_is_refused(client: Client) -> 
 # Accumulators and pushes
 
 
-def test_a_push_gives_rows_of_a_table(client: Client, datasets: FakeDatasets) -> None:
+def test_a_push_gives_rows_of_a_table(client: Client, files: FakeFiles) -> None:
     acc = client.accumulator(
         Template(TOTAL, params={'scaling': [Factor(factor=10.0)]}, blanks=('sample',))
     )
-    acc.push(sample=[dataset(run=1)])
-    acc.push(sample=[dataset(run=2)])
+    acc.push(sample=[file(run=1)])
+    acc.push(sample=[file(run=2)])
 
     assert client.output(acc, 'value') == 30.0
     request = client.provenance(acc).request
-    assert request.datasets() == [datasets.resolve(dataset(run=n)) for n in (1, 2)]
+    assert request.files() == [files.resolve(file(run=n)) for n in (1, 2)]
 
 
 def test_a_table_may_hold_values_that_are_not_files(client: Client) -> None:
     acc = client.accumulator(
-        Template(TOTAL, params={'sample': [dataset(run=2)]}, blanks=('scaling',))
+        Template(TOTAL, params={'sample': [file(run=2)]}, blanks=('scaling',))
     )
     acc.push(scaling=[Factor(factor=3.0), Factor(factor=5.0)])
 
@@ -288,22 +288,20 @@ def test_a_table_may_hold_values_that_are_not_files(client: Client) -> None:
         acc.push(scaling=[{'factor': 5.0}])
 
 
-def test_a_push_refuses_a_row_the_table_holds(
-    client: Client, datasets: FakeDatasets
-) -> None:
+def test_a_push_refuses_a_row_the_table_holds(client: Client, files: FakeFiles) -> None:
     acc = client.accumulator(Template(TOTAL, blanks=('sample', 'scaling')))
-    acc.push(sample=[dataset(run=1)])
-    path = datasets.path(datasets.resolve(dataset(run=1)))
+    acc.push(sample=[file(run=1)])
+    path = files.path(files.resolve(file(run=1)))
 
     with pytest.raises(SubmitError, match=r'sample\[1\]: repeats sample\[0\]'):
-        acc.push(sample=[dataset(path=path)])
+        acc.push(sample=[file(path=path)])
     with pytest.raises(SubmitError, match=r'sample\[2\]: repeats sample\[1\]'):
-        acc.push(sample=[dataset(run=2), dataset(run=2)])
+        acc.push(sample=[file(run=2), file(run=2)])
 
 
 def test_a_push_gives_rows_of_blank_tables(client: Client) -> None:
     acc = client.accumulator(UNSCALED)
-    row = [dataset(run=1)]
+    row = [file(run=1)]
     fixed = r"^scaling: not a blank table of the accumulator, \['sample'\]$"
     refused = [
         (fixed, {'scaling': [Factor()]}),
@@ -343,7 +341,7 @@ def test_the_blanks_of_an_accumulator_are_tables(client: Client) -> None:
 def test_the_table_rules_hold_on_the_fixed_tables_of_a_template(
     client: Client,
 ) -> None:
-    run = [dataset(run=1)]
+    run = [file(run=1)]
     refused = {
         r'sample\[1\]: repeats sample\[0\]': Template(
             TOTAL, params={'sample': run * 2}, blanks=('scaling',)
@@ -358,9 +356,9 @@ def test_the_table_rules_hold_on_the_fixed_tables_of_a_template(
 
 
 def test_a_table_that_may_be_empty_is_given_without_rows(client: Client) -> None:
-    plain = client.compute(TOTAL, params={'sample': [dataset(run=1)], 'scaling': []})
+    plain = client.compute(TOTAL, params={'sample': [file(run=1)], 'scaling': []})
     acc = client.accumulator(UNSCALED)
-    acc.push(sample=[dataset(run=1)])
+    acc.push(sample=[file(run=1)])
 
     assert client.provenance(acc).request == plain.request
     assert client.output(acc, 'value') == client.output(plain, 'value') == 1.0
@@ -369,11 +367,11 @@ def test_a_table_that_may_be_empty_is_given_without_rows(client: Client) -> None
 
 
 def test_a_push_whose_file_cannot_be_read_stops_the_accumulator(
-    client: Client, datasets: FakeDatasets
+    client: Client, files: FakeFiles
 ) -> None:
     acc = client.accumulator(UNSCALED)
-    datasets.corrupt(datasets.resolve(dataset(run=1)))
-    acc.push(sample=[dataset(run=1)])
+    files.corrupt(files.resolve(file(run=1)))
+    acc.push(sample=[file(run=1)])
 
     unreadable = 'push 0 failed: OSError: file signature not found'
     with pytest.raises(NotReadable, match=unreadable):
@@ -399,7 +397,7 @@ def test_a_referenced_value_that_fails_its_type_s_check_fails_where_it_is_read(
 
 
 def test_the_params_model_s_model_validator_is_never_called(client: Client) -> None:
-    rows = {'sample': [dataset(run=1)]}
+    rows = {'sample': [file(run=1)]}
     plain = client.compute(CHECKED, params=rows)
     stage = client.stage(Template(CHECKED, blanks=('sample',)))
     acc = client.accumulator(Template(CHECKED, blanks=('sample',)))

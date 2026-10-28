@@ -4,12 +4,12 @@
 References: how a request names data that exist elsewhere.
 
 A request gives the value at a root place by reference to data that exist
-elsewhere, or inline: an output of an earlier record, a dataset the
+elsewhere, or inline: an output of an earlier record, a file the
 framework did not compute, or, in a request not yet accepted, an output of an
 accumulator that the framework holds. A *root place* is the value of a
 parameter, or an element of a list parameter (see :mod:`ess.spec.places`). A
-reference stands for a whole group: a reference to a dataset for a dataset
-model (see :class:`ess.spec.parameters.DatasetModel`), at a root place or at a
+reference stands for a whole group: a reference to a file for a file
+model (see :class:`ess.spec.parameters.FileModel`), at a root place or at a
 field of a group typed one, a reference to an output for any other group, at a
 root place. A reference is what a request names and what a record keeps;
 turning it into the data a workflow takes, a local path or an object, is the
@@ -18,9 +18,9 @@ business of whatever runs the workflow.
 The JSON form of a reference is an object with the key ``"@ref"``, which
 names its kind. The key is reserved: an object with it is a reference, at any
 depth, so a reference is found in plain data without a spec, and one that is
-not at a root place, or at a field typed a dataset model, is refused::
+not at a root place, or at a field typed a file model, is refused::
 
-    {"@ref": "dataset", "dataset": "run:loki/60339"}
+    {"@ref": "file", "file": "run:loki/60339"}
     {"@ref": "output", "record": "r17", "output": "centre"}
     {"@ref": "output", "record": "r18", "output": "slices", "key": "2"}
     {"@ref": "accumulator", "accumulator": "a3", "output": "iofq"}
@@ -73,7 +73,7 @@ class OutputRef(_Ref, frozen=True):
         return f'{self.record}.{self.output}{key}'
 
 
-class DatasetRef(_Ref, frozen=True):
+class FileRef(_Ref, frozen=True):
     """
     Data the framework did not compute, named by an identity the framework owns.
 
@@ -82,16 +82,16 @@ class DatasetRef(_Ref, frozen=True):
     catalogue PID, an instrument and run number, a path, makes the string
     self-describing, ``pid:...`` or ``run:...``, and normalizes it before it
     enters a record, because two references are equal only when their strings
-    are. A place whose type is a dataset model (see
-    :class:`ess.spec.parameters.DatasetModel`) takes a reference to a
-    dataset, and no other place does.
+    are. A place whose type is a file model (see
+    :class:`ess.spec.parameters.FileModel`) takes a reference to a
+    file, and no other place does.
     """
 
-    kind: Literal['dataset'] = Field(default='dataset', alias='@ref', repr=False)
-    dataset: str = Field(min_length=1)
+    kind: Literal['file'] = Field(default='file', alias='@ref', repr=False)
+    file: str = Field(min_length=1)
 
     def __str__(self) -> str:
-        return self.dataset
+        return self.file
 
 
 class AccumulatorRef(_Ref, frozen=True):
@@ -113,7 +113,7 @@ class AccumulatorRef(_Ref, frozen=True):
         return f'{self.accumulator}.{self.output}'
 
 
-Ref = OutputRef | DatasetRef | AccumulatorRef
+Ref = OutputRef | FileRef | AccumulatorRef
 """
 A reference: the value at a place of a request.
 
@@ -124,7 +124,7 @@ submitted; no record holds one.
 
 _KINDS: dict[str, type[Ref]] = {
     'output': OutputRef,
-    'dataset': DatasetRef,
+    'file': FileRef,
     'accumulator': AccumulatorRef,
 }
 

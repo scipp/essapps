@@ -24,18 +24,18 @@ from ess.apps import (
     Status,
     SubmitError,
     Template,
-    dataset,
+    file,
     local,
 )
 from ess.apps.log import Finished, Log, Persist
 from ess.apps.testing import (
-    FakeDatasets,
+    FakeFiles,
     FakeStore,
     StagedFunction,
     kept_rows,
-    read_dataset,
+    read_file,
 )
-from ess.spec import Binding, DatasetModel, WorkflowSpec, function_binding
+from ess.spec import Binding, FileModel, WorkflowSpec, function_binding
 
 
 class Amount(BaseModel):
@@ -47,7 +47,7 @@ class Amount(BaseModel):
     value: float
 
 
-class SampleRun(DatasetModel): ...
+class SampleRun(FileModel): ...
 
 
 class Box:
@@ -127,7 +127,7 @@ OFFSET = _spec('offset', OffsetParams, Value)
 
 
 def _sample(n: int) -> dict[str, Any]:
-    return {'sample': dataset(run=n)}
+    return {'sample': file(run=n)}
 
 
 class GatedStore(FakeStore):
@@ -156,11 +156,11 @@ class GatedStore(FakeStore):
 
 
 @pytest.fixture
-def datasets(tmp_path: Path) -> FakeDatasets:
-    datasets = FakeDatasets(proposal='p1', directory=tmp_path)
+def files(tmp_path: Path) -> FakeFiles:
+    files = FakeFiles(proposal='p1', directory=tmp_path)
     for n in (1, 2):
-        datasets.measure(n, float(n))
-    return datasets
+        files.measure(n, float(n))
+    return files
 
 
 @pytest.fixture
@@ -186,12 +186,12 @@ def boxes() -> list[weakref.ref[Box]]:
 @pytest.fixture
 def bind(loading: threading.Event, boxes: list[weakref.ref[Box]]) -> list[Binding]:
     def load(params: RunParams) -> Loaded:
-        run = read_dataset(params.sample.path)
+        run = read_file(params.sample.path)
         loading.wait(timeout=5)
         return Loaded(value=Amount(value=run), extra=Amount(value=-run))
 
     def box(params: RunParams) -> BoxOutputs:
-        boxes.append(weakref.ref(value := Box(read_dataset(params.sample.path))))
+        boxes.append(weakref.ref(value := Box(read_file(params.sample.path))))
         return BoxOutputs(value=Boxed(box=value))
 
     def total(params: TotalParams) -> Value:
@@ -207,7 +207,7 @@ def bind(loading: threading.Event, boxes: list[weakref.ref[Box]]) -> list[Bindin
         function_binding(LOAD, load),
         function_binding(SHIFT, shift),
         kept_rows(TOTAL, total),
-        function_binding(LIST, lambda p: Listed(value=[read_dataset(p.sample.path)])),
+        function_binding(LIST, lambda p: Listed(value=[read_file(p.sample.path)])),
         function_binding(BOX, box),
         function_binding(
             UNBOX, lambda p: Value(value=Amount(value=p.source.box.value))
@@ -223,12 +223,12 @@ def log() -> Log:
 
 @pytest.fixture
 def backend(
-    datasets: FakeDatasets,
+    files: FakeFiles,
     store: GatedStore,
     bind: list[Binding],
     log: Log,
 ) -> Iterator[Backend]:
-    backend = Backend(datasets, bind, store=store, log=log)
+    backend = Backend(files, bind, store=store, log=log)
     yield backend
     store.gate.set()
     backend.close()
@@ -379,7 +379,7 @@ def test_persisting_what_is_persisted_logs_nothing(client: Client, log: Log) -> 
 
 
 def test_persist_is_refused_for_what_the_client_cannot_persist(
-    client: Client, connect: Callable[[], Client], datasets: FakeDatasets
+    client: Client, connect: Callable[[], Client], files: FakeFiles
 ) -> None:
     load = client.compute(LOAD, params=_sample(1))
     zero = Amount(value=0.0)
@@ -392,7 +392,7 @@ def test_persist_is_refused_for_what_the_client_cannot_persist(
         client.submit(LOAD, params=_sample(1), persist=('other',))
     with local(
         proposal='p1',
-        datasets=datasets,
+        files=files,
         bind=[function_binding(LOAD, lambda p: Loaded(value=zero, extra=zero))],
     ) as alone:
         with pytest.raises(SubmitError, match='needs a store'):
@@ -439,9 +439,9 @@ def test_a_frozen_accumulator_persisted_is_kept_by_the_store(
 
 
 def test_closing_a_local_client_waits_until_what_is_persisted_is_written(
-    datasets: FakeDatasets, bind: list[Binding], store: GatedStore
+    files: FakeFiles, bind: list[Binding], store: GatedStore
 ) -> None:
-    client = local(proposal='p1', datasets=datasets, bind=bind, store=store)
+    client = local(proposal='p1', files=files, bind=bind, store=store)
     load = client.compute(LOAD, params=_sample(1))
     store.gate.clear()
     client.persist(load)
@@ -560,13 +560,13 @@ def test_a_frozen_record_kept_by_the_client_is_persisted_later(
 
 @pytest.fixture
 def start(
-    datasets: FakeDatasets, bind: list[Binding], store: GatedStore
+    files: FakeFiles, bind: list[Binding], store: GatedStore
 ) -> Iterator[Callable[[Path], Client]]:
     """A client of a new backend over the log at a path, with the same store."""
     backends: list[Backend] = []
 
     def start(path: Path) -> Client:
-        backends.append(Backend(datasets, bind, log=Log(path), store=store))
+        backends.append(Backend(files, bind, log=Log(path), store=store))
         return Client(backends[-1], proposal='p1', submitter='anna')
 
     yield start

@@ -17,20 +17,20 @@ Where                      Widget
 =========================  ================================================
 a parameter, :class:`Ways` a choice of ways: the fields of each group written
                            inline, an output of a record that fits
-                           ``Ways.record``, or for a dataset model a dataset
+                           ``Ways.record``, or for a file model a file
                            that fits it, and ``None``. A record is offered
                            while an output fits.
 a field of a group         an input of its type, or a picker of its values;
                            for a list of scalars, a list of these; for a
-                           dataset model, a picker of the datasets that fit
+                           file model, a picker of the files that fit
                            it, with ``None`` if it is typed ``X | None``
 =========================  ================================================
 
 A record's output fits if its type, from the record's spec, fits the place,
 and a request of the client may reference it now (``client.readable``), so a
-pending record is offered too. A dataset fits a dataset model if a
+pending record is offered too. A file fits a file model if a
 :class:`~ess.apps.Selector` of the model's metadata matches it, as the
-backend checks when the request is submitted. A dataset that the form is set
+backend checks when the request is submitted. A file that the form is set
 to, such as one a record names, stays picked when the listing no longer has
 it.
 
@@ -52,7 +52,7 @@ without a zone stays without one, and a time of ``AwareDatetime`` without a
 value is in UTC. The fraction of a second of the value is kept.
 
 Not covered: list parameters (tables, :class:`Rows`), scipp/essapps#101, and
-a list of dataset models at a field of a group.
+a list of file models at a field of a group.
 """
 
 from __future__ import annotations
@@ -69,8 +69,8 @@ from pydantic_core import to_jsonable_python
 
 from ess.apps import Client, FieldError, Selector, SubmitError
 from ess.spec import (
-    DatasetModel,
-    DatasetRef,
+    FileModel,
+    FileRef,
     OutputRef,
     WorkflowSpec,
     field_types,
@@ -98,7 +98,7 @@ type _Missing = list[FieldError]
 class Listing:
     """
     What a request of ``client`` may name now, looked up once for a refresh
-    of any number of forms: the datasets of each dataset model and the
+    of any number of forms: the files of each file model and the
     client's records, each by a label, and the outputs a request may
     reference.
 
@@ -106,19 +106,19 @@ class Listing:
     client lists no records by the type of their outputs (gap 1), so
     :meth:`fitting` checks the type of each readable output. A record has no
     short name (gap 4), so its label is the start of its id, its spec, and
-    the datasets and records its request names: ``2f9c01 Find centre, from
+    the files and records its request names: ``2f9c01 Find centre, from
     run 101``.
     """
 
     def __init__(self, client: Client) -> None:
         self._client = client
-        self._metadata: dict[DatasetRef, dict[str, Any]] = {}
-        self._datasets: dict[str, dict[str, DatasetRef]] = {}
+        self._metadata: dict[FileRef, dict[str, Any]] = {}
+        self._files: dict[str, dict[str, FileRef]] = {}
 
         def source(ref: Any) -> str:
-            if not isinstance(ref, DatasetRef):
+            if not isinstance(ref, FileRef):
                 return str(ref.record[:6])
-            return _dataset_label(ref, self._known(ref))
+            return _file_label(ref, self._known(ref))
 
         self.records = client.records()
         specs = {s: client.spec(s) for s in {r.spec for r in self.records}}
@@ -141,22 +141,22 @@ class Listing:
             for name in names
         ]
 
-    def datasets(self, model: type[DatasetModel]) -> dict[str, DatasetRef]:
-        """The datasets that fit ``model``, each by a label, in the order measured."""
+    def files(self, model: type[FileModel]) -> dict[str, FileRef]:
+        """The files that fit ``model``, each by a label, in the order measured."""
         selector = Selector(**model.metadata)
-        if (key := repr(selector)) not in self._datasets:
-            listed = self._client.datasets.list(selector)
-            self._datasets[key] = {}
+        if (key := repr(selector)) not in self._files:
+            listed = self._client.files.list(selector)
+            self._files[key] = {}
             for ref in listed:
                 fields = self._known(ref)
                 role = f' ({fields["role"]})' if 'role' in fields else ''
-                self._datasets[key][_dataset_label(ref, fields) + role] = ref
-        return self._datasets[key]
+                self._files[key][_file_label(ref, fields) + role] = ref
+        return self._files[key]
 
-    def _known(self, ref: DatasetRef) -> dict[str, Any]:
-        """The metadata of a dataset, looked up once."""
+    def _known(self, ref: FileRef) -> dict[str, Any]:
+        """The metadata of a file, looked up once."""
         if ref not in self._metadata:
-            self._metadata[ref] = self._client.datasets.metadata(ref)
+            self._metadata[ref] = self._client.files.metadata(ref)
         return self._metadata[ref]
 
     def fitting(self, tp: Any) -> dict[str, OutputRef]:
@@ -166,10 +166,10 @@ class Listing:
         }
 
 
-def _dataset_label(ref: DatasetRef, metadata: Mapping[str, Any]) -> str:
+def _file_label(ref: FileRef, metadata: Mapping[str, Any]) -> str:
     """
-    ``run 101`` where the metadata has a run, else the dataset's identity:
-    the contract of a dataset source names no field but ``proposal``.
+    ``run 101`` where the metadata has a run, else the file's identity:
+    the contract of a file source names no field but ``proposal``.
     """
     run = metadata.get('run')
     return str(ref) if run is None else f'run {run}'
@@ -192,8 +192,8 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice:
         else:
             way = places.title(value, group.model_fields[described.tag])
             ways[way] = _Group(group, {described.tag: value}, listing)
-    if field_types.is_dataset(described.record):
-        ways[_Choice.DATASET] = _Dataset(described.record, listing)
+    if field_types.is_file(described.record):
+        ways[_Choice.FILE] = _File(described.record, listing)
     elif described.record is not None:
         ways[_Choice.RECORD] = _Record(described.record, listing)
     if described.none:
@@ -203,17 +203,17 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice:
 
 def _field(
     group: type[BaseModel], name: str, listing: Listing
-) -> _Scalar | _Scalars | _Dataset:
+) -> _Scalar | _Scalars | _File:
     """
     The input of the field ``name`` of ``group``, written inline, or the
-    picker of a dataset model.
+    picker of a file model.
     """
     info = group.model_fields[name]
-    if (model := field_types.dataset_model(info.annotation)) is not None:
+    if (model := field_types.file_model(info.annotation)) is not None:
         if field_types.is_list(group, name):
-            raise NotImplementedError(f'{name}: a list of dataset models at a field')
+            raise NotImplementedError(f'{name}: a list of file models at a field')
         optional = field_types.optional(info.annotation)[1]
-        return _Dataset(model, listing, places.title(name, info), optional)
+        return _File(model, listing, places.title(name, info), optional)
     widget = _Scalars if field_types.is_list(group, name) else _Scalar
     return widget(
         places.title(name, info),
@@ -235,17 +235,17 @@ def _pick(widget: Any, value: Any) -> None:
     widget.value = value if value in widget.options.values() else None
 
 
-class _Dataset:
+class _File:
     """
-    A dataset model: a picker of the datasets that fit it, labelled ``name``
-    at a field of a group, and with ``None`` if ``optional``. A dataset that
+    A file model: a picker of the files that fit it, labelled ``name``
+    at a field of a group, and with ``None`` if ``optional``. A file that
     the form is set to and the listing lacks stays picked, labelled by its
     reference as given, an identity or a name such as ``run:101``.
     """
 
     def __init__(
         self,
-        model: type[DatasetModel],
+        model: type[FileModel],
         listing: Listing,
         name: str | None = None,
         optional: bool = False,
@@ -257,20 +257,20 @@ class _Dataset:
         self.refresh(listing)
 
     def refresh(self, listing: Listing) -> None:
-        nothing = '(none)' if self._optional else '(choose a dataset)'
-        self._listed = {nothing: None, **listing.datasets(self._model)}
+        nothing = '(none)' if self._optional else '(choose a file)'
+        self._listed = {nothing: None, **listing.files(self._model)}
         self.set(self.widget.value)
 
     def value(self, loc: Loc, missing: _Missing) -> Any:
         if self.widget.value is None and not self._optional:
-            missing.append(FieldError(None, loc, 'choose a dataset'))
+            missing.append(FieldError(None, loc, 'choose a file'))
             return UNSET
         return self.widget.value
 
     def set(self, value: Any) -> None:
         # A reference, or its JSON form, as a request may give it.
         ref = None if value is UNSET else as_ref(value)
-        picked = ref if isinstance(ref, DatasetRef) else None
+        picked = ref if isinstance(ref, FileRef) else None
         options = dict(self._listed)
         if picked is not None and picked not in options.values():
             options[str(picked)] = picked
@@ -461,7 +461,7 @@ class _Group:
 
     def refresh(self, listing: Listing) -> None:
         for field in self._fields.values():
-            if isinstance(field, _Dataset):
+            if isinstance(field, _File):
                 field.refresh(listing)
 
     def panel(self) -> Any:
@@ -512,7 +512,7 @@ class _Nothing:
         return pn.Spacer(height=0)
 
 
-_Way = _Group | _Record | _Dataset | _Nothing
+_Way = _Group | _Record | _File | _Nothing
 
 
 class _Choice:
@@ -528,7 +528,7 @@ class _Choice:
     """
 
     RECORD = 'From a record'
-    DATASET = 'A dataset'
+    FILE = 'A file'
     NONE = 'None'
 
     def __init__(
@@ -592,15 +592,15 @@ class _Choice:
         """The label of the way that writes ``value``, or ``None`` if unset."""
         if value is UNSET:
             groups = [label for label, w in self._ways.items() if isinstance(w, _Group)]
-            refs = [w for w in (self.RECORD, self.DATASET) if w in self._ways]
+            refs = [w for w in (self.RECORD, self.FILE) if w in self._ways]
             first = groups or refs
             return first[0] if len(first) == 1 and self.NONE not in self._ways else None
         if value is None:
             return self.NONE
         if isinstance(value, OutputRef):
             return self.RECORD
-        if isinstance(value, DatasetRef):
-            return self.DATASET
+        if isinstance(value, FileRef):
+            return self.FILE
         tag = {} if self._tag is None else {self._tag: dict(value)[self._tag]}
         for label, way in self._ways.items():
             if isinstance(way, _Group) and way.tag == tag:
@@ -652,7 +652,7 @@ class Form:
         Show ``params``, as a record or a request holds them, such as
         ``record.request.params``; a place left out is as it starts, at its
         default or unset. A reference that the client may not read now
-        chooses the way of a record, with no record picked; a dataset that
+        chooses the way of a record, with no record picked; a file that
         is not listed stays picked.
         """
         if unknown := set(params) - set(self._params):
@@ -670,7 +670,7 @@ class Form:
 
     def refresh(self, listing: Listing | None = None) -> None:
         """
-        List the datasets and the records that fit again, from ``listing``,
+        List the files and the records that fit again, from ``listing``,
         or from one looked up now.
         """
         listing = Listing(self._client) if listing is None else listing

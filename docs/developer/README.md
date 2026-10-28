@@ -26,8 +26,8 @@ The same with the framework:
 records = {}
 for run in (60339, 60340, 60341):
     records[run] = client.submit(IOFQ, params={'reduction': Reduction(bins=100),
-                                               'sample': dataset(run=run),
-                                               'can': dataset(run=60338),
+                                               'sample': file(run=run),
+                                               'can': file(run=60338),
                                                'transmission': t.ref('transmission')})
 client.wait(records)
 client.output(records[60339], 'iofq')
@@ -35,7 +35,7 @@ client.output(records[60339], 'iofq')
 
 `client` connects to the framework (see Client and backend).
 `IOFQ` is the spec of the I(Q) reduction, which names its params and outputs (see Specs and bindings).
-`dataset(run=run)` names the raw data of a run (see Datasets), here the sample run, and `dataset(run=60338)` the empty-can run that each reduction subtracts.
+`file(run=run)` names the raw data of a run (see Files), here the sample run, and `file(run=60338)` the empty-can run that each reduction subtracts.
 `t` is the record of a transmission reduction of the sample, and `t.ref('transmission')` gives its output, the sample's transmission, to each reduction (see Specs and bindings).
 `client.submit` returns a *record* at once.
 The three reductions run in parallel, possibly on another machine.
@@ -46,7 +46,7 @@ What the framework adds to the plain loop:
 - Each call is kept as a record. The same process finds it later, and on the service, other notebooks and programs too.
 - Output values are kept for the client that asked, and for every client of the proposal once persisted.
 - Calls can run elsewhere and in parallel.
-- Every output can answer where it came from: which spec, which parameter values, which datasets, which software versions.
+- Every output can answer where it came from: which spec, which parameter values, which files, which software versions.
 
 ## Terms
 
@@ -60,13 +60,13 @@ The framework is essapps (`ess.apps`) and essspec (`ess.spec`), in this reposito
 | params, outputs | the two models of a spec: everything the workflow takes, and its results (see Specs and bindings) |
 | parameter | a field of the params model |
 | written inline | a value written inline is the value itself in the request, such as `Reduction(bins=100)`; the record holds its JSON form. A request gives each value in one of two forms: written inline, or given by reference. A type has a *JSON form* when pydantic makes a JSON schema of it with the params model's config. |
-| reference | names data that exist elsewhere: a dataset, an output of a record, or an output of an accumulator. It stands for a whole group. |
+| reference | names data that exist elsewhere: a file, an output of a record, or an output of an accumulator. It stands for a whole group. |
 | group | a pydantic model, such as `Reduction`, the settings of one reduction step. A request writes a group as an object of its fields. A `RootModel` is not a group. |
 | root place | the value of a parameter, or an element of a list parameter: where a request writes a value or a reference. The type at a root place decides which (see Specs and bindings). |
 | place | a position in a request's params, named by its path, such as `reduction.bins` or `sample[2]`. A field of a group is a place, not a root place. |
 | scalar | an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a `Literal`, possibly with constraints, such as `Annotated[float, Gt(0)]`. A request writes a scalar inline. |
 | data value | a field of a group without a JSON form, such as a scipp array. A group that holds one is given by reference to an output only. |
-| dataset model | a group that stands for a file: a subclass of `DatasetModel`, which holds only `dataset`, the dataset's identity, given by reference to a dataset only |
+| file model | a group that stands for a file: a subclass of `FileModel`, which holds only `file`, the file's identity, given by reference to a file only |
 | fits | a reference fits a root place when the data it names can be the value there (see References) |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
 | request | a spec and its params, each value written inline or given by reference |
@@ -78,7 +78,7 @@ The framework is essapps (`ess.apps`) and essspec (`ess.spec`), in this reposito
 | fixed value | the value a template gives a parameter, as a request does |
 | blank | a parameter that a template leaves open, a table among them |
 | store, persist | the *store* keeps outputs outside the backend's memory. To *persist* an output is to have it written there. |
-| dataset source | where a backend finds datasets |
+| file source | where a backend finds files |
 | table, row | a *table* is a list parameter whose *rows* an accumulator takes a push at a time (see Combining runs: tables) |
 | stage | a template the backend keeps for a client, to compute its fixed part once |
 | accumulator | a template whose blanks are tables, kept by the backend for a client |
@@ -95,11 +95,11 @@ The framework is essapps (`ess.apps`) and essspec (`ess.spec`), in this reposito
 ## Client and backend
 
 ```python
-client = local(proposal='p1', datasets=..., bind=[iofq, ...], store=...)
+client = local(proposal='p1', files=..., bind=[iofq, ...], store=...)
 ```
 
 `local` makes a backend in the user's process and a client of it, for interactive work such as a notebook.
-`datasets` is the dataset source (see Datasets), `bind` lists a binding for each spec (see Specs and bindings), and `store` is optional (see Persist).
+`files` is the file source (see Files), `bind` lists a binding for each spec (see Specs and bindings), and `store` is optional (see Persist).
 Batch and automatic reduction run on *the service*, a backend that DMSC hosts.
 `connect('https://reduce.example', proposal='p1')` makes a client of it.
 The service runs only workflows from installed packages.
@@ -117,10 +117,10 @@ A spec has two pydantic models:
 | outputs | results | (none) | the data the workflow returns |
 
 ```python
-class Sample(DatasetModel, kind='raw'):           # a dataset model: the file of a sample run
+class Sample(FileModel, kind='raw'):           # a file model: the file of a sample run
     ...
 
-class Can(DatasetModel, kind='raw'):              # the file of the empty-can run
+class Can(FileModel, kind='raw'):              # the file of the empty-can run
     ...
 
 class Reduction(BaseModel):                       # a group of scalars
@@ -156,8 +156,8 @@ A request for `IOFQ` gives each parameter in one of two ways, written inline or 
 
 ```python
 {'reduction': {'bins': 50},                       # written inline: the group's JSON form
- 'sample': dataset(run=611),                      # a reference to a dataset
- 'can': dataset(run=614),
+ 'sample': file(run=611),                      # a reference to a file
+ 'can': file(run=614),
  'transmission': t611.ref('transmission')}        # a reference to an output of the record t611
 ```
 
@@ -170,7 +170,7 @@ The type at a root place decides which of the two it takes, with `| None` remove
 
 | The type at a root place | Example | Inline | By reference |
 |---|---|---|---|
-| a dataset model | `Sample`, `Can` | no | to a dataset that fits (see Datasets) |
+| a file model | `Sample`, `Can` | no | to a file that fits (see Files) |
 | a group without a data value | `Reduction`, `BeamCentre` | an object of its fields | to an output of its class |
 | a group with a data value | `ComputedTransmission` | no | to an output of its class |
 | a union of groups | `GivenCentre \| FindCentre` (see below) | an object of one alternative's fields, with its tag | no |
@@ -179,11 +179,11 @@ The type at a root place decides which of the two it takes, with `| None` remove
 **Fields of a group.** The framework interprets the parameters and the fields of each group written inline, nothing deeper.
 A *scalar* is an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a `Literal`, possibly constrained, such as `Annotated[float, Gt(0)]`.
 A group is validated whole, once, when the request arrives.
-So a group holds only what is known then: values typed in, and datasets, named by their identity.
+So a group holds only what is known then: values typed in, and files, named by their identity.
 A value that another request computes may not exist yet; it fills a whole parameter.
-The fields of a group without a data value are scalars, dataset models, or lists of one of these.
-A scalar is never typed `X | None`; a dataset model may be.
-A form shows an input for each, a request writes a scalar inline, and it gives a dataset by reference.
+The fields of a group without a data value are scalars, file models, or lists of one of these.
+A scalar is never typed `X | None`; a file model may be.
+A form shows an input for each, a request writes a scalar inline, and it gives a file by reference.
 `WorkflowSpec` refuses any other field, with the fix:
 
 ```python
@@ -195,22 +195,22 @@ class Reduction(BaseModel):
     start: float | None = None                    # refused: a parameter typed X | None, or a bool field
 
 class Specimen(BaseModel):
-    run: SampleRun                                # a dataset model: given by reference to a dataset
+    run: SampleRun                                # a file model: given by reference to a file
     thickness: float = 1.0
-    runs: list[SampleRun] = []                    # a list of dataset models: [] without elements
-    can: CanRun | None = None                     # a dataset model may be X | None, with default None
+    runs: list[SampleRun] = []                    # a list of file models: [] without elements
+    can: CanRun | None = None                     # a file model may be X | None, with default None
 ```
 
-A request gives a dataset at such a field by reference, inside the group written inline:
+A request gives a file at such a field by reference, inside the group written inline:
 
 ```python
-{'specimen': {'run': dataset(run=611), 'thickness': 2.0}}
+{'specimen': {'run': file(run=611), 'thickness': 2.0}}
 ```
 
-No output holds a dataset model, so a group with a dataset model is written inline only, and a form offers no record picker for it.
+No output holds a file model, so a group with a file model is written inline only, and a form offers no record picker for it.
 
 A *data value* is a field without a JSON form, such as a scipp array.
-No request can write it, so a group with a data value is given by reference to an output only; of its other fields, the framework refuses only a `Path`, a dataset model, a `NewType`, or a type alias, since no output could fill them.
+No request can write it, so a group with a data value is given by reference to an output only; of its other fields, the framework refuses only a `Path`, a file model, a `NewType`, or a type alias, since no output could fill them.
 
 **References stand for groups.** A reference to an output stands for a whole group, at a root place.
 A number or an `sc.DataArray` names no role: every output of its type would fit, so a picker of records would list unrelated outputs.
@@ -222,20 +222,20 @@ transmission: sc.DataArray                        # refused by WorkflowSpec: a p
 {'reduction': {'bins': r.ref('bins')}}            # refused at submission: a reference to an output is at a root place only
 ```
 
-**Files.** A file is a parameter, the element of a list parameter, or a field of a group, whose type is a *dataset model*: a subclass of `ess.spec.DatasetModel`, which holds `dataset: str`, the dataset's identity, and nothing else.
-Its class keywords name the metadata that a fitting dataset has, so that a picker offers only datasets of its kind; without keywords, it takes raw datasets:
+**Files.** A file is a parameter, the element of a list parameter, or a field of a group, whose type is a *file model*: a subclass of `ess.spec.FileModel`, which holds `file: str`, the file's identity, and nothing else.
+Its class keywords name the metadata that a fitting file has, so that a picker offers only files of its kind; without keywords, it takes raw files:
 
 ```python
-class MaskFile(DatasetModel, kind='mask'):
+class MaskFile(FileModel, kind='mask'):
     """A pixel mask, as XML."""
 
-mask: MaskFile | None = None                      # a picker of datasets of kind 'mask', or none
+mask: MaskFile | None = None                      # a picker of files of kind 'mask', or none
 ```
 
-A request gives a dataset model by reference to a dataset only, so that the dataset source checks access and the record holds the dataset's identity.
+A request gives a file model by reference to a file only, so that the file source checks access and the record holds the file's identity.
 The binding gets the model with the local path of its file attached, `mask.path`; a program without a backend makes it with `MaskFile.local(path)`.
-A `Path` anywhere else in the params is refused, and so is an output that is or holds a dataset model or a `Path`: every path a workflow gets has passed the access check.
-A dataset model has no validators of its own: what it would check of a file is metadata, which the fit check covers when the request is submitted, or the workflow's to read.
+A `Path` anywhere else in the params is refused, and so is an output that is or holds a file model or a `Path`: every path a workflow gets has passed the access check.
+A file model has no validators of its own: what it would check of a file is metadata, which the fit check covers when the request is submitted, or the workflow's to read.
 
 A root place takes a file or an output of another workflow, as its type says; never a choice between the two.
 A value that is read from a file by some users and computed by others is a group, given by reference, and a workflow that reads the file outputs the group: a published normalization is read by a workflow whose output another request references ([user-stories.md](user-stories.md), story C2).
@@ -244,7 +244,7 @@ A value that is read from a file by some users and computed by others is a group
 A number is a field of a group, such as the `bins` of a `Reduction`:
 
 ```python
-sample: Path                                      # refused by WorkflowSpec: a file is a dataset model
+sample: Path                                      # refused by WorkflowSpec: a file is a file model
 bins: int = 100                                   # refused by WorkflowSpec: not a group
 ```
 
@@ -254,7 +254,7 @@ So a UI generated from the params schema shows each parameter as a section ([ADR
 |---|---|
 | a group without a data value | a form of its fields, and a picker of records whose output is of its class |
 | a group with a data value | a picker of records whose output is of its class |
-| a dataset model | a picker of datasets of its kind |
+| a file model | a picker of files of its kind |
 | a union of groups | a choice of alternatives, each a form of its fields |
 | a list | rows, added and edited; each row the widget of its element |
 | `X \| None` | a toggle over the widget of `X` |
@@ -262,7 +262,7 @@ So a UI generated from the params schema shows each parameter as a section ([ADR
 In a form, a scalar field is an input of its type, and a list of scalars a list of inputs.
 
 No type in the params or the outputs is a `NewType`, at any depth: a class names a role.
-A sample run and a can run are both raw datasets, and each is a class of its own, `Sample` and `Can`, since a `PipelineBinding` keys a parameter by its class.
+A sample run and a can run are both raw files, and each is a class of its own, `Sample` and `Can`, since a `PipelineBinding` keys a parameter by its class.
 `NewType`s, and other sciline keys such as esssans' `Filename[SampleRun]`, live in the workflow package and in the binding (see What a binding provides), never in the spec.
 
 **Unions.** A parameter, or the element of a list parameter, may be a discriminated union of groups, `Annotated[A | B, Field(discriminator='kind')]`, in which each alternative has the *tag* field `kind`, typed as a `Literal` of one string, its own, such as `Literal['find']`.
@@ -306,7 +306,7 @@ beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = 
 # whose toggle, off, reads as "no beam centre"
 ```
 
-`DirectBeam` is a dataset model of the direct-beam run.
+`DirectBeam` is a file model of the direct-beam run.
 `direct_beam` has no default (see Defaults below), so a UI shows its toggle with neither state chosen until the user picks one.
 A choice between modes is a union of groups.
 An optional part with fields that need values is a parameter typed `X | None`.
@@ -323,9 +323,9 @@ A value *round-trips* when its JSON form reads back as the value.
 
 - The names of params and outputs are distinct.
 - Each parameter is a group, a union of groups, or a list of one, possibly typed `X | None`. A list parameter is not typed `list[X] | None`, since a list without rows is `[]`, and its element is not typed `X | None`, since each row is a value.
-- The fields of a group without a data value are scalars, dataset models, or lists of one of these. A scalar is never typed `X | None`; a dataset model may be, with the default `None`, and a list with the default `[]`. A group with a data value is given by reference to an output only; of its other fields, the framework refuses only a `Path`, a dataset model, a `NewType`, or a type alias, since no output could fill them.
-- A dataset model holds only `dataset`, as `DatasetModel` declares it, and has no validators or serializers of its own. A `Path` outside a dataset model is refused.
-- Each output is a type, possibly typed `X | None`, or a list or a dict of one. No output is or holds a dataset model or a `Path`, at any depth.
+- The fields of a group without a data value are scalars, file models, or lists of one of these. A scalar is never typed `X | None`; a file model may be, with the default `None`, and a list with the default `[]`. A group with a data value is given by reference to an output only; of its other fields, the framework refuses only a `Path`, a file model, a `NewType`, or a type alias, since no output could fill them.
+- A file model holds only `file`, as `FileModel` declares it, and has no validators or serializers of its own. A `Path` outside a file model is refused.
+- Each output is a type, possibly typed `X | None`, or a list or a dict of one. No output is or holds a file model or a `Path`, at any depth.
 - No type in the params or the outputs is a `NewType` or a type alias, at any depth: a spec names a role by a class, and a binding maps it to a key of its own.
 - A union of groups is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag. No alternative has a data value.
 - A group has no serializers, computed fields, or aliases, which would make its JSON form differ from the object of its fields. It may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation).
@@ -360,7 +360,7 @@ draft = function_binding(IOFQ, iofq)        # from ess.spec
 ```
 
 The binding never sees a reference: the backend reads the data of each reference before it calls the binding.
-Each value is its type, whichever form the request gave it in: a group as the model, with each data value in it as the scipp object, such as the field `transmission` of a `ComputedTransmission`, and a dataset model with a local path.
+Each value is its type, whichever form the request gave it in: a group as the model, with each data value in it as the scipp object, such as the field `transmission` of a `ComputedTransmission`, and a file model with a local path.
 The backend passes every parameter, with the defaults of the model filled in.
 Defaults belong in the model only.
 A binding must not modify the values it gets or return an output that shares memory with one of them.
@@ -375,8 +375,8 @@ The service runs only installed workflows.
 A *request* is a spec and its params, given by keyword:
 
 ```python
-result = client.compute(IOFQ, params={'reduction': Reduction(bins=100), 'sample': dataset(run=60339),
-                                      'can': dataset(run=60338), 'transmission': t.ref('transmission')})
+result = client.compute(IOFQ, params={'reduction': Reduction(bins=100), 'sample': file(run=60339),
+                                      'can': file(run=60338), 'transmission': t.ref('transmission')})
                                       # submit, then wait
 client.output(result, 'iofq')            # raises RecordFailed if the record failed
 client.output(result, 'iofq', select={'Q': slice(0, 10)})
@@ -384,7 +384,7 @@ client.output(result, 'iofq', select={'Q': slice(0, 10)})
 
 `params` is a dict by name: each value written inline or given by reference, or a list of these for a list parameter (see Specs and bindings).
 A value written inline is the value, such as `Reduction(bins=100)`, or its JSON form, `{'bins': 100}`: both give the same request.
-`params` may also be an instance of the params model, if every value is written inline; a spec with a dataset model takes a dict.
+`params` may also be an instance of the params model, if every value is written inline; a spec with a file model takes a dict.
 It may be left out when every parameter has a default.
 
 Submitting a request returns a *record*.
@@ -419,8 +419,8 @@ A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)
 
 | Phase | What is validated |
 |---|---|
-| request phase | each group, or row, written inline, whole, by the type at its root place, from its JSON form; an instance by its dump. The datasets inside it are resolved and checked first, so its validators run with their identities |
-| call phase, once the references are read | the data of each reference to an output, by the type at its root place; a dataset model, at a root place or inside a group, gets the local path of its file |
+| request phase | each group, or row, written inline, whole, by the type at its root place, from its JSON form; an instance by its dump. The files inside it are resolved and checked first, so its validators run with their identities |
+| call phase, once the references are read | the data of each reference to an output, by the type at its root place; a file model, at a root place or inside a group, gets the local path of its file |
 
 In the request phase, at submission, the backend also checks the names and the required parameters, each reference readable and fitting its root place (see References), and the table rules (see Combining runs: tables).
 Every validator of a group written inline runs then, with all its fields at hand:
@@ -440,56 +440,56 @@ Its `errors` list each reason as a `FieldError`, as pydantic's `ValidationError.
 If one request of a call is refused, none is submitted.
 A request that fails in the call phase makes a failed record.
 Its failure, `client.failure(record)`, keeps the framework's own words as they are: a value refused in the call phase, such as `mask.path: Value error, ...`, and the backend's reasons, such as `record r17 failed`, `the workflow of sans-iofq/v1 returned None as iofq`, or `the write failed: ...`.
-An error that the binding, its driver, the dataset source, or the store raises is given with its type, such as `KeyError: 'counts'` or `the write failed: OSError: no space left on device`.
+An error that the binding, its driver, the file source, or the store raises is given with its type, such as `KeyError: 'counts'` or `the write failed: OSError: no space left on device`.
 Validation in the request phase never proves that a workflow will succeed.
 
 ## References
 
-A value is given by *reference*: to an output of a record, `record.ref(name)`; to a dataset, `dataset(...)` (see Datasets); or to an output of an accumulator, `acc.ref(name)` (see Stages and accumulators).
+A value is given by *reference*: to an output of a record, `record.ref(name)`; to a file, `file(...)` (see Files); or to an output of an accumulator, `acc.ref(name)` (see Stages and accumulators).
 A reference to a pending record is allowed, so a chain is submitted without waiting.
-`BEAM_CENTRE` takes the parameter `direct_beam`, a dataset model of the direct-beam run, and returns `centre: BeamCentre`.
+`BEAM_CENTRE` takes the parameter `direct_beam`, a file model of the direct-beam run, and returns `centre: BeamCentre`.
 The same beam centre is typed in by one user and computed by another:
 
 ```python
-runs = {'sample': dataset(run=60339), 'can': dataset(run=60338), 'transmission': t.ref('transmission')}
+runs = {'sample': file(run=60339), 'can': file(run=60338), 'transmission': t.ref('transmission')}
 result = client.submit(IOFQ, params={**runs, 'beam_centre': BeamCentre(x=0.012, y=-0.003)})  # written inline
-centre = client.submit(BEAM_CENTRE, params={'direct_beam': dataset(run=60330)})             # pending
+centre = client.submit(BEAM_CENTRE, params={'direct_beam': file(run=60330)})             # pending
 result = client.submit(IOFQ, params={**runs, 'beam_centre': centre.ref('centre')})          # a reference
 ```
 
 The backend runs the last request once the one before has completed.
 A request never references another request of the same `submit` call.
-A dataset model is always given by reference: `dataset(path=...)` names a file by its path, and a string or an object of its fields where a dataset model is expected is refused.
+A file model is always given by reference: `file(path=...)` names a file by its path, and a string or an object of its fields where a file model is expected is refused.
 `record.ref(output, key)` names one element of a list or dict output: by its index for a list, `key='2'`, and by its key for a dict.
 A key that the output lacks fails in the call phase.
 
 A reference to an output stands for a whole group, at a root place, such as `beam_centre` or `sample[2]`: never for a union of groups, a field of a group, or a whole list.
-A reference to a dataset stands for a dataset model, at a root place or at a field of a group typed a dataset model.
+A reference to a file stands for a file model, at a root place or at a field of a group typed a file model.
 Its JSON form is an object with the key `@ref`, which names its kind:
 
 ```json
-{"@ref": "dataset", "dataset": "run:loki/60339"}
+{"@ref": "file", "file": "run:loki/60339"}
 {"@ref": "output", "record": "r17", "output": "centre"}
 {"@ref": "output", "record": "r18", "output": "slices", "key": "2"}
 ```
 
 The key `@ref` is reserved at every depth: an object with it is a reference.
 So the framework finds the references of a request without the spec, in every array and every object.
-With the spec, it refuses a reference inside a group written inline, except one to a dataset at a field typed a dataset model, and a default whose JSON form holds the key `@ref`.
+With the spec, it refuses a reference inside a group written inline, except one to a file at a field typed a file model, and a default whose JSON form holds the key `@ref`.
 
 A reference *fits* a root place when the data it names can be the value there.
 `| None` is removed on both sides.
 A reference with a key names one element, of the output's element type, and an element of a list parameter takes a reference by the element type.
-Output references and dataset references work the same way:
+Output references and file references work the same way:
 
-| | Reference to an output | Reference to a dataset |
+| | Reference to an output | Reference to a file |
 |---|---|---|
-| Place | a parameter, or an element of a list parameter | the same, or a field of a group typed a dataset model, or an element of a list field of one |
-| Stands for | a whole group, not a dataset model | a whole dataset model |
-| Fits if | the output's class is the group's class or a subclass of it | the dataset's metadata has the model's metadata |
-| Resolved in the call phase to | the stored output | the dataset model with the local path |
+| Place | a parameter, or an element of a list parameter | the same, or a field of a group typed a file model, or an element of a list field of one |
+| Stands for | a whole group, not a file model | a whole file model |
+| Fits if | the output's class is the group's class or a subclass of it | the file's metadata has the model's metadata |
+| Resolved in the call phase to | the stored output | the file model with the local path |
 | Found in a record | by its `@ref` key, without the spec | the same |
-| Access check at submission | records the client may read (see How long records and values are kept) | datasets the proposal may read |
+| Access check at submission | records the client may read (see How long records and values are kept) | files the proposal may read |
 
 | Data the reference names | Type at the root place | Fits |
 |---|---|---|
@@ -497,8 +497,8 @@ Output references and dataset references work the same way:
 | an output `BeamCentre` | `GivenCentre \| FindCentre`, a union of groups | no: a union is written inline |
 | an output `list[TimeRange]`, with a key | `TimeRange`, a row of `time_range: list[TimeRange]` | yes |
 | an output `sc.DataArray` | `ComputedTransmission` | no: a reference stands for a group, so the workflow outputs `ComputedTransmission` |
-| a raw dataset | `Sample`, a dataset model of kind `'raw'` | yes |
-| a raw dataset | `MaskFile`, a dataset model of kind `'mask'` | no |
+| a raw file | `Sample`, a file model of kind `'raw'` | yes |
+| a raw file | `MaskFile`, a file model of kind `'mask'` | no |
 
 ## Labels and members
 
@@ -523,7 +523,7 @@ A blank is a whole parameter, never a field of a group.
 `Template` takes the fixed values as a request does, and all but the spec by keyword:
 
 ```python
-template = Template(IOFQ, params={'reduction': Reduction(bins=100), 'can': dataset(run=60338),
+template = Template(IOFQ, params={'reduction': Reduction(bins=100), 'can': file(run=60338),
                                   'transmission': t.ref('transmission')},
                     blanks=('sample',))
 ```
@@ -567,7 +567,7 @@ A submission may reference only
 
 - output values its client keeps,
 - persisted outputs,
-- datasets,
+- files,
 - the current state of its client's own accumulators.
 
 Any other reference is refused, even to a record that is still pending.
@@ -578,8 +578,8 @@ A submission also refuses a reference to a record that failed or was cancelled, 
 It waits for nothing and reads no value, so a form calls it each time it lists the records to pick from.
 
 ```python
-centre = client.compute(BEAM_CENTRE, params={'direct_beam': dataset(run=60330)})
-result = client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
+centre = client.compute(BEAM_CENTRE, params={'direct_beam': file(run=60330)})
+result = client.submit(IOFQ, params={'sample': file(run=60339), 'can': file(run=60338),
                                      'transmission': t.ref('transmission'), 'beam_centre': centre.ref('centre')})
 client.release(centre)              # the pending request keeps the centre until it has run
 client.output(result, 'iofq')       # allowed: this client asked for the record
@@ -600,7 +600,7 @@ An output is *persisted* while a persist request names it and its write has not 
 
 ```python
 client.persist(result, 'iofq')     # the store keeps iofq too; every output if none is named
-client.submit(IOFQ, params={'sample': dataset(run=60341), 'can': dataset(run=60338),
+client.submit(IOFQ, params={'sample': file(run=60341), 'can': file(run=60338),
                             'transmission': t.ref('transmission')},
               label='night', persist=('iofq',))             # only the store keeps iofq
 morning = connect(url, proposal='p1')                       # the next day, any process
@@ -615,30 +615,30 @@ morning.output(morning.records(label='night')[0], 'iofq')   # read from the stor
 The service keeps values in its memory and limits the memory of each client (the *cap*).
 It ends a client that makes no call within its *lease*, and gives each proposal a store.
 
-## Datasets
+## Files
 
 ```python
-dataset(run=60339)
-dataset(path='/home/user/data/run1.h5')
-dataset(pid='20.500.12269/vanadium')     # an output published in a catalogue
+file(run=60339)
+file(path='/home/user/data/run1.h5')
+file(pid='20.500.12269/vanadium')     # an output published in a catalogue
 ```
 
-A request names a dataset by what a person knows, such as a run number.
-The backend resolves the name to the dataset's identity, which the record holds in place of the name.
+A request names a file by what a person knows, such as a run number.
+The backend resolves the name to the file's identity, which the record holds in place of the name.
 The record holds no metadata.
-A client reads it from the dataset source.
+A client reads it from the file source.
 
-**Dataset source.** A backend finds datasets through its *dataset source*, which DMSC deploys with it.
-A client lists datasets, waits for new ones, and reads their metadata through `client.datasets`, from the backend's dataset source.
-A client sees only the datasets its proposal may read.
-A *selector* picks datasets by metadata.
-It matches raw datasets unless it names another kind, such as calibration.
-A dataset *fits* a dataset model when the selector of the model's metadata, `Selector(**MaskFile.metadata)`, matches it, so a form lists for a dataset model only the datasets that the backend accepts there.
+**File source.** A backend finds files through its *file source*, which DMSC deploys with it.
+A client lists files, waits for new ones, and reads their metadata through `client.files`, from the backend's file source.
+A client sees only the files its proposal may read.
+A *selector* picks files by metadata.
+It matches raw files unless it names another kind, such as calibration.
+A file *fits* a file model when the selector of the model's metadata, `Selector(**MaskFile.metadata)`, matches it, so a form lists for a file model only the files that the backend accepts there.
 
 ```python
-samples = client.datasets.list(Selector(role='sample'))       # dataset references, usable as values
-for run in client.datasets.watch(Selector(scan='17')): ...   # existing ones first, then new ones
-client.datasets.metadata(run)['sample']                       # the source's current values
+samples = client.files.list(Selector(role='sample'))       # file references, usable as values
+for run in client.files.watch(Selector(scan='17')): ...   # existing ones first, then new ones
+client.files.metadata(run)['sample']                       # the source's current values
 ```
 
 ## Combining runs: tables
@@ -667,17 +667,17 @@ The validators and constraints of the element type check each row.
 A request that gives every row is a plain request:
 
 ```python
-result = client.compute(IOFQ_MULTI, params={'sample': [dataset(run=611), dataset(run=612)],
-                                             'can': [dataset(run=614)],
+result = client.compute(IOFQ_MULTI, params={'sample': [file(run=611), file(run=612)],
+                                             'can': [file(run=614)],
                                              'transmission': t.ref('transmission')})
 ```
 
 **Values of the runs.** A value that differs per run, such as a motor position, is in the run's file.
-A row of a table of runs is a dataset reference and nothing else.
+A row of a table of runs is a file reference and nothing else.
 A value that differs between runs, such as a thickness, makes the runs separate requests; a value shared by all runs of a request is a parameter, such as one transmission for the summed sample runs.
 
 A multi-run spec may have outputs of its own, such as `STITCH`, a stitch of all angles, or no single-run spec, such as `VOLUME`, which sums counts over runs.
-It is written the same way: `runs: list[Run] = Field(min_length=1)`, a table of the dataset model `Run`, with `WorkflowSpec(..., tables=('runs',))`, so the model, its schema, and the backend agree that the table has a row.
+It is written the same way: `runs: list[Run] = Field(min_length=1)`, a table of the file model `Run`, with `WorkflowSpec(..., tables=('runs',))`, so the model, its schema, and the backend agree that the table has a row.
 A list parameter makes a table only when `tables` names it; otherwise it is a value like any other.
 
 The *table rules* are: the number of rows of a table meets its length constraints, such as a table that needs a row, and the rows of a table are distinct.
@@ -700,7 +700,7 @@ A client keeps a stage or an accumulator until it releases it or ends.
 **Stage.** A *stage* is a template that the backend keeps for a client:
 
 ```python
-tune = client.stage(Template(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
+tune = client.stage(Template(IOFQ, params={'sample': file(run=60339), 'can': file(run=60338),
                                            'transmission': t.ref('transmission')},
                              blanks=('reduction',)))
 for bins in (50, 100, 200):
@@ -722,9 +722,9 @@ The backend keeps it for a client ([ADR 0006](adr/0006-the-unit-is-an-accumulati
 iofq = client.accumulator(Template(IOFQ_MULTI, params={'reduction': Reduction(bins=100),
                                                        'transmission': t.ref('transmission')},
                                    blanks=('sample', 'can')))
-iofq.push(sample=[dataset(run=611)])                                  # one row
-iofq.push(sample=[dataset(run=612), dataset(run=613)])                # two rows of one table
-iofq.push(sample=[dataset(run=617)], can=[dataset(run=614)])          # rows of two tables
+iofq.push(sample=[file(run=611)])                                  # one row
+iofq.push(sample=[file(run=612), file(run=613)])                # two rows of one table
+iofq.push(sample=[file(run=617)], can=[file(run=614)])          # rows of two tables
 client.output(iofq, 'iofq')                                           # the output of state 3
 ```
 
@@ -768,8 +768,8 @@ A value that fails its check at a push stops the accumulator, as any failing pus
 
 **Distinct rows.** A push refuses a row that the table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
 Rows are compared in two ways.
-In the request phase, they are compared whole, as the record holds them: a value written inline by its JSON form, a dataset by the identity the dataset source gives it, and a reference to an output by record, output, and key, each at its place.
-So `dataset(run=611)` and `dataset(path=...)` of the same file are one row.
+In the request phase, they are compared whole, as the record holds them: a value written inline by its JSON form, a file by the identity the file source gives it, and a reference to an output by record, output, and key, each at its place.
+So `file(run=611)` and `file(path=...)` of the same file are one row.
 A push checks this against the pushes logged, since a pin that refused the repeat would refuse every later state.
 A plain request with a repeated row is refused too, including one in a template.
 
@@ -779,9 +779,9 @@ So a value written inline and a reference to an output whose value is equal are 
 `SLICES` is a spec like `IOFQ`, with the table `time_range: list[TimeRange] = Field(min_length=1)`:
 
 ```python
-slicer = client.compute(FIND_SLICES, params={'log': dataset(run=611)})   # outputs slices: list[TimeRange]
+slicer = client.compute(FIND_SLICES, params={'log': file(run=611)})   # outputs slices: list[TimeRange]
 n = len(client.output(slicer, 'slices'))
-acc = client.accumulator(Template(SLICES, params={'sample': dataset(run=611), 'can': dataset(run=614),
+acc = client.accumulator(Template(SLICES, params={'sample': file(run=611), 'can': file(run=614),
                                                   'transmission': t611.ref('transmission')},
                                   blanks=('time_range',)))
 acc.push(time_range=[slicer.ref('slices', key=str(i)) for i in range(n)])
@@ -847,7 +847,7 @@ The client can keep it, persist it, or reference it from another template.
 **Releasing.** `client.release(acc)`, or ending its client, returns at once:
 
 ```python
-iofq.push(sample=[dataset(run=615)])
+iofq.push(sample=[file(run=615)])
 exported = client.submit(EXPORT, params={'result': iofq.ref('iofq')})   # pins the state after this push
 client.release(iofq)                                           # the push is added, and the export runs
 ```
@@ -864,7 +864,7 @@ The workflow author makes it from a pipeline, a driver, or a function, each for 
 single = PipelineBinding(IOFQ, make_pipeline)            # from ess.spec.pipeline
 multi = DriverBinding(IOFQ_MULTI, IofQDriver)            # from ess.spec
 export = function_binding(EXPORT, export_csv)            # from ess.spec
-client = local(proposal='p1', datasets=..., bind=[single, multi, export])
+client = local(proposal='p1', files=..., bind=[single, multi, export])
 ```
 
 Each binding serves some of the client's actions:
@@ -1048,12 +1048,12 @@ A *controller* decides over time what to submit, push, and release.
 It is ordinary code that uses the client, such as a notebook, an application's UI, or a server that runs automatic reduction.
 Controllers never run in the backend.
 
-**A loop over arrivals** waits for new datasets.
+**A loop over arrivals** waits for new files.
 This one adds each run of a rotation scan to a volume as it arrives, and cuts through the volume after each run (story D7):
 
 ```python
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
-for run in islice(client.datasets.watch(Selector(scan='17')), 300):   # the scan's 300 runs
+for run in islice(client.files.watch(Selector(scan='17')), 300):   # the scan's 300 runs
     volume.push(runs=[run])                                 # added once the previous cut is copied
     show(client.output(volume, 'volume', select={'q': 0}))
 total = client.freeze(volume)
@@ -1061,39 +1061,39 @@ total = client.freeze(volume)
 
 The binding of `VOLUME` is a driver that sums, so the loop holds one volume and keeps one record, from `freeze`.
 
-**A loop over records** reduces each dataset in a request of its own.
-`client.output` waits for its record, so the loop shows each result before it takes the next dataset:
+**A loop over records** reduces each file in a request of its own.
+`client.output` waits for its record, so the loop shows each result before it takes the next file:
 
 ```python
-for run in client.datasets.watch(Selector(role='transmission')):
-    record = client.submit(TRANSMISSION, params={'run': run, 'empty_beam': dataset(run=60336)})
+for run in client.files.watch(Selector(role='transmission')):
+    record = client.submit(TRANSMISSION, params={'run': run, 'empty_beam': file(run=60336)})
     show(client.output(record, 'transmission'))
 ```
 
 ## Batch and automatic reduction
 
 [automatic-reduction.md](automatic-reduction.md) states these rules in full.
-The examples reduce transmission runs with `TRANSMISSION` (see Specs and bindings), whose parameters `run` and `empty_beam` are dataset models.
-`apply` fills a template once per dataset: the dataset is the value of the blank `at`, a parameter of a dataset model, such as `'run'`.
-A *lookup* fills further blanks, each a parameter of a dataset model, such as the latest empty-beam run before each transmission run at `'empty_beam'`.
-The template's fixed values give the other parameters, the same for each dataset.
+The examples reduce transmission runs with `TRANSMISSION` (see Specs and bindings), whose parameters `run` and `empty_beam` are file models.
+`apply` fills a template once per file: the file is the value of the blank `at`, a parameter of a file model, such as `'run'`.
+A *lookup* fills further blanks, each a parameter of a file model, such as the latest empty-beam run before each transmission run at `'empty_beam'`.
+The template's fixed values give the other parameters, the same for each file.
 `apply` returns the requests keyed by the value of a metadata field (`member_field`):
 
 ```python
 empty_beams = Lookup({'empty_beam': LastBefore(Selector(role='empty-beam'))})
-requests = apply(Template(TRANSMISSION, blanks=('run', 'empty_beam')), runs, client.datasets,
+requests = apply(Template(TRANSMISSION, blanks=('run', 'empty_beam')), runs, client.files,
                  at='run', member_field='sample', lookup=empty_beams)
 client.submit(requests, label='transmission', persist=True)
 ```
 
 A *rule* is plain data: a name, a template, a selector, a label, the blank `at`, and optionally a `member_field`, a `lookup`, a `series`, and `persist`, the outputs it persists.
-The *trigger loop* is a controller that fills the template for each new dataset the selector matches, and submits it under the label, persisted.
-A dataset is new to a rule until a record under its label holds it at `at`.
-With a *series*, one request takes all matching datasets so far with the same value of a metadata field, as the rows of the blank `at`, a table of a dataset model, such as `'runs'`.
-An example is all angles of one sample at ESTIA, which the toy spec `STITCH` stitches, over its table `runs`, each divided by the reference run of its parameter `reference`, a dataset model:
+The *trigger loop* is a controller that fills the template for each new file the selector matches, and submits it under the label, persisted.
+A file is new to a rule until a record under its label holds it at `at`.
+With a *series*, one request takes all matching files so far with the same value of a metadata field, as the rows of the blank `at`, a table of a file model, such as `'runs'`.
+An example is all angles of one sample at ESTIA, which the toy spec `STITCH` stitches, over its table `runs`, each divided by the reference run of its parameter `reference`, a file model:
 
 ```python
-reference = dataset(run=500)                # the reference run
+reference = file(run=500)                # the reference run
 rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
             selector=Selector(role='sample'), series='sample', at='runs', label='reflectivity')
 TriggerLoop(client, rules=[rule]).run()
@@ -1103,13 +1103,13 @@ TriggerLoop(client, rules=[rule]).run()
 
 ```python
 provenance = client.provenance(result)
-provenance.datasets(), provenance.records(), provenance.software
+provenance.files(), provenance.records(), provenance.software
 pid = client.publish(result.ref('iofq'), 'scicat')     # the output and its provenance
 ```
 
-Provenance lists the record's request, every record that supplied a value by reference (directly or through other records), the datasets they used, and the software versions.
+Provenance lists the record's request, every record that supplied a value by reference (directly or through other records), the files they used, and the software versions.
 If a value is an output of an accumulator's state, the record listed is the record of that state.
-Provenance stops at datasets.
+Provenance stops at files.
 
 Publishing puts an output in a catalogue with its provenance.
 The catalogue entry stays after the proposal's history is dropped.
@@ -1139,7 +1139,7 @@ Arrival, order, and placement hold up to rounding.
 Not visible in the code of notebooks, apps, or workflow packages:
 
 - how history and outputs are stored, moved, and dropped
-- how a run number or file becomes a dataset identity
+- how a run number or file becomes a file identity
 - when and where a request runs, and where a stage or a driver lives
 - the format of persisted outputs and the store's layout
 - how the service notices a vanished client and sets the cap per client (scipp/essapps#27)

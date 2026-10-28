@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Fakes for tests: a dataset source whose datasets a test makes appear as
+Fakes for tests: a file source whose files a test makes appear as
 files, a store held in memory, and bindings over plain functions.
 """
 
@@ -18,46 +18,46 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from ess.spec import DatasetRef, DriverBinding, StageCall, WorkflowSpec
+from ess.spec import DriverBinding, FileRef, StageCall, WorkflowSpec
 from ess.spec.binding import fixed_values
 from ess.spec.testing import instance
 
-from .datasets import Selector
+from .files import Selector
 
 type Spec = WorkflowSpec[Any, Any]
 
 
-def read_dataset(path: Path) -> Any:
-    """The content of a dataset that :class:`FakeDatasets` wrote."""
+def read_file(path: Path) -> Any:
+    """The content of a file that :class:`FakeFiles` wrote."""
     return json.loads(path.read_text())
 
 
-class FakeDatasets:
+class FakeFiles:
     """
-    A dataset source over files in ``directory``.
+    A file source over files in ``directory``.
 
-    A dataset is identified by its run number, or by its PID if it has one.
+    A file is identified by its run number, or by its PID if it has one.
     :meth:`measure` writes its content, which must have a JSON form, to a
-    file of its own, which a workflow reads with :func:`read_dataset`. A run
+    file of its own, which a workflow reads with :func:`read_file`. A run
     measured again keeps its identity and its place in the order of
-    measurement, and its file is written again. A dataset is named by its
+    measurement, and its file is written again. A file is named by its
     run, its PID, or its path. Its metadata are the proposal, the run, and
-    the fields :meth:`measure` is given, such as ``kind='mask'``; a dataset
-    without ``kind`` is raw (see :class:`~.datasets.Selector`).
+    the fields :meth:`measure` is given, such as ``kind='mask'``; a file
+    without ``kind`` is raw (see :class:`~.files.Selector`).
     """
 
     def __init__(self, proposal: str, directory: Path) -> None:
         self.proposal = proposal
         self._directory = directory
-        self._paths: dict[DatasetRef, Path] = {}
-        self._metadata: dict[DatasetRef, dict[str, Any]] = {}
-        self._corrupt: set[DatasetRef] = set()
+        self._paths: dict[FileRef, Path] = {}
+        self._metadata: dict[FileRef, dict[str, Any]] = {}
+        self._corrupt: set[FileRef] = set()
         self._arrived = threading.Condition()
 
-    def measure(self, run: int, content: Any, **fields: Any) -> DatasetRef:
+    def measure(self, run: int, content: Any, **fields: Any) -> FileRef:
         """Make run ``run`` appear, or appear again, and return its identity."""
         pid = fields.get('pid')
-        ref = DatasetRef(dataset=f'pid:{pid}' if pid else f'uuid:run-{run}')
+        ref = FileRef(file=f'pid:{pid}' if pid else f'uuid:run-{run}')
         path = self._directory / f'run-{run}.json'
         path.write_text(json.dumps(content))
         with self._arrived:
@@ -66,39 +66,39 @@ class FakeDatasets:
             self._arrived.notify_all()
         return ref
 
-    def corrupt(self, ref: DatasetRef) -> None:
+    def corrupt(self, ref: FileRef) -> None:
         self._corrupt.add(ref)
 
-    def repair(self, ref: DatasetRef) -> None:
+    def repair(self, ref: FileRef) -> None:
         self._corrupt.discard(ref)
 
-    def correct(self, ref: DatasetRef, **fields: Any) -> None:
+    def correct(self, ref: FileRef, **fields: Any) -> None:
         self._metadata[ref] |= fields
 
-    def resolve(self, name: DatasetRef) -> DatasetRef:
+    def resolve(self, name: FileRef) -> FileRef:
         if name in self._paths:
             return name
-        kind, _, value = name.dataset.partition(':')
+        kind, _, value = name.file.partition(':')
         for ref, metadata in self._metadata.items():
             known = str(self._paths[ref]) if kind == 'path' else metadata.get(kind)
             if str(known) == value:
                 return ref
         raise KeyError(name)
 
-    def path(self, ref: DatasetRef) -> Path:
+    def path(self, ref: FileRef) -> Path:
         if ref in self._corrupt:
             raise OSError('file signature not found')
         return self._paths[ref]
 
-    def metadata(self, ref: DatasetRef) -> dict[str, Any]:
+    def metadata(self, ref: FileRef) -> dict[str, Any]:
         return dict(self._metadata[ref])
 
-    def list(self, selector: Selector) -> list[DatasetRef]:
+    def list(self, selector: Selector) -> list[FileRef]:
         with self._arrived:
             return [r for r, m in self._metadata.items() if selector.matches(m)]
 
-    def watch(self, selector: Selector) -> Iterator[DatasetRef]:
-        seen: set[DatasetRef] = set()
+    def watch(self, selector: Selector) -> Iterator[FileRef]:
+        seen: set[FileRef] = set()
         while True:
             with self._arrived:
                 self._arrived.wait_for(lambda: set(self.list(selector)) - seen)

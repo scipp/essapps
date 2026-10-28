@@ -8,14 +8,14 @@ import pytest
 import scipp as sc
 from pydantic import BaseModel
 
-from ess.spec import DatasetModel
+from ess.spec import FileModel
 from ess.spec.field_types import (
     arguments,
     element,
     fields_of,
     fits,
     is_alias,
-    is_dataset,
+    is_file,
     is_single,
     optional,
     plain,
@@ -25,7 +25,7 @@ from ess.spec.field_types import (
 )
 
 
-class RunFile(DatasetModel, kind='raw'):
+class RunFile(FileModel, kind='raw'):
     pass
 
 
@@ -114,13 +114,13 @@ def test_lists_dicts_and_unions_are_not_data_values(tp: Any) -> None:
     assert not is_single(tp)
 
 
-def test_a_dataset_model_is_a_subclass_of_dataset_model() -> None:
-    assert is_dataset(RunFile)
-    assert is_dataset(DatasetModel)
-    assert not is_dataset(Path)
-    assert not is_dataset(Parts)
-    assert not is_dataset(RunFile | None)
-    assert not is_dataset(list[RunFile])
+def test_a_file_model_is_a_subclass_of_file_model() -> None:
+    assert is_file(RunFile)
+    assert is_file(FileModel)
+    assert not is_file(Path)
+    assert not is_file(Parts)
+    assert not is_file(RunFile | None)
+    assert not is_file(list[RunFile])
 
 
 def test_a_newtype_and_a_type_alias_are_aliases() -> None:

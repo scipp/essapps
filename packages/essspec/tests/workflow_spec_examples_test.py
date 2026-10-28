@@ -15,11 +15,11 @@ import scipp as sc
 from annotated_types import Gt
 from pydantic import BaseModel, Field, computed_field, field_validator
 
-from ess.spec import DatasetModel, WorkflowSpec
+from ess.spec import FileModel, WorkflowSpec
 
 
 def allowed_spec() -> WorkflowSpec:
-    class RunFile(DatasetModel, kind='raw'): ...
+    class RunFile(FileModel, kind='raw'): ...
 
     class WavelengthRange(BaseModel):
         start: float
@@ -65,7 +65,7 @@ def allowed_spec() -> WorkflowSpec:
 
 
 def refused_spec() -> WorkflowSpec:
-    class RunFile(DatasetModel, kind='raw'): ...
+    class RunFile(FileModel, kind='raw'): ...
 
     class WavelengthRange(BaseModel):
         start: float
@@ -85,7 +85,7 @@ def refused_spec() -> WorkflowSpec:
     class Geometry(BaseModel):
         file: Path
 
-    class CalibrationFile(DatasetModel, kind='calibration'):
+    class CalibrationFile(FileModel, kind='calibration'):
         run: int
 
     class Reduction(BaseModel):
@@ -159,12 +159,12 @@ def refusal() -> str:
         "Reduction: no serializers or computed fields, {'computed_fields'",
         'Centring.centre: GivenCentre | FindCentre is a union of groups',
         'Sample.run: RunNumber is a NewType',
-        'Geometry.file: a Path is outside a dataset model',
-        "CalibrationFile: a dataset model holds only dataset, not ['run']",
+        'Geometry.file: a Path is outside a file model',
+        "CalibrationFile: a file model holds only file, not ['run']",
         'Params.transmissions: a list parameter is not typed list[X] | None',
         'Params.masks: the element of a list parameter is not typed X | None',
         'Params.range: the default',
-        'Outputs.raw: RunFile is a dataset model; no output holds one',
+        'Outputs.raw: RunFile is a file model; no output holds one',
         'Params.bins: int is not a group',
         'sample_runs: a table has no default',
         'iofq: a field of both Params and Outputs',

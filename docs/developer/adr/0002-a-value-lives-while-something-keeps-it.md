@@ -32,7 +32,7 @@ It cannot look inside the binding, so it does not track what the binding keeps a
 **Work that nothing keeps is cancelled**, since its outputs would be dropped the moment they are computed.
 A running workflow is not interrupted, so cancelling frees memory, not CPU.
 
-**A submission references only what its client keeps, persisted values, and datasets.**
+**A submission references only what its client keeps, persisted values, and files.**
 So whether it is refused depends only on what its client keeps, not on how far other work has come.
 
 **Nothing is written unless persisted**, since the framework cannot tell which outputs are worth writing (Context).
@@ -61,7 +61,7 @@ No client does.
 Each pending record is
 
 - cancelled, unless a persist request names it, or a record named by a persist request reads it, directly or through other pending records;
-- run, if every value it reads is a dataset, is written, or comes from a pending record that runs;
+- run, if every value it reads is a file, is written, or comes from a pending record that runs;
 - failed otherwise, as the record of an accumulator's state is, since its driver is gone.
 
 ## Alternatives considered

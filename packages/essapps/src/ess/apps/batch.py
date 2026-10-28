@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A batch: one template filled for each of many datasets.
+A batch: one template filled for each of many files.
 
-A lookup fills further blanks per dataset, such as the can measured most
-recently before a sample. A dataset fills the one blank the lookup leaves, a
-parameter of a dataset model, such as ``'sample'``. Datasets are ordered by
+A lookup fills further blanks per file, such as the can measured most
+recently before a sample. A file fills the one blank the lookup leaves, a
+parameter of a file model, such as ``'sample'``. Files are ordered by
 their run number.
 """
 
@@ -14,35 +14,35 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from ess.spec import DatasetRef
+from ess.spec import FileRef
 
-from .client import Datasets
-from .datasets import Selector
+from .client import Files
+from .files import Selector
 from .records import Request, Template
 
 
-def run_number(ref: DatasetRef, source: Datasets) -> int:
+def run_number(ref: FileRef, source: Files) -> int:
     return int(source.metadata(ref)['run'])
 
 
 @dataclass(frozen=True)
 class LastBefore:
-    """The matching dataset with the highest run number below the filled one's."""
+    """The matching file with the highest run number below the filled one's."""
 
     selector: Selector
 
-    def find(self, ref: DatasetRef, source: Datasets) -> DatasetRef:
+    def find(self, ref: FileRef, source: Files) -> FileRef:
         run = run_number(ref, source)
         earlier = [d for d in source.list(self.selector) if run_number(d, source) < run]
         if not earlier:
-            raise LookupError(f'no dataset matching {self.selector} before run {run}')
+            raise LookupError(f'no file matching {self.selector} before run {run}')
         return max(earlier, key=lambda d: run_number(d, source))
 
 
 class Lookup:
     """
-    Rules that fill blanks per dataset, each keyed by its blank, a parameter
-    of a dataset model::
+    Rules that fill blanks per file, each keyed by its blank, a parameter
+    of a file model::
 
         Lookup({'can': LastBefore(Selector(role='can'))})
     """
@@ -55,49 +55,49 @@ class Lookup:
         """The blanks the lookup fills."""
         return set(self.rules)
 
-    def fill(self, ref: DatasetRef, source: Datasets) -> dict[str, DatasetRef]:
-        """Each blank the lookup fills, with the dataset found for it."""
+    def fill(self, ref: FileRef, source: Files) -> dict[str, FileRef]:
+        """Each blank the lookup fills, with the file found for it."""
         return {blank: rule.find(ref, source) for blank, rule in self.rules.items()}
 
 
-def dataset_place(template: Template, lookup: Lookup | None, at: str) -> str:
-    """The place a dataset fills, ``at``: the one blank the lookup leaves."""
+def file_place(template: Template, lookup: Lookup | None, at: str) -> str:
+    """The place a file fills, ``at``: the one blank the lookup leaves."""
     left = [b for b in template.blanks if lookup is None or b not in lookup.blanks]
     if len(left) != 1:
-        raise ValueError(f'a dataset fills one blank; {template.blanks} leave {left}')
+        raise ValueError(f'a file fills one blank; {template.blanks} leave {left}')
     if at != left[0]:
-        raise ValueError(f'a dataset fills the blank {left[0]!r}, not {at!r}')
+        raise ValueError(f'a file fills the blank {left[0]!r}, not {at!r}')
     return at
 
 
 def apply(
     template: Template,
-    datasets: Iterable[DatasetRef],
-    source: Datasets,
+    files: Iterable[FileRef],
+    source: Files,
     *,
     at: str,
     member_field: str = 'run',
     lookup: Lookup | None = None,
 ) -> dict[str, Request]:
     """
-    Fill the template for each dataset.
+    Fill the template for each file.
 
-    ``source`` answers metadata queries, such as ``client.datasets``. Each
-    dataset fills the blank ``at``, the one the lookup leaves, a parameter
-    of a dataset model::
+    ``source`` answers metadata queries, such as ``client.files``. Each
+    file fills the blank ``at``, the one the lookup leaves, a parameter
+    of a file model::
 
         template = Template(IOFQ, blanks=('sample',))
-        apply(template, runs, client.datasets, at='sample')
-        # {'101': Request(IOFQ, params={'sample': dataset(run=101)}), ...}
+        apply(template, runs, client.files, at='sample')
+        # {'101': Request(IOFQ, params={'sample': file(run=101)}), ...}
 
     The requests are keyed by member: the value of the metadata field
-    ``member_field`` of each dataset. Submitting them under a label makes the
+    ``member_field`` of each file. Submitting them under a label makes the
     keys the members of their records. Raises ``LookupError`` if the request
-    of a dataset cannot be made.
+    of a file cannot be made.
     """
     requests, failed = try_apply(
         template,
-        datasets,
+        files,
         source,
         at=at,
         member_field=member_field,
@@ -110,24 +110,24 @@ def apply(
 
 def try_apply(
     template: Template,
-    datasets: Iterable[DatasetRef],
-    source: Datasets,
+    files: Iterable[FileRef],
+    source: Files,
     *,
     at: str,
     member_field: str = 'run',
     lookup: Lookup | None = None,
-) -> tuple[dict[str, Request], dict[DatasetRef, LookupError]]:
+) -> tuple[dict[str, Request], dict[FileRef, LookupError]]:
     """
-    As :func:`apply`, but leave out each dataset whose request cannot be made.
+    As :func:`apply`, but leave out each file whose request cannot be made.
 
-    A request cannot be made if the lookup finds nothing for the dataset, or
+    A request cannot be made if the lookup finds nothing for the file, or
     its metadata lacks ``member_field``. Returns the requests, and the error of
-    each dataset left out.
+    each file left out.
     """
-    place = dataset_place(template, lookup, at)
+    place = file_place(template, lookup, at)
     requests: dict[str, Request] = {}
-    failed: dict[DatasetRef, LookupError] = {}
-    for ref in datasets:
+    failed: dict[FileRef, LookupError] = {}
+    for ref in files:
         try:
             member = str(source.metadata(ref)[member_field])
             found = lookup.fill(ref, source) if lookup else {}
@@ -135,6 +135,6 @@ def try_apply(
             failed[ref] = error
             continue
         if member in requests:
-            raise ValueError(f'two datasets have {member_field} {member}')
+            raise ValueError(f'two files have {member_field} {member}')
         requests[member] = template.fill(params={place: ref, **found})
     return requests, failed

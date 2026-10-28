@@ -159,7 +159,7 @@ a { color: var(--stage); }
 <section class="slide" id="board">
   <div class="eyebrow">Slide 1 · The picture</div>
   <h2>Two specs of one reduction, each run plainly or through a template the backend keeps</h2>
-  <p class="lede">Rows: what the spec takes. Columns: whether the backend keeps anything between calls. Each ≡ links two cells that give the same outputs. <code>611</code> stands for <code>dataset(run=611)</code>; <code>shared</code> holds the values of the shared groups.</p>
+  <p class="lede">Rows: what the spec takes. Columns: whether the backend keeps anything between calls. Each ≡ links two cells that give the same outputs. <code>611</code> stands for <code>file(run=611)</code>; <code>shared</code> holds the values of the shared groups.</p>
   <div class="board">
   <div class="bgrid" role="img" aria-label="A two by two grid. Rows: single-run spec and multi-run spec. Columns: plain request, and a template the backend keeps, shown as a stage for the single-run spec and an accumulator for the multi-run spec; a stage needs a pipeline binding, an accumulator a driver binding. Caching links plain request and stage, arrival links plain request and accumulator, and one-row links the two plain requests.">
     <div></div>
@@ -493,7 +493,7 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
   <h2>A single-run and a multi-run spec over one per-run sciline graph</h2>
   <div class="cols">
     <div style="display:flex; flex-direction:column; gap:10px; min-width:0">
-<pre><code><span class="k-pkg">class</span> Run(DatasetModel): ...      <span class="c"># a dataset model, and a row of a table</span>
+<pre><code><span class="k-pkg">class</span> Run(FileModel): ...      <span class="c"># a file model, and a row of a table</span>
 
 <span class="k-pkg">class</span> IofQParams(BaseModel):         <span class="c"># single-run: one run of each kind</span>
     sample: Run
@@ -602,7 +602,7 @@ binding = DriverBinding(SUM, RowSum)</code></pre>
     <div>
       <div class="eyebrow" style="margin-bottom:6px">Needed to read the grid</div>
       <ul class="tight">
-        <li><b>Records and references.</b> Every connection between requests is a reference: <code>record.ref('centre')</code>, <code>dataset(run=611)</code>, or <code>acc.ref('iofq')</code>, which the backend replaces at submission by an output of a record of the state's plain request. A reference to a pending record is valid. The backend waits for it.</li>
+        <li><b>Records and references.</b> Every connection between requests is a reference: <code>record.ref('centre')</code>, <code>file(run=611)</code>, or <code>acc.ref('iofq')</code>, which the backend replaces at submission by an output of a record of the state's plain request. A reference to a pending record is valid. The backend waits for it.</li>
         <li><b>Template</b> is the shared building block: stage, accumulator, batch (<code>apply</code>), and rules all start from one.</li>
         <li><b>Controllers.</b> The backend never decides what to submit or push. A notebook, an app, or the <code>TriggerLoop</code> of rules does.</li>
         <li><b>Where it runs.</b> Both: values in memory while something keeps them, written only when persisted. The service (designed, not built) keeps them under a cap per client; where it holds an accumulator's driver is open. Placement says the results do not differ.</li>
@@ -611,7 +611,7 @@ binding = DriverBinding(SUM, RowSum)</code></pre>
     <div>
       <div class="eyebrow" style="margin-bottom:6px">Orthogonal, safe to leave off the slides</div>
       <ul class="tight">
-        <li>Datasets and the dataset source (<code>client.datasets</code>, selectors, <code>watch</code>)</li>
+        <li>Files and the file source (<code>client.files</code>, selectors, <code>watch</code>)</li>
         <li>Labels and members (tentative)</li>
         <li>Status, failure, cancel, <code>as_completed</code></li>
         <li>Lookups, series, rules</li>

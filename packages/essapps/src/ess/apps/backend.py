@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 The backend checks requests, keeps records, and runs requests. It also
-answers its clients' queries about the datasets of its dataset source.
+answers its clients' queries about the files of its file source.
 
 What the backend knows of history is its log (see ``log.py``): every
 submission, finished record, opened accumulator, push, persist request, and
@@ -78,7 +78,7 @@ its lock, what depends on history and on what the client keeps: each reference
 to a record or an accumulator is one the client may read, and its data fit the
 type at its place. Each group given inline is validated whole then, so that
 its validators run. In the *call phase*, on a worker, the backend reads the
-data each reference names, an output, or for a dataset the dataset model,
+data each reference names, an output, or for a file the file model,
 with the local path of its file attached, and makes each value by its field,
 a row of a list by its element type, of the JSON form the log holds, with the
 data read in place of each reference (see
@@ -94,7 +94,7 @@ outputs model: an output that the spec declares optional and the binding
 returns as ``None`` is left out, and a record whose binding returns anything
 else fails.
 
-A stage checks its template's values when it is made, and resolves dataset
+A stage checks its template's values when it is made, and resolves file
 names: each fixed value by its own field. It keeps the outputs they
 reference until it has staged. A request through it must have its values
 outside the blanks. The first such request to run has the binding make its
@@ -211,8 +211,8 @@ from ess.spec import (
     AccumulatorBinding,
     AccumulatorRef,
     Binding,
-    DatasetRef,
     Driver,
+    FileRef,
     OutputRef,
     Ref,
     StageBinding,
@@ -224,8 +224,8 @@ from ess.spec import (
 from ess.spec.refs import Loc, ParamsError, iter_refs, map_refs
 
 from .checks import Checks, check_fit, distinct
-from .datasets import DatasetSource, Selector, readable
 from .errors import ClientEnded, NotReadable, RecordFailed, SubmitError
+from .files import FileSource, Selector, readable
 from .log import (
     Event,
     Finished,
@@ -257,7 +257,7 @@ def _reason(error: Exception) -> str:
     Why a step failed, as a failure records it. An error the framework raises
     with a message for the user, such as a value refused in the call phase,
     is its message as it stands. Any other, raised by a binding, a driver, a
-    dataset source, or a store, is its type and message, such as
+    file source, or a store, is its type and message, such as
     ``KeyError: 'counts'``, which ``'counts'`` alone would not tell.
     """
     if isinstance(error, _Failure | ParamsError | SubmitError | NotReadable):
@@ -381,7 +381,7 @@ class _Stage:
     A stage: its spec's binding, its template, and the binding's callable
     once it has staged.
 
-    The template's values are as given, with dataset names resolved when the
+    The template's values are as given, with file names resolved when the
     stage was made. ``given`` names the values a call gives: the blanks.
     ``reads`` are the outputs of records the
     template references, which the stage keeps as a reader until it has
@@ -569,7 +569,7 @@ class Backend:
     """
     Checks requests, keeps records, and runs requests (see the module docstring).
 
-    ``datasets`` is its dataset source, and ``bind`` lists a binding for each
+    ``files`` is its file source, and ``bind`` lists a binding for each
     spec it runs; each binding names its spec. Workflows, the steps of
     accumulators, and writes share ``workers`` threads. A long step or
     workflow holds one of them, so other work waits only once every worker is
@@ -582,14 +582,14 @@ class Backend:
 
     def __init__(
         self,
-        datasets: DatasetSource,
+        files: FileSource,
         bind: Sequence[Binding],
         *,
         workers: int = 4,
         log: Log | None = None,
         store: Store | None = None,
     ) -> None:
-        self._datasets = datasets
+        self._files = files
         self._store = store
         self._bindings: dict[SpecId, Binding] = {}
         self._checks: dict[SpecId, Checks] = {}
@@ -604,7 +604,7 @@ class Backend:
             if (spec_id := SpecId.of(binding.spec)) in self._bindings:
                 raise ValueError(f'two specs are bound as {spec_id}')
             self._bindings[spec_id] = binding
-            self._checks[spec_id] = Checks(binding.spec, datasets)
+            self._checks[spec_id] = Checks(binding.spec, files)
         self._executor = ThreadPoolExecutor(max_workers=workers)
         self._changed = threading.Condition()
         self._log = Log() if log is None else log
@@ -674,7 +674,7 @@ class Backend:
         2. A pending record is cancelled unless a persist request names it, or
            a pending record that a persist request names reads it, directly
            or through other pending records.
-        3. Otherwise it runs if each value it reads is a dataset, is written,
+        3. Otherwise it runs if each value it reads is a file, is written,
            or is an output of a pending record that runs, and fails if not.
            A record of a state fails, since the driver it reads is gone.
            A call through a stage runs as its plain request, since the stage
@@ -799,7 +799,7 @@ class Backend:
         """
         Check every request, then create a record for each.
 
-        If one request is refused, none is submitted. Dataset names are
+        If one request is refused, none is submitted. File names are
         resolved before the backend's lock is taken. The state of each of the
         client's accumulators that the requests reference is pinned to the
         pushes logged so far, and its plain request is checked outside the
@@ -1030,7 +1030,7 @@ class Backend:
         for loc, ref, tp in places.ref_types(
             self._bindings[spec_id].spec.params, params
         ):
-            if isinstance(ref, DatasetRef):
+            if isinstance(ref, FileRef):
                 continue  # checked when resolved
             source = self._source_spec(ref, loc, caller, states, also)
             check_fit(self._bindings[source].spec, ref, tp, loc)
@@ -1292,16 +1292,16 @@ class Backend:
         The rows of each table in ``values`` whose element type has a JSON
         form are distinct by the JSON forms of the rows read, as the element
         type dumps them, so an inline value and a reference to equal data are
-        one row, and a dataset model is its dataset's identity. They are
+        one row, and a file model is its file's identity. They are
         compared with those in ``rows``, the rows read before by table, which
         they join (see :func:`.checks.distinct`).
         """
         spec = self._bindings[spec_id].spec
         read = self._reader(values)
         paths = {
-            ref.dataset: self._datasets.path(ref)
+            ref.file: self._files.path(ref)
             for _, ref in iter_refs(values)
-            if isinstance(ref, DatasetRef)
+            if isinstance(ref, FileRef)
         }
         typed = {
             n: places.validated(spec.params, n, v, read, paths)
@@ -1356,8 +1356,8 @@ class Backend:
         What reads the data each reference in ``params`` names: outputs held
         in memory, or one element of each, taken under the backend's lock
         now, and outside it, outputs written and no longer held from the
-        store; a reference to a dataset is its own data, of which validating
-        makes the dataset model. The caller reads only what something keeps
+        store; a reference to a file is its own data, of which validating
+        makes the file model. The caller reads only what something keeps
         for it, so an output is held or written.
         """
         held: dict[Ref, Any] = {}
@@ -1372,7 +1372,7 @@ class Backend:
                     held[ref] = _element(self._outputs[key], ref)
 
         def read(ref: Ref) -> Any:
-            if isinstance(ref, DatasetRef):
+            if isinstance(ref, FileRef):
                 return ref
             return held[ref] if ref in held else self._stored(ref)
 
@@ -1383,8 +1383,8 @@ class Backend:
         The written value of an output, or its element if ``ref`` has a key.
         Needs no lock.
         """
-        if isinstance(ref, DatasetRef):
-            raise TypeError(f'{ref}: a dataset is not stored')
+        if isinstance(ref, FileRef):
+            raise TypeError(f'{ref}: a file is not stored')
         if isinstance(ref, AccumulatorRef):
             raise TypeError(f'{ref}: a record never reads an accumulator')
         if self._store is None:
@@ -2338,29 +2338,29 @@ class Backend:
             with self._changed:
                 self._let_go([(acc, upto)])
 
-    # Datasets, within the client's proposal
+    # Files, within the client's proposal
 
-    def datasets(self, selector: Selector, client: str) -> list[DatasetRef]:
-        """The matching datasets the proposal may read, in the order measured."""
+    def files(self, selector: Selector, client: str) -> list[FileRef]:
+        """The matching files the proposal may read, in the order measured."""
         proposal = self._client(client).proposal
         return [
             ref
-            for ref in self._datasets.list(selector)
-            if readable(self._datasets.metadata(ref), proposal)
+            for ref in self._files.list(selector)
+            if readable(self._files.metadata(ref), proposal)
         ]
 
-    def watch_datasets(self, selector: Selector, client: str) -> Iterator[DatasetRef]:
-        """Matching datasets the proposal may read: existing ones, then new ones."""
+    def watch_files(self, selector: Selector, client: str) -> Iterator[FileRef]:
+        """Matching files the proposal may read: existing ones, then new ones."""
         proposal = self._client(client).proposal
         return (
             ref
-            for ref in self._datasets.watch(selector)
-            if readable(self._datasets.metadata(ref), proposal)
+            for ref in self._files.watch(selector)
+            if readable(self._files.metadata(ref), proposal)
         )
 
-    def dataset_metadata(self, ref: DatasetRef, client: str) -> dict[str, Any]:
+    def file_metadata(self, ref: FileRef, client: str) -> dict[str, Any]:
         proposal = self._client(client).proposal
-        metadata = self._datasets.metadata(ref)
+        metadata = self._files.metadata(ref)
         if not readable(metadata, proposal):
-            raise KeyError(f'no dataset {ref} in proposal {proposal}')
+            raise KeyError(f'no file {ref} in proposal {proposal}')
         return metadata

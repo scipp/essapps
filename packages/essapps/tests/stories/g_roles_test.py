@@ -7,17 +7,17 @@ from collections.abc import Callable
 import pytest
 
 from ess.apps import Client, SubmitError, local
-from ess.apps.testing import FakeDatasets
+from ess.apps.testing import FakeFiles
 from ess.spec import function_binding
 
 from .conftest import BEAM_CENTRE, IOFQ, Measure, iofq
 
 
 def test_g2_developer_iterates_on_a_workflow(
-    measure: Measure, datasets: FakeDatasets
+    measure: Measure, files: FakeFiles
 ) -> None:
     draft = iofq
-    dev = local(proposal='p1', datasets=datasets, bind=[function_binding(IOFQ, draft)])
+    dev = local(proposal='p1', files=files, bind=[function_binding(IOFQ, draft)])
     result = dev.compute(
         IOFQ,
         params={

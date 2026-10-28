@@ -50,7 +50,7 @@ So no later submission can reference it ([ADR 0002](0002-a-value-lives-while-som
 This is why no wait goes round in a circle ([ADR 0003](0003-accumulators-add-in-place.md)).
 
 **What the framework sees is flat.**
-A row is what the reduction repeats: a dataset reference to a run, or a group written inline, such as a time slice.
+A row is what the reduction repeats: a file reference to a run, or a group written inline, such as a time slice.
 Structure below a row, such as detector banks, belongs to the driver, so that the per-run work runs once per row, not once per bank.
 The framework cannot tell a bank index from a per-run value, so nothing checks this rule for workflow authors.
 Records, checks, pushes, and the forms of apps stay the same for every technique.
@@ -65,13 +65,13 @@ class TimeRange(BaseModel):
     stop: float
 
 class SlicesParams(IofQSettings):        # the settings that IofQParams has too
-    sample: Sample                       # Sample, Can: dataset models
+    sample: Sample                       # Sample, Can: file models
     can: Can
     time_range: list[TimeRange] = Field(min_length=1)
 
 SLICES = WorkflowSpec(name='sans-slices', version=1, title='I(Q) of time slices', description='...',
                       params=SlicesParams, outputs=IofQOutputs, tables=('time_range',))
-acc = client.accumulator(Template(SLICES, params={'sample': dataset(run=611), 'can': dataset(run=614)},
+acc = client.accumulator(Template(SLICES, params={'sample': file(run=611), 'can': file(run=614)},
                                   blanks=('time_range',)))
 acc.push(time_range=[TimeRange(start=0, stop=60)])
 acc.push(time_range=[TimeRange(start=60, stop=120)])
@@ -98,9 +98,9 @@ IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title='I(Q) of summ
                           params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
 iofq = client.accumulator(Template(IOFQ_MULTI, params={'transmission': t.ref('transmission')},
                                    blanks=('sample', 'can')))
-iofq.push(sample=[dataset(run=611)])
-iofq.push(can=[dataset(run=614)])
-iofq.push(sample=[dataset(run=613), dataset(run=615)])   # one push, one state
+iofq.push(sample=[file(run=611)])
+iofq.push(can=[file(run=614)])
+iofq.push(sample=[file(run=613), file(run=615)])   # one push, one state
 ```
 
 ## Alternatives considered

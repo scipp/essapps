@@ -26,8 +26,8 @@ from pydantic_core import to_jsonable_python
 
 from ess.spec import (
     AccumulatorRef,
-    DatasetModel,
-    DatasetRef,
+    FileModel,
+    FileRef,
     NoParams,
     OutputRef,
     SerializedWorkflowSpec,
@@ -55,23 +55,23 @@ class TimeRange(BaseModel):
     stop: float
 
 
-class RunFile(DatasetModel, kind='raw'):
+class RunFile(FileModel, kind='raw'):
     pass
 
 
-class MaskFile(DatasetModel, kind='mask'):
+class MaskFile(FileModel, kind='mask'):
     pass
 
 
-class GeometryFile(DatasetModel):
-    """A dataset model without keywords: it takes raw datasets."""
+class GeometryFile(FileModel):
+    """A file model without keywords: it takes raw files."""
 
 
-class SampleRun(DatasetModel, kind='raw'):
+class SampleRun(FileModel, kind='raw'):
     """A sample run's file."""
 
 
-class CanRun(DatasetModel, kind='raw'):
+class CanRun(FileModel, kind='raw'):
     """An empty can run's file."""
 
 
@@ -121,25 +121,25 @@ class Exposure:
     seconds: Seconds
 
 
-class CalibrationFile(DatasetModel, kind='calibration'):
-    """A dataset model with a field other than its path: refused."""
+class CalibrationFile(FileModel, kind='calibration'):
+    """A file model with a field other than its path: refused."""
 
     run: int
 
 
 class CheckedMaskFile(MaskFile):
-    """A dataset model with a validator of its own: refused."""
+    """A file model with a validator of its own: refused."""
 
-    @field_validator('dataset')
+    @field_validator('file')
     @classmethod
-    def _xml(cls, dataset: str) -> str:
-        if not dataset.endswith('.xml'):
+    def _xml(cls, file: str) -> str:
+        if not file.endswith('.xml'):
             raise ValueError('a mask is an XML file')
-        return dataset
+        return file
 
 
 class AttachingMaskFile(MaskFile):
-    """A dataset model that declares a validator of DatasetModel anew: refused."""
+    """A file model that declares a validator of FileModel anew: refused."""
 
     @model_validator(mode='after')
     def _with_path(self) -> Self:
@@ -147,14 +147,14 @@ class AttachingMaskFile(MaskFile):
 
 
 class InitMaskFile(MaskFile):
-    """A dataset model with a model_post_init of its own: refused."""
+    """A file model with a model_post_init of its own: refused."""
 
     def model_post_init(self, context: Any) -> None:
         pass
 
 
 class BeamStopMaskFile(MaskFile):
-    """A subclass of a subclass of DatasetModel that keeps its dataset."""
+    """A subclass of a subclass of FileModel that keeps its file."""
 
 
 class LocalPath(Path):
@@ -339,8 +339,8 @@ GEOMETRIES = spec(
     params=model('P', geometry=(list[SampleGeometry], Field(min_length=1))),
     tables=('geometry',),
 )
-DATASETS = spec(
-    name='sans-datasets',
+FILES = spec(
+    name='sans-files',
     params=model(
         'P',
         mask=(MaskFile | None, None),
@@ -436,18 +436,18 @@ OPTIONAL_ROW = re.escape(
 NOT_AN_OUTPUT = re.escape(
     'an output is a type, possibly typed X | None, or a list or a dict of one'
 )
-OUTSIDE_A_DATASET_MODEL = re.escape(
-    "a Path is outside a dataset model; a file is a parameter of a dataset model, "
-    "such as mask: MaskFile with class MaskFile(DatasetModel, kind='mask'), given "
-    "by reference to a dataset"
+OUTSIDE_A_FILE_MODEL = re.escape(
+    "a Path is outside a file model; a file is a parameter of a file model, "
+    "such as mask: MaskFile with class MaskFile(FileModel, kind='mask'), given "
+    "by reference to a file"
 )
 
-KEEPS_THE_DATASET = re.escape(
-    'a dataset model keeps the dataset of DatasetModel, without a default or an alias'
+KEEPS_THE_FILE = re.escape(
+    'a file model keeps the file of FileModel, without a default or an alias'
 )
-DATASET_MODEL_OUTPUT = re.escape(
-    'is a dataset model; no output holds one, so that a file comes from a '
-    'dataset, which the dataset source checks'
+FILE_MODEL_OUTPUT = re.escape(
+    'is a file model; no output holds one, so that a file comes from a '
+    'file, which the file source checks'
 )
 
 
@@ -792,7 +792,7 @@ class TestModelRules:
             *(
                 (
                     {'params': model('P', **fields)},
-                    f'{where}: {OUTSIDE_A_DATASET_MODEL}',
+                    f'{where}: {OUTSIDE_A_FILE_MODEL}',
                 )
                 for fields, where in (
                     ({'path': (Path, ...)}, 'P.path'),
@@ -853,33 +853,33 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', calibration=(CalibrationFile, ...))},
-                r"P.calibration: CalibrationFile: a dataset model holds only "
-                r"dataset, not \['run'\]",
+                r"P.calibration: CalibrationFile: a file model holds only "
+                r"file, not \['run'\]",
             ),
             *(
                 (
                     {'params': model('P', mask=(mask, ...))},
-                    rf'P.mask: {mask.__name__}.dataset: {KEEPS_THE_DATASET}',
+                    rf'P.mask: {mask.__name__}.file: {KEEPS_THE_FILE}',
                 )
                 for mask in (
                     pydantic.create_model(
-                        'IntMask', __base__=MaskFile, dataset=(int, ...)
+                        'IntMask', __base__=MaskFile, file=(int, ...)
                     ),
                     pydantic.create_model(
-                        'OptionalMask', __base__=MaskFile, dataset=(str | None, None)
+                        'OptionalMask', __base__=MaskFile, file=(str | None, None)
                     ),
                     pydantic.create_model(
-                        'DefaultMask', __base__=MaskFile, dataset=(str, 'run:loki/1')
+                        'DefaultMask', __base__=MaskFile, file=(str, 'run:loki/1')
                     ),
                     pydantic.create_model(
                         'AliasedMask',
                         __base__=MaskFile,
-                        dataset=(str, Field(alias='file')),
+                        file=(str, Field(alias='path')),
                     ),
                     pydantic.create_model(
                         'AnnotatedMask',
                         __base__=MaskFile,
-                        dataset=(Annotated[str, AfterValidator(lambda p: p)], ...),
+                        file=(Annotated[str, AfterValidator(lambda p: p)], ...),
                     ),
                 )
             ),
@@ -895,23 +895,23 @@ class TestModelRules:
                         ),
                     )
                 },
-                r"P.mask: LabelledMask: a dataset model holds only dataset, not "
+                r"P.mask: LabelledMask: a file model holds only file, not "
                 r"\['label'\]",
             ),
             (
                 {'params': model('P', mask=(CheckedMaskFile, ...))},
-                r"P.mask: CheckedMaskFile: a dataset model has no validators or "
+                r"P.mask: CheckedMaskFile: a file model has no validators or "
                 r"serializers of its own",
             ),
             (
                 {'params': model('P', mask=(AttachingMaskFile, ...))},
-                r"P.mask: AttachingMaskFile: a dataset model has no validators or "
+                r"P.mask: AttachingMaskFile: a file model has no validators or "
                 r"serializers of its own, \{'model_validators': \['_with_path'\]\}",
             ),
             (
                 {'params': model('P', mask=(InitMaskFile, ...))},
-                r"P.mask: InitMaskFile: a dataset model keeps the model_post_init, "
-                r"__eq__, and __hash__ of DatasetModel, not its own "
+                r"P.mask: InitMaskFile: a file model keeps the model_post_init, "
+                r"__eq__, and __hash__ of FileModel, not its own "
                 r"\['model_post_init'\]",
             ),
             (
@@ -920,13 +920,13 @@ class TestModelRules:
                         'P', mask=(type('Mutable', (MaskFile,), {}, frozen=False), ...)
                     )
                 },
-                'P.mask: Mutable: a dataset model keeps the config of DatasetModel',
+                'P.mask: Mutable: a file model keeps the config of FileModel',
             ),
             *(
                 (
                     {'params': model('P', g=(group, ...))},
                     f'P.g: {group.__name__} is given by reference to an output only: '
-                    f'{where} {DATASET_MODEL_OUTPUT}',
+                    f'{where} {FILE_MODEL_OUTPUT}',
                 )
                 for group, where in (
                     (
@@ -954,7 +954,7 @@ class TestModelRules:
             *(
                 (
                     {'outputs': model('O', **fields)},
-                    f'{where} {DATASET_MODEL_OUTPUT}',
+                    f'{where} {FILE_MODEL_OUTPUT}',
                 )
                 for fields, where in (
                     ({'raw': (RunFile, ...)}, 'O.raw: RunFile'),
@@ -977,7 +977,7 @@ class TestModelRules:
             *(
                 (
                     {'outputs': model('O', **fields)},
-                    f'{where}: {OUTSIDE_A_DATASET_MODEL}',
+                    f'{where}: {OUTSIDE_A_FILE_MODEL}',
                 )
                 for fields, where in (
                     ({'path': (Path, ...)}, 'O.path'),
@@ -1113,7 +1113,7 @@ class TestModelRules:
             (
                 {
                     'params': model(
-                        'P', loose=(Loose, Loose(**{'@ref': 'dataset', 'dataset': 'a'}))
+                        'P', loose=(Loose, Loose(**{'@ref': 'file', 'file': 'a'}))
                     )
                 },
                 f'P.loose: {NOT_A_VALUE}: loose: a is a reference; a default is a '
@@ -1216,11 +1216,11 @@ OPTIONAL_LIST_FIELD = re.escape(
 )
 NOT_A_SCALAR = re.escape(
     'is not a scalar; a field of a group is a scalar (int, float, str, bool, '
-    'datetime, an enum, or a Literal), a dataset model, or a list of one: a value '
+    'datetime, an enum, or a Literal), a file model, or a list of one: a value '
     'of several parts is a group, a parameter of its own'
 )
 A_PARAMETER_OF_ITS_OWN = re.escape(
-    'a field of a group is a scalar, a dataset model, or a list of one: make it a '
+    'a field of a group is a scalar, a file model, or a list of one: make it a '
     'parameter of its own'
 )
 
@@ -1266,7 +1266,7 @@ class TestFields:
         spec(params=model('P', g=(_group_with(tp), ...)))
 
     @pytest.mark.parametrize('tp', [SampleRun, list[SampleRun], SampleRun | None])
-    def test_a_field_of_a_group_is_a_dataset_model(self, tp: Any) -> None:
+    def test_a_field_of_a_group_is_a_file_model(self, tp: Any) -> None:
         spec(params=model('P', g=(_group_with(tp), ...)))
 
     @pytest.mark.parametrize(
@@ -1276,13 +1276,13 @@ class TestFields:
             (list[SampleRun], [SampleRun.local('run.nxs')]),
         ],
     )
-    def test_a_dataset_model_at_a_field_has_no_default_dataset(
+    def test_a_file_model_at_a_field_has_no_default_file(
         self, tp: Any, default: Any
     ) -> None:
         group = model('G', value=(tp, default))
         with pytest.raises(
             ValueError,
-            match=r'P\.g: G\.value: a dataset model at a field has no default but None',
+            match=r'P\.g: G\.value: a file model at a field has no default but None',
         ):
             spec(params=model('P', g=(group, ...)))
 
@@ -1453,9 +1453,9 @@ class TestTables:
         with pytest.raises(ValueError, match=reason):
             spec(params=model('P', **params), tables=tables)
 
-    def test_a_table_may_be_of_dataset_models(self) -> None:
-        assert DATASETS.tables == ('runs',)
-        assert not _takes_inline(DATASETS, 'runs')
+    def test_a_table_may_be_of_file_models(self) -> None:
+        assert FILES.tables == ('runs',)
+        assert not _takes_inline(FILES, 'runs')
 
     def test_the_field_validators_of_a_group_check_each_row(self) -> None:
         assert _takes_inline(GEOMETRIES, 'geometry')
@@ -1486,13 +1486,13 @@ class TestTables:
             with pytest.raises(pydantic.ValidationError, match='unknown run'):
                 runs.params(**{**known_rows, **rows})
         assert runs.serialize().params_schema['properties']['sample']['items'] == (
-            dataset_ref('SampleRun', {'kind': 'raw'})
+            file_ref('SampleRun', {'kind': 'raw'})
         )
 
 
-def dataset_ref(data_type: str, metadata: dict[str, Any]) -> dict[str, Any]:
-    """The schema of a reference to a dataset, of a dataset model."""
-    return {'$ref': '#/$defs/DatasetRef', 'dataType': data_type, 'metadata': metadata}
+def file_ref(data_type: str, metadata: dict[str, Any]) -> dict[str, Any]:
+    """The schema of a reference to a file, of a file model."""
+    return {'$ref': '#/$defs/FileRef', 'dataType': data_type, 'metadata': metadata}
 
 
 def data_ref(data_type: str) -> dict[str, Any]:
@@ -1506,8 +1506,8 @@ def inline(schema: dict[str, Any]) -> dict[str, Any]:
     return {**schema, 'not': {'required': ['@ref']}}
 
 
-SAMPLE = DatasetRef(dataset='run:loki/1')
-CAN = {'can': DatasetRef(dataset='run:loki/3')}
+SAMPLE = FileRef(file='run:loki/1')
+CAN = {'can': FileRef(file='run:loki/3')}
 """The can that each request of ``IOFQ`` gives, left out of the cases below."""
 
 
@@ -1537,7 +1537,7 @@ class TestSerialization:
 
     def test_a_reference_is_an_object_with_its_kind_under_at_ref(self) -> None:
         defs = IOFQ.serialize().params_schema['$defs']
-        for kind in (OutputRef, DatasetRef, AccumulatorRef):
+        for kind in (OutputRef, FileRef, AccumulatorRef):
             assert defs[kind.__name__] == kind.model_json_schema()
             assert '@ref' in defs[kind.__name__]['required']
 
@@ -1577,17 +1577,17 @@ class TestSerialization:
             'title': 'Time',
         }
 
-    def test_a_dataset_model_or_a_group_with_a_data_value_is_a_reference_to_its_type(
+    def test_a_file_model_or_a_group_with_a_data_value_is_a_reference_to_its_type(
         self,
     ) -> None:
         schema = IOFQ.serialize().params_schema
         properties = schema['properties']
         assert {n: properties[n] for n in ('sample', 'can', 'beam_centre')} == {
             'sample': {
-                **dataset_ref('SampleRun', {'kind': 'raw'}),
+                **file_ref('SampleRun', {'kind': 'raw'}),
                 'title': 'Sample run',
             },
-            'can': {**dataset_ref('CanRun', {'kind': 'raw'}), 'title': 'Can'},
+            'can': {**file_ref('CanRun', {'kind': 'raw'}), 'title': 'Can'},
             'beam_centre': {
                 'anyOf': [data_ref('BeamCentre'), {'type': 'null'}],
                 'default': None,
@@ -1596,25 +1596,25 @@ class TestSerialization:
         }
         assert 'BeamCentre' not in schema['$defs']
 
-    def test_a_dataset_model_is_a_reference_to_a_dataset_with_its_metadata(
+    def test_a_file_model_is_a_reference_to_a_file_with_its_metadata(
         self,
     ) -> None:
-        properties = DATASETS.serialize().params_schema['properties']
+        properties = FILES.serialize().params_schema['properties']
         assert properties['mask']['anyOf'] == [
             {
-                '$ref': '#/$defs/DatasetRef',
+                '$ref': '#/$defs/FileRef',
                 'dataType': 'MaskFile',
                 'metadata': {'kind': 'mask'},
             },
             {'type': 'null'},
         ]
         assert properties['geometry'] == {
-            **dataset_ref('GeometryFile', {'kind': 'raw'}),
+            **file_ref('GeometryFile', {'kind': 'raw'}),
             'title': 'Geometry',
         }
-        assert properties['runs']['items'] == dataset_ref('RunFile', {'kind': 'raw'})
+        assert properties['runs']['items'] == file_ref('RunFile', {'kind': 'raw'})
 
-    def test_a_dataset_model_at_a_field_is_a_reference_to_a_dataset(self) -> None:
+    def test_a_file_model_at_a_field_is_a_reference_to_a_file(self) -> None:
         group = model(
             'G',
             run=(SampleRun, ...),
@@ -1628,8 +1628,8 @@ class TestSerialization:
             'title': 'G',
         }
         properties = schema['$defs']['G']['properties']
-        assert properties['run'] == dataset_ref('SampleRun', {'kind': 'raw'})
-        assert properties['masks']['items'] == dataset_ref('MaskFile', {'kind': 'mask'})
+        assert properties['run'] == file_ref('SampleRun', {'kind': 'raw'})
+        assert properties['masks']['items'] == file_ref('MaskFile', {'kind': 'mask'})
 
     def test_a_union_is_its_alternatives_inline_never_a_reference(self) -> None:
         params = model('P', by=(By, ...), maybe=(By | None, None), each=(list[By], []))
@@ -1669,13 +1669,13 @@ class TestSerialization:
         properties = serialized.params_schema['properties']
         assert properties['sample'] == {
             'type': 'array',
-            'items': dataset_ref('SampleRun', {'kind': 'raw'}),
+            'items': file_ref('SampleRun', {'kind': 'raw'}),
             'title': 'Sample run',
             'minItems': 1,
         }
         assert properties['can'] == {
             'type': 'array',
-            'items': dataset_ref('CanRun', {'kind': 'raw'}),
+            'items': file_ref('CanRun', {'kind': 'raw'}),
             'title': 'Can',
             'minItems': 1,
         }
@@ -1729,9 +1729,9 @@ class TestSerialization:
             {'sample': 'run.nxs'},
             {'sample': {'path': 'run.nxs'}},
             {'sample': SAMPLE, 'reduction': {'bins': 'x'}},
-            {'sample': {'@ref': 'dataset'}},
-            {'sample': {'dataset': 'run:loki/1'}},
-            {'sample': SAMPLE, 'beam_centre': DatasetRef(dataset='run:loki/2')},
+            {'sample': {'@ref': 'file'}},
+            {'sample': {'file': 'run:loki/1'}},
+            {'sample': SAMPLE, 'beam_centre': FileRef(file='run:loki/2')},
             {'sample': OutputRef(record='r1', output='sample')},
             {
                 'sample': SAMPLE,
@@ -1764,7 +1764,7 @@ class TestSerialization:
         schema = spec(params=params).serialize().params_schema
         jsonschema.Draft202012Validator.check_schema(schema)
         ref = OutputRef(record='r1', output='x')
-        file = DatasetRef(dataset='run:loki/1')
+        file = FileRef(file='run:loki/1')
         request = {
             'reduction': ref,
             'by': {'mode': 'monitor'},
@@ -1779,7 +1779,7 @@ class TestSerialization:
             {'by': {'mode': 'time', 'seconds': ref}},
             {'by': {'mode': ref, 'seconds': 1.0}},  # at a tag
             {'gate': {'mode': 'window', 'start': ref}},
-            {'sample': ref},  # a file is given by a dataset only
+            {'sample': ref},  # a file is given by a file only
             {'ranges': ref},  # a list is not given by one reference
             {'ranges': [{'start': ref, 'stop': 1.0}]},
         ):
@@ -1799,7 +1799,7 @@ class TestSerialization:
             jsonschema.validate({'geometry': []}, schema)
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(
-                to_jsonable_python({'geometry': [DatasetRef(dataset='run:loki/1')]}),
+                to_jsonable_python({'geometry': [FileRef(file='run:loki/1')]}),
                 schema,
             )
 

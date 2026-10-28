@@ -13,9 +13,9 @@ import pytest
 import sciline
 from pydantic import BaseModel, Field
 
-from ess.apps import Backend, Client, Status, SubmitError, Template, dataset
-from ess.apps.testing import FakeDatasets, read_dataset
-from ess.spec import DatasetModel, WorkflowSpec
+from ess.apps import Backend, Client, Status, SubmitError, Template, file
+from ess.apps.testing import FakeFiles, read_file
+from ess.spec import FileModel, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
 
 Loaded = NewType('Loaded', float)
@@ -24,7 +24,7 @@ Offsets = NewType('Offsets', list)
 Total = NewType('Total', float)
 
 
-class SampleRun(DatasetModel): ...
+class SampleRun(FileModel): ...
 
 
 class Shift(BaseModel):
@@ -98,22 +98,22 @@ def make_pipeline(
     loaded: list[float],
 ) -> Callable[[Mapping[str, Any]], sciline.Pipeline]:
     def load(sample: SampleRun) -> Loaded:
-        loaded.append(read_dataset(sample.path))
-        return Loaded(10 * read_dataset(sample.path))
+        loaded.append(read_file(sample.path))
+        return Loaded(10 * read_file(sample.path))
 
     return lambda fixed: sciline.Pipeline([load, shift, total])
 
 
 @pytest.fixture
-def datasets(tmp_path: Path) -> FakeDatasets:
-    datasets = FakeDatasets(proposal='p1', directory=tmp_path)
-    datasets.measure(1, 1.0)
-    return datasets
+def files(tmp_path: Path) -> FakeFiles:
+    files = FakeFiles(proposal='p1', directory=tmp_path)
+    files.measure(1, 1.0)
+    return files
 
 
 @pytest.fixture
 def client(
-    datasets: FakeDatasets,
+    files: FakeFiles,
     make_pipeline: Callable[[Mapping[str, Any]], sciline.Pipeline],
 ) -> Iterator[Client]:
     bind = [
@@ -122,13 +122,13 @@ def client(
             TOTAL, make_pipeline, keys={'offsets': (Offsets,), 'total': (Total,)}
         ),
     ]
-    backend = Backend(datasets, bind)
+    backend = Backend(files, bind)
     yield Client(backend, proposal='p1', submitter='anna')
     backend.close()
 
 
 def test_a_stage_loads_its_run_once(client: Client, loaded: list[float]) -> None:
-    sample = {'sample': dataset(run=1)}
+    sample = {'sample': file(run=1)}
     tune = client.stage(Template(SHIFT, params=sample, blanks=('shift',)))
     tuned = [
         client.compute(tune, params={'shift': Shift(offset=x)}) for x in (0.5, 1.5, 2.5)
@@ -145,7 +145,7 @@ def test_a_pipeline_takes_a_table_whole_and_makes_no_accumulators(
     client: Client,
 ) -> None:
     offsets = [Offset(offset=x) for x in (0.5, 1.5, 2.5)]
-    sample = {'sample': dataset(run=1)}
+    sample = {'sample': file(run=1)}
     plain = client.compute(TOTAL, params={'offsets': offsets, **sample})
 
     assert client.output(plain, 'total') == 34.5
@@ -154,7 +154,7 @@ def test_a_pipeline_takes_a_table_whole_and_makes_no_accumulators(
 
 
 def test_a_stage_takes_a_table_as_a_blank(client: Client) -> None:
-    sample = {'sample': dataset(run=1)}
+    sample = {'sample': file(run=1)}
     tune = client.stage(Template(TOTAL, params=sample, blanks=('offsets',)))
     tuned = client.compute(tune, params={'offsets': [Offset(offset=1.0)]})
 
@@ -163,7 +163,7 @@ def test_a_stage_takes_a_table_as_a_blank(client: Client) -> None:
 
 def test_a_blank_no_output_depends_on_is_accepted(client: Client) -> None:
     annotate = client.stage(
-        Template(SHIFT, params={'sample': dataset(run=1)}, blanks=('annotation',))
+        Template(SHIFT, params={'sample': file(run=1)}, blanks=('annotation',))
     )
     noted = client.compute(annotate, params={'annotation': {'note': 'first try'}})
 
@@ -171,16 +171,16 @@ def test_a_blank_no_output_depends_on_is_accepted(client: Client) -> None:
 
 
 def test_a_field_without_a_key_cannot_be_a_blank(
-    datasets: FakeDatasets,
+    files: FakeFiles,
     make_pipeline: Callable[[Mapping[str, Any]], sciline.Pipeline],
 ) -> None:
     binding = PipelineBinding(
         SHIFT, make_pipeline, keys={'annotation': (), 'value': (Shifted,)}
     )
-    backend = Backend(datasets, [binding])
+    backend = Backend(files, [binding])
     client = Client(backend, proposal='p1', submitter='anna')
     annotate = client.stage(
-        Template(SHIFT, params={'sample': dataset(run=1)}, blanks=('annotation',))
+        Template(SHIFT, params={'sample': file(run=1)}, blanks=('annotation',))
     )
 
     record = client.compute(annotate, params={'annotation': {'note': 'x'}})

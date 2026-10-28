@@ -4,7 +4,7 @@ import pytest
 
 from ess.apps import Client
 from ess.apps.panel import App, Listing
-from ess.spec import DatasetRef
+from ess.spec import FileRef
 
 
 @pytest.fixture
@@ -27,7 +27,7 @@ def test_a_place_with_nothing_given_is_shown_and_nothing_is_submitted(
 
     assert app.compute() is None
     assert app.message.object == (
-        'Refused:\n\n- run: choose a dataset\n- sample.thickness: give a value'
+        'Refused:\n\n- run: choose a file\n- sample.thickness: give a value'
     )
     assert client.records() == []
 
@@ -42,7 +42,7 @@ def test_a_refused_request_shows_each_reason_by_its_place(app: App) -> None:
     )
 
 
-def test_a_failed_record_shows_why(app: App, run: DatasetRef) -> None:
+def test_a_failed_record_shows_why(app: App, run: FileRef) -> None:
     app.picker.value = 'Reduce'
     app.form.set({'run': run, 'sample': {'thickness': 0.0}})
 
@@ -51,7 +51,7 @@ def test_a_failed_record_shows_why(app: App, run: DatasetRef) -> None:
 
 
 def test_a_computed_record_is_shown_and_offered_by_the_forms(
-    app: App, client: Client, run: DatasetRef
+    app: App, client: Client, run: FileRef
 ) -> None:
     app.form.set({'run': run})
 

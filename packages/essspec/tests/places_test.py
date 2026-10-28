@@ -8,7 +8,7 @@ import scipp as sc
 from annotated_types import Gt, MinLen
 from pydantic import BaseModel, Field, field_validator
 
-from ess.spec import DatasetModel, DatasetRef, OutputRef
+from ess.spec import FileModel, FileRef, OutputRef
 from ess.spec.places import (
     Rows,
     Ways,
@@ -21,11 +21,11 @@ from ess.spec.places import (
 from ess.spec.refs import Loc, ParamsError, Ref
 
 
-class RunFile(DatasetModel, kind='raw'):
+class RunFile(FileModel, kind='raw'):
     pass
 
 
-class MaskFile(DatasetModel, kind='mask'):
+class MaskFile(FileModel, kind='mask'):
     pass
 
 
@@ -81,20 +81,20 @@ class MeasuredParams(BaseModel):
     measured: Measured
 
 
-def test_a_dataset_model_takes_a_reference_to_a_dataset_only() -> None:
+def test_a_file_model_takes_a_reference_to_a_file_only() -> None:
     assert place(MaskParams, 'mask') == Ways(
         tag=None, inline={}, record=MaskFile, none=True, metadata=()
     )
 
 
-def test_a_group_holding_a_dataset_model_is_written_inline_only() -> None:
+def test_a_group_holding_a_file_model_is_written_inline_only() -> None:
     assert place(MeasuredParams, 'measured') == Ways(
         tag=None, inline={None: Measured}, record=None, none=False, metadata=()
     )
 
 
-def test_a_dataset_in_a_group_is_held_as_on_ref_gives_it() -> None:
-    other = DatasetRef(dataset='pid-2')
+def test_a_file_in_a_group_is_held_as_on_ref_gives_it() -> None:
+    other = FileRef(file='pid-2')
 
     def resolved(loc: Loc, ref: Ref, tp: Any) -> Ref:
         assert (loc, tp) in {
@@ -103,7 +103,7 @@ def test_a_dataset_in_a_group_is_held_as_on_ref_gives_it() -> None:
         }
         return other
 
-    value = {'run': DATASET, 'masks': [DATASET]}
+    value = {'run': FILE, 'masks': [FILE]}
     form = other.model_dump(by_alias=True)
     assert held(MeasuredParams, 'measured', value, resolved) == {
         'run': form,
@@ -112,14 +112,14 @@ def test_a_dataset_in_a_group_is_held_as_on_ref_gives_it() -> None:
     }
 
 
-def test_a_dataset_model_in_a_group_gets_its_local_path_from_paths() -> None:
-    form = DATASET.model_dump(by_alias=True)
+def test_a_file_model_in_a_group_gets_its_local_path_from_paths() -> None:
+    form = FILE.model_dump(by_alias=True)
     measured = validated(
         MeasuredParams,
         'measured',
         {'run': form, 'thickness': 2.0, 'masks': []},
         read=lambda ref: ref,
-        paths={DATASET.dataset: Path('run.nxs')},
+        paths={FILE.file: Path('run.nxs')},
     )
     assert measured.run.path == Path('run.nxs')
 
@@ -176,8 +176,8 @@ def test_a_union_without_a_discriminator_is_refused() -> None:
         place(Undiscriminated, 'beam_centre')
 
 
-def test_a_request_writes_no_field_of_a_dataset_model_or_a_data_value() -> None:
-    assert unwritten(MaskFile) == 'dataset'
+def test_a_request_writes_no_field_of_a_file_model_or_a_data_value() -> None:
+    assert unwritten(MaskFile) == 'file'
     assert unwritten(Mask) == 'mask'
     assert unwritten(Sample) is None
 
@@ -186,24 +186,22 @@ def _found(loc: Loc, ref: Ref, tp: Any) -> tuple[Loc, Ref, Any]:
     return loc, ref, tp
 
 
-DATASET = DatasetRef(dataset='pid-1')
+FILE = FileRef(file='pid-1')
 OUTPUT = OutputRef(record='r1', output='sample')
 
 
 def test_a_reference_at_a_parameter_is_held_as_on_ref_gives_it() -> None:
-    assert held(MaskParams, 'mask', DATASET, _found) == (('mask',), DATASET, MaskFile)
-    assert held(MaskParams, 'mask', DATASET.model_dump(), _found) == (
+    assert held(MaskParams, 'mask', FILE, _found) == (('mask',), FILE, MaskFile)
+    assert held(MaskParams, 'mask', FILE.model_dump(), _found) == (
         ('mask',),
-        DATASET,
+        FILE,
         MaskFile,
     )
     assert held(MaskParams, 'sample', OUTPUT, _found) == (('sample',), OUTPUT, Sample)
 
 
 def test_a_reference_at_an_element_of_a_list_parameter_stands_for_one_row() -> None:
-    assert held(MaskParams, 'runs', [DATASET], _found) == [
-        (('runs', 0), DATASET, RunFile)
-    ]
+    assert held(MaskParams, 'runs', [FILE], _found) == [(('runs', 0), FILE, RunFile)]
     assert held(Params, 'samples', [{'thickness': 2.0}, OUTPUT], _found) == [
         {'thickness': 2.0},
         (('samples', 1), OUTPUT, Sample),
@@ -234,7 +232,7 @@ def test_no_reference_fits_a_union() -> None:
     ('name', 'value', 'loc'),
     [
         ('sample', {'thickness': OUTPUT}, ('sample', 'thickness')),
-        ('reduction', {'angles': [1.0, DATASET]}, ('reduction', 'angles', 1)),
+        ('reduction', {'angles': [1.0, FILE]}, ('reduction', 'angles', 1)),
         ('samples', [{'thickness': OUTPUT}], ('samples', 0, 'thickness')),
         ('beam_centre', {'kind': 'given', 'x': OUTPUT}, ('beam_centre', 'x')),
     ],
@@ -247,8 +245,8 @@ def test_a_reference_inside_a_group_is_refused(name: str, value: Any, loc: Loc) 
     assert at == loc
     assert msg.endswith(
         'a reference stands for a whole group, at a parameter or an element of a '
-        'list parameter; inside a group, only a field typed a dataset model takes '
-        'one, a reference to a dataset'
+        'list parameter; inside a group, only a field typed a file model takes '
+        'one, a reference to a file'
     )
 
 
@@ -292,8 +290,8 @@ def test_an_error_inside_a_union_names_its_place_without_the_tag() -> None:
     assert at == ('beam_centre', 'tolerance')
 
 
-def test_a_dataset_model_instance_is_held_as_the_reference_to_its_dataset() -> None:
-    ref = DatasetRef(dataset='path:mask.xml')
+def test_a_file_model_instance_is_held_as_the_reference_to_its_file() -> None:
+    ref = FileRef(file='path:mask.xml')
     assert held(MaskParams, 'mask', MaskFile.local('mask.xml'), _found) == (
         ('mask',),
         ref,
@@ -309,15 +307,13 @@ def test_a_dataset_model_instance_is_held_as_the_reference_to_its_dataset() -> N
         ('runs', ['run.nxs'], ('runs', 0)),
     ],
 )
-def test_a_dataset_model_given_inline_is_refused(
-    name: str, value: Any, loc: Loc
-) -> None:
+def test_a_file_model_given_inline_is_refused(name: str, value: Any, loc: Loc) -> None:
     with pytest.raises(ParamsError) as raised:
         held(MaskParams, name, value, _found)
     ((at, msg),) = raised.value.errors
     assert at == loc
-    assert 'is not a dataset; ' in msg
-    assert 'is given by reference to a dataset, such as dataset(path=...)' in msg
+    assert 'is not a file; ' in msg
+    assert 'is given by reference to a file, such as file(path=...)' in msg
 
 
 def test_a_group_with_a_data_value_given_inline_is_refused() -> None:
@@ -333,12 +329,12 @@ def test_a_group_with_a_data_value_given_inline_is_refused() -> None:
 
 
 def test_each_reference_has_the_type_of_its_parameter_or_element() -> None:
-    params = {'mask': DATASET, 'sample': OUTPUT, 'runs': [DATASET, DATASET]}
+    params = {'mask': FILE, 'sample': OUTPUT, 'runs': [FILE, FILE]}
     assert ref_types(MaskParams, params) == [
-        (('mask',), DATASET, MaskFile),
+        (('mask',), FILE, MaskFile),
         (('sample',), OUTPUT, Sample),
-        (('runs', 0), DATASET, RunFile),
-        (('runs', 1), DATASET, RunFile),
+        (('runs', 0), FILE, RunFile),
+        (('runs', 1), FILE, RunFile),
     ]
 
 
@@ -346,18 +342,18 @@ def _read(ref: Ref) -> Ref:
     return ref
 
 
-def test_a_dataset_model_is_made_of_the_reference_and_the_path_given_for_it() -> None:
-    paths = {DATASET.dataset: Path('mask.xml')}
-    made = validated(MaskParams, 'mask', DATASET, _read, paths)
-    assert made == MaskFile(dataset=DATASET.dataset)
+def test_a_file_model_is_made_of_the_reference_and_the_path_given_for_it() -> None:
+    paths = {FILE.file: Path('mask.xml')}
+    made = validated(MaskParams, 'mask', FILE, _read, paths)
+    assert made == MaskFile(file=FILE.file)
     assert made.path == Path('mask.xml')
-    (run,) = validated(MaskParams, 'runs', [DATASET], _read, paths)
-    assert run == RunFile(dataset=DATASET.dataset)
+    (run,) = validated(MaskParams, 'runs', [FILE], _read, paths)
+    assert run == RunFile(file=FILE.file)
     assert run.path == Path('mask.xml')
 
 
-def test_a_dataset_model_without_a_path_given_has_none() -> None:
-    made = validated(MaskParams, 'mask', DATASET, _read)
+def test_a_file_model_without_a_path_given_has_none() -> None:
+    made = validated(MaskParams, 'mask', FILE, _read)
     with pytest.raises(ValueError, match='only when the request runs'):
         made.path
 
@@ -376,6 +372,6 @@ def test_an_output_read_for_a_reference_is_kept_as_it_is() -> None:
     assert made is output
 
 
-def test_a_binding_gives_a_dataset_model_as_data() -> None:
-    given = validated(MaskParams, 'mask', {'dataset': 'pid-1'})
-    assert given == MaskFile(dataset='pid-1')
+def test_a_binding_gives_a_file_model_as_data() -> None:
+    given = validated(MaskParams, 'mask', {'file': 'pid-1'})
+    assert given == MaskFile(file='pid-1')

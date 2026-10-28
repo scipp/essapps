@@ -10,7 +10,7 @@ from dataclasses import replace
 import pytest
 
 from ess.apps import Client, Rule, Selector, Template, TriggerLoop
-from ess.apps.testing import FakeDatasets
+from ess.apps.testing import FakeFiles
 
 from .conftest import IOFQ, IOFQ_V2, STITCH, Measure, Reduction
 
@@ -74,7 +74,7 @@ def test_e2_automatic_reduction_goes_quiet(
 
 @pytest.mark.xfail(reason=NO_PUBLISH)
 def test_e3_reduction_of_our_own_output(
-    client: Client, measure: Measure, datasets: FakeDatasets
+    client: Client, measure: Measure, files: FakeFiles
 ) -> None:
     rule = Rule(
         'auto-iofq',
@@ -87,7 +87,7 @@ def test_e3_reduction_of_our_own_output(
     measure(1, [1.0, 2.0, 3.0, 4.0])
     (reduced,) = loop.step()
     pid = client.publish(reduced.ref('iofq'), 'scicat')
-    datasets.add_published(scicat.entries[pid])
+    files.add_published(scicat.entries[pid])
 
     assert loop.step() == []
 
@@ -116,7 +116,7 @@ def test_e4_template_improved_during_a_beamtime(
     (after,) = TriggerLoop(client, rules=[improved]).step()
 
     user = connect()  # any client of the proposal
-    assert after.request.datasets() == [second]
+    assert after.request.files() == [second]
     assert [user.output(r, 'iofq').values.tolist() for r in (before, after)] == [
         [3.0, 7.0],
         [2.0, 7.0],
@@ -126,4 +126,4 @@ def test_e4_template_improved_during_a_beamtime(
         for r in user.records(label='iofq')
         if r.request.params['reduction']['threshold'] != 1.5
     ]
-    assert [r.request.datasets() for r in stale] == [[first]]
+    assert [r.request.files() for r in stale] == [[first]]

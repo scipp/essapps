@@ -3,7 +3,7 @@
 """
 Shared vocabulary of workflow parameter models.
 
-Common building blocks for workflow params models: the dataset model of a
+Common building blocks for workflow params models: the file model of a
 file, constrained unit choices, and range/edges models with cross-field
 validation. Purely declarative — no scipp;
 converting validated values into scipp objects is the workflow implementation's
@@ -39,56 +39,56 @@ from pydantic import (
     model_validator,
 )
 
-from .refs import DatasetRef
+from .refs import FileRef
 
 
-class DatasetModel(BaseModel, frozen=True, extra='forbid'):
+class FileModel(BaseModel, frozen=True, extra='forbid'):
     """
-    A kind of file: the identity of a dataset, given by reference to a
-    dataset only, and the local path of its file when the request runs.
+    A kind of file: the identity of a file, given by reference to a
+    file only, and the local path of its file when the request runs.
 
-    A subclass names the metadata of the datasets it takes, as keywords of
+    A subclass names the metadata of the files it takes, as keywords of
     the class, each a string, a number, or a bool::
 
-        class MaskFile(DatasetModel, kind='mask'):
+        class MaskFile(FileModel, kind='mask'):
             '''A pixel mask, as XML.'''
 
-    A dataset fits the model if its metadata have each key and value of the
-    model's ``metadata``; a dataset without ``kind`` is raw. ``metadata`` is
+    A file fits the model if its metadata have each key and value of the
+    model's ``metadata``; a file without ``kind`` is raw. ``metadata`` is
     ``{'kind': 'raw'}`` unless a subclass says otherwise: a subclass with
     keywords merges them over its parent's metadata, one without inherits
     them. A keyword that is a key of pydantic's ``ConfigDict``, such as
     ``title``, ``frozen``, or ``extra``, configures the model instead, so it
     cannot be a metadata key.
 
-    The value of a dataset model is ``dataset``, the dataset's identity,
+    The value of a file model is ``file``, the file's identity,
     which the backend resolves when the request is submitted, so that
     everything a request gives is known then. Its JSON form is the reference
-    to the dataset, ``{'@ref': 'dataset', 'dataset': ...}``, of which it is
+    to the file, ``{'@ref': 'file', 'file': ...}``, of which it is
     also validated, so that a reference is found in a record without the
-    spec. Two dataset models are equal if they are of one class and name one
-    dataset.
+    spec. Two file models are equal if they are of one class and name one
+    file.
 
-    The local path of the dataset's file exists only when the request runs:
+    The local path of the file's file exists only when the request runs:
     the backend validates the model with the context ``{'paths': {identity:
-    local path}}``, and :attr:`path` raises before. A dataset model holds
-    only ``dataset``, as declared here, and has no validators of its own,
+    local path}}``, and :attr:`path` raises before. A file model holds
+    only ``file``, as declared here, and has no validators of its own,
     since what it would check of a file is either metadata, which the fit
     check covers when the request is submitted, or the workflow's to read.
-    No output holds a dataset model, so that every path a workflow gets
-    comes from a dataset that the dataset source checks. A program without a
-    backend makes a dataset model of a local file with :meth:`local`.
+    No output holds a file model, so that every path a workflow gets
+    comes from a file that the file source checks. A program without a
+    backend makes a file model of a local file with :meth:`local`.
     """
 
     metadata: ClassVar[dict[str, Any]] = {'kind': 'raw'}
-    dataset: str = Field(min_length=1)
+    file: str = Field(min_length=1)
     _path: Path | None = PrivateAttr(None)
 
     def __init_subclass__(cls, **metadata: Any) -> None:
         super().__init_subclass__()
         if bad := {k: v for k, v in metadata.items() if type(v) not in _SCALARS}:
             raise TypeError(
-                f'{cls.__name__}: the metadata of a dataset model are strings, '
+                f'{cls.__name__}: the metadata of a file model are strings, '
                 f'numbers, or bools, as JSON holds them, not {bad}'
             )
         cls.metadata = {**cls.metadata, **metadata}
@@ -97,24 +97,24 @@ class DatasetModel(BaseModel, frozen=True, extra='forbid'):
     def local(cls, path: Path | str) -> Self:
         """
         The model of the local file ``path``, named ``path:<path>``, as
-        ``dataset(path=...)`` names it, a name that a backend resolves to the
-        dataset's identity.
+        ``file(path=...)`` names it, a name that a backend resolves to the
+        file's identity.
         """
         identity = f'path:{path}'
         return cls.model_validate(
-            {'dataset': identity}, context={'paths': {identity: Path(path)}}
+            {'file': identity}, context={'paths': {identity: Path(path)}}
         )
 
     @property
     def path(self) -> Path:
         """
-        The local path of the dataset's file, when the request runs; raises
+        The local path of the file's file, when the request runs; raises
         ``ValueError`` before, so that a validator that reads it refuses the
         request when it arrives.
         """
         if self._path is None:
             raise ValueError(
-                f'{self.dataset}: a dataset has a local path only when the request '
+                f'{self.file}: a file has a local path only when the request '
                 'runs, or if made of a local file with .local(path)'
             )
         return self._path
@@ -122,30 +122,30 @@ class DatasetModel(BaseModel, frozen=True, extra='forbid'):
     @model_validator(mode='before')
     @classmethod
     def _of_ref(cls, value: Any) -> Any:
-        if isinstance(value, DatasetRef):
-            return {'dataset': value.dataset}
-        if isinstance(value, Mapping) and value.get('@ref') == 'dataset':
+        if isinstance(value, FileRef):
+            return {'file': value.file}
+        if isinstance(value, Mapping) and value.get('@ref') == 'file':
             return {k: v for k, v in value.items() if k != '@ref'}
         return value
 
     @model_validator(mode='after')
     def _with_path(self, info: ValidationInfo) -> Self:
         paths = (info.context or {}).get('paths', {})
-        if self.dataset in paths:
-            self._path = Path(paths[self.dataset])
+        if self.file in paths:
+            self._path = Path(paths[self.file])
         return self
 
     @model_serializer
     def _as_ref(self) -> dict[str, str]:
-        return {'@ref': 'dataset', 'dataset': self.dataset}
+        return {'@ref': 'file', 'file': self.file}
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, DatasetModel):
+        if not isinstance(other, FileModel):
             return NotImplemented
-        return type(self) is type(other) and self.dataset == other.dataset
+        return type(self) is type(other) and self.file == other.file
 
     def __hash__(self) -> int:
-        return hash((type(self), self.dataset))
+        return hash((type(self), self.file))
 
 
 _SCALARS = (str, int, float, bool)

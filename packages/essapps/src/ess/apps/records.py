@@ -20,7 +20,7 @@ from typing import Annotated, Any, Literal, get_args, get_origin
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, with_config
 from pydantic.fields import FieldInfo
 
-from ess.spec import AccumulatorRef, DatasetRef, OutputRef, Ref, WorkflowSpec
+from ess.spec import AccumulatorRef, FileRef, OutputRef, Ref, WorkflowSpec
 from ess.spec.refs import ParamsError, iter_refs, map_refs
 
 from .errors import FieldError, SubmitError
@@ -130,8 +130,8 @@ class Request(BaseModel, frozen=True):
     ``params`` is an instance of the params model, if every value is given
     inline, or a dict by name: an inline value, such as a group as a model or
     a dict, or a reference, as the parameter's type allows; a list of these
-    for a list parameter. A dataset model is always given by reference to a
-    dataset, such as ``dataset(path=...)``, at a parameter, an element of a list
+    for a list parameter. A file model is always given by reference to a
+    file, such as ``file(path=...)``, at a parameter, an element of a list
     parameter, or a field of a group. A reference to an output stands for a
     whole group, at a parameter or an element of a list parameter; a union of
     groups is written inline only. ``"@ref"`` is reserved at every depth, so
@@ -166,9 +166,9 @@ class Request(BaseModel, frozen=True):
             ref for _, ref in iter_refs(self.params) if isinstance(ref, AccumulatorRef)
         ]
 
-    def datasets(self) -> list[DatasetRef]:
-        """The datasets this request names directly."""
-        return [ref for _, ref in iter_refs(self.params) if isinstance(ref, DatasetRef)]
+    def files(self) -> list[FileRef]:
+        """The files this request names directly."""
+        return [ref for _, ref in iter_refs(self.params) if isinstance(ref, FileRef)]
 
 
 @dataclass(frozen=True, init=False)
@@ -229,7 +229,7 @@ class Record(BaseModel, frozen=True):
     A request as the backend accepted it.
 
     ``request`` has every value filled in, inline values in their JSON form
-    and references as :data:`~ess.spec.Ref`: dataset names resolved, defaults
+    and references as :data:`~ess.spec.Ref`: file names resolved, defaults
     filled, and each reference to an
     accumulator replaced by a reference to the record of the state it reads, a
     record of the plain request of that state.
