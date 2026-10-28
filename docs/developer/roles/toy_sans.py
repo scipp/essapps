@@ -198,12 +198,16 @@ class CountsParams(BaseModel):
     runs: list[Run] = Field(min_length=1)
 
 
-class CountsOutputs(BaseModel):
+class RunCounts(BaseModel):
+    """The counts per pixel of each run, by run and pixel position."""
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    counts: sc.DataArray = Field(
-        description='Counts per pixel of each run, by run and pixel position.'
-    )
+    counts: sc.DataArray
+
+
+class CountsOutputs(BaseModel):
+    counts: RunCounts
 
 
 COUNTS = WorkflowSpec(
@@ -421,9 +425,8 @@ def counts(params: CountsParams) -> CountsOutputs:
         time.sleep(SECONDS_PER_RUN)
         rows.append(json.loads(run.path.read_text())['counts'])
     data = sc.array(dims=['run', 'pixel'], values=rows, unit='counts')
-    return CountsOutputs(
-        counts=sc.DataArray(data, coords={'x': PIXELS.fields.x.copy()})
-    )
+    counts = sc.DataArray(data, coords={'x': PIXELS.fields.x.copy()})
+    return CountsOutputs(counts=RunCounts(counts=counts))
 
 
 forward_binding = function_binding(FORWARD, forward)

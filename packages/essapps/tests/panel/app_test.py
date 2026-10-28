@@ -67,5 +67,5 @@ def test_a_computed_record_is_listed_and_offered_by_the_forms(
     assert record is not None
     label = Listing(client).labels[record.id]
     assert app.message.object == f'Computed {label}.'
-    assert app.outputs.table.value['Record'].tolist() == [label]
+    assert app.records.table.widget.value['Record'].tolist() == [label]
     assert app.forms['Reduce'].ways('beam_centre') == ['Given', 'From a record']

@@ -2,7 +2,8 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 A minimal app on a client: a form for each spec the backend runs, a button
-that submits, and the outputs of the client's records.
+that submits, and the outputs of the client's records, with the records
+themselves in a tab of their own.
 
 The app needs a client only. It submits the shown form's request through the
 client and shows what the backend says: each reason a request is refused, by
@@ -25,8 +26,10 @@ import panel as pn
 
 from ess.apps import Client, Record, Status, SubmitError
 
-from .form import Form, Listing
+from .form import Form
+from .listing import Listing
 from .outputs import Outputs
+from .records import Records
 
 
 class App:
@@ -36,7 +39,8 @@ class App:
 
     ``forms`` holds the forms by spec title, and ``picker`` picks the one
     shown. ``message`` shows the outcome of the last submission, once its
-    record has finished. ``outputs`` lists the outputs of the records.
+    record has finished. ``outputs`` lists the outputs of the records, and
+    ``records`` the records.
     """
 
     def __init__(self, client: Client) -> None:
@@ -47,7 +51,8 @@ class App:
         self.button.on_click(lambda _: self.submit())
         self.message = pn.pane.Markdown('')
         self._listing = Listing(client)
-        self.outputs = Outputs(client, self._listing)
+        self.outputs = Outputs(client, self._listing, refresh=self.refresh)
+        self.records = Records(client, self._listing)
         self._form = pn.Column(sizing_mode='stretch_width')
         self._submitted: Record | None = None  # until it has finished
         self.picker.param.watch(lambda _: self._show(), 'value')
@@ -87,11 +92,11 @@ class App:
         and show the outcome of the last submission once it is listed
         finished.
         """
-        pending = self.outputs.pending
+        pending = self._listing.pending
         if any(s is not Status.PENDING for s in self.client.status(pending)):
             self.refresh()
         record = self._submitted
-        if record is None or record in self.outputs.pending:
+        if record is None or record in self._listing.pending:
             return
         failure = self.client.failure(record)
         self.message.object = (
@@ -103,13 +108,14 @@ class App:
 
     def refresh(self) -> Listing:
         """
-        List the records again, in the pickers and in the outputs; what is
-        listed.
+        List the records again, in the pickers, the outputs, and the records;
+        what is listed.
         """
         self._listing = Listing(self.client)
         for form in self.forms.values():
             form.refresh(self._listing)
         self.outputs.refresh(self._listing)
+        self.records.refresh(self._listing)
         return self._listing
 
     def panel(self) -> Any:
@@ -118,7 +124,9 @@ class App:
             self._form,
             self.button,
             self.message,
-            pn.pane.Markdown('**Outputs**'),
-            self.outputs.panel(),
+            pn.Tabs(
+                ('Outputs', self.outputs.panel()),
+                ('Records', self.records.panel()),
+            ),
             sizing_mode='stretch_width',
         )

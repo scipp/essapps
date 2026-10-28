@@ -1,187 +1,195 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The outputs of the client's records: a table with a row per output, and the
-output selected, what it is, how it was made, and its value.
+The outputs of the client's records, by type: what a scientist picks, to
+plot it, to see where it came from, or to remove it.
 
-What an output is comes from the record's spec: the output's title, type,
-and description, else the first paragraph of the docstring of a group type.
-How it was made comes from the record: its request, and the records and
-files it read (``client.provenance``). The value is read only for the output
-selected, once its record has completed, since a read copies it whole: the
-client has no call that tells an output's sizes and unit without its value.
+Each output is to be a group, so that its type says what it is,
+``BeamCentre``, where an array's type says only ``DataArray``. An output is
+listed by its type and the time its record was created,
+``BeamCentre (11:45)``, as the pickers of a form offer it (:class:`Listing`).
 
-An output declared as an array, or as a group with an array field
-(:func:`ess.spec.field_types.has_array`), can be plotted with plopp, each
-array of it in a figure of its own. The spec declares no number of
-dimensions, so an array of none, or of more than two, is found only once
-read, and is not plotted.
+What an output is comes from the record's spec: the output's description,
+else the first paragraph of the docstring of its type. The value is read only
+for the output selected, once its record has completed, since a read copies
+it whole: the client has no call that tells an output's sizes and unit
+without its value. Where it came from is the provenance graph
+(:class:`~ess.apps.panel.graph.Graph`), which shows the records pending and
+where a failure started.
+
+The output selected is shown with its plot or its provenance graph, as
+picked; the pick stays as other outputs are selected. Each array field of
+an output is plotted with plopp, in a figure of its own, once its record
+has completed. The spec declares no number of dimensions, so an array of
+none, or of more than two, is found only once read, and is not plotted.
+
+Removing an output releases its record (``client.release``), which drops the
+value of each of the record's outputs, and cancels it if pending; the
+record stays in the proposal's history, and in the graphs of the records
+that read it.
 """
 
 from __future__ import annotations
 
 import inspect
-import json
+from collections.abc import Callable
 from typing import Any
 
-import pandas as pd
 import panel as pn
 import plopp as pp
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
-from pydantic_core import to_jsonable_python
 
 from ess.apps import Client, Record, Status
-from ess.spec import field_types, places
+from ess.spec import field_types
 
-from .form import Listing
+from .graph import Graph
+from .listing import Listing
+from .table import Table
 
 
 class Outputs:
     """
-    A table with a row per output of each of the client's records, newest
-    first, and below it the output selected, with a button that plots it.
+    A table of the outputs of the client's records, grouped by type, newest
+    first, and below it the output selected, with a button that removes it,
+    and its plot or its provenance graph, as ``views`` picks.
 
-    A row's status is its record's, or ``not readable`` for an output that a
-    request of the client may not reference, of a record that has not
-    failed: one of another client's records, not persisted, or an optional
-    output that the workflow did not return.
+    An output is listed while a request of the client may reference it, so
+    while its record is pending or completed, and when its record has failed,
+    until removed. ``refresh`` is called once an output is removed; by
+    default it lists the outputs again.
     """
 
-    def __init__(self, client: Client, listing: Listing) -> None:
+    def __init__(
+        self,
+        client: Client,
+        listing: Listing,
+        refresh: Callable[[], object] | None = None,
+    ) -> None:
         self._client = client
-        self._rows: list[tuple[Record, str]] = []
-        self._status: dict[str, Status] = {}
-        self.table = pn.widgets.Tabulator(
-            disabled=True,
-            selectable=1,
-            sortable=False,
-            show_index=False,
-            layout='fit_columns',
-            sizing_mode='stretch_width',
+        self._refresh = refresh or (lambda: self.refresh(Listing(client)))
+        self._removed: set[str] = set()
+        self.table = Table[tuple[str, str]](  # by record id and output name
+            ['Type', 'Output', 'Status'],
+            self._show,
+            groupby=['Type'],
+            hidden_columns=['Type'],
         )
-        self.table.param.watch(lambda _: self._show(), 'selection')
         self.detail = pn.pane.Markdown('', sizing_mode='stretch_width')
-        self.button = pn.widgets.Button(label='Plot', disabled=True)
-        self.button.on_click(lambda _: self.plot())
-        self.plots = pn.Column(sizing_mode='stretch_width')
+        self.views = pn.widgets.RadioButtonGroup(options=['Plot', 'Provenance'])
+        self.views.param.watch(lambda _: self._show_view(), 'value')
+        self.remove_button = pn.widgets.Button(
+            label='Remove',
+            disabled=True,
+            description="Drop the value of each of the record's outputs",
+        )
+        self.remove_button.on_click(lambda _: self.remove())
+        self.graph = Graph(client)
+        self.view = pn.Column(sizing_mode='stretch_width')
         self.refresh(listing)
 
     @property
     def selected(self) -> tuple[Record, str] | None:
         """The record and the name of the output selected, if one is."""
-        selection = self.table.selection
-        return self._rows[selection[0]] if len(selection) == 1 else None
-
-    @property
-    def pending(self) -> list[Record]:
-        """The records that were pending at the last refresh."""
-        return [
-            r for r in self._listing.records if self._status[r.id] is Status.PENDING
-        ]
+        if (selected := self.table.selected) is None:
+            return None
+        record, name = selected
+        return self._records[record], name
 
     def select(self, record: Record, name: str) -> None:
         """Select the output ``name`` of ``record``."""
-        self.table.selection = [self._rows.index((record, name))]
+        self.table.select((record.id, name))
 
     def refresh(self, listing: Listing) -> None:
         """
         List the outputs again. The output selected stays so if listed, and
-        is shown again, which drops its plots, only if its status changed.
+        is shown again, which draws its plots again, only if its status
+        changed. A provenance graph is drawn again in any case.
         """
-        selected = self.selected
-        shown = None if selected is None else self._row_status(*selected)
         self._listing = listing
-        statuses = self._client.status(listing.records)
-        self._status = {r.id: s for r, s in zip(listing.records, statuses, strict=True)}
-        self._rows = [(r, n) for r in reversed(listing.records) for n in r.outputs]
-        self.table.value = pd.DataFrame(
+        self._records = {r.id: r for r in listing.records}
+        self.table.set(
             {
-                'Record': [listing.labels[r.id] for r, _ in self._rows],
-                'Output': [n for _, n in self._rows],
-                'Type': [self._type(r, n) for r, n in self._rows],
-                'Status': [self._row_status(r, n) for r, n in self._rows],
-            },
-            dtype=str,
+                (r.id, n): {
+                    'Type': listing.type_name(r, n),
+                    'Output': listing.output_label(r.ref(n)),
+                    'Status': str(listing.status[r.id]),
+                }
+                for r in reversed(listing.records)
+                if r.id not in self._removed
+                for n in r.outputs
+                if n in listing.readable[r.id] or listing.status[r.id] is Status.FAILED
+            }
         )
-        index = [self._rows.index(selected)] if selected in self._rows else []
-        if self.table.selection != index:
-            self.table.selection = index  # which shows it
-        elif selected is not None and self._row_status(*selected) != shown:
-            self._show()
-
-    def _info(self, record: Record, name: str) -> FieldInfo:
-        return self._listing.specs[record.id].outputs.model_fields[name]
-
-    def _type(self, record: Record, name: str) -> str:
-        return field_types.type_name(self._info(record, name).annotation)
-
-    def _readable(self, record: Record, name: str) -> bool:
-        return name in self._listing.readable[record.id]
-
-    def _row_status(self, record: Record, name: str) -> str:
-        status = self._status[record.id]
-        if status in (Status.FAILED, Status.CANCELLED) or self._readable(record, name):
-            return str(status)
-        return 'not readable'
+        if self.views.value == 'Provenance':
+            self.graph.refresh(listing)
 
     def _show(self) -> None:
-        """Show the output selected; nothing if none is."""
-        self.plots.objects = []
-        self.button.disabled = True
-        if (selected := self.selected) is None:
+        """Show the output selected, and its view; nothing if none is."""
+        selected = self.selected
+        self.remove_button.disabled = selected is None
+        if selected is None:
             self.detail.object = ''
-            return
-        record, name = selected
+        else:
+            self.detail.object = self._describe(*selected)
+        self._show_view()
+
+    def _describe(self, record: Record, name: str) -> str:
         listing = self._listing
-        spec = listing.specs[record.id]
-        info = self._info(record, name)
-        status = self._row_status(record, name)
-        lines = [f'### {places.title(name, info)}: `{self._type(record, name)}`']
+        info = listing.specs[record.id].outputs.model_fields[name]
+        status = listing.status[record.id]
+        lines = [f'### {listing.output_label(record.ref(name))}: {status}']
         if about := _about(info):
             lines.append(about)
-        lines += [
-            f'**Record** {listing.labels[record.id]}, {status}, by '
-            f'{record.submitter} at {record.created:%Y-%m-%d %H:%M:%S}',
-            f'**Spec** {spec.title} (`{record.spec}`): {spec.description}',
-        ]
-        provenance = self._client.provenance(record)
-        if upstream := provenance.records():
-            labels = (listing.labels.get(r.id, r.id[:6]) for r in upstream)
-            lines.append('**Reads** ' + '; '.join(labels))
-        if files := provenance.files():
-            lines.append('**Files** ' + ', '.join(map(listing.file_label, files)))
-        params = to_jsonable_python(record.request.params, by_alias=True)
-        lines.append(f'**Params**\n```json\n{json.dumps(params, indent=2)}\n```')
-        if self._status[record.id] in (Status.FAILED, Status.CANCELLED):
+        lines.append(f'**Record** {listing.labels[record.id]}')
+        if status is Status.FAILED:
             lines.append(f'**Failure** {self._client.failure(record)}')
-        elif self._status[record.id] is Status.COMPLETED and self._readable(
-            record, name
-        ):
+        elif status is Status.COMPLETED:
             value = self._client.output(record, name)
             lines.append(f'**Value**\n\n{_summary(value)}')
-            self.button.disabled = not field_types.has_array(info.annotation)
-        self.detail.object = '\n\n'.join(lines)
+        return '\n\n'.join(lines)
 
-    def plot(self) -> None:
-        """Plot each array of the output selected, of one or two dimensions."""
+    def _show_view(self) -> None:
+        """
+        The provenance graph of the output selected, or each of its arrays of
+        one or two dimensions plotted, once its record has completed.
+        """
+        self.view.objects = []
         if (selected := self.selected) is None:
             return
         record, name = selected
+        if self.views.value == 'Provenance':
+            self.graph.show(record, self._listing)
+            self.view.objects = [self.graph.panel()]
+            return
+        info = self._listing.specs[record.id].outputs.model_fields[name]
+        completed = self._listing.status[record.id] is Status.COMPLETED
+        if not completed or not field_types.has_array(info.annotation):
+            return
         value = self._client.output(record, name)
+        label = self._listing.output_label(record.ref(name))
         arrays = (
-            {f'{name}.{n}': v for n, v in value if hasattr(v, 'dims')}
+            {f'{label} {n}': v for n, v in value if hasattr(v, 'dims')}
             if isinstance(value, BaseModel)
-            else {name: value}
+            else {label: value}
         )
-        self.plots.objects = [_figure(title, array) for title, array in arrays.items()]
+        self.view.objects = [_figure(title, array) for title, array in arrays.items()]
+
+    def remove(self) -> None:
+        """Release the record of the output selected, and stop listing it."""
+        if (selected := self.selected) is None:
+            return
+        record, _ = selected
+        self._client.release(record)
+        self._removed.add(record.id)
+        self._refresh()
 
     def panel(self) -> Any:
         return pn.Column(
-            self.table,
+            self.table.widget,
             self.detail,
-            self.button,
-            self.plots,
+            pn.Row(self.views, self.remove_button),
+            self.view,
             sizing_mode='stretch_width',
         )
 
