@@ -131,8 +131,9 @@ class Request(BaseModel, frozen=True):
     inline, or a dict by name: an inline value, such as a group as a model or
     a dict, or a reference, as the parameter's type allows; a list of these
     for a list parameter. A dataset model is always given by reference to a
-    dataset, such as ``dataset(path=...)``. A reference stands for a whole
-    group, at a parameter or an element of a list parameter; a union of
+    dataset, such as ``dataset(path=...)``, at a parameter, an element of a list
+    parameter, or a field of a group. A reference to an output stands for a
+    whole group, at a parameter or an element of a list parameter; a union of
     groups is written inline only. ``"@ref"`` is reserved at every depth, so
     the references of a request are found without its spec (see
     :func:`ess.spec.refs.iter_refs`).

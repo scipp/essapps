@@ -71,10 +71,57 @@ class MaskParams(BaseModel):
     runs: list[RunFile] = []
 
 
+class Measured(BaseModel):
+    run: RunFile
+    thickness: float = Field(1.0, gt=0)
+    masks: list[MaskFile] = []
+
+
+class MeasuredParams(BaseModel):
+    measured: Measured
+
+
 def test_a_dataset_model_takes_a_reference_to_a_dataset_only() -> None:
     assert place(MaskParams, 'mask') == Ways(
         tag=None, inline={}, record=MaskFile, none=True, metadata=()
     )
+
+
+def test_a_group_holding_a_dataset_model_is_written_inline_only() -> None:
+    assert place(MeasuredParams, 'measured') == Ways(
+        tag=None, inline={None: Measured}, record=None, none=False, metadata=()
+    )
+
+
+def test_a_dataset_in_a_group_is_held_as_on_ref_gives_it() -> None:
+    other = DatasetRef(dataset='pid-2')
+
+    def resolved(loc: Loc, ref: Ref, tp: Any) -> Ref:
+        assert (loc, tp) in {
+            (('measured', 'run'), RunFile),
+            (('measured', 'masks', 0), MaskFile),
+        }
+        return other
+
+    value = {'run': DATASET, 'masks': [DATASET]}
+    form = other.model_dump(by_alias=True)
+    assert held(MeasuredParams, 'measured', value, resolved) == {
+        'run': form,
+        'thickness': 1.0,
+        'masks': [form],
+    }
+
+
+def test_a_dataset_model_in_a_group_gets_its_local_path_from_paths() -> None:
+    form = DATASET.model_dump(by_alias=True)
+    measured = validated(
+        MeasuredParams,
+        'measured',
+        {'run': form, 'thickness': 2.0, 'masks': []},
+        read=lambda ref: ref,
+        paths={DATASET.dataset: Path('run.nxs')},
+    )
+    assert measured.run.path == Path('run.nxs')
 
 
 def test_a_group_with_a_data_value_takes_a_reference_only() -> None:
@@ -200,7 +247,8 @@ def test_a_reference_inside_a_group_is_refused(name: str, value: Any, loc: Loc) 
     assert at == loc
     assert msg.endswith(
         'a reference stands for a whole group, at a parameter or an element of a '
-        'list parameter, never inside a group'
+        'list parameter; inside a group, only a field typed a dataset model takes '
+        'one, a reference to a dataset'
     )
 
 
@@ -244,12 +292,20 @@ def test_an_error_inside_a_union_names_its_place_without_the_tag() -> None:
     assert at == ('beam_centre', 'tolerance')
 
 
+def test_a_dataset_model_instance_is_held_as_the_reference_to_its_dataset() -> None:
+    ref = DatasetRef(dataset='path:mask.xml')
+    assert held(MaskParams, 'mask', MaskFile.local('mask.xml'), _found) == (
+        ('mask',),
+        ref,
+        MaskFile,
+    )
+
+
 @pytest.mark.parametrize(
     ('name', 'value', 'loc'),
     [
         ('mask', 'mask.xml', ('mask',)),
         ('mask', {'path': 'mask.xml'}, ('mask',)),
-        ('mask', MaskFile.local('mask.xml'), ('mask',)),
         ('runs', ['run.nxs'], ('runs', 0)),
     ],
 )

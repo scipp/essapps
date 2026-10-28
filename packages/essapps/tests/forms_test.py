@@ -366,7 +366,8 @@ def test_a_reference_inside_a_group_written_inline_is_refused(
         client.submit(spec, params=params(ref))
     assert str(raised.value) == (
         f'{place}: {ref}: a reference stands for a whole group, at a parameter or '
-        'an element of a list parameter, never inside a group'
+        'an element of a list parameter; inside a group, only a field typed a '
+        'dataset model takes one, a reference to a dataset'
     )
 
 

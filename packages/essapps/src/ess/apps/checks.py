@@ -22,9 +22,10 @@ The checks of a request; a template, a push, and a state check part of these:
   be given; one left out takes its default.
 - *Places.* A request writes a value or a reference at each place: the
   value of a parameter, or an element of a list parameter (see
-  :mod:`ess.spec.places`). A reference at a tag, inside a group, for a whole
-  list, or at a union of groups is refused. A group is written as an object
-  of its fields; a field left out takes its default.
+  :mod:`ess.spec.places`). A reference at a tag, for a whole list, at a
+  union of groups, or inside a group is refused, but one to a dataset at a
+  field typed a dataset model. A group is written as an object of its
+  fields; a field left out takes its default.
 - *Inline values.* An inline value is allowed where the type at the place
   is a group without a data value, or a union of groups, and ``None`` where
   it is optional; so a dataset model given inline, such as a path as a
@@ -38,7 +39,7 @@ The checks of a request; a template, a push, and a state check part of these:
   nor has a group whose validators change a value they validated already
   (see :func:`ess.spec.field_types.inline`). A list parameter that is not a
   table meets its length constraints.
-- *References.* A reference stands for a whole group. A union of groups is
+- *References.* A reference to an output stands for a whole group. A union of groups is
   written inline only, with the tag of an alternative: no reference fits
   it, so that a producer need not output a tagged class to feed it. A
   dataset model is given by reference to a dataset, and only a dataset

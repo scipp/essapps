@@ -6,14 +6,17 @@ Root places: where a request writes either a value or a reference, by type.
 A request is a JSON object of parameter values. A *root place* is a position
 in it where the request may write either a value or a reference to data that
 exist elsewhere (see :mod:`ess.spec.refs`): the value of a parameter, or an
-element of a list parameter. A group written inline holds only scalars and
-lists of scalars, so no root place is inside it::
+element of a list parameter. A group written inline holds scalars, dataset
+models, and lists of these, which are not root places. A request gives a
+dataset at a field typed a dataset model by reference, but a field is not a
+place for a reference to an output::
 
     {
         'sample': dataset(run=101),                    # sample
         'centre': finder.ref('centre'),                # centre
         'reduction': {'bins': 50, 'banks': [1, 2]},    # reduction
         'runs': [dataset(run=102), dataset(run=103)],  # runs, runs[0], runs[1]
+        'specimen': {'run': dataset(run=104), 'thickness': 2.0},  # specimen
     }
 
 The type at a root place decides what the request writes there, with
@@ -25,8 +28,9 @@ Type at the root place                    The request writes
 ========================================  =====================================
 a dataset model                           a reference to a dataset
 a group                                   an object of its fields, unless one
-                                          is a data value; or a reference to
-                                          an output
+                                          is a data value, with a reference to
+                                          a dataset at a field typed a dataset
+                                          model; or a reference to an output
 a union of groups                         an object of the fields of one
                                           alternative, with its tag, as for a
                                           group; never a reference
@@ -36,15 +40,19 @@ a list, ``list[X]``, at a parameter       a list, each element a root place
 
 A *scalar* is an ``int``, ``float``, ``str``, ``bool``, ``datetime``, an
 enum, or a ``Literal``, which a request writes inline, as JSON. A *data
-value* is a field without a JSON form, which no request writes. The fields
-of a group without a data value are scalars or lists of scalars, never typed
-``X | None``. A group with a data value is given by reference to an output
+value* is a field without a JSON form, which no request writes. A group is
+validated whole, once, when the request arrives, so it holds only what is known
+then: values typed in, and datasets, named by their identity. A value that
+another request computes may not exist yet; it fills a whole parameter. So the
+fields of a group without a data value are scalars, dataset models, or lists of
+one of these. A scalar is never typed ``X | None``; a dataset model may be. A
+group with a data value is given by reference to an output
 only (see :func:`unwritten`); of its other fields, the framework refuses only
 a ``Path``, a dataset model, a ``NewType``, or a type alias, since no output
 could fill them.
 
-A reference stands for a whole group. A reference to a dataset fits a
-dataset model whose metadata the dataset has (see
+A reference to an output stands for a whole group. A reference to a dataset
+fits a dataset model whose metadata the dataset has (see
 :class:`~ess.spec.parameters.DatasetModel`). A reference to an output fits
 the root place's type, and no output holds a dataset model, so that a file
 comes only from a dataset, which the dataset source checks. A
@@ -57,7 +65,8 @@ such as a found beam centre, and a data value is a field of one::
 
 ``"@ref"`` is reserved at every depth, so that a reference is found
 without the spec (see :func:`ess.spec.refs.positions`), and one inside a
-group written inline is refused.
+group written inline is refused, but one to a dataset at a field typed a
+dataset model.
 
 A *union of groups* is a pydantic discriminated union,
 ``Annotated[A | B, Field(discriminator='kind')]``, in which each
@@ -177,6 +186,9 @@ def held(model: type[BaseModel], name: str, value: Any, on_ref: OnRef) -> Any:
 
 
 def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
+    if isinstance(value, BaseModel) and not isinstance(value, Ref):
+        # A dataset model, in it or as it, as the reference to its dataset.
+        value = value.model_dump()
     tp, nullable = field_types.optional(slot.annotation)
     union = alternatives(slot.annotation, slot.discriminator)
     if (ref := ref_at(loc, value)) is not None:
@@ -190,11 +202,7 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
     if value is None and nullable:
         return None
     if field_types.is_dataset(tp):
-        raise _refused(
-            loc,
-            f'{value!r} is not a dataset; {field_types.type_name(tp)} is given by '
-            'reference to a dataset, such as dataset(path=...)',
-        )
+        raise _not_a_dataset(loc, tp, value)
     if union is not None or field_types.is_group(tp):
         fields = dict(value) if isinstance(value, BaseModel) else value
         if not isinstance(fields, Mapping):
@@ -203,15 +211,69 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
                 f'{value!r} is not an object; a group is written as an object '
                 'of its fields',
             )
-        _written(loc, _group(loc, slot, fields))
-        for at, item in positions(loc, fields):
-            if at != loc and (ref := ref_at(at, item)) is not None:
+        group = _group(loc, slot, fields)
+        _written(loc, group)
+        value = _datasets_held(loc, group, fields, on_ref)
+        for at, item in positions(loc, value):
+            if (
+                at != loc
+                and (ref := ref_at(at, item)) is not None
+                and _dataset_field(group, at[len(loc)]) is None
+            ):
                 raise _refused(
                     at,
                     f'{ref}: a reference stands for a whole group, at a parameter '
-                    'or an element of a list parameter, never inside a group',
+                    'or an element of a list parameter; inside a group, only a field '
+                    'typed a dataset model takes one, a reference to a dataset',
                 )
     return _inline(loc, slot, value)
+
+
+def _dataset_field(group: type[BaseModel], name: str | int) -> Any:
+    """The dataset model at the field ``name`` of ``group``, or ``None``."""
+    field = group.model_fields.get(str(name))
+    tp = None if field is None else field_types.value_type(field.annotation)
+    return tp if field_types.is_dataset(tp) else None
+
+
+def _datasets_held(
+    loc: Loc, group: type[BaseModel], fields: Mapping[str, Any], on_ref: OnRef
+) -> dict[str, Any]:
+    """
+    ``fields`` of ``group`` at ``loc``, with each reference at a field typed
+    a dataset model, or at an element of a list of one, replaced by what
+    ``on_ref`` returns for it, in its JSON form, so that the group is
+    validated whole with the datasets resolved.
+    """
+    held = dict(fields)
+    for name, item in fields.items():
+        if (tp := _dataset_field(group, name)) is None:
+            continue
+        if field_types.is_list(group, name) and isinstance(item, list):
+            held[name] = [
+                _dataset_held((*loc, name, i), tp, v, on_ref)
+                for i, v in enumerate(item)
+            ]
+        else:
+            held[name] = _dataset_held((*loc, name), tp, item, on_ref)
+    return held
+
+
+def _dataset_held(loc: Loc, tp: Any, value: Any, on_ref: OnRef) -> Any:
+    if (ref := ref_at(loc, value)) is None:
+        if value is None:
+            return value  # refused when the group is validated, unless X | None
+        raise _not_a_dataset(loc, tp, value)
+    held = on_ref(loc, ref, tp)
+    return held.model_dump(by_alias=True) if isinstance(held, BaseModel) else held
+
+
+def _not_a_dataset(loc: Loc, tp: Any, value: Any) -> ParamsError:
+    return _refused(
+        loc,
+        f'{value!r} is not a dataset; {field_types.type_name(tp)} is given by '
+        'reference to a dataset, such as dataset(path=...)',
+    )
 
 
 def _written(loc: Loc, group: type[BaseModel]) -> None:
@@ -426,7 +488,18 @@ def _described(annotation: Any, metadata: tuple[Any, ...]) -> Ways:
         tag, groups = union
         return Ways(tag, groups, None, none, metadata)
     inline = {} if unwritten(tp) is not None else {None: tp}
-    return Ways(None, inline, tp, none, metadata)
+    record = None if _holds_dataset(tp) else tp
+    return Ways(None, inline, record, none, metadata)
+
+
+def _holds_dataset(group: Any) -> bool:
+    """
+    Whether ``group`` has a field typed a dataset model: no output holds one,
+    so no output fits it.
+    """
+    return not field_types.is_dataset(group) and any(
+        _dataset_field(group, n) is not None for n in group.model_fields
+    )
 
 
 def _unwrapped(annotation: Any) -> tuple[Any, tuple[Any, ...], bool]:

@@ -301,7 +301,8 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
       without ``name``, whose JSON form reads back as another value, such as a field
       of a group whose validator changes a value it has validated already,
       or whose JSON form is an object with the key ``"@ref"``, which reads
-      as a reference (see :func:`ess.spec.refs.positions`).
+      as a reference (see :func:`ess.spec.refs.positions`), unless it is a
+      dataset model, whose JSON form is the reference to its dataset.
     """
     one = model_of(model, name, whole)
     if isinstance(value, BaseModel):
@@ -321,10 +322,22 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
     if again != made:
         raise ParamsError([(_differs((), made, again), _NO_JSON_FORM)])
     if refs := [
-        loc for loc, v in positions((), stored) if isinstance(v, dict) and '@ref' in v
+        loc
+        for loc, v in positions((), stored)
+        if isinstance(v, dict) and '@ref' in v and not _is_dataset_at(made, loc)
     ]:
         raise ParamsError((loc, _READS_AS_REF) for loc in refs)
     return stored
+
+
+def _is_dataset_at(value: Any, loc: Loc) -> bool:
+    """Whether ``value`` holds a dataset model at ``loc``, a position inside it."""
+    for at in loc:
+        if isinstance(at, int):
+            value = value[at]
+        else:
+            value = getattr(value, at, None)
+    return isinstance(value, DatasetModel)
 
 
 _NO_JSON_FORM = 'has no JSON form that reads back as the value'

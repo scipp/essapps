@@ -87,8 +87,8 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         # A field is never X | None: a value that may be absent is a
         # parameter typed X | None, or a bool field, such as limit_range: bool.
         start: float | None = None
-        # A field of a group is a scalar or a list of scalars: a value of
-        # several parts is a group, a parameter of its own.
+        # A field of a group is a scalar, a dataset model, or a list of one: a
+        # value of several parts is a group, a parameter of its own.
         limits: tuple[float, float] = (0.0, 1.0)
         # A group is not a field of a group: it is a parameter of its own.
         range: WavelengthRange
@@ -626,6 +626,15 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
             problem := _default_problem(group, name, places.field_value)
         ):
             problems.append(f'{where}: {problem}')
+        elif (
+            field_types.is_dataset(field_types.value_type(field.annotation))
+            and not field.is_required()
+            and field.get_default(call_default_factory=True) not in (None, [])
+        ):
+            problems.append(
+                f'{where}: a dataset model at a field has no default but None or '
+                '[]: a request gives each dataset by reference'
+            )
     return problems
 
 
@@ -667,14 +676,17 @@ def _dataset_model_problems(model: type[BaseModel]) -> list[str]:
 def _field_problem(annotation: Any) -> str | None:
     """
     Why a field typed ``annotation``, of a group without a data value, is
-    not *interpreted*, with the fix, or ``None``. An interpreted field is a
-    scalar, ``int``, ``float``, ``str``, ``bool``, ``datetime`` (or pydantic's
-    ``AwareDatetime`` or ``NaiveDatetime``), an enum, or a ``Literal``,
-    possibly with constraints, ``Annotated[float, Gt(0)]``, or a list of
-    scalars, and never ``X | None``, nor a ``Literal`` with ``None``, which
-    is ``X | None`` too: a form shows each as an input of its type, and a
-    request writes it inline. Any other type, a group, a union, a tuple, a
-    dict, or a dataclass, is refused.
+    not *interpreted*, with the fix, or ``None``. An interpreted field is
+    known when the request arrives, so that the group is validated whole
+    then: a scalar, ``int``, ``float``, ``str``, ``bool``, ``datetime`` (or
+    pydantic's ``AwareDatetime`` or ``NaiveDatetime``), an enum, or a
+    ``Literal``, possibly with constraints, ``Annotated[float, Gt(0)]``, a
+    dataset model, which a request gives by reference to a dataset, or a list
+    of one of these. A scalar is never typed ``X | None``, nor a ``Literal``
+    with ``None``, which is ``X | None`` too; a dataset model may be, for a
+    file that may be left out: a form shows each as an input of its type, or
+    a picker. Any other type, a group, a union, a tuple, a dict, or a
+    dataclass, is refused.
     """
     tp, is_optional, item_optional = _taken_apart(annotation)
     if item_optional is not None and (is_optional or item_optional):
@@ -682,6 +694,8 @@ def _field_problem(annotation: Any) -> str | None:
             'a list field is never typed list[X] | None or list[X | None]; a list '
             'without elements is [], and each element is a value'
         )
+    if field_types.is_dataset(tp):
+        return None
     if is_optional or (get_origin(tp) is Literal and None in get_args(tp)):
         return (
             'a field is never typed X | None, nor a Literal with None; a value '
@@ -697,13 +711,15 @@ def _field_problem(annotation: Any) -> str | None:
         kind = 'a union of groups' if union else 'a group'
         return (
             f'{field_types.type_name(tp)} is {kind}; a field of a group is a '
-            'scalar or a list of scalars: make it a parameter of its own'
+            'scalar, a dataset model, or a list of one: make it a parameter of '
+            'its own'
         )
     return (
         f'{field_types.type_name(tp)} is not a scalar; a field of a group is a '
-        'scalar (int, float, str, bool, datetime, an enum, or a Literal) or a '
-        'list of scalars: a value of several parts is a group, a parameter of '
-        'its own, such as range: WavelengthRange, not limits: tuple[float, float]'
+        'scalar (int, float, str, bool, datetime, an enum, or a Literal), a '
+        'dataset model, or a list of one: a value of several parts is a group, '
+        'a parameter of its own, such as range: WavelengthRange, not limits: '
+        'tuple[float, float]'
     )
 
 
@@ -902,7 +918,8 @@ def _inline_form(groups: Sequence[Any], metadata: Sequence[Any]) -> Any:
 def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
     """
     A model of the fields of a group, each a scalar or a list of scalars,
-    written inline only, with its constraints; the tag field ``tag`` of an
+    written inline only, or of a dataset model, a reference to a dataset
+    (see :func:`_ref_form`), with its constraints; the tag field ``tag`` of an
     alternative of a union without its default, required, since a request
     always writes it. The title of a tag labels its alternative, so a tag
     without one is titled by its value, as a parameter is by its name;
@@ -914,10 +931,9 @@ def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
         label = (
             places.title(get_args(info.annotation)[0], info) if name == tag else None
         )
+        annotation = _dataset_field_form(info.annotation)
         fields[name] = (
-            Annotated[info.annotation, *info.metadata]
-            if info.metadata
-            else info.annotation,
+            Annotated[annotation, *info.metadata] if info.metadata else annotation,
             Field(
                 default=PydanticUndefined
                 if name == tag
@@ -935,6 +951,20 @@ def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
     return create_model(
         group.__name__, __config__=group.model_config, __doc__=group.__doc__, **fields
     )
+
+
+def _dataset_field_form(annotation: Any) -> Any:
+    """
+    ``annotation`` of a field of a group, with a dataset model, or the element
+    of a list of one, replaced by the reference it takes.
+    """
+    tp, is_optional, _ = _taken_apart(annotation)
+    if not field_types.is_dataset(tp):
+        return annotation
+    form = _ref_form(tp)
+    if get_origin(field_types.optional(annotation)[0]) is list:
+        form = list[form]  # type: ignore[valid-type]
+    return Union[form, None] if is_optional else form  # noqa: UP007
 
 
 def _outputs_schema(model: type[BaseModel]) -> dict[str, Any]:

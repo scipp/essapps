@@ -20,8 +20,8 @@ The spec must state these choices so that:
 
 Terms from [ADR 0001](0001-minimal-workflow-spec.md) and the developer README:
 
-- A *group* is a pydantic model, written as an object of its fields. The fields of a group without a data value are *scalars*, such as a `float` or a `Literal`, or lists of scalars, never typed `X | None`.
-- A *root place* is the value of a parameter, or an element of a list parameter. A request writes a value or a reference there, and nowhere else.
+- A *group* is a pydantic model, written as an object of its fields. The fields of a group without a data value are *scalars*, such as a `float` or a `Literal`, dataset models, or lists of one of these. A scalar is never typed `X | None`.
+- A *root place* is the value of a parameter, or an element of a list parameter. A request writes a value or a reference there. The one other place for a reference is a field of a group typed a dataset model, which takes a reference to a dataset.
 - A *reference* names data that exist elsewhere: an output of a record, `finder.ref('centre')`, or a dataset. It *fits* a root place when the data it names can be the value there.
 - A *data value* is a field of a group without a JSON form, such as an `sc.DataArray`. A group with a data value is given by reference to an output only, since no request can write a data value inline; of its other fields, the framework refuses only a `Path`, a dataset model, a `NewType`, or a type alias, since no output could fill them.
 - A *dataset model* is a group that stands for a file, given by reference to a dataset only.
@@ -142,7 +142,7 @@ That `None` means *without X* is a guideline, not a rule the framework checks.
 It has no exception for data values: `None` in `transmission: ComputedTransmission | None` does not mean "the one in the run's file".
 
 **Only a parameter is typed `X | None`.**
-A field of a group without a data value is never typed `X | None`, so each toggle is over the widget of a whole parameter.
+A scalar field of a group is never typed `X | None`, so each toggle is over the widget of a whole parameter.
 A choice between modes is a union of groups.
 An optional part with fields that need values is a parameter typed `X | None`: an optional file is a dataset model, `direct_beam: DirectBeam | None`, and an optional data value is a group of it, `mask: PixelMask | None`.
 A `bool` field switches one optional part of a group whose fields all have defaults, such as `limit_range: bool` next to `start` and `stop`, both with defaults; the form shows those fields either way.
@@ -211,7 +211,7 @@ A value held at a key that a parameter's key leads to has the same effect, but t
 - An author tests that each alternative has its effect, and that a request with `None` after one with a value gives the result without X. The second fails if `make_pipeline` sets the value in a pipeline it keeps.
 - A spec that tunes a value in a stage, such as a scan of the beam centre, types that parameter as a plain group, or its client submits plain requests.
 - A table whose single-run parameter is a union has a key per alternative, so the driver of the multi-run spec cannot cut the single-run graph at one key for its rows.
-- A choice for one field of a row of a table is not a union, since a field of a group is a scalar. A choice of way per row is a table whose rows are a union, `list[A | B]`, each row written inline, and a choice of way for all rows is a parameter.
+- A choice for one field of a row of a table is not a union, since a field of a group is a scalar or a dataset model. A choice of way per row is a table whose rows are a union, `list[A | B]`, each row written inline, and a choice of way for all rows is a parameter.
 
 ## Alternatives considered
 

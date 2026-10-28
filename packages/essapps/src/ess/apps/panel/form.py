@@ -21,7 +21,9 @@ a parameter, :class:`Ways` a choice of ways: the fields of each group written
                            that fits it, and ``None``. A record is offered
                            while an output fits.
 a field of a group         an input of its type, or a picker of its values;
-                           for a list of scalars, a list of these
+                           for a list of scalars, a list of these; for a
+                           dataset model, a picker of the datasets that fit
+                           it, with ``None`` if it is typed ``X | None``
 =========================  ================================================
 
 A record's output fits if its type, from the record's spec, fits the place,
@@ -49,7 +51,8 @@ set to, or of the default, which its label names: ``Start (UTC)``. A time
 without a zone stays without one, and a time of ``AwareDatetime`` without a
 value is in UTC. The fraction of a second of the value is kept.
 
-Not covered: list parameters (tables, :class:`Rows`), scipp/essapps#101.
+Not covered: list parameters (tables, :class:`Rows`), scipp/essapps#101, and
+a list of dataset models at a field of a group.
 """
 
 from __future__ import annotations
@@ -74,7 +77,7 @@ from ess.spec import (
     places,
 )
 from ess.spec.places import Ways
-from ess.spec.refs import Loc, iter_refs
+from ess.spec.refs import Loc, as_ref, iter_refs
 
 
 class _Unset:
@@ -185,10 +188,10 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice:
     ways: dict[str, _Way] = {}
     for value, group in described.inline.items():
         if value is None or described.tag is None:
-            ways['Given'] = _Group(group, {})
+            ways['Given'] = _Group(group, {}, listing)
         else:
             way = places.title(value, group.model_fields[described.tag])
-            ways[way] = _Group(group, {described.tag: value})
+            ways[way] = _Group(group, {described.tag: value}, listing)
     if field_types.is_dataset(described.record):
         ways[_Choice.DATASET] = _Dataset(described.record, listing)
     elif described.record is not None:
@@ -198,9 +201,19 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice:
     return _Choice(places.title(name, info), ways, described.tag, _default(info))
 
 
-def _field(group: type[BaseModel], name: str) -> _Scalar | _Scalars:
-    """The input of the field ``name`` of ``group``, written inline."""
+def _field(
+    group: type[BaseModel], name: str, listing: Listing
+) -> _Scalar | _Scalars | _Dataset:
+    """
+    The input of the field ``name`` of ``group``, written inline, or the
+    picker of a dataset model.
+    """
     info = group.model_fields[name]
+    tp, optional = field_types.optional(info.annotation)
+    if field_types.is_dataset(field_types.value_type(info.annotation)):
+        if field_types.is_list(group, name):
+            raise NotImplementedError(f'{name}: a list of dataset models at a field')
+        return _Dataset(tp, listing, places.title(name, info), optional)
     widget = _Scalars if field_types.is_list(group, name) else _Scalar
     return widget(
         places.title(name, info),
@@ -224,29 +237,40 @@ def _pick(widget: Any, value: Any) -> None:
 
 class _Dataset:
     """
-    A dataset model: a picker of the datasets that fit it. A dataset that the
-    form is set to and the listing lacks stays picked, labelled by its
+    A dataset model: a picker of the datasets that fit it, labelled ``name``
+    at a field of a group, and with ``None`` if ``optional``. A dataset that
+    the form is set to and the listing lacks stays picked, labelled by its
     reference as given, an identity or a name such as ``run:101``.
     """
 
-    def __init__(self, model: type[DatasetModel], listing: Listing) -> None:
+    def __init__(
+        self,
+        model: type[DatasetModel],
+        listing: Listing,
+        name: str | None = None,
+        optional: bool = False,
+    ) -> None:
         self._model = model
+        self._optional = optional
         self._listed: dict[str, Any] = {}
-        self.widget = pn.widgets.Select(sizing_mode='stretch_width')
+        self.widget = pn.widgets.Select(label=name or '', sizing_mode='stretch_width')
         self.refresh(listing)
 
     def refresh(self, listing: Listing) -> None:
-        self._listed = {'(choose a dataset)': None, **listing.datasets(self._model)}
+        nothing = '(none)' if self._optional else '(choose a dataset)'
+        self._listed = {nothing: None, **listing.datasets(self._model)}
         self.set(self.widget.value)
 
     def value(self, loc: Loc, missing: _Missing) -> Any:
-        if self.widget.value is None:
+        if self.widget.value is None and not self._optional:
             missing.append(FieldError(None, loc, 'choose a dataset'))
             return UNSET
         return self.widget.value
 
     def set(self, value: Any) -> None:
-        picked = value if isinstance(value, DatasetRef) else None
+        # At a field of a group, a record holds the reference's JSON form.
+        ref = None if value is UNSET else as_ref(value)
+        picked = ref if isinstance(ref, DatasetRef) else None
         options = dict(self._listed)
         if picked is not None and picked not in options.values():
             options[str(picked)] = picked
@@ -413,10 +437,14 @@ class _Scalars:
 class _Group:
     """The fields of a group, each an input; the tag of an alternative has none."""
 
-    def __init__(self, group: type[BaseModel], tag: dict[str, str]) -> None:
+    def __init__(
+        self, group: type[BaseModel], tag: dict[str, str], listing: Listing
+    ) -> None:
         self.tag = tag
         self._fields = {
-            name: _field(group, name) for name in group.model_fields if name not in tag
+            name: _field(group, name, listing)
+            for name in group.model_fields
+            if name not in tag
         }
         self._panel = pn.Column(
             *(w.panel() for w in self._fields.values()), sizing_mode='stretch_width'
@@ -432,7 +460,9 @@ class _Group:
             field.set(given.get(name, UNSET))
 
     def refresh(self, listing: Listing) -> None:
-        pass
+        for field in self._fields.values():
+            if isinstance(field, _Dataset):
+                field.refresh(listing)
 
     def panel(self) -> Any:
         return self._panel

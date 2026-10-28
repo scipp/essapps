@@ -1082,8 +1082,8 @@ class TestModelRules:
                         'P', loose=(Loose, Loose(**{'@ref': 'dataset', 'dataset': 'a'}))
                     )
                 },
-                rf'P.loose: {NOT_A_VALUE}: loose.@ref: '
-                'Extra inputs are not permitted',
+                f'P.loose: {NOT_A_VALUE}: loose: a is a reference; a default is a '
+                'value',
             ),
             (
                 {
@@ -1136,8 +1136,8 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', sample=(SampleRun, SampleRun.local('run.nxs')))},
-                f'P.sample: {NOT_A_VALUE}: sample: .* is not a dataset; SampleRun '
-                r'is given by reference to a dataset, such as dataset\(path=...\)',
+                f'P.sample: {NOT_A_VALUE}: sample: path:run.nxs is a reference; a '
+                'default is a value',
             ),
             (
                 {
@@ -1145,7 +1145,8 @@ class TestModelRules:
                         'P', runs=(list[SampleRun], [SampleRun.local('run.nxs')])
                     )
                 },
-                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: .* is not a dataset',
+                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: path:run.nxs is a reference; '
+                'a default is a value',
             ),
             (
                 {'outputs': model('O', iofq=(sc.DataArray | sc.Variable, ...))},
@@ -1181,12 +1182,12 @@ OPTIONAL_LIST_FIELD = re.escape(
 )
 NOT_A_SCALAR = re.escape(
     'is not a scalar; a field of a group is a scalar (int, float, str, bool, '
-    'datetime, an enum, or a Literal) or a list of scalars: a value of several '
-    'parts is a group, a parameter of its own'
+    'datetime, an enum, or a Literal), a dataset model, or a list of one: a value '
+    'of several parts is a group, a parameter of its own'
 )
 A_PARAMETER_OF_ITS_OWN = re.escape(
-    'a field of a group is a scalar or a list of scalars: make it a parameter of '
-    'its own'
+    'a field of a group is a scalar, a dataset model, or a list of one: make it a '
+    'parameter of its own'
 )
 
 
@@ -1230,6 +1231,27 @@ class TestFields:
     def test_a_field_of_a_group_is_a_scalar_or_a_list_of_scalars(self, tp: Any) -> None:
         spec(params=model('P', g=(_group_with(tp), ...)))
 
+    @pytest.mark.parametrize('tp', [SampleRun, list[SampleRun], SampleRun | None])
+    def test_a_field_of_a_group_is_a_dataset_model(self, tp: Any) -> None:
+        spec(params=model('P', g=(_group_with(tp), ...)))
+
+    @pytest.mark.parametrize(
+        ('tp', 'default'),
+        [
+            (SampleRun | None, SampleRun.local('run.nxs')),
+            (list[SampleRun], [SampleRun.local('run.nxs')]),
+        ],
+    )
+    def test_a_dataset_model_at_a_field_has_no_default_dataset(
+        self, tp: Any, default: Any
+    ) -> None:
+        group = model('G', value=(tp, default))
+        with pytest.raises(
+            ValueError,
+            match=r'P\.g: G\.value: a dataset model at a field has no default but None',
+        ):
+            spec(params=model('P', g=(group, ...)))
+
     @pytest.mark.parametrize(
         'tp',
         [
@@ -1265,8 +1287,6 @@ class TestFields:
         [
             (Reduction, 'Reduction is a group'),
             (list[Reduction], 'Reduction is a group'),
-            (SampleRun, 'SampleRun is a group'),
-            (list[SampleRun], 'SampleRun is a group'),
             (By, 'ByMonitor | ByTime is a union of groups'),
             (list[By], 'ByMonitor | ByTime is a union of groups'),
             (ByMonitor | ByTime, 'ByMonitor | ByTime is a union of groups'),
@@ -1561,6 +1581,23 @@ class TestSerialization:
             'title': 'Geometry',
         }
         assert properties['runs']['items'] == dataset_ref('RunFile', {'kind': 'raw'})
+
+    def test_a_dataset_model_at_a_field_is_a_reference_to_a_dataset(self) -> None:
+        group = model(
+            'G',
+            run=(SampleRun, ...),
+            masks=(list[MaskFile], []),
+            thickness=(float, 1.0),
+        )
+        schema = spec(params=model('P', g=(group, ...))).serialize().params_schema
+        assert schema['properties']['g'] == {
+            '$ref': '#/$defs/G',
+            'not': {'required': ['@ref']},
+            'title': 'G',
+        }
+        properties = schema['$defs']['G']['properties']
+        assert properties['run'] == dataset_ref('SampleRun', {'kind': 'raw'})
+        assert properties['masks']['items'] == dataset_ref('MaskFile', {'kind': 'mask'})
 
     def test_a_union_is_its_alternatives_inline_never_a_reference(self) -> None:
         params = model('P', by=(By, ...), maybe=(By | None, None), each=(list[By], []))

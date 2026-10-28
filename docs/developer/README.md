@@ -64,7 +64,7 @@ The framework is essapps (`ess.apps`) and essspec (`ess.spec`), in this reposito
 | group | a pydantic model, such as `Reduction`, the settings of one reduction step. A request writes a group as an object of its fields. A `RootModel` is not a group. |
 | root place | the value of a parameter, or an element of a list parameter: where a request writes a value or a reference. The type at a root place decides which (see Specs and bindings). |
 | place | a position in a request's params, named by its path, such as `reduction.bins` or `sample[2]`. A field of a group is a place, not a root place. |
-| scalar | an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a `Literal`, possibly with constraints, such as `Annotated[float, Gt(0)]`. The fields of a group without a data value are scalars or lists of scalars, which a request writes inline. |
+| scalar | an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a `Literal`, possibly with constraints, such as `Annotated[float, Gt(0)]`. A request writes a scalar inline. |
 | data value | a field of a group without a JSON form, such as a scipp array. A group that holds one is given by reference to an output only. |
 | dataset model | a group that stands for a file: a subclass of `DatasetModel`, which holds only `path`, given by reference to a dataset only |
 | fits | a reference fits a root place when the data it names can be the value there (see References) |
@@ -178,8 +178,12 @@ The type at a root place decides which of the two it takes, with `| None` remove
 
 **Fields of a group.** The framework interprets the parameters and the fields of each group written inline, nothing deeper.
 A *scalar* is an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a `Literal`, possibly constrained, such as `Annotated[float, Gt(0)]`.
-The fields of a group without a data value are scalars or lists of scalars, never typed `X | None`.
-A form shows an input for each, and a request writes it inline.
+A group is validated whole, once, when the request arrives.
+So a group holds only what is known then: values typed in, and datasets, named by their identity.
+A value that another request computes may not exist yet; it fills a whole parameter.
+The fields of a group without a data value are scalars, dataset models, or lists of one of these.
+A scalar is never typed `X | None`; a dataset model may be.
+A form shows an input for each, a request writes a scalar inline, and it gives a dataset by reference.
 `WorkflowSpec` refuses any other field, with the fix:
 
 ```python
@@ -189,19 +193,33 @@ class Reduction(BaseModel):
     range: WavelengthRange                        # refused: a group is a parameter of its own
     limits: tuple[float, float]                   # refused: not a scalar
     start: float | None = None                    # refused: a parameter typed X | None, or a bool field
+
+class Specimen(BaseModel):
+    run: SampleRun                                # a dataset model: given by reference to a dataset
+    thickness: float = 1.0
+    runs: list[SampleRun] = []                    # a list of dataset models: [] without elements
+    can: CanRun | None = None                     # a dataset model may be X | None, with default None
 ```
+
+A request gives a dataset at such a field by reference, inside the group written inline:
+
+```python
+{'specimen': {'run': dataset(run=611), 'thickness': 2.0}}
+```
+
+No output holds a dataset model, so a group with a dataset model is written inline only, and a form offers no record picker for it.
 
 A *data value* is a field without a JSON form, such as a scipp array.
 No request can write it, so a group with a data value is given by reference to an output only; of its other fields, the framework refuses only a `Path`, a dataset model, a `NewType`, or a type alias, since no output could fill them.
 
-**References stand for groups.** A reference stands for a whole group, at a root place.
+**References stand for groups.** A reference to an output stands for a whole group, at a root place.
 A number or an `sc.DataArray` names no role: every output of its type would fit, so a picker of records would list unrelated outputs.
 A group names the role, such as `BeamCentre` or `ComputedTransmission`, and a reference fits it by the group's class.
 So a data value is a field of a group, such as the field `transmission` of `ComputedTransmission`, and the workflow that computes it outputs the group:
 
 ```python
 transmission: sc.DataArray                        # refused by WorkflowSpec: a parameter is a group
-{'reduction': {'bins': r.ref('bins')}}            # refused at submission: a reference is at a root place only
+{'reduction': {'bins': r.ref('bins')}}            # refused at submission: a reference to an output is at a root place only
 ```
 
 **Files.** A file is a parameter, or the element of a list parameter, whose type is a *dataset model*: a subclass of `ess.spec.DatasetModel`, which holds `path: Path` and nothing else.
@@ -305,7 +323,7 @@ A value *round-trips* when its JSON form reads back as the value.
 
 - The names of params and outputs are distinct.
 - Each parameter is a group, a union of groups, or a list of one, possibly typed `X | None`. A list parameter is not typed `list[X] | None`, since a list without rows is `[]`, and its element is not typed `X | None`, since each row is a value.
-- The fields of a group without a data value are scalars or lists of scalars, never typed `X | None`. A group with a data value is given by reference to an output only; of its other fields, the framework refuses only a `Path`, a dataset model, a `NewType`, or a type alias, since no output could fill them.
+- The fields of a group without a data value are scalars, dataset models, or lists of one of these. A scalar is never typed `X | None`; a dataset model may be, with the default `None`, and a list with the default `[]`. A group with a data value is given by reference to an output only; of its other fields, the framework refuses only a `Path`, a dataset model, a `NewType`, or a type alias, since no output could fill them.
 - A dataset model holds only `dataset`, as `DatasetModel` declares it, and has no validators or serializers of its own. A `Path` outside a dataset model is refused.
 - Each output is a type, possibly typed `X | None`, or a list or a dict of one. No output is or holds a dataset model or a `Path`, at any depth.
 - No type in the params or the outputs is a `NewType` or a type alias, at any depth: a spec names a role by a class, and a binding maps it to a key of its own.
@@ -397,19 +415,19 @@ Each takes one request or record, a list, or a dict, and returns the same shape.
 A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)` in place of `IOFQ`.
 `client.spec(record.spec)` gives the spec that the backend runs under that `SpecId`, and `client.specs()` every spec it runs, so a form needs no specs of its own.
 
-**Validation.** A group written inline holds no reference, so each is validated whole when the request arrives:
+**Validation.** A group is validated whole when the request arrives, so it holds no reference to an output:
 
 | Phase | What is validated |
 |---|---|
-| request phase | each group, or row, written inline, whole, by the type at its root place, from its JSON form; an instance by its dump |
-| call phase, once the references are read | the data of each reference to an output, by the type at its root place; a dataset model gets the local path of its file |
+| request phase | each group, or row, written inline, whole, by the type at its root place, from its JSON form; an instance by its dump. The datasets inside it are resolved and checked first, so its validators run with their identities |
+| call phase, once the references are read | the data of each reference to an output, by the type at its root place; a dataset model, at a root place or inside a group, gets the local path of its file |
 
 In the request phase, at submission, the backend also checks the names and the required parameters, each reference readable and fitting its root place (see References), and the table rules (see Combining runs: tables).
 Every validator of a group written inline runs then, with all its fields at hand:
 
 ```python
 {'range': {'start': 10.0, 'stop': 5.0}}           # refused at submission by a validator of WavelengthRange
-{'reduction': {'bins': r.ref('bins')}}            # refused at submission: a reference inside a group
+{'reduction': {'bins': r.ref('bins')}}            # refused at submission: a reference at a scalar field
 ```
 
 A value written inline must round-trip, since the log holds its JSON form: a number that is not finite does not.
@@ -445,7 +463,8 @@ A dataset model is always given by reference: `dataset(path=...)` names a file b
 `record.ref(output, key)` names one element of a list or dict output: by its index for a list, `key='2'`, and by its key for a dict.
 A key that the output lacks fails in the call phase.
 
-A reference stands for a whole group, at a root place, such as `beam_centre` or `sample[2]`: never for a union of groups, a field of a group, or a whole list.
+A reference to an output stands for a whole group, at a root place, such as `beam_centre` or `sample[2]`: never for a union of groups, a field of a group, or a whole list.
+A reference to a dataset stands for a dataset model, at a root place or at a field of a group typed a dataset model.
 Its JSON form is an object with the key `@ref`, which names its kind:
 
 ```json
@@ -456,7 +475,7 @@ Its JSON form is an object with the key `@ref`, which names its kind:
 
 The key `@ref` is reserved at every depth: an object with it is a reference.
 So the framework finds the references of a request without the spec, in every array and every object.
-With the spec, it refuses a reference inside a group written inline, and a default whose JSON form holds the key `@ref`.
+With the spec, it refuses a reference inside a group written inline, except one to a dataset at a field typed a dataset model, and a default whose JSON form holds the key `@ref`.
 
 A reference *fits* a root place when the data it names can be the value there.
 `| None` is removed on both sides.
@@ -465,7 +484,7 @@ Output references and dataset references work the same way:
 
 | | Reference to an output | Reference to a dataset |
 |---|---|---|
-| Root place | a parameter, or an element of a list parameter | the same |
+| Place | a parameter, or an element of a list parameter | the same, or a field of a group typed a dataset model, or an element of a list field of one |
 | Stands for | a whole group, not a dataset model | a whole dataset model |
 | Fits if | the output's class is the group's class or a subclass of it | the dataset's metadata has the model's metadata |
 | Resolved in the call phase to | the stored output | the dataset model with the local path |
