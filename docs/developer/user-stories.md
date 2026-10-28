@@ -14,9 +14,9 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 
 | Spec | Params | Outputs | Computes | Stands in for |
 |---|---|---|---|---|
-| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: Sample`, `beam_centre: BeamCentre \| None`, `normalization: ComputedNormalization \| None` (no default) | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre.position`; divided by the normalization's `factor`; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, of one run |
+| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: Sample`, `beam_centre: BeamCentre` (`x=0.0`), `normalization: ComputedNormalization \| None` (no default) | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre.x`; divided by the normalization's `factor`; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, of one run |
 | `IOFQ_CAN` | the params of `IOFQ`, and `can: Can` | `iofq`, `masked` | as `IOFQ`, of the counts minus the can's counts | a SANS reduction of one run with the can subtracted |
-| `BEAM_CENTRE` | `direct_beam: DirectBeam` | `centre: BeamCentre` | `BeamCentre(position=...)`, with the mean of the counts | beam-centre finding |
+| `BEAM_CENTRE` | `direct_beam: DirectBeam` | `centre: BeamCentre` | `BeamCentre(x=...)`, with the mean of the counts | beam-centre finding |
 | `VANADIUM` | `scaling: Scaling` (`scale=1.0`), `vanadium: Vanadium` | `normalization: ComputedNormalization` | `ComputedNormalization(factor=...)`, with the sum of the counts times `scale` | vanadium processing |
 | `LOAD_NORMALIZATION` | `published: PublishedNormalization` | `normalization: ComputedNormalization` | `ComputedNormalization(factor=...)`, with the factor read from the file | reading a result published to a catalogue |
 | `NORMALIZE` | `scaling: Scaling`, `runs: list[Sample]`, a table | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
@@ -31,18 +31,17 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `IOFQ_V2` | `reduction: ReductionV2` (`bins=4`, `mask_below=0.0`), the others as `IOFQ` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed field of `reduction` and a new default |
 | `SLICER` | `sample: Sample` | `slices: list[TimeRange]` | a `TimeRange` (`start`, `stop`) for every two bins of the run's log | a first reduction that finds time slices in a log |
 | `SLICES` | `sample: Sample`, `time_range: list[TimeRange]`, a table | `sliced` | the sample's counts in each time range, summed | a reduction of one run sliced in time |
-| `FIND_CENTRE` | `direct_beam: DirectBeam` | `centre: Centre` | `Centre(x=...)`, with the mean of the counts | beam-centre finding, with the centre as a group |
-| `CENTRED_MULTI` | `centre: Centre`; `transmission: Transmission`; `sample: list[Sample]`, a table; `can: list[Can]`, a table | `centred` | the sample runs' counts summed, times `transmission.fraction`; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and the transmission of the summed runs |
+| `CENTRED_MULTI` | `centre: BeamCentre`; `transmission: Transmission`; `sample: list[Sample]`, a table; `can: list[Can]`, a table | `centred` | the sample runs' counts summed, times `transmission.fraction`; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and the transmission of the summed runs |
 
 The type at a root place, the value of a parameter or an element of a list parameter, decides how a request gives the value there (README.md, Terms, and Specs and bindings, which also has the row for a union of groups):
 
 | The type at a root place | In the toy specs | Given as |
 |---|---|---|
 | a file model | the runs, such as `Sample`; `PublishedNormalization` | a file reference |
-| a group without a data value | `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre` | an object of its fields, or a reference to an output of its class |
-| a group with a data value | `BeamCentre`, `ComputedNormalization`, `Transmission`, `Parts`, `Volume`, `Reflectivity` | a reference to an output of its class |
+| a group without a data value | `Reduction`, `Scaling`, `Position`, `TimeRange`, `BeamCentre` | an object of its fields, or a reference to an output of its class |
+| a group with a data value | `ComputedNormalization`, `Transmission`, `Parts`, `Volume`, `Reflectivity` | a reference to an output of its class |
 | a list, `list[X]` | each list parameter, such as `runs` and `parts` | a list, each element given as an `X` |
-| `X \| None` | `beam_centre` and `normalization` of `IOFQ` | `None`, or given as an `X` |
+| `X \| None` | `normalization` of `IOFQ` | `None`, or given as an `X` |
 
 Each parameter of a toy spec is a group or a list of groups, possibly `X | None`.
 Each field of these groups is a scalar, such as `bins` and `scale`, or a data value, such as the `sc.Variable` of `Volume.counts`.
@@ -59,14 +58,14 @@ class Can(Run): ...
 
 A request gives a table of runs as a list of file references, such as `runs`.
 An output without a type in the list of toy specs is a `sc.Variable`.
-`BeamCentre`, `Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each, named by its role: `position`, `fraction`, `counts`, and `curve`.
+`Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each, named by its role: `fraction`, `counts`, and `curve`.
 `ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` is the file model of a file that holds it.
 `Parts` is a group of two `sc.Variable`s.
-A reference to an output fits a root place when the output is of the class of the group there: `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `VANADIUM`'s and `LOAD_NORMALIZATION`'s `normalization` fit `IOFQ`'s `normalization`, `FIND_CENTRE`'s `centre` and `CONTRIBUTE`'s `transmission` fit `CENTRED_MULTI`'s `centre` and `transmission`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
+A reference to an output fits a root place when the output is of the class of the group there: `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre` and `CENTRED_MULTI`'s `centre`, `VANADIUM`'s and `LOAD_NORMALIZATION`'s `normalization` fit `IOFQ`'s `normalization`, `CONTRIBUTE`'s `transmission` fits `CENTRED_MULTI`'s `transmission`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
 The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with a run per row; that of `SLICES` has a time range per row.
 These specs declare their tables with `tables=`, and each table needs a row, with `Field(min_length=1)`, as in `runs: list[Sample] = Field(min_length=1)`.
-`CENTRED_MULTI` has the params `centre: Centre`, `transmission: Transmission`, `sample: list[Sample] = Field(min_length=1)`, and `can: list[Can] = Field(min_length=1)`, with `tables=('sample', 'can')`.
+`CENTRED_MULTI` has the params `centre: BeamCentre`, `transmission: Transmission`, `sample: list[Sample] = Field(min_length=1)`, and `can: list[Can] = Field(min_length=1)`, with `tables=('sample', 'can')`.
 So both `sample` and `can` are tables that need a row, and one transmission applies to the summed sample runs.
 `PARTS_SUM` declares no table, so its `parts` is a value like any other, given whole in a request.
 
@@ -819,28 +818,28 @@ Actor: user. Goal: give one multi-run spec a beam centre that a first reduction 
 direct_beam = measure(600, [0.5, 1.5])
 sample = measure(611, [12.0, 36.0])
 can = measure(620, [1.0, 1.0])
-finder = client.compute(FIND_CENTRE, params={'direct_beam': direct_beam})
+finder = client.compute(BEAM_CENTRE, params={'direct_beam': direct_beam})
 t611 = client.compute(CONTRIBUTE, params={'sample': sample})   # transmission 1 / 4
 transmission = t611.ref('transmission')
 computed = client.accumulator(Template(CENTRED_MULTI, params={'centre': finder.ref('centre'), 'transmission': transmission},
                                        blanks=('sample', 'can')))
-typed = client.accumulator(Template(CENTRED_MULTI, params={'centre': Centre(x=1.0), 'transmission': transmission},
+typed = client.accumulator(Template(CENTRED_MULTI, params={'centre': BeamCentre(x=1.0), 'transmission': transmission},
                                     blanks=('sample', 'can')))
 for accumulator in (computed, typed):
     accumulator.push(sample=[sample])
     accumulator.push(can=[can])
 
-assert client.output(finder, 'centre') == Centre(x=1.0)        # the mean of [0.5, 1.5]
+assert client.output(finder, 'centre') == BeamCentre(x=1.0)    # the mean of [0.5, 1.5]
 assert [client.output(a, 'centred').values.tolist() for a in (computed, typed)] == [
     [1.0, 7.0], [1.0, 7.0]]                                     # [12, 36] / 4 - [1, 1] - 1
 assert client.provenance(computed).records() == [finder, t611]
 assert client.provenance(typed).request.params['centre'] == {'x': 1.0}
 ```
 
-Both drivers get a `Centre`; neither sees whether it was typed in or computed.
+Both drivers get a `BeamCentre`; neither sees whether it was typed in or computed.
 The record of the typed-in centre holds the value written inline in its JSON form, and that of the computed one holds the reference, so its provenance reaches the finder.
 Both accumulators give the transmission by reference, as in I3.
-`IOFQ`'s `beam_centre`, a `BeamCentre`, has a field that is a data value, so it takes a reference only (C1).
+`IOFQ`'s `normalization`, a `ComputedNormalization`, has a field that is a data value, so it takes a reference only (C2).
 
 ### I3. A transmission computed for the summed runs
 
@@ -851,7 +850,7 @@ runs = [measure(611, [1.0, 3.0]), measure(612, [4.0, 4.0])]
 can = measure(620, [1.0, 1.0])
 t = client.compute(CONTRIBUTE, params={'sample': measure(630, [1.0, 3.0])})   # transmission 1 / 4
 total = client.accumulator(Template(CENTRED_MULTI,
-                                    params={'centre': Centre(x=0.0), 'transmission': t.ref('transmission')},
+                                    params={'centre': BeamCentre(x=0.0), 'transmission': t.ref('transmission')},
                                     blanks=('sample', 'can')))
 total.push(sample=runs)
 total.push(can=[can])

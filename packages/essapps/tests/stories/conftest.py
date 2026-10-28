@@ -123,14 +123,14 @@ class Reduction(BaseModel):
     threshold: float = 0.0
 
 
-class BeamCentre(Data):
+class BeamCentre(BaseModel):
     """
-    The beam centre that ``BEAM_CENTRE`` finds, as a position: a group that
-    holds a data value, so a request gives it by reference only (C1). Compare
-    :class:`Centre`, a beam centre that a request may also type in (I2).
+    A beam centre as a number, so a request may type it in, or give it by
+    reference to the output of ``BEAM_CENTRE`` (C1, I2). The default is the
+    nominal centre.
     """
 
-    position: sc.Variable
+    x: float = 0.0
 
 
 class ComputedNormalization(Data):
@@ -153,7 +153,7 @@ class PublishedNormalization(FileModel):
 class IofQParams(Data):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: Sample
-    beam_centre: BeamCentre | None = None
+    beam_centre: BeamCentre = BeamCentre()
     normalization: ComputedNormalization | None
 
 
@@ -173,8 +173,7 @@ def _reduce(params: IofQParams, counts: np.ndarray) -> IofQOutputs:
     """``IOFQ`` of the given counts, which may differ from the sample's."""
     reduction = params.reduction
     masked = np.where(counts < reduction.threshold, 0.0, counts)
-    centre = params.beam_centre
-    reduced = masked - (0.0 if centre is None else centre.position.value)
+    reduced = masked - params.beam_centre.x
     normalization = params.normalization
     reduced = reduced / (1.0 if normalization is None else normalization.factor.value)
     return IofQOutputs(
@@ -202,7 +201,7 @@ class ReductionV2(BaseModel):
 class IofQV2Params(Data):
     reduction: ReductionV2 = Field(default_factory=ReductionV2)
     sample: Sample
-    beam_centre: BeamCentre | None = None
+    beam_centre: BeamCentre = BeamCentre()
     normalization: ComputedNormalization | None
 
 
@@ -235,9 +234,7 @@ BEAM_CENTRE = _spec('beam-centre', CentreOutputs, params=BeamCentreParams)
 
 def beam_centre(params: BeamCentreParams) -> CentreOutputs:
     return CentreOutputs(
-        centre=BeamCentre(
-            position=sc.scalar(float(_counts(params.direct_beam.path).mean()))
-        )
+        centre=BeamCentre(x=float(_counts(params.direct_beam.path).mean()))
     )
 
 
@@ -548,33 +545,8 @@ def sliced(params: SlicesParams) -> SlicedOutputs:
     return SlicedOutputs(sliced=sc.scalar(total))
 
 
-class Centre(BaseModel):
-    """
-    A beam centre as a number, so a request may type it in, or give it by
-    reference to the output of ``FIND_CENTRE`` (I2). Compare
-    :class:`BeamCentre`, which a request gives by reference only (C1).
-    """
-
-    x: float
-
-
-class FindCentreParams(Data):
-    direct_beam: DirectBeam
-
-
-class FoundCentre(Data):
-    centre: Centre
-
-
-FIND_CENTRE = _spec('find-centre', FoundCentre, params=FindCentreParams)
-
-
-def find_centre(params: FindCentreParams) -> FoundCentre:
-    return FoundCentre(centre=Centre(x=float(_counts(params.direct_beam.path).mean())))
-
-
 class CentredParams(Data):
-    centre: Centre
+    centre: BeamCentre
     transmission: Transmission  # of the summed sample runs
     sample: list[Sample] = Field(min_length=1)
     can: list[Can] = Field(min_length=1)
@@ -623,7 +595,6 @@ TOYS: dict[SpecId, Binding[Any, Any]] = {
         summing(VOLUME, volume),
         function_binding(SLICER, slicer),
         kept_rows(SLICES, sliced),
-        function_binding(FIND_CENTRE, find_centre),
         kept_rows(CENTRED_MULTI, centred),
     ]
 }
