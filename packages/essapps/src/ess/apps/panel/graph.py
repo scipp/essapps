@@ -3,7 +3,9 @@
 """
 The provenance of a record as a graph: the record, each record it read
 through all references (``client.provenance``), and their files, with an
-arrow from each to the records whose requests name it.
+arrow from each to the records whose requests name it, labelled by the
+place of the parameter it is given at, as a refusal names it: ``sample``,
+``runs[2]``.
 
 Files are in the first column, and each record is a column to the right of
 the rightmost of what it reads, so arrows point right; :func:`layout`
@@ -29,7 +31,7 @@ from pydantic_core import to_jsonable_python
 
 from ess.apps import Client, Record, Status
 from ess.spec import FileRef
-from ess.spec.refs import iter_refs
+from ess.spec.refs import iter_refs, loc_text
 
 from .listing import Listing
 from .records import describe
@@ -50,7 +52,9 @@ _EDGE_COLOR = '#888888'
 class Graph:
     """
     The provenance graph of the record shown, and below it the node
-    picked, by clicking it or with :meth:`pick`.
+    picked, by clicking it or with :meth:`pick`. ``nodes`` lists the files
+    and records of the graph, and ``edges`` each arrow: from a file or
+    record, to a record, and the places of the parameters it is given at.
     """
 
     def __init__(self, client: Client) -> None:
@@ -58,6 +62,7 @@ class Graph:
         self._record: Record | None = None
         self._picked: Node | None = None
         self.nodes: list[Node] = []
+        self.edges: list[tuple[Node, Record, str]] = []
         self.pane = pn.pane.Bokeh(sizing_mode='stretch_width')
         self.detail = pn.pane.Markdown('', sizing_mode='stretch_width')
 
@@ -70,11 +75,11 @@ class Graph:
         self._listing = listing
         provenance = self._client.provenance(record)
         records = [record, *provenance.records()]
-        # What each record reads: a file, or a record by its id.
+        # What each record reads: a file, or a record by its id, and where.
         reads = {
             r.id: [
-                ref if isinstance(ref, FileRef) else ref.record
-                for _, ref in iter_refs(r.request.params)
+                (ref if isinstance(ref, FileRef) else ref.record, loc_text(loc))
+                for loc, ref in iter_refs(r.request.params)
             ]
             for r in records
         }
@@ -82,16 +87,26 @@ class Graph:
 
         def place(key: Any) -> int:
             if key not in column:
-                column[key] = 1 + max(map(place, reads[key]), default=0)
+                column[key] = 1 + max((place(k) for k, _ in reads[key]), default=0)
             return column[key]
 
         for r in records:
             place(r.id)
         self.nodes = [*provenance.files(), *reversed(records)]
         keys = [n if isinstance(n, FileRef) else n.id for n in self.nodes]
-        edges = list(dict.fromkeys((k, r.id) for r in records for k in reads[r.id]))
-        at, paths = layout({k: column[k] for k in keys}, edges)
-        self.pane.object = self._figure([at[k] for k in keys], paths)
+        # The places of an edge: those where a record reads one file or record.
+        edges: dict[tuple[Any, str], list[str]] = defaultdict(list)
+        for r in records:
+            for k, where in reads[r.id]:
+                edges[k, r.id].append(where)
+        at, paths = layout({k: column[k] for k in keys}, list(edges))
+        labels = [', '.join(places) for places in edges.values()]
+        node = dict(zip(keys, self.nodes, strict=True))
+        self.edges = [
+            (node[a], node[b], label)
+            for (a, b), label in zip(edges, labels, strict=True)
+        ]
+        self.pane.object = self._figure([at[k] for k in keys], paths, labels)
         picked = self._picked if self._picked in self.nodes else record
         self.pick(picked)
 
@@ -122,7 +137,9 @@ class Graph:
             return _FILE_COLOR
         return _COLORS[self._listing.status[node.id]]
 
-    def _figure(self, at: list[Point], paths: list[list[Point]]) -> Any:
+    def _figure(
+        self, at: list[Point], paths: list[list[Point]], labels: list[str]
+    ) -> Any:
         x = [p[0] for p in at]
         y = [p[1] for p in at]
         source = ColumnDataSource(
@@ -177,6 +194,29 @@ class Graph:
                 y_start='y0',
                 x_end='x1',
                 y_end='y1',
+            )
+        )
+        # A label halfway along the last segment, where edges into one node
+        # are still apart.
+        middles = [_short_of(path[-2], path[-1], 0.5) for path in paths]
+        fig.add_layout(
+            LabelSet(
+                x='x',
+                y='y',
+                text='text',
+                source=ColumnDataSource(
+                    {
+                        'x': [m[0] for m in middles],
+                        'y': [m[1] for m in middles],
+                        'text': labels,
+                    }
+                ),
+                text_align='center',
+                text_baseline='middle',
+                text_font_size='8pt',
+                text_color='#555555',
+                background_fill_color='white',
+                background_fill_alpha=0.8,
             )
         )
         fig.scatter('x', 'y', source=source, size=16, color='color', marker='marker')

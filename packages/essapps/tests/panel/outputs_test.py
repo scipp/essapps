@@ -255,6 +255,7 @@ def test_the_provenance_graph_shows_each_record_read_and_their_files(
 
     graph = outputs.graph
     assert graph.nodes == [file, curve, scale]
+    assert graph.edges == [(curve, scale, 'curve'), (file, curve, 'run')]
     assert outputs.view.objects  # the graph, with the node picked below it
     listing = Listing(client)
     assert graph.detail.object == describe(client, listing, scale)
