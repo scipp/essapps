@@ -657,8 +657,10 @@ class _Rows:
     Selecting one row shows it in the editor. ``Update row`` writes the
     editor back to it, and ``Add as new row`` appends it, each only if
     nothing is missing in it, so that every row is complete. ``Remove``
-    removes the rows selected. The params refuse an editor that differs
-    from the row selected, so that an edit is not lost unseen.
+    removes the rows selected. The params refuse an editor that the user
+    changed since it showed the row selected, so that an edit of a row is
+    not lost unseen; an editor filled in while no row is selected is not
+    added, and one changed is shown another row when it is selected.
 
     Unset, it has no row until one is added or ``Remove`` is clicked, which
     gives the empty list. A row set that the editor cannot show whole, such
@@ -672,6 +674,9 @@ class _Rows:
         self._default = default
         self._listing = listing
         self._rows: list[Any] | None = None  # unset
+        # The editor's value as it showed the row selected, which differs
+        # from the row if the editor cannot show it whole.
+        self._shown: Any = UNSET
         group = element.inline.get(None)  # a union is not covered
         self._fields = (
             {}
@@ -728,6 +733,7 @@ class _Rows:
         i = self._selected()
         if i is not None:
             self._editor.set((self._rows or [])[i])
+            self._shown = self._editor.value((), [])
         self._update.disabled = i is None
         self._message.object = ''
 
@@ -744,7 +750,7 @@ class _Rows:
             self._render()
             self._table.selection = [len(self._rows) - 1]
         else:
-            rows[i] = value
+            rows[i] = self._shown = value
             self._render()
 
     def _remove(self) -> None:
@@ -788,7 +794,7 @@ class _Rows:
             missing.append(FieldError(None, loc, 'add a row, or remove for none'))
             return UNSET
         i = self._selected()
-        if i is not None and self._editor.value((), []) != self._rows[i]:
+        if i is not None and self._editor.value((), []) != self._shown:
             missing.append(
                 FieldError(
                     None,

@@ -11,7 +11,7 @@ from ess.apps import Client, SubmitError
 from ess.apps.panel import Form, Listing
 from ess.apps.panel.form import UNSET
 from ess.apps.testing import FakeFiles
-from ess.spec import FileModel, FileRef, WorkflowSpec
+from ess.spec import FileModel, FileRef, OutputRef, WorkflowSpec
 
 type Spec = WorkflowSpec[Any, Any]
 
@@ -692,6 +692,25 @@ def test_a_row_selected_is_edited_and_updated(stack: Form, run: FileRef) -> None
     }
     click(stack, 'Shots', 'Update row')
     assert [s['thickness'] for s in stack.params['shots']] == [4.0, 3.0]
+
+
+def test_a_row_the_editor_cannot_show_is_kept_when_selected(
+    stack: Form, run: FileRef
+) -> None:
+    unread = OutputRef(record='f00d', output='centre')
+    stack.set({'runs': [run], 'shots': [], 'centres': [unread]})
+    table(stack, 'Centres').selection = [0]
+    assert stack.params['centres'] == [unread]
+
+
+def test_a_row_is_not_updated_while_a_value_is_missing_in_the_editor(
+    stack: Form, run: FileRef
+) -> None:
+    stack.set({'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]})
+    table(stack, 'Shots').selection = [0]
+    widget_in(stack, 'Shots', 'Thickness').value = None
+    click(stack, 'Shots', 'Update row')
+    assert rows(stack, 'Shots') == [{'Run': 'run 101 (sample)', 'Thickness': '2.0'}]
 
 
 def test_remove_removes_the_rows_selected(stack: Form, run: FileRef) -> None:
