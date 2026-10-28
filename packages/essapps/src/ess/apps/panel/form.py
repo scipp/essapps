@@ -22,10 +22,10 @@ a parameter, :class:`Ways` a choice of ways: the fields of each group written
                            ``Ways.record``, or for a file model a file
                            that fits it, and ``None``. A record is offered
                            while an output fits.
-a list parameter,          a row per element, labelled by its position:
+a list parameter,          a table of the rows, and the editor of a row,
 :class:`Rows`              the choice of ways of the element, as at a
-                           parameter of its type, side by side; and
-                           buttons that add a row and remove the last
+                           parameter of its type; for a file model, also a
+                           picker of files to add, a row each
 a field of a group         an input of its type, or a picker of its values;
                            for a list of scalars, a list of these; for a
                            file model, a picker of the files that fit
@@ -40,19 +40,20 @@ backend checks when the request is submitted. A file that the form is set
 to, such as one a record names, stays picked when the listing no longer has
 it.
 
-The widgets follow those of esslivedata's dashboard (scipp/esslivedata#1426),
-in Panel. A place without a default starts unset, so that a value a correct
-reduction needs is never filled in for the user; so does a list, of rows or
-of scalars, until an element is added or removed, so that a table, which has
-no default, is never given without rows by mistake. A place is left out of
-the request only if it is a choice with no way chosen, which it is only
-without a default, so the backend refuses it as required. A way chosen, or
-an input, with nothing given is not left out, since the backend would fill
-in the default: the params name it as missing (see :attr:`Form.params`). An
-empty text is the value ``''`` where the place has a default, and nothing
-given where it has none, since a text input cannot tell an empty text from
-none; an element of a list of texts is a text, ``''`` too, since it was
-added.
+The widgets follow those of esslivedata's dashboard
+(scipp/esslivedata#1426), in Panel. A table is a ``Tabulator``, so a
+notebook loads Panel with ``pn.extension('tabulator')``. A place without a
+default starts unset, so that a value a correct reduction needs is never
+filled in for the user; so does a list, of rows or of scalars, until an
+element is added or removed, so that a table, which has no default, is never
+given without rows by mistake. A place is left out of the request only if it
+is a choice with no way chosen, which it is only without a default, so the
+backend refuses it as required. A way chosen, or an input, with nothing
+given is not left out, since the backend would fill in the default: the
+params name it as missing (see :attr:`Form.params`). An empty text is the
+value ``''`` where the place has a default, and nothing given where it has
+none, since a text input cannot tell an empty text from none; an element of
+a list of texts is a text, ``''`` too, since it was added.
 
 A time is picked to the second, in the zone of the value the picker was
 set to, or of the default, which its label names: ``Start (UTC)``. A time
@@ -70,6 +71,7 @@ from datetime import UTC, datetime, tzinfo
 from enum import Enum
 from typing import Any, get_args
 
+import pandas as pd
 import panel as pn
 from pydantic import AwareDatetime, BaseModel, NaiveDatetime
 from pydantic.fields import FieldInfo
@@ -139,7 +141,7 @@ class Listing:
         readable = client.readable(self.records)
         self._outputs = [
             (
-                f'{self.labels[record.id]}: {name}',
+                self.output_label(record.ref(name)),
                 record.ref(name),
                 specs[record.spec].outputs.model_fields[name].annotation,
             )
@@ -166,6 +168,14 @@ class Listing:
         if ref not in self._metadata:
             self._metadata[ref] = self._client.files.metadata(ref)
         return self._metadata[ref]
+
+    def output_label(self, ref: OutputRef) -> str:
+        """
+        The label of an output, as :meth:`fitting` gives it; the reference if
+        its record is not listed.
+        """
+        record = self.labels.get(ref.record)
+        return str(ref) if record is None else f'{record}: {ref.output}'
 
     def fitting(self, tp: Any) -> dict[str, OutputRef]:
         """The outputs a request may reference that fit ``tp``, newest first."""
@@ -199,18 +209,15 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice |
     return _Rows(label, described.element, _default(info), listing)
 
 
-def _ways(described: Ways, listing: Listing, row: bool = False) -> dict[str, _Way]:
-    """
-    The widget of each way of a place that ``described`` describes, by label;
-    in a ``row`` of a table, the fields of a group side by side.
-    """
+def _ways(described: Ways, listing: Listing) -> dict[str, _Way]:
+    """The widget of each way of a place that ``described`` describes, by label."""
     ways: dict[str, _Way] = {}
     for value, group in described.inline.items():
         if value is None or described.tag is None:
-            ways['Given'] = _Group(group, {}, listing, row)
+            ways['Given'] = _Group(group, {}, listing)
         else:
             way = places.title(value, group.model_fields[described.tag])
-            ways[way] = _Group(group, {described.tag: value}, listing, row)
+            ways[way] = _Group(group, {described.tag: value}, listing)
     if field_types.is_file_model(described.record):
         ways[_Choice.FILE] = _File(described.record, listing)
     elif described.record is not None:
@@ -393,45 +400,48 @@ class _Scalar:
         return self.widget
 
 
-class _List:
+class _Scalars:
     """
-    A list: a widget per element, labelled by its position, ``Banks [0]``,
-    and buttons that add an element and remove the last. Unset, it has no
+    A list of scalars: an input per element, as :class:`_Scalar` has it, and
+    buttons that add an element and remove the last. Unset, it has no
     element until one is added or removed: a removal gives no element, the
-    empty list. A subclass makes the widget of an element, and the panel.
+    empty list.
     """
 
-    _unset = 'add an element, or remove for none'
-
-    def __init__(self, label: str, default: Any) -> None:
+    def __init__(
+        self, label: str, tp: Any, default: Any, description: str | None = None
+    ) -> None:
         self._label = label
+        self._type = tp
         self._default = default
-        self._elements: list[Any] | None = None  # unset
+        self._description = description
+        self._elements: list[_Scalar] | None = None  # unset
         self._column = pn.Column(sizing_mode='stretch_width')
         add = pn.widgets.Button(label=f'Add to {label}')
         add.on_click(lambda _: self._resize(len(self._elements or []) + 1))
         remove = pn.widgets.Button(label=f'Remove from {label}')
         remove.on_click(lambda _: self._resize(len(self._elements or []) - 1))
-        self._buttons = pn.Row(add, remove)
+        self._panel = pn.Column(self._column, pn.Row(add, remove))
         self.set(UNSET)
 
-    def _element(self, label: str) -> Any:
-        """The widget of an element labelled ``label``, with nothing given."""
-        raise NotImplementedError
-
     def _resize(self, n: int) -> None:
-        """Keep the first ``n`` elements, none for ``-1``, or add elements."""
+        """
+        Keep the first ``n`` elements, none for ``-1``, or add elements with
+        nothing given, but a text, which is ``''``.
+        """
         elements = self._elements or []
         del elements[n:]
+        default = '' if self._type is str else UNSET
         elements.extend(
-            self._element(f'{self._label} [{i}]') for i in range(len(elements), n)
+            _Scalar(f'{self._label} [{i}]', self._type, default, self._description)
+            for i in range(len(elements), n)
         )
         self._elements = elements
         self._column.objects = [e.panel() for e in elements]
 
     def value(self, loc: Loc, missing: _Missing) -> Any:
         if self._elements is None:
-            missing.append(FieldError(None, loc, self._unset))
+            missing.append(FieldError(None, loc, 'add an element, or remove for none'))
             return UNSET
         return [e.value((*loc, i), missing) for i, e in enumerate(self._elements)]
 
@@ -446,41 +456,15 @@ class _List:
         for element, item in zip(self._elements or [], value, strict=True):
             element.set(item)
 
-
-class _Scalars(_List):
-    """
-    A list of scalars: an input per element, as :class:`_Scalar` has it. An
-    element added has nothing given, but a text, which is ``''``.
-    """
-
-    def __init__(
-        self, label: str, tp: Any, default: Any, description: str | None = None
-    ) -> None:
-        self._type = tp
-        self._description = description
-        super().__init__(label, default)
-        self._panel = pn.Column(self._column, self._buttons)
-
-    def _element(self, label: str) -> _Scalar:
-        default = '' if self._type is str else UNSET
-        return _Scalar(label, self._type, default, self._description)
-
     def panel(self) -> Any:
         return self._panel
 
 
 class _Group:
-    """
-    The fields of a group, each an input, one below the other, or side by
-    side in a ``row`` of a table; the tag of an alternative has none.
-    """
+    """The fields of a group, each an input; the tag of an alternative has none."""
 
     def __init__(
-        self,
-        group: type[BaseModel],
-        tag: dict[str, str],
-        listing: Listing,
-        row: bool = False,
+        self, group: type[BaseModel], tag: dict[str, str], listing: Listing
     ) -> None:
         self.tag = tag
         self._fields = {
@@ -488,8 +472,7 @@ class _Group:
             for name in group.model_fields
             if name not in tag
         }
-        layout = pn.Row if row else pn.Column
-        self._panel = layout(
+        self._panel = pn.Column(
             *(w.panel() for w in self._fields.values()), sizing_mode='stretch_width'
         )
 
@@ -562,8 +545,7 @@ class _Choice:
     """
     A group, or a union of groups, possibly typed ``X | None``: a radio
     button per way that is offered, and the widget of the chosen way, in the
-    tab of a parameter titled ``label``; in a ``row`` of a table, these side
-    by side, after the label.
+    tab of a parameter titled ``label``, or in the editor of a row.
 
     It starts at its default's way. Without a default, it starts unset,
     unless there is no ``None`` and one way only is written inline, or none
@@ -577,25 +559,19 @@ class _Choice:
     NONE = 'None'
 
     def __init__(
-        self,
-        label: str,
-        ways: dict[str, _Way],
-        tag: str | None,
-        default: Any,
-        row: bool = False,
+        self, label: str, ways: dict[str, _Way], tag: str | None, default: Any
     ) -> None:
         self._ways = ways
         self._tag = tag
         self._default = default
         self._selector = pn.widgets.RadioBoxGroup(options=list(ways), inline=True)
         self._selector.param.watch(lambda _: self._show(), 'value')
-        widgets = (self._selector, *(w.panel() for w in ways.values()))
-        self._panel = (
-            pn.Row(pn.pane.Markdown(label, width=100), *widgets)
-            if row
-            else pn.Column(*widgets, name=label)
+        self._panel = pn.Column(
+            self._selector,
+            *(w.panel() for w in ways.values()),
+            name=label,
+            sizing_mode='stretch_width',
         )
-        self._panel.sizing_mode = 'stretch_width'
         self.set(UNSET)
 
     def _show(self) -> None:
@@ -661,36 +637,198 @@ class _Choice:
         return self._panel
 
 
-class _Rows(_List):
+class _Rows:
     """
-    A list parameter: in its tab, titled by its name, a row per element,
-    labelled by its position, ``Sample [0]``: the choice of ways of the
-    element, as a parameter of its type has it, with the widgets side by
-    side, as the columns of a table. A row added starts as such a parameter
-    without a default does: at its one way, since the element is neither a
-    union nor typed ``X | None``.
-    """
+    A list parameter: a table with a row per element, and a column per field
+    of the element, or one of the file or the output it is given as; and
+    below it the editor of a row, the choice of ways of the element as a
+    parameter of its type has it. The rows are held as a request writes
+    them, so the widgets do not grow with the rows.
 
-    _unset = 'add a row, or remove for none'
+    Selecting one row shows it in the editor. ``Update row`` writes the
+    editor back to it, and ``Add as new row`` appends it, each only if
+    nothing is missing in it, so that every row is complete. ``Remove``
+    removes the rows selected. For a file model, ``Add files`` appends a row
+    per file picked that the table does not hold. The params refuse an
+    editor that differs from the row selected, so that an edit is not lost
+    unseen.
+
+    Unset, it has no row until one is added or ``Remove`` is clicked, which
+    gives the empty list. A row set that the editor cannot show whole, such
+    as a reference to an output that the client may not read now, is kept
+    as given.
+    """
 
     def __init__(
         self, label: str, element: Ways, default: Any, listing: Listing
     ) -> None:
-        self._element_ways = element
+        self._default = default
         self._listing = listing
-        super().__init__(label, default)
-        self._panel = pn.Column(
-            self._column, self._buttons, name=label, sizing_mode='stretch_width'
+        self._rows: list[Any] | None = None  # unset
+        group = element.inline.get(None)  # a union is not covered
+        self._fields = (
+            {}
+            if group is None
+            else {
+                name: (
+                    places.title(name, info),
+                    field_types.file_model(info.annotation),
+                )
+                for name, info in group.model_fields.items()
+            }
+        )
+        self._model = (
+            element.record if field_types.is_file_model(element.record) else None
+        )
+        # The column of the file or the output that a row may be given as.
+        self._ref = None
+        if element.record is not None:
+            self._ref = 'Record' if self._model is None else 'File'
+        self._editor = _Choice('', _ways(element, listing), element.tag, UNSET)
+        self._table = pn.widgets.Tabulator(
+            disabled=True, selectable=True, sortable=False, sizing_mode='stretch_width'
+        )
+        self._table.param.watch(lambda _: self._load(), 'selection')
+        self._heading = pn.pane.Markdown()
+        self._message = pn.pane.Markdown()
+        remove = pn.widgets.Button(label='Remove')
+        remove.on_click(lambda _: self._remove())
+        self._update = pn.widgets.Button(label='Update row')
+        self._update.on_click(lambda _: self._write(self._selected()))
+        add = pn.widgets.Button(label='Add as new row')
+        add.on_click(lambda _: self._write(None))
+        objects = [
+            self._table,
+            remove,
+            self._heading,
+            self._editor.panel(),
+            pn.Row(self._update, add),
+            self._message,
+        ]
+        self._files = pn.widgets.MultiSelect(label='Files', size=8)
+        if self._model is not None:
+            add_files = pn.widgets.Button(label='Add files')
+            add_files.on_click(lambda _: self._add_files())
+            objects += [self._files, add_files]
+        self._panel = pn.Column(*objects, name=label, sizing_mode='stretch_width')
+        self.refresh(listing)
+        self.set(UNSET)
+
+    def _selected(self) -> int | None:
+        """The row selected, if one is."""
+        selection = self._table.selection
+        return selection[0] if len(selection) == 1 else None
+
+    def _load(self) -> None:
+        """Show the row selected in the editor, if one is."""
+        i = self._selected()
+        if i is not None:
+            self._editor.set((self._rows or [])[i])
+        self._heading.object = 'New row' if i is None else f'Row {i}'
+        self._update.disabled = i is None
+        self._message.object = ''
+
+    def _write(self, i: int | None) -> None:
+        """Write the editor to the row ``i``, or a new row, if nothing is missing."""
+        missing: _Missing = []
+        value = self._editor.value((), missing)
+        self._message.object = '\n'.join(f'- {e}' for e in missing)
+        if missing:
+            return
+        rows = self._rows or []
+        if i is None:
+            self._rows = [*rows, value]
+            self._render()
+            self._table.selection = [len(self._rows) - 1]
+        else:
+            rows[i] = value
+            self._render()
+
+    def _remove(self) -> None:
+        selected = set(self._table.selection)
+        self._rows = [r for i, r in enumerate(self._rows or []) if i not in selected]
+        self._table.selection = []
+        self._render()
+
+    def _add_files(self) -> None:
+        if not (picked := self._files.value):
+            return  # an unset table stays unset
+        rows = self._rows or []
+        self._rows = rows + [
+            f for f in self._files.options.values() if f in picked and f not in rows
+        ]
+        self._files.value = []
+        self._render()
+
+    def _render(self) -> None:
+        """Show the rows in the table, a file or an output by its label."""
+        rows = self._rows or []
+        listed: dict[Any, dict[FileRef, str]] = {}
+
+        def text(value: Any, model: type[FileModel] | None) -> str:
+            ref = as_ref(value)
+            if isinstance(ref, OutputRef):
+                return self._listing.output_label(ref)
+            if isinstance(ref, FileRef) and model is not None:
+                if model not in listed:
+                    files = self._listing.files(model)
+                    listed[model] = {r: label for label, r in files.items()}
+                return listed[model].get(ref, str(ref))
+            return '' if value is None else str(value)
+
+        columns = {
+            title: [
+                text(r.get(name), model) if isinstance(r, Mapping) else '' for r in rows
+            ]
+            for name, (title, model) in self._fields.items()
+        }
+        if self._ref is not None:
+            columns[self._ref] = [
+                '' if isinstance(r, Mapping) else text(r, self._model) for r in rows
+            ]
+        self._table.value = pd.DataFrame(
+            columns, index=pd.RangeIndex(len(rows), name='#')
         )
 
-    def _element(self, label: str) -> _Choice:
-        ways = _ways(self._element_ways, self._listing, row=True)
-        return _Choice(label, ways, self._element_ways.tag, UNSET, row=True)
+    def value(self, loc: Loc, missing: _Missing) -> Any:
+        if self._rows is None:
+            missing.append(FieldError(None, loc, 'add a row, or remove for none'))
+            return UNSET
+        i = self._selected()
+        if i is not None and self._editor.value((), []) != self._rows[i]:
+            missing.append(
+                FieldError(
+                    None,
+                    (*loc, i),
+                    'the editor holds changes: update the row, or deselect it',
+                )
+            )
+        return list(self._rows)
+
+    def set(self, value: Any) -> None:
+        if value is UNSET:
+            value = self._default
+        self._table.selection = []
+        if value is UNSET:
+            self._rows = None
+        else:
+            self._rows = []
+            for item in value:
+                self._editor.set(item)
+                missing: _Missing = []
+                given = self._editor.value((), missing)
+                self._rows.append(item if missing else given)
+            self._editor.set(UNSET)
+        self._render()
 
     def refresh(self, listing: Listing) -> None:
         self._listing = listing
-        for row in self._elements or []:
-            row.refresh(listing)
+        self._editor.refresh(listing)
+        if self._model is not None:
+            picked = self._files.value
+            self._files.options = listing.files(self._model)
+            self._files.value = [f for f in picked if f in self._files.options.values()]
+        self._render()
 
     def panel(self) -> Any:
         return self._panel
@@ -730,7 +868,7 @@ class Form:
             beam_centre: choose a record
             reduction.bins: give a value
             sample: add a row, or remove for none
-            sample[0]: choose a file
+            sample[1]: the editor holds changes: update the row, or deselect it
         """
         missing: _Missing = []
         given = {n: w.value((n,), missing) for n, w in self._params.items()}
@@ -755,11 +893,11 @@ class Form:
     def ways(self, name: str) -> list[str]:
         """
         The ways offered at the parameter ``name``, a group or a union, such
-        as ``['Given', 'From a record']``; a list parameter has a choice of
-        ways per row.
+        as ``['Given', 'From a record']``; not of a list parameter, whose
+        rows are edited one at a time.
         """
         if not isinstance(widget := self._params[name], _Choice):
-            raise TypeError(f'{name}: a list parameter has a choice of ways per row')
+            raise TypeError(f'{name}: a list parameter, edited a row at a time')
         return widget.offered
 
     def refresh(self, listing: Listing | None = None) -> None:
