@@ -131,28 +131,35 @@ def widget(form: Form, label: str) -> Any:
     return found
 
 
-def card(form: Form, title: str) -> Any:
-    """The box titled ``title``."""
-    (found,) = (c for c in form.panel().select(pn.Card) if c.title == title)
+def box(form: Form, title: str) -> Any:
+    """The box titled ``title``, or the row of a table labelled ``title``."""
+    boxes = [c for c in form.panel().select(pn.Card) if c.title == title]
+    rows = [
+        r
+        for r in form.panel().select(pn.Row)
+        if r.objects and getattr(r.objects[0], 'object', None) == title
+    ]
+    (found,) = boxes + rows
     return found
 
 
 def widget_in(form: Form, title: str, label: str) -> Any:
-    """The input labelled ``label`` in the box titled ``title``, such as a row."""
+    """The input labelled ``label`` in the box or row ``title``."""
     (found,) = (
-        w for w in card(form, title).select(pn.widgets.Widget) if w.label == label
+        w for w in box(form, title).select(pn.widgets.Widget) if w.label == label
     )
     return found
 
 
 def way(form: Form, title: str) -> Any:
-    """The radio buttons of the ways of the box titled ``title``."""
-    return card(form, title).objects[0]
+    """The radio buttons of the ways of the box or row ``title``."""
+    (found,) = box(form, title).select(pn.widgets.RadioBoxGroup)
+    return found
 
 
 def picker(form: Form, title: str) -> Any:
-    """The picker of a file, or of a record, of the box titled ``title``."""
-    (found,) = card(form, title).select(pn.widgets.Select)
+    """The picker of a file, or of a record, of the box or row ``title``."""
+    (found,) = box(form, title).select(pn.widgets.Select)
     return found
 
 

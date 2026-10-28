@@ -20,8 +20,9 @@ a parameter, :class:`Ways` a choice of ways: the fields of each group written
                            ``Ways.record``, or for a file model a file
                            that fits it, and ``None``. A record is offered
                            while an output fits.
-a list parameter,          a box per row, each the choice of ways of the
-:class:`Rows`              element, as at a parameter of its type, and
+a list parameter,          a box of rows, each labelled by its position and
+:class:`Rows`              the choice of ways of the element, as at a
+                           parameter of its type, side by side; and
                            buttons that add a row and remove the last
 a field of a group         an input of its type, or a picker of its values;
                            for a list of scalars, a list of these; for a
@@ -196,15 +197,18 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice |
     return _Rows(label, described.element, _default(info), listing)
 
 
-def _ways(described: Ways, listing: Listing) -> dict[str, _Way]:
-    """The widget of each way of a place that ``described`` describes, by label."""
+def _ways(described: Ways, listing: Listing, row: bool = False) -> dict[str, _Way]:
+    """
+    The widget of each way of a place that ``described`` describes, by label;
+    in a ``row`` of a table, the fields of a group side by side.
+    """
     ways: dict[str, _Way] = {}
     for value, group in described.inline.items():
         if value is None or described.tag is None:
-            ways['Given'] = _Group(group, {}, listing)
+            ways['Given'] = _Group(group, {}, listing, row)
         else:
             way = places.title(value, group.model_fields[described.tag])
-            ways[way] = _Group(group, {described.tag: value}, listing)
+            ways[way] = _Group(group, {described.tag: value}, listing, row)
     if field_types.is_file_model(described.record):
         ways[_Choice.FILE] = _File(described.record, listing)
     elif described.record is not None:
@@ -464,10 +468,17 @@ class _Scalars(_List):
 
 
 class _Group:
-    """The fields of a group, each an input; the tag of an alternative has none."""
+    """
+    The fields of a group, each an input, one below the other, or side by
+    side in a ``row`` of a table; the tag of an alternative has none.
+    """
 
     def __init__(
-        self, group: type[BaseModel], tag: dict[str, str], listing: Listing
+        self,
+        group: type[BaseModel],
+        tag: dict[str, str],
+        listing: Listing,
+        row: bool = False,
     ) -> None:
         self.tag = tag
         self._fields = {
@@ -475,7 +486,8 @@ class _Group:
             for name in group.model_fields
             if name not in tag
         }
-        self._panel = pn.Column(
+        layout = pn.Row if row else pn.Column
+        self._panel = layout(
             *(w.panel() for w in self._fields.values()), sizing_mode='stretch_width'
         )
 
@@ -547,7 +559,8 @@ _Way = _Group | _Record | _File | _Nothing
 class _Choice:
     """
     A group, or a union of groups, possibly typed ``X | None``: a box with a
-    radio button per way that is offered, and the widget of the chosen way.
+    radio button per way that is offered, and the widget of the chosen way;
+    in a ``row`` of a table, these side by side, after the label.
 
     It starts at its default's way. Without a default, it starts unset,
     unless there is no ``None`` and one way only is written inline, or none
@@ -561,20 +574,25 @@ class _Choice:
     NONE = 'None'
 
     def __init__(
-        self, label: str, ways: dict[str, _Way], tag: str | None, default: Any
+        self,
+        label: str,
+        ways: dict[str, _Way],
+        tag: str | None,
+        default: Any,
+        row: bool = False,
     ) -> None:
         self._ways = ways
         self._tag = tag
         self._default = default
         self._selector = pn.widgets.RadioBoxGroup(options=list(ways), inline=True)
         self._selector.param.watch(lambda _: self._show(), 'value')
-        self._panel = pn.Card(
-            self._selector,
-            *(w.panel() for w in ways.values()),
-            title=label,
-            collapsible=False,
-            sizing_mode='stretch_width',
+        widgets = (self._selector, *(w.panel() for w in ways.values()))
+        self._panel = (
+            pn.Row(pn.pane.Markdown(label, width=100), *widgets)
+            if row
+            else pn.Card(*widgets, title=label, collapsible=False)
         )
+        self._panel.sizing_mode = 'stretch_width'
         self.set(UNSET)
 
     def _show(self) -> None:
@@ -642,11 +660,12 @@ class _Choice:
 
 class _Rows(_List):
     """
-    A list parameter: a box titled by its name, with a row per element, each
-    the choice of ways of the element, as a parameter of its type has it,
-    titled by its position, ``Sample [0]``. A row added starts as such a
-    parameter without a default does: at its one way, since the element is
-    neither a union nor typed ``X | None``.
+    A list parameter: a box titled by its name, with a row per element,
+    labelled by its position, ``Sample [0]``: the choice of ways of the
+    element, as a parameter of its type has it, with the widgets side by
+    side, as the columns of a table. A row added starts as such a parameter
+    without a default does: at its one way, since the element is neither a
+    union nor typed ``X | None``.
     """
 
     _unset = 'add a row, or remove for none'
@@ -666,8 +685,8 @@ class _Rows(_List):
         )
 
     def _element(self, label: str) -> _Choice:
-        ways = _ways(self._element_ways, self._listing)
-        return _Choice(label, ways, self._element_ways.tag, UNSET)
+        ways = _ways(self._element_ways, self._listing, row=True)
+        return _Choice(label, ways, self._element_ways.tag, UNSET, row=True)
 
     def refresh(self, listing: Listing) -> None:
         self._listing = listing
