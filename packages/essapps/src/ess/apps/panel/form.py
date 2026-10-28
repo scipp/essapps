@@ -24,8 +24,7 @@ a parameter, :class:`Ways` a choice of ways: the fields of each group written
                            while an output fits.
 a list parameter,          a table of the rows, and the editor of a row,
 :class:`Rows`              the choice of ways of the element, as at a
-                           parameter of its type; for a file model, also a
-                           picker of files to add, a row each
+                           parameter of its type
 a field of a group         an input of its type, or a picker of its values;
                            for a list of scalars, a list of these; for a
                            file model, a picker of the files that fit
@@ -648,10 +647,8 @@ class _Rows:
     Selecting one row shows it in the editor. ``Update row`` writes the
     editor back to it, and ``Add as new row`` appends it, each only if
     nothing is missing in it, so that every row is complete. ``Remove``
-    removes the rows selected. For a file model, ``Add files`` appends a row
-    per file picked that the table does not hold. The params refuse an
-    editor that differs from the row selected, so that an edit is not lost
-    unseen.
+    removes the rows selected. The params refuse an editor that differs
+    from the row selected, so that an edit is not lost unseen.
 
     Unset, it has no row until one is added or ``Remove`` is clicked, which
     gives the empty list. A row set that the editor cannot show whole, such
@@ -697,21 +694,16 @@ class _Rows:
         self._update.on_click(lambda _: self._write(self._selected()))
         add = pn.widgets.Button(label='Add as new row')
         add.on_click(lambda _: self._write(None))
-        objects = [
+        self._panel = pn.Column(
             self._table,
             remove,
             self._heading,
             self._editor.panel(),
             pn.Row(self._update, add),
             self._message,
-        ]
-        self._files = pn.widgets.MultiSelect(label='Files', size=8)
-        if self._model is not None:
-            add_files = pn.widgets.Button(label='Add files')
-            add_files.on_click(lambda _: self._add_files())
-            objects += [self._files, add_files]
-        self._panel = pn.Column(*objects, name=label, sizing_mode='stretch_width')
-        self.refresh(listing)
+            name=label,
+            sizing_mode='stretch_width',
+        )
         self.set(UNSET)
 
     def _selected(self) -> int | None:
@@ -748,16 +740,6 @@ class _Rows:
         selected = set(self._table.selection)
         self._rows = [r for i, r in enumerate(self._rows or []) if i not in selected]
         self._table.selection = []
-        self._render()
-
-    def _add_files(self) -> None:
-        if not (picked := self._files.value):
-            return  # an unset table stays unset
-        rows = self._rows or []
-        self._rows = rows + [
-            f for f in self._files.options.values() if f in picked and f not in rows
-        ]
-        self._files.value = []
         self._render()
 
     def _render(self) -> None:
@@ -826,10 +808,6 @@ class _Rows:
     def refresh(self, listing: Listing) -> None:
         self._listing = listing
         self._editor.refresh(listing)
-        if self._model is not None:
-            picked = self._files.value
-            self._files.options = listing.files(self._model)
-            self._files.value = [f for f in picked if f in self._files.options.values()]
         self._render()
 
     def panel(self) -> Any:

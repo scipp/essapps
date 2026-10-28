@@ -642,17 +642,14 @@ def test_a_table_without_rows_is_refused_by_its_length(
     assert [e.loc for e in refused.value.errors] == [('runs',)]
 
 
-def test_the_files_picked_are_added_a_row_each_unless_the_table_has_them(
+def test_a_row_of_a_file_model_is_a_file_picked_in_the_editor(
     stack: Form, files: FakeFiles, run: FileRef
 ) -> None:
     other = files.measure(102, {'counts': 4.0, 'x': 0.0}, role='sample')
     stack.refresh()
-    click(stack, 'Runs', 'Add files')
-    assert (('runs',), 'add a row, or remove for none') in missing(stack)
-    widget_in(stack, 'Runs', 'Files').value = [run]
-    click(stack, 'Runs', 'Add files')
-    widget_in(stack, 'Runs', 'Files').value = [other, run]
-    click(stack, 'Runs', 'Add files')
+    for picked in (run, other):
+        picker(stack, 'Runs').value = picked
+        click(stack, 'Runs', 'Add as new row')
     click(stack, 'Shots', 'Remove')
     assert stack.params['runs'] == [run, other]
     assert rows(stack, 'Runs') == [
