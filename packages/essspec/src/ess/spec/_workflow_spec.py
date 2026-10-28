@@ -315,14 +315,6 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
             raise ValueError(f'{self.name}: {"; ".join(problems)}')
         return self
 
-    def has_json_form(self, name: str) -> bool:
-        """
-        Whether the type of the parameter ``name``, with ``| None`` removed
-        and for a list parameter its element type taken, has a JSON form (see
-        :func:`ess.spec.field_types.has_json_form`).
-        """
-        return field_types.has_json_form(self.params, name)
-
     def serialize(self) -> SerializedWorkflowSpec:
         """
         Project to the plain-data form.
@@ -331,9 +323,10 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         element of a list parameter, or a field of a group, in the forms it
         takes: a dataset model as a reference to a dataset, with the model's
         metadata; a group as ``anyOf`` the object of its fields, each a
-        scalar or a list of scalars, and a reference to an output, or one of
-        them only; a union of groups as ``oneOf`` the object of the fields of
-        each alternative, never a reference; a scalar as its JSON schema.
+        scalar, a dataset model, or a list of one, and a reference to an
+        output, or one of them only; a union of groups as ``oneOf`` the
+        object of the fields of each alternative, never a reference; a scalar
+        as its JSON schema.
         A reference's schema is the ``@ref`` object of each kind it may be,
         with the name of the data type it must fit in ``dataType``, as the
         outputs schema has each output.
@@ -434,7 +427,6 @@ def _model_validators_only(model: type[BaseModel]) -> list[str]:
 
 _SERIALIZERS = ('field_serializers', 'model_serializers', 'computed_fields')
 _VALIDATORS = ('validators', 'field_validators', 'root_validators', 'model_validators')
-_DATASET_DECORATORS = _decorators(DatasetModel, (*_VALIDATORS, *_SERIALIZERS))
 
 
 def _params_problems(model: type[BaseModel]) -> list[str]:
@@ -592,8 +584,10 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
     group without a data value, a serializer or a computed field, which
     would make the group's JSON form differ from the object of its fields, a
     field with an alias, a field that is not interpreted (see
-    :func:`_field_problem`), and a default that is not a value, since a
-    field left out holds its default. Field and model validators of any mode
+    :func:`_field_problem`), a default that is not a value, since a field
+    left out holds its default, and of a dataset model a default but
+    ``None``, or ``[]`` for a list, since a request gives each dataset by
+    reference. Field and model validators of any mode
     are allowed: they run whenever the group is validated whole (see
     :mod:`ess.spec.places`). A group with a data value is given by reference
     only, to an output, so it holds no dataset model, as no output does (see
@@ -627,7 +621,7 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
         ):
             problems.append(f'{where}: {problem}')
         elif (
-            field_types.is_dataset(field_types.value_type(field.annotation))
+            field_types.dataset_model(field.annotation) is not None
             and not field.is_required()
             and field.get_default(call_default_factory=True) not in (None, [])
         ):
@@ -642,9 +636,10 @@ def _dataset_model_problems(model: type[BaseModel]) -> list[str]:
     """
     Refuse a dataset model with a field other than ``dataset``, that
     declares ``dataset`` anew, such as with another type, a default, or an
-    alias, or with a validator or serializer of its own: the value of a
-    dataset model is the identity of a dataset (see
-    :class:`~ess.spec.parameters.DatasetModel`).
+    alias, with a validator, a serializer, ``model_post_init``, ``__eq__``,
+    or ``__hash__`` of its own, or with another config but its title: the
+    value of a dataset model is the identity of a dataset, and the backend
+    attaches its local path (see :class:`~ess.spec.parameters.DatasetModel`).
     """
     if other := [n for n in model.model_fields if n != 'dataset']:
         return [f'{model.__name__}: a dataset model holds only dataset, not {other}']
@@ -656,13 +651,16 @@ def _dataset_model_problems(model: type[BaseModel]) -> list[str]:
             f'{model.__name__}.dataset: a dataset model keeps the dataset of '
             'DatasetModel, without a default or an alias'
         ]
-    found = _decorators(model, (*_VALIDATORS, *_SERIALIZERS)).items()
-    inherited = _DATASET_DECORATORS
     own = {
-        kind: added
-        for kind, names in found
-        if (added := sorted(set(names) - set(inherited.get(kind, ()))))
+        kind: found
+        for kind in (*_VALIDATORS, *_SERIALIZERS)
+        if (found := _own_decorators(model, kind))
     }
+    if methods := _own_methods(model):
+        return [
+            f'{model.__name__}: a dataset model keeps the model_post_init, __eq__, '
+            f'and __hash__ of DatasetModel, not its own {methods}'
+        ]
     if own:
         return [
             f'{model.__name__}: a dataset model has no validators or serializers '
@@ -670,7 +668,49 @@ def _dataset_model_problems(model: type[BaseModel]) -> list[str]:
             "the model, such as class MaskFile(DatasetModel, kind='mask'), or "
             "the workflow's to read"
         ]
+    if _config(model) != _config(DatasetModel):
+        return [
+            f'{model.__name__}: a dataset model keeps the config of DatasetModel, '
+            'but its title'
+        ]
     return []
+
+
+def _own_decorators(model: type[BaseModel], kind: str) -> list[str]:
+    """
+    The decorators of ``kind`` of ``model`` that are not DatasetModel's, by
+    function, so that one declared anew under the same name is found.
+    """
+    inherited = getattr(DatasetModel.__pydantic_decorators__, kind)
+    return sorted(
+        name
+        for name, d in getattr(model.__pydantic_decorators__, kind).items()
+        if name not in inherited
+        or _unbound(d.func) is not _unbound(inherited[name].func)
+    )
+
+
+def _unbound(func: Any) -> Any:
+    """The function of ``func``, bound to each class for a classmethod."""
+    return getattr(func, '__func__', func)
+
+
+def _own_methods(model: type[BaseModel]) -> list[str]:
+    """``__eq__``, ``__hash__``, or ``model_post_init`` that ``model`` declares anew."""
+    found = [
+        m
+        for m in ('__eq__', '__hash__')
+        if getattr(model, m) is not getattr(DatasetModel, m)
+    ]
+    # pydantic puts a model_post_init of its own in each class with private
+    # attributes, which sets them.
+    if not model.model_post_init.__module__.startswith('pydantic.'):
+        found.append('model_post_init')
+    return found
+
+
+def _config(model: type[BaseModel]) -> dict[str, Any]:
+    return {k: v for k, v in model.model_config.items() if k != 'title'}
 
 
 def _field_problem(annotation: Any) -> str | None:
@@ -918,7 +958,7 @@ def _inline_form(groups: Sequence[Any], metadata: Sequence[Any]) -> Any:
 def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
     """
     A model of the fields of a group, each a scalar or a list of scalars,
-    written inline only, or of a dataset model, a reference to a dataset
+    written inline, or of a dataset model, a reference to a dataset
     (see :func:`_ref_form`), with its constraints; the tag field ``tag`` of an
     alternative of a union without its default, required, since a request
     always writes it. The title of a tag labels its alternative, so a tag

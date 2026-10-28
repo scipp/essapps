@@ -358,7 +358,7 @@ def test_a_dataset_model_is_made_of_the_reference_and_the_path_given_for_it() ->
 
 def test_a_dataset_model_without_a_path_given_has_none() -> None:
     made = validated(MaskParams, 'mask', DATASET, _read)
-    with pytest.raises(RuntimeError, match='only when the request runs'):
+    with pytest.raises(ValueError, match='only when the request runs'):
         made.path
 
 

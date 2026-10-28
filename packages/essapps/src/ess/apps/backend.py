@@ -1309,7 +1309,7 @@ class Backend:
         }
         rows = {} if rows is None else rows
         for table in spec.tables:
-            if table in typed and spec.has_json_form(table):
+            if table in typed and field_types.has_json_form(spec.params, table):
                 seen = rows.setdefault(table, {})
                 forms = [
                     field_types.json_form(spec.params, table, v) for v in typed[table]

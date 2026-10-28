@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from enum import Enum
 from pathlib import Path, PosixPath, PurePosixPath
-from typing import Annotated, Any, Literal, NewType, TypedDict
+from typing import Annotated, Any, Literal, NewType, Self, TypedDict
 
 import pydantic
 import pytest
@@ -136,6 +136,21 @@ class CheckedMaskFile(MaskFile):
         if not dataset.endswith('.xml'):
             raise ValueError('a mask is an XML file')
         return dataset
+
+
+class AttachingMaskFile(MaskFile):
+    """A dataset model that declares a validator of DatasetModel anew: refused."""
+
+    @model_validator(mode='after')
+    def _with_path(self) -> Self:
+        return self
+
+
+class InitMaskFile(MaskFile):
+    """A dataset model with a model_post_init of its own: refused."""
+
+    def model_post_init(self, context: Any) -> None:
+        pass
 
 
 class BeamStopMaskFile(MaskFile):
@@ -888,6 +903,25 @@ class TestModelRules:
                 r"P.mask: CheckedMaskFile: a dataset model has no validators or "
                 r"serializers of its own",
             ),
+            (
+                {'params': model('P', mask=(AttachingMaskFile, ...))},
+                r"P.mask: AttachingMaskFile: a dataset model has no validators or "
+                r"serializers of its own, \{'model_validators': \['_with_path'\]\}",
+            ),
+            (
+                {'params': model('P', mask=(InitMaskFile, ...))},
+                r"P.mask: InitMaskFile: a dataset model keeps the model_post_init, "
+                r"__eq__, and __hash__ of DatasetModel, not its own "
+                r"\['model_post_init'\]",
+            ),
+            (
+                {
+                    'params': model(
+                        'P', mask=(type('Mutable', (MaskFile,), {}, frozen=False), ...)
+                    )
+                },
+                'P.mask: Mutable: a dataset model keeps the config of DatasetModel',
+            ),
             *(
                 (
                     {'params': model('P', g=(group, ...))},
@@ -1422,8 +1456,6 @@ class TestTables:
     def test_a_table_may_be_of_dataset_models(self) -> None:
         assert DATASETS.tables == ('runs',)
         assert not _takes_inline(DATASETS, 'runs')
-        assert DATASETS.has_json_form('runs')
-        assert IOFQ_MULTI.has_json_form('time_range')
 
     def test_the_field_validators_of_a_group_check_each_row(self) -> None:
         assert _takes_inline(GEOMETRIES, 'geometry')

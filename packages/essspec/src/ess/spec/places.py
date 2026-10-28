@@ -204,7 +204,7 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
     if field_types.is_dataset(tp):
         raise _not_a_dataset(loc, tp, value)
     if union is not None or field_types.is_group(tp):
-        fields = dict(value) if isinstance(value, BaseModel) else value
+        fields = value
         if not isinstance(fields, Mapping):
             raise _refused(
                 loc,
@@ -232,8 +232,7 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
 def _dataset_field(group: type[BaseModel], name: str | int) -> Any:
     """The dataset model at the field ``name`` of ``group``, or ``None``."""
     field = group.model_fields.get(str(name))
-    tp = None if field is None else field_types.value_type(field.annotation)
-    return tp if field_types.is_dataset(tp) else None
+    return None if field is None else field_types.dataset_model(field.annotation)
 
 
 def _datasets_held(
@@ -260,6 +259,8 @@ def _datasets_held(
 
 
 def _dataset_held(loc: Loc, tp: Any, value: Any, on_ref: OnRef) -> Any:
+    if field_types.is_dataset(type(value)):
+        value = value.model_dump()
     if (ref := ref_at(loc, value)) is None:
         if value is None:
             return value  # refused when the group is validated, unless X | None
@@ -631,11 +632,18 @@ def ref_types(
     model: type[BaseModel], params: Mapping[str, Any]
 ) -> list[tuple[Loc, Ref, Any]]:
     """
-    Each reference in ``params``, by name, as a record holds them, with its
-    place, a parameter or an element of a list parameter, and the type at the
-    place, with ``| None`` removed: the type of the data it must fit.
+    Each reference at a root place in ``params``, by name, as a record holds
+    them, with its place, a parameter or an element of a list parameter, and
+    the type at the place, with ``| None`` removed: the type of the data it
+    must fit. A reference inside a group, to a dataset at a field typed a
+    dataset model, is left out: it is checked when it is resolved.
     """
-    return [
-        (loc, ref, field_types.value_type(model.model_fields[str(loc[0])].annotation))
-        for loc, ref in iter_refs(params)
-    ]
+    found = []
+    for loc, ref in iter_refs(params):
+        name = str(loc[0])
+        if len(loc) > (2 if field_types.is_list(model, name) else 1):
+            continue
+        found.append(
+            (loc, ref, field_types.value_type(model.model_fields[name].annotation))
+        )
+    return found

@@ -95,7 +95,11 @@ class DatasetModel(BaseModel, frozen=True, extra='forbid'):
 
     @classmethod
     def local(cls, path: Path | str) -> Self:
-        """The model of the local file ``path``, named ``path:<path>``."""
+        """
+        The model of the local file ``path``, named ``path:<path>``, as
+        ``dataset(path=...)`` names it, a name that a backend resolves to the
+        dataset's identity.
+        """
         identity = f'path:{path}'
         return cls.model_validate(
             {'dataset': identity}, context={'paths': {identity: Path(path)}}
@@ -103,10 +107,15 @@ class DatasetModel(BaseModel, frozen=True, extra='forbid'):
 
     @property
     def path(self) -> Path:
-        """The local path of the dataset's file, when the request runs."""
+        """
+        The local path of the dataset's file, when the request runs; raises
+        ``ValueError`` before, so that a validator that reads it refuses the
+        request when it arrives.
+        """
         if self._path is None:
-            raise RuntimeError(
-                f'{self.dataset}: a dataset has a local path only when the request runs'
+            raise ValueError(
+                f'{self.dataset}: a dataset has a local path only when the request '
+                'runs, or if made of a local file with .local(path)'
             )
         return self._path
 

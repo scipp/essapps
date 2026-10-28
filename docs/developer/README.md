@@ -66,7 +66,7 @@ The framework is essapps (`ess.apps`) and essspec (`ess.spec`), in this reposito
 | place | a position in a request's params, named by its path, such as `reduction.bins` or `sample[2]`. A field of a group is a place, not a root place. |
 | scalar | an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a `Literal`, possibly with constraints, such as `Annotated[float, Gt(0)]`. A request writes a scalar inline. |
 | data value | a field of a group without a JSON form, such as a scipp array. A group that holds one is given by reference to an output only. |
-| dataset model | a group that stands for a file: a subclass of `DatasetModel`, which holds only `path`, given by reference to a dataset only |
+| dataset model | a group that stands for a file: a subclass of `DatasetModel`, which holds only `dataset`, the dataset's identity, given by reference to a dataset only |
 | fits | a reference fits a root place when the data it names can be the value there (see References) |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
 | request | a spec and its params, each value written inline or given by reference |
@@ -222,7 +222,7 @@ transmission: sc.DataArray                        # refused by WorkflowSpec: a p
 {'reduction': {'bins': r.ref('bins')}}            # refused at submission: a reference to an output is at a root place only
 ```
 
-**Files.** A file is a parameter, or the element of a list parameter, whose type is a *dataset model*: a subclass of `ess.spec.DatasetModel`, which holds `path: Path` and nothing else.
+**Files.** A file is a parameter, the element of a list parameter, or a field of a group, whose type is a *dataset model*: a subclass of `ess.spec.DatasetModel`, which holds `dataset: str`, the dataset's identity, and nothing else.
 Its class keywords name the metadata that a fitting dataset has, so that a picker offers only datasets of its kind; without keywords, it takes raw datasets:
 
 ```python

@@ -56,7 +56,7 @@ class TestDatasetModel:
             {'dataset': 'run:loki/1'}, context={'paths': paths}
         )
         assert mask.path == Path('/data/1.nxs')
-        with pytest.raises(RuntimeError, match='only when the request runs'):
+        with pytest.raises(ValueError, match='only when the request runs'):
             MaskFile(dataset='run:loki/1').path
 
     def test_two_dataset_models_are_equal_by_class_and_dataset(self) -> None:

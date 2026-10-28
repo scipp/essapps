@@ -176,8 +176,8 @@ group, such as `limit_range: bool` next to `start` and `stop`. Which of the
 two, why a choice between modes is a union, and what `X | None` means, is
 [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
-**Files are dataset models.** A file is a parameter, or the element of a list
-parameter, whose type is a *dataset model*: a subclass of
+**Files are dataset models.** A file is a parameter, the element of a list
+parameter, or a field of a group, whose type is a *dataset model*: a subclass of
 `ess.spec.DatasetModel`, which holds only `dataset: str`, the dataset's
 identity. Its class keywords name the metadata that a fitting dataset has:
 

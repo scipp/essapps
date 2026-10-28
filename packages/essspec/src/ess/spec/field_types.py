@@ -168,6 +168,15 @@ def is_dataset(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, DatasetModel)
 
 
+def dataset_model(annotation: Any) -> Any:
+    """
+    The dataset model of a field typed ``annotation``, ``X``, ``X | None``,
+    or ``list[X]`` of one, or ``None``.
+    """
+    tp = value_type(annotation)
+    return tp if is_dataset(tp) else None
+
+
 def is_group(tp: Any) -> bool:
     """
     Whether ``tp`` is a group: a pydantic model, but not a ``RootModel``,

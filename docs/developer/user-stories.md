@@ -49,7 +49,7 @@ Each field of these groups is a scalar, such as `bins` and `scale`, or a data va
 Each run is a dataset model, with a class for each role: `Sample`, `Can`, `DirectBeam`, `Vanadium`, `Background`, and `Reference`, each a subclass of `Run`:
 
 ```python
-class Run(DatasetModel): ...    # path: Path, from DatasetModel
+class Run(DatasetModel): ...    # dataset: str, from DatasetModel
 
 class Sample(Run): ...
 class Can(Run): ...

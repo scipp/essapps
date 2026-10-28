@@ -209,11 +209,11 @@ def _field(
     picker of a dataset model.
     """
     info = group.model_fields[name]
-    tp, optional = field_types.optional(info.annotation)
-    if field_types.is_dataset(field_types.value_type(info.annotation)):
+    if (model := field_types.dataset_model(info.annotation)) is not None:
         if field_types.is_list(group, name):
             raise NotImplementedError(f'{name}: a list of dataset models at a field')
-        return _Dataset(tp, listing, places.title(name, info), optional)
+        optional = field_types.optional(info.annotation)[1]
+        return _Dataset(model, listing, places.title(name, info), optional)
     widget = _Scalars if field_types.is_list(group, name) else _Scalar
     return widget(
         places.title(name, info),
@@ -268,7 +268,7 @@ class _Dataset:
         return self.widget.value
 
     def set(self, value: Any) -> None:
-        # At a field of a group, a record holds the reference's JSON form.
+        # A reference, or its JSON form, as a request may give it.
         ref = None if value is UNSET else as_ref(value)
         picked = ref if isinstance(ref, DatasetRef) else None
         options = dict(self._listed)

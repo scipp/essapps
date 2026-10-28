@@ -37,6 +37,20 @@ class Channels(BaseModel):
         return self
 
 
+class Checked(BaseModel):
+    run: SampleRun
+
+    @model_validator(mode='after')
+    def _suffix(self) -> Self:
+        if self.run.path.suffix != '.json':
+            raise ValueError('not JSON')
+        return self
+
+
+class CheckedParams(BaseModel):
+    checked: Checked
+
+
 class Factor(BaseModel):
     factor: float = 1.0
 
@@ -77,6 +91,7 @@ def _spec(name: str, params: type[BaseModel], **kwargs: Any) -> Any:
 SAMPLE = _spec('sample', SampleParams)
 TABLE = _spec('table', TableParams, tables=('samples',))
 CHANNELS = _spec('channels', ChannelParams)
+CHECKED = _spec('checked', CheckedParams)
 
 
 def _weighed(sample: Sample) -> float:
@@ -114,6 +129,7 @@ def client(datasets: FakeDatasets) -> Iterator[Client]:
         StagedFunction(SAMPLE, _sample),
         kept_rows(TABLE, _table),
         function_binding(CHANNELS, _channels),
+        function_binding(CHECKED, lambda p: Outputs(total=Total(value=0.0))),
     ]
     backend = Backend(datasets, bindings)
     yield Client(backend, proposal='p1', submitter='anna')
@@ -238,3 +254,13 @@ def test_an_accumulator_takes_rows_each_with_its_dataset(client: Client) -> None
     accumulator.push(samples=[{'run': dataset(run=1), 'thickness': 1.0}])
     accumulator.push(samples=[{'run': dataset(run=2), 'thickness': 2.0}])
     assert client.output(accumulator, 'total') == Total(value=50.0)
+
+
+def test_a_validator_that_reads_a_local_path_refuses_the_request_at_submit(
+    client: Client,
+) -> None:
+    with pytest.raises(SubmitError) as raised:
+        client.submit(CHECKED, params={'checked': {'run': dataset(run=1)}})
+    (error,) = raised.value.errors
+    assert error.loc == ('checked',)
+    assert 'a dataset has a local path only when the request runs' in error.msg
