@@ -10,12 +10,12 @@ import pytest
 from ess.apps import Client, NotReadable, Template
 
 from .conftest import (
+    BEAM_CENTRE,
     CENTRED_MULTI,
     CONTRIBUTE,
-    FIND_CENTRE,
     SLICER,
     SLICES,
-    Centre,
+    BeamCentre,
     Measure,
     TimeRange,
 )
@@ -47,7 +47,7 @@ def test_i2_beam_centre_typed_in_or_computed(client: Client, measure: Measure) -
     direct_beam = measure(600, [0.5, 1.5])
     sample = measure(611, [12.0, 36.0])
     can = measure(620, [1.0, 1.0])
-    finder = client.compute(FIND_CENTRE, params={'direct_beam': direct_beam})
+    finder = client.compute(BEAM_CENTRE, params={'direct_beam': direct_beam})
     t611 = client.compute(CONTRIBUTE, params={'sample': sample})
     transmission = t611.ref('transmission')
     computed, typed = (
@@ -58,13 +58,13 @@ def test_i2_beam_centre_typed_in_or_computed(client: Client, measure: Measure) -
                 blanks=('sample', 'can'),
             )
         )
-        for centre in (finder.ref('centre'), Centre(x=1.0))
+        for centre in (finder.ref('centre'), BeamCentre(x=1.0))
     )
     for accumulator in (computed, typed):
         accumulator.push(sample=[sample])
         accumulator.push(can=[can])
 
-    assert client.output(finder, 'centre') == Centre(x=1.0)
+    assert client.output(finder, 'centre') == BeamCentre(x=1.0)
     assert [
         client.output(accumulator, 'centred').values.tolist()
         for accumulator in (computed, typed)
@@ -82,7 +82,7 @@ def test_i3_a_transmission_computed_for_the_summed_runs(
     total = client.accumulator(
         Template(
             CENTRED_MULTI,
-            params={'centre': Centre(x=0.0), 'transmission': t.ref('transmission')},
+            params={'centre': BeamCentre(x=0.0), 'transmission': t.ref('transmission')},
             blanks=('sample', 'can'),
         )
     )
