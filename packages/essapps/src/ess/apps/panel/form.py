@@ -257,7 +257,7 @@ def _picked(widget: Any, options: Mapping[str, Any]) -> None:
 
 def _pick(widget: Any, value: Any) -> None:
     """Pick ``value`` if the picker lists it, else nothing."""
-    widget.value = value if value in widget.options.values() else None
+    widget.value = value if value in widget.options.values() else UNSET
 
 
 class _File:
@@ -266,6 +266,10 @@ class _File:
     at a field of a group, and with ``None`` if ``optional``. A file that
     the form is set to and the listing lacks stays picked, labelled by its
     reference as given, an identity or a name such as ``run:101``.
+
+    A picker's option of nothing, here ``None`` too, has the value ``UNSET``:
+    Panel does not send a value of ``None`` to the browser when it first
+    shows a picker, which then shows no option at all.
     """
 
     def __init__(
@@ -283,21 +287,23 @@ class _File:
 
     def refresh(self, listing: Listing) -> None:
         nothing = '(none)' if self._optional else '(choose a file)'
-        self._listed = {nothing: None, **listing.files(self._model)}
+        self._listed = {nothing: UNSET, **listing.files(self._model)}
         self.set(self.widget.value)
 
     def value(self, loc: Loc, missing: _Missing) -> Any:
-        if self.widget.value is None and not self._optional:
-            missing.append(FieldError(None, loc, 'choose a file'))
-            return UNSET
-        return self.widget.value
+        if self.widget.value is not UNSET:
+            return self.widget.value
+        if self._optional:
+            return None
+        missing.append(FieldError(None, loc, 'choose a file'))
+        return UNSET
 
     def set(self, value: Any) -> None:
         # A reference, or its JSON form, as a request may give it.
         ref = None if value is UNSET else as_ref(value)
-        picked = ref if isinstance(ref, FileRef) else None
+        picked = ref if isinstance(ref, FileRef) else UNSET
         options = dict(self._listed)
-        if picked is not None and picked not in options.values():
+        if picked is not UNSET and picked not in options.values():
             options[str(picked)] = picked
         self.widget.options = options
         self.widget.value = picked
@@ -313,8 +319,8 @@ class _Scalar:
     """
     A scalar: an ``int``, ``float``, or ``str`` input, or a picker of a time,
     that may be unset, or for a ``bool``, an enum, or a ``Literal``, a picker
-    of its values with an option for none, so that it may start unset. It
-    gives the JSON form of its value.
+    of its values with an option for none, ``UNSET`` as at a file, so that it
+    may start unset. It gives the JSON form of its value.
     """
 
     def __init__(
@@ -349,11 +355,11 @@ class _Scalar:
 
     @staticmethod
     def _picker(values: dict[str, Any], options: dict[str, Any]) -> Any:
-        return pn.widgets.Select(options={'(choose)': None, **values}, **options)
+        return pn.widgets.Select(options={'(choose)': UNSET, **values}, **options)
 
     def value(self, loc: Loc, missing: _Missing) -> Any:
         value = self.widget.value
-        if value is None or (value == '' and self._default is UNSET):
+        if value is None or value is UNSET or (value == '' and self._default is UNSET):
             missing.append(FieldError(None, loc, 'give a value'))
             return UNSET
         if self._type in _TIMES:
@@ -370,7 +376,8 @@ class _Scalar:
         if value is UNSET:
             value = self._default
         if value is UNSET:
-            value = '' if self._type is str else None
+            if not isinstance(self.widget, pn.widgets.Select):
+                value = '' if self._type is str else None
         elif isinstance(self._type, type) and issubclass(self._type, Enum):
             value = self._type(value)  # a record holds an enum by its value
         if self._type in _TIMES:
@@ -494,7 +501,10 @@ class _Group:
 
 
 class _Record:
-    """An output of a record that fits the place: a picker of references."""
+    """
+    An output of a record that fits the place: a picker of references, with
+    ``UNSET`` for none, as at a file.
+    """
 
     def __init__(self, tp: type[BaseModel], listing: Listing) -> None:
         self._tp = tp
@@ -506,10 +516,10 @@ class _Record:
         return len(self.widget.options) > 1
 
     def refresh(self, listing: Listing) -> None:
-        _picked(self.widget, {'(choose a record)': None, **listing.fitting(self._tp)})
+        _picked(self.widget, {'(choose a record)': UNSET, **listing.fitting(self._tp)})
 
     def value(self, loc: Loc, missing: _Missing) -> Any:
-        if self.widget.value is None:
+        if self.widget.value is UNSET:
             missing.append(FieldError(None, loc, 'choose a record'))
             return UNSET
         return self.widget.value

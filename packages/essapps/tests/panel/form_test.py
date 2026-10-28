@@ -9,6 +9,7 @@ from pydantic import AwareDatetime, BaseModel, Field, NaiveDatetime
 
 from ess.apps import Client, SubmitError
 from ess.apps.panel import Form, Listing
+from ess.apps.panel.form import UNSET
 from ess.apps.testing import FakeFiles
 from ess.spec import FileModel, FileRef, WorkflowSpec
 
@@ -467,7 +468,7 @@ def test_a_file_that_does_not_fit_stays_picked_when_set(
     mask = files.measure(201, {'counts': 1.0}, kind='mask')
     form.set({'run': mask, 'sample': {'thickness': 2.0}})
     assert picker(form, 'Run').options == {
-        '(choose a file)': None,
+        '(choose a file)': UNSET,
         'run 101 (sample)': run,
         str(mask): mask,
     }
