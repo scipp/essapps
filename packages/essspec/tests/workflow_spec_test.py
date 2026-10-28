@@ -127,19 +127,19 @@ class CalibrationFile(DatasetModel, kind='calibration'):
     run: int
 
 
-class XmlMaskFile(MaskFile):
-    """A dataset model that checks its path."""
+class CheckedMaskFile(MaskFile):
+    """A dataset model with a validator of its own: refused."""
 
-    @field_validator('path')
+    @field_validator('dataset')
     @classmethod
-    def _xml(cls, path: Path) -> Path:
-        if path.suffix != '.xml':
+    def _xml(cls, dataset: str) -> str:
+        if not dataset.endswith('.xml'):
             raise ValueError('a mask is an XML file')
-        return path
+        return dataset
 
 
-class BeamStopMaskFile(XmlMaskFile):
-    """A subclass of a subclass of DatasetModel that keeps its path."""
+class BeamStopMaskFile(MaskFile):
+    """A subclass of a subclass of DatasetModel that keeps its dataset."""
 
 
 class LocalPath(Path):
@@ -427,9 +427,8 @@ OUTSIDE_A_DATASET_MODEL = re.escape(
     "by reference to a dataset"
 )
 
-KEEPS_THE_PATH = re.escape(
-    'a dataset model keeps the path of DatasetModel, path: Path, without a '
-    'default or an alias; a check of the path is a field validator'
+KEEPS_THE_DATASET = re.escape(
+    'a dataset model keeps the dataset of DatasetModel, without a default or an alias'
 )
 DATASET_MODEL_OUTPUT = re.escape(
     'is a dataset model; no output holds one, so that a file comes from a '
@@ -487,7 +486,7 @@ class TestModelRules:
             },
             {'params': model('P', by=(By | None, None), each=(list[By], []))},
             {'params': model('P', centre=(validated('Centre', x=(float, ...)), ...))},
-            {'params': model('P', mask=(XmlMaskFile, ...))},
+            {'params': model('P', mask=(MaskFile, ...))},
             {'params': model('P', mask=(BeamStopMaskFile | None, None))},
             {
                 'params': model(
@@ -506,7 +505,7 @@ class TestModelRules:
         assert IofQParams.__pydantic_decorators__.model_validators
         with pytest.raises(pydantic.ValidationError, match='the sample run is not'):
             IofQParams.model_validate(
-                {'sample': {'path': 'a.nxs'}, 'can': {'path': 'a.nxs'}}
+                {'sample': SampleRun.local('a.nxs'), 'can': CanRun.local('a.nxs')}
             )
 
     @pytest.mark.parametrize(
@@ -839,35 +838,55 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', calibration=(CalibrationFile, ...))},
-                r"P.calibration: CalibrationFile: a dataset model holds only path, not "
-                r"\['run'\]",
+                r"P.calibration: CalibrationFile: a dataset model holds only "
+                r"dataset, not \['run'\]",
             ),
             *(
                 (
                     {'params': model('P', mask=(mask, ...))},
-                    rf'P.mask: {mask.__name__}.path: {KEEPS_THE_PATH}',
+                    rf'P.mask: {mask.__name__}.dataset: {KEEPS_THE_DATASET}',
                 )
                 for mask in (
                     pydantic.create_model(
-                        'StrMask', __base__=MaskFile, path=(str, ...)
+                        'IntMask', __base__=MaskFile, dataset=(int, ...)
                     ),
                     pydantic.create_model(
-                        'OptionalMask', __base__=MaskFile, path=(Path | None, None)
+                        'OptionalMask', __base__=MaskFile, dataset=(str | None, None)
                     ),
                     pydantic.create_model(
-                        'DefaultMask', __base__=MaskFile, path=(Path, Path('mask.xml'))
+                        'DefaultMask', __base__=MaskFile, dataset=(str, 'run:loki/1')
                     ),
                     pydantic.create_model(
                         'AliasedMask',
                         __base__=MaskFile,
-                        path=(Path, Field(alias='file')),
+                        dataset=(str, Field(alias='file')),
                     ),
                     pydantic.create_model(
-                        'CheckedMask',
+                        'AnnotatedMask',
                         __base__=MaskFile,
-                        path=(Annotated[Path, AfterValidator(lambda p: p)], ...),
+                        dataset=(Annotated[str, AfterValidator(lambda p: p)], ...),
                     ),
                 )
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        mask=(
+                            pydantic.create_model(
+                                'LabelledMask', __base__=MaskFile, label=(str, ...)
+                            ),
+                            ...,
+                        ),
+                    )
+                },
+                r"P.mask: LabelledMask: a dataset model holds only dataset, not "
+                r"\['label'\]",
+            ),
+            (
+                {'params': model('P', mask=(CheckedMaskFile, ...))},
+                r"P.mask: CheckedMaskFile: a dataset model has no validators or "
+                r"serializers of its own",
             ),
             *(
                 (
@@ -1116,14 +1135,14 @@ class TestModelRules:
                 f'P.runs: {NOT_A_PARAMETER}',
             ),
             (
-                {'params': model('P', sample=(SampleRun, SampleRun(path='run.nxs')))},
+                {'params': model('P', sample=(SampleRun, SampleRun.local('run.nxs')))},
                 f'P.sample: {NOT_A_VALUE}: sample: .* is not a dataset; SampleRun '
                 r'is given by reference to a dataset, such as dataset\(path=...\)',
             ),
             (
                 {
                     'params': model(
-                        'P', runs=(list[SampleRun], [SampleRun(path='run.nxs')])
+                        'P', runs=(list[SampleRun], [SampleRun.local('run.nxs')])
                     )
                 },
                 rf'P.runs: {NOT_A_VALUE}: runs\[0\]: .* is not a dataset',
@@ -1146,7 +1165,7 @@ class TestModelRules:
         params = model(
             'P',
             centre=(sc.Variable, sc.scalar(1.0)),
-            sample=(SampleRun, SampleRun(path='a')),
+            sample=(SampleRun, SampleRun.local('a')),
         )
         with pytest.raises(ValueError, match=r'P\.centre: .*; P\.sample: '):
             spec(params=params)
@@ -1383,7 +1402,7 @@ class TestTables:
     def test_a_table_may_be_of_dataset_models(self) -> None:
         assert DATASETS.tables == ('runs',)
         assert not _takes_inline(DATASETS, 'runs')
-        assert not DATASETS.has_json_form('runs')
+        assert DATASETS.has_json_form('runs')
         assert IOFQ_MULTI.has_json_form('time_range')
 
     def test_the_field_validators_of_a_group_check_each_row(self) -> None:
@@ -1403,11 +1422,15 @@ class TestTables:
             can=(list[Annotated[CanRun, AfterValidator(known)]], ...),
         )
         runs = spec(params=params, tables=('sample', 'can'))
-        row = {'path': Path('run.nxs')}
-        other = {'path': Path('other.nxs')}
-        known_rows = {'sample': [row], 'can': [row]}
+        known_rows = {
+            'sample': [SampleRun.local('run.nxs')],
+            'can': [CanRun.local('run.nxs')],
+        }
         runs.params(**known_rows)
-        for rows in ({'sample': [other]}, {'can': [other]}):
+        for rows in (
+            {'sample': [SampleRun.local('other.nxs')]},
+            {'can': [CanRun.local('other.nxs')]},
+        ):
             with pytest.raises(pydantic.ValidationError, match='unknown run'):
                 runs.params(**{**known_rows, **rows})
         assert runs.serialize().params_schema['properties']['sample']['items'] == (

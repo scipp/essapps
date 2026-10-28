@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -27,12 +26,7 @@ class RunFile(DatasetModel, kind='raw'):
 
 
 class MaskFile(DatasetModel, kind='mask'):
-    @field_validator('path')
-    @classmethod
-    def _xml(cls, path: Path) -> Path:
-        if path.suffix != '.xml':
-            raise ValueError('a mask is an XML file')
-        return path
+    pass
 
 
 class Mask(BaseModel, arbitrary_types_allowed=True):
@@ -136,7 +130,7 @@ def test_a_union_without_a_discriminator_is_refused() -> None:
 
 
 def test_a_request_writes_no_field_of_a_dataset_model_or_a_data_value() -> None:
-    assert unwritten(MaskFile) == 'path'
+    assert unwritten(MaskFile) == 'dataset'
     assert unwritten(Mask) == 'mask'
     assert unwritten(Sample) is None
 
@@ -255,7 +249,7 @@ def test_an_error_inside_a_union_names_its_place_without_the_tag() -> None:
     [
         ('mask', 'mask.xml', ('mask',)),
         ('mask', {'path': 'mask.xml'}, ('mask',)),
-        ('mask', MaskFile(path='mask.xml'), ('mask',)),
+        ('mask', MaskFile.local('mask.xml'), ('mask',)),
         ('runs', ['run.nxs'], ('runs', 0)),
     ],
 )
@@ -292,30 +286,29 @@ def test_each_reference_has_the_type_of_its_parameter_or_element() -> None:
     ]
 
 
-def _read(path: str) -> Callable[[Ref], dict[str, Path]]:
-    return lambda ref: {'path': Path(path)}
+def _read(ref: Ref) -> Ref:
+    return ref
 
 
-def test_a_dataset_model_is_made_of_the_path_read_for_its_reference() -> None:
-    assert validated(MaskParams, 'mask', DATASET, _read('mask.xml')) == MaskFile(
-        path=Path('mask.xml')
-    )
-    assert validated(MaskParams, 'runs', [DATASET], _read('run.nxs')) == [
-        RunFile(path=Path('run.nxs'))
-    ]
+def test_a_dataset_model_is_made_of_the_reference_and_the_path_given_for_it() -> None:
+    paths = {DATASET.dataset: Path('mask.xml')}
+    made = validated(MaskParams, 'mask', DATASET, _read, paths)
+    assert made == MaskFile(dataset=DATASET.dataset)
+    assert made.path == Path('mask.xml')
+    (run,) = validated(MaskParams, 'runs', [DATASET], _read, paths)
+    assert run == RunFile(dataset=DATASET.dataset)
+    assert run.path == Path('mask.xml')
 
 
-def test_a_validator_of_a_dataset_model_refuses_the_path_at_its_place() -> None:
-    with pytest.raises(ParamsError) as raised:
-        validated(MaskParams, 'mask', DATASET, _read('mask.nxs'))
-    ((at, msg),) = raised.value.errors
-    assert at == ('mask', 'path')
-    assert 'a mask is an XML file' in msg
+def test_a_dataset_model_without_a_path_given_has_none() -> None:
+    made = validated(MaskParams, 'mask', DATASET, _read)
+    with pytest.raises(RuntimeError, match='only when the request runs'):
+        made.path
 
 
 def test_a_value_held_inline_is_made_of_its_json_form() -> None:
     stored = held(Params, 'reduction', {'bins': 3}, _found)
-    assert validated(Params, 'reduction', stored, _read('unused')) == Reduction(bins=3)
+    assert validated(Params, 'reduction', stored, _read) == Reduction(bins=3)
 
 
 def test_an_output_read_for_a_reference_is_kept_as_it_is() -> None:
@@ -328,6 +321,5 @@ def test_an_output_read_for_a_reference_is_kept_as_it_is() -> None:
 
 
 def test_a_binding_gives_a_dataset_model_as_data() -> None:
-    assert validated(MaskParams, 'mask', {'path': Path('mask.xml')}) == MaskFile(
-        path=Path('mask.xml')
-    )
+    given = validated(MaskParams, 'mask', {'dataset': 'pid-1'})
+    assert given == MaskFile(dataset='pid-1')

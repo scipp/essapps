@@ -193,13 +193,13 @@ def write(tmp_path: Path, name: str, counts: list[float]) -> Path:
 @pytest.fixture
 def samples(tmp_path: Path) -> list[SampleRun]:
     return [
-        SampleRun(path=write(tmp_path, f'sample{i}', c)) for i, c in enumerate(SAMPLES)
+        SampleRun.local(write(tmp_path, f'sample{i}', c)) for i, c in enumerate(SAMPLES)
     ]
 
 
 @pytest.fixture
 def cans(tmp_path: Path) -> list[CanRun]:
-    return [CanRun(path=write(tmp_path, f'can{i}', c)) for i, c in enumerate(CANS)]
+    return [CanRun.local(write(tmp_path, f'can{i}', c)) for i, c in enumerate(CANS)]
 
 
 def reduction(bins: int) -> dict[str, Reduction]:
@@ -284,8 +284,8 @@ def test_summing_the_rows_gives_the_reduction_of_the_summed_runs(
     tmp_path: Path,
 ) -> None:
     summed = IofQParams(
-        sample=SampleRun(path=write(tmp_path, 'samples', np.sum(SAMPLES, axis=0))),
-        can=CanRun(path=write(tmp_path, 'cans', np.sum(CANS, axis=0))),
+        sample=SampleRun.local(write(tmp_path, 'samples', np.sum(SAMPLES, axis=0))),
+        can=CanRun.local(write(tmp_path, 'cans', np.sum(CANS, axis=0))),
     )
     rows = IOFQ_MULTI.params(sample=samples, can=cans)
     np.testing.assert_allclose(multi.compute(rows).iofq, single.compute(summed).iofq)

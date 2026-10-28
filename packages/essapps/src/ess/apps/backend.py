@@ -78,8 +78,8 @@ its lock, what depends on history and on what the client keeps: each reference
 to a record or an accumulator is one the client may read, and its data fit the
 type at its place. Each group given inline is validated whole then, so that
 its validators run. In the *call phase*, on a worker, the backend reads the
-data each reference names, an output, or for a dataset the dataset model of
-its local path, whose validators run then, and makes each value by its field,
+data each reference names, an output, or for a dataset the dataset model,
+with the local path of its file attached, and makes each value by its field,
 a row of a list by its element type, of the JSON form the log holds, with the
 data read in place of each reference (see
 :func:`ess.spec.places.validated`). For a plain request it makes the params
@@ -1292,15 +1292,20 @@ class Backend:
         The rows of each table in ``values`` whose element type has a JSON
         form are distinct by the JSON forms of the rows read, as the element
         type dumps them, so an inline value and a reference to equal data are
-        one row. They are compared with those in ``rows``, the rows read
-        before by table, which they join (see :func:`.checks.distinct`). A
-        table of dataset models has no JSON form: its rows are distinct by the
-        identities of their datasets, as given, not by their local paths.
+        one row, and a dataset model is its dataset's identity. They are
+        compared with those in ``rows``, the rows read before by table, which
+        they join (see :func:`.checks.distinct`).
         """
         spec = self._bindings[spec_id].spec
         read = self._reader(values)
+        paths = {
+            ref.dataset: self._datasets.path(ref)
+            for _, ref in iter_refs(values)
+            if isinstance(ref, DatasetRef)
+        }
         typed = {
-            n: places.validated(spec.params, n, v, read) for n, v in values.items()
+            n: places.validated(spec.params, n, v, read, paths)
+            for n, v in values.items()
         }
         rows = {} if rows is None else rows
         for table in spec.tables:
@@ -1351,8 +1356,9 @@ class Backend:
         What reads the data each reference in ``params`` names: outputs held
         in memory, or one element of each, taken under the backend's lock
         now, and outside it, outputs written and no longer held from the
-        store, and the paths of datasets. The caller reads only what something
-        keeps for it, so an output is held or written.
+        store; a reference to a dataset is its own data, of which validating
+        makes the dataset model. The caller reads only what something keeps
+        for it, so an output is held or written.
         """
         held: dict[Ref, Any] = {}
         with self._changed:
@@ -1364,16 +1370,21 @@ class Backend:
                     raise _not_returned(f'record {ref.record} output {ref.output}')
                 if key in self._outputs:
                     held[ref] = _element(self._outputs[key], ref)
-        return lambda ref: held[ref] if ref in held else self._stored(ref)
+
+        def read(ref: Ref) -> Any:
+            if isinstance(ref, DatasetRef):
+                return ref
+            return held[ref] if ref in held else self._stored(ref)
+
+        return read
 
     def _stored(self, ref: Ref) -> Any:
         """
-        For a dataset, ``{'path': <local path>}``, of which validating makes
-        the dataset model; for an output, its written value, or its element
-        if ``ref`` has a key. Needs no lock.
+        The written value of an output, or its element if ``ref`` has a key.
+        Needs no lock.
         """
         if isinstance(ref, DatasetRef):
-            return {'path': self._datasets.path(ref)}
+            raise TypeError(f'{ref}: a dataset is not stored')
         if isinstance(ref, AccumulatorRef):
             raise TypeError(f'{ref}: a record never reads an accumulator')
         if self._store is None:

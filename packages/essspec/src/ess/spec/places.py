@@ -106,6 +106,7 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from types import NoneType, UnionType
 from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
@@ -253,6 +254,7 @@ def validated(
     name: str,
     value: Any,
     read: Callable[[Ref], Any] | None = None,
+    paths: Mapping[str, Path] | None = None,
 ) -> Any:
     """
     ``value`` of the field ``name`` of ``model``, validated by its field (see
@@ -263,10 +265,12 @@ def validated(
     is as a record holds it: the JSON form of a value written inline, and a
     reference at a parameter or an element of a list parameter. Each
     reference is replaced by the data ``read`` gives for it, and the value
-    made of the result. A value written inline was validated when the request
-    was submitted, and its JSON form reads back as it, so this fails only
-    for the data of a reference, such as a dataset model whose validator
-    refuses the local path. It is validated in Python mode with
+    made of the result: of a reference to a dataset, ``read`` gives the
+    reference, and the dataset model made of it gets its local path from
+    ``paths``, by identity (see :class:`~ess.spec.parameters.DatasetModel`).
+    A value written inline was validated when the request was submitted, and
+    its JSON form reads back as it, so this fails only for the data of a
+    reference to an output. It is validated in Python mode with
     ``strict=False``: a strict model takes an enum from its string only from
     JSON, and the request phase has already validated each value given
     inline from its JSON form, with the model's strictness (see
@@ -278,10 +282,12 @@ def validated(
     if read is not None:
         value = map_refs({name: value}, read)[name]
     strict = False if read is not None else None
+    context = None if paths is None else {'paths': paths}
 
     def check(loc: Loc, v: Any) -> Any:
         try:
-            return getattr(one.model_validate({name: v}, strict=strict), name)
+            given = one.model_validate({name: v}, strict=strict, context=context)
+            return getattr(given, name)
         except ValidationError as error:
             raise ParamsError(
                 ((*loc, *e['loc'][1:]), e['msg']) for e in error.errors()
@@ -536,11 +542,12 @@ def unwritten(group: type[BaseModel]) -> str | None:
     """
     The first field of ``group`` that a request does not write, or ``None``
     if there is none: a data value, a field without a JSON form; of a dataset
-    model, its ``path``, since a request gives a dataset model by reference
-    to a dataset only. A group with such a field is given by reference only.
+    model, its ``dataset``, since a request gives a dataset model by
+    reference to a dataset only. A group with such a field is given by
+    reference only.
     """
     if field_types.is_dataset(group):
-        return 'path'
+        return 'dataset'
     return next(
         (n for n in group.model_fields if not field_types.has_json_form(group, n)),
         None,

@@ -215,9 +215,9 @@ mask: MaskFile | None = None                      # a picker of datasets of kind
 ```
 
 A request gives a dataset model by reference to a dataset only, so that the dataset source checks access and the record holds the dataset's identity.
-The binding gets the model with a local path, `MaskFile(path=...)`.
+The binding gets the model with the local path of its file attached, `mask.path`; a program without a backend makes it with `MaskFile.local(path)`.
 A `Path` anywhere else in the params is refused, and so is an output that is or holds a dataset model or a `Path`: every path a workflow gets has passed the access check.
-A validator of a dataset model, such as one that checks the suffix, runs when the backend makes the model, in the call phase (see Requests and records, Validation).
+A dataset model has no validators of its own: what it would check of a file is metadata, which the fit check covers when the request is submitted, or the workflow's to read.
 
 A root place takes a file or an output of another workflow, as its type says; never a choice between the two.
 A value that is read from a file by some users and computed by others is a group, given by reference, and a workflow that reads the file outputs the group: a published normalization is read by a workflow whose output another request references ([user-stories.md](user-stories.md), story C2).
@@ -306,7 +306,7 @@ A value *round-trips* when its JSON form reads back as the value.
 - The names of params and outputs are distinct.
 - Each parameter is a group, a union of groups, or a list of one, possibly typed `X | None`. A list parameter is not typed `list[X] | None`, since a list without rows is `[]`, and its element is not typed `X | None`, since each row is a value.
 - The fields of a group without a data value are scalars or lists of scalars, never typed `X | None`. A group with a data value is given by reference to an output only; of its other fields, the framework refuses only a `Path`, a dataset model, a `NewType`, or a type alias, since no output could fill them.
-- A dataset model holds only `path`, as `DatasetModel` declares it; a field validator of `path` is allowed. A `Path` outside a dataset model is refused.
+- A dataset model holds only `dataset`, as `DatasetModel` declares it, and has no validators or serializers of its own. A `Path` outside a dataset model is refused.
 - Each output is a type, possibly typed `X | None`, or a list or a dict of one. No output is or holds a dataset model or a `Path`, at any depth.
 - No type in the params or the outputs is a `NewType` or a type alias, at any depth: a spec names a role by a class, and a binding maps it to a key of its own.
 - A union of groups is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag. No alternative has a data value.
@@ -402,7 +402,7 @@ A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)
 | Phase | What is validated |
 |---|---|
 | request phase | each group, or row, written inline, whole, by the type at its root place, from its JSON form; an instance by its dump |
-| call phase, once the references are read | the data of each reference, by the type at its root place: a dataset model is made with the local path |
+| call phase, once the references are read | the data of each reference to an output, by the type at its root place; a dataset model gets the local path of its file |
 
 In the request phase, at submission, the backend also checks the names and the required parameters, each reference readable and fitting its root place (see References), and the table rules (see Combining runs: tables).
 Every validator of a group written inline runs then, with all its fields at hand:
@@ -415,7 +415,7 @@ Every validator of a group written inline runs then, with all its fields at hand
 A value written inline must round-trip, since the log holds its JSON form: a number that is not finite does not.
 The record holds the JSON form of the validated group, so `Reduction(bins=100)` and `{'bins': 100}` give one record, and a group whose validator changes a value it has validated already, such as one that converts millimetres to metres, does not round-trip and is refused.
 The call phase makes each value of the JSON form the record holds, with `strict=False`, so that a strict model takes an enum from its string, as the request phase took it from JSON.
-It fails only for the data of a reference, such as a dataset model whose validator refuses the local path, which fails the record, or the push.
+It fails only for the data of a reference to an output, which fails the record, or the push.
 It makes the params instance from these values.
 A request that cannot run is refused at submission with a `SubmitError`.
 Its `errors` list each reason as a `FieldError`, as pydantic's `ValidationError.errors()` does: the place of the field at fault, `loc`, such as `('reduction', 'bins')` or `('sample', 2)`, the reason, `msg`, and for a call with several requests the request's key or index, `entry`.
@@ -865,7 +865,7 @@ binding.compute(params)                            # Binding: a plain request
 call = binding.make_stage(fixed, blanks)           # StageBinding: at a stage's first call
 call({'reduction': Reduction(bins=50)})            # the blanks' values; once per call through the stage
 driver = binding.make_accumulator(fixed, blanks)   # AccumulatorBinding: when an accumulator opens
-driver.push('sample', [Sample(path=path_611)])     # once per table of a push: its rows
+driver.push('sample', [Sample.local(path_611)])    # once per table of a push: its rows
 driver.outputs()                                   # once per state that is read
 ```
 
@@ -875,7 +875,7 @@ A stage or an accumulator is made from some values only, so `make_stage` and `ma
 ```python
 {'reduction': Reduction(bins=2), 'beam_centre': BeamCentre(x=0.012, y=-0.003),  # a group as the model
  'transmission': computed,                                     # the output a reference names, a ComputedTransmission
- 'sample': [Sample(path=path_611), Sample(path=path_612)]}     # a table as the list of its rows, each with a local path
+ 'sample': [Sample.local(path_611), Sample.local(path_612)]}   # a table as the list of its rows, each with a local path
 ```
 
 `fixed` holds the fixed values, and `blanks` names the others, a table among them.

@@ -901,13 +901,14 @@ def test_a_dataset_reaches_the_workflow_as_its_dataset_model(
     with local(proposal='p1', datasets=datasets, bind=bind) as client:
         client.compute(_load(2))
 
-    path = datasets.path(datasets.resolve(dataset(run=2)))
-    assert received == [SampleRun(path=path)]
+    ref = datasets.resolve(dataset(run=2))
+    assert received == [SampleRun(dataset=ref.dataset)]
+    assert received[0].path == datasets.path(ref)
 
 
 @pytest.mark.parametrize(
     'inline',
-    ['/data/run-1.json', {'path': '/data/run-1.json'}, SampleRun(path='/data/x')],
+    ['/data/run-1.json', {'path': '/data/run-1.json'}],
 )
 def test_a_dataset_model_given_inline_is_refused(client: Client, inline: Any) -> None:
     with pytest.raises(SubmitError) as raised:
@@ -918,6 +919,16 @@ def test_a_dataset_model_given_inline_is_refused(client: Client, inline: Any) ->
         ' is not a dataset; SampleRun is given by reference to a dataset, such as '
         'dataset(path=...)'
     )
+
+
+def test_a_dataset_model_instance_is_given_as_the_reference_to_its_dataset(
+    client: Client,
+) -> None:
+    with pytest.raises(SubmitError) as raised:
+        client.submit(LOAD, params={'sample': SampleRun.local('/data/x')})
+    (error,) = raised.value.errors
+    assert error.loc == ('sample',)
+    assert error.msg == 'unknown dataset path:/data/x'
 
 
 # What a client keeps
@@ -1326,7 +1337,9 @@ def test_an_accumulator_s_values_reach_the_driver_as_the_log_holds_them(
     (run,) = _state(client, read).request.params['runs']
     assert run == datasets.resolve(dataset(run=1))
     assert scaled_sum.opened[0]['labels'] == Labels(tags=['a', 'b'])
-    assert scaled_sum.held[0].runs == [RunFile(path=datasets.path(run))]
+    (held,) = scaled_sum.held[0].runs
+    assert held == RunFile(dataset=run.dataset)
+    assert held.path == datasets.path(run)
 
 
 def test_an_optional_output_left_out_is_not_read(client: Client) -> None:

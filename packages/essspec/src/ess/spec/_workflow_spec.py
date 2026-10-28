@@ -78,7 +78,7 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         file: Path
 
     class CalibrationFile(DatasetModel, kind='calibration'):
-        # A dataset model holds only path: the dataset's metadata say the rest.
+        # A dataset model holds only dataset: the dataset's metadata say the rest.
         run: int
 
     class Reduction(BaseModel):
@@ -319,14 +319,9 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         """
         Whether the type of the parameter ``name``, with ``| None`` removed
         and for a list parameter its element type taken, has a JSON form (see
-        :func:`ess.spec.field_types.has_json_form`) and is not a dataset
-        model, whose JSON form, read, would be a local path rather than the
-        dataset's identity.
+        :func:`ess.spec.field_types.has_json_form`).
         """
-        tp = field_types.value_type(self.params.model_fields[name].annotation)
-        return not field_types.is_dataset(tp) and field_types.has_json_form(
-            self.params, name
-        )
+        return field_types.has_json_form(self.params, name)
 
     def serialize(self) -> SerializedWorkflowSpec:
         """
@@ -414,7 +409,7 @@ def _distinct(params: type[BaseModel], outputs: type[BaseModel]) -> list[str]:
 
 
 def _decorators(model: type[BaseModel], kinds: Sequence[str]) -> dict[str, list[str]]:
-    """The decorators of ``model`` itself of each of ``kinds``, by kind."""
+    """The decorators of ``model``, and of its bases, of each of ``kinds``, by kind."""
     decorators = model.__pydantic_decorators__
     return {
         kind: sorted(getattr(decorators, kind))
@@ -438,6 +433,8 @@ def _model_validators_only(model: type[BaseModel]) -> list[str]:
 
 
 _SERIALIZERS = ('field_serializers', 'model_serializers', 'computed_fields')
+_VALIDATORS = ('validators', 'field_validators', 'root_validators', 'model_validators')
+_DATASET_DECORATORS = _decorators(DatasetModel, (*_VALIDATORS, *_SERIALIZERS))
 
 
 def _params_problems(model: type[BaseModel]) -> list[str]:
@@ -634,19 +631,35 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
 
 def _dataset_model_problems(model: type[BaseModel]) -> list[str]:
     """
-    Refuse a dataset model with a field other than ``path``, or that declares
-    ``path`` anew, such as with another type, a default, or an alias: the
-    backend makes the model of ``{'path': <local path>}``. A field validator
-    of ``path`` is allowed.
+    Refuse a dataset model with a field other than ``dataset``, that
+    declares ``dataset`` anew, such as with another type, a default, or an
+    alias, or with a validator or serializer of its own: the value of a
+    dataset model is the identity of a dataset (see
+    :class:`~ess.spec.parameters.DatasetModel`).
     """
-    if other := [n for n in model.model_fields if n != 'path']:
-        return [f'{model.__name__}: a dataset model holds only path, not {other}']
+    if other := [n for n in model.model_fields if n != 'dataset']:
+        return [f'{model.__name__}: a dataset model holds only dataset, not {other}']
     # The repr of a FieldInfo shows each attribute that a declaration sets.
-    if repr(model.model_fields['path']) != repr(DatasetModel.model_fields['path']):
+    if repr(model.model_fields['dataset']) != repr(
+        DatasetModel.model_fields['dataset']
+    ):
         return [
-            f'{model.__name__}.path: a dataset model keeps the path of '
-            'DatasetModel, path: Path, without a default or an alias; a check of '
-            'the path is a field validator'
+            f'{model.__name__}.dataset: a dataset model keeps the dataset of '
+            'DatasetModel, without a default or an alias'
+        ]
+    found = _decorators(model, (*_VALIDATORS, *_SERIALIZERS)).items()
+    inherited = _DATASET_DECORATORS
+    own = {
+        kind: added
+        for kind, names in found
+        if (added := sorted(set(names) - set(inherited.get(kind, ()))))
+    }
+    if own:
+        return [
+            f'{model.__name__}: a dataset model has no validators or serializers '
+            f'of its own, {own}; what it would check of a file is metadata of '
+            "the model, such as class MaskFile(DatasetModel, kind='mask'), or "
+            "the workflow's to read"
         ]
     return []
 

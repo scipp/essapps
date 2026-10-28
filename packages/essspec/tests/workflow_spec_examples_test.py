@@ -160,7 +160,7 @@ def refusal() -> str:
         'Centring.centre: GivenCentre | FindCentre is a union of groups',
         'Sample.run: RunNumber is a NewType',
         'Geometry.file: a Path is outside a dataset model',
-        "CalibrationFile: a dataset model holds only path, not ['run']",
+        "CalibrationFile: a dataset model holds only dataset, not ['run']",
         'Params.transmissions: a list parameter is not typed list[X] | None',
         'Params.masks: the element of a list parameter is not typed X | None',
         'Params.range: the default',

@@ -158,8 +158,8 @@ two, why a choice between modes is a union, and what `X | None` means, is
 
 **Files are dataset models.** A file is a parameter, or the element of a list
 parameter, whose type is a *dataset model*: a subclass of
-`ess.spec.DatasetModel`, which holds only `path: Path`. Its class keywords name
-the metadata that a fitting dataset has:
+`ess.spec.DatasetModel`, which holds only `dataset: str`, the dataset's
+identity. Its class keywords name the metadata that a fitting dataset has:
 
 ```python
 class MaskFile(DatasetModel, kind='mask'):
@@ -167,9 +167,14 @@ class MaskFile(DatasetModel, kind='mask'):
 ```
 
 A dataset model is given by reference to a dataset only, so that the dataset
-source checks access and the record holds the dataset's identity; the binding
-gets the model with a local path. No output is or holds a dataset model or a
-`Path`, so every path a workflow gets has passed the access check. The metadata
+source checks access and the record holds the dataset's identity. The identity
+is the model's value, and its JSON form is the reference, so a dataset model is
+known when the request arrives, as a value typed in is. The local path of its
+file exists only when the request runs: the backend attaches it then, and the
+binding reads it as `run.path`, which raises before. A program without a
+backend makes the model of a local file with `MaskFile.local(path)`. No output
+is or holds a dataset model or a `Path`, so every path a workflow gets has
+passed the access check. The metadata
 let a picker offer only the datasets that fit. A field of the model for a
 metadata value, such as the run number, waits for a workflow that needs it.
 
@@ -283,8 +288,10 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
   reference to an output only; of its other fields, the framework refuses
   only a `Path`, a dataset model, a `NewType`, or a type alias, since no
   output could fill them.
-- A dataset model holds only `path`, as `DatasetModel` declares it; a field
-  validator of `path` is allowed. A `Path` outside a dataset model is refused.
+- A dataset model holds only `dataset`, as `DatasetModel` declares it, and
+  has no validators or serializers of its own: what it would check of a file
+  is metadata, which the fit check covers, or the workflow's to read. A `Path`
+  outside a dataset model is refused.
 - Each output's type is a type, possibly typed `X | None`, or a list or a dict
   of one. No output is or holds a dataset model or a `Path`, at any depth.
 - No type in the params or the outputs is a `NewType` or a type alias, at any

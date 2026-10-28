@@ -27,11 +27,11 @@ for an accumulator. A plain request passes an instance of the params model,
 ``compute(params) -> outputs``. A stage or an accumulator is made from some
 values only, so these pass by name, each as its type, whether given inline
 or by reference: a group as the model, with a data value in it as the object,
-a dataset model as the model of the dataset's local path, and a table as the
-list of its rows::
+a dataset model with the local path of its dataset's file, and a table as
+the list of its rows::
 
     {'reduction': Reduction(bins=2), 'beam_centre': centre,
-     'sample': [Sample(path=path_611), Sample(path=path_612)]}
+     'sample': [Sample.local(path_611), Sample.local(path_612)]}
 
 Blanks name parameters, a table among them. An output that the spec declares
 optional is left out by being ``None``.
