@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import panel as pn
 import pytest
-from pydantic import AwareDatetime, BaseModel, NaiveDatetime
+from pydantic import AwareDatetime, BaseModel, Field, NaiveDatetime
 
 from ess.apps import Client, SubmitError
 from ess.apps.panel import Form, Listing
@@ -88,6 +88,28 @@ TIMES_AND_LISTS: Spec = WorkflowSpec(
 )
 
 
+class Left(BaseModel):
+    kind: Literal['left'] = 'left'
+
+
+class Right(BaseModel):
+    kind: Literal['right'] = 'right'
+
+
+class SidesParams(BaseModel):
+    sides: list[Annotated[Left | Right, Field(discriminator='kind')]]
+
+
+SIDES: Spec = WorkflowSpec(
+    name='sides',
+    version=1,
+    title='Sides',
+    description='A list of a union of groups.',
+    params=SidesParams,
+    outputs=Value,
+)
+
+
 @pytest.fixture
 def form(client: Client, reduce_spec: Spec) -> Form:
     return Form(reduce_spec, client)
@@ -115,13 +137,21 @@ def card(form: Form, title: str) -> Any:
     return found
 
 
+def widget_in(form: Form, title: str, label: str) -> Any:
+    """The input labelled ``label`` in the box titled ``title``, such as a row."""
+    (found,) = (
+        w for w in card(form, title).select(pn.widgets.Widget) if w.label == label
+    )
+    return found
+
+
 def way(form: Form, title: str) -> Any:
     """The radio buttons of the ways of the box titled ``title``."""
     return card(form, title).objects[0]
 
 
 def picker(form: Form, title: str) -> Any:
-    """The file picker of the box titled ``title``."""
+    """The picker of a file, or of a record, of the box titled ``title``."""
     (found,) = card(form, title).select(pn.widgets.Select)
     return found
 
@@ -562,3 +592,106 @@ def test_a_group_holding_a_file_is_set_as_a_record_holds_it(
     held = {'run': run.model_dump(by_alias=True), 'thickness': 2.0, 'mask': None}
     measured.set({'measured': held})
     assert measured.params == {'measured': {'run': run, 'thickness': 2.0, 'mask': None}}
+
+
+@pytest.fixture
+def stack(client: Client, stack_spec: Spec) -> Form:
+    return Form(stack_spec, client)
+
+
+def test_a_table_starts_unset_and_a_list_with_a_default_at_it(stack: Form) -> None:
+    assert missing(stack) == {
+        (('runs',), 'add a row, or remove for none'),
+        (('shots',), 'add a row, or remove for none'),
+    }
+    widget(stack, 'Remove from Runs').clicks += 1
+    widget(stack, 'Remove from Shots').clicks += 1
+    assert stack.params == {
+        'runs': [],
+        'shots': [],
+        'centres': [{'x': 1.0, 'y': 0.0}],
+    }
+
+
+def test_a_table_without_rows_is_refused_by_its_length(
+    client: Client, stack: Form, stack_spec: Spec
+) -> None:
+    widget(stack, 'Remove from Runs').clicks += 1
+    widget(stack, 'Remove from Shots').clicks += 1
+    with pytest.raises(SubmitError) as refused:
+        client.submit(stack_spec, params=stack.params)
+    assert [e.loc for e in refused.value.errors] == [('runs',)]
+
+
+def test_a_row_of_a_file_model_is_a_picker_of_the_files_that_fit(
+    stack: Form, run: FileRef
+) -> None:
+    widget(stack, 'Remove from Shots').clicks += 1
+    widget(stack, 'Add to Runs').clicks += 1
+    assert missing(stack) == {(('runs', 0), 'choose a file')}
+    assert list(picker(stack, 'Runs [0]').options) == [
+        '(choose a file)',
+        'run 101 (sample)',
+    ]
+    picker(stack, 'Runs [0]').value = run
+    assert stack.params['runs'] == [run]
+
+
+def test_a_row_of_a_group_has_an_input_per_field(stack: Form, run: FileRef) -> None:
+    widget(stack, 'Add to Runs').clicks += 1
+    picker(stack, 'Runs [0]').value = run
+    widget(stack, 'Add to Shots').clicks += 1
+    widget(stack, 'Add to Shots').clicks += 1
+    widget_in(stack, 'Shots [1]', 'Run').value = run
+    widget_in(stack, 'Shots [1]', 'Thickness').value = 2.0
+    assert missing(stack) == {(('shots', 0, 'run'), 'choose a file')}
+    widget(stack, 'Remove from Shots').clicks += 1
+    widget(stack, 'Add to Shots').clicks += 1
+    assert widget_in(stack, 'Shots [1]', 'Thickness').value == 1.0
+
+
+def test_a_row_offers_a_record_while_a_fitting_output_is_readable(
+    client: Client, stack: Form, find_spec: Spec, run: FileRef
+) -> None:
+    assert way(stack, 'Centres [0]').options == ['Given']
+    with pytest.raises(TypeError, match='a choice of ways per row'):
+        stack.ways('centres')
+    found = client.compute(find_spec, params={'run': run})
+    stack.refresh()
+    assert way(stack, 'Centres [0]').options == ['Given', 'From a record']
+    widget(stack, 'Add to Centres').clicks += 1
+    assert way(stack, 'Centres [1]').options == ['Given', 'From a record']
+    way(stack, 'Centres [1]').value = 'From a record'
+    picker(stack, 'Centres [1]').value = found.ref('centre')
+    widget(stack, 'Remove from Runs').clicks += 1
+    widget(stack, 'Remove from Shots').clicks += 1
+    assert stack.params['centres'] == [{'x': 1.0, 'y': 0.0}, found.ref('centre')]
+
+
+def test_tables_round_trip_through_a_record(
+    client: Client,
+    files: FakeFiles,
+    stack: Form,
+    stack_spec: Spec,
+    find_spec: Spec,
+    run: FileRef,
+) -> None:
+    other = files.measure(102, {'counts': 4.0, 'x': 0.0}, role='sample')
+    found = client.compute(find_spec, params={'run': run})
+    record = client.compute(
+        stack_spec,
+        params={
+            'runs': [run, other],
+            'shots': [{'run': other, 'thickness': 2.0}],
+            'centres': [found.ref('centre'), {'x': 2.0, 'y': 0.0}],
+        },
+    )
+    assert client.output(record, 'total').value == 6.0 + 4.0 + 2.0 + 1.5 + 2.0
+    stack.set(record.request.params)
+    assert stack.params == record.request.params
+    assert way(stack, 'Centres [0]').value == 'From a record'
+
+
+def test_a_list_of_a_union_is_not_covered(client: Client) -> None:
+    with pytest.raises(NotImplementedError, match='sides: a list of a union'):
+        Form(SIDES, client)

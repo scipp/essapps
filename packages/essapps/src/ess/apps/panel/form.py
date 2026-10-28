@@ -20,6 +20,9 @@ a parameter, :class:`Ways` a choice of ways: the fields of each group written
                            ``Ways.record``, or for a file model a file
                            that fits it, and ``None``. A record is offered
                            while an output fits.
+a list parameter,          a box per row, each the choice of ways of the
+:class:`Rows`              element, as at a parameter of its type, and
+                           buttons that add a row and remove the last
 a field of a group         an input of its type, or a picker of its values;
                            for a list of scalars, a list of these; for a
                            file model, a picker of the files that fit
@@ -36,23 +39,25 @@ it.
 
 The widgets follow those of esslivedata's dashboard (scipp/esslivedata#1426),
 in Panel. A place without a default starts unset, so that a value a correct
-reduction needs is never filled in for the user; so does a list of scalars,
-until an element is added or removed. A place is left out of the request
-only if it is a choice with no way chosen, which it is only without a
-default, so the backend refuses it as required. A way chosen, or an input,
-with nothing given is not left out, since the backend would fill in the
-default: the params name it as missing (see :attr:`Form.params`). An empty
-text is the value ``''`` where the place has a default, and nothing given
-where it has none, since a text input cannot tell an empty text from none;
-an element of a list of texts is a text, ``''`` too, since it was added.
+reduction needs is never filled in for the user; so does a list, of rows or
+of scalars, until an element is added or removed, so that a table, which has
+no default, is never given without rows by mistake. A place is left out of
+the request only if it is a choice with no way chosen, which it is only
+without a default, so the backend refuses it as required. A way chosen, or
+an input, with nothing given is not left out, since the backend would fill
+in the default: the params name it as missing (see :attr:`Form.params`). An
+empty text is the value ``''`` where the place has a default, and nothing
+given where it has none, since a text input cannot tell an empty text from
+none; an element of a list of texts is a text, ``''`` too, since it was
+added.
 
 A time is picked to the second, in the zone of the value the picker was
 set to, or of the default, which its label names: ``Start (UTC)``. A time
 without a zone stays without one, and a time of ``AwareDatetime`` without a
 value is in UTC. The fraction of a second of the value is kept.
 
-Not covered: list parameters (tables, :class:`Rows`), scipp/essapps#101, and
-a list of file models at a field of a group.
+Not covered: a list parameter of a union of groups, whose row would pick its
+alternative, and a list of file models at a field of a group.
 """
 
 from __future__ import annotations
@@ -179,12 +184,20 @@ def _default(info: FieldInfo) -> Any:
     return UNSET if info.is_required() else info.get_default(call_default_factory=True)
 
 
-def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice:
+def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice | _Rows:
     """The widget of the parameter ``name`` of ``model``, the params model."""
     info = model.model_fields[name]
+    label = places.title(name, info)
     described = places.place(model, name)
-    if not isinstance(described, Ways):
-        raise NotImplementedError(f'{name}: a list parameter (a table)')
+    if isinstance(described, Ways):
+        return _Choice(label, _ways(described, listing), described.tag, _default(info))
+    if described.element.tag is not None:
+        raise NotImplementedError(f'{name}: a list of a union of groups')
+    return _Rows(label, described.element, _default(info), listing)
+
+
+def _ways(described: Ways, listing: Listing) -> dict[str, _Way]:
+    """The widget of each way of a place that ``described`` describes, by label."""
     ways: dict[str, _Way] = {}
     for value, group in described.inline.items():
         if value is None or described.tag is None:
@@ -198,7 +211,7 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice:
         ways[_Choice.RECORD] = _Record(described.record, listing)
     if described.none:
         ways[_Choice.NONE] = _Nothing()
-    return _Choice(places.title(name, info), ways, described.tag, _default(info))
+    return ways
 
 
 def _field(
@@ -374,48 +387,45 @@ class _Scalar:
         return self.widget
 
 
-class _Scalars:
+class _List:
     """
-    A list of scalars: an input per element, as :class:`_Scalar` has it, and
-    buttons that add an element and remove the last. Unset, it has no
+    A list: a widget per element, labelled by its position, ``Banks [0]``,
+    and buttons that add an element and remove the last. Unset, it has no
     element until one is added or removed: a removal gives no element, the
-    empty list.
+    empty list. A subclass makes the widget of an element, and the panel.
     """
 
-    def __init__(
-        self, label: str, tp: Any, default: Any, description: str | None = None
-    ) -> None:
+    _unset = 'add an element, or remove for none'
+
+    def __init__(self, label: str, default: Any) -> None:
         self._label = label
-        self._type = tp
         self._default = default
-        self._description = description
-        self._elements: list[_Scalar] | None = None  # unset
+        self._elements: list[Any] | None = None  # unset
         self._column = pn.Column(sizing_mode='stretch_width')
         add = pn.widgets.Button(label=f'Add to {label}')
         add.on_click(lambda _: self._resize(len(self._elements or []) + 1))
         remove = pn.widgets.Button(label=f'Remove from {label}')
         remove.on_click(lambda _: self._resize(len(self._elements or []) - 1))
-        self._panel = pn.Column(self._column, pn.Row(add, remove))
+        self._buttons = pn.Row(add, remove)
         self.set(UNSET)
 
+    def _element(self, label: str) -> Any:
+        """The widget of an element labelled ``label``, with nothing given."""
+        raise NotImplementedError
+
     def _resize(self, n: int) -> None:
-        """
-        Keep the first ``n`` elements, none for ``-1``, or add elements with
-        nothing given, but a text, which is ``''``.
-        """
+        """Keep the first ``n`` elements, none for ``-1``, or add elements."""
         elements = self._elements or []
         del elements[n:]
-        default = '' if self._type is str else UNSET
         elements.extend(
-            _Scalar(f'{self._label} [{i}]', self._type, default, self._description)
-            for i in range(len(elements), n)
+            self._element(f'{self._label} [{i}]') for i in range(len(elements), n)
         )
         self._elements = elements
         self._column.objects = [e.panel() for e in elements]
 
     def value(self, loc: Loc, missing: _Missing) -> Any:
         if self._elements is None:
-            missing.append(FieldError(None, loc, 'add an element, or remove for none'))
+            missing.append(FieldError(None, loc, self._unset))
             return UNSET
         return [e.value((*loc, i), missing) for i, e in enumerate(self._elements)]
 
@@ -429,6 +439,25 @@ class _Scalars:
         self._resize(len(value))
         for element, item in zip(self._elements or [], value, strict=True):
             element.set(item)
+
+
+class _Scalars(_List):
+    """
+    A list of scalars: an input per element, as :class:`_Scalar` has it. An
+    element added has nothing given, but a text, which is ``''``.
+    """
+
+    def __init__(
+        self, label: str, tp: Any, default: Any, description: str | None = None
+    ) -> None:
+        self._type = tp
+        self._description = description
+        super().__init__(label, default)
+        self._panel = pn.Column(self._column, self._buttons)
+
+    def _element(self, label: str) -> _Scalar:
+        default = '' if self._type is str else UNSET
+        return _Scalar(label, self._type, default, self._description)
 
     def panel(self) -> Any:
         return self._panel
@@ -611,6 +640,44 @@ class _Choice:
         return self._panel
 
 
+class _Rows(_List):
+    """
+    A list parameter: a box titled by its name, with a row per element, each
+    the choice of ways of the element, as a parameter of its type has it,
+    titled by its position, ``Sample [0]``. A row added starts as such a
+    parameter without a default does: at its one way, since the element is
+    neither a union nor typed ``X | None``.
+    """
+
+    _unset = 'add a row, or remove for none'
+
+    def __init__(
+        self, label: str, element: Ways, default: Any, listing: Listing
+    ) -> None:
+        self._element_ways = element
+        self._listing = listing
+        super().__init__(label, default)
+        self._panel = pn.Card(
+            self._column,
+            self._buttons,
+            title=label,
+            collapsible=False,
+            sizing_mode='stretch_width',
+        )
+
+    def _element(self, label: str) -> _Choice:
+        ways = _ways(self._element_ways, self._listing)
+        return _Choice(label, ways, self._element_ways.tag, UNSET)
+
+    def refresh(self, listing: Listing) -> None:
+        self._listing = listing
+        for row in self._elements or []:
+            row.refresh(listing)
+
+    def panel(self) -> Any:
+        return self._panel
+
+
 class Form:
     """
     The params of one spec: a widget per parameter, listing what ``client``
@@ -636,10 +703,12 @@ class Form:
         """
         The params as a request gives them; a place with no way chosen is
         left out. Raises :class:`~ess.apps.SubmitError` at each place
-        where a way is chosen, or an input is, with nothing given::
+        where a way is chosen, or an input or a list is, with nothing given::
 
             beam_centre: choose a record
             reduction.bins: give a value
+            sample: add a row, or remove for none
+            sample[0]: choose a file
         """
         missing: _Missing = []
         given = {n: w.value((n,), missing) for n, w in self._params.items()}
@@ -664,9 +733,12 @@ class Form:
     def ways(self, name: str) -> list[str]:
         """
         The ways offered at the parameter ``name``, a group or a union, such
-        as ``['Given', 'From a record']``.
+        as ``['Given', 'From a record']``; a list parameter has a choice of
+        ways per row.
         """
-        return self._params[name].offered
+        if not isinstance(widget := self._params[name], _Choice):
+            raise TypeError(f'{name}: a list parameter has a choice of ways per row')
+        return widget.offered
 
     def refresh(self, listing: Listing | None = None) -> None:
         """
