@@ -560,7 +560,8 @@ class _Choice:
     unless there is no ``None`` and one way only is written inline, or none
     is: then the choice of a record over the fields is not one of meaning.
     The way of a record is offered while an output fits, while it is chosen,
-    or if it is the only way.
+    or if it is the only way. Set, each way not chosen is as it starts, so
+    that it shows no value set before, such as a row shown before.
     """
 
     RECORD = 'From a record'
@@ -619,8 +620,8 @@ class _Choice:
             value = self._default
         label = self._label(value)
         self._selector.value = label
-        if label is not None:
-            self._ways[label].set(value)
+        for way_label, way in self._ways.items():
+            way.set(value if way_label == label else UNSET)
         self._offer()
 
     def _label(self, value: Any) -> str | None:

@@ -9,7 +9,6 @@ from pydantic import AwareDatetime, BaseModel, Field, NaiveDatetime
 
 from ess.apps import Client, SubmitError
 from ess.apps.panel import Form, Listing
-from ess.apps.panel.form import UNSET
 from ess.apps.testing import FakeFiles
 from ess.spec import FileModel, FileRef, OutputRef, WorkflowSpec
 
@@ -467,11 +466,11 @@ def test_a_file_that_does_not_fit_stays_picked_when_set(
 ) -> None:
     mask = files.measure(201, {'counts': 1.0}, kind='mask')
     form.set({'run': mask, 'sample': {'thickness': 2.0}})
-    assert picker(form, 'Run').options == {
-        '(choose a file)': UNSET,
-        'run 101 (sample)': run,
-        str(mask): mask,
-    }
+    assert list(picker(form, 'Run').options) == [
+        '(choose a file)',
+        'run 101 (sample)',
+        str(mask),
+    ]
     assert form.params['run'] == mask
 
 
@@ -738,6 +737,17 @@ def test_a_row_may_be_an_output_of_a_record_that_fits(
     assert stack.params['centres'] == [{'x': 1.0, 'y': 0.0}, found.ref('centre')]
     label = f'{found.id[:6]} Find centre, from run 101: centre'
     assert rows(stack, 'Centres')[1] == {'X': '', 'Y': '', 'Record': label}
+
+
+def test_the_editor_offers_no_record_of_a_row_shown_before(
+    client: Client, stack: Form, find_spec: Spec, run: FileRef
+) -> None:
+    found = client.compute(find_spec, params={'run': run})
+    centres = [found.ref('centre'), {'x': 2.0, 'y': 0.0}]
+    stack.set({'runs': [run], 'shots': [], 'centres': centres})
+    way(stack, 'Centres').value = 'From a record'
+    click(stack, 'Centres', 'Add as new row')
+    assert stack.params['centres'] == centres
 
 
 def test_tables_round_trip_through_a_record(
