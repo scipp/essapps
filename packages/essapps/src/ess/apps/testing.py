@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Fakes for tests: a file source whose files a test makes appear as
-files, a store held in memory, and bindings over plain functions.
+Fakes for tests: a file source whose files a test makes appear, a store
+held in memory, and bindings over plain functions.
 """
 
 from __future__ import annotations
@@ -36,14 +36,15 @@ class FakeFiles:
     """
     A file source over files in ``directory``.
 
-    A file is identified by its run number, or by its PID if it has one.
-    :meth:`measure` writes its content, which must have a JSON form, to a
-    file of its own, which a workflow reads with :func:`read_file`. A run
-    measured again keeps its identity and its place in the order of
-    measurement, and its file is written again. A file is named by its
-    run, its PID, or its path. Its metadata are the proposal, the run, and
-    the fields :meth:`measure` is given, such as ``kind='mask'``; a file
-    without ``kind`` is raw (see :class:`~.files.Selector`).
+    A file is identified by its run number, or by the PID of its SciCat
+    dataset if it has one. :meth:`measure` writes a file to ``directory``
+    with the given content, which must have a JSON form, and a workflow reads
+    it with :func:`read_file`. A run measured again keeps its identity and
+    its place in the order of measurement, and its file is written again. A
+    file is named by its run, its PID, or its path. Its metadata are the
+    proposal, the run, and the fields :meth:`measure` is given, such as
+    ``kind='mask'``; a file without ``kind`` is raw (see
+    :class:`~.files.Selector`).
     """
 
     def __init__(self, proposal: str, directory: Path) -> None:

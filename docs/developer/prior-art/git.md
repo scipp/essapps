@@ -28,7 +28,7 @@ Git's lesson for those: keep one append order per label, or have each record nam
 **A reference names an object, never a name.**
 A submodule's gitlink holds the commit the superproject expects ([gitsubmodules L37-L38][sm]); the branch named in `.gitmodules` is a hint, which `submodule update --remote` follows.
 `main@{yesterday}` reads the local reflog, so it means different things on different machines ([revisions L90-L100][revdate]).
-Here, a dataset name such as `dataset(run=60339)` is resolved to the dataset's identity at submission, and the record holds the identity ([Datasets](../README.md#datasets)).
+Here, a name such as `file(run=60339)` is resolved to the file's identity at submission, and the record holds the identity ([Files](../README.md#files)).
 A reference points to an output of one record ([References](../README.md#references)); no reference means "the latest record under a label".
 Keep it so.
 A name resolved at submission gives a backlog or a re-run a different input than the live reduction got.
@@ -38,7 +38,7 @@ A name resolved at submission gives a backlog or a re-run a different input than
 `git gc` keeps everything reachable from refs and reflogs and prunes unreachable objects after a grace period, two weeks by default ([config/gc L96-L105][gcexp]).
 The grace period protects a concurrent process that is about to reference an object that is unreachable now, and the docs admit that "users who run commands concurrently have to live with some risk of corruption" ([git-gc L157-L173][gcnotes]).
 Here, a reference keeps no value; only keepers do: the client that asked, a pending request until its workflow returns, a persist request, the store ([How long records and values are kept](../README.md#how-long-records-and-values-are-kept)).
-A submission may reference only values its client keeps, persisted values, and datasets, so whether it is refused never depends on how far other work has come ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)).
+A submission may reference only values its client keeps, persisted values, and files, so whether it is refused never depends on how far other work has come ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)).
 That rule removes the race git mitigates with a grace period.
 Git's rule would also keep every intermediate of a chain for as long as its final output is kept.
 
@@ -57,13 +57,13 @@ The file format and the store's layout are open (ADR 0002, Open); a hash and siz
 
 **Publishing sends a closure.**
 `git push` updates remote refs and "sends all necessary data that isn't already on the remote" ([git-push L21-L23][push]), so the remote can read every commit the ref reaches.
-`client.publish` (not implemented) puts an output in a catalogue with its provenance: every record that supplied an input, down to the datasets ([Provenance and publication](../README.md#provenance-and-publication)).
+`client.publish` (not implemented) puts an output in a catalogue with its provenance: every record that supplied an input, down to the files ([Provenance and publication](../README.md#provenance-and-publication)).
 The catalogue entry survives the proposal's history for the same reason a pushed branch survives the local clone: what it needs travels with it.
 
 **Names need a namespace.**
 Git keeps branches, tags, and remote branches under separate prefixes (`refs/heads/`, `refs/tags/`, `refs/remotes/`), resolves a short name by a fixed order of rules, and warns when it is ambiguous ([revisions L27-L33][revname], `core.warnAmbiguousRefs`, true by default, [config/core L407-L409][warn]).
 Here, a label is one free string per proposal.
-A rule owns its label by convention only: a record a notebook submits under it stops the rule from reducing the datasets that record names ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
+A rule owns its label by convention only: a record a notebook submits under it stops the rule from reducing the files that record names ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
 Labels are tentative ([open question 3](../README.md#open-questions)).
 If they stay, separate the names of rules from the names people choose before the first users, since renaming names that records already carry is costly.
 

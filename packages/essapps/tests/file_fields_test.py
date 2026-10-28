@@ -177,7 +177,7 @@ def test_a_value_next_to_a_file_is_checked_at_submit(client: Client) -> None:
         (
             {'run': '/data/run-1.json'},
             ('sample', 'run'),
-            "'/data/run-1.json' is not a file; SampleRun is given by reference",
+            "'/data/run-1.json' is not a reference; SampleRun is given by reference",
         ),
     ],
 )

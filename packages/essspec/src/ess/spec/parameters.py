@@ -3,8 +3,8 @@
 """
 Shared vocabulary of workflow parameter models.
 
-Common building blocks for workflow params models: the file model of a
-file, constrained unit choices, and range/edges models with cross-field
+Common building blocks for workflow params models: the file model,
+constrained unit choices, and range/edges models with cross-field
 validation. Purely declarative — no scipp;
 converting validated values into scipp objects is the workflow implementation's
 concern (see :mod:`ess.spec.conversions`).
@@ -44,11 +44,11 @@ from .refs import FileRef
 
 class FileModel(BaseModel, frozen=True, extra='forbid'):
     """
-    A kind of file: the identity of a file, given by reference to a
-    file only, and the local path of its file when the request runs.
+    A file that a workflow reads: its identity, given by reference only, and
+    its local path when the request runs.
 
-    A subclass names the metadata of the files it takes, as keywords of
-    the class, each a string, a number, or a bool::
+    A subclass is a kind of file. It names the metadata of the files it
+    takes, as keywords of the class, each a string, a number, or a bool::
 
         class MaskFile(FileModel, kind='mask'):
             '''A pixel mask, as XML.'''
@@ -61,23 +61,22 @@ class FileModel(BaseModel, frozen=True, extra='forbid'):
     ``title``, ``frozen``, or ``extra``, configures the model instead, so it
     cannot be a metadata key.
 
-    The value of a file model is ``file``, the file's identity,
-    which the backend resolves when the request is submitted, so that
-    everything a request gives is known then. Its JSON form is the reference
-    to the file, ``{'@ref': 'file', 'file': ...}``, of which it is
-    also validated, so that a reference is found in a record without the
-    spec. Two file models are equal if they are of one class and name one
-    file.
+    The value of a file model is ``file``, the file's identity, which the
+    backend resolves when the request is submitted, so that everything a
+    request gives is known then. Its JSON form is the reference to the file,
+    ``{'@ref': 'file', 'file': ...}``, of which it is also validated, so that
+    a reference is found in a record without the spec. Two file models are
+    equal if they are of one class and name one file.
 
-    The local path of the file's file exists only when the request runs:
-    the backend validates the model with the context ``{'paths': {identity:
-    local path}}``, and :attr:`path` raises before. A file model holds
-    only ``file``, as declared here, and has no validators of its own,
-    since what it would check of a file is either metadata, which the fit
-    check covers when the request is submitted, or the workflow's to read.
-    No output holds a file model, so that every path a workflow gets
-    comes from a file that the file source checks. A program without a
-    backend makes a file model of a local file with :meth:`local`.
+    The local path of the file exists only when the request runs: the
+    backend validates the model with the context ``{'paths': {identity:
+    local path}}``, and :attr:`path` raises before. A file model holds only
+    ``file``, as declared here, and has no validators of its own, since what
+    it would check of a file is either metadata, which the fit check covers
+    when the request is submitted, or the workflow's to read. No output
+    holds a file model, so that every path a workflow gets comes from a file
+    that the file source checks. A program without a backend makes a file
+    model of a local file with :meth:`local`.
     """
 
     metadata: ClassVar[dict[str, Any]] = {'kind': 'raw'}
@@ -108,7 +107,7 @@ class FileModel(BaseModel, frozen=True, extra='forbid'):
     @property
     def path(self) -> Path:
         """
-        The local path of the file's file, when the request runs; raises
+        The local path of the file, when the request runs; raises
         ``ValueError`` before, so that a validator that reads it refuses the
         request when it arrives.
         """

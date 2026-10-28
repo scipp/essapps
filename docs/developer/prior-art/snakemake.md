@@ -17,7 +17,7 @@ Facts were checked on 2026-10-13 against Snakemake 9.27 (commit [`4523356`](http
 Snakemake keys the metadata of each output by its path ([persistence](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/persistence/__init__.py#L372-L374)), and reruns a job when an input is newer than its output.
 Many flags follow from this: `ancient()` ignores an input's timestamp, `--touch` marks outputs current without running, `--latency-wait` waits for late files, and two rules that can produce one path raise `AmbiguousRuleException`.
 Moving a file loses its metadata.
-For us: a reference names an output of a record or a dataset identity, and a record never changes ([README](../README.md#requests-and-records)), so none of these flags has a counterpart.
+For us: a reference names an output of a record or a file identity, and a record never changes ([README](../README.md#requests-and-records)), so none of these flags has a counterpart.
 
 **Recording provenance stayed; acting on it automatically split the users.**
 Snakemake 7.8.0 (May 2022) reruns a job when its parameters, code, set of inputs, or software environment changed, not only when an input is newer ([#1694](https://github.com/snakemake/snakemake/issues/1694)).
@@ -26,8 +26,8 @@ A bug made the environment trigger fire on unchanged environments; 7.8.1 fixed i
 The maintainer kept the new default and pointed users to `--rerun-triggers mtime`, which shipped with 7.8.0, and to `--cleanup-metadata <file>`, which existed before, to silence a trigger.
 He reported as many requests for the new behaviour as complaints about it.
 Every planned job prints the reason it runs ([FAQ](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/docs/project_info/faq.rst#L526-L531)).
-For us: the trigger loop counts a dataset as handled once a record under the rule's label names it, and no record names the rule ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
-So changing a rule's template reduces no handled dataset again, and whether a stored result is out of date stays the user's decision.
+For us: the trigger loop counts a file as handled once a record under the rule's label names it, and no record names the rule ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
+So changing a rule's template reduces no handled file again, and whether a stored result is out of date stays the user's decision.
 If a story asks for it, borrow `--list-changes params` ([cli.py](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/cli.py#L1230-L1236)): a query listing the records under a label whose request differs from what the rule would submit now, for the user to resubmit.
 
 **What a record of a run holds, and at what grain.**

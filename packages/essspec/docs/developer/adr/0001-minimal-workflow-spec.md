@@ -176,9 +176,9 @@ group, such as `limit_range: bool` next to `start` and `stop`. Which of the
 two, why a choice between modes is a union, and what `X | None` means, is
 [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
-**Files are file models.** A file is a parameter, the element of a list
-parameter, or a field of a group, whose type is a *file model*: a subclass of
-`ess.spec.FileModel`, which holds only `file: str`, the file's
+**A file is typed a file model.** A parameter, the element of a list
+parameter, or a field of a group that takes a file is typed a *file model*: a
+subclass of `ess.spec.FileModel`, which holds only `file: str`, the file's
 identity. Its class keywords name the metadata that a fitting file has:
 
 ```python
@@ -186,11 +186,11 @@ class MaskFile(FileModel, kind='mask'):
     """A pixel mask, as XML."""
 ```
 
-A file model is given by reference to a file only, so that the file
-source checks access and the record holds the file's identity. The identity
-is the model's value, and its JSON form is the reference, so a file model is
-known when the request arrives, as a value typed in is. The local path of its
-file exists only when the request runs: the backend attaches it then, and the
+A file model is given by reference to a file only, so that the file source
+checks access and the record holds the file's identity. The identity is the
+model's value, and its JSON form is the reference, so a file model is known
+when the request arrives, as a value typed in is. The local path of the file
+exists only when the request runs: the backend attaches it then, and the
 binding reads it as `run.path`, which raises before. A program without a
 backend makes the model of a local file with `MaskFile.local(path)`. No output
 is or holds a file model or a `Path`, so every path a workflow gets has
@@ -255,7 +255,7 @@ others compute is a group given by reference, and a workflow that reads the
 file outputs the group.
 
 ```python
-class Sample(FileModel, kind='raw'): ...       # the file of a sample run
+class Sample(FileModel, kind='raw'): ...          # the file of a sample run
 class Can(FileModel, kind='raw'): ...
 
 class Reduction(BaseModel):                       # a group of scalars
@@ -503,7 +503,7 @@ meaningless for technique-level batch workflows, and a spec cannot guarantee
 global uniqueness of anything — only the context that enumerates or deploys
 specs can. esslivedata keeps keying workflows by `(instrument, name, version)`,
 supplying the instrument from its registration context. Data-provenance
-identity (which spec, parameter values, and files produced a file) similarly
+identity (which spec, parameter values, and files produced an output) similarly
 composes spec identity with deployment context; the spec's contribution is
 being serializable and versioned.
 

@@ -79,7 +79,7 @@ to a record or an accumulator is one the client may read, and its data fit the
 type at its place. Each group given inline is validated whole then, so that
 its validators run. In the *call phase*, on a worker, the backend reads the
 data each reference names, an output, or for a file the file model,
-with the local path of its file attached, and makes each value by its field,
+with the file's local path attached, and makes each value by its field,
 a row of a list by its element type, of the JSON form the log holds, with the
 data read in place of each reference (see
 :func:`ess.spec.places.validated`). For a plain request it makes the params

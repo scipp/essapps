@@ -117,10 +117,10 @@ A spec has two pydantic models:
 | outputs | results | (none) | the data the workflow returns |
 
 ```python
-class Sample(FileModel, kind='raw'):           # a file model: the file of a sample run
+class Sample(FileModel, kind='raw'):              # a file model: the file of a sample run
     ...
 
-class Can(FileModel, kind='raw'):              # the file of the empty-can run
+class Can(FileModel, kind='raw'):                 # the file of the empty-can run
     ...
 
 class Reduction(BaseModel):                       # a group of scalars
@@ -156,7 +156,7 @@ A request for `IOFQ` gives each parameter in one of two ways, written inline or 
 
 ```python
 {'reduction': {'bins': 50},                       # written inline: the group's JSON form
- 'sample': file(run=611),                      # a reference to a file
+ 'sample': file(run=611),                         # a reference to a file
  'can': file(run=614),
  'transmission': t611.ref('transmission')}        # a reference to an output of the record t611
 ```
@@ -222,7 +222,7 @@ transmission: sc.DataArray                        # refused by WorkflowSpec: a p
 {'reduction': {'bins': r.ref('bins')}}            # refused at submission: a reference to an output is at a root place only
 ```
 
-**Files.** A file is a parameter, the element of a list parameter, or a field of a group, whose type is a *file model*: a subclass of `ess.spec.FileModel`, which holds `file: str`, the file's identity, and nothing else.
+**Files.** A parameter, the element of a list parameter, or a field of a group takes a file when its type is a *file model*: a subclass of `ess.spec.FileModel`, which holds `file: str`, the file's identity, and nothing else.
 Its class keywords name the metadata that a fitting file has, so that a picker offers only files of its kind; without keywords, it takes raw files:
 
 ```python
@@ -244,7 +244,7 @@ A value that is read from a file by some users and computed by others is a group
 A number is a field of a group, such as the `bins` of a `Reduction`:
 
 ```python
-sample: Path                                      # refused by WorkflowSpec: a file is a file model
+sample: Path                                      # refused by WorkflowSpec: a file is typed a file model
 bins: int = 100                                   # refused by WorkflowSpec: not a group
 ```
 
@@ -453,7 +453,7 @@ The same beam centre is typed in by one user and computed by another:
 ```python
 runs = {'sample': file(run=60339), 'can': file(run=60338), 'transmission': t.ref('transmission')}
 result = client.submit(IOFQ, params={**runs, 'beam_centre': BeamCentre(x=0.012, y=-0.003)})  # written inline
-centre = client.submit(BEAM_CENTRE, params={'direct_beam': file(run=60330)})             # pending
+centre = client.submit(BEAM_CENTRE, params={'direct_beam': file(run=60330)})                # pending
 result = client.submit(IOFQ, params={**runs, 'beam_centre': centre.ref('centre')})          # a reference
 ```
 
@@ -636,9 +636,9 @@ It matches raw files unless it names another kind, such as calibration.
 A file *fits* a file model when the selector of the model's metadata, `Selector(**MaskFile.metadata)`, matches it, so a form lists for a file model only the files that the backend accepts there.
 
 ```python
-samples = client.files.list(Selector(role='sample'))       # file references, usable as values
-for run in client.files.watch(Selector(scan='17')): ...   # existing ones first, then new ones
-client.files.metadata(run)['sample']                       # the source's current values
+samples = client.files.list(Selector(role='sample'))          # file references, usable as values
+for run in client.files.watch(Selector(scan='17')): ...      # existing ones first, then new ones
+client.files.metadata(run)['sample']                          # the source's current values
 ```
 
 ## Combining runs: tables
@@ -722,9 +722,9 @@ The backend keeps it for a client ([ADR 0006](adr/0006-the-unit-is-an-accumulati
 iofq = client.accumulator(Template(IOFQ_MULTI, params={'reduction': Reduction(bins=100),
                                                        'transmission': t.ref('transmission')},
                                    blanks=('sample', 'can')))
-iofq.push(sample=[file(run=611)])                                  # one row
-iofq.push(sample=[file(run=612), file(run=613)])                # two rows of one table
-iofq.push(sample=[file(run=617)], can=[file(run=614)])          # rows of two tables
+iofq.push(sample=[file(run=611)])                                     # one row
+iofq.push(sample=[file(run=612), file(run=613)])                      # two rows of one table
+iofq.push(sample=[file(run=617)], can=[file(run=614)])                # rows of two tables
 client.output(iofq, 'iofq')                                           # the output of state 3
 ```
 
@@ -1139,7 +1139,7 @@ Arrival, order, and placement hold up to rounding.
 Not visible in the code of notebooks, apps, or workflow packages:
 
 - how history and outputs are stored, moved, and dropped
-- how a run number or file becomes a file identity
+- how a run number or path becomes a file identity
 - when and where a request runs, and where a stage or a driver lives
 - the format of persisted outputs and the store's layout
 - how the service notices a vanished client and sets the cap per client (scipp/essapps#27)

@@ -171,8 +171,8 @@ def total(params: SumParams) -> ValueOutputs:
     return ValueOutputs(value=Amount(value=value))
 
 
-def _read(file: FileModel) -> Amount:
-    return Amount(value=read_file(file.path))
+def _read(model: FileModel) -> Amount:
+    return Amount(value=read_file(model.path))
 
 
 def runs(params: RunsParams) -> ValueOutputs:
@@ -512,7 +512,7 @@ def test_a_table_takes_a_list_of_rows(client: Client) -> None:
 
 
 def test_a_file_model_given_inline_is_refused(client: Client) -> None:
-    refused = 'is not a file; SampleRun is given by reference to a file'
+    refused = 'is not a reference; SampleRun is given by reference to a file'
 
     with pytest.raises(SubmitError, match=rf"^sample: '/data/run-1.json' {refused}"):
         client.submit(LOAD, params={'sample': '/data/run-1.json'})
@@ -520,7 +520,7 @@ def test_a_file_model_given_inline_is_refused(client: Client) -> None:
         client.submit(LOAD, params={'sample': {'path': '/data/run-1.json'}})
 
 
-def test_a_file_given_by_path_is_the_file_of_that_path(
+def test_a_path_names_the_file_at_that_path(
     client: Client, files: FakeFiles, gate: Gate
 ) -> None:
     gate.open.set()
@@ -799,7 +799,7 @@ def test_rows_are_distinct_as_a_whole(client: Client) -> None:
 def test_rows_of_file_models_are_distinct_by_identity_not_by_path(
     client: Client, files: FakeFiles
 ) -> None:
-    # Two files of one run, by PID, share the run's file.
+    # Two files of one run, by PID, share the run's local path.
     a = files.measure(7, 1.0, pid='x')
     b = files.measure(7, 2.0, pid='y')
     assert files.path(a) == files.path(b)

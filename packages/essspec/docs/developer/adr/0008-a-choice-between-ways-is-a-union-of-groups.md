@@ -114,7 +114,7 @@ transmission: ComputedTransmission        # a group with a data value, by refere
                                           # or the output of a workflow that reads the sample's file
 ```
 
-A transmission computed from a transmission run is not an alternative of the union, since an alternative holds scalars only: a spec that computes it takes the run as a parameter of a file model, `transmission_run: TransmissionRun`, in place of the union, and computes the transmission in a step of its workflow.
+A transmission computed from a transmission run is not an alternative of the union, since an alternative holds scalars only: a spec that computes it takes the run as a parameter typed a file model, `transmission_run: TransmissionRun`, in place of the union, and computes the transmission in a step of its workflow.
 
 **`X | None` means *without X*.**
 `mask: PixelMask | None = None` applies no mask for `None`; `direct_beam: DirectBeam | None`, a file model of the direct-beam run, applies no direct-beam correction.
@@ -144,7 +144,7 @@ It has no exception for data values: `None` in `transmission: ComputedTransmissi
 **Only a parameter is typed `X | None`.**
 A scalar field of a group is never typed `X | None`, so each toggle is over the widget of a whole parameter.
 A choice between modes is a union of groups.
-An optional part with fields that need values is a parameter typed `X | None`: an optional file is a file model, `direct_beam: DirectBeam | None`, and an optional data value is a group of it, `mask: PixelMask | None`.
+An optional part with fields that need values is a parameter typed `X | None`: `direct_beam: DirectBeam | None` for an optional file, with `DirectBeam` a file model, and `mask: PixelMask | None` for an optional data value, with `PixelMask` a group that holds it.
 A `bool` field switches one optional part of a group whose fields all have defaults, such as `limit_range: bool` next to `start` and `stop`, both with defaults; the form shows those fields either way.
 A list that may be empty is `[]`, not `None`: a list parameter is not typed `list[X] | None`, and its element is not typed `X | None`.
 

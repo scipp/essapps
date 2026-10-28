@@ -17,10 +17,10 @@ in, or computed by ``TRANSMISSION`` from a transmission run. ``FORWARD`` takes
 the I(Q) that ``IOFQ`` or ``IOFQ_MULTI`` outputs, as the group ``IofQ``, since a
 reference stands for a group only.
 
-Each parameter is a group. A file is a file model, a group given by
-reference to a file: ``Sample``, ``Can``, or ``Run``. A ``PipelineBinding``
-keys each parameter by its class, so the sample and the can are classes of
-their own.
+Each parameter is a group. A parameter that takes a file is typed a file
+model, a group given by reference to a file: ``Sample``, ``Can``, or ``Run``. A
+``PipelineBinding`` keys each parameter by its class, so the sample and the can
+are classes of their own.
 
 workflow-authors.ipynb writes the specs and bindings below step by step; the other
 notebooks import them from here.
@@ -84,7 +84,7 @@ class IofQ(BaseModel):
 
 
 class Run(FileModel):
-    """A run's file, of a raw file."""
+    """A run's raw file."""
 
 
 class Sample(Run):

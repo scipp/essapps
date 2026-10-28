@@ -12,10 +12,10 @@ file at a field typed a file model by reference, but a field is not a
 place for a reference to an output::
 
     {
-        'sample': file(run=101),                    # sample
-        'centre': finder.ref('centre'),                # centre
-        'reduction': {'bins': 50, 'banks': [1, 2]},    # reduction
-        'runs': [file(run=102), file(run=103)],  # runs, runs[0], runs[1]
+        'sample': file(run=101),                     # sample
+        'centre': finder.ref('centre'),              # centre
+        'reduction': {'bins': 50, 'banks': [1, 2]},  # reduction
+        'runs': [file(run=102), file(run=103)],      # runs, runs[0], runs[1]
         'specimen': {'run': file(run=104), 'thickness': 2.0},  # specimen
     }
 
@@ -26,7 +26,7 @@ The type at a root place decides what the request writes there, with
 ========================================  =====================================
 Type at the root place                    The request writes
 ========================================  =====================================
-a file model                           a reference to a file
+a file model                              a reference to a file
 a group                                   an object of its fields, unless one
                                           is a data value, with a reference to
                                           a file at a field typed a file
@@ -54,11 +54,11 @@ could fill them.
 A reference to an output stands for a whole group. A reference to a file
 fits a file model whose metadata the file has (see
 :class:`~ess.spec.parameters.FileModel`). A reference to an output fits
-the root place's type, and no output holds a file model, so that a file
-comes only from a file, which the file source checks. A
-number, a string, or a ``sc.DataArray`` names no role: every output of its
-type would fit, so a value computed by another workflow comes as a group,
-such as a found beam centre, and a data value is a field of one::
+the root place's type, and no output holds a file model, so that every
+file comes from the file source, which checks it. A number, a string, or a
+``sc.DataArray`` names no role: every output of its type would fit, so a
+value computed by another workflow comes as a group, such as a found beam
+centre, and a data value is a field of one::
 
     class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):
         transmission: sc.DataArray  # a data value: given by reference only
@@ -202,7 +202,7 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
     if value is None and nullable:
         return None
     if field_types.is_file(tp):
-        raise _not_a_file(loc, tp, value)
+        raise _not_a_file_ref(loc, tp, value)
     if union is not None or field_types.is_group(tp):
         fields = value
         if not isinstance(fields, Mapping):
@@ -263,15 +263,15 @@ def _file_held(loc: Loc, tp: Any, value: Any, on_ref: OnRef) -> Any:
     if (ref := ref_at(loc, value)) is None:
         if value is None:
             return value  # refused when the group is validated, unless X | None
-        raise _not_a_file(loc, tp, value)
+        raise _not_a_file_ref(loc, tp, value)
     held = on_ref(loc, ref, tp)
     return held.model_dump(by_alias=True) if isinstance(held, BaseModel) else held
 
 
-def _not_a_file(loc: Loc, tp: Any, value: Any) -> ParamsError:
+def _not_a_file_ref(loc: Loc, tp: Any, value: Any) -> ParamsError:
     return _refused(
         loc,
-        f'{value!r} is not a file; {field_types.type_name(tp)} is given by '
+        f'{value!r} is not a reference; {field_types.type_name(tp)} is given by '
         'reference to a file, such as file(path=...)',
     )
 

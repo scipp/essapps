@@ -60,7 +60,7 @@ class Can(Run): ...
 A request gives a table of runs as a list of file references, such as `runs`.
 An output without a type in the list of toy specs is a `sc.Variable`.
 `BeamCentre`, `Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each, named by its role: `position`, `fraction`, `counts`, and `curve`.
-`ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` is a file model, a file of it.
+`ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` is the file model of a file that holds it.
 `Parts` is a group of two `sc.Variable`s.
 A reference to an output fits a root place when the output is of the class of the group there: `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `VANADIUM`'s and `LOAD_NORMALIZATION`'s `normalization` fit `IOFQ`'s `normalization`, `FIND_CENTRE`'s `centre` and `CONTRIBUTE`'s `transmission` fit `CENTRED_MULTI`'s `centre` and `transmission`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
@@ -90,7 +90,8 @@ Every backend in the stories reads the same files and publishes to the same `sci
 `measure(n, counts, **fields)` makes run `n` appear as a raw file with the given counts and metadata, and returns its reference.
 The metadata of such a file also holds its run number, as `run`; `measure(..., proposal=...)` makes the file belong to another proposal.
 `files` is the fake file source of every backend; stories query it through `client.files` as in README.md.
-It has a helper for tests: `files.add_published(entry)` lists a published entry as a derived file, as SciCat does, and returns its reference.
+It has a helper for tests: `files.add_published(entry)` lists a published entry as a file of kind `'derived'` and returns its reference.
+SciCat lists such an entry as a derived dataset.
 `scicat` is a fake publisher; `scicat.entries[pid]` is a published entry, with `.provenance`.
 `folder` is a directory with files that hold counts, as `measure` files do.
 `corrupt(run)` makes a file unreadable, with the failure message `'file signature not found'`; `repair(run)` undoes it.
@@ -587,7 +588,7 @@ assert [c.counts.value for c in cuts] == [float(k) for k in range(1, 301)]
 assert client.output(total, 'volume').counts.values.tolist() == [300.0, 45150.0]
 assert total.request == Request(VOLUME, params={'runs': pushed})   # push order
 assert client.records() == [total]                             # the cuts made no record
-assert len(client.provenance(total).files()) == 300         # run 5, measured again, once
+assert len(client.provenance(total).files()) == 300            # run 5, measured again, once
 ```
 
 `watch` yields run 5 once, although its file arrives twice.
@@ -646,7 +647,7 @@ assert loop.status(rule).reason == '1: unknown spec sans-iofq/v1'   # member 1
 
 ### E3. Reduction of our own output
 
-Actor: none; a failure mode. Goal: a published result that SciCat lists as a file does not trigger the rule.
+Actor: none; a failure mode. Goal: a published result that SciCat lists as a dataset does not trigger the rule.
 
 ```python
 rule = Rule('auto-iofq', Template(IOFQ, params={'normalization': None}, blanks=('sample',)), selector=Selector(),   # every raw file
@@ -660,7 +661,7 @@ files.add_published(scicat.entries[pid])
 assert loop.step() == []
 ```
 
-A published entry is a derived file, and a selector matches only raw files unless it names another kind.
+A published entry is a file of kind `'derived'`, and a selector matches only raw files unless it names another kind.
 
 ### E4. Template improved during a beamtime
 
@@ -678,11 +679,11 @@ second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
 (after,) = TriggerLoop(client, rules=[improved]).step()
 
 user = connect()                                                # any client of the proposal
-assert after.request.files() == [second]                     # run 1 is not reduced again
+assert after.request.files() == [second]                        # run 1 is not reduced again
 assert [user.output(r, 'iofq').values.tolist() for r in (before, after)] == [
     [3.0, 7.0], [2.0, 7.0]]
 stale = [r for r in user.records(label='iofq') if r.request.params['reduction']['threshold'] != 1.5]
-assert [r.request.files() for r in stale] == [[first]]       # to reprocess, if the user wants
+assert [r.request.files() for r in stale] == [[first]]          # to reprocess, if the user wants
 ```
 
 The second loop stands in for a running trigger loop whose rule is replaced. It learns that run 1 is handled from the records under `iofq`.
@@ -859,7 +860,7 @@ assert client.output(total, 'centred').values.tolist() == [0.25, 0.75]   # ([1, 
 assert client.provenance(total).records() == [t]
 ```
 
-Each row of `sample` is a file model, which holds only the path of its file.
+Each row of `sample` is a file model, which holds only its file's identity.
 The transmission applies to the summed runs, so it is a parameter of its own, given by reference to the record that computed it.
 `Transmission` has a field that is a data value, so a transmission takes a reference only.
 The provenance of the sum reaches that record.
@@ -875,4 +876,4 @@ What the design leaves open or defers, with the stories each item affects.
 - **Labels and members** (D1, D2, and every story that calls `apply`): `member_field`, and labels and members on records, are tentative; README.md open question 3.
 - **Grouping** (system story D7): spreading one accumulator over several nodes needs a merge of two drivers; README.md open question 1.
 - **Recomputing in a record's environment** (F2): deferred.
-- **Publishing** (C2): a published output is a file in the catalogue, which a workflow reads as it reads a run; `publish` and SciCat are not implemented.
+- **Publishing** (C2): a published output is a derived dataset in the catalogue, and a workflow reads its file as it reads a run; `publish` and SciCat are not implemented.

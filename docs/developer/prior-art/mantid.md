@@ -34,7 +34,7 @@ In 2024, on ISIS's analysis machines (IDAaaS), the journal began to list runs se
 Retrying failed rows at each poll was considered and rejected as confusing for users.
 The fix lists only runs found in the data cache's index ([mantid#37449](https://github.com/mantidproject/mantid/pull/37449)), together with slower polling ([mantid#36895](https://github.com/mantidproject/mantid/pull/36895)).
 For us: the trigger loop makes the same choice, a failed record counts as handled ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
-So the dataset source must list a dataset only once its file is complete; otherwise the first reduction fails and the dataset is never reduced again without a person.
+So the file source must list a run's file only once it is complete; otherwise the first reduction fails and the file is never reduced again without a person.
 This bears on the Open question of how long after the file writer finishes the catalogue lists a run ([data](../../requirements/data.md#open)).
 
 **Typed and computed values are kept apart.**

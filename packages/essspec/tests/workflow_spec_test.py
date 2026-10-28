@@ -122,7 +122,7 @@ class Exposure:
 
 
 class CalibrationFile(FileModel, kind='calibration'):
-    """A file model with a field other than its path: refused."""
+    """A file model with a field other than ``file``: refused."""
 
     run: int
 
@@ -154,7 +154,7 @@ class InitMaskFile(MaskFile):
 
 
 class BeamStopMaskFile(MaskFile):
-    """A subclass of a subclass of FileModel that keeps its file."""
+    """A subclass of a subclass of FileModel that keeps its field ``file``."""
 
 
 class LocalPath(Path):
@@ -437,17 +437,17 @@ NOT_AN_OUTPUT = re.escape(
     'an output is a type, possibly typed X | None, or a list or a dict of one'
 )
 OUTSIDE_A_FILE_MODEL = re.escape(
-    "a Path is outside a file model; a file is a parameter of a file model, "
-    "such as mask: MaskFile with class MaskFile(FileModel, kind='mask'), given "
-    "by reference to a file"
+    "a Path is outside a file model; a parameter or a field that takes a file is "
+    "typed a file model, such as mask: MaskFile with class MaskFile(FileModel, "
+    "kind='mask'), and given by reference"
 )
 
 KEEPS_THE_FILE = re.escape(
-    'a file model keeps the file of FileModel, without a default or an alias'
+    'a file model keeps the field file of FileModel, without a default or an alias'
 )
 FILE_MODEL_OUTPUT = re.escape(
-    'is a file model; no output holds one, so that a file comes from a '
-    'file, which the file source checks'
+    'is a file model; no output holds one, so that every file comes from the '
+    'file source, which checks it'
 )
 
 
@@ -853,8 +853,8 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', calibration=(CalibrationFile, ...))},
-                r"P.calibration: CalibrationFile: a file model holds only "
-                r"file, not \['run'\]",
+                r"P.calibration: CalibrationFile: a file model holds only the "
+                r"field file, not \['run'\]",
             ),
             *(
                 (
@@ -895,7 +895,7 @@ class TestModelRules:
                         ),
                     )
                 },
-                r"P.mask: LabelledMask: a file model holds only file, not "
+                r"P.mask: LabelledMask: a file model holds only the field file, not "
                 r"\['label'\]",
             ),
             (
@@ -1779,7 +1779,7 @@ class TestSerialization:
             {'by': {'mode': 'time', 'seconds': ref}},
             {'by': {'mode': ref, 'seconds': 1.0}},  # at a tag
             {'gate': {'mode': 'window', 'start': ref}},
-            {'sample': ref},  # a file is given by a file only
+            {'sample': ref},  # a file model takes a reference to a file only
             {'ranges': ref},  # a list is not given by one reference
             {'ranges': [{'start': ref, 'stop': 1.0}]},
         ):

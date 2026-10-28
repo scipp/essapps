@@ -3,11 +3,11 @@
 """
 Toy specs and fixtures of the user stories (docs/developer/user-stories.md).
 
-A file made by ``measure`` is a file of a list of counts. The toy specs
-compute what the table in user-stories.md says, so that every number can be
-checked by hand. Each toy workflow takes an instance of its spec's params model,
-where each run is a file model, the path of its file, and reads the counts of
-each file.
+A file made by ``measure`` holds a list of counts. The toy specs compute
+what the table in user-stories.md says, so that every number can be checked
+by hand. Each toy workflow takes an instance of its spec's params model,
+where each run is a file model with the file's local path, and reads the
+counts of each file.
 
 After each story, every record whose outputs a client of the story still keeps
 is run again as its request by that client, and must give the same outputs
@@ -136,7 +136,7 @@ class BeamCentre(Data):
 class ComputedNormalization(Data):
     """
     The normalization that ``VANADIUM`` computes from a vanadium run, or that
-    ``LOAD_NORMALIZATION`` reads from a published file: a group that holds a
+    ``LOAD_NORMALIZATION`` reads from the catalogue: a group that holds a
     data value, so a request gives it by reference only.
     """
 
@@ -144,7 +144,10 @@ class ComputedNormalization(Data):
 
 
 class PublishedNormalization(FileModel):
-    """A normalization published to the catalogue, as a file of its factor (C2)."""
+    """
+    A normalization published to the catalogue, read back as a file that holds
+    its factor (C2).
+    """
 
 
 class IofQParams(Data):
@@ -275,7 +278,7 @@ LOAD_NORMALIZATION = _spec(
 
 
 def load_normalization(params: LoadNormalizationParams) -> VanadiumOutputs:
-    """The normalization of a published file of its factor (C2)."""
+    """The normalization read from a published file that holds its factor (C2)."""
     factor = sc.scalar(float(read_file(params.published.path)))
     return VanadiumOutputs(normalization=ComputedNormalization(factor=factor))
 
@@ -713,8 +716,8 @@ Measure = Callable[..., FileRef]
 @pytest.fixture
 def measure(files: FakeFiles) -> Measure:
     """
-    Make run ``n`` appear as a file of the given counts, with the given
-    metadata; return its identity.
+    Make run ``n`` appear as a file that holds the given counts, with the
+    given metadata; return its identity.
     """
 
     def measure(n: int, counts: list[float], **fields: Any) -> FileRef:

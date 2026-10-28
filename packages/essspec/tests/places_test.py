@@ -312,7 +312,7 @@ def test_a_file_model_given_inline_is_refused(name: str, value: Any, loc: Loc) -
         held(MaskParams, name, value, _found)
     ((at, msg),) = raised.value.errors
     assert at == loc
-    assert 'is not a file; ' in msg
+    assert 'is not a reference; ' in msg
     assert 'is given by reference to a file, such as file(path=...)' in msg
 
 

@@ -20,7 +20,10 @@ from ess.spec import FileRef
 def file(
     *, run: int | None = None, path: Path | str | None = None, pid: str | None = None
 ) -> FileRef:
-    """A reference to a file by its run number, its path, or its PID."""
+    """
+    A reference to a file by its run number, its path, or the PID of the
+    SciCat dataset that holds it.
+    """
     given = {'run': run, 'path': path, 'pid': pid}
     named = {kind: value for kind, value in given.items() if value is not None}
     if len(named) != 1:
@@ -73,8 +76,8 @@ class FileSource(Protocol):
 
     def path(self, ref: FileRef) -> Path:
         """
-        A local path to the file's file, for a workflow to read; raises
-        ``OSError`` if the file cannot be had.
+        A local path to the file, for a workflow to read; raises ``OSError``
+        if the file cannot be had.
         """
         ...
 

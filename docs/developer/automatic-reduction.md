@@ -8,7 +8,7 @@ Its stories are S7, C1, D1 to D6, and E1 to E4 in [user-stories.md](user-stories
 
 `apply` fills a template for each file and returns the requests keyed by member, the value of a metadata field (by default the run number).
 It reads metadata through `client.files` and builds plain data; it submits nothing.
-The examples of batches, lookups, and rules reduce transmission runs with `TRANSMISSION` ([README.md](README.md#specs-and-bindings)), whose parameters `run` and `empty_beam` are file models, each a run's file given by reference to a file, and whose output is `transmission: ComputedTransmission`.
+The examples of batches, lookups, and rules reduce transmission runs with `TRANSMISSION` ([README.md](README.md#specs-and-bindings)), whose parameters `run` and `empty_beam` are file models, each a run's file given by reference, and whose output is `transmission: ComputedTransmission`.
 
 ```python
 template = Template(TRANSMISSION, params={'empty_beam': file(run=60336)}, blanks=('run',))
@@ -69,7 +69,7 @@ loop.status(rule).reason     # why the rule submitted nothing or skipped a file
 loop.run()                   # steps forever
 ```
 
-The loop keeps no memory of its own. A rule has handled a file when a record under the rule's label holds it at the blank `at`, or for a series in a row of that blank table, `runs[i]`, so a restarted or replaced loop does not reduce a file again, and a file whose file arrives again keeps its identity and is not reduced twice.
+The loop keeps no memory of its own. A rule has handled a file when a record under the rule's label holds it at the blank `at`, or for a series in a row of that blank table, `runs[i]`, so a restarted or replaced loop does not reduce a file again, and a file that arrives again keeps its identity and is not reduced twice.
 A file that the record holds at another place, such as an empty-beam run that a lookup fills, does not count.
 This holds while the proposal's history is kept. A running loop keeps it, since a proposal with an open client is not idle (README.md, [How long records and values are kept](README.md#how-long-records-and-values-are-kept)).
 

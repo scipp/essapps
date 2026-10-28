@@ -7,7 +7,7 @@ A :class:`WorkflowSpec` names a workflow and holds two pydantic models: the
 *params*, everything a request gives the workflow, and the *outputs*, the
 results it returns. A spec of an I(Q) reduction::
 
-    class RunFile(FileModel, kind='raw'):  # a file: from a file
+    class RunFile(FileModel, kind='raw'):  # a file: given by reference
         ...
 
     class WavelengthRange(BaseModel):
@@ -72,13 +72,13 @@ from the field types (see :mod:`ess.spec.field_types`). Making a spec checks
 them. Each comment below names a rule that a spec breaks, with the fix::
 
     class Geometry(BaseModel):
-        # A file is a parameter of a file model, given by reference to a
-        # file: geometry: GeometryFile, with class
-        # GeometryFile(FileModel, ...).
+        # A parameter or a field that takes a file is typed a file model:
+        # geometry: GeometryFile, with class GeometryFile(FileModel, ...).
         file: Path
 
     class CalibrationFile(FileModel, kind='calibration'):
-        # A file model holds only file: the file's metadata say the rest.
+        # A file model holds only the file's identity: the file's metadata
+        # say the rest.
         run: int
 
     class Reduction(BaseModel):
@@ -138,8 +138,8 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         iofq: sc.DataArray
         # An output is X, X | None, list[X], or dict[str, X], not a union.
         width: float | str
-        # No output holds a file model or a Path: a file comes from a
-        # file.
+        # No output holds a file model or a Path: every file comes from the
+        # file source.
         raw: RunFile
 
     WorkflowSpec(..., params=Params, outputs=Outputs, tables=('sample_runs',))
@@ -357,7 +357,7 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     ==================================  =================================
     Forms at the place                  Widget
     ==================================  =================================
-    a reference to a file only       a file picker (a file model)
+    a reference to a file only          a file picker (a file model)
     the object of a group's fields      the group's fields
     a reference to an output only       a record picker (a group that
                                         holds a data value)
@@ -554,15 +554,15 @@ def _alias_problems(annotation: Any) -> list[str]:
 def _path_problems(annotation: Any) -> list[str]:
     """
     Refuse each ``Path`` that ``annotation`` is made of outside a file
-    model, named by the field of the class that holds it, if any: a file is
-    a parameter of a file model, given by reference to a file, so that
-    the file source checks each file a workflow reads.
+    model, named by the field of the class that holds it, if any: a
+    parameter or a field that takes a file is typed a file model and given by
+    reference, so that the file source checks each file a workflow reads.
     """
     found = _found(annotation, _is_path, skip=field_types.is_file)
     return [
-        f'{where}a Path is outside a file model; a file is a parameter of a '
-        "file model, such as mask: MaskFile with class MaskFile(FileModel, "
-        "kind='mask'), given by reference to a file"
+        f'{where}a Path is outside a file model; a parameter or a field that '
+        "takes a file is typed a file model, such as mask: MaskFile with class "
+        "MaskFile(FileModel, kind='mask'), and given by reference"
         for where in dict.fromkeys(where for where, _ in found)
     ]
 
@@ -642,11 +642,13 @@ def _file_model_problems(model: type[BaseModel]) -> list[str]:
     attaches its local path (see :class:`~ess.spec.parameters.FileModel`).
     """
     if other := [n for n in model.model_fields if n != 'file']:
-        return [f'{model.__name__}: a file model holds only file, not {other}']
+        return [
+            f'{model.__name__}: a file model holds only the field file, not {other}'
+        ]
     # The repr of a FieldInfo shows each attribute that a declaration sets.
     if repr(model.model_fields['file']) != repr(FileModel.model_fields['file']):
         return [
-            f'{model.__name__}.file: a file model keeps the file of '
+            f'{model.__name__}.file: a file model keeps the field file of '
             'FileModel, without a default or an alias'
         ]
     own = {
@@ -831,13 +833,12 @@ def _output_file_problems(annotation: Any) -> list[str]:
     """
     Refuse each file model that ``annotation``, of an output, is made of,
     named by the field of the class that holds it, if any: no output holds
-    one, so that a file comes from a file, which the file source
-    checks.
+    one, so that every file comes from the file source, which checks it.
     """
     return [
         f'{where}{field_types.type_name(model)} is a file model; no output '
-        'holds one, so that a file comes from a file, which the file source '
-        'checks'
+        'holds one, so that every file comes from the file source, which '
+        'checks it'
         for where, model in _found(annotation, field_types.is_file)
     ]
 
