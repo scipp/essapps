@@ -683,23 +683,25 @@ class _Rows:
             self._ref = 'Record' if self._model is None else 'File'
         self._editor = _Choice('', _ways(element, listing), element.tag, UNSET)
         self._table = pn.widgets.Tabulator(
-            disabled=True, selectable=True, sortable=False, sizing_mode='stretch_width'
+            disabled=True,
+            selectable=True,
+            sortable=False,
+            show_index=False,
+            layout='fit_columns',
+            sizing_mode='stretch_width',
         )
         self._table.param.watch(lambda _: self._load(), 'selection')
-        self._heading = pn.pane.Markdown()
         self._message = pn.pane.Markdown()
-        remove = pn.widgets.Button(label='Remove')
-        remove.on_click(lambda _: self._remove())
-        self._update = pn.widgets.Button(label='Update row')
-        self._update.on_click(lambda _: self._write(self._selected()))
         add = pn.widgets.Button(label='Add as new row')
         add.on_click(lambda _: self._write(None))
+        self._update = pn.widgets.Button(label='Update row', disabled=True)
+        self._update.on_click(lambda _: self._write(self._selected()))
+        remove = pn.widgets.Button(label='Remove')
+        remove.on_click(lambda _: self._remove())
         self._panel = pn.Column(
             self._table,
-            remove,
-            self._heading,
             self._editor.panel(),
-            pn.Row(self._update, add),
+            pn.Row(add, self._update, remove),
             self._message,
             name=label,
             sizing_mode='stretch_width',
@@ -716,7 +718,6 @@ class _Rows:
         i = self._selected()
         if i is not None:
             self._editor.set((self._rows or [])[i])
-        self._heading.object = 'New row' if i is None else f'Row {i}'
         self._update.disabled = i is None
         self._message.object = ''
 
@@ -770,9 +771,7 @@ class _Rows:
             ]
         # Of text, since Tabulator formats a column by its type when first
         # shown, and a column without rows would be one of numbers.
-        self._table.value = pd.DataFrame(
-            columns, index=pd.RangeIndex(len(rows), name='#'), dtype=str
-        )
+        self._table.value = pd.DataFrame(columns, dtype=str)
 
     def value(self, loc: Loc, missing: _Missing) -> Any:
         if self._rows is None:
@@ -834,6 +833,7 @@ class Form:
                 *(w.panel() for w in self._params.values()),
                 tabs_location='left',
                 sizing_mode='stretch_width',
+                max_width=800,
             ),
             sizing_mode='stretch_width',
         )
