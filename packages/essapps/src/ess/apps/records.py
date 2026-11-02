@@ -127,16 +127,13 @@ class Request(BaseModel, frozen=True):
     """
     A spec and its params, by name.
 
-    ``params`` is an instance of the params model, if every value is given
-    inline, or a dict by name: an inline value, such as a group as a model or
-    a dict, or a reference, as the parameter's type allows; a list of these
-    for a list parameter. A file model is always given by reference to a
-    file, such as ``file(path=...)``, at a parameter, an element of a list
-    parameter, or a field of a group. A reference to an output stands for a
-    whole group, at a parameter or an element of a list parameter; a union of
-    groups is written inline only. ``"@ref"`` is reserved at every depth, so
-    the references of a request are found without its spec (see
-    :func:`ess.spec.refs.iter_refs`).
+    ``params`` is an instance of the params model, which cannot hold a
+    reference to an output, or a dict by name: a group as a model or a dict, a
+    file, ``file(...)``, a reference to an output, or ``None``, as the
+    parameter's type allows; a list of these for a list parameter. The rules
+    are stated in :mod:`ess.spec._workflow_spec`. A JSON object with the key
+    ``"@ref"`` is a reference at any depth, so the references and files of a
+    request are found without its spec (see :func:`ess.spec.refs.iter_refs`).
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra='forbid')

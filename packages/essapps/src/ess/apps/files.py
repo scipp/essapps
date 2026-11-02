@@ -21,8 +21,9 @@ def file(
     *, run: int | None = None, path: Path | str | None = None, pid: str | None = None
 ) -> FileRef:
     """
-    A reference to a file by its run number, its path, or the PID of the
-    SciCat dataset that holds it.
+    A file by its run number, its path, or the PID of the SciCat dataset
+    that holds it, as a request writes it. The backend resolves it to the
+    file's identity when the request is submitted.
     """
     given = {'run': run, 'path': path, 'pid': pid}
     named = {kind: value for kind, value in given.items() if value is not None}

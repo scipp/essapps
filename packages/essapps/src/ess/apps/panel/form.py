@@ -3,16 +3,17 @@
 """
 A form for a spec's params, generated from its pydantic models, on a client.
 
-The form gives the params as a request does: the JSON form of each place given
-inline, and a reference at each other place. It is filled from params as a
-record holds them, so that a record's request can be edited and submitted
-again.
+The form gives the params as a request does: at each parameter, or each row
+of a list parameter, the JSON form of a group or a file, a reference to an
+output, or ``None``. It is filled from params as a record stores them, so
+that a record's request can be edited and submitted again.
 
 The form has a tab per parameter, with the tabs on the left, as
-esslivedata's dashboard has. The widget follows from what a request writes
-at each root place, by the type :func:`ess.spec.places.root_type` gives, as
-the params schema does, and is labelled by :func:`ess.spec.places.title`, a
-parameter by the title of its tab:
+esslivedata's dashboard has. The widget follows from what a request may write
+at each parameter or row, by the type :func:`ess.spec.places.root_type`
+gives, as the params schema does (see :mod:`ess.spec._workflow_spec`), and
+is labelled by :func:`ess.spec.places.title`, a parameter by the title of its
+tab:
 
 =========================  ================================================
 Where                      Widget
@@ -219,7 +220,7 @@ def _choice(
     listing: Listing,
 ) -> _Choice:
     """
-    The choice of ways at a root place of type ``tp``, as
+    The choice of ways at a parameter or row of type ``tp``, as
     :func:`ess.spec.places.root_type` gives it with ``none`` and ``metadata``.
     """
     tag = None
@@ -244,8 +245,8 @@ def _field(
     group: type[BaseModel], name: str, listing: Listing
 ) -> _Scalar | _Scalars | _File:
     """
-    The input of the field ``name`` of ``group``, written inline, or the
-    picker of a file model.
+    The input of the field ``name`` of ``group``: of a scalar or a list of
+    scalars, or the picker of a file model.
     """
     info = group.model_fields[name]
     if (model := field_types.file_model(info.annotation)) is not None:
