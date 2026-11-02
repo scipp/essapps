@@ -21,16 +21,21 @@ from ess.spec import FileModel, WorkflowSpec
 def allowed_spec() -> WorkflowSpec:
     class RunFile(FileModel, kind='raw'): ...
 
+    class Reduction(BaseModel):
+        bins: Annotated[int, Gt(0)] = 50
+        banks: list[int] = []
+
     class WavelengthRange(BaseModel):
         start: float
         stop: float
 
+    class Specimen(BaseModel):
+        run: RunFile
+        can: RunFile | None = None
+        thickness: float = 1.0
+
     class PixelMask(BaseModel, arbitrary_types_allowed=True):
         mask: sc.DataArray
-
-    class Reduction(BaseModel):
-        bins: Annotated[int, Gt(0)] = 50
-        banks: list[int] = []
 
     class GivenCentre(BaseModel):
         kind: Literal['given'] = 'given'
@@ -44,6 +49,7 @@ def allowed_spec() -> WorkflowSpec:
     class IofQParams(BaseModel):
         reduction: Reduction = Reduction()
         range: WavelengthRange | None = None
+        specimen: Specimen
         mask: PixelMask | None = None
         centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
         transmission: RunFile
@@ -89,12 +95,16 @@ def refused_spec() -> WorkflowSpec:
         def width(self) -> float:
             return 0.0
 
+    class Binning(BaseModel):
+        start: float | None = None
+
     class Sample(BaseModel):
         run: RunNumber
 
     class Params(BaseModel):
         bins: int = 10
         reduction: Reduction
+        binning: Binning = Binning()
         sample: Sample
         geometry: Geometry
         calibration: CalibrationFile
@@ -147,6 +157,8 @@ def refusal() -> str:
         'Params.transmissions: a list parameter is not typed list[X] | None',
         'Params.masks: the element of a list parameter is not typed X | None',
         'Params.range: the default',
+        'Params.binning: the default is not a value a request may write: '
+        'binning: Binning is given by reference',
         'Outputs.raw: RunFile is a file model; no output holds one',
         'Params.bins: int is not a group',
         'sample_runs: a table has no default',

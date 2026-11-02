@@ -45,11 +45,11 @@ from .refs import FileRef
 
 class FileModel(BaseModel, frozen=True, extra='forbid'):
     """
-    A file that a workflow reads: its identity, given by reference to the
-    file, and its local path when the request runs.
+    A file that a workflow reads: its identity ``file``, and when the
+    request runs, its local path :attr:`path`.
 
-    A subclass is a kind of file. It names the metadata of the files it
-    takes, as keywords of the class, each a string, a number, or a bool::
+    A subclass is a kind of file. Its class keywords are the metadata that a
+    file must have to fit the model, each a string, a number, or a bool::
 
         class MaskFile(FileModel, kind='mask'):
             '''A pixel mask, as XML.'''
@@ -60,18 +60,19 @@ class FileModel(BaseModel, frozen=True, extra='forbid'):
     keywords merges them over its parent's metadata, one without inherits
     them. A keyword that is a key of pydantic's ``ConfigDict``, such as
     ``title``, ``frozen``, or ``extra``, configures the model instead, so it
-    cannot be a metadata key.
+    cannot be a metadata key. A subclass adds no fields and no validators
+    (see the rules in :mod:`ess.spec._workflow_spec`).
 
-    The value of a file model is ``file``, the file's identity. Its JSON
-    form is the reference to the file, ``{'@ref': 'file', 'file': ...}``, of
-    which it is also validated, so that a file is found in a record without
-    the spec. Two file models are equal if they are of one class and name
-    one file.
+    A request writes a file as ``file(...)``. Its JSON form, which the model
+    dumps to and is validated from, is ``{'@ref': 'file', 'file': ...}``, so
+    that code reading a record finds its files without the spec (see
+    :mod:`ess.spec.refs`). Two file models are equal if they are of one
+    class and name one file.
 
     A request names a file by what a person knows, such as a run number. The
     backend resolves the name to the file's identity when the request is
-    submitted, so that everything a request gives is known then: it
-    validates the model with the context ``{'files': resolve}``::
+    submitted, by validating the model with the context
+    ``{'files': resolve}``::
 
         def resolve(name: str, model: type[FileModel]) -> str:
             ...  # the identity of the file, or raise ValueError
@@ -83,19 +84,14 @@ class FileModel(BaseModel, frozen=True, extra='forbid'):
     ``resolve`` raises ``ValueError`` if the file is unknown, if the
     request's proposal may not read it, or if it does not fit the model; its
     message is that of the validation error. Validated from JSON, as a
-    request is, a file model takes only the reference to a file; validated
-    in Python, it also takes the object of its fields, ``MaskFile(file=...)``.
+    request is, a file model takes only ``{'@ref': 'file', ...}``. Validated
+    in Python, it also takes ``{'file': ...}``, as ``MaskFile(file=...)``
+    gives it.
 
     The local path of the file exists only when the request runs: the
     backend validates the model with the context ``{'paths': {identity:
-    local path}}``, and :attr:`path` raises before. A file model holds only
-    ``file``, as declared here, and a subclass has no validators but
-    FileModel's, since what it would check of a file is either metadata,
-    which the resolver checks when the request is submitted, or the
-    workflow's to read. No output
-    holds a file model, so that every path a workflow gets comes from a file
-    that the file source checks. A program without a backend makes a file
-    model of a local file with :meth:`local`.
+    local path}}``, and :attr:`path` raises before. A program without a
+    backend makes a file model of a local file with :meth:`local`.
     """
 
     metadata: ClassVar[dict[str, Any]] = {'kind': 'raw'}
