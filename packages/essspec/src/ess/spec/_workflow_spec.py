@@ -50,7 +50,10 @@ results it returns. A spec of an I(Q) reduction::
 
 Each field of ``IofQParams`` is a *parameter*. A *group* is a model, such
 as ``Reduction``, whose fields a request writes as an object. A *data
-value* is a value without a JSON form, such as a scipp array. A request for
+value* is a field for which a form has no input: any field but a scalar, a
+file model, or a list of one (see :mod:`ess.spec.places`), such as a scipp
+array, or ``start: float | None``. A group with a data value is given by
+reference only. A request for
 ``IOFQ``, with ``file(...)`` a reference to a file and
 ``m.ref('pixel_mask')`` a reference to the output ``pixel_mask`` of an
 earlier record ``m``::
@@ -84,24 +87,11 @@ them. Each comment below names a rule that a spec breaks, with the fix::
     class Reduction(BaseModel):
         # No aliases: a request writes a field by its name.
         bins: int = Field(10, alias='nbins')
-        # A field is never X | None: a value that may be absent is a
-        # parameter typed X | None, or a bool field, such as limit_range: bool.
-        start: float | None = None
-        # A field of a group is a scalar, a file model, or a list of one: a
-        # value of several parts is a group, a parameter of its own.
-        limits: tuple[float, float] = (0.0, 1.0)
-        # A group is not a field of a group: it is a parameter of its own.
-        range: WavelengthRange
 
         # No serializers or computed fields: the record holds a group as the
         # object of its fields.
         @computed_field
         def width(self) -> float: ...
-
-    class Centring(BaseModel):
-        # A union of groups is a parameter, or the element of a list
-        # parameter, never a field of a group.
-        centre: GivenCentre | FindCentre
 
     class Sample(BaseModel):
         # No NewType or type alias: a spec names a role by a class.
@@ -112,7 +102,6 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         # bins is a field of Reduction.
         bins: int = 10
         reduction: Reduction
-        centring: Centring
         sample: Sample
         geometry: Geometry
         calibration: CalibrationFile
@@ -173,14 +162,11 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable, Sequence
-from datetime import datetime
-from enum import Enum
 from pathlib import PurePath
 from types import UnionType
 from typing import (
     Annotated,
     Any,
-    Literal,
     Self,
     TypeAliasType,
     Union,
@@ -190,11 +176,9 @@ from typing import (
 
 from annotated_types import MaxLen, MinLen
 from pydantic import (
-    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
-    NaiveDatetime,
     create_model,
     model_validator,
 )
@@ -587,17 +571,15 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
     Refuse a group at a parameter whose fields a request cannot write: of a
     group without a data value, a serializer or a computed field, which
     would make the group's JSON form differ from the object of its fields, a
-    field with an alias, a field that is not interpreted (see
-    :func:`_field_problem`), a default that is not a value, since a field
-    left out holds its default, and of a file model a default but
-    ``None``, or ``[]`` for a list, since a request gives each file by
-    reference. Field and model validators of any mode
-    are allowed: they run whenever the group is validated whole (see
-    :mod:`ess.spec.places`). A group with a data value is given by reference
-    only, to an output, so it holds no file model, as no output does (see
-    :func:`_output_file_problems`); its fields are not looked at
-    otherwise. A file model is checked by :func:`_file_model_problems`
-    alone.
+    field with an alias, a default that is not a value, since a field left
+    out holds its default, and of a file model a default but ``None``, or
+    ``[]`` for a list, since a request gives each file by reference. Field
+    and model validators of any mode are allowed: they run whenever the group
+    is validated whole (see :mod:`ess.spec.places`). A group with a data
+    value, a field that is not interpreted, is given by reference only, to an
+    output, so it holds no file model, as no output does (see
+    :func:`_output_file_problems`); its fields are not looked at otherwise. A
+    file model is checked by :func:`_file_model_problems` alone.
     """
     if field_types.is_file_model(group):
         return _file_model_problems(group)
@@ -613,8 +595,6 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
         where = f'{group.__name__}.{name}'
         if _has_alias(field):
             problems.append(f'{where}: a field of a group has no alias')
-        elif (problem := _field_problem(field.annotation)) is not None:
-            problems.append(f'{where}: {problem}')
         elif field.default_factory_takes_validated_data:
             problems.append(
                 f'{where}: the default_factory of a field of a group takes no other '
@@ -715,64 +695,6 @@ def _own_methods(model: type[BaseModel]) -> list[str]:
 
 def _config(model: type[BaseModel]) -> dict[str, Any]:
     return {k: v for k, v in model.model_config.items() if k != 'title'}
-
-
-def _field_problem(annotation: Any) -> str | None:
-    """
-    Why a field typed ``annotation``, of a group without a data value, is
-    not *interpreted*, with the fix, or ``None``. An interpreted field is
-    known when the request arrives, so that the group is validated whole
-    then: a scalar, ``int``, ``float``, ``str``, ``bool``, ``datetime`` (or
-    pydantic's ``AwareDatetime`` or ``NaiveDatetime``), an enum, or a
-    ``Literal``, possibly with constraints, ``Annotated[float, Gt(0)]``, a
-    file model, which a request gives by reference to a file, or a list
-    of one of these. A scalar is never typed ``X | None``, nor a ``Literal``
-    with ``None``, which is ``X | None`` too; a file model may be, for a
-    file that may be left out: a form shows each as an input of its type, or
-    a picker. Any other type, a group, a union, a tuple, a dict, or a
-    dataclass, is refused.
-    """
-    tp, is_optional, item_optional = _taken_apart(annotation)
-    if item_optional is not None and (is_optional or item_optional):
-        return (
-            'a list field is never typed list[X] | None or list[X | None]; a list '
-            'without elements is [], and each element is a value'
-        )
-    if field_types.is_file_model(tp):
-        return None
-    if is_optional or (get_origin(tp) is Literal and None in get_args(tp)):
-        return (
-            'a field is never typed X | None, nor a Literal with None; a value '
-            'that may be absent is a parameter typed X | None, or a bool field, '
-            'such as limit_range: bool'
-        )
-    if _is_scalar(tp):
-        return None
-    union = get_origin(tp) in (Union, UnionType)
-    if field_types.is_group(tp) or (
-        union and any(map(field_types.is_group, get_args(tp)))
-    ):
-        kind = 'a union of groups' if union else 'a group'
-        return (
-            f'{field_types.type_name(tp)} is {kind}; a field of a group is a '
-            'scalar, a file model, or a list of one: make it a parameter of '
-            'its own'
-        )
-    return (
-        f'{field_types.type_name(tp)} is not a scalar; a field of a group is a '
-        'scalar (int, float, str, bool, datetime, an enum, or a Literal), a '
-        'file model, or a list of one: a value of several parts is a group, '
-        'a parameter of its own, such as range: WavelengthRange, not limits: '
-        'tuple[float, float]'
-    )
-
-
-def _is_scalar(tp: Any) -> bool:
-    return (
-        tp in (int, float, str, bool, datetime, AwareDatetime, NaiveDatetime)
-        or get_origin(tp) is Literal
-        or (isinstance(tp, type) and issubclass(tp, Enum))
-    )
 
 
 def _default_problem(

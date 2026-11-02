@@ -38,18 +38,22 @@ a list, ``list[X]``, at a parameter       a list, each element a root place
                                           of type ``X``
 ========================================  =====================================
 
-A *scalar* is an ``int``, ``float``, ``str``, ``bool``, ``datetime``, an
-enum, or a ``Literal``, which a request writes inline, as JSON. A *data
-value* is a field without a JSON form, which no request writes. A group is
-validated whole, once, when the request arrives, so it holds only what is known
-then: values typed in, and files, named by their identity. A value that
-another request computes may not exist yet; it fills a whole parameter. So the
-fields of a group without a data value are scalars, file models, or lists of
-one of these. A scalar is never typed ``X | None``; a file model may be. A
-group with a data value is given by reference to an output
-only (see :func:`unwritten`); of its other fields, the framework refuses only
-a ``Path``, a file model, a ``NewType``, or a type alias, since no output
-could fill them.
+A *scalar* is an ``int``, ``float``, ``str``, ``bool``, ``datetime`` (or
+pydantic's ``AwareDatetime`` or ``NaiveDatetime``), an enum whose values are
+strings, numbers, or bools, or a ``Literal`` of these, which a request writes
+inline, as JSON. A field of a group is *interpreted* if it is a scalar, a
+file model, or a list of one, possibly with constraints,
+``Annotated[float, Gt(0)]``: a form shows it as an input of its type, or a
+file picker. A scalar is never typed ``X | None``, a file model may be, and a
+list and its elements never are. Any other field is a *data value*, such as a
+scipp array, ``float | None``, a tuple, or a group, which no request writes,
+so a group with a data value is given by reference to an output only (see
+:func:`unwritten`). A group is validated whole, once, when the request
+arrives, so it holds only what is known then: values typed in, and files,
+named by their identity. A value that another request computes may not exist
+yet; it fills a whole parameter. Of the fields of a group with a data value,
+the framework refuses only a ``Path``, a file model, a ``NewType``, or a type
+alias, since no output could fill them.
 
 A reference to an output stands for a whole group. A reference to a file
 fits a file model whose metadata the file has (see
@@ -120,11 +124,21 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from types import NoneType, UnionType
 from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel, Discriminator, Field, TypeAdapter, ValidationError
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    Discriminator,
+    Field,
+    NaiveDatetime,
+    TypeAdapter,
+    ValidationError,
+)
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticSerializationError
 
@@ -286,7 +300,7 @@ def _written(loc: Loc, group: type[BaseModel]) -> None:
     """Refuse ``group`` written at ``loc`` if it is given by reference only."""
     if (data := unwritten(group)) is not None:
         held_type = field_types.type_name(
-            field_types.optional(group.model_fields[data].annotation)[0]
+            field_types.plain(group.model_fields[data].annotation)
         )
         raise _refused(
             loc,
@@ -572,12 +586,46 @@ def _tags(annotation: Any) -> tuple[Any, ...]:
 def unwritten(group: type[BaseModel]) -> str | None:
     """
     The first field of ``group`` that a request does not write, or ``None``
-    if there is none: a data value, a field without a JSON form. A group
+    if there is none: a data value, a field that is not interpreted. A group
     with such a field is given by reference to an output only.
     """
     return next(
-        (n for n in group.model_fields if not field_types.has_json_form(group, n)),
+        (n for n, f in group.model_fields.items() if not _interpreted(f.annotation)),
         None,
+    )
+
+
+def _interpreted(annotation: Any) -> bool:
+    """
+    Whether a field typed ``annotation`` is interpreted: a scalar, a file
+    model, possibly typed ``X | None``, or a list of one, never typed
+    ``list[X] | None`` or ``list[X | None]``.
+    """
+    tp, none = field_types.optional(annotation)
+    if get_origin(tp) is list:
+        tp, item_none = field_types.optional(get_args(tp)[0])
+        return not (none or item_none) and (
+            _is_scalar(tp) or field_types.is_file_model(tp)
+        )
+    return field_types.is_file_model(tp) or (not none and _is_scalar(tp))
+
+
+def _is_scalar(tp: Any) -> bool:
+    """
+    Whether ``tp`` is a scalar: its JSON form is a number, a string, or a
+    bool, so never an object that reads as a reference.
+    """
+    if tp in (int, float, str, bool, datetime, AwareDatetime, NaiveDatetime):
+        return True
+    if get_origin(tp) is Literal:
+        values = get_args(tp)
+    elif isinstance(tp, type) and issubclass(tp, Enum):
+        values = tuple(tp)
+    else:
+        return False
+    return all(
+        isinstance(v.value if isinstance(v, Enum) else v, str | int | float | bool)
+        for v in values
     )
 
 
