@@ -5,16 +5,16 @@ from typing import Annotated, Any, Literal
 
 import pytest
 import scipp as sc
-from annotated_types import Gt, MinLen
-from pydantic import BaseModel, Field, field_validator, model_validator
+from annotated_types import Gt
+from pydantic import BaseModel, Field, Strict, field_validator, model_validator
 
 from ess.spec import FileModel, FileRef, OutputRef
 from ess.spec.places import (
-    Rows,
-    Ways,
+    alternatives,
     held,
-    place,
     ref_types,
+    root_type,
+    takes_output,
     unwritten,
     validated,
 )
@@ -90,16 +90,15 @@ def _named(name: str, model: type[FileModel]) -> str:
     return name
 
 
-def test_a_file_model_takes_a_reference_to_a_file_only() -> None:
-    assert place(MaskParams, 'mask') == Ways(
-        tag=None, inline={}, record=MaskFile, none=True, metadata=()
-    )
+def test_a_file_model_takes_no_output() -> None:
+    assert root_type(MaskParams, 'mask') == (MaskFile, True, ())
+    assert not takes_output(MaskFile)
 
 
 def test_a_group_holding_a_file_model_is_written_inline_only() -> None:
-    assert place(MeasuredParams, 'measured') == Ways(
-        tag=None, inline={None: Measured}, record=None, none=False, metadata=()
-    )
+    assert root_type(MeasuredParams, 'measured') == (Measured, False, ())
+    assert unwritten(Measured) is None
+    assert not takes_output(Measured)
 
 
 def test_a_file_in_a_group_is_held_as_files_resolves_it() -> None:
@@ -192,55 +191,74 @@ def test_a_file_model_in_a_group_gets_its_local_path_from_paths() -> None:
 
 
 def test_a_group_with_a_data_value_takes_a_reference_only() -> None:
-    assert place(Params, 'mask') == Ways(
-        tag=None, inline={}, record=Mask, none=False, metadata=()
-    )
+    assert root_type(Params, 'mask') == (Mask, False, ())
+    assert unwritten(Mask) == 'mask'
+    assert takes_output(Mask)
 
 
 def test_a_group_of_scalars_is_written_inline_or_by_reference() -> None:
-    assert place(Params, 'reduction') == Ways(
-        tag=None, inline={None: Reduction}, record=Reduction, none=True, metadata=()
-    )
+    assert root_type(Params, 'reduction') == (Reduction, True, ())
+    assert unwritten(Reduction) is None
+    assert takes_output(Reduction)
+
+
+def test_the_metadata_of_the_field_comes_before_that_in_its_type() -> None:
+    class Strictly(BaseModel):
+        reduction: Annotated[Reduction, 'inner'] | None = Field(None, strict=True)
+
+    assert root_type(Strictly, 'reduction') == (Reduction, True, (Strict(), 'inner'))
 
 
 def test_a_union_is_written_inline_with_the_tag_of_an_alternative() -> None:
-    described = place(Params, 'beam_centre')
-    assert isinstance(described, Ways)
-    assert described.tag == 'kind'
-    assert described.inline == {'given': GivenCentre, 'find': FindCentre}
-    assert described.record is None
-    assert not described.none
+    tp, none, metadata = root_type(Params, 'beam_centre')
+    assert not none
+    assert alternatives(tp, *metadata) == (
+        'kind',
+        {'given': GivenCentre, 'find': FindCentre},
+    )
+    assert not takes_output(tp)
 
 
 def test_a_union_typed_x_or_none_takes_none() -> None:
     class MaybeCentre(BaseModel):
         beam_centre: Centre | None = None
 
-    described = place(MaybeCentre, 'beam_centre')
-    assert isinstance(described, Ways)
-    assert described.inline == {'given': GivenCentre, 'find': FindCentre}
-    assert described.none
-
-
-def test_a_list_parameter_describes_its_rows() -> None:
-    assert place(Params, 'samples') == Rows(
-        element=Ways(
-            tag=None, inline={None: Sample}, record=Sample, none=False, metadata=()
-        ),
-        metadata=(MinLen(2),),
+    tp, none, metadata = root_type(MaybeCentre, 'beam_centre')
+    assert none
+    assert alternatives(tp, *metadata) == (
+        'kind',
+        {'given': GivenCentre, 'find': FindCentre},
     )
-    centres = place(Params, 'centres')
-    assert isinstance(centres, Rows)
-    assert isinstance(centres.element, Ways)
-    assert centres.element.inline == {'given': GivenCentre, 'find': FindCentre}
+
+
+def test_the_discriminator_of_a_field_is_in_its_metadata() -> None:
+    class ByField(BaseModel):
+        beam_centre: GivenCentre | FindCentre = Field(discriminator='kind')
+
+    tp, _, metadata = root_type(ByField, 'beam_centre')
+    assert alternatives(tp, *metadata) == (
+        'kind',
+        {'given': GivenCentre, 'find': FindCentre},
+    )
+
+
+def test_the_root_type_of_a_list_parameter_is_that_of_an_element() -> None:
+    assert root_type(Params, 'samples') == (Sample, False, ())
+    tp, none, metadata = root_type(Params, 'centres')
+    assert not none
+    assert alternatives(tp, *metadata) == (
+        'kind',
+        {'given': GivenCentre, 'find': FindCentre},
+    )
 
 
 def test_a_union_without_a_discriminator_is_refused() -> None:
     class Undiscriminated(BaseModel):
         beam_centre: GivenCentre | FindCentre
 
+    tp, _, metadata = root_type(Undiscriminated, 'beam_centre')
     with pytest.raises(ValueError, match='discriminator'):
-        place(Undiscriminated, 'beam_centre')
+        alternatives(tp, *metadata)
 
 
 def test_a_request_writes_no_data_value() -> None:

@@ -159,7 +159,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         unions = {
             n: union
             for n, f in declared.items()
-            if (union := places.alternatives(f.annotation, f.discriminator)) is not None
+            if (union := places.alternatives(f.annotation, f)) is not None
         }
         own = {
             n: tuple(unions[n][1].values())
