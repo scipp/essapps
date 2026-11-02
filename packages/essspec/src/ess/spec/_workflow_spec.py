@@ -132,8 +132,12 @@ request writes there:
 - ``X | None``: what ``X`` takes, or ``None``.
 - ``list[X]``: a list of rows, each what ``X`` takes.
 
-The params schema of a spec (see :meth:`WorkflowSpec.serialize`) and a form
-made from the params model follow this list. The rules behind it:
+The framework derives from the params model a *request type*, the type of
+what a request writes at each place, which follows this list (see
+:mod:`ess.spec.request_types`). It validates a request, its JSON schema is
+the params schema of the spec (see :meth:`WorkflowSpec.serialize`), and a
+form made from the params model offers the forms it takes. The rules behind
+it:
 
 - A reference to an output fills a whole parameter or a whole row, never a
   field of a group. The backend validates a group when the request is
@@ -810,9 +814,9 @@ def _parameter_value(model: type[BaseModel], name: str, value: Any) -> Any:
     """
     ``value`` of the parameter ``name`` of ``model`` as validating it gives,
     if a request may write it without a reference to an output or a file
-    (see :func:`ess.spec.places.held`).
+    (see :func:`ess.spec.request_types.held`).
     """
-    held = places.held(model, name, value, _no_file)
+    held = request_types.held(model, name, value, _no_file)
     if refs := places.ref_types(model, {name: held}):
         raise ParamsError(
             (loc, f'{ref} is a reference; a default is a value') for loc, ref, _ in refs

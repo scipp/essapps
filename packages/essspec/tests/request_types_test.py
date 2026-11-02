@@ -1,200 +1,448 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""
-The request type validates a request and is the params schema, so the two
-agree: a request that :func:`ess.spec.places.held` accepts is one that the
-params schema takes, and the other way round.
-"""
-
 from typing import Annotated, Any, Literal
 
 import pytest
+import scipp as sc
 from annotated_types import Gt
-from pydantic import AfterValidator, BaseModel, Field, TypeAdapter
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    Discriminator,
+    Field,
+    PlainSerializer,
+    field_validator,
+    model_validator,
+)
 
-from ess.spec import FileModel, FileRef, OutputRef, WorkflowSpec
-from ess.spec.places import held
-from ess.spec.refs import ParamsError
-from ess.spec.request_types import FILE, INLINE, OUTPUT, row_forms
+from ess.spec import FileModel, FileRef, OutputRef, request_types
+from ess.spec.places import alternatives, root_type, validated
+from ess.spec.refs import Loc, ParamsError, Ref
+from ess.spec.request_types import held, row_forms
 
 
 class RunFile(FileModel, kind='raw'):
     pass
 
 
+class MaskFile(FileModel, kind='mask'):
+    pass
+
+
+class Mask(BaseModel, arbitrary_types_allowed=True):
+    mask: sc.DataArray
+
+
+class Sample(BaseModel):
+    thickness: float = Field(1.0, gt=0)
+
+
 class Reduction(BaseModel):
-    bins: Annotated[int, Gt(0)] = 10
+    bins: int = Field(50, ge=1)
+    limits: Annotated[float, Gt(0)] = Field(1.0, ge=1)
+    angles: list[float] = []
 
 
-class Specimen(BaseModel):
-    run: RunFile
-    thickness: float = 1.0
-
-
-class Given(BaseModel):
+class GivenCentre(BaseModel):
     kind: Literal['given'] = 'given'
     x: float = 0.0
 
 
-class Find(BaseModel):
-    kind: Literal['find'] = 'find'
-    tol: Annotated[float, Gt(0)] = 1e-3
+class FindCentre(BaseModel):
+    kind: Literal['find']
+    tolerance: float = Field(1e-3, gt=0)
 
 
-class WithFile(BaseModel):
-    kind: Literal['wf'] = 'wf'
-    run: RunFile
-
-
-Centre = Annotated[Given | Find, Field(discriminator='kind')]
+Centre = Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
 
 
 class Params(BaseModel):
-    red: Reduction = Reduction()
-    opt: Reduction | None = None
-    spec: Specimen | None = None
-    centre: Centre = Given()
-    ocentre: Centre | None = None
-    wf: Annotated[Given | WithFile, Field(discriminator='kind')] | None = None
-    run: RunFile | None = None
+    mask: Mask
+    sample: Sample
+    reduction: Reduction | None = None
+    beam_centre: Centre
+    centres: list[Centre]
+    samples: list[Sample] = Field(min_length=2)
+
+
+class MaskParams(BaseModel):
+    mask: MaskFile | None = None
+    sample: Sample | None = None
     runs: list[RunFile] = []
-    reds: list[Reduction] = []
-    cents: list[Centre] = []
-    given: Given = Given()  # also an alternative of centre, with its tag optional
 
 
-class Outputs(BaseModel):
-    result: Reduction
+class Measured(BaseModel):
+    run: RunFile
+    thickness: float = Field(1.0, gt=0)
+    masks: list[MaskFile] = []
 
 
-SPEC = WorkflowSpec(
-    name='forms', version=1, title='F', description='.', params=Params, outputs=Outputs
-)
-
-OUT = {'@ref': 'output', 'record': 'r1', 'output': 'o'}
-ACC = {'@ref': 'accumulator', 'accumulator': 'a1', 'output': 'o'}
-RUN = {'@ref': 'file', 'file': 'run:1'}
-
-REQUESTS = [
-    ('red', OUT),
-    ('red', ACC),
-    ('red', {**OUT, 'extra': 1}),
-    ('red', {'@ref': 'output'}),
-    ('red', {'@ref': 'bogus'}),
-    ('red', {'@ref': 5}),
-    ('red', RUN),
-    ('red', 5),
-    ('red', None),
-    ('red', []),
-    ('red', {'bins': 0}),
-    ('red', {'bins': OUT}),
-    ('red', {'bins': RUN}),
-    ('red', {'bins': 2, 'nope': 1}),
-    ('opt', None),
-    ('opt', OUT),
-    ('opt', 5),
-    ('spec', OUT),
-    ('spec', {'run': RUN}),
-    ('spec', {'run': OUT}),
-    ('spec', {'run': 'run:1'}),
-    ('spec', {'run': {'file': 'run:1'}}),
-    ('spec', {}),
-    ('centre', {'kind': 'find', 'tol': -1}),
-    ('centre', {'tol': 1}),
-    ('centre', {'kind': 'nope'}),
-    ('centre', {'kind': OUT}),
-    ('centre', OUT),
-    ('centre', RUN),
-    ('centre', 5),
-    ('centre', None),
-    ('centre', {'kind': 'find', 'x': 1}),
-    ('ocentre', None),
-    ('ocentre', {'kind': 'find'}),
-    ('ocentre', OUT),
-    ('wf', {'kind': 'wf', 'run': RUN}),
-    ('wf', {'kind': 'wf', 'run': OUT}),
-    ('wf', {'kind': 'wf'}),
-    ('run', RUN),
-    ('run', OUT),
-    ('run', ACC),
-    ('run', {'file': 'run:1'}),
-    ('run', 'run:1'),
-    ('run', {'@ref': 'file'}),
-    ('run', {**RUN, 'x': 1}),
-    ('run', None),
-    ('run', 5),
-    ('runs', [RUN]),
-    ('runs', [RUN, OUT]),
-    ('runs', OUT),
-    ('runs', RUN),
-    ('runs', [None]),
-    ('runs', 'x'),
-    ('reds', [{'bins': 1}, OUT]),
-    ('reds', [{'bins': 1}, RUN]),
-    ('reds', [{'bins': 0}]),
-    ('reds', [None]),
-    ('cents', [{'kind': 'find'}, {'kind': 'given', 'x': 1.0}]),
-    ('cents', [{'kind': 'find'}, OUT]),
-    ('cents', [{'kind': 'x'}]),
-    ('cents', [5]),
-    ('given', {}),
-    ('given', {'kind': 'given'}),
-    ('given', OUT),
-]
+class MeasuredParams(BaseModel):
+    measured: Measured
 
 
-def _resolved(name: str, model: type[FileModel]) -> str:
-    """Each name is the identity of a known file: the schema checks no file."""
+FILE_ID = 'pid-1'
+FILE = FileRef(file=FILE_ID)
+
+OUTPUT = OutputRef(record='r1', output='sample')
+
+
+def _named(name: str, model: type[FileModel]) -> str:
+    """A resolver that takes each name for the identity of a file."""
     return name
 
 
-@pytest.mark.parametrize(('name', 'value'), REQUESTS)
-def test_the_params_schema_takes_what_a_request_may_write(
-    name: str, value: Any
+def _unread(ref: Ref) -> Any:
+    raise AssertionError(f'{ref} is read; a file is never read')
+
+
+def _unknown(name: str, model: type[FileModel]) -> str:
+    raise ValueError(f'unknown file {name}')
+
+
+class NamedCentre(BaseModel):
+    beam_centre: Annotated[GivenCentre | FindCentre, Discriminator('kind')]
+
+
+class Disguised(BaseModel):
+    """A group whose field a serializer dumps as a reference to an output."""
+
+    value: Annotated[
+        int,
+        BeforeValidator(lambda v: int(v['key']) if isinstance(v, dict) else v),
+        PlainSerializer(
+            lambda v: {'@ref': 'output', 'record': 'r', 'output': 'o', 'key': str(v)}
+        ),
+    ] = 1
+
+
+class DisguisedParams(BaseModel):
+    group: Disguised
+    rows: list[Disguised] = []
+
+
+def test_a_file_in_a_group_is_held_as_files_resolves_it() -> None:
+    asked = []
+
+    def resolve(name: str, model: type[FileModel]) -> str:
+        asked.append((name, model))
+        return 'pid-2'
+
+    value = {'run': FILE, 'masks': [FILE]}
+    form = FileRef(file='pid-2').model_dump(by_alias=True)
+    assert held(MeasuredParams, 'measured', value, resolve) == {
+        'run': form,
+        'thickness': 1.0,
+        'masks': [form],
+    }
+    assert asked == [('pid-1', RunFile), ('pid-1', MaskFile)]
+
+
+@pytest.mark.parametrize(
+    ('model', 'name', 'value', 'locs'),
+    [
+        (MaskParams, 'mask', FILE, [('mask',)]),
+        (MaskParams, 'runs', [FILE], [('runs', 0)]),
+        (MeasuredParams, 'measured', {'run': FILE}, [('measured', 'run')]),
+        (
+            MeasuredParams,
+            'measured',
+            {'run': FILE.model_dump(), 'masks': [FILE]},
+            [('measured', 'run'), ('measured', 'masks', 0)],
+        ),
+    ],
+)
+def test_a_file_that_files_refuses_is_refused_at_its_place(
+    model: type[BaseModel], name: str, value: Any, locs: list[Loc]
 ) -> None:
-    jsonschema = pytest.importorskip('jsonschema')
-    validator = jsonschema.Draft202012Validator(SPEC.serialize().params_schema)
-    try:
-        held(Params, name, value, _resolved)
-    except ParamsError:
-        accepted = False
-    else:
-        accepted = True
-    request = TypeAdapter(Any).dump_python({name: value}, mode='json')
-    assert validator.is_valid(request) == accepted
+    with pytest.raises(ParamsError) as raised:
+        held(model, name, value, _unknown)
+    assert raised.value.errors == tuple((loc, 'unknown file pid-1') for loc in locs)
+
+
+def test_a_file_that_a_validator_makes_is_refused() -> None:
+    class Named(BaseModel):
+        mask: MaskFile
+
+        @model_validator(mode='before')
+        @classmethod
+        def _of_name(cls, data: Any) -> Any:
+            if isinstance(data, dict) and 'name' in data:
+                ref = {'@ref': 'file', 'file': data['name']}
+                return {'mask': MaskFile.model_validate(ref)}
+            return data
+
+    class NamedParams(BaseModel):
+        named: Named
+
+    with pytest.raises(ParamsError) as raised:
+        held(NamedParams, 'named', {'name': 'pid-1'}, _named)
+    assert raised.value.errors == (
+        (
+            ('named', 'mask'),
+            'file pid-1 was not resolved: a validator made it, so the file source '
+            'has not checked it',
+        ),
+    )
+    assert held(NamedParams, 'named', {'mask': FILE}, _named) == {
+        'mask': FILE.model_dump()
+    }
+
+
+def test_a_discriminator_in_the_metadata_of_a_field_names_the_tag() -> None:
+    tp, _, metadata = root_type(NamedCentre, 'beam_centre')
+    assert alternatives(tp, *metadata) == (
+        'kind',
+        {'given': GivenCentre, 'find': FindCentre},
+    )
+    value = {'kind': 'find', 'tolerance': 0.5}
+    assert held(NamedCentre, 'beam_centre', value, _named) == value
+    with pytest.raises(ParamsError) as raised:
+        held(NamedCentre, 'beam_centre', {'tolerance': 0.5}, _named)
+    assert raised.value.errors == (
+        (
+            ('beam_centre',),
+            "the tag 'kind' is not given; it is one of ['given', 'find']",
+        ),
+    )
+
+
+def test_a_reference_to_an_output_at_a_parameter_is_held_as_its_json_form() -> None:
+    form = OUTPUT.model_dump()
+    assert held(MaskParams, 'sample', OUTPUT, _named) == form
+    given = {'@ref': 'output', 'record': 'r1', 'output': 'sample'}
+    assert held(MaskParams, 'sample', given, _named) == form
+
+
+def test_a_reference_to_an_output_at_a_file_model_is_refused() -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(MaskParams, 'mask', OUTPUT, _named)
+    assert raised.value.errors == (
+        (
+            ('mask',),
+            'r1.sample is a reference to an output; MaskFile is given by reference '
+            'to a file, such as file(path=...)',
+        ),
+    )
+
+
+def test_a_reference_to_an_output_at_a_group_with_a_file_model_is_refused() -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(MeasuredParams, 'measured', OUTPUT, _named)
+    assert raised.value.errors == (
+        (('measured',), 'r1.sample: no output fits Measured, which holds a file model'),
+    )
+
+
+def test_a_file_at_a_parameter_typed_a_group_is_refused() -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(MaskParams, 'sample', FILE, _named)
+    assert raised.value.errors == (
+        (('sample',), 'file pid-1 does not fit Sample, which is not a file model'),
+    )
+
+
+def test_a_reference_at_an_element_of_a_list_parameter_stands_for_one_row() -> None:
+    assert held(MaskParams, 'runs', [FILE], _named) == [FILE.model_dump()]
+    assert held(Params, 'samples', [{'thickness': 2.0}, OUTPUT], _named) == [
+        {'thickness': 2.0},
+        OUTPUT.model_dump(),
+    ]
+
+
+def test_a_reference_to_a_whole_list_is_refused() -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(MaskParams, 'runs', OUTPUT, _named)
+    assert raised.value.errors == (
+        (
+            ('runs',),
+            'r1.sample is a reference to a whole list; a reference stands for one '
+            'element of a list',
+        ),
+    )
+
+
+def test_no_reference_fits_a_union() -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(Params, 'beam_centre', OUTPUT, _named)
+    ((at, msg),) = raised.value.errors
+    assert at == ('beam_centre',)
+    assert 'a union of groups is written inline' in msg
+
+
+@pytest.mark.parametrize(
+    ('name', 'value', 'loc'),
+    [
+        ('sample', {'thickness': OUTPUT}, ('sample', 'thickness')),
+        ('reduction', {'angles': [1.0, OUTPUT]}, ('reduction', 'angles', 1)),
+        ('samples', [{'thickness': OUTPUT}], ('samples', 0, 'thickness')),
+        ('beam_centre', {'kind': 'given', 'x': OUTPUT}, ('beam_centre', 'x')),
+        ('measured', {'run': OUTPUT}, ('measured', 'run')),
+    ],
+)
+def test_a_reference_to_an_output_inside_a_group_is_refused(
+    name: str, value: Any, loc: Loc
+) -> None:
+    model = {'sample': MaskParams, 'measured': MeasuredParams}.get(name, Params)
+    with pytest.raises(ParamsError) as raised:
+        held(model, name, value, _named)
+    assert raised.value.errors == (
+        (
+            loc,
+            'r1.sample: a reference to an output fills a whole parameter or a '
+            'whole row, never a field of a group',
+        ),
+    )
+
+
+def test_a_file_at_a_field_that_is_not_a_file_model_is_refused() -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(Params, 'reduction', {'angles': [1.0, FILE]}, _named)
+    ((at, msg),) = raised.value.errors
+    assert at == ('reduction', 'angles', 1)
+    assert 'valid number' in msg
+
+
+def test_a_group_given_inline_is_held_as_the_json_form_of_it_validated() -> None:
+    assert held(Params, 'reduction', {'bins': 3}, _named) == {
+        'bins': 3,
+        'limits': 1.0,
+        'angles': [],
+    }
+    assert held(Params, 'reduction', Reduction(bins=3), _named) == held(
+        Params, 'reduction', {'bins': 3}, _named
+    )
+
+
+def test_a_group_given_inline_is_validated_whole() -> None:
+    class Range(BaseModel):
+        start: float
+        stop: float
+
+        @field_validator('stop')
+        @classmethod
+        def _after_start(cls, stop: float, info: Any) -> float:
+            if stop <= info.data['start']:
+                raise ValueError('stop must be after start')
+            return stop
+
+    class RangeParams(BaseModel):
+        range: Range
+
+    with pytest.raises(ParamsError) as raised:
+        held(RangeParams, 'range', {'start': 10.0, 'stop': 5.0}, _named)
+    ((at, msg),) = raised.value.errors
+    assert at == ('range', 'stop')
+    assert 'stop must be after start' in msg
+
+
+def test_an_error_inside_a_union_names_its_place_without_the_tag() -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(Params, 'beam_centre', {'kind': 'find', 'tolerance': -1.0}, _named)
+    ((at, _),) = raised.value.errors
+    assert at == ('beam_centre', 'tolerance')
+
+
+def test_a_file_model_instance_is_held_as_the_reference_to_its_file() -> None:
+    ref = FileRef(file='path:mask.xml')
+    held_mask = held(MaskParams, 'mask', MaskFile.local('mask.xml'), _named)
+    assert held_mask == ref.model_dump()
+
+
+@pytest.mark.parametrize(
+    ('model', 'name', 'value', 'loc'),
+    [
+        (MaskParams, 'mask', 'mask.xml', ('mask',)),
+        (MaskParams, 'mask', {'path': 'mask.xml'}, ('mask',)),
+        (MaskParams, 'mask', {'file': 'mask.xml'}, ('mask',)),
+        (MaskParams, 'runs', ['run.nxs'], ('runs', 0)),
+        (
+            MeasuredParams,
+            'measured',
+            {'run': {'file': 'run.nxs'}},
+            ('measured', 'run'),
+        ),
+    ],
+)
+def test_a_file_model_given_inline_is_refused(
+    model: type[BaseModel], name: str, value: Any, loc: Loc
+) -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(model, name, value, _named)
+    ((at, msg),) = raised.value.errors
+    assert at == loc
+    assert 'is not a reference; ' in msg
+    assert 'is given by reference to a file, such as file(path=...)' in msg
+
+
+@pytest.mark.parametrize(
+    ('name', 'value', 'loc'),
+    [('group', {'value': 2}, ('group', 'value')), ('rows', [{}], ('rows', 0, 'value'))],
+)
+def test_a_reference_to_an_output_in_a_json_form_written_inline_is_refused(
+    name: str, value: Any, loc: Loc
+) -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(DisguisedParams, name, value, _named)
+    ((at, msg),) = raised.value.errors
+    assert at == loc
+    assert msg.endswith(
+        'the JSON form of a value written inline holds a reference to an output, '
+        'which fills a whole parameter or a whole row'
+    )
+
+
+def test_a_group_with_a_data_value_given_inline_is_refused() -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(Params, 'mask', {'mask': None}, _named)
+    assert raised.value.errors == (
+        (
+            ('mask',),
+            'Mask is given by reference: no request writes its field mask, of '
+            'DataArray',
+        ),
+    )
+
+
+def test_a_value_held_inline_is_made_of_its_json_form() -> None:
+    stored = held(Params, 'reduction', {'bins': 3}, _named)
+    assert validated(Params, 'reduction', stored, _unread) == Reduction(bins=3)
 
 
 def test_each_place_takes_the_forms_its_type_allows() -> None:
-    assert list(row_forms(Params, 'red')) == [INLINE, OUTPUT]
-    assert list(row_forms(Params, 'spec')) == [INLINE]
-    assert list(row_forms(Params, 'centre')) == [INLINE]
-    assert list(row_forms(Params, 'run')) == [FILE]
-    assert list(row_forms(Params, 'runs')) == [FILE]
+    inline, file, output = (
+        request_types.INLINE,
+        request_types.FILE,
+        request_types.OUTPUT,
+    )
+    assert list(row_forms(Params, 'sample')) == [inline, output]
+    assert list(row_forms(Params, 'mask')) == [output]
+    assert list(row_forms(Params, 'beam_centre')) == [inline]
+    assert list(row_forms(Params, 'samples')) == [inline, output]
+    assert list(row_forms(MaskParams, 'mask')) == [file]
+    assert list(row_forms(MaskParams, 'runs')) == [file]
+    assert list(row_forms(MeasuredParams, 'measured')) == [inline]
 
 
-def _only_run_1(run: RunFile) -> RunFile:
-    if run.file != 'run:1':
-        raise ValueError('only run:1 is allowed here')
-    return run
+def _only_pid_1(mask: MaskFile) -> MaskFile:
+    if mask.file != FILE_ID:
+        raise ValueError(f'only {FILE_ID} is allowed here')
+    return mask
+
+
+class Checked(BaseModel):
+    mask: Annotated[MaskFile, AfterValidator(_only_pid_1)]
+    masks: list[Annotated[MaskFile, AfterValidator(_only_pid_1)]] = []
 
 
 def test_the_validators_of_a_file_model_at_a_place_run_when_it_is_written() -> None:
-    class Checked(BaseModel):
-        run: Annotated[RunFile, AfterValidator(_only_run_1)]
-        runs: list[Annotated[RunFile, AfterValidator(_only_run_1)]] = []
-
-    assert held(Checked, 'run', FileRef(file='run:1'), _resolved) == RUN
-    for name, value, loc in (
-        ('run', FileRef(file='run:2'), ('run',)),
-        ('runs', [FileRef(file='run:2')], ('runs', 0)),
-    ):
+    assert held(Checked, 'mask', FILE, _named) == FILE.model_dump()
+    other = FileRef(file='pid-2')
+    places = (('mask', other, ('mask',)), ('masks', [other], ('masks', 0)))
+    for name, value, loc in places:
         with pytest.raises(ParamsError) as raised:
-            held(Checked, name, value, _resolved)
+            held(Checked, name, value, _named)
         ((at, msg),) = raised.value.errors
         assert at == loc
-        assert 'only run:1 is allowed here' in msg
-
-
-def test_a_reference_to_an_output_is_held_as_given() -> None:
-    ref = OutputRef(record='r1', output='o')
-    assert held(Params, 'red', ref, _resolved) == ref.model_dump()
+        assert f'only {FILE_ID} is allowed here' in msg

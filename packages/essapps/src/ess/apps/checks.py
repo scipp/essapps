@@ -23,13 +23,13 @@ request, of which a template, a push, and a state check a part:
 - *Names.* Each name is a parameter of the spec. A required parameter must
   be given. One left out takes its default.
 - *Values.* Each parameter, or each row of a list parameter, is validated
-  by :func:`ess.spec.places.held`. It refuses what a request may not write
-  there, validates each group, row, and file whole from its JSON form, and
-  returns what the record stores. A field that a model lacks is refused,
-  since validating would drop it silently. The JSON form of a value must
-  read back as the value, since the call phase makes the value from it (see
-  :func:`ess.spec.field_types.inline`). A list parameter that is not a
-  table meets its length constraints.
+  by its request type (see :func:`ess.spec.request_types.held`). It refuses
+  what a request may not write there, validates each group, row, and file
+  whole from its JSON form, and returns what the record stores. A field
+  that a model lacks is refused, since validating would drop it silently.
+  The JSON form of a value must read back as the value, since the call
+  phase makes the value from it (see :func:`ess.spec.field_types.inline`).
+  A list parameter that is not a table meets its length constraints.
 - *Files.* Validating a file resolves it with the file source (see
   :class:`ess.spec.FileModel`): the file must be known, the proposal must
   be allowed to read it, and its metadata must fit the file model, as a
@@ -66,7 +66,7 @@ from ess.spec import (
     OutputRef,
     WorkflowSpec,
     field_types,
-    places,
+    request_types,
 )
 from ess.spec.binding import fixed_values
 from ess.spec.refs import Loc, ParamsError
@@ -167,10 +167,10 @@ class Checks:
         """
         The value of parameter ``name`` as the record holds it: at each place,
         the JSON form of an inline value, each file resolved, a reference to
-        an output, or ``None`` (see :func:`ess.spec.places.held`).
+        an output, or ``None`` (see :func:`ess.spec.request_types.held`).
         """
         try:
-            stored = places.held(
+            stored = request_types.held(
                 self.spec.params,
                 name,
                 value,

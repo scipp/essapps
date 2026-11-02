@@ -126,6 +126,24 @@ decides which forms it accepts, with `| None` removed:
 | a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag | no |
 | a list, `list[X]` | a list parameter | a list of rows, each as for `X` | no; each row as for `X` |
 
+**The forms are a type.** The framework derives from the params model a
+*request type* (`ess.spec.request_types`): at each parameter or row, the union
+of the forms the table gives it, each with the type that validates it, the
+group's own class written inline, the file model, or a reference to an output.
+The form of a value is known from its `@ref` key alone, so the request phase
+validates a value by the type of its form, the JSON schema of the request type
+is the params schema, and a form offers a widget for each form the place
+takes. The backend, the schema, and a form thus agree by construction. The
+params model stays the type of the call phase; the record holds the JSON form
+of the request type.
+
+| | Params model | Request type |
+|---|---|---|
+| `reduction: Reduction` | `Reduction` | `Reduction \| OutputRef \| AccumulatorRef` |
+| `transmission: ComputedTransmission` | `ComputedTransmission` | `OutputRef \| AccumulatorRef` |
+| `sample: SampleRun` | the file model, with its local path | the file model, as `{"@ref": "file", ...}` |
+| `centre: GivenCentre \| FindCentre` | the alternative | the alternative, with its tag |
+
 **Only the first level is interpreted.** A *group* is a pydantic model, written
 as an object of its fields; a `RootModel` is not a group. Each parameter is a
 group, a union of groups, or a list of one, possibly typed `X | None`. A field
@@ -489,10 +507,10 @@ validators. `spec.serialize()` projects onto `SerializedWorkflowSpec`, a
 plain-data pydantic model that round-trips through JSON and is what a service
 announces to remote consumers. It holds a schema of the params
 (`params_schema`), one of the outputs (`outputs_schema`), and the tables. The
-params schema gives each parameter the forms it takes, so that a UI renders
-the widget of each parameter or row, as the table above has it; at a file model,
-the schema names the model's metadata, so that a remote picker offers only the
-files that fit. `SerializedWorkflowSpec` states the forms and the widget of
+params schema is the JSON schema of the request type, so it gives each
+parameter the forms it takes, and a UI renders the widget of each parameter or
+row, as the table above has it; a file model's definition in the schema holds
+its metadata, so that a remote picker offers only the files that fit. `SerializedWorkflowSpec` states the forms and the widget of
 each.
 
 There is deliberately no inverse. Validators do not survive JSON Schema, so a
@@ -635,6 +653,11 @@ output, and dims and units of an output for a UI.
   several purposes, such as those of two He3 cells, are one generic group,
   `He3Cell[Polarizer]` and `He3Cell[Analyzer]`, as sciline tells such keys
   apart by a type parameter.
+- **The rules applied twice**, by a walk over the places of a request that
+  validates it, and by a schema-only copy of each place and group made for the
+  JSON schema, as before the request type. Each restated the table above, and
+  they drifted: the walk took a reference to an output at a file model, which
+  the schema refused, and left it for the fit check to refuse.
 - **A file as a `Path` field of a group.** The file source does not check
   the path, and a picker cannot tell which kind of file a field takes.
 - **A reference to an output at a field of a group**, such as a sample's

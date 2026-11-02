@@ -90,7 +90,8 @@ from ess.spec import (
     places,
     request_types,
 )
-from ess.spec.refs import Loc, as_ref, iter_refs
+from ess.spec.refs import Loc, as_ref
+
 from .listing import Listing
 
 
