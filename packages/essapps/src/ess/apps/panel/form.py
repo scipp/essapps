@@ -10,10 +10,10 @@ that a record's request can be edited and submitted again.
 
 The form has a tab per parameter, with the tabs on the left, as
 esslivedata's dashboard has. The widget follows from what a request may write
-at each parameter or row, by the type :func:`ess.spec.places.root_type`
-gives, as the params schema does (see :mod:`ess.spec._workflow_spec`), and
-is labelled by :func:`ess.spec.places.title`, a parameter by the title of its
-tab:
+at each parameter or row, the forms of its request type
+(:func:`ess.spec.request_types.forms`), which also validate a request and
+are the params schema, and is labelled by :func:`ess.spec.places.title`, a
+parameter by the title of its tab:
 
 =========================  ================================================
 Where                      Widget
@@ -21,9 +21,9 @@ Where                      Widget
 a parameter                a choice of ways: of a file model, a file that
                            fits it; of a union, the fields of each
                            alternative; of a group, its fields unless it
-                           holds a data value (``places.written_inline``), and
+                           holds a data value (the form ``inline``), and
                            an output of a record that fits it if one can
-                           (``places.takes_output``); and ``None`` if
+                           (the form ``output``); and ``None`` if
                            typed ``X | None``. A record is offered while
                            an output fits.
 a list parameter           a table of the rows, and the editor of a row,
@@ -88,6 +88,7 @@ from ess.spec import (
     WorkflowSpec,
     field_types,
     places,
+    request_types,
 )
 from ess.spec.refs import Loc, as_ref, iter_refs
 from .listing import Listing
@@ -138,16 +139,17 @@ def _choice(
     """
     tag = None
     ways: dict[str, _Way] = {}
+    forms = request_types.forms(tp, metadata)
     if (union := places.alternatives(tp, *metadata)) is not None:
         tag, groups = union
         for value, group in groups.items():
             way = places.title(value, group.model_fields[tag])
             ways[way] = _Group(group, {tag: value}, listing)
-    if places.written_inline(tp):
+    elif request_types.INLINE in forms:
         ways['Given'] = _Group(tp, {}, listing)
-    if field_types.is_file_model(tp):
+    if request_types.FILE in forms:
         ways[_Choice.FILE] = _File(tp, listing)
-    if places.takes_output(tp):
+    if request_types.OUTPUT in forms:
         ways[_Choice.RECORD] = _Record(tp, listing)
     if none:
         ways[_Choice.NONE] = _Nothing()
@@ -610,8 +612,9 @@ class _Rows:
         # from the row if the editor cannot show it whole.
         self._shown: Any = UNSET
         # A union is not covered.
-        self._model = tp if field_types.is_file_model(tp) else None
-        fields = tp.model_fields if places.written_inline(tp) else {}
+        forms = request_types.forms(tp, metadata)
+        self._model = tp if request_types.FILE in forms else None
+        fields = tp.model_fields if request_types.INLINE in forms else {}
         self._fields = {
             name: (places.title(name, info), field_types.file_model(info.annotation))
             for name, info in fields.items()
@@ -620,7 +623,7 @@ class _Rows:
         self._ref = None
         if self._model is not None:
             self._ref = 'File'
-        elif places.takes_output(tp):
+        elif request_types.OUTPUT in forms:
             self._ref = 'Record'
         self._editor = _choice('', tp, none, metadata, UNSET, listing)
         self._table = pn.widgets.Tabulator(
