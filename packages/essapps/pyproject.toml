@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-panel = ["panel>=1.10", "pandas"]
+panel = ["panel>=1.10", "pandas", "plopp"]
 test = [
     "essapps[panel]",
     "essspec[scipp,sciline]",
