@@ -151,11 +151,11 @@ made from the params model follow this list. The rules behind it:
 - No output holds a file model, so that every file comes from the file
   source, which checks it. So a group with a file model takes no reference to
   an output, and a group with a data value has no file model.
-- No reference fits a union. An output need not be of a tagged class, so a
-  workflow that outputs a group need not know the unions that take it. A
-  parameter that takes either a value typed in or an output is a group, such
-  as ``BeamCentre``, not a union. So no alternative of a union has a data
-  value.
+- No reference to an output fits a union. An output that fit one would
+  carry the tag of an alternative, so the workflow that computes it would
+  know the specs that take it (see ADR 0008). A parameter that takes either
+  a value typed in or an output is a group, such as ``BeamCentre``, not a
+  union. So no alternative of a union has a data value.
 - A default is a value that a request may write, as validating it gives: an
   instance of a group, not a dict, and never a reference or a file. A file
   model at a field of a group has no default but ``None`` or ``[]``.
