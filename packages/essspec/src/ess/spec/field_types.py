@@ -304,7 +304,8 @@ def inline(
     ``model``, or a row of it unless ``whole`` (see :func:`model_of`), as the
     framework holds it: of a group, the JSON form of the group validated.
 
-    ``value``, plain data, is validated from its JSON form, with
+    ``value``, plain data such as :func:`ess.spec.places.held` makes of
+    Python objects, is validated from its JSON form, with
     ``context``, and with a field that a model lacks refused at any depth,
     since validating would drop it silently. Its JSON form must read back as
     the value, validated without ``context``. Raises:
@@ -316,7 +317,7 @@ def inline(
       without ``name``, whose JSON form reads back as another value, such as a field
       of a group whose validator changes a value it has validated already,
       or whose JSON form is an object with the key ``"@ref"``, which reads
-      as a reference (see :func:`ess.spec.refs.positions`), unless it is the
+      as a reference (see :func:`ess.spec.refs.positions`), unless it is a
       reference to a file, the JSON form of a file model.
     """
     one = model_of(model, name, whole)

@@ -130,7 +130,6 @@ from .refs import (
     Loc,
     OutputRef,
     ParamsError,
-    Ref,
     iter_refs,
     map_refs,
     positions,
@@ -168,31 +167,54 @@ class _Slot:
         return None if self.element else info.discriminator
 
 
-def held(
-    model: type[BaseModel],
-    name: str,
-    value: Any,
-    files: Files | None = None,
-) -> Any:
+def held(model: type[BaseModel], name: str, value: Any, files: Files) -> Any:
     """
     ``value`` of the field ``name`` of ``model``, a parameter, as a record
     holds it: the JSON form of a value written inline or of a reference to
     an output, or ``None``; of a list, each element so. Whether the data of
-    a reference fit is checked where it is read (see :func:`ref_types`).
-    ``value`` is as a request gives it, plain data or Python
-    objects, such as an instance of a group, a file model, or a
-    :data:`~ess.spec.refs.Ref`, which are turned into plain data first.
+    a reference to an output fit its place is for the caller to check when
+    the request is submitted (see :func:`ref_types`). ``value`` is as a
+    request gives it, plain data or Python objects, such as an instance of a
+    group, a file model, or a :data:`~ess.spec.refs.Ref`, which are turned
+    into plain data first.
 
     A group, a row, or a file model written inline is validated whole, with
     each file resolved by ``files`` (see
     :class:`~ess.spec.parameters.FileModel`), and held as the JSON form of
     the validated value, a field left out at its default (see
-    :func:`ess.spec.field_types.inline`). Without ``files``, a file is held
-    as named. Raises :class:`~ess.spec.refs.ParamsError` at the place of the
-    first problem.
+    :func:`ess.spec.field_types.inline`). A file that ``files`` did not
+    resolve, such as one that a validator of a group makes of a name, is
+    refused, since the file source has not checked it. Raises
+    :class:`~ess.spec.refs.ParamsError` at the place of the first problem.
     """
-    value = _ANY.dump_python(value)
-    context = None if files is None else {'files': files}
+    resolved: set[str] = set()
+
+    def resolve(file: str, model: type[FileModel]) -> str:
+        identity = files(file, model)
+        resolved.add(identity)
+        return identity
+
+    stored = _parameter(model, name, _ANY.dump_python(value), {'files': resolve})
+    if unresolved := [
+        (loc, ref)
+        for loc, ref in iter_refs({name: stored})
+        if isinstance(ref, FileRef) and ref.file not in resolved
+    ]:
+        raise ParamsError(
+            (
+                loc,
+                f'file {ref} was not resolved: a validator made it, so the file '
+                'source has not checked it',
+            )
+            for loc, ref in unresolved
+        )
+    return stored
+
+
+def _parameter(
+    model: type[BaseModel], name: str, value: Any, context: dict[str, Any]
+) -> Any:
+    """``value``, plain data, of the parameter ``name`` as :func:`held` has it."""
     if not field_types.is_list(model, name):
         return _held((name,), _Slot(model, name), value, context)
     if (ref := ref_at((name,), value)) is not None:
@@ -211,7 +233,7 @@ _ANY = TypeAdapter(Any)
 """Dumps Python objects to plain data, keeping a number that is not finite."""
 
 
-def _held(loc: Loc, slot: _Slot, value: Any, context: dict[str, Any] | None) -> Any:
+def _held(loc: Loc, slot: _Slot, value: Any, context: dict[str, Any]) -> Any:
     tp, nullable = field_types.optional(slot.annotation)
     union = alternatives(slot.annotation, slot.discriminator)
     ref = ref_at(loc, value)
@@ -292,7 +314,7 @@ def validated(
     model: type[BaseModel],
     name: str,
     value: Any,
-    read: Callable[[Ref], Any] | None = None,
+    read: Callable[[OutputRef | AccumulatorRef], Any] | None = None,
     paths: Mapping[str, Path] | None = None,
 ) -> Any:
     """
@@ -617,8 +639,9 @@ def ref_types(
     Each reference to an output in ``params``, by name, as a record holds
     them, with its place, a parameter or an element of a list parameter, and
     the type at the place, with ``| None`` removed: the type of the data it
-    must fit. A file is a value, resolved when the request is submitted, so
-    a reference to a file is left out.
+    must fit. ``params`` are as :func:`held` makes them, so a reference to
+    an output is only at a root place. A file is a value, resolved when the
+    request is submitted, so a reference to a file is left out.
     """
     return [
         (loc, ref, field_types.value_type(model.model_fields[str(loc[0])].annotation))

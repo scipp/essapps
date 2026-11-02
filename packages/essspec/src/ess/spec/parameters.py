@@ -80,15 +80,19 @@ class FileModel(BaseModel, frozen=True, extra='forbid'):
             {'@ref': 'file', 'file': 'run:101'}, context={'files': resolve}
         )
 
-    ``resolve`` raises ``ValueError`` if the file is unknown, or does not fit
-    the model; its message is that of the validation error.
+    ``resolve`` raises ``ValueError`` if the file is unknown, if the
+    request's proposal may not read it, or if it does not fit the model; its
+    message is that of the validation error. Validated from JSON, as a
+    request is, a file model takes only the reference to a file; validated
+    in Python, it also takes the object of its fields, ``MaskFile(file=...)``.
 
     The local path of the file exists only when the request runs: the
     backend validates the model with the context ``{'paths': {identity:
     local path}}``, and :attr:`path` raises before. A file model holds only
-    ``file``, as declared here, and has no validators of its own, since what
-    it would check of a file is either metadata, which the fit check covers
-    when the request is submitted, or the workflow's to read. No output
+    ``file``, as declared here, and a subclass has no validators but
+    FileModel's, since what it would check of a file is either metadata,
+    which the resolver checks when the request is submitted, or the
+    workflow's to read. No output
     holds a file model, so that every path a workflow gets comes from a file
     that the file source checks. A program without a backend makes a file
     model of a local file with :meth:`local`.
@@ -140,7 +144,11 @@ class FileModel(BaseModel, frozen=True, extra='forbid'):
             value = {'file': value.file}
         elif isinstance(value, Mapping) and value.get('@ref') == 'file':
             value = {k: v for k, v in value.items() if k != '@ref'}
-        elif not (isinstance(value, Mapping) and value.keys() == {'file'}):
+        elif not (
+            info.mode == 'python'
+            and isinstance(value, Mapping)
+            and value.keys() == {'file'}
+        ):
             raise PydanticCustomError(
                 'file_ref',
                 f'{value!r} is not a reference; {cls.__name__} is given by '

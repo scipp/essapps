@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 import pytest
 import scipp as sc
 from annotated_types import Gt, MinLen
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ess.spec import FileModel, FileRef, OutputRef
 from ess.spec.places import (
@@ -85,6 +85,11 @@ FILE = FileRef(file='pid-1')
 OUTPUT = OutputRef(record='r1', output='sample')
 
 
+def _named(name: str, model: type[FileModel]) -> str:
+    """A resolver that takes each name for the identity of a file."""
+    return name
+
+
 def test_a_file_model_takes_a_reference_to_a_file_only() -> None:
     assert place(MaskParams, 'mask') == Ways(
         tag=None, inline={}, record=MaskFile, none=True, metadata=()
@@ -114,40 +119,63 @@ def test_a_file_in_a_group_is_held_as_files_resolves_it() -> None:
     assert asked == [('pid-1', RunFile), ('pid-1', MaskFile)]
 
 
-def test_a_file_is_held_as_named_without_files() -> None:
-    form = FILE.model_dump(by_alias=True)
-    assert held(MeasuredParams, 'measured', {'run': FILE}) == {
-        'run': form,
-        'thickness': 1.0,
-        'masks': [],
-    }
-    assert held(MaskParams, 'mask', FILE) == form
-
-
 def _unknown(name: str, model: type[FileModel]) -> str:
     raise ValueError(f'unknown file {name}')
 
 
 @pytest.mark.parametrize(
-    ('model', 'name', 'value', 'loc'),
+    ('model', 'name', 'value', 'locs'),
     [
-        (MaskParams, 'mask', FILE, ('mask',)),
-        (MaskParams, 'runs', [FILE], ('runs', 0)),
-        (MeasuredParams, 'measured', {'run': FILE}, ('measured', 'run')),
+        (MaskParams, 'mask', FILE, [('mask',)]),
+        (MaskParams, 'runs', [FILE], [('runs', 0)]),
+        (MeasuredParams, 'measured', {'run': FILE}, [('measured', 'run')]),
         (
             MeasuredParams,
             'measured',
             {'run': FILE.model_dump(), 'masks': [FILE]},
-            ('measured', 'run'),
+            [('measured', 'run'), ('measured', 'masks', 0)],
         ),
     ],
 )
 def test_a_file_that_files_refuses_is_refused_at_its_place(
-    model: type[BaseModel], name: str, value: Any, loc: Loc
+    model: type[BaseModel], name: str, value: Any, locs: list[Loc]
 ) -> None:
     with pytest.raises(ParamsError) as raised:
         held(model, name, value, _unknown)
-    assert raised.value.errors[0] == (loc, 'unknown file pid-1')
+    assert raised.value.errors == tuple((loc, 'unknown file pid-1') for loc in locs)
+
+
+def test_a_file_that_a_validator_makes_is_refused() -> None:
+    class Named(BaseModel):
+        mask: MaskFile
+
+        @model_validator(mode='before')
+        @classmethod
+        def _of_name(cls, data: Any) -> Any:
+            if isinstance(data, dict) and 'name' in data:
+                ref = {'@ref': 'file', 'file': data['name']}
+                return {'mask': MaskFile.model_validate(ref)}
+            return data
+
+    class NamedParams(BaseModel):
+        named: Named
+
+    with pytest.raises(ParamsError) as raised:
+        held(NamedParams, 'named', {'name': 'pid-1'}, _named)
+    assert raised.value.errors == (
+        (
+            ('named', 'mask'),
+            'file pid-1 was not resolved: a validator made it, so the file source '
+            'has not checked it',
+        ),
+    )
+    assert held(NamedParams, 'named', {'mask': FILE}, _named) == {
+        'mask': FILE.model_dump()
+    }
+
+
+def _unread(ref: Ref) -> Any:
+    raise AssertionError(f'{ref} is read; a file is never read')
 
 
 def test_a_file_model_in_a_group_gets_its_local_path_from_paths() -> None:
@@ -155,11 +183,12 @@ def test_a_file_model_in_a_group_gets_its_local_path_from_paths() -> None:
     measured = validated(
         MeasuredParams,
         'measured',
-        {'run': form, 'thickness': 2.0, 'masks': []},
-        read=lambda ref: ref,
+        {'run': form, 'thickness': 2.0, 'masks': [form]},
+        read=_unread,
         paths={FILE.file: Path('run.nxs')},
     )
     assert measured.run.path == Path('run.nxs')
+    assert measured.masks[0].path == Path('run.nxs')
 
 
 def test_a_group_with_a_data_value_takes_a_reference_only() -> None:
@@ -222,23 +251,24 @@ def test_a_request_writes_no_data_value() -> None:
 
 def test_a_reference_to_an_output_at_a_parameter_is_held_as_its_json_form() -> None:
     form = OUTPUT.model_dump()
-    assert form == {'@ref': 'output', 'record': 'r1', 'output': 'sample', 'key': None}
-    assert held(MaskParams, 'sample', OUTPUT) == form
-    assert held(MaskParams, 'sample', {k: v for k, v in form.items() if v}) == form
-    assert held(MaskParams, 'mask', OUTPUT) == form  # its type is checked on read
+    assert held(MaskParams, 'sample', OUTPUT, _named) == form
+    given = {'@ref': 'output', 'record': 'r1', 'output': 'sample'}
+    assert held(MaskParams, 'sample', given, _named) == form
+    # Whether its data fit is checked at submit, over ref_types.
+    assert held(MaskParams, 'mask', OUTPUT, _named) == form
 
 
-def test_a_file_at_a_group_that_is_not_a_file_model_is_refused() -> None:
+def test_a_file_at_a_parameter_typed_a_group_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(MaskParams, 'sample', FILE)
+        held(MaskParams, 'sample', FILE, _named)
     assert raised.value.errors == (
         (('sample',), 'file pid-1 does not fit Sample, which is not a file model'),
     )
 
 
 def test_a_reference_at_an_element_of_a_list_parameter_stands_for_one_row() -> None:
-    assert held(MaskParams, 'runs', [FILE]) == [FILE.model_dump()]
-    assert held(Params, 'samples', [{'thickness': 2.0}, OUTPUT]) == [
+    assert held(MaskParams, 'runs', [FILE], _named) == [FILE.model_dump()]
+    assert held(Params, 'samples', [{'thickness': 2.0}, OUTPUT], _named) == [
         {'thickness': 2.0},
         OUTPUT.model_dump(),
     ]
@@ -246,7 +276,7 @@ def test_a_reference_at_an_element_of_a_list_parameter_stands_for_one_row() -> N
 
 def test_a_reference_to_a_whole_list_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(MaskParams, 'runs', OUTPUT)
+        held(MaskParams, 'runs', OUTPUT, _named)
     assert raised.value.errors == (
         (
             ('runs',),
@@ -258,7 +288,7 @@ def test_a_reference_to_a_whole_list_is_refused() -> None:
 
 def test_no_reference_fits_a_union() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(Params, 'beam_centre', OUTPUT)
+        held(Params, 'beam_centre', OUTPUT, _named)
     ((at, msg),) = raised.value.errors
     assert at == ('beam_centre',)
     assert 'a union of groups is written inline' in msg
@@ -279,7 +309,7 @@ def test_a_reference_to_an_output_inside_a_group_is_refused(
 ) -> None:
     model = {'sample': MaskParams, 'measured': MeasuredParams}.get(name, Params)
     with pytest.raises(ParamsError) as raised:
-        held(model, name, value)
+        held(model, name, value, _named)
     assert raised.value.errors == (
         (
             loc,
@@ -291,20 +321,20 @@ def test_a_reference_to_an_output_inside_a_group_is_refused(
 
 def test_a_file_at_a_field_that_is_not_a_file_model_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(Params, 'reduction', {'angles': [1.0, FILE]})
+        held(Params, 'reduction', {'angles': [1.0, FILE]}, _named)
     ((at, msg),) = raised.value.errors
     assert at == ('reduction', 'angles', 1)
     assert 'valid number' in msg
 
 
 def test_a_group_given_inline_is_held_as_the_json_form_of_it_validated() -> None:
-    assert held(Params, 'reduction', {'bins': 3}) == {
+    assert held(Params, 'reduction', {'bins': 3}, _named) == {
         'bins': 3,
         'limits': 1.0,
         'angles': [],
     }
-    assert held(Params, 'reduction', Reduction(bins=3)) == held(
-        Params, 'reduction', {'bins': 3}
+    assert held(Params, 'reduction', Reduction(bins=3), _named) == held(
+        Params, 'reduction', {'bins': 3}, _named
     )
 
 
@@ -324,7 +354,7 @@ def test_a_group_given_inline_is_validated_whole() -> None:
         range: Range
 
     with pytest.raises(ParamsError) as raised:
-        held(RangeParams, 'range', {'start': 10.0, 'stop': 5.0})
+        held(RangeParams, 'range', {'start': 10.0, 'stop': 5.0}, _named)
     ((at, msg),) = raised.value.errors
     assert at == ('range', 'stop')
     assert 'stop must be after start' in msg
@@ -332,27 +362,37 @@ def test_a_group_given_inline_is_validated_whole() -> None:
 
 def test_an_error_inside_a_union_names_its_place_without_the_tag() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(Params, 'beam_centre', {'kind': 'find', 'tolerance': -1.0})
+        held(Params, 'beam_centre', {'kind': 'find', 'tolerance': -1.0}, _named)
     ((at, _),) = raised.value.errors
     assert at == ('beam_centre', 'tolerance')
 
 
 def test_a_file_model_instance_is_held_as_the_reference_to_its_file() -> None:
     ref = FileRef(file='path:mask.xml')
-    assert held(MaskParams, 'mask', MaskFile.local('mask.xml')) == (ref.model_dump())
+    held_mask = held(MaskParams, 'mask', MaskFile.local('mask.xml'), _named)
+    assert held_mask == ref.model_dump()
 
 
 @pytest.mark.parametrize(
-    ('name', 'value', 'loc'),
+    ('model', 'name', 'value', 'loc'),
     [
-        ('mask', 'mask.xml', ('mask',)),
-        ('mask', {'path': 'mask.xml'}, ('mask',)),
-        ('runs', ['run.nxs'], ('runs', 0)),
+        (MaskParams, 'mask', 'mask.xml', ('mask',)),
+        (MaskParams, 'mask', {'path': 'mask.xml'}, ('mask',)),
+        (MaskParams, 'mask', {'file': 'mask.xml'}, ('mask',)),
+        (MaskParams, 'runs', ['run.nxs'], ('runs', 0)),
+        (
+            MeasuredParams,
+            'measured',
+            {'run': {'file': 'run.nxs'}},
+            ('measured', 'run'),
+        ),
     ],
 )
-def test_a_file_model_given_inline_is_refused(name: str, value: Any, loc: Loc) -> None:
+def test_a_file_model_given_inline_is_refused(
+    model: type[BaseModel], name: str, value: Any, loc: Loc
+) -> None:
     with pytest.raises(ParamsError) as raised:
-        held(MaskParams, name, value)
+        held(model, name, value, _named)
     ((at, msg),) = raised.value.errors
     assert at == loc
     assert 'is not a reference; ' in msg
@@ -361,7 +401,7 @@ def test_a_file_model_given_inline_is_refused(name: str, value: Any, loc: Loc) -
 
 def test_a_group_with_a_data_value_given_inline_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(Params, 'mask', {'mask': None})
+        held(Params, 'mask', {'mask': None}, _named)
     assert raised.value.errors == (
         (
             ('mask',),
@@ -379,29 +419,25 @@ def test_each_reference_to_an_output_has_the_type_of_its_parameter_or_element() 
     ]
 
 
-def _read(ref: Ref) -> Ref:
-    return ref
-
-
 def test_a_file_model_is_made_of_the_reference_and_the_path_given_for_it() -> None:
     paths = {FILE.file: Path('mask.xml')}
-    made = validated(MaskParams, 'mask', FILE, _read, paths)
+    made = validated(MaskParams, 'mask', FILE, _unread, paths)
     assert made == MaskFile(file=FILE.file)
     assert made.path == Path('mask.xml')
-    (run,) = validated(MaskParams, 'runs', [FILE], _read, paths)
+    (run,) = validated(MaskParams, 'runs', [FILE], _unread, paths)
     assert run == RunFile(file=FILE.file)
     assert run.path == Path('mask.xml')
 
 
 def test_a_file_model_without_a_path_given_has_none() -> None:
-    made = validated(MaskParams, 'mask', FILE, _read)
+    made = validated(MaskParams, 'mask', FILE, _unread)
     with pytest.raises(ValueError, match='only when the request runs'):
         made.path
 
 
 def test_a_value_held_inline_is_made_of_its_json_form() -> None:
-    stored = held(Params, 'reduction', {'bins': 3})
-    assert validated(Params, 'reduction', stored, _read) == Reduction(bins=3)
+    stored = held(Params, 'reduction', {'bins': 3}, _named)
+    assert validated(Params, 'reduction', stored, _unread) == Reduction(bins=3)
 
 
 def test_an_output_read_for_a_reference_is_kept_as_it_is() -> None:

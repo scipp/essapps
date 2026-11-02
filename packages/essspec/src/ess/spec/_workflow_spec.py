@@ -810,7 +810,7 @@ def _parameter_value(model: type[BaseModel], name: str, value: Any) -> Any:
 
 
 def _no_file(name: str, model: type[FileModel]) -> str:
-    raise ValueError(f'file {name}: a default holds no file')
+    raise ValueError(f'file {name}: a default cannot name a file')
 
 
 def _outputs_problems(model: type[BaseModel]) -> list[str]:

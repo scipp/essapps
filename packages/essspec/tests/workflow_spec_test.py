@@ -299,6 +299,12 @@ class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
     banks: dict[str, sc.DataArray] | None = None
 
 
+class Measured(BaseModel):
+    """A group with a field typed a file model."""
+
+    run: RunFile
+
+
 class Loose(BaseModel, extra='allow'):
     """A group that takes any field, ``@ref`` among them."""
 
@@ -1171,7 +1177,7 @@ class TestModelRules:
             (
                 {'params': model('P', sample=(SampleRun, SampleRun.local('run.nxs')))},
                 f'P.sample: {NOT_A_VALUE}: sample: file path:run.nxs: a default '
-                'holds no file',
+                'cannot name a file',
             ),
             (
                 {
@@ -1180,7 +1186,29 @@ class TestModelRules:
                     )
                 },
                 rf'P.runs: {NOT_A_VALUE}: runs\[0\]: file path:run.nxs: a default '
-                'holds no file',
+                'cannot name a file',
+            ),
+            (
+                {
+                    'params': model(
+                        'P', measured=(Measured, Measured(run=RunFile(file='run-1')))
+                    )
+                },
+                f'P.measured: {NOT_A_VALUE}: measured.run: file run-1: a default '
+                'cannot name a file',
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        reduction=(
+                            Reduction,
+                            OutputRef(record='r1', output='reduction'),
+                        ),
+                    )
+                },
+                f'P.reduction: {NOT_A_VALUE}: reduction: r1.reduction is a '
+                'reference; a default is a value',
             ),
             (
                 {'outputs': model('O', iofq=(sc.DataArray | sc.Variable, ...))},

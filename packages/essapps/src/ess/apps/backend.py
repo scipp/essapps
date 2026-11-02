@@ -78,11 +78,10 @@ its lock, what depends on history and on what the client keeps: each reference
 to a record or an accumulator is one the client may read, and its data fit the
 type at its place. Each group given inline is validated whole then, so that
 its validators run. In the *call phase*, on a worker, the backend reads the
-data each reference names, an output, or for a file the file model,
-with the file's local path attached, and makes each value by its field,
-a row of a list by its element type, of the JSON form the log holds, with the
-data read in place of each reference (see
-:func:`ess.spec.places.validated`). For a plain request it makes the params
+output each reference names, and makes each value by its field, a row of a
+list by its element type, of the JSON form the log holds, with the data read
+in place of each reference and each file model given its file's local path
+(see :func:`ess.spec.places.validated`). For a plain request it makes the params
 instance from these values without validating again, so the params model's
 model validators never run; a stage or an accumulator gets the values by
 name. The rows of a table, if its element type has a JSON form, are
@@ -1349,7 +1348,9 @@ class Backend:
         reads, stage.reads = stage.reads, []
         self._let_go(reads)
 
-    def _reader(self, params: Mapping[str, Any]) -> Callable[[Ref], Any]:
+    def _reader(
+        self, params: Mapping[str, Any]
+    ) -> Callable[[OutputRef | AccumulatorRef], Any]:
         """
         What reads the data each reference in ``params`` names: outputs held
         in memory, or one element of each, taken under the backend's lock
@@ -1368,12 +1369,12 @@ class Backend:
                 if key in self._outputs:
                     held[ref] = _element(self._outputs[key], ref)
 
-        def read(ref: Ref) -> Any:
+        def read(ref: OutputRef | AccumulatorRef) -> Any:
             return held[ref] if ref in held else self._stored(ref)
 
         return read
 
-    def _stored(self, ref: Ref) -> Any:
+    def _stored(self, ref: OutputRef | AccumulatorRef) -> Any:
         """
         The written value of an output, or its element if ``ref`` has a key.
         Needs no lock.
