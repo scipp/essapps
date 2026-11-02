@@ -74,12 +74,6 @@ def refused_spec() -> WorkflowSpec:
     class PixelMask(BaseModel, arbitrary_types_allowed=True):
         mask: sc.DataArray
 
-    class GivenCentre(BaseModel):
-        kind: Literal['given'] = 'given'
-
-    class FindCentre(BaseModel):
-        kind: Literal['find'] = 'find'
-
     RunNumber = NewType('RunNumber', int)
 
     class Geometry(BaseModel):
@@ -90,16 +84,10 @@ def refused_spec() -> WorkflowSpec:
 
     class Reduction(BaseModel):
         bins: int = Field(10, alias='nbins')
-        start: float | None = None
-        limits: tuple[float, float] = (0.0, 1.0)
-        range: WavelengthRange
 
         @computed_field
         def width(self) -> float:
             return 0.0
-
-    class Centring(BaseModel):
-        centre: GivenCentre | FindCentre
 
     class Sample(BaseModel):
         run: RunNumber
@@ -107,7 +95,6 @@ def refused_spec() -> WorkflowSpec:
     class Params(BaseModel):
         bins: int = 10
         reduction: Reduction
-        centring: Centring
         sample: Sample
         geometry: Geometry
         calibration: CalibrationFile
@@ -153,11 +140,7 @@ def refusal() -> str:
     'rule',
     [
         'Reduction.bins: a field of a group has no alias',
-        'Reduction.start: a field is never typed X | None',
-        'Reduction.limits: tuple is not a scalar',
-        'Reduction.range: WavelengthRange is a group',
         "Reduction: no serializers or computed fields, {'computed_fields'",
-        'Centring.centre: GivenCentre | FindCentre is a union of groups',
         'Sample.run: RunNumber is a NewType',
         'Geometry.file: a Path is outside a file model',
         "CalibrationFile: a file model holds only the field file, not ['run']",

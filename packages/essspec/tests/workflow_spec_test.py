@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 import re
 from datetime import datetime
-from enum import Enum
+from enum import Enum, IntEnum
 from pathlib import Path, PosixPath, PurePosixPath
 from typing import Annotated, Any, Literal, NewType, Self, TypedDict
 
@@ -82,12 +82,6 @@ class ByMonitor(BaseModel):
 class ByTime(BaseModel):
     mode: Literal['time']
     seconds: float
-
-
-class Normalization(BaseModel):
-    """A group that holds a union of groups: refused."""
-
-    by: ByMonitor | ByTime = Field(ByMonitor(mode='monitor'), discriminator='mode')
 
 
 By = Annotated[ByMonitor | ByTime, Field(discriminator='mode')]
@@ -193,6 +187,11 @@ class Mode(Enum):
     slow = 'slow'
 
 
+class Level(IntEnum):
+    low = 1
+    high = 2
+
+
 def validated(name: str, **fields: Any) -> type[BaseModel]:
     """A model with ``fields`` and a field validator of its first field."""
 
@@ -248,8 +247,8 @@ class ByCentre(BaseModel, arbitrary_types_allowed=True):
 
 class Centring(BaseModel):
     """
-    A group with a field of a group with a data value, which has no JSON form:
-    a data value itself.
+    A group with a field of a group, and of a tuple: data values, so it is
+    given by reference only.
     """
 
     centre: BeamCentre | None = None
@@ -310,7 +309,7 @@ class Loose(BaseModel, extra='allow'):
 
 
 class Tagged(Enum):
-    """An enum whose JSON form is an object with the key ``@ref``."""
+    """An enum whose value is an object: not a scalar."""
 
     a = {'@ref': 'a'}  # noqa: RUF012
 
@@ -674,11 +673,6 @@ class TestModelRules:
                 'P.b: RoleRun.file: SampleFile is a NewType',
             ),
             (
-                {'params': model('P', normalization=(Normalization, ...))},
-                'P.normalization: Normalization.by: ByMonitor | ByTime is a union of '
-                'groups',
-            ),
-            (
                 {
                     'params': model(
                         'P', centre=(BeamCentre, BeamCentre(position=sc.scalar(1.0)))
@@ -698,7 +692,7 @@ class TestModelRules:
                     )
                 },
                 f'P.centring: {NOT_A_VALUE}: centring: Centring is given by '
-                'reference: no request writes its field centre, of BeamCentre',
+                'reference: no request writes its field centre, of BeamCentre | None',
             ),
             (
                 {'params': model('P', reduction=(dict[str, Reduction], {}))},
@@ -735,9 +729,11 @@ class TestModelRules:
                         ),
                     )
                 },
-                'P.by: ByCentre.centre: no request writes it, since an alternative '
-                'of a union is written inline, with its tag, and no reference fits a '
-                'union; make ByCentre a parameter of its own, given by reference',
+                'P.by: ByCentre.centre, of Variable: no request writes it, since an '
+                'alternative of a union is written inline, with its tag, and no '
+                'reference fits a union; give the field a type that the params '
+                'schema has an input for, or make ByCentre a parameter of its own, '
+                'given by reference',
             ),
             (
                 {
@@ -753,7 +749,7 @@ class TestModelRules:
                         ),
                     )
                 },
-                'P.by: ByCentre.centre: no request writes it',
+                'P.by: ByCentre.centre, of Variable: no request writes it',
             ),
             (
                 {
@@ -793,7 +789,7 @@ class TestModelRules:
                         ),
                     )
                 },
-                'P.by: ByPeak.centre: no request writes it',
+                'P.by: ByPeak.centre, of BeamCentre: no request writes it',
             ),
             *(
                 (
@@ -931,7 +927,8 @@ class TestModelRules:
             *(
                 (
                     {'params': model('P', g=(group, ...))},
-                    f'P.g: {group.__name__} is given by reference to an output only: '
+                    f'P.g: {group.__name__} is given by reference to an output only, '
+                    'since no request writes its field data, of Variable: '
                     f'{where} {FILE_MODEL_OUTPUT}',
                 )
                 for group, where in (
@@ -1150,15 +1147,6 @@ class TestModelRules:
                 )
             ),
             (
-                {
-                    'params': model(
-                        'P', r=(model('R', kinds=(list[Tagged], [Tagged.a])), ...)
-                    )
-                },
-                rf'P.r: R.kinds: {NOT_A_VALUE}: kinds\[0\]: has a JSON form that '
-                'reads as a reference',
-            ),
-            (
                 {'params': model('P', steps=(list[TimeRange], None))},
                 f'P.steps: {NOT_A_VALUE}: steps: None is not a list',
             ),
@@ -1234,25 +1222,6 @@ class TestModelRules:
             spec(params=params)
 
 
-OPTIONAL_FIELD = re.escape(
-    'a field is never typed X | None, nor a Literal with None; a value that may be '
-    'absent is a parameter typed X | None, or a bool field, such as limit_range: bool'
-)
-OPTIONAL_LIST_FIELD = re.escape(
-    'a list field is never typed list[X] | None or list[X | None]; a list without '
-    'elements is [], and each element is a value'
-)
-NOT_A_SCALAR = re.escape(
-    'is not a scalar; a field of a group is a scalar (int, float, str, bool, '
-    'datetime, an enum, or a Literal), a file model, or a list of one: a value '
-    'of several parts is a group, a parameter of its own'
-)
-A_PARAMETER_OF_ITS_OWN = re.escape(
-    'a field of a group is a scalar, a file model, or a list of one: make it a '
-    'parameter of its own'
-)
-
-
 def _group_with(tp: Any) -> type[BaseModel]:
     """A group with the field ``value`` of type ``tp``, and a tag."""
     return model('G', mode=(Literal['g'], 'g'), value=(tp, ...))
@@ -1279,23 +1248,29 @@ class TestFields:
             bool,
             datetime,
             Mode,
+            Level,
             Literal['a', 'b'],
+            Literal[1, 2.5, True],
             Annotated[float, Gt(0)],
+            Annotated[str, MinLen(1)],
             list[float],
             list[Annotated[int, Ge(0)]],
             list[Mode],
+            list[Literal['a', 'b']],
             list[datetime],
             AwareDatetime,
             NaiveDatetime,
             list[AwareDatetime],
+            SampleRun,
+            SampleRun | None,
+            list[SampleRun],
         ],
     )
-    def test_a_field_of_a_group_is_a_scalar_or_a_list_of_scalars(self, tp: Any) -> None:
-        spec(params=model('P', g=(_group_with(tp), ...)))
-
-    @pytest.mark.parametrize('tp', [SampleRun, list[SampleRun], SampleRun | None])
-    def test_a_field_of_a_group_is_a_file_model(self, tp: Any) -> None:
-        spec(params=model('P', g=(_group_with(tp), ...)))
+    def test_a_field_of_a_group_is_a_scalar_a_file_model_or_a_list_of_one(
+        self, tp: Any
+    ) -> None:
+        params = model('P', g=(_group_with(tp), ...))
+        assert _takes_inline(spec(params=params), 'g')
 
     @pytest.mark.parametrize(
         ('tp', 'default'),
@@ -1317,105 +1292,77 @@ class TestFields:
     @pytest.mark.parametrize(
         'tp',
         [
-            int | None,
-            str | None,
-            Mode | None,
-            Literal['a', 'b'] | None,
-            Literal['a', None],  # noqa: PYI061
-            Literal[None],  # noqa: PYI061
-            list[Literal['a', None]],  # noqa: PYI061
-            Reduction | None,
-        ],
-    )
-    def test_a_field_is_never_typed_x_or_none(self, tp: Any) -> None:
-        with pytest.raises(ValueError, match=f'P.g: G.value: {OPTIONAL_FIELD}'):
-            spec(params=model('P', g=(_group_with(tp), ...)))
-
-    @pytest.mark.parametrize(
-        'tp',
-        [
-            list[float] | None,
-            list[float | None],
-            Annotated[list[float], MinLen(1)] | None,
-            list[Reduction | None],
-        ],
-    )
-    def test_a_list_field_is_never_typed_x_or_none(self, tp: Any) -> None:
-        with pytest.raises(ValueError, match=f'P.g: G.value: {OPTIONAL_LIST_FIELD}'):
-            spec(params=model('P', g=(_group_with(tp), ...)))
-
-    @pytest.mark.parametrize(
-        ('tp', 'name'),
-        [
-            (Reduction, 'Reduction is a group'),
-            (list[Reduction], 'Reduction is a group'),
-            (By, 'ByMonitor | ByTime is a union of groups'),
-            (list[By], 'ByMonitor | ByTime is a union of groups'),
-            (ByMonitor | ByTime, 'ByMonitor | ByTime is a union of groups'),
-        ],
-    )
-    def test_a_group_is_never_a_field_of_a_group(self, tp: Any, name: str) -> None:
-        with pytest.raises(
-            ValueError, match=f'P.g: G.value: {name}; {A_PARAMETER_OF_ITS_OWN}'
-        ):
-            spec(params=model('P', g=(_group_with(tp), ...)))
-
-    @pytest.mark.parametrize(
-        ('tp', 'name'),
-        [
-            (dict[str, float], 'dict'),
-            (dict[str, By], 'dict'),
-            (tuple[float, float], 'tuple'),
-            (set[float], 'set'),
-            (frozenset[Mode], 'frozenset'),
-            (Limits, 'Limits'),
-            (Pair, 'Pair'),
-            (RootModel[list[float]], re.escape('RootModel[list[float]]')),
-            (int | float, re.escape('int | float')),
-            (Any, 'Any'),
-            (list[list[float]], 'list'),
-            (list[tuple[float, float]], 'tuple'),
-            (list[Limits], 'Limits'),
-        ],
-    )
-    def test_any_other_field_is_refused(self, tp: Any, name: str) -> None:
-        with pytest.raises(ValueError, match=f'P.g: G.value: {name} {NOT_A_SCALAR}'):
-            spec(params=model('P', g=(_group_with(tp), ...)))
-
-    @pytest.mark.parametrize(
-        ('params', 'where'),
-        [
-            (lambda g: model('P', g=(g, ...)), 'P.g: G.value'),
-            (lambda g: model('P', g=(g | None, None)), 'P.g: G.value'),
-            (lambda g: model('P', rows=(list[g], [])), 'P.rows: G.value'),
-            (
-                lambda g: model(
-                    'P', by=(Annotated[g | ByTime, By.__metadata__[0]], ...)
-                ),
-                'P.by: G.value',
-            ),
-        ],
-    )
-    def test_a_field_is_checked_at_each_place_of_its_group(
-        self, params: Any, where: str
-    ) -> None:
-        with pytest.raises(ValueError, match=f'{where}: tuple {NOT_A_SCALAR}'):
-            spec(params=params(_group_with(tuple[float, float])))
-
-    @pytest.mark.parametrize(
-        'tp',
-        [
             sc.DataArray,
             list[sc.DataArray],
-            dict[str, sc.DataArray],
             sc.Variable | sc.DataArray,
             sc.DataArray | None,
             BeamCentre,
+            int | None,
+            Mode | None,
+            Literal['a', 'b'] | None,
+            Literal['a', None],  # noqa: PYI061
+            list[Literal['a', None]],  # noqa: PYI061
+            list[float] | None,
+            list[float | None],
+            list[list[float]],
+            Reduction,
+            Reduction | None,
+            list[Reduction],
+            By,
+            ByMonitor | ByTime,
+            Tagged,
+            list[Tagged],
+            Literal[Tagged.a],
+            Literal[Mode.fast],
+            tuple[float, float],
+            dict[str, float],
+            set[float],
+            Limits,
+            Pair,
+            RootModel[list[float]],
+            int | float,
+            Any,
         ],
     )
-    def test_a_field_without_a_json_form_is_a_data_value(self, tp: Any) -> None:
+    def test_any_other_field_is_a_data_value(self, tp: Any) -> None:
         params = model('P', g=(_group_with(tp), ...))
         assert not _takes_inline(spec(params=params), 'g')
+
+    @pytest.mark.parametrize(
+        ('tp', 'value', 'shown'),
+        [
+            (float | None, None, 'float | None'),
+            (tuple[float, float], (0.0, 1.0), 'tuple[float, float]'),
+            (TimeRange, TimeRange(start=0.0, stop=1.0), 'TimeRange'),
+            (Tagged, Tagged.a, 'Tagged'),
+        ],
+    )
+    def test_a_group_with_a_data_value_has_no_default(
+        self, tp: Any, value: Any, shown: str
+    ) -> None:
+        group = model('G', value=(tp, ...))
+        with pytest.raises(
+            ValueError,
+            match=re.escape(
+                f'P.g: {NOT_A_VALUE}: g: G is given by reference: no request '
+                f'writes its field value, of {shown}'
+            ),
+        ):
+            spec(params=model('P', g=(group, group(value=value))))
+
+    @pytest.mark.parametrize(
+        'params',
+        [
+            lambda g: model('P', g=(g, ...)),
+            lambda g: model('P', g=(g | None, None)),
+            lambda g: model('P', g=(list[g], [])),
+        ],
+    )
+    def test_a_group_with_a_data_value_is_given_by_reference_at_each_place(
+        self, params: Any
+    ) -> None:
+        group = _group_with(tuple[float, float])
+        assert not _takes_inline(spec(params=params(group)), 'g')
 
     def test_a_group_with_a_data_value_holds_any_type_an_output_may(self) -> None:
         group = model(

@@ -3,7 +3,6 @@
 """The value at each place given inline or by reference, as the request chooses."""
 
 from collections.abc import Callable, Iterator
-from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -24,7 +23,7 @@ from ess.spec import FileModel, OutputRef, WorkflowSpec, function_binding
 
 
 class Blob:
-    """A data value: a type without a JSON form."""
+    """A data value: a type that is not a scalar or a file model."""
 
     def __init__(self, value: float) -> None:
         self.value = value
@@ -44,12 +43,6 @@ class LabelledShift(Shift):
     """A shift with a field that ``Shift`` lacks."""
 
     label: str = ''
-
-
-class Tagged(Enum):
-    """An enum whose JSON form is an object with the key ``@ref``."""
-
-    output = {'@ref': 'output'}  # noqa: RUF012
 
 
 class SampleRun(FileModel): ...
@@ -74,14 +67,10 @@ class LoadOutputs(BaseModel):
 
 
 class Terms(BaseModel):
-    """
-    Fields of types that take no reference: numbers added to a shift, and
-    ``kinds``, whose JSON form holds the key ``@ref``.
-    """
+    """Fields of types that take no reference: numbers added to a shift."""
 
     offset: float = 0.0
     values: list[float] = Field(default_factory=list)
-    kinds: list[Tagged] = Field(default_factory=list)
 
 
 class AddParams(BaseModel):
@@ -662,16 +651,6 @@ def test_a_key_names_an_element_of_an_output(client: Client, loaded: Record) -> 
     )
 
     assert client.output(computed, 'value') == 2.0
-
-
-def test_a_value_whose_json_form_reads_as_a_reference_is_refused(
-    client: Client,
-) -> None:
-    with pytest.raises(
-        SubmitError,
-        match=r'^terms\.kinds\[0\]: has a JSON form that reads as a reference$',
-    ):
-        client.submit(ADD, params={'terms': {'kinds': [Tagged.output]}})
 
 
 def test_a_group_that_holds_a_data_value_is_given_by_reference_only(

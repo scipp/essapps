@@ -8,8 +8,10 @@ import scipp as sc
 from annotated_types import Gt
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     Discriminator,
     Field,
+    PlainSerializer,
     Strict,
     field_validator,
     model_validator,
@@ -444,6 +446,40 @@ def test_a_file_model_given_inline_is_refused(
     assert at == loc
     assert 'is not a reference; ' in msg
     assert 'is given by reference to a file, such as file(path=...)' in msg
+
+
+class Disguised(BaseModel):
+    """A group whose field a serializer dumps as a reference to an output."""
+
+    value: Annotated[
+        int,
+        BeforeValidator(lambda v: int(v['key']) if isinstance(v, dict) else v),
+        PlainSerializer(
+            lambda v: {'@ref': 'output', 'record': 'r', 'output': 'o', 'key': str(v)}
+        ),
+    ] = 1
+
+
+class DisguisedParams(BaseModel):
+    group: Disguised
+    rows: list[Disguised] = []
+
+
+@pytest.mark.parametrize(
+    ('name', 'value', 'loc'),
+    [('group', {'value': 2}, ('group', 'value')), ('rows', [{}], ('rows', 0, 'value'))],
+)
+def test_a_reference_to_an_output_in_a_json_form_written_inline_is_refused(
+    name: str, value: Any, loc: Loc
+) -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(DisguisedParams, name, value, _named)
+    ((at, msg),) = raised.value.errors
+    assert at == loc
+    assert msg.endswith(
+        'the JSON form of a value written inline holds a reference to an output, '
+        'which fills a whole parameter or a whole row'
+    )
 
 
 def test_a_group_with_a_data_value_given_inline_is_refused() -> None:

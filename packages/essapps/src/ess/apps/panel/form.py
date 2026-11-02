@@ -75,7 +75,7 @@ from typing import Any, get_args
 
 import pandas as pd
 import panel as pn
-from pydantic import AwareDatetime, BaseModel, NaiveDatetime
+from pydantic import AwareDatetime, BaseModel
 from pydantic.fields import FieldInfo
 from pydantic_core import to_jsonable_python
 
@@ -239,9 +239,6 @@ class _File:
         return self.widget
 
 
-_TIMES = (datetime, AwareDatetime, NaiveDatetime)
-
-
 class _Scalar:
     """
     A scalar: an ``int``, ``float``, or ``str`` input, or a picker of a time,
@@ -270,7 +267,7 @@ class _Scalar:
             self.widget = pn.widgets.IntInput(**options)
         elif tp is str:
             self.widget = pn.widgets.TextInput(**options)
-        elif tp in _TIMES:
+        elif tp in field_types.TIMES:
             self.widget = pn.widgets.DatetimePicker(**options)
         elif tp is bool:
             self.widget = self._picker({'True': True, 'False': False}, options)
@@ -289,7 +286,7 @@ class _Scalar:
         if value is None or value is UNSET or (value == '' and self._default is UNSET):
             missing.append(FieldError(None, loc, 'give a value'))
             return UNSET
-        if self._type in _TIMES:
+        if self._type in field_types.TIMES:
             # The picker gives a time without a zone, to the second: the time
             # set, unless the user changed it.
             value = value.replace(tzinfo=self._zone)
@@ -307,7 +304,7 @@ class _Scalar:
                 value = '' if self._type is str else None
         elif isinstance(self._type, type) and issubclass(self._type, Enum):
             value = self._type(value)  # a record holds an enum by its value
-        if self._type in _TIMES:
+        if self._type in field_types.TIMES:
             value = self._time(value)
         self.widget.value = value
 

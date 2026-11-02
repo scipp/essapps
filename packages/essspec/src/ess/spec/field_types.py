@@ -27,10 +27,12 @@ import dataclasses
 import functools
 import operator
 from collections.abc import Iterable, Iterator
+from datetime import datetime
 from types import NoneType, UnionType
 from typing import (
     Annotated,
     Any,
+    Literal,
     NewType,
     TypeAliasType,
     Union,
@@ -40,13 +42,22 @@ from typing import (
     is_typeddict,
 )
 
-from pydantic import BaseModel, Field, RootModel, ValidationError, create_model
-from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
-from pydantic.json_schema import GenerateJsonSchema, JsonSchemaWarningKind
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    Field,
+    NaiveDatetime,
+    RootModel,
+    ValidationError,
+    create_model,
+)
 from pydantic_core import PydanticCustomError, from_json, to_json
 
 from .parameters import FileModel
-from .refs import Loc, ParamsError, positions
+from .refs import Loc, ParamsError
+
+TIMES = (datetime, AwareDatetime, NaiveDatetime)
+"""The types of a time, which a request writes as a string."""
 
 
 def plain(tp: Any) -> Any:
@@ -76,6 +87,20 @@ def optional(tp: Any) -> tuple[Any, bool]:
             inner = args[0] if len(args) == 1 else Union[tuple(args)]  # noqa: UP007
             return inner, True
     return tp, False
+
+
+def taken_apart(annotation: Any) -> tuple[Any, bool, bool | None]:
+    """
+    The type of one value of ``annotation``, ``X`` of ``X``, ``X | None``,
+    ``list[X]``, ``list[X] | None``, or ``list[X | None]``; whether
+    ``annotation`` is typed ``X | None``; and for a list whether its element
+    is, else ``None``.
+    """
+    tp, is_optional = optional(annotation)
+    if get_origin(tp) is not list:
+        return tp, is_optional, None
+    tp, item_optional = optional(get_args(tp)[0])
+    return tp, is_optional, item_optional
 
 
 def element(tp: Any) -> Any | None:
@@ -210,46 +235,25 @@ def has_array(tp: Any) -> bool:
     )
 
 
-@functools.cache
-def has_json_form(model: type[BaseModel], name: str) -> bool:
-    """
-    Whether the type of the field ``name`` of ``model``, with ``| None``
-    removed and for a list its element type taken, has a JSON form: pydantic
-    makes a JSON schema of it, with the config of ``model``, of each member
-    of a union too.
-    """
-    tp = value_type(model.model_fields[name].annotation)
-    try:
-        # A field of a model of its own carries the config, which
-        # TypeAdapter refuses for a model type.
-        create_model(
-            'Value', __config__=model.model_config, value=(tp, ...)
-        ).model_json_schema(schema_generator=_EveryMember)
-    except (PydanticInvalidForJsonSchema, PydanticSchemaGenerationError):
-        return False
-    return True
-
-
-class _EveryMember(GenerateJsonSchema):
-    """
-    Refuses a union with a member without a JSON schema, which pydantic
-    leaves out of the union's schema: ``sc.Variable | sc.DataArray`` has
-    none, not ``anyOf: []``.
-    """
-
-    def emit_warning(self, kind: JsonSchemaWarningKind, detail: str) -> None:
-        if kind == 'skipped-choice':
-            raise PydanticInvalidForJsonSchema(detail)
-        super().emit_warning(kind, detail)
-
-
 def type_name(tp: Any) -> str:
     """
-    The name of a type, as a serialized spec shows it; of a union, the names
-    of its members, ``BeamCentre | FindCentre``.
+    The name of a type, as a serialized spec shows it, without ``Annotated``
+    metadata; of a union, the names of its members, ``BeamCentre |
+    FindCentre``; of a generic alias, with its arguments, ``tuple[float,
+    float]`` or ``Literal['a', 'b']``.
     """
-    if get_origin(tp) in (Union, UnionType):
-        return ' | '.join(map(type_name, get_args(tp)))
+    tp = plain(tp)
+    origin, args = get_origin(tp), get_args(tp)
+    if origin in (Union, UnionType):
+        return ' | '.join(map(type_name, args))
+    if tp is NoneType:
+        return 'None'
+    if tp is Ellipsis:
+        return '...'
+    if origin is Literal:
+        return f'Literal[{", ".join(map(repr, args))}]'
+    if origin is not None:
+        return f'{type_name(origin)}[{", ".join(map(type_name, args))}]'
     return getattr(tp, '__name__', None) or repr(tp)
 
 
@@ -334,12 +338,10 @@ def inline(
     - ``PydanticSerializationError`` if it has no JSON form;
     - ``ValidationError`` if it is not valid, or if its JSON form is not,
       such as of a number that is not finite, which JSON holds as ``null``;
-    - :class:`~ess.spec.refs.ParamsError` at each position inside the value,
-      without ``name``, whose JSON form reads back as another value, such as a field
-      of a group whose validator changes a value it has validated already,
-      or whose JSON form is an object with the key ``"@ref"``, which reads
-      as a reference (see :func:`ess.spec.refs.positions`), unless it is a
-      reference to a file, the JSON form of a file model.
+    - :class:`~ess.spec.refs.ParamsError` at the position inside the value,
+      without ``name``, whose JSON form reads back as another value, such as
+      a field of a group whose validator changes a value it has validated
+      already.
     """
     one = model_of(model, name, whole)
     given = to_json({name: value}, inf_nan_mode='constants')
@@ -357,17 +359,10 @@ def inline(
         ) from None
     if again != made:
         raise ParamsError([(_differs((), made, again), _NO_JSON_FORM)])
-    if refs := [
-        loc
-        for loc, v in positions((), stored)
-        if isinstance(v, dict) and '@ref' in v and v['@ref'] != 'file'
-    ]:
-        raise ParamsError((loc, _READS_AS_REF) for loc in refs)
     return stored
 
 
 _NO_JSON_FORM = 'has no JSON form that reads back as the value'
-_READS_AS_REF = 'has a JSON form that reads as a reference'
 _NO_JSON_FORM_ERROR = PydanticCustomError('no_json_form', _NO_JSON_FORM)
 
 
