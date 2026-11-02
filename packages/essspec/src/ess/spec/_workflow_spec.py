@@ -608,8 +608,8 @@ def _found(
 def _alias_problems(annotation: Any) -> list[str]:
     """
     Refuse each ``NewType`` or type alias that ``annotation`` is made of,
-    named by the field of the class that holds it, if any: a spec names a
-    role by a class.
+    named by the field of the class that holds it, if any: a class says what
+    a value is.
     """
     return [
         f'{where}{alias.__name__} is '

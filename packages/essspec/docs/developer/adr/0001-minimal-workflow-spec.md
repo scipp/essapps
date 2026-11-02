@@ -78,66 +78,73 @@ factories in another under the same name, are the natural fit for the
 requirement above and are expected to become the convention once the first
 service adopts this spec.
 
-### Params written inline or given by reference
+### Params: values, files, and references to outputs
 
 A request goes through two phases. The *request phase* is what the client and
 the backend do with a request before any data is read: validate, log, record,
 pin. The *call phase* starts when the backend reads data for the binding.
 
-A field of the params model is a *parameter*. A request gives each value in one
-of two forms: *written inline* or *given by reference*. A value written inline
-is the value itself in the request; the record holds its JSON form. A
-*reference* names data that exist elsewhere: a file, an output of a record,
-or an output of an accumulator. In the request phase a value given by reference
-is the reference; in the call phase it is the data. The params model types the
-call phase only. The backend reads each reference and builds the params
-instance from the values written inline and the data, so every field of it
-holds the type it declares. The binding gets that instance:
-`compute(params) -> outputs`.
+A field of the params model is a *parameter*. An element of a list parameter
+is a *row*. A request gives each parameter, or each row, in one of three
+forms:
+
+- *written inline*: the value itself, such as `Reduction(bins=100)` or
+  `{'bins': 100}`;
+- a *file*, `file(run=60339)`, which the backend resolves to the file's
+  identity in the request phase;
+- a *reference to an output*, which names an output of an earlier record or
+  of an accumulator. In the request phase it is the reference; in the call
+  phase it is the data.
+
+The *JSON form* of a value is what it dumps to as JSON,
+`model_dump(mode='json')`. The record holds the JSON form of each value, file,
+and reference. A value *round-trips* when its JSON form reads back as the
+value. The params model types the call phase only. The backend reads each
+reference to an output and builds the params instance from the values and the
+data, so every field of it holds the type it declares. The binding gets that
+instance: `compute(params) -> outputs`.
 
 | Model | Holds | In a request | When the workflow runs |
 |---|---|---|---|
-| params | everything the workflow takes: settings, files, data | each value written inline or given by reference | the values, and the data the references name |
+| params | everything the workflow takes: settings, files, data | each value written inline, a file, or a reference to an output | the values, files with their local paths, and the data the references name |
 | outputs | results | (none) | the data the workflow returns |
 
-Which form a value takes is the request's choice, at each *root place*, since
-the same value is typed in by one user and computed by another: a beam centre
-is typed in, or found by a first reduction; the time slices of a slicing
-reduction are typed in, or found from a log. A root place is the value of a
-parameter, or an element of a list parameter. A *place* is any position in the
-params, named by its path, such as `reduction.bins`; a field of a group is a
-place, not a root place. The type at a root place decides which forms it
-accepts, with `| None` removed. A type has a *JSON form* when
-pydantic makes a JSON schema of it with its model's config. A value
-*round-trips* when its JSON form reads back as the value.
+Whether a parameter is written inline or a reference to an output is the
+request's choice, since the same value is typed in by one user and computed
+by another: a beam centre is typed in, or found by a first reduction; the time
+slices of a slicing reduction are typed in, or found from a log. A *place* is
+any position in the params, named by its path, such as `reduction.bins` or
+`samples[2]`. The type of a parameter, or of the rows of a list parameter,
+decides which forms it accepts, with `| None` removed:
 
-| The type at a root place | Example | Inline | By reference |
+| Type | Example | Value | Reference to an output |
 |---|---|---|---|
-| a file model | `Sample`, `MaskFile` | no | to a file that fits |
-| a group without a data value | `Reduction`, `BeamCentre` | an object of its fields | to an output of its class |
-| a group holding a file model | `Sample(run, thickness)` | an object of its fields, each file by reference | no |
+| a file model | `SampleRun`, `MaskFile` | a file that fits | no |
+| a group without a data value or a file model | `Reduction`, `BeamCentre` | an object of its fields | to an output of its class |
+| a group with a file model | `Sample(run, thickness)` | an object of its fields, each file as `file(...)` | no |
 | a group with a data value | `ComputedTransmission` | no | to an output of its class |
 | a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag | no |
-| a list, `list[X]` | a list parameter | a list, each element a root place of type `X` | no |
+| a list, `list[X]` | a list parameter | a list of rows, each as for `X` | no; each row as for `X` |
 
 **Only the first level is interpreted.** A *group* is a pydantic model, written
 as an object of its fields; a `RootModel` is not a group. Each parameter is a
-group, a union of groups, or a list of one, possibly typed `X | None`. A
-*scalar* is an `int`, `float`, `str`, `bool`, `datetime`, an enum, or a
-`Literal`, possibly constrained, such as `Annotated[float, Gt(0)]`. A *data
-value* is a field without a JSON form, such as a scipp array, which no request
-can write. The fields of a group without a data value are scalars, file
-models, or lists of one of these; a scalar is never typed `X | None`, a file
-model may be, for a file that may be left out. A group with a data value is
-given by reference to an output only; of its other fields, the framework
-refuses only a `Path`, a file model, a `NewType`, or a type alias, since no
-output could fill them. The framework looks no deeper.
+group, a union of groups, or a list of one, possibly typed `X | None`. A field
+of a group is *interpreted* if a form made from the params schema has an input
+for it: a *scalar*; a file model, possibly typed `X | None`, for a file that
+may be left out; or a list of scalars or of file models. A scalar is an `int`,
+`float`, `str`, `bool`, or `datetime`, or an enum or a `Literal` whose values
+are of these types, possibly constrained, such as `Annotated[float, Gt(0)]`.
+Any other field is a *data value*, such as a scipp array, `float | None`, or
+`tuple[float, float]`. No request can write a data value, so a group with one
+is given by reference to an output only. Of its fields, the framework refuses
+a `Path`, a file model, a `NewType`, or a type alias, since no output could
+fill them. The framework looks no deeper.
 
 **A group is validated whole, once, when the request arrives.** So a group
-holds only what is known then: values typed in, and files, named by their
-identity. A value that another request computes may not exist yet; it fills a
-whole parameter. So a file picker sits next to a checkbox, and a picker of
-records fills a whole card:
+holds only what is known then: values typed in, and files, resolved to their
+identity. A value that another request computes may not exist yet, so a
+reference to an output fills a whole parameter or row. So a file picker sits
+next to a checkbox, and a picker of records fills a whole card:
 
 ```python
 class Sample(BaseModel):
@@ -157,12 +164,12 @@ This buys two things:
   one that the runs of four spin channels are distinct. A reference to an
   output only has to fit its type, and the call phase only reads the data of
   the references and attaches the local paths of the files.
-- A UI needs one widget per root place and one input per field, with no
+- A UI needs one widget per parameter or row and one input per field, with no
   recursion:
 
-  | Root place | Widget |
+  | Parameter or row | Widget |
   |---|---|
-  | a group without a data value | a form of its fields, a file picker for a file model, and a picker of records whose output is of its class, unless it holds a file model |
+  | a group with interpreted fields only | a form of its fields, a file picker for a file model, and a picker of records whose output is of its class, unless it has a file model |
   | a group with a data value | a picker of records whose output is of its class |
   | a file model | a picker of files of its kind |
   | a union of groups | a choice of alternatives, each a form of its fields |
@@ -186,73 +193,77 @@ class MaskFile(FileModel, kind='mask'):
     """A pixel mask, as XML."""
 ```
 
-A file model is given by reference to a file only, so that the file source
-checks access and the record holds the file's identity. The identity is the
-model's value, and its JSON form is the reference, so a file model is known
-when the request arrives, as a value typed in is. The local path of the file
-exists only when the request runs: the backend attaches it then, and the
-binding reads it as `run.path`, which raises before. A program without a
-backend makes the model of a local file with `MaskFile.local(path)`. No output
-is or holds a file model or a `Path`, so every path a workflow gets has
-passed the access check. The metadata
-let a picker offer only the files that fit. A field of the model for a
-metadata value, such as the run number, waits for a workflow that needs it.
+A request writes a file as `file(...)`, such as `file(run=60339)` or
+`file(path=...)`. The backend resolves it to the file's identity in the
+request phase, so that the file source checks access and that the file's
+metadata fit the model, and the record holds the identity. A file is
+therefore known when the request arrives, as a value typed in is, and can be
+a field of a group. The local path of the file exists only when the request
+runs: the backend attaches it then, and the binding reads it as `run.path`,
+which raises before. A program without a backend makes the model of a local
+file with `MaskFile.local(path)`. No output is or holds a file model or a
+`Path`, so every path a workflow gets has passed the access check. The
+metadata let a picker offer only the files that fit. A field of the model for
+a metadata value, such as the run number, waits for a workflow that needs it.
 
-**References stand for whole groups.** A number or a scipp array names no role:
-every output of its type fits a root place of that type, so a UI that offers
+**References to outputs fill groups.** A reference to an output fits a
+parameter or row by the class of the group there. A parameter typed `float`
+or `sc.DataArray` would fit every output of that type, so a UI that offers
 the outputs that fit would list every number, or every array, that any record
-holds. A group names its role by its class. So a value that another workflow
-computes comes as a group, which that workflow outputs, such as a found beam
-centre, and a data value is a field of a group, such as
+holds. A group's class says what the value is. So a value that another
+workflow computes comes as a group, which that workflow outputs, such as a
+found beam centre, and a data value is a field of a group, such as
 `ComputedTransmission.transmission`.
 
-A reference names an output of an earlier record (`OutputRef`: record, output
-name, and optionally the key of one element of a list or dict output), a
-file the framework did not compute (`FileRef`: one identity string), or
-an output of an accumulator (`AccumulatorRef`: accumulator and output name).
-Only a request holds an `AccumulatorRef`: the framework replaces it, when it
-accepts the request, by an output of a record of the accumulator's state. Its
-JSON form is an object with the key `@ref`, which names its kind:
+A reference to an output names an output of an earlier record (`OutputRef`:
+record, output name, and optionally the key of one element of a list or dict
+output), or an output of an accumulator (`AccumulatorRef`: accumulator and
+output name). Only a request holds an `AccumulatorRef`: the framework
+replaces it, when it accepts the request, by an output of a record of the
+accumulator's state. The JSON form of a reference to an output, and of a file
+(`FileRef`: one identity string), is an object with the key `@ref`, which
+names its kind:
 
 ```json
 {"@ref": "file", "file": "run:loki/60339"}
 {"@ref": "output", "record": "r17", "output": "slices", "key": "2"}
 ```
 
-The key `@ref` is reserved at every depth: an object with it is a reference. So
-a framework finds the references of a request without the spec, as a remote
-client that holds only the serialized spec must, and a value written inline
-never reads as a reference. With the spec, the framework refuses a reference
-inside a group written inline, but one to a file at a field typed a file
-model, and a default whose JSON form holds the key.
+The key `@ref` is reserved at every depth: an object with it is a reference to
+an output or a file. So a framework finds the references and files of a
+request without the spec, as a remote client that holds only the serialized
+spec must, and a value written inline never reads as a reference. With the
+spec, the framework refuses a reference to an output inside a group, and a
+default whose JSON form holds the key.
 
 The identity string of a `FileRef` is opaque to the spec and interpreted
 only by the framework that minted it, which makes it self-describing where it
 has several kinds of identity, as a URI does with its scheme:
 `pid:20.500.12269/abc`, `run:dream/1`. It compares as a string, so the
-framework normalizes it before a reference enters a record.
+framework normalizes it before it enters a record.
 
-Output references and file references work the same way:
+A file and a reference to an output differ in where they may be and when they
+are resolved:
 
-| | Reference to an output | Reference to a file |
+| | Reference to an output | File |
 |---|---|---|
-| Place | a parameter, or an element of a list parameter | the same, or a field of a group typed a file model, or an element of a list field of one |
-| Stands for | a whole group, not a file model | a whole file model |
-| Fits if | the output's class is the group's class or a subclass of it | the file's metadata has the model's metadata |
-| Resolved in the call phase to | the stored output | the file model with the local path |
+| Place | a parameter, or a row | the same, or a field of a group typed a file model, or an element of a list field of one |
+| Fills | a whole group, not a file model | a whole file model |
+| Fits if | the output's class is the group's class or a subclass of it | the file's metadata have the model's metadata |
+| Resolved | in the call phase, to the stored output | in the request phase, to the file's identity; in the call phase, the file model gets the local path |
 | Found in a record | by its `@ref` key, without the spec | the same |
 | Access check at submission | records the client may read | files the proposal may read |
 
-No reference fits a union, and no single reference fills a list parameter. A
-subclass that names a role fits a root place typed by its base class too, so
-a root place that takes one role only is typed by that role's class. A framework
+No reference to an output fits a union, and none fills a whole list
+parameter. A subclass fits a parameter typed by its base class too, so a
+parameter that takes only the subclass is typed by the subclass. A framework
 checks fit in the request phase, so that a chain of requests is refused before
 anything runs. `ess.spec.field_types.fits` states the rule.
 
-A root place takes a file or an output of another workflow, as its type says;
-never a choice between the two. A value that some users read from a file and
-others compute is a group given by reference, and a workflow that reads the
-file outputs the group.
+A parameter or row takes a file or an output of another workflow, as its type
+says; never a choice between the two. A value that some users read from a
+file and others compute is a group given by reference to an output, and a
+workflow that reads the file outputs the group.
 
 ```python
 class Sample(FileModel, kind='raw'): ...          # the file of a sample run
@@ -304,14 +315,11 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
   typed `X | None`. A list parameter is not typed `list[X] | None`, since a
   list without rows is `[]`, and its element is not typed `X | None`, since
   each row is a value.
-- The fields of a group without a data value are scalars, file models, or
-  lists of one of these. A scalar is never typed `X | None`; a file model
-  may be, and has no default but `None`, or `[]` for a list. A group with a
-  file model is written inline only, since no output holds one. A group
-  with a data value is given by
-  reference to an output only; of its other fields, the framework refuses
-  only a `Path`, a file model, a `NewType`, or a type alias, since no
-  output could fill them.
+- A group with a data value is given by reference to an output only. Of its
+  fields, the framework refuses a `Path`, a file model, a `NewType`, or a
+  type alias, since no output could fill them. A file model at a field of a
+  group has no default but `None`, or `[]` for a list. A group with a file
+  model is written inline only, since no output holds one.
 - A file model holds only `file`, as `FileModel` declares it, and
   has no validators or serializers of its own: what it would check of a file
   is metadata, which the fit check covers, or the workflow's to read. A `Path`
@@ -319,8 +327,8 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 - Each output's type is a type, possibly typed `X | None`, or a list or a dict
   of one. No output is or holds a file model or a `Path`, at any depth.
 - No type in the params or the outputs is a `NewType` or a type alias, at any
-  depth. A class names a role. A `NewType` of a shared type would name one only
-  if the fit check looked through it. A `NewType` that a sciline graph needs
+  depth. A class says what a value is. A `NewType` of a shared type would say
+  it only if the fit check looked through it. A `NewType` that a sciline graph needs
   as a key belongs to the binding (`keys=`, or a provider that takes the value
   out of the group).
 - A union of groups is discriminated by the name of its tag field, not by a
@@ -331,10 +339,11 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 - A group has no serializers, computed fields, or aliases, which would make
   its JSON form differ from the object of its fields. It may have field and
   model validators of any mode.
-- A default is a value, never a reference: what a request may write at the
-  place, which round-trips and holds no `@ref` object at any depth; of a type
-  without a JSON form, `None` or `[]`. It is the value that validating it
-  gives, since pydantic does not validate a default: a group's default is an
+- A default is a value, never a reference to an output or a file: what a
+  request may write at the place, which round-trips and holds no `@ref`
+  object at any depth. A parameter typed a group with a data value has no
+  default but `None`, or `[]` for a list. A default is the value that
+  validating it gives, since pydantic does not validate a default: a group's default is an
   instance, not the object of its fields, and an enum's a member, not its
   value.
 - A table has no default (see the multi-run spec below).
@@ -351,9 +360,9 @@ JSON form of a value, which the framework stores and reads back. In the request
 phase, each group, or row, written inline is validated whole, from its JSON
 form, and the record holds the JSON form of the validated group, which must
 read back as it. The call phase makes each value of the JSON form the record
-holds, with the data read in place of each reference; it fails only for the
-data of a reference, such as a file model whose validator refuses the local
-path. A check across parameters, such as a Q range that the wavelength band
+holds, with the data read in place of each reference to an output and the
+local path attached to each file; it fails only for the data of a reference
+to an output. A check across parameters, such as a Q range that the wavelength band
 and the detector can reach, is the binding's or the driver's, and fails when
 the request runs. A binding may run the model validators,
 `IofQParams.model_validate(dict(params))`, where it has the whole instance.
@@ -404,7 +413,7 @@ own, such as `iofq: IofQ` or `centre: BeamCentre`, or is a list or a dict of
 one, and a reference with a key names one element.
 
 "Outputs can be parameters" is a fit check between an output's type and the
-group at a root place. An output that another workflow takes is a group, such as
+group of a parameter or row. An output that another workflow takes is a group, such as
 `centre: BeamCentre` or `iofq: IofQ`; one that none takes need not be. Where a
 framework stores an output is not a spec concept. Output *selection* (choosing
 which sciline targets to compute) is not modeled: like parameter slicing, it is
@@ -419,8 +428,8 @@ declaration or in a unit field beside it, as the edges models do; a data value
 carries its own unit.
 
 A *table* is a list parameter whose *rows* an accumulator takes a push at a
-time, such as the sample runs. Each row is a root place, written inline or
-given by reference, as its type allows. The rows of a table are distinct. A
+time, such as the sample runs. Each row is written inline, a file, or a
+reference to an output, as its type allows. The rows of a table are distinct. A
 *single-run spec* takes one run per parameter. A *multi-run spec* of the same
 reduction takes a table in place of such a parameter. Its params model is a
 plain model, and the fields the two models have in common are shared by
@@ -457,7 +466,7 @@ of counts over the runs of a scan, is written the same way:
 file model.
 
 A value that differs per run, such as a motor position, is in the run's file.
-A row of a table of runs is a file reference and nothing else. A value that
+A row of a table of runs is a file and nothing else. A value that
 differs between runs, such as a thickness, makes the runs separate requests; a
 value shared by all runs of a request is a parameter, such as one transmission
 for the summed sample runs (see the alternative "A file model at a field of
@@ -481,7 +490,7 @@ plain-data pydantic model that round-trips through JSON and is what a service
 announces to remote consumers. It holds a schema of the params
 (`params_schema`), one of the outputs (`outputs_schema`), and the tables. The
 params schema gives each parameter the forms it takes, so that a UI renders
-the widget of each root place, as the table above has it; at a file model,
+the widget of each parameter or row, as the table above has it; at a file model,
 the schema names the model's metadata, so that a remote picker offers only the
 files that fit. `SerializedWorkflowSpec` states the forms and the widget of
 each.
@@ -595,39 +604,39 @@ output, and dims and units of an output for a UI.
 - **`$ref` as the key of a reference.** It is the JSON Schema keyword for a
   reference within a schema, so a reference held in a schema, as a default or
   an example, would be read as one.
-- **A reference at every place with a JSON form**, such as a number computed by
-  another record. Every output of the type fits, so a picker of the outputs
+- **A reference to an output at a parameter of any type**, such as a number
+  computed by another record. Every output of the type fits, so a picker of the outputs
   that fit lists every number that any record holds; a group that holds the
   number names what it is.
-- **`NewType`s as roles**, such as
+- **`NewType`s to say what a value is**, such as
   `Transmission = NewType('Transmission', sc.DataArray)` or
-  `SampleFile = NewType('SampleFile', Path)`, which name the role for the fit
-  check and give each parameter a sciline key of its own. The fit check must
-  then look through `NewType`s, both ways for a plain output to fit a role,
-  and a place typed plain `sc.DataArray` still takes every array that any
-  record holds. A class names the role, and a sciline key that differs from
+  `SampleFile = NewType('SampleFile', Path)`, which give the fit check a type
+  of its own and each parameter a sciline key of its own. The fit check must
+  then look through `NewType`s, both ways for a plain output to fit, and a
+  place typed plain `sc.DataArray` still takes every array that any record
+  holds. A class says what a value is, and a sciline key that differs from
   the spec's class is the binding's (`keys=`), or an adapter provider that
   takes the value out of the group.
 - **Parameters of any type**, such as `bins: int` at the top level. A
   generated UI shows a parameter that is not a group outside the sections of
   the groups, and two parameters of one type need `keys=` for distinct sciline
   keys.
-- **A field of a group of any type with a JSON form**, such as
-  `limits: tuple[float, float]` or `scales: dict[str, float]`, written inline
-  as one value. A form has no widget for it, and no spec needs one: its parts
-  are the fields of a group, a parameter of its own.
-- **Any place at any depth written inline or given by reference**: groups
+- **A field of a group of any type that pydantic makes a JSON schema of**,
+  such as `limits: tuple[float, float]` or `scales: dict[str, float]`, written
+  inline as one value. A form has no widget for it, and no spec needs one: its
+  parts are the fields of a group, a parameter of its own. Such a field is a
+  data value, so its group is given by reference to an output only.
+- **A reference to an output at any depth**: groups
   inside groups, unions and `X | None` at fields, each field a place of its
   own. A group with a reference inside cannot be validated whole when the
   request arrives, so it is checked field by field, and its validators run only
   once the data are read, in the call phase. The framework recurses over
   places, with cycle detection, and a form nests widgets. Settings used for
-  several roles, such as those of two He3 cells, are one generic group,
-  `He3Cell[Polarizer]` and `He3Cell[Analyzer]`, as sciline names a role by a
-  type parameter.
-- **A file as a `Path` field of a group**, given by reference to a file.
-  A group that holds a file then has a reference inside, and a picker cannot
-  tell which kind of file a field takes.
+  several purposes, such as those of two He3 cells, are one generic group,
+  `He3Cell[Polarizer]` and `He3Cell[Analyzer]`, as sciline tells such keys
+  apart by a type parameter.
+- **A file as a `Path` field of a group.** The file source does not check
+  the path, and a picker cannot tell which kind of file a field takes.
 - **A reference to an output at a field of a group**, such as a sample's
   computed transmission next to its run and thickness. The record may still be
   pending when the request arrives, so the group could be validated only in the
@@ -647,7 +656,7 @@ output, and dims and units of an output for a UI.
   a table would hold a group. Adding it later breaks nothing.
 - **A reference to a whole list** filling a list parameter. The table rules,
   such as distinct rows, could then be checked only in the call phase.
-- **`@ref` reserved at root places only**, plain data deeper. A reference
+- **`@ref` reserved at parameters and rows only**, plain data deeper. A reference
   inside a group would then be refused by pydantic's type error, such as
   "Input should be a valid number", rather than by the rule that says where a
   reference goes.

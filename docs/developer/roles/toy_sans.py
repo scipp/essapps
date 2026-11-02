@@ -15,10 +15,11 @@ correctly; the summed sample runs have one transmission.
 A beam centre is typed in, or found by ``FIND_CENTRE``; a transmission is typed
 in, or computed by ``TRANSMISSION`` from a transmission run. ``FORWARD`` takes
 the I(Q) that ``IOFQ`` or ``IOFQ_MULTI`` outputs, as the group ``IofQ``, since a
-reference stands for a group only.
+reference to an output fills a parameter, which is a group.
 
 Each parameter is a group. A parameter that takes a file is typed a file
-model, a group given by reference to a file: ``Sample``, ``Can``, or ``Run``. A
+model, ``Sample``, ``Can``, or ``Run``, and a request writes it as
+``file(...)``. A
 ``PipelineBinding`` keys each parameter by its class, so the sample and the can
 are classes of their own.
 
