@@ -1116,8 +1116,8 @@ class TestModelRules:
                         'P', loose=(Loose, Loose(**{'@ref': 'file', 'file': 'a'}))
                     )
                 },
-                f'P.loose: {NOT_A_VALUE}: loose: a is a reference; a default is a '
-                'value',
+                f'P.loose: {NOT_A_VALUE}: loose: file a does not fit Loose, which '
+                'is not a file model',
             ),
             (
                 {
@@ -1170,8 +1170,8 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', sample=(SampleRun, SampleRun.local('run.nxs')))},
-                f'P.sample: {NOT_A_VALUE}: sample: path:run.nxs is a reference; a '
-                'default is a value',
+                f'P.sample: {NOT_A_VALUE}: sample: file path:run.nxs: a default '
+                'holds no file',
             ),
             (
                 {
@@ -1179,8 +1179,8 @@ class TestModelRules:
                         'P', runs=(list[SampleRun], [SampleRun.local('run.nxs')])
                     )
                 },
-                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: path:run.nxs is a reference; '
-                'a default is a value',
+                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: file path:run.nxs: a default '
+                'holds no file',
             ),
             (
                 {'outputs': model('O', iofq=(sc.DataArray | sc.Variable, ...))},

@@ -1030,8 +1030,6 @@ class Backend:
         for loc, ref, tp in places.ref_types(
             self._bindings[spec_id].spec.params, params
         ):
-            if isinstance(ref, FileRef):
-                continue  # checked when resolved
             source = self._source_spec(ref, loc, caller, states, also)
             check_fit(self._bindings[source].spec, ref, tp, loc)
 
@@ -1356,9 +1354,8 @@ class Backend:
         What reads the data each reference in ``params`` names: outputs held
         in memory, or one element of each, taken under the backend's lock
         now, and outside it, outputs written and no longer held from the
-        store; a reference to a file is its own data, of which validating
-        makes the file model. The caller reads only what something keeps
-        for it, so an output is held or written.
+        store. The caller reads only what something keeps for it, so an
+        output is held or written.
         """
         held: dict[Ref, Any] = {}
         with self._changed:
@@ -1372,8 +1369,6 @@ class Backend:
                     held[ref] = _element(self._outputs[key], ref)
 
         def read(ref: Ref) -> Any:
-            if isinstance(ref, FileRef):
-                return ref
             return held[ref] if ref in held else self._stored(ref)
 
         return read
@@ -1383,8 +1378,6 @@ class Backend:
         The written value of an output, or its element if ``ref`` has a key.
         Needs no lock.
         """
-        if isinstance(ref, FileRef):
-            raise TypeError(f'{ref}: a file is not stored')
         if isinstance(ref, AccumulatorRef):
             raise TypeError(f'{ref}: a record never reads an accumulator')
         if self._store is None:

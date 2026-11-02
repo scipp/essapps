@@ -20,16 +20,15 @@ The checks of a request; a template, a push, and a state check part of these:
 
 - *Names.* Each name is a parameter of the spec. A required parameter must
   be given; one left out takes its default.
-- *Places.* A request writes a value or a reference at each place: the
-  value of a parameter, or an element of a list parameter (see
-  :mod:`ess.spec.places`). A reference at a tag, for a whole list, at a
-  union of groups, or inside a group is refused, but one to a file at a
-  field typed a file model. A group is written as an object of its
-  fields; a field left out takes its default.
+- *Places.* A request writes a value or a reference to an output at each
+  place: the value of a parameter, or an element of a list parameter (see
+  :mod:`ess.spec.places`). A reference to an output at a tag, for a whole
+  list, at a union of groups, or inside a group is refused. A group is
+  written as an object of its fields; a field left out takes its default.
 - *Inline values.* An inline value is allowed where the type at the place
-  is a group without a data value, or a union of groups, and ``None`` where
-  it is optional; so a file model given inline, such as a path as a
-  string, is refused: it is given as ``file(path=...)``. Each group, or
+  is a group without a data value, a union of groups, or a file model, and
+  ``None`` where it is optional. A file is given by reference to it, such
+  as ``file(path=...)``, not as a path. Each group, file model, or
   row of a list, given inline is validated whole, so that its validators
   run, by its field, or for an element of a list by its element type, from
   its JSON form, an instance by its dump, and a field that a model lacks is
@@ -39,15 +38,17 @@ The checks of a request; a template, a push, and a state check part of these:
   nor has a group whose validators change a value they validated already
   (see :func:`ess.spec.field_types.inline`). A list parameter that is not a
   table meets its length constraints.
-- *References.* A reference to an output stands for a whole group. A union of groups is
-  written inline only, with the tag of an alternative: no reference fits
-  it, so that a producer need not output a tagged class to feed it. A
-  file model is given by reference to a file, and only a file
-  model is (see :class:`ess.spec.FileModel`): the file source checks
-  that the proposal may read it, the file fits the model by its
-  metadata, as a :class:`~.files.Selector` of the model's metadata
+- *Files.* A file model, at a parameter or at a field of a group, is
+  given by reference to a file, and only a file model is (see
+  :class:`ess.spec.FileModel`). Validating it resolves the file: the file
+  source checks that the proposal may read it, the file fits the model by
+  its metadata, as a :class:`~.files.Selector` of the model's metadata
   matches it, and the record holds its identity, to which its name is
-  resolved, so it must be known. A reference to a record or an accumulator
+  resolved, so it must be known.
+- *References.* A reference to an output stands for a whole group. A union
+  of groups is written inline only, with the tag of an alternative: no
+  reference fits it, so that a producer need not output a tagged class to
+  feed it. A reference to a record or an accumulator
   is checked by the backend, which knows what the client may read (see
   :func:`check_fit`): its data fit the place. No output holds a file
   model, so a path comes only from a file.
@@ -75,9 +76,9 @@ from pydantic_core import to_json
 
 from ess.spec import (
     AccumulatorRef,
+    FileModel,
     FileRef,
     OutputRef,
-    Ref,
     WorkflowSpec,
     field_types,
     places,
@@ -180,15 +181,16 @@ class Checks:
     def _value(self, name: str, value: Any, proposal: str) -> Any:
         """
         The value of parameter ``name`` as the record holds it: at each place,
-        the JSON form of an inline value, a reference, a file's resolved,
-        or ``None`` (see :func:`ess.spec.places.held`).
+        the JSON form of an inline value, each file resolved, a reference to
+        an output, or ``None`` (see :func:`ess.spec.places.held`).
         """
         try:
             stored = places.held(
                 self.spec.params,
                 name,
                 value,
-                lambda loc, ref, tp: self._ref(loc, ref, tp, proposal),
+                lambda loc, ref, tp: ref,
+                lambda file, model: self._file(file, model, proposal),
             )
         except ParamsError as error:
             raise SubmitError.of(error) from None
@@ -200,40 +202,25 @@ class Checks:
             raise SubmitError.at((name,), f'{_rows_text(len(stored))}; it needs {need}')
         return stored
 
-    def _ref(self, loc: Loc, ref: Ref, tp: Any, proposal: str) -> Ref:
+    def _file(self, name: str, model: type[FileModel], proposal: str) -> str:
         """
-        The reference ``ref`` at ``loc``, a file's resolved. A file
-        model is given by reference to a file, one the proposal may read
-        and that fits the model, and only a file model is.
+        The identity of the file ``name``, which must be known, readable by
+        ``proposal``, and fit ``model``; raises ``ValueError`` otherwise.
         """
-        name = field_types.type_name(tp)
-        if not isinstance(ref, FileRef):
-            if field_types.is_file_model(tp):
-                raise SubmitError.at(
-                    loc,
-                    f'{ref} is not a file; {name} is given by reference to a file',
-                )
-            return ref
-        if not field_types.is_file_model(tp):
-            raise SubmitError.at(
-                loc, f'file {ref} does not fit {name}, which is not a file model'
-            )
+        ref = FileRef(file=name)
         try:
             identity = self._files.resolve(ref)
         except KeyError:
-            raise SubmitError.at(loc, f'unknown file {ref}') from None
+            raise ValueError(f'unknown file {ref}') from None
         metadata = self._files.metadata(identity)
         if not readable(metadata, proposal):
-            raise SubmitError.at(
-                loc, f'file {ref} belongs to proposal {metadata["proposal"]}'
+            raise ValueError(f'file {ref} belongs to proposal {metadata["proposal"]}')
+        if not (selector := Selector(**model.metadata)).matches(metadata):
+            raise ValueError(
+                f'file {ref} does not fit {model.__name__}, which takes files with '
+                f'{selector.fields}'
             )
-        if not (selector := Selector(**tp.metadata)).matches(metadata):
-            raise SubmitError.at(
-                loc,
-                f'file {ref} does not fit {name}, which takes files with '
-                f'{selector.fields}',
-            )
-        return identity
+        return identity.file
 
 
 def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, loc: Loc) -> None:

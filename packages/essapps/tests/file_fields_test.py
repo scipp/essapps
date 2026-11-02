@@ -118,6 +118,7 @@ def files(tmp_path: Path) -> FakeFiles:
     files.measure(1, 10.0)
     files.measure(2, 20.0)
     files.measure(3, 1.0, kind='mask')
+    files.measure(4, 1.0, proposal='p2')
     return files
 
 
@@ -175,6 +176,11 @@ def test_a_value_next_to_a_file_is_checked_at_submit(client: Client) -> None:
             "does not fit MaskFile, which takes files with {'kind': 'mask'}",
         ),
         (
+            {'run': file(run=4)},
+            ('sample', 'run'),
+            'file run:4 belongs to proposal p2',
+        ),
+        (
             {'run': '/data/run-1.json'},
             ('sample', 'run'),
             "'/data/run-1.json' is not a reference; SampleRun is given by reference",
@@ -199,7 +205,10 @@ def test_a_reference_to_an_output_at_a_file_field_is_refused(
         client.submit(SAMPLE, params={'sample': {'run': record.ref('total')}})
     (error,) = raised.value.errors
     assert error.loc == ('sample', 'run')
-    assert 'is not a file; SampleRun is given by reference to a file' in error.msg
+    assert error.msg.endswith(
+        'a reference to an output fills a whole parameter or a whole row, never a '
+        'field of a group'
+    )
 
 
 def test_a_check_across_files_runs_at_submit_on_their_identities(
