@@ -631,9 +631,7 @@ def test_the_schema_of_a_union_requires_the_tag_of_each_alternative() -> None:
     inline = schema['properties']['beam_centre']
 
     for alternative in inline['oneOf']:
-        form = schema['$defs'][alternative['$ref'].rsplit('/', 1)[1]]
-        assert 'kind' in form['required']
-        assert 'default' not in form['properties']['kind']
+        assert alternative['required'] == ['kind']
 
 
 def test_a_key_that_an_output_lacks_fails_the_record(

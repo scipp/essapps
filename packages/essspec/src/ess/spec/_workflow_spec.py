@@ -879,73 +879,18 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
     """
     The JSON Schema of the params: that of the spec's request type (see
     :func:`ess.spec.request_types.request_model`), which validates a
-    request. As the backend does, it refuses a field that a model lacks. An
-    alternative of a union requires its tag, since a request always writes
-    it, and the tag is titled by its value unless the field has a title, as
-    a parameter is by its name; pydantic's title, made of the name of the
-    field, would be that of every alternative.
+    request. As the backend does, it refuses a field that a model lacks.
     """
     model = request_types.request_model(spec.params)
-    schema = _one_of_one(model.model_json_schema())
+    schema = model.model_json_schema()
     for name, prop in schema.get('properties', {}).items():
         # pydantic leaves out the title of a field that is a $ref, if it is
         # the one it would make of the name.
         prop.setdefault('title', model.model_fields[name].title)
-    defs = schema.get('$defs', {})
-    for group in [schema, *defs.values()]:
+    for group in [schema, *schema.get('$defs', {}).values()]:
         if 'properties' in group:
             group['additionalProperties'] = False
-    for name in spec.params.model_fields:
-        tp, _, metadata = places.root_type(spec.params, name)
-        if (union := places.alternatives(tp, *metadata)) is not None:
-            _tags_required(schema, *union)
     return schema
-
-
-def _one_of_one(schema: Any) -> Any:
-    """
-    ``schema`` with each ``oneOf`` of one schema, that of a place that takes
-    one form, replaced by that schema.
-    """
-    if isinstance(schema, list):
-        return [_one_of_one(s) for s in schema]
-    if not isinstance(schema, dict):
-        return schema
-    schema = {k: _one_of_one(v) for k, v in schema.items()}
-    if len(one := schema.get('oneOf', ())) == 1:
-        rest = {k: v for k, v in schema.items() if k != 'oneOf'}
-        return {**one[0], **rest}
-    return schema
-
-
-def _tags_required(schema: dict[str, Any], tag: str, groups: dict[str, Any]) -> None:
-    """
-    Make the tag ``tag`` of each alternative in ``groups``, by tag value, a
-    required field without a default in ``schema``, titled by its value.
-    """
-    mappings = [
-        d['mapping']
-        for d in _found_in(schema, 'discriminator')
-        if d.get('propertyName') == tag
-    ]
-    for value, group in groups.items():
-        for ref in {m[value] for m in mappings if value in m}:
-            found = schema['$defs'][ref.removeprefix('#/$defs/')]
-            prop = found['properties'][tag]
-            prop.pop('default', None)
-            prop['title'] = places.title(value, group.model_fields[tag])
-            required = {*found.get('required', ()), tag}
-            found['required'] = [n for n in found['properties'] if n in required]
-
-
-def _found_in(schema: Any, key: str) -> list[Any]:
-    """The value of each ``key`` of an object in ``schema``, at any depth."""
-    if isinstance(schema, list):
-        return [v for s in schema for v in _found_in(s, key)]
-    if not isinstance(schema, dict):
-        return []
-    found = [schema[key]] if key in schema else []
-    return found + [v for s in schema.values() for v in _found_in(s, key)]
 
 
 def _outputs_schema(model: type[BaseModel]) -> dict[str, Any]:

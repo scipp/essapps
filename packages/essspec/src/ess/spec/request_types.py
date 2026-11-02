@@ -20,12 +20,14 @@ JSON schema of the params::
     sample: SampleRun                SampleRun                     (@ref file)
     runs: list[RunFile]              list[RunFile]
 
-The request type of a parameter, or of a row of a list parameter, is a
-union of the *forms* that the place takes, tagged by :func:`form_of`: a
-group or a union of groups written ``inline``, a ``file``, or a reference
-to an ``output``. A group written inline is the group's own class, with its
-validators, and a file is the file model's own class, which a backend
-validates with a resolver of files (see
+The request type of a parameter, or of a row of a list parameter, is the
+union of the *forms* that the place takes (see :func:`forms`), tagged by
+:func:`form_of`: a group or a union of groups written ``inline``, a
+``file``, or a reference to an ``output``. The form of a value is known
+from the value alone, by its key ``"@ref"``, so a value is validated by
+the type of its form (see :func:`form_model`). A group written inline is
+the group's own class, with its validators, and a file is the file model's
+own class, which a backend validates with a resolver of files (see
 :class:`~ess.spec.parameters.FileModel`). So validating a request by its
 request type validates each group whole and resolves each file, and what is
 left of the request phase is to check each reference to an output against
@@ -58,11 +60,10 @@ OUTPUT: Final = 'output'
 
 def form_of(value: Any) -> str | None:
     """
-    The form of ``value``, as a request writes it at a place: :data:`FILE`
-    or :data:`OUTPUT` for an object with the key ``"@ref"`` of that kind, or
-    its Python form; the value of ``"@ref"`` if it names no kind, so that
-    it is refused as a form that no place takes; and :data:`INLINE` for
-    any other value.
+    The form of ``value``, as a request writes it at a place, or its Python
+    form: :data:`FILE` or :data:`OUTPUT` for an object with the key
+    ``"@ref"`` of that kind, ``None`` for one of no kind, and :data:`INLINE`
+    for any other value.
     """
     if isinstance(value, FileModel | FileRef):
         return FILE
@@ -70,12 +71,9 @@ def form_of(value: Any) -> str | None:
         return OUTPUT
     if not isinstance(value, Mapping) or '@ref' not in value:
         return INLINE
-    kind = value['@ref']
-    if kind == 'file':
-        return FILE
-    if kind in ('output', 'accumulator'):
-        return OUTPUT
-    return kind if isinstance(kind, str) else None
+    return {'file': FILE, 'output': OUTPUT, 'accumulator': OUTPUT}.get(
+        value['@ref'] if isinstance(value['@ref'], str) else ''
+    )
 
 
 def _not_a_ref(schema: dict[str, Any]) -> None:
@@ -86,29 +84,33 @@ def _not_a_ref(schema: dict[str, Any]) -> None:
 def forms(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
     """
     The forms that a parameter or row of type ``tp`` takes, by tag, each the
-    type that validates it (see :func:`~ess.spec.places.root_type` for ``tp``
-    and ``metadata``):
+    type that validates it, with the constraints of the place (see
+    :func:`~ess.spec.places.root_type` for ``tp`` and ``metadata``):
 
     - :data:`INLINE`: the union of groups, with its discriminator, or the
-      group if it has no data value (see :func:`~ess.spec.places.unwritten`),
-      with the constraints of the place;
+      group if it has no data value (see :func:`~ess.spec.places.unwritten`);
     - :data:`FILE`: the file model;
     - :data:`OUTPUT`: a reference to an output, if one can fit ``tp`` (see
       :func:`~ess.spec.places.takes_output`), with the name of ``tp`` as its
       ``dataType`` in the JSON schema.
 
-    A form panel shows a widget for each form a place takes.
+    In the JSON schema, an inline form refuses an object with the key
+    ``@ref``, and each alternative of a union requires its tag, since a
+    request always writes it, and is titled by its tag (see
+    :func:`~ess.spec.places.title`). A form panel shows a widget for each
+    form a place takes.
     """
     taken: dict[str, Any] = {}
     if (union := places.alternatives(tp, *metadata)) is not None:
         tag, groups = union
-        alternatives = Union[tuple(groups.values())]  # noqa: UP007
+        members = tuple(_alternative(group, tag, v) for v, group in groups.items())
+        alternatives = Union[members]  # noqa: UP007
         inline = Annotated[alternatives, *metadata, Field(discriminator=tag)]
         taken[INLINE] = Annotated[inline, Field(json_schema_extra=_not_a_ref)]
     elif places.written_inline(tp):
         taken[INLINE] = Annotated[tp, *metadata, Field(json_schema_extra=_not_a_ref)]
     if field_types.is_file_model(tp):
-        taken[FILE] = tp
+        taken[FILE] = Annotated[tp, *metadata] if metadata else tp
     if places.takes_output(tp):
         data_type = {'dataType': field_types.type_name(tp)}
         taken[OUTPUT] = Annotated[
@@ -118,15 +120,31 @@ def forms(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
     return taken
 
 
+def _alternative(group: type[BaseModel], tag: str, value: str) -> Any:
+    """
+    The alternative ``group`` of a union, whose tag ``tag`` is ``value``: in
+    the JSON schema, the tag is required and titles the alternative. pydantic
+    would leave out a tag with a default from ``required``, and title the
+    alternative by the class; it requires the tag when it validates.
+    """
+    extra = {
+        'title': places.title(value, group.model_fields[tag]),
+        'required': [tag],
+    }
+    return Annotated[group, Field(json_schema_extra=extra)]
+
+
 def tagged(taken: Mapping[str, Any], none: bool) -> Any:
     """
-    The type of a place that takes the forms ``taken`` (see :func:`forms`), a
-    union tagged by :func:`form_of`; ``| None`` if ``none``. A value of a
-    form the place does not take is refused with the error
-    ``union_tag_invalid``, whose context names the form given.
+    The type of a place that takes the forms ``taken`` (see :func:`forms`):
+    the form, if one, else their union tagged by :func:`form_of`; ``| None``
+    if ``none``.
     """
-    members = tuple(Annotated[tp, Tag(tag)] for tag, tp in taken.items())
-    form = Annotated[Union[members], Discriminator(form_of)]  # noqa: UP007
+    if len(taken) == 1:
+        (form,) = taken.values()
+    else:
+        members = tuple(Annotated[tp, Tag(tag)] for tag, tp in taken.items())
+        form = Annotated[Union[members], Discriminator(form_of)]  # noqa: UP007
     return Union[form, None] if none else form  # noqa: UP007
 
 
@@ -164,13 +182,13 @@ def parameter_type(model: type[BaseModel], name: str) -> Any:
 
 
 @functools.cache
-def row_model(model: type[BaseModel], name: str) -> type[BaseModel]:
+def form_model(model: type[BaseModel], name: str, form: str) -> type[BaseModel]:
     """
-    A model of the field ``name`` alone, typed its :func:`row_type`, with
-    the config of ``model``: it validates one value that a request writes
-    at the parameter, or one row of it.
+    A model of the field ``name`` alone, typed its form ``form`` (see
+    :func:`row_forms`), with the config of ``model``: it validates one value
+    of that form that a request writes at the parameter, or one row of it.
     """
-    field = (row_type(model, name), ...)
+    field = (row_forms(model, name)[form], ...)
     return create_model(model.__name__, __config__=model.model_config, **{name: field})
 
 

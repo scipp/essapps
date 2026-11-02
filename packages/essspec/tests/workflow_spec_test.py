@@ -1572,18 +1572,29 @@ class TestSerialization:
             )
 
         by = (Annotated[ByCount | ByTime, Field(discriminator='mode')], ...)
-        defs = spec(params=model('P', by=by)).serialize().params_schema['$defs']
-        assert defs['ByCount']['properties']['mode'] == {
+        schema = spec(params=model('P', by=by)).serialize().params_schema
+        assert schema['properties']['by']['oneOf'] == [
+            {'$ref': '#/$defs/ByCount', 'title': 'Per count', 'required': ['mode']},
+            {'$ref': '#/$defs/ByTime', 'title': 'Time', 'required': ['mode']},
+        ]
+        # The definition of a group is its own, which another place may share.
+        assert schema['$defs']['ByCount']['properties']['mode'] == {
             'const': 'by_count',
             'type': 'string',
             'title': 'Per count',
             'description': 'By the counts of the run.',
         }
-        assert defs['ByTime']['properties']['mode'] == {
-            'const': 'time',
-            'type': 'string',
-            'title': 'Time',
-        }
+
+    def test_a_group_that_is_an_alternative_and_a_parameter_keeps_its_default_tag(
+        self,
+    ) -> None:
+        jsonschema = pytest.importorskip('jsonschema')
+        by = (Annotated[ByWindow | ByTime, Field(discriminator='mode')], ...)
+        params = model('P', by=by, window=(ByWindow, ByWindow()))
+        schema = spec(params=params).serialize().params_schema
+        jsonschema.validate({'by': {'mode': 'window'}, 'window': {}}, schema)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({'by': {}, 'window': {}}, schema)
 
     def test_a_file_model_or_a_group_with_a_data_value_is_a_reference_to_its_type(
         self,
@@ -1646,7 +1657,10 @@ class TestSerialization:
         properties = spec(params=params).serialize().params_schema['properties']
         alternatives = inline(
             {
-                'oneOf': [{'$ref': '#/$defs/ByMonitor'}, {'$ref': '#/$defs/ByTime'}],
+                'oneOf': [
+                    {'$ref': f'#/$defs/{name}', 'title': title, 'required': ['mode']}
+                    for name, title in (('ByMonitor', 'Monitor'), ('ByTime', 'Time'))
+                ],
                 'discriminator': {
                     'propertyName': 'mode',
                     'mapping': {

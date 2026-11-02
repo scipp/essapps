@@ -183,7 +183,8 @@ def _row(
 ) -> Any:
     """
     ``value``, plain data at ``loc``, of the parameter ``name`` or of a row
-    of it, validated by its request type; its JSON form.
+    of it, validated by the type of its form (see
+    :func:`~ess.spec.request_types.form_of`); its JSON form.
     """
     tp, none, metadata = root_type(model, name)
     union = alternatives(tp, *metadata)
@@ -198,52 +199,45 @@ def _row(
             f'{ref}: a reference to an output fills a whole parameter or a whole '
             'row, never a field of a group',
         )
+    if value is None and none:
+        return None
     form = request_types.form_of(value)
-    if not (value is None and none) and form not in request_types.row_forms(
-        model, name
-    ):
+    if form not in request_types.row_forms(model, name):
         raise _refused(loc, _form_refused(tp, union, value, form))
 
     def problem(error: ErrorDetails) -> tuple[Loc, str]:
-        return _problem(loc, tp, union, value, error)
+        return _problem(loc, union, value, error)
 
-    one = request_types.row_model(model, name)
+    one = request_types.form_model(model, name, form)
     return _inline(loc, one, name, value, problem, whole=True, context=context)
 
 
 def _problem(
     loc: Loc,
-    tp: Any,
     union: tuple[str, dict[str, Any]] | None,
     value: Any,
     error: ErrorDetails,
 ) -> tuple[Loc, str]:
     """
-    ``error`` of ``value`` at ``loc``, a place of type ``tp``, validated by
-    its request type, at its place, with its message. pydantic puts the form
-    of the value after the place, and the tag of a union or the kind of a
-    reference after that, ``('beam_centre', 'inline', 'find', 'tolerance')``.
-    These are left out, ``beam_centre.tolerance``, so that the place is the
-    same whichever form the value has.
+    ``error`` of ``value`` at ``loc``, a place of the union ``union`` if not
+    ``None``, at its place, with its message. pydantic puts the tag of a
+    union after the union's place, ``('beam_centre', 'find', 'tolerance')``,
+    which is left out, ``beam_centre.tolerance``, so that the place is the
+    same whichever way the alternative is chosen.
     """
-    form, *inner = error['loc'][1:] or (None,)
-    kind = error['type']
-    if form == request_types.INLINE and not inner:
-        if kind in ('model_type', 'dict_type'):
-            return loc, (
-                f'{value!r} is not an object; a group is written as an object of '
-                'its fields'
-            )
-        if union is not None and kind == 'union_tag_not_found':
-            return loc, (
-                f'the tag {union[0]!r} is not given; it is one of {list(union[1])}'
-            )
-        if union is not None and kind == 'union_tag_invalid':
-            tag, groups = union
-            return (*loc, tag), f'{value[tag]!r} is not a tag, one of {list(groups)}'
-    if form == request_types.OUTPUT or (form == request_types.INLINE and union):
-        inner = inner[1:]
-    return (*loc, *inner), error['msg']
+    inner, kind = error['loc'][1:], error['type']
+    if kind in ('model_type', 'dict_type') and not inner:
+        return loc, (
+            f'{value!r} is not an object; a group is written as an object of its fields'
+        )
+    if union is None:
+        return (*loc, *inner), error['msg']
+    tag, groups = union
+    if kind == 'union_tag_not_found' and not inner:
+        return loc, f'the tag {tag!r} is not given; it is one of {list(groups)}'
+    if kind == 'union_tag_invalid' and not inner:
+        return (*loc, tag), f'{value[tag]!r} is not a tag, one of {list(groups)}'
+    return (*loc, *inner[1:]), error['msg']
 
 
 def _form_refused(
