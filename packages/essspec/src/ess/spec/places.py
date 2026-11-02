@@ -63,7 +63,6 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from types import NoneType, UnionType
@@ -71,9 +70,9 @@ from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, Discriminator, Field, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo
-from pydantic_core import PydanticSerializationError
+from pydantic_core import ErrorDetails, PydanticSerializationError
 
-from . import field_types
+from . import field_types, request_types
 from .parameters import FileModel
 from .refs import (
     AccumulatorRef,
@@ -82,6 +81,7 @@ from .refs import (
     OutputRef,
     ParamsError,
     Ref,
+    as_ref,
     iter_refs,
     map_refs,
     positions,
@@ -97,30 +97,6 @@ file's identity, or raises ``ValueError`` (see
 """
 
 
-@dataclass(frozen=True)
-class _Slot:
-    """
-    The type of the field ``name`` of ``model``, a parameter or a field of a
-    group, or of an element of it, a list, if ``element``.
-    """
-
-    model: type[BaseModel]
-    name: str
-    element: bool = False
-
-    @property
-    def annotation(self) -> Any:
-        tp = self.model.model_fields[self.name].annotation
-        return get_args(tp)[0] if self.element else tp
-
-    @property
-    def union(self) -> tuple[str, dict[str, Any]] | None:
-        """The union of groups of the type, as :func:`alternatives` has it."""
-        info = self.model.model_fields[self.name]
-        field = () if self.element else field_metadata(info)
-        return alternatives(self.annotation, *field)
-
-
 def held(model: type[BaseModel], name: str, value: Any, files: Files) -> Any:
     """
     The value of the parameter ``name`` of ``model`` as the record stores
@@ -129,21 +105,21 @@ def held(model: type[BaseModel], name: str, value: Any, files: Files) -> Any:
     ``value`` is what the request gives: plain data, or Python objects such
     as an instance of a group or a :data:`~ess.spec.refs.Ref`, which are
     dumped to plain data first. For a list parameter, each row is handled
-    on its own:
+    on its own. Each is validated from its JSON form by its request type
+    (see :mod:`ess.spec.request_types`), with each file resolved by
+    ``files``, and the JSON form of the validated value is returned (see
+    :func:`ess.spec.field_types.inline`): a group, a file, or a reference
+    to an output as given. The caller checks that the data of a reference
+    to an output fit the parameter (see :func:`ref_types`).
 
-    - A reference to an output is returned as its JSON form. The caller
-      checks that its data fit the parameter (see :func:`ref_types`).
-    - ``None`` is returned as is, if the parameter is ``X | None``.
-    - A group, or a file, is validated whole from its JSON form, with each
-      file resolved by ``files``. The JSON form of the validated value is
-      returned, with each field left out at its default (see
-      :func:`ess.spec.field_types.inline`).
-
-    Refused, besides what validation refuses: a file that ``files`` did not
-    resolve, such as one that a validator of a group makes from a name,
-    since the file source has not checked it; and a reference to an output
-    in the JSON form of a group, such as one that a serializer makes. Raises
-    :class:`~ess.spec.refs.ParamsError` at the position of each problem.
+    Refused, besides what the request type refuses: an object with the key
+    ``"@ref"`` that is no reference, at any depth; a reference to an output
+    inside a value, since it fills a whole parameter or row; a file that
+    ``files`` did not resolve, such as one that a validator of a group
+    makes from a name, since the file source has not checked it; and a
+    reference to an output in the JSON form of a group, such as one that a
+    serializer makes. Raises :class:`~ess.spec.refs.ParamsError` at the
+    position of each problem.
     """
     resolved: set[str] = set()
 
@@ -152,7 +128,20 @@ def held(model: type[BaseModel], name: str, value: Any, files: Files) -> Any:
         resolved.add(identity)
         return identity
 
-    stored = _parameter(model, name, _ANY.dump_python(value), {'files': resolve})
+    context = {'files': resolve}
+    given = _ANY.dump_python(value)
+    if not field_types.is_list(model, name):
+        stored = _row(model, name, (name,), given, context)
+    elif (ref := ref_at((name,), given)) is not None:
+        raise _refused(
+            (name,),
+            f'{ref} is a reference to a whole list; a reference stands for one '
+            'element of a list',
+        )
+    elif not isinstance(given, list):
+        raise _refused((name,), f'{given!r} is not a list')
+    else:
+        stored = [_row(model, name, (name, i), v, context) for i, v in enumerate(given)]
     root = 2 if field_types.is_list(model, name) else 1
     problems = [
         (loc, problem)
@@ -185,101 +174,109 @@ def _stored_ref_problem(ref: Ref, at_root: bool, resolved: set[str]) -> str | No
     )
 
 
-def _parameter(
-    model: type[BaseModel], name: str, value: Any, context: dict[str, Any]
-) -> Any:
-    """``value``, plain data, of the parameter ``name`` as :func:`held` returns it."""
-    if not field_types.is_list(model, name):
-        return _held((name,), _Slot(model, name), value, context)
-    if (ref := ref_at((name,), value)) is not None:
-        raise _refused(
-            (name,),
-            f'{ref} is a reference to a whole list; a reference stands for one '
-            'element of a list',
-        )
-    if not isinstance(value, list):
-        raise _refused((name,), f'{value!r} is not a list')
-    slot = _Slot(model, name, element=True)
-    return [_held((name, i), slot, v, context) for i, v in enumerate(value)]
-
-
 _ANY = TypeAdapter(Any)
 """Dumps Python objects to plain data, keeping a number that is not finite."""
 
 
-def _held(loc: Loc, slot: _Slot, value: Any, context: dict[str, Any]) -> Any:
-    tp, nullable = field_types.optional(slot.annotation)
-    union = slot.union
-    ref = ref_at(loc, value)
-    if ref is not None and union is not None:
-        raise _refused(
-            loc,
-            f'{ref}: a union of groups is written inline, with the tag of an '
-            'alternative; no reference fits it',
-        )
-    if ref is not None and not isinstance(ref, FileRef):
-        return ref.model_dump()
-    if value is None and nullable:
-        return None
-    if not field_types.is_file_model(tp):
-        if isinstance(ref, FileRef):
-            raise _refused(
-                loc,
-                f'file {ref} does not fit {field_types.type_name(tp)}, which is '
-                'not a file model',
-            )
-        if not isinstance(value, Mapping):
-            raise _refused(
-                loc,
-                f'{value!r} is not an object; a group is written as an object '
-                'of its fields',
-            )
-        _written(loc, _group(loc, slot, value))
+def _row(
+    model: type[BaseModel], name: str, loc: Loc, value: Any, context: dict[str, Any]
+) -> Any:
+    """
+    ``value``, plain data at ``loc``, of the parameter ``name`` or of a row
+    of it, validated by its request type; its JSON form.
+    """
+    tp, none, metadata = root_type(model, name)
+    union = alternatives(tp, *metadata)
     for at, item in positions(loc, value):
-        if (
-            at != loc
-            and (ref := ref_at(at, item)) is not None
-            and not isinstance(ref, FileRef)
-        ):
-            raise _refused(
-                at,
-                f'{ref}: a reference to an output fills a whole parameter or a '
-                'whole row, never a field of a group',
+        ref = ref_at(at, item)
+        if at == loc or ref is None or isinstance(ref, FileRef):
+            continue
+        if union is not None and at == (*loc, union[0]):
+            raise _refused(at, f'{ref}: a tag is written inline, never as a reference')
+        raise _refused(
+            at,
+            f'{ref}: a reference to an output fills a whole parameter or a whole '
+            'row, never a field of a group',
+        )
+    form = request_types.form_of(value)
+    if not (value is None and none) and form not in request_types.row_forms(
+        model, name
+    ):
+        raise _refused(loc, _form_refused(tp, union, value, form))
+
+    def problem(error: ErrorDetails) -> tuple[Loc, str]:
+        return _problem(loc, tp, union, value, error)
+
+    one = request_types.row_model(model, name)
+    return _inline(loc, one, name, value, problem, whole=True, context=context)
+
+
+def _problem(
+    loc: Loc,
+    tp: Any,
+    union: tuple[str, dict[str, Any]] | None,
+    value: Any,
+    error: ErrorDetails,
+) -> tuple[Loc, str]:
+    """
+    ``error`` of ``value`` at ``loc``, a place of type ``tp``, validated by
+    its request type, at its place, with its message. pydantic puts the form
+    of the value after the place, and the tag of a union or the kind of a
+    reference after that, ``('beam_centre', 'inline', 'find', 'tolerance')``.
+    These are left out, ``beam_centre.tolerance``, so that the place is the
+    same whichever form the value has.
+    """
+    form, *inner = error['loc'][1:] or (None,)
+    kind = error['type']
+    if form == request_types.INLINE and not inner:
+        if kind in ('model_type', 'dict_type'):
+            return loc, (
+                f'{value!r} is not an object; a group is written as an object of '
+                'its fields'
             )
-    return _inline(loc, slot, value, context)
+        if union is not None and kind == 'union_tag_not_found':
+            return loc, (
+                f'the tag {union[0]!r} is not given; it is one of {list(union[1])}'
+            )
+        if union is not None and kind == 'union_tag_invalid':
+            tag, groups = union
+            return (*loc, tag), f'{value[tag]!r} is not a tag, one of {list(groups)}'
+    if form == request_types.OUTPUT or (form == request_types.INLINE and union):
+        inner = inner[1:]
+    return (*loc, *inner), error['msg']
 
 
-def _written(loc: Loc, group: type[BaseModel]) -> None:
-    """Refuse ``group`` written at ``loc`` if it is given by reference only."""
-    if (data := unwritten(group)) is not None:
-        held_type = field_types.type_name(group.model_fields[data].annotation)
-        raise _refused(
-            loc,
-            f'{field_types.type_name(group)} is given by reference: no request '
-            f'writes its field {data}, of {held_type}',
+def _form_refused(
+    tp: Any, union: tuple[str, dict[str, Any]] | None, value: Any, form: str | None
+) -> str:
+    """Why a place of type ``tp`` refuses ``value``, of the form ``form``."""
+    name = field_types.type_name(tp)
+    if form == request_types.FILE:
+        return f'file {as_ref(value)} does not fit {name}, which is not a file model'
+    if form == request_types.OUTPUT:
+        ref = as_ref(value)
+        if union is not None:
+            return (
+                f'{ref}: a union of groups is written inline, with the tag of an '
+                'alternative; no reference fits it'
+            )
+        if field_types.is_file_model(tp):
+            return (
+                f'{ref} is a reference to an output; {name} is given by reference '
+                'to a file, such as file(path=...)'
+            )
+        return f'{ref}: no output fits {name}, which holds a file model'
+    if field_types.is_file_model(tp):
+        return (
+            f'{value!r} is not a reference; {name} is given by reference to a '
+            'file, such as file(path=...)'
         )
-
-
-def _group(loc: Loc, slot: _Slot, value: Mapping[str, Any]) -> type[BaseModel]:
-    """
-    The group whose fields ``value`` at ``loc`` gives: the group at the
-    place, or of a union the alternative its tag names.
-    """
-    if (union := slot.union) is None:
-        return field_types.optional(slot.annotation)[0]
-    tag, groups = union
-    if tag not in value:
-        raise _refused(
-            loc, f'the tag {tag!r} is not given; it is one of {list(groups)}'
-        )
-    if (ref := ref_at((*loc, tag), value[tag])) is not None:
-        raise _refused(
-            (*loc, tag), f'{ref}: a tag is written inline, never as a reference'
-        )
-    given = value[tag]
-    if not isinstance(given, str) or (group := groups.get(given)) is None:
-        raise _refused((*loc, tag), f'{given!r} is not a tag, one of {list(groups)}')
-    return group
+    data = unwritten(tp)
+    held_type = field_types.type_name(tp.model_fields[data].annotation)
+    return (
+        f'{name} is given by reference: no request writes its field {data}, of '
+        f'{held_type}'
+    )
 
 
 def validated(
@@ -337,48 +334,39 @@ def field_value(group: type[BaseModel], name: str, value: Any) -> Any:
     spec checks the default of each field of a group with it. Raises
     :class:`~ess.spec.refs.ParamsError` at ``name``.
     """
-    slot = _Slot(group, name)
-    _inline((name,), slot, value)
+
+    def problem(error: ErrorDetails) -> tuple[Loc, str]:
+        return (name, *error['loc'][1:]), error['msg']
+
+    _inline((name,), group, name, value, problem, whole=True)
     one = field_types.model_of(group, name, whole=True)
     try:
         return getattr(one.model_validate({name: value}), name)
     except ValidationError as error:
-        raise _at((name,), slot, error) from None
-
-
-def _at(loc: Loc, slot: _Slot, error: ValidationError) -> ParamsError:
-    """
-    ``error`` of a value at ``loc`` of the type ``slot``, validated by a model
-    of its field, at the place of each problem. pydantic puts the tag of a
-    union after the union's place, ``('beam_centre', 'find', 'tolerance')``,
-    which is left out, ``beam_centre.tolerance``, so that the place is the
-    same whichever way the alternative is chosen.
-    """
-    union = slot.union
-    tags = {} if union is None else union[1]
-
-    def place(inner: Loc) -> Loc:
-        return (*loc, *(inner[1:] if inner and inner[0] in tags else inner))
-
-    return ParamsError((place(e['loc'][1:]), e['msg']) for e in error.errors())
+        raise ParamsError(map(problem, error.errors())) from None
 
 
 def _inline(
-    loc: Loc, slot: _Slot, value: Any, context: dict[str, Any] | None = None
+    loc: Loc,
+    model: type[BaseModel],
+    name: str,
+    value: Any,
+    problem: Callable[[ErrorDetails], tuple[Loc, str]],
+    whole: bool,
+    context: dict[str, Any] | None = None,
 ) -> Any:
     """
-    The JSON form of ``value``, a group, a file, or a field of a group, at
-    ``loc``, validated with ``context`` (see
-    :func:`~ess.spec.field_types.inline`).
+    The JSON form of ``value`` at ``loc``, of the field ``name`` of
+    ``model``, validated with ``context`` (see
+    :func:`~ess.spec.field_types.inline`); ``problem`` places each error of
+    validation and words it.
     """
     try:
-        return field_types.inline(
-            slot.model, slot.name, value, whole=not slot.element, context=context
-        )
+        return field_types.inline(model, name, value, whole=whole, context=context)
     except PydanticSerializationError as error:
         raise _refused(loc, f'cannot be stored as JSON: {error}') from None
     except ValidationError as error:
-        raise _at(loc, slot, error) from None
+        raise ParamsError(map(problem, error.errors())) from None
     except ParamsError as error:
         raise ParamsError(((*loc, *at), msg) for at, msg in error.errors) from None
     except ValueError as error:

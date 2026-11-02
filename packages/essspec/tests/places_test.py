@@ -304,7 +304,26 @@ def test_a_reference_to_an_output_at_a_parameter_is_held_as_its_json_form() -> N
     given = {'@ref': 'output', 'record': 'r1', 'output': 'sample'}
     assert held(MaskParams, 'sample', given, _named) == form
     # Whether its data fit is checked at submit, over ref_types.
-    assert held(MaskParams, 'mask', OUTPUT, _named) == form
+
+
+def test_a_reference_to_an_output_at_a_file_model_is_refused() -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(MaskParams, 'mask', OUTPUT, _named)
+    assert raised.value.errors == (
+        (
+            ('mask',),
+            'r1.sample is a reference to an output; MaskFile is given by reference '
+            'to a file, such as file(path=...)',
+        ),
+    )
+
+
+def test_a_reference_to_an_output_at_a_group_with_a_file_model_is_refused() -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(MeasuredParams, 'measured', OUTPUT, _named)
+    assert raised.value.errors == (
+        (('measured',), 'r1.sample: no output fits Measured, which holds a file model'),
+    )
 
 
 def test_a_file_at_a_parameter_typed_a_group_is_refused() -> None:
