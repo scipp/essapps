@@ -78,11 +78,10 @@ its lock, what depends on history and on what the client keeps: each reference
 to a record or an accumulator is one the client may read, and its data fit the
 type at its place. Each group given inline is validated whole then, so that
 its validators run. In the *call phase*, on a worker, the backend reads the
-data each reference names, an output, or for a file the file model,
-with the file's local path attached, and makes each value by its field,
-a row of a list by its element type, of the JSON form the log holds, with the
-data read in place of each reference (see
-:func:`ess.spec.places.validated`). For a plain request it makes the params
+output each reference names, and makes each value by its field, a row of a
+list by its element type, of the JSON form the log holds, with the data read
+in place of each reference and each file model given its file's local path
+(see :func:`ess.spec.places.validated`). For a plain request it makes the params
 instance from these values without validating again, so the params model's
 model validators never run; a stage or an accumulator gets the values by
 name. The rows of a table, if its element type has a JSON form, are
@@ -1024,8 +1023,6 @@ class Backend:
         for loc, ref, tp in places.ref_types(
             self._bindings[spec_id].spec.params, params
         ):
-            if isinstance(ref, FileRef):
-                continue  # checked when resolved
             source = self._source_spec(ref, loc, caller, states, also)
             check_fit(self._bindings[source].spec, ref, tp, loc)
 
@@ -1345,14 +1342,15 @@ class Backend:
         reads, stage.reads = stage.reads, []
         self._let_go(reads)
 
-    def _reader(self, params: Mapping[str, Any]) -> Callable[[Ref], Any]:
+    def _reader(
+        self, params: Mapping[str, Any]
+    ) -> Callable[[OutputRef | AccumulatorRef], Any]:
         """
         What reads the data each reference in ``params`` names: outputs held
         in memory, or one element of each, taken under the backend's lock
         now, and outside it, outputs written and no longer held from the
-        store; a reference to a file is its own data, of which validating
-        makes the file model. The caller reads only what something keeps
-        for it, so an output is held or written.
+        store. The caller reads only what something keeps for it, so an
+        output is held or written.
         """
         held: dict[Ref, Any] = {}
         with self._changed:
@@ -1365,20 +1363,16 @@ class Backend:
                 if key in self._outputs:
                     held[ref] = _element(self._outputs[key], ref)
 
-        def read(ref: Ref) -> Any:
-            if isinstance(ref, FileRef):
-                return ref
+        def read(ref: OutputRef | AccumulatorRef) -> Any:
             return held[ref] if ref in held else self._stored(ref)
 
         return read
 
-    def _stored(self, ref: Ref) -> Any:
+    def _stored(self, ref: OutputRef | AccumulatorRef) -> Any:
         """
         The written value of an output, or its element if ``ref`` has a key.
         Needs no lock.
         """
-        if isinstance(ref, FileRef):
-            raise TypeError(f'{ref}: a file is not stored')
         if isinstance(ref, AccumulatorRef):
             raise TypeError(f'{ref}: a record never reads an accumulator')
         if self._store is None:

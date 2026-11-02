@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """A file model at a field of a group: given, checked, and read."""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Self
 
@@ -118,6 +118,7 @@ def files(tmp_path: Path) -> FakeFiles:
     files.measure(1, 10.0)
     files.measure(2, 20.0)
     files.measure(3, 1.0, kind='mask')
+    files.measure(4, 1.0, proposal='p2')
     return files
 
 
@@ -175,6 +176,11 @@ def test_a_value_next_to_a_file_is_checked_at_submit(client: Client) -> None:
             "does not fit MaskFile, which takes files with {'kind': 'mask'}",
         ),
         (
+            {'run': file(run=4)},
+            ('sample', 'run'),
+            'file run:4 belongs to proposal p2',
+        ),
+        (
             {'run': '/data/run-1.json'},
             ('sample', 'run'),
             "'/data/run-1.json' is not a reference; SampleRun is given by reference",
@@ -191,15 +197,54 @@ def test_a_file_at_a_field_is_checked_as_one_at_a_parameter(
     assert msg in error.msg
 
 
-def test_a_reference_to_an_output_at_a_file_field_is_refused(
+def _submitted(client: Client, params: dict[str, Any]) -> None:
+    spec = TABLE if 'samples' in params else SAMPLE
+    client.submit(spec, params=params)
+
+
+def _staged(client: Client, params: dict[str, Any]) -> None:
+    client.stage(Template(SAMPLE, params=params, blanks=('scale',)))
+
+
+def _pushed(client: Client, params: dict[str, Any]) -> None:
+    client.accumulator(Template(TABLE, blanks=('samples',))).push(**params)
+
+
+IN_A_GROUP = ({'sample': {'run': file(run=9)}}, ('sample', 'run'))
+IN_A_ROW = (
+    {'samples': [{'run': file(run=1)}, {'run': file(run=9)}]},
+    ('samples', 1, 'run'),
+)
+
+
+@pytest.mark.parametrize(
+    ('give', 'params', 'loc'),
+    [
+        (_submitted, *IN_A_GROUP),
+        (_submitted, *IN_A_ROW),
+        (_staged, *IN_A_GROUP),
+        (_pushed, *IN_A_ROW),
+    ],
+)
+def test_an_unknown_file_in_a_group_is_refused_at_its_place(
     client: Client,
+    give: Callable[[Client, dict[str, Any]], None],
+    params: dict[str, Any],
+    loc: tuple[Any, ...],
 ) -> None:
-    record = client.submit(SAMPLE, params={'sample': {'run': file(run=1)}})
     with pytest.raises(SubmitError) as raised:
-        client.submit(SAMPLE, params={'sample': {'run': record.ref('total')}})
+        give(client, params)
     (error,) = raised.value.errors
-    assert error.loc == ('sample', 'run')
-    assert 'is not a file; SampleRun is given by reference to a file' in error.msg
+    assert (error.loc, error.msg) == (loc, 'unknown file run:9')
+
+
+def test_a_file_at_a_field_named_by_its_path_is_held_by_its_identity(
+    client: Client, files: FakeFiles
+) -> None:
+    identity = files.resolve(file(run=1))
+    by_path = file(path=files.path(identity))
+    record = client.submit(SAMPLE, params={'sample': {'run': by_path}})
+    assert record.request.params['sample']['run'] == identity
 
 
 def test_a_check_across_files_runs_at_submit_on_their_identities(

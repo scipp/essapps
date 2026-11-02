@@ -351,7 +351,7 @@ def test_a_group_is_given_by_value_or_by_reference(
         (RUNS, lambda ref: {'runs': [{'number': ref}]}, 'runs[0].number'),
     ],
 )
-def test_a_reference_inside_a_group_written_inline_is_refused(
+def test_a_reference_to_an_output_inside_a_group_is_refused(
     client: Client,
     loaded: Record,
     spec: WorkflowSpec[Any, Any],
@@ -363,9 +363,8 @@ def test_a_reference_inside_a_group_written_inline_is_refused(
     with pytest.raises(SubmitError) as raised:
         client.submit(spec, params=params(ref))
     assert str(raised.value) == (
-        f'{place}: {ref}: a reference stands for a whole group, at a parameter or '
-        'an element of a list parameter; inside a group, only a field typed a '
-        'file model takes one, a reference to a file'
+        f'{place}: {ref}: a reference to an output fills a whole parameter or a '
+        'whole row, never a field of a group'
     )
 
 

@@ -4,12 +4,12 @@
 Root places: where a request writes either a value or a reference, by type.
 
 A request is a JSON object of parameter values. A *root place* is a position
-in it where the request may write either a value or a reference to data that
-exist elsewhere (see :mod:`ess.spec.refs`): the value of a parameter, or an
-element of a list parameter. A group written inline holds scalars, file
-models, and lists of these, which are not root places. A request gives a
-file at a field typed a file model by reference, but a field is not a
-place for a reference to an output::
+in it where the request may write either a value or a reference to an output
+(see :mod:`ess.spec.refs`): the value of a parameter, or an element of a list
+parameter. A group written inline holds scalars, file models, and lists of
+these, which are not root places: a reference to an output fills a whole
+parameter or a whole row. A file is a value, written as the reference to the
+file, at a root place or at a field typed a file model::
 
     {
         'sample': file(run=101),                     # sample
@@ -64,9 +64,8 @@ centre, and a data value is a field of one::
         transmission: sc.DataArray  # a data value: given by reference only
 
 ``"@ref"`` is reserved at every depth, so that a reference is found
-without the spec (see :func:`ess.spec.refs.positions`), and one inside a
-group written inline is refused, but one to a file at a field typed a
-file model.
+without the spec (see :func:`ess.spec.refs.positions`). A reference to an
+output inside a group written inline is refused.
 
 A *union of groups* is a pydantic discriminated union,
 ``Annotated[A | B, Field(discriminator='kind')]``, in which each
@@ -97,13 +96,13 @@ among them, or a union; of a list parameter, the :class:`Rows`. For the two
     Ways(tag='kind', inline={'given': GivenCentre, 'find': FindCentre},
          record=None, none=False, ...)
 
-In the request phase, :func:`held` validates each group, or row, given
-inline whole, from its JSON form, so that its validators run, and the record
-holds the JSON form of the validated group, which must read back as it (see
-:func:`ess.spec.field_types.inline`). An instance of the group and the
-object of its fields give one record. In the call phase, :func:`validated`
-replaces each reference by its data, and makes each value of what the record
-holds.
+In the request phase, :func:`held` validates each group, row, or file model
+given inline whole, from its JSON form, so that its validators run and each
+file is resolved, and the record holds the JSON form of the validated value,
+which must read back as it (see :func:`ess.spec.field_types.inline`). An
+instance of the group and the object of its fields give one record. In the
+call phase, :func:`validated` replaces each reference to an output by its
+data, and makes each value of what the record holds.
 
 An error names its *place*, its position in the params, such as
 ``reduction.bins``; inside a union, without the tag:
@@ -119,18 +118,29 @@ from pathlib import Path
 from types import NoneType, UnionType
 from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel, Discriminator, Field, ValidationError
+from pydantic import BaseModel, Discriminator, Field, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticSerializationError
 
 from . import field_types
-from .refs import Loc, ParamsError, Ref, iter_refs, map_refs, positions, ref_at
+from .parameters import FileModel
+from .refs import (
+    AccumulatorRef,
+    FileRef,
+    Loc,
+    OutputRef,
+    ParamsError,
+    iter_refs,
+    map_refs,
+    positions,
+    ref_at,
+)
 
-type OnRef = Callable[[Loc, Ref, Any], Any]
+type Files = Callable[[str, type[FileModel]], str]
 """
-What :func:`held` does with a reference at a place: given the place, the
-reference, and the type at the place, it returns what the record holds, or
-raises.
+What resolves a file in the request phase: given the name of a file and the
+file model at its place, it returns the file's identity, or raises
+``ValueError`` (see :class:`~ess.spec.parameters.FileModel`).
 """
 
 
@@ -157,22 +167,56 @@ class _Slot:
         return None if self.element else info.discriminator
 
 
-def held(model: type[BaseModel], name: str, value: Any, on_ref: OnRef) -> Any:
+def held(model: type[BaseModel], name: str, value: Any, files: Files) -> Any:
     """
     ``value`` of the field ``name`` of ``model``, a parameter, as a record
-    holds it: the JSON form of a value written inline, at a reference what
-    ``on_ref`` returns for it, or ``None``; of a list, each element so.
-    ``value`` is as a request gives it, a group as a mapping of its fields or
-    an instance, a reference as a :data:`~ess.spec.refs.Ref` or its JSON
-    form.
+    holds it: the JSON form of a value written inline or of a reference to
+    an output, or ``None``; of a list, each element so. Whether the data of
+    a reference to an output fit its place is for the caller to check when
+    the request is submitted (see :func:`ref_types`). ``value`` is as a
+    request gives it, plain data or Python objects, such as an instance of a
+    group, a file model, or a :data:`~ess.spec.refs.Ref`, which are turned
+    into plain data first.
 
-    A group, or a row, written inline is validated whole, and held as the JSON
-    form of the validated group, a field left out at its default (see
-    :func:`ess.spec.field_types.inline`). Raises
+    A group, a row, or a file model written inline is validated whole, with
+    each file resolved by ``files`` (see
+    :class:`~ess.spec.parameters.FileModel`), and held as the JSON form of
+    the validated value, a field left out at its default (see
+    :func:`ess.spec.field_types.inline`). A file that ``files`` did not
+    resolve, such as one that a validator of a group makes of a name, is
+    refused, since the file source has not checked it. Raises
     :class:`~ess.spec.refs.ParamsError` at the place of the first problem.
     """
+    resolved: set[str] = set()
+
+    def resolve(file: str, model: type[FileModel]) -> str:
+        identity = files(file, model)
+        resolved.add(identity)
+        return identity
+
+    stored = _parameter(model, name, _ANY.dump_python(value), {'files': resolve})
+    if unresolved := [
+        (loc, ref)
+        for loc, ref in iter_refs({name: stored})
+        if isinstance(ref, FileRef) and ref.file not in resolved
+    ]:
+        raise ParamsError(
+            (
+                loc,
+                f'file {ref} was not resolved: a validator made it, so the file '
+                'source has not checked it',
+            )
+            for loc, ref in unresolved
+        )
+    return stored
+
+
+def _parameter(
+    model: type[BaseModel], name: str, value: Any, context: dict[str, Any]
+) -> Any:
+    """``value``, plain data, of the parameter ``name`` as :func:`held` has it."""
     if not field_types.is_list(model, name):
-        return _held((name,), _Slot(model, name), value, on_ref)
+        return _held((name,), _Slot(model, name), value, context)
     if (ref := ref_at((name,), value)) is not None:
         raise _refused(
             (name,),
@@ -182,98 +226,53 @@ def held(model: type[BaseModel], name: str, value: Any, on_ref: OnRef) -> Any:
     if not isinstance(value, list):
         raise _refused((name,), f'{value!r} is not a list')
     slot = _Slot(model, name, element=True)
-    return [_held((name, i), slot, v, on_ref) for i, v in enumerate(value)]
+    return [_held((name, i), slot, v, context) for i, v in enumerate(value)]
 
 
-def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
-    if isinstance(value, BaseModel) and not isinstance(value, Ref):
-        # A file model, in it or as it, as the reference to its file.
-        value = value.model_dump()
+_ANY = TypeAdapter(Any)
+"""Dumps Python objects to plain data, keeping a number that is not finite."""
+
+
+def _held(loc: Loc, slot: _Slot, value: Any, context: dict[str, Any]) -> Any:
     tp, nullable = field_types.optional(slot.annotation)
     union = alternatives(slot.annotation, slot.discriminator)
-    if (ref := ref_at(loc, value)) is not None:
-        if union is not None:
-            raise _refused(
-                loc,
-                f'{ref}: a union of groups is written inline, with the tag of an '
-                'alternative; no reference fits it',
-            )
-        return on_ref(loc, ref, tp)
+    ref = ref_at(loc, value)
+    if ref is not None and union is not None:
+        raise _refused(
+            loc,
+            f'{ref}: a union of groups is written inline, with the tag of an '
+            'alternative; no reference fits it',
+        )
+    if ref is not None and not isinstance(ref, FileRef):
+        return ref.model_dump()
     if value is None and nullable:
         return None
-    if field_types.is_file_model(tp):
-        raise _not_a_file_ref(loc, tp, value)
-    if union is not None or field_types.is_group(tp):
-        fields = value
-        if not isinstance(fields, Mapping):
+    if not field_types.is_file_model(tp):
+        if isinstance(ref, FileRef):
+            raise _refused(
+                loc,
+                f'file {ref} does not fit {field_types.type_name(tp)}, which is '
+                'not a file model',
+            )
+        if not isinstance(value, Mapping):
             raise _refused(
                 loc,
                 f'{value!r} is not an object; a group is written as an object '
                 'of its fields',
             )
-        group = _group(loc, slot, fields)
-        _written(loc, group)
-        value = _files_held(loc, group, fields, on_ref)
-        for at, item in positions(loc, value):
-            if (
-                at != loc
-                and (ref := ref_at(at, item)) is not None
-                and _file_field(group, at[len(loc)]) is None
-            ):
-                raise _refused(
-                    at,
-                    f'{ref}: a reference stands for a whole group, at a parameter '
-                    'or an element of a list parameter; inside a group, only a field '
-                    'typed a file model takes one, a reference to a file',
-                )
-    return _inline(loc, slot, value)
-
-
-def _file_field(group: type[BaseModel], name: str | int) -> Any:
-    """The file model at the field ``name`` of ``group``, or ``None``."""
-    field = group.model_fields.get(str(name))
-    return None if field is None else field_types.file_model(field.annotation)
-
-
-def _files_held(
-    loc: Loc, group: type[BaseModel], fields: Mapping[str, Any], on_ref: OnRef
-) -> dict[str, Any]:
-    """
-    ``fields`` of ``group`` at ``loc``, with each reference at a field typed
-    a file model, or at an element of a list of one, replaced by what
-    ``on_ref`` returns for it, in its JSON form, so that the group is
-    validated whole with the files resolved.
-    """
-    held = dict(fields)
-    for name, item in fields.items():
-        if (tp := _file_field(group, name)) is None:
-            continue
-        if field_types.is_list(group, name) and isinstance(item, list):
-            held[name] = [
-                _file_held((*loc, name, i), tp, v, on_ref) for i, v in enumerate(item)
-            ]
-        else:
-            held[name] = _file_held((*loc, name), tp, item, on_ref)
-    return held
-
-
-def _file_held(loc: Loc, tp: Any, value: Any, on_ref: OnRef) -> Any:
-    if field_types.is_file_model(type(value)):
-        value = value.model_dump()
-    if (ref := ref_at(loc, value)) is None:
-        if value is None:
-            return value  # refused when the group is validated, unless X | None
-        raise _not_a_file_ref(loc, tp, value)
-    held = on_ref(loc, ref, tp)
-    return held.model_dump(by_alias=True) if isinstance(held, BaseModel) else held
-
-
-def _not_a_file_ref(loc: Loc, tp: Any, value: Any) -> ParamsError:
-    return _refused(
-        loc,
-        f'{value!r} is not a reference; {field_types.type_name(tp)} is given by '
-        'reference to a file, such as file(path=...)',
-    )
+        _written(loc, _group(loc, slot, value))
+    for at, item in positions(loc, value):
+        if (
+            at != loc
+            and (ref := ref_at(at, item)) is not None
+            and not isinstance(ref, FileRef)
+        ):
+            raise _refused(
+                at,
+                f'{ref}: a reference to an output fills a whole parameter or a '
+                'whole row, never a field of a group',
+            )
+    return _inline(loc, slot, value, context)
 
 
 def _written(loc: Loc, group: type[BaseModel]) -> None:
@@ -315,7 +314,7 @@ def validated(
     model: type[BaseModel],
     name: str,
     value: Any,
-    read: Callable[[Ref], Any] | None = None,
+    read: Callable[[OutputRef | AccumulatorRef], Any] | None = None,
     paths: Mapping[str, Path] | None = None,
 ) -> Any:
     """
@@ -325,10 +324,10 @@ def validated(
 
     With ``read`` ``None``, ``value`` is as a binding takes it, data. Else it
     is as a record holds it: the JSON form of a value written inline, and a
-    reference at a parameter or an element of a list parameter. Each
-    reference is replaced by the data ``read`` gives for it, and the value
-    made of the result: of a reference to a file, ``read`` gives the
-    reference, and the file model made of it gets its local path from
+    reference to an output at a parameter or an element of a list
+    parameter. Each reference to an output is replaced by the data ``read``
+    gives for it, and the value made of the result. A file is a value: the
+    file model made of the reference to its file gets its local path from
     ``paths``, by identity (see :class:`~ess.spec.parameters.FileModel`).
     A value written inline was validated when the request was submitted, and
     its JSON form reads back as it, so this fails only for the data of a
@@ -342,7 +341,9 @@ def validated(
     """
     one = field_types.model_of(model, name)
     if read is not None:
-        value = map_refs({name: value}, read)[name]
+        value = map_refs(
+            {name: value}, lambda ref: ref if isinstance(ref, FileRef) else read(ref)
+        )[name]
     strict = False if read is not None else None
     context = None if paths is None else {'paths': paths}
 
@@ -394,13 +395,17 @@ def _at(loc: Loc, slot: _Slot, error: ValidationError) -> ParamsError:
     return ParamsError((place(e['loc'][1:]), e['msg']) for e in error.errors())
 
 
-def _inline(loc: Loc, slot: _Slot, value: Any) -> Any:
+def _inline(
+    loc: Loc, slot: _Slot, value: Any, context: dict[str, Any] | None = None
+) -> Any:
     """
-    The JSON form of ``value`` written inline at ``loc`` (see
-    :func:`~ess.spec.field_types.inline`).
+    The JSON form of ``value`` written inline at ``loc``, validated with
+    ``context`` (see :func:`~ess.spec.field_types.inline`).
     """
     try:
-        return field_types.inline(slot.model, slot.name, value, whole=not slot.element)
+        return field_types.inline(
+            slot.model, slot.name, value, whole=not slot.element, context=context
+        )
     except PydanticSerializationError as error:
         raise _refused(loc, f'cannot be stored as JSON: {error}') from None
     except ValidationError as error:
@@ -425,7 +430,8 @@ class Ways:
     ``record`` is the type that the data of a reference must fit: an
     output's type, or for a file model, which a request gives by
     reference to a file only, the model; ``None`` for a union, which no
-    reference fits.
+    reference fits, and for a group with a field typed a file model, which
+    no output holds.
     """
 
     tag: str | None
@@ -487,6 +493,8 @@ def _described(annotation: Any, metadata: tuple[Any, ...]) -> Ways:
     if (union := alternatives(annotated)) is not None:
         tag, groups = union
         return Ways(tag, groups, None, none, metadata)
+    if field_types.is_file_model(tp):
+        return Ways(None, {}, tp, none, metadata)
     inline = {} if unwritten(tp) is not None else {None: tp}
     record = None if _holds_file(tp) else tp
     return Ways(None, inline, record, none, metadata)
@@ -497,8 +505,9 @@ def _holds_file(group: Any) -> bool:
     Whether ``group`` has a field typed a file model: no output holds one,
     so no output fits it.
     """
-    return not field_types.is_file_model(group) and any(
-        _file_field(group, n) is not None for n in group.model_fields
+    return any(
+        field_types.file_model(f.annotation) is not None
+        for f in group.model_fields.values()
     )
 
 
@@ -614,13 +623,9 @@ def groups_at(model: type[BaseModel], name: str) -> list[type[BaseModel]]:
 def unwritten(group: type[BaseModel]) -> str | None:
     """
     The first field of ``group`` that a request does not write, or ``None``
-    if there is none: a data value, a field without a JSON form; of a file
-    model, its ``file``, since a request gives a file model by
-    reference to a file only. A group with such a field is given by
-    reference only.
+    if there is none: a data value, a field without a JSON form. A group
+    with such a field is given by reference to an output only.
     """
-    if field_types.is_file_model(group):
-        return 'file'
     return next(
         (n for n in group.model_fields if not field_types.has_json_form(group, n)),
         None,
@@ -629,20 +634,17 @@ def unwritten(group: type[BaseModel]) -> str | None:
 
 def ref_types(
     model: type[BaseModel], params: Mapping[str, Any]
-) -> list[tuple[Loc, Ref, Any]]:
+) -> list[tuple[Loc, OutputRef | AccumulatorRef, Any]]:
     """
-    Each reference at a root place in ``params``, by name, as a record holds
+    Each reference to an output in ``params``, by name, as a record holds
     them, with its place, a parameter or an element of a list parameter, and
     the type at the place, with ``| None`` removed: the type of the data it
-    must fit. A reference inside a group, to a file at a field typed a
-    file model, is left out: it is checked when it is resolved.
+    must fit. ``params`` are as :func:`held` makes them, so a reference to
+    an output is only at a root place. A file is a value, resolved when the
+    request is submitted, so a reference to a file is left out.
     """
-    found = []
-    for loc, ref in iter_refs(params):
-        name = str(loc[0])
-        if len(loc) > (2 if field_types.is_list(model, name) else 1):
-            continue
-        found.append(
-            (loc, ref, field_types.value_type(model.model_fields[name].annotation))
-        )
-    return found
+    return [
+        (loc, ref, field_types.value_type(model.model_fields[str(loc[0])].annotation))
+        for loc, ref in iter_refs(params)
+        if not isinstance(ref, FileRef)
+    ]

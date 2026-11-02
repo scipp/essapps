@@ -8,17 +8,17 @@ elsewhere, or inline: an output of an earlier record, a file the
 framework did not compute, or, in a request not yet accepted, an output of an
 accumulator that the framework holds. A *root place* is the value of a
 parameter, or an element of a list parameter (see :mod:`ess.spec.places`). A
-reference stands for a whole group: a reference to a file for a file
-model (see :class:`ess.spec.parameters.FileModel`), at a root place or at a
-field of a group typed one, a reference to an output for any other group, at a
-root place. A reference is what a request names and what a record keeps;
+reference to an output stands for a whole group, at a root place. A file is a
+value: the JSON form of a file model is the reference to its file (see
+:class:`ess.spec.parameters.FileModel`), at a root place or at a field of a
+group typed one. A reference is what a request names and what a record keeps;
 turning it into the data a workflow takes, a local path or an object, is the
 business of whatever runs the workflow.
 
 The JSON form of a reference is an object with the key ``"@ref"``, which
 names its kind. The key is reserved: an object with it is a reference, at any
-depth, so a reference is found in plain data without a spec, and one that is
-not at a root place, or at a field typed a file model, is refused::
+depth, so a reference is found in plain data without a spec, and a reference
+to an output that is not at a root place is refused::
 
     {"@ref": "file", "file": "run:loki/60339"}
     {"@ref": "output", "record": "r17", "output": "centre"}

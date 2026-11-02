@@ -313,16 +313,23 @@ def json_form(
     return from_json(made.model_dump_json(by_alias=True))[name]
 
 
-def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -> Any:
+def inline(
+    model: type[BaseModel],
+    name: str,
+    value: Any,
+    whole: bool = False,
+    context: dict[str, Any] | None = None,
+) -> Any:
     """
     The JSON form of ``value``, written inline for the field ``name`` of
     ``model``, or a row of it unless ``whole`` (see :func:`model_of`), as the
     framework holds it: of a group, the JSON form of the group validated.
 
-    ``value``, an instance of a group by its dump, is validated from its JSON
-    form, with a field that a model lacks refused at any depth, since
-    validating would drop it silently. Its JSON form must read back as the
-    value. Raises:
+    ``value``, plain data such as :func:`ess.spec.places.held` makes of
+    Python objects, is validated from its JSON form, with
+    ``context``, and with a field that a model lacks refused at any depth,
+    since validating would drop it silently. Its JSON form must read back as
+    the value, validated without ``context``. Raises:
 
     - ``PydanticSerializationError`` if it has no JSON form;
     - ``ValidationError`` if it is not valid, or if its JSON form is not,
@@ -332,14 +339,13 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
       of a group whose validator changes a value it has validated already,
       or whose JSON form is an object with the key ``"@ref"``, which reads
       as a reference (see :func:`ess.spec.refs.positions`), unless it is a
-      file model, whose JSON form is the reference to its file.
+      reference to a file, the JSON form of a file model.
     """
     one = model_of(model, name, whole)
-    if isinstance(value, BaseModel):
-        # Its own serializer would write a number that is not finite as null.
-        value = value.model_dump()
     given = to_json({name: value}, inf_nan_mode='constants')
-    made = getattr(one.model_validate_json(given, extra='forbid'), name)
+    made = getattr(
+        one.model_validate_json(given, extra='forbid', context=context), name
+    )
     stored = json_form(model, name, made, whole)
     try:
         again = getattr(one.model_validate_json(to_json({name: stored})), name)
@@ -354,20 +360,10 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
     if refs := [
         loc
         for loc, v in positions((), stored)
-        if isinstance(v, dict) and '@ref' in v and not _is_file_at(made, loc)
+        if isinstance(v, dict) and '@ref' in v and v['@ref'] != 'file'
     ]:
         raise ParamsError((loc, _READS_AS_REF) for loc in refs)
     return stored
-
-
-def _is_file_at(value: Any, loc: Loc) -> bool:
-    """Whether ``value`` holds a file model at ``loc``, a position inside it."""
-    for at in loc:
-        if isinstance(at, int):
-            value = value[at]
-        else:
-            value = getattr(value, at, None)
-    return isinstance(value, FileModel)
 
 
 _NO_JSON_FORM = 'has no JSON form that reads back as the value'

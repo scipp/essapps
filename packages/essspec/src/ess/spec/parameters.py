@@ -38,14 +38,15 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
 from .refs import FileRef
 
 
 class FileModel(BaseModel, frozen=True, extra='forbid'):
     """
-    A file that a workflow reads: its identity, given by reference only, and
-    its local path when the request runs.
+    A file that a workflow reads: its identity, given by reference to the
+    file, and its local path when the request runs.
 
     A subclass is a kind of file. It names the metadata of the files it
     takes, as keywords of the class, each a string, a number, or a bool::
@@ -61,19 +62,37 @@ class FileModel(BaseModel, frozen=True, extra='forbid'):
     ``title``, ``frozen``, or ``extra``, configures the model instead, so it
     cannot be a metadata key.
 
-    The value of a file model is ``file``, the file's identity, which the
-    backend resolves when the request is submitted, so that everything a
-    request gives is known then. Its JSON form is the reference to the file,
-    ``{'@ref': 'file', 'file': ...}``, of which it is also validated, so that
-    a reference is found in a record without the spec. Two file models are
-    equal if they are of one class and name one file.
+    The value of a file model is ``file``, the file's identity. Its JSON
+    form is the reference to the file, ``{'@ref': 'file', 'file': ...}``, of
+    which it is also validated, so that a file is found in a record without
+    the spec. Two file models are equal if they are of one class and name
+    one file.
+
+    A request names a file by what a person knows, such as a run number. The
+    backend resolves the name to the file's identity when the request is
+    submitted, so that everything a request gives is known then: it
+    validates the model with the context ``{'files': resolve}``::
+
+        def resolve(name: str, model: type[FileModel]) -> str:
+            ...  # the identity of the file, or raise ValueError
+
+        MaskFile.model_validate(
+            {'@ref': 'file', 'file': 'run:101'}, context={'files': resolve}
+        )
+
+    ``resolve`` raises ``ValueError`` if the file is unknown, if the
+    request's proposal may not read it, or if it does not fit the model; its
+    message is that of the validation error. Validated from JSON, as a
+    request is, a file model takes only the reference to a file; validated
+    in Python, it also takes the object of its fields, ``MaskFile(file=...)``.
 
     The local path of the file exists only when the request runs: the
     backend validates the model with the context ``{'paths': {identity:
     local path}}``, and :attr:`path` raises before. A file model holds only
-    ``file``, as declared here, and has no validators of its own, since what
-    it would check of a file is either metadata, which the fit check covers
-    when the request is submitted, or the workflow's to read. No output
+    ``file``, as declared here, and a subclass has no validators but
+    FileModel's, since what it would check of a file is either metadata,
+    which the resolver checks when the request is submitted, or the
+    workflow's to read. No output
     holds a file model, so that every path a workflow gets comes from a file
     that the file source checks. A program without a backend makes a file
     model of a local file with :meth:`local`.
@@ -120,11 +139,27 @@ class FileModel(BaseModel, frozen=True, extra='forbid'):
 
     @model_validator(mode='before')
     @classmethod
-    def _of_ref(cls, value: Any) -> Any:
+    def _of_ref(cls, value: Any, info: ValidationInfo) -> Any:
         if isinstance(value, FileRef):
-            return {'file': value.file}
-        if isinstance(value, Mapping) and value.get('@ref') == 'file':
-            return {k: v for k, v in value.items() if k != '@ref'}
+            value = {'file': value.file}
+        elif isinstance(value, Mapping) and value.get('@ref') == 'file':
+            value = {k: v for k, v in value.items() if k != '@ref'}
+        elif not (
+            info.mode == 'python'
+            and isinstance(value, Mapping)
+            and value.keys() == {'file'}
+        ):
+            raise PydanticCustomError(
+                'file_ref',
+                f'{value!r} is not a reference; {cls.__name__} is given by '
+                'reference to a file, such as file(path=...)',
+            )
+        resolve = (info.context or {}).get('files')
+        if resolve is not None and isinstance(value.get('file'), str):
+            try:
+                value = {**value, 'file': resolve(value['file'], cls)}
+            except ValueError as error:
+                raise PydanticCustomError('file', str(error)) from None
         return value
 
     @model_validator(mode='after')
