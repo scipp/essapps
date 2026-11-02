@@ -340,12 +340,6 @@ def _selected(value: Any, select: Selection) -> Any:
     return value.model_copy(update=copy.deepcopy(fields))
 
 
-def _is_array(tp: Any) -> bool:
-    """Whether ``tp``, possibly typed ``X | None``, has named dimensions."""
-    tp = field_types.optional(tp)[0]
-    return isinstance(tp, type) and hasattr(tp, 'dims')
-
-
 def _output_reads(params: Mapping[str, Any]) -> list[tuple[str, str]]:
     """The outputs of records that ``params`` reference, by record ID and name."""
     return [
@@ -2278,14 +2272,7 @@ class Backend:
             raise ValueError('select= needs the name of an output')
         declared = self._bindings[spec_id].spec.outputs.model_fields
         for name in (n for n in names if n in declared):  # others raise when read
-            tp = field_types.optional(declared[name].annotation)[0]
-            if not (
-                _is_array(tp)
-                or (
-                    field_types.is_group(tp)
-                    and any(_is_array(f.annotation) for f in tp.model_fields.values())
-                )
-            ):
+            if not field_types.has_array(declared[name].annotation):
                 raise ValueError(
                     f'{spec_id} output {name!r}: select= needs an array, or a group '
                     'with an array field'

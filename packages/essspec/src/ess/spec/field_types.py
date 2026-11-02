@@ -189,6 +189,27 @@ def _is_model(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, BaseModel)
 
 
+def is_array(tp: Any) -> bool:
+    """
+    Whether ``tp``, ``X`` or ``X | None``, is an array: a type with named
+    dimensions, ``dims``, such as a scipp variable or data array.
+    """
+    tp = optional(tp)[0]
+    return isinstance(tp, type) and hasattr(tp, 'dims')
+
+
+def has_array(tp: Any) -> bool:
+    """
+    Whether ``tp``, ``X`` or ``X | None``, is an array, or a group with an
+    array field (see :func:`is_array`): what a reader slices by dimension,
+    or plots.
+    """
+    tp = optional(tp)[0]
+    return is_array(tp) or (
+        is_group(tp) and any(is_array(f.annotation) for f in tp.model_fields.values())
+    )
+
+
 @functools.cache
 def has_json_form(model: type[BaseModel], name: str) -> bool:
     """
