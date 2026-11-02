@@ -189,7 +189,6 @@ class Checks:
                 self.spec.params,
                 name,
                 value,
-                lambda loc, ref, tp: ref,
                 lambda file, model: self._file(file, model, proposal),
             )
         except ParamsError as error:

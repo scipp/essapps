@@ -204,7 +204,7 @@ from pydantic_core import PydanticUndefined
 from . import field_types, places
 from .parameters import FileModel
 from .places import Rows, Ways
-from .refs import AccumulatorRef, FileRef, Loc, OutputRef, ParamsError, Ref
+from .refs import AccumulatorRef, FileRef, OutputRef, ParamsError
 
 
 class NoParams(BaseModel):
@@ -801,12 +801,12 @@ def _parameter_value(model: type[BaseModel], name: str, value: Any) -> Any:
     if a request may write it with no reference to an output and no file
     (see :func:`ess.spec.places.held`).
     """
-    places.held(model, name, value, _no_ref, _no_file)
+    held = places.held(model, name, value, _no_file)
+    if refs := places.ref_types(model, {name: held}):
+        raise ParamsError(
+            (loc, f'{ref} is a reference; a default is a value') for loc, ref, _ in refs
+        )
     return places.validated(model, name, value)
-
-
-def _no_ref(loc: Loc, ref: Ref, tp: Any) -> Any:
-    raise ParamsError([(loc, f'{ref} is a reference; a default is a value')])
 
 
 def _no_file(name: str, model: type[FileModel]) -> str:

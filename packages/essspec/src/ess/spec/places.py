@@ -137,13 +137,6 @@ from .refs import (
     ref_at,
 )
 
-type OnRef = Callable[[Loc, Ref, Any], Any]
-"""
-What :func:`held` does with a reference to an output at a root place: given
-the place, the reference, and the type at the place, it returns what the
-record holds, or raises.
-"""
-
 type Files = Callable[[str, type[FileModel]], str]
 """
 What resolves a file in the request phase: given the name of a file and the
@@ -179,14 +172,14 @@ def held(
     model: type[BaseModel],
     name: str,
     value: Any,
-    on_ref: OnRef,
     files: Files | None = None,
 ) -> Any:
     """
     ``value`` of the field ``name`` of ``model``, a parameter, as a record
-    holds it: the JSON form of a value written inline, at a reference to an
-    output what ``on_ref`` returns for it, or ``None``; of a list, each
-    element so. ``value`` is as a request gives it, plain data or Python
+    holds it: the JSON form of a value written inline or of a reference to
+    an output, or ``None``; of a list, each element so. Whether the data of
+    a reference fit is checked where it is read (see :func:`ref_types`).
+    ``value`` is as a request gives it, plain data or Python
     objects, such as an instance of a group, a file model, or a
     :data:`~ess.spec.refs.Ref`, which are turned into plain data first.
 
@@ -201,7 +194,7 @@ def held(
     value = _ANY.dump_python(value)
     context = None if files is None else {'files': files}
     if not field_types.is_list(model, name):
-        return _held((name,), _Slot(model, name), value, on_ref, context)
+        return _held((name,), _Slot(model, name), value, context)
     if (ref := ref_at((name,), value)) is not None:
         raise _refused(
             (name,),
@@ -211,16 +204,14 @@ def held(
     if not isinstance(value, list):
         raise _refused((name,), f'{value!r} is not a list')
     slot = _Slot(model, name, element=True)
-    return [_held((name, i), slot, v, on_ref, context) for i, v in enumerate(value)]
+    return [_held((name, i), slot, v, context) for i, v in enumerate(value)]
 
 
 _ANY = TypeAdapter(Any)
 """Dumps Python objects to plain data, keeping a number that is not finite."""
 
 
-def _held(
-    loc: Loc, slot: _Slot, value: Any, on_ref: OnRef, context: dict[str, Any] | None
-) -> Any:
+def _held(loc: Loc, slot: _Slot, value: Any, context: dict[str, Any] | None) -> Any:
     tp, nullable = field_types.optional(slot.annotation)
     union = alternatives(slot.annotation, slot.discriminator)
     ref = ref_at(loc, value)
@@ -231,13 +222,7 @@ def _held(
             'alternative; no reference fits it',
         )
     if ref is not None and not isinstance(ref, FileRef):
-        if field_types.is_file_model(tp):
-            raise _refused(
-                loc,
-                f'{ref} is not a file; {field_types.type_name(tp)} is given by '
-                'reference to a file',
-            )
-        return on_ref(loc, ref, tp)
+        return ref.model_dump()
     if value is None and nullable:
         return None
     if not field_types.is_file_model(tp):
