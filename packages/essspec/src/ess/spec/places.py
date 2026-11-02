@@ -86,15 +86,21 @@ possibly typed ``X | None``, not a union::
     beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
                                             # typed in, or found in this graph
 
-:func:`place` describes what a request writes at a parameter, as the
-table above has it, for the params schema of a spec and for a form that a
-UI makes from the models: the :class:`Ways` of a group, a file model
-among them, or a union; of a list parameter, the :class:`Rows`. For the two
-``beam_centre`` above::
+The params schema of a spec and a form that a UI makes from the models
+both follow the table above so: :func:`root_type` gives the type at the root
+places of a parameter, and each way to write it has a predicate of its own.
+A group is written inline unless it holds a data value
+(:func:`written_inline`), and by reference if an output can fit it
+(:func:`takes_output`); a union is written inline as one of its
+alternatives (:func:`alternatives`). For the two ``beam_centre`` above::
 
-    Ways(tag=None, inline={None: BeamCentre}, record=BeamCentre, none=False, ...)
-    Ways(tag='kind', inline={'given': GivenCentre, 'find': FindCentre},
-         record=None, none=False, ...)
+    tp, none, metadata = root_type(Params, 'beam_centre')
+    written_inline(tp)  # True for BeamCentre
+    takes_output(tp)  # True for BeamCentre
+    field_types.is_file_model(tp)  # False: a reference to a file
+    alternatives(tp, *metadata)
+    # None for BeamCentre; for the union:
+    # ('kind', {'given': GivenCentre, 'find': FindCentre})
 
 In the request phase, :func:`held` validates each group, row, or file model
 given inline whole, from its JSON form, so that its validators run and each
@@ -161,10 +167,11 @@ class _Slot:
         return get_args(tp)[0] if self.element else tp
 
     @property
-    def discriminator(self) -> Any:
-        """The discriminator of the field, if it is not in the annotation."""
+    def union(self) -> tuple[str, dict[str, Any]] | None:
+        """The union of groups of the type, as :func:`alternatives` has it."""
         info = self.model.model_fields[self.name]
-        return None if self.element else info.discriminator
+        field = () if self.element else field_metadata(info)
+        return alternatives(self.annotation, *field)
 
 
 def held(model: type[BaseModel], name: str, value: Any, files: Files) -> Any:
@@ -235,7 +242,7 @@ _ANY = TypeAdapter(Any)
 
 def _held(loc: Loc, slot: _Slot, value: Any, context: dict[str, Any]) -> Any:
     tp, nullable = field_types.optional(slot.annotation)
-    union = alternatives(slot.annotation, slot.discriminator)
+    union = slot.union
     ref = ref_at(loc, value)
     if ref is not None and union is not None:
         raise _refused(
@@ -293,7 +300,7 @@ def _group(loc: Loc, slot: _Slot, value: Mapping[str, Any]) -> type[BaseModel]:
     The group whose fields ``value`` at ``loc`` gives: the group at the
     place, or of a union the alternative its tag names.
     """
-    if (union := alternatives(slot.annotation, slot.discriminator)) is None:
+    if (union := slot.union) is None:
         return field_types.optional(slot.annotation)[0]
     tag, groups = union
     if tag not in value:
@@ -386,7 +393,7 @@ def _at(loc: Loc, slot: _Slot, error: ValidationError) -> ParamsError:
     which is left out, ``beam_centre.tolerance``, so that the place is the
     same whichever way the alternative is chosen.
     """
-    union = alternatives(slot.annotation, slot.discriminator)
+    union = slot.union
     tags = {} if union is None else union[1]
 
     def place(inner: Loc) -> Loc:
@@ -420,52 +427,36 @@ def _refused(loc: Loc, msg: str) -> ParamsError:
     return ParamsError([(loc, msg)])
 
 
-@dataclass(frozen=True)
-class Ways:
+def root_type(model: type[BaseModel], name: str) -> tuple[Any, bool, tuple[Any, ...]]:
     """
-    A group, a union of groups, or either typed ``X | None``: the ways a
-    request writes it. ``inline`` holds the groups that a request writes as
-    an object of their fields: the alternatives of a union by the value of
-    its tag field ``tag``; a group by ``None``, unless it holds a data value.
-    ``record`` is the type that the data of a reference must fit: an
-    output's type, or for a file model, which a request gives by
-    reference to a file only, the model; ``None`` for a union, which no
-    reference fits, and for a group with a field typed a file model, which
-    no output holds.
-    """
+    The type at the root places of the parameter ``name`` of ``model``, the
+    params model of a spec: at the parameter, or at each element of a list
+    parameter. It is given without ``| None`` and ``Annotated``, with whether
+    it is typed ``X | None``, and with its metadata: that of the field, with
+    its discriminator, then of each ``Annotated`` in the type, the outer
+    first. The metadata of the field of a list parameter, such as its length,
+    is that of the list, so an element has only that of its type::
 
-    tag: str | None
-    inline: dict[str | None, type[BaseModel]]
-    record: type[BaseModel] | None
-    none: bool  # typed X | None
-    metadata: tuple[Any, ...]  # of the field, then of the Annotated in its type
-
-
-@dataclass(frozen=True)
-class Rows:
-    """
-    A list parameter: its elements, places, each as ``element`` describes
-    it, and ``metadata``, the constraints of the list, such as its length.
-    """
-
-    element: Ways
-    metadata: tuple[Any, ...]
-
-
-def place(model: type[BaseModel], name: str) -> Ways | Rows:
-    """
-    What a request writes at the parameter ``name`` of ``model``, the params
-    model of a spec (see the table in :mod:`ess.spec.places`); of a list
-    parameter, :class:`Rows`. Raises ``ValueError`` as :func:`alternatives`
-    does.
+        root_type(Params, 'beam_centre')
+        # (GivenCentre | FindCentre, False, (Field(discriminator='kind'),))
+        root_type(Params, 'samples')  # samples: list[Sample] = Field(min_length=2)
+        # (Sample, False, ())
     """
     info = model.model_fields[name]
-    metadata = tuple(info.metadata)
-    if info.discriminator is not None:
-        metadata += (Field(discriminator=info.discriminator),)
     if field_types.is_list(model, name):
-        return Rows(_described(get_args(info.annotation)[0], ()), metadata)
-    return _described(info.annotation, metadata)
+        return _unwrapped(get_args(info.annotation)[0])
+    tp, none, inner = _unwrapped(info.annotation)
+    return tp, none, (*field_metadata(info), *inner)
+
+
+def field_metadata(info: FieldInfo) -> tuple[Any, ...]:
+    """
+    The metadata of a field with ``info``, with its discriminator, which
+    pydantic keeps apart from the rest as ``Field(discriminator='kind')``.
+    """
+    if info.discriminator is None:
+        return tuple(info.metadata)
+    return (*info.metadata, Field(discriminator=info.discriminator))
 
 
 def title(name: str, info: FieldInfo) -> str:
@@ -482,40 +473,11 @@ def title(name: str, info: FieldInfo) -> str:
     return info.title or name.replace('_', ' ').title()
 
 
-def _described(annotation: Any, metadata: tuple[Any, ...]) -> Ways:
-    """
-    The description of a place of type ``annotation``, a group or a union of
-    groups, possibly typed ``X | None``, with ``metadata``.
-    """
-    tp, inner, none = _unwrapped(annotation)
-    metadata = (*metadata, *inner)
-    annotated = Annotated[tp, *metadata] if metadata else tp
-    if (union := alternatives(annotated)) is not None:
-        tag, groups = union
-        return Ways(tag, groups, None, none, metadata)
-    if field_types.is_file_model(tp):
-        return Ways(None, {}, tp, none, metadata)
-    inline = {} if unwritten(tp) is not None else {None: tp}
-    record = None if _holds_file(tp) else tp
-    return Ways(None, inline, record, none, metadata)
-
-
-def _holds_file(group: Any) -> bool:
-    """
-    Whether ``group`` has a field typed a file model: no output holds one,
-    so no output fits it.
-    """
-    return any(
-        field_types.file_model(f.annotation) is not None
-        for f in group.model_fields.values()
-    )
-
-
-def _unwrapped(annotation: Any) -> tuple[Any, tuple[Any, ...], bool]:
+def _unwrapped(annotation: Any) -> tuple[Any, bool, tuple[Any, ...]]:
     """
     ``annotation`` without its outer ``Annotated`` and ``| None``, at any
-    depth; the metadata of each ``Annotated``, the outer first; and whether
-    it had ``| None``. Unlike :func:`~ess.spec.field_types.optional`, it
+    depth; whether it had ``| None``; and the metadata of each ``Annotated``,
+    the outer first. Unlike :func:`~ess.spec.field_types.optional`, it
     keeps the metadata of the members of a union and the elements of a list.
     """
     tp, metadata, none = annotation, (), False
@@ -529,17 +491,17 @@ def _unwrapped(annotation: Any) -> tuple[Any, tuple[Any, ...], bool]:
             tp = rest[0] if len(rest) == 1 else Union[rest]  # noqa: UP007
             none = True
         else:
-            return tp, metadata, none
+            return tp, none, metadata
 
 
-def alternatives(
-    annotation: Any, discriminator: Any = None
-) -> tuple[str, dict[str, Any]] | None:
+def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] | None:
     """
     The tag and the alternatives, by the value of their tag, of the union of
     groups that ``annotation``, possibly typed ``X | None``, is; ``None`` if
-    it is not a union with a group in it, such as ``int | str``. ``discriminator`` is
-    that of the field, if the annotation does not carry it. An alternative
+    it is not a union with a group in it, such as ``int | str``. ``metadata``
+    is that of the field (see :func:`field_metadata`), which may give the
+    discriminator, such as ``Field(discriminator='kind')``; one in the
+    annotation takes precedence over it. An alternative
     is as declared, without ``Annotated`` metadata. The alternatives are in
     the order of the union.
 
@@ -551,8 +513,9 @@ def alternatives(
     alternative that a request cannot write inline (see :func:`unwritten`),
     since no reference fits a union.
     """
-    tp, metadata, _ = _unwrapped(annotation)
-    for meta in metadata:
+    tp, _, inner = _unwrapped(annotation)
+    discriminator = None
+    for meta in (*metadata, *inner):
         if isinstance(meta, FieldInfo) and meta.discriminator is not None:
             discriminator = meta.discriminator
         elif isinstance(meta, Discriminator):
@@ -605,20 +568,6 @@ def _tags(annotation: Any) -> tuple[Any, ...]:
     return get_args(annotation) if get_origin(annotation) is Literal else ()
 
 
-def groups_at(model: type[BaseModel], name: str) -> list[type[BaseModel]]:
-    """
-    The groups at the places of the field ``name`` of ``model``: the group,
-    or the alternatives of the union, that it or each element of it is, if
-    any. Raises ``ValueError`` as :func:`alternatives` does.
-    """
-    slot = _Slot(model, name, element=field_types.is_list(model, name))
-    tp, _ = field_types.optional(slot.annotation)
-    if field_types.is_group(tp):
-        return [tp]
-    union = alternatives(slot.annotation, slot.discriminator)
-    return [] if union is None else list(union[1].values())
-
-
 @functools.cache
 def unwritten(group: type[BaseModel]) -> str | None:
     """
@@ -629,6 +578,35 @@ def unwritten(group: type[BaseModel]) -> str | None:
     return next(
         (n for n in group.model_fields if not field_types.has_json_form(group, n)),
         None,
+    )
+
+
+def written_inline(tp: Any) -> bool:
+    """
+    Whether a request writes a root place of type ``tp`` as an object of the
+    fields of ``tp``: a group, not a file model, which a request gives by
+    reference to a file, with no data value (see :func:`unwritten`).
+    """
+    return (
+        field_types.is_group(tp)
+        and not field_types.is_file_model(tp)
+        and unwritten(tp) is None
+    )
+
+
+def takes_output(tp: Any) -> bool:
+    """
+    Whether a reference to an output fits a root place of type ``tp``: a
+    group, not a file model, which a request gives by reference to a file,
+    with no field typed a file model, since no output holds one.
+    """
+    return (
+        field_types.is_group(tp)
+        and not field_types.is_file_model(tp)
+        and all(
+            field_types.file_model(f.annotation) is None
+            for f in tp.model_fields.values()
+        )
     )
 
 

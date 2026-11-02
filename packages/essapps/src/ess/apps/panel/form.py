@@ -9,21 +9,24 @@ record holds them, so that a record's request can be edited and submitted
 again.
 
 The form has a tab per parameter, with the tabs on the left, as
-esslivedata's dashboard has. The widget follows from what a request writes,
-as :func:`ess.spec.places.place` describes a parameter, and is labelled by
-:func:`ess.spec.places.title`, as the params schema is, a parameter by the
-title of its tab:
+esslivedata's dashboard has. The widget follows from what a request writes
+at each root place, by the type :func:`ess.spec.places.root_type` gives, as
+the params schema does, and is labelled by :func:`ess.spec.places.title`, a
+parameter by the title of its tab:
 
 =========================  ================================================
 Where                      Widget
 =========================  ================================================
-a parameter, :class:`Ways` a choice of ways: the fields of each group written
-                           inline, an output of a record that fits
-                           ``Ways.record``, or for a file model a file
-                           that fits it, and ``None``. A record is offered
-                           while an output fits.
-a list parameter,          a table of the rows, and the editor of a row,
-:class:`Rows`              the choice of ways of the element, as at a
+a parameter                a choice of ways: of a file model, a file that
+                           fits it; of a union, the fields of each
+                           alternative; of a group, its fields unless it
+                           holds a data value (``places.written_inline``), and
+                           an output of a record that fits it if one can
+                           (``places.takes_output``); and ``None`` if
+                           typed ``X | None``. A record is offered while
+                           an output fits.
+a list parameter           a table of the rows, and the editor of a row,
+                           the choice of ways of the element, as at a
                            parameter of its type
 a field of a group         an input of its type, or a picker of its values;
                            for a list of scalars, a list of these; for a
@@ -85,9 +88,7 @@ from ess.spec import (
     field_types,
     places,
 )
-from ess.spec.places import Ways
-from ess.spec.refs import Loc, as_ref
-
+from ess.spec.refs import Loc, as_ref, iter_refs
 from .listing import Listing
 
 
@@ -114,30 +115,42 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice |
     """The widget of the parameter ``name`` of ``model``, the params model."""
     info = model.model_fields[name]
     label = places.title(name, info)
-    described = places.place(model, name)
-    if isinstance(described, Ways):
-        return _Choice(label, _ways(described, listing), described.tag, _default(info))
-    if described.element.tag is not None:
+    tp, none, metadata = places.root_type(model, name)
+    if not field_types.is_list(model, name):
+        return _choice(label, tp, none, metadata, _default(info), listing)
+    if places.alternatives(tp, *metadata) is not None:
         raise NotImplementedError(f'{name}: a list of a union of groups')
-    return _Rows(label, described.element, _default(info), listing)
+    return _Rows(label, tp, none, metadata, _default(info), listing)
 
 
-def _ways(described: Ways, listing: Listing) -> dict[str, _Way]:
-    """The widget of each way of a place that ``described`` describes, by label."""
+def _choice(
+    label: str,
+    tp: Any,
+    none: bool,
+    metadata: tuple[Any, ...],
+    default: Any,
+    listing: Listing,
+) -> _Choice:
+    """
+    The choice of ways at a root place of type ``tp``, as
+    :func:`ess.spec.places.root_type` gives it with ``none`` and ``metadata``.
+    """
+    tag = None
     ways: dict[str, _Way] = {}
-    for value, group in described.inline.items():
-        if value is None or described.tag is None:
-            ways['Given'] = _Group(group, {}, listing)
-        else:
-            way = places.title(value, group.model_fields[described.tag])
-            ways[way] = _Group(group, {described.tag: value}, listing)
-    if field_types.is_file_model(described.record):
-        ways[_Choice.FILE] = _File(described.record, listing)
-    elif described.record is not None:
-        ways[_Choice.RECORD] = _Record(described.record, listing)
-    if described.none:
+    if (union := places.alternatives(tp, *metadata)) is not None:
+        tag, groups = union
+        for value, group in groups.items():
+            way = places.title(value, group.model_fields[tag])
+            ways[way] = _Group(group, {tag: value}, listing)
+    if places.written_inline(tp):
+        ways['Given'] = _Group(tp, {}, listing)
+    if field_types.is_file_model(tp):
+        ways[_Choice.FILE] = _File(tp, listing)
+    if places.takes_output(tp):
+        ways[_Choice.RECORD] = _Record(tp, listing)
+    if none:
         ways[_Choice.NONE] = _Nothing()
-    return ways
+    return _Choice(label, ways, tag, default)
 
 
 def _field(
@@ -584,7 +597,13 @@ class _Rows:
     """
 
     def __init__(
-        self, label: str, element: Ways, default: Any, listing: Listing
+        self,
+        label: str,
+        tp: Any,
+        none: bool,
+        metadata: tuple[Any, ...],
+        default: Any,
+        listing: Listing,
     ) -> None:
         self._default = default
         self._listing = listing
@@ -592,26 +611,20 @@ class _Rows:
         # The editor's value as it showed the row selected, which differs
         # from the row if the editor cannot show it whole.
         self._shown: Any = UNSET
-        group = element.inline.get(None)  # a union is not covered
-        self._fields = (
-            {}
-            if group is None
-            else {
-                name: (
-                    places.title(name, info),
-                    field_types.file_model(info.annotation),
-                )
-                for name, info in group.model_fields.items()
-            }
-        )
-        self._model = (
-            element.record if field_types.is_file_model(element.record) else None
-        )
+        # A union is not covered.
+        self._model = tp if field_types.is_file_model(tp) else None
+        fields = tp.model_fields if places.written_inline(tp) else {}
+        self._fields = {
+            name: (places.title(name, info), field_types.file_model(info.annotation))
+            for name, info in fields.items()
+        }
         # The column of the file or the output that a row may be given as.
         self._ref = None
-        if element.record is not None:
-            self._ref = 'Record' if self._model is None else 'File'
-        self._editor = _Choice('', _ways(element, listing), element.tag, UNSET)
+        if self._model is not None:
+            self._ref = 'File'
+        elif places.takes_output(tp):
+            self._ref = 'Record'
+        self._editor = _choice('', tp, none, metadata, UNSET, listing)
         self._table = pn.widgets.Tabulator(
             disabled=True,
             selectable=True,
