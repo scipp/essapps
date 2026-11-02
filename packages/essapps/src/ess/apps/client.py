@@ -325,19 +325,18 @@ class Client:
         """
         Submit a spec or a stage with values, or requests.
 
-        A spec takes its params, a dict by name or an instance of its params
-        model if every value is given inline. The value at each place, a
-        parameter or an element of a list parameter, is given as its type
-        allows (see :mod:`ess.spec.places`):
+        A spec takes its params, a dict by name, or an instance of its params
+        model, which cannot hold a reference to an output. Each
+        parameter, or each row of a list parameter, is given as its type
+        allows (see :mod:`ess.spec._workflow_spec`):
 
-        - a file model, by reference to a file;
+        - a file model, as a file, ``file(...)``;
         - any other group, as a model or a dict of its fields, unless a field
-          is a data value; or by reference to an output that fits;
+          is a data value; or as a reference to an output that fits;
         - a union of groups, as a model or a dict of the fields of one
-          alternative, with its tag, never by reference.
+          alternative, with its tag, never as a reference.
 
-        A scalar field of a group is given inline, and a file model field
-        by reference to a file::
+        For example::
 
             client.submit(IOFQ, params={'reduction': Reduction(bins=4),
                                         'sample': file(run=60339),

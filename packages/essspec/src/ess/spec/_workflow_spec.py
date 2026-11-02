@@ -5,70 +5,163 @@ Workflow specifications: the interface of a workflow, without its code.
 
 A :class:`WorkflowSpec` names a workflow and holds two pydantic models: the
 *params*, everything a request gives the workflow, and the *outputs*, the
-results it returns. A spec of an I(Q) reduction::
+results it returns. This docstring states the rules for both models, once.
+The other modules of ``ess.spec`` and ``ess.apps`` apply them and link here.
 
-    class RunFile(FileModel, kind='raw'):  # a file: given by reference
+A spec of an I(Q) reduction, with each kind of parameter once::
+
+    class RunFile(FileModel, kind='raw'):     # a file model: a raw data file
         ...
+
+    class Reduction(BaseModel):               # a group of scalars
+        bins: Annotated[int, Gt(0)] = 50      # a scalar, with a constraint
+        banks: list[int] = []                 # a list of scalars; [] if empty
 
     class WavelengthRange(BaseModel):
         start: float
         stop: float
 
+    class Specimen(BaseModel):                # a group with files
+        run: RunFile                          # a file
+        can: RunFile | None = None            # a file, or None
+        thickness: float = 1.0
+
     class PixelMask(BaseModel, arbitrary_types_allowed=True):
-        mask: sc.DataArray                    # a data value: PixelMask is
-                                              # given by reference only
+        mask: sc.DataArray                    # a data value: PixelMask is given
+                                              # by reference to an output only
 
-    class Reduction(BaseModel):
-        bins: Annotated[int, Gt(0)] = 50      # a scalar, with a constraint
-        banks: list[int] = []                 # may be empty: [], not None
-
-    class GivenCentre(BaseModel):
-        kind: Literal['given'] = 'given'      # the tag of an alternative
+    class GivenCentre(BaseModel):             # an alternative of a union
+        kind: Literal['given'] = 'given'      # its tag
         x: float = 0.0
         y: float = 0.0
 
-    class FindCentre(BaseModel):
+    class FindCentre(BaseModel):              # another alternative
         kind: Literal['find'] = 'find'
         tolerance: Annotated[float, Gt(0)] = 1e-3
 
     class IofQParams(BaseModel):
         reduction: Reduction = Reduction()    # a default is an instance
-        range: WavelengthRange | None = None  # may be absent
+        range: WavelengthRange | None = None  # None: no range
+        specimen: Specimen                    # no default: required
         mask: PixelMask | None = None
         centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
-        transmission: RunFile
+        transmission: RunFile                 # a file
         sample_runs: list[RunFile]            # a table: no default
 
     class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
         iofq: sc.DataArray
-        pixel_mask: PixelMask                 # fits IofQParams.mask of a request
+        pixel_mask: PixelMask                 # fits the parameter mask
 
     IOFQ = WorkflowSpec(
         name='iofq', version=1, title='I(Q)', description='...',
         params=IofQParams, outputs=IofQOutputs, tables=('sample_runs',),
     )
 
-Each field of ``IofQParams`` is a *parameter*. A *group* is a model, such
-as ``Reduction``, whose fields a request writes as an object. A *data
-value* is a field for which the params schema has no input: any field but a
-scalar, a file model, or a list of one (see :mod:`ess.spec.places`), such as
-a scipp array, or ``start: float | None``. A group with a data value is given by
-reference only. A request for
-``IOFQ``, with ``file(...)`` a reference to a file and
-``m.ref('pixel_mask')`` a reference to the output ``pixel_mask`` of an
-earlier record ``m``::
+A request gives the parameters as a dict by name. In this request for
+``IOFQ``, ``m`` is the record of an earlier request whose spec has the
+output ``pixel_mask``::
 
     {
-        'reduction': {'bins': 100},
-        'mask': m.ref('pixel_mask'),
-        'centre': {'kind': 'find'},
-        'transmission': file(run=99),
-        'sample_runs': [file(run=101), file(run=102)],
-    }
+        'reduction': {'bins': 100},              # a group: banks takes its default
+        'specimen': {'run': file(run=104), 'thickness': 2.0},  # a file in a group
+        'mask': m.ref('pixel_mask'),             # a reference to an output
+        'centre': {'kind': 'find'},              # the tag picks FindCentre
+        'transmission': file(run=99),            # a file
+        'sample_runs': [file(run=101), file(run=102)],  # two rows
+    }                                            # range is left out: None
 
-:mod:`ess.spec.places` describes what a request writes at each root place by
-its type, and when each value is validated; :mod:`ess.spec.refs` describes the
-references.
+Terms
+-----
+
+*Parameter*
+    A field of the params model, such as ``reduction``. A *list parameter*,
+    ``list[X]``, holds *rows*, each of type ``X``. A *table* is a list
+    parameter whose rows an accumulator takes a push at a time. ``tables``
+    names the tables.
+*Group*
+    A pydantic model, such as ``Reduction``, but not a ``RootModel``. A
+    request writes a group as a JSON object of its *fields*. A field left out
+    takes its default.
+*Union of groups*
+    A pydantic discriminated union, such as the type of ``centre``. Each
+    alternative is a group with the *tag* field named by ``discriminator``,
+    typed a ``Literal`` of one string. A request writes the fields of one
+    alternative and its tag, which says which alternative it is.
+*Scalar*
+    An ``int``, ``float``, ``str``, ``bool``, or ``datetime`` (also
+    pydantic's ``AwareDatetime`` and ``NaiveDatetime``), or an enum or a
+    ``Literal`` whose values are of these types.
+*File model*, *file*
+    A file model is a subclass of :class:`~ess.spec.parameters.FileModel`,
+    such as ``RunFile``. Its value is a *file*. A request writes a file as
+    ``file(...)``, such as ``file(run=99)``. The backend resolves it to the
+    file's identity when the request is submitted. The binding gets the file
+    model with the file's local path, ``transmission.path``.
+*Interpreted field*, *data value*
+    A field of a group is *interpreted* if a form made from the params
+    schema has an input for it: a scalar; a file model, possibly typed
+    ``X | None``; or a list of scalars or of file models. Constraints, such
+    as ``Gt(0)``, are allowed.
+    Any other field is a *data value*, such as ``mask: sc.DataArray``,
+    ``start: float | None``, ``limits: tuple[float, float]``, or a field
+    typed a group. No request can write a data value.
+*Reference to an output*
+    ``m.ref('pixel_mask')`` names the output ``pixel_mask`` of the record
+    ``m``. ``acc.ref(...)`` names an output of an accumulator. The backend
+    replaces the reference by the output's data when the request runs.
+*JSON form*
+    What a value dumps to as JSON, ``model_dump(mode='json')``. The record of
+    a request stores the JSON form of each value. The JSON form of a file is
+    ``{'@ref': 'file', 'file': 'run:loki/99'}``, and that of a reference to
+    an output is ``{'@ref': 'output', 'record': ..., 'output': ...}`` (see
+    :mod:`ess.spec.refs`).
+
+What a request writes
+---------------------
+
+The type of a parameter, or of the rows of a list parameter, says what a
+request writes there:
+
+- A group, such as ``Reduction``: a JSON object of its fields, or a
+  reference to an output. A group with a file model, such as ``Specimen``,
+  takes no reference to an output. A group with a data value, such as
+  ``PixelMask``, takes only a reference to an output.
+- A union of groups, such as the type of ``centre``: a JSON object of the
+  fields of one alternative, with its tag.
+- A file model, such as ``RunFile``: a file.
+- ``X | None``: what ``X`` takes, or ``None``.
+- ``list[X]``: a list of rows, each what ``X`` takes.
+
+The params schema of a spec (see :meth:`WorkflowSpec.serialize`) and a form
+made from the params model follow this list. The rules behind it:
+
+- A reference to an output fills a whole parameter or a whole row, never a
+  field of a group. The backend validates a group when the request is
+  submitted, so that its validators see all its fields, and an output may
+  not exist yet then.
+- A file is a value, like a scalar. Its identity is known when the request
+  is submitted, so a file can be a field of a group.
+- A reference to an output fits a parameter or a row if the output's type is
+  the group's class or a subclass of it (see
+  :func:`~ess.spec.field_types.fits`). So a parameter is a group: a
+  parameter typed ``float`` or ``sc.DataArray`` would fit every output of
+  that type, and a picker of records would list unrelated outputs. A number
+  is a field of a group, such as ``Reduction.bins``, and an array is a field
+  of a group whose class says what it is, such as ``PixelMask``.
+- No output holds a file model, so that every file comes from the file
+  source, which checks it. So a group with a file model takes no reference to
+  an output, and a group with a data value has no file model.
+- No reference to an output fits a union. An output that fit one would
+  carry the tag of an alternative, so the workflow that computes it would
+  know the specs that take it (see ADR 0008). A parameter that takes either
+  a value typed in or an output is a group, such as ``BeamCentre``, not a
+  union. So no alternative of a union has a data value.
+- A default is a value that a request may write, as validating it gives: an
+  instance of a group, not a dict, and never a reference or a file. A file
+  model at a field of a group has no default but ``None`` or ``[]``.
+
+What a spec refuses
+-------------------
 
 The models are ordinary pydantic models: what the framework needs, it reads
 from the field types (see :mod:`ess.spec.field_types`). Making a spec checks
@@ -80,21 +173,27 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         file: Path
 
     class CalibrationFile(FileModel, kind='calibration'):
-        # A file model holds only the file's identity: the file's metadata
-        # say the rest.
+        # A file model has only the field file, the file's identity. The
+        # metadata of the file say the rest.
         run: int
 
     class Reduction(BaseModel):
         # No aliases: a request writes a field by its name.
         bins: int = Field(10, alias='nbins')
 
-        # No serializers or computed fields: the record holds a group as the
-        # object of its fields.
+        # No serializers or computed fields: the JSON form of a group is the
+        # JSON object of its fields.
         @computed_field
         def width(self) -> float: ...
 
+    class Binning(BaseModel):
+        # float | None is a data value, so Binning is given by reference to
+        # an output only, and its default Binning() is refused. Use a bool
+        # field, or make the optional part a parameter typed X | None.
+        start: float | None = None
+
     class Sample(BaseModel):
-        # No NewType or type alias: a spec names a role by a class.
+        # No NewType or type alias: a class says what a value is.
         run: RunNumber
 
     class Params(BaseModel):
@@ -102,6 +201,7 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         # bins is a field of Reduction.
         bins: int = 10
         reduction: Reduction
+        binning: Binning = Binning()
         sample: Sample
         geometry: Geometry
         calibration: CalibrationFile
@@ -140,12 +240,11 @@ validator, but the framework never calls it, since a stage and a driver
 never get a whole params instance. A binding may run it,
 ``IofQParams.model_validate(dict(params))``.
 
-A *table* is a list parameter whose *rows* an accumulator takes a push at a
-time, such as the sample runs; its rows are distinct. ``tables`` names the
-tables. A request gives every table, ``[]`` for one without rows, so that no
-request leaves out a table by mistake.
+A request gives every table, ``[]`` for one without rows, so that no request
+leaves out a table by mistake. The rows of a table are distinct.
 
-Two forms exist, related by a one-way projection:
+Two forms
+---------
 
 * :class:`WorkflowSpec` is the in-process form. It holds the model *classes*,
   so consumers in the same process get full pydantic validation.
@@ -302,19 +401,13 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         """
         Project to the plain-data form.
 
-        The params schema has the value at each *place*, a parameter, an
-        element of a list parameter, or a field of a group, in the forms it
-        takes: a file model as a reference to a file, with the model's
-        metadata; a group as ``anyOf`` the object of its fields, each a
-        scalar, a file model, or a list of one, and a reference to an
-        output, or one of them only; a union of groups as ``oneOf`` the
-        object of the fields of each alternative, never a reference; a scalar
-        as its JSON schema.
-        A reference's schema is the ``@ref`` object of each kind it may be,
-        with the name of the data type it must fit in ``dataType``, as the
-        outputs schema has each output.
-        The projection is one-way: pydantic validators do not survive it, so
-        a consumer of the serialized form can validate only optimistically.
+        The params schema gives each parameter, or the rows of a list
+        parameter, the forms a request may write there (see the module
+        docstring), and each field of a group the JSON schema of its type,
+        or of a file. :class:`SerializedWorkflowSpec` shows the schema of each
+        form. The projection is one-way: pydantic validators do not survive
+        it, so a consumer of the serialized form can validate only
+        optimistically.
         """
         return SerializedWorkflowSpec(
             name=self.name,
@@ -332,32 +425,34 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     """
     Plain-data form of a workflow spec, safe to send across process boundaries.
 
-    Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON. A
-    UI generated from it reads the widget at each place from the forms the
-    params schema gives it. A schema with ``dataType`` is a reference, of the kinds that
-    the ``@ref`` const of each object it allows names:
+    Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON.
+    ``params_schema`` is a JSON schema of the params. At each parameter, or
+    the rows of a list parameter, it allows the forms that a request may
+    write there (see :mod:`ess.spec._workflow_spec`). A UI made from it
+    picks a widget by these forms:
 
-    ==================================  =================================
-    Forms at the place                  Widget
-    ==================================  =================================
-    a reference to a file only          a file picker (a file model)
+    ==================================  ===================================
+    Schema at a parameter or row        Widget
+    ==================================  ===================================
+    a file only                         a picker of files (a file model)
     the object of a group's fields      the group's fields
-    a reference to an output only       a record picker (a group that
-                                        holds a data value)
-    both                                the group's fields, and a choice
+    a reference to an output only       a picker of records (a group with
+                                        a data value)
+    both of the last two                the group's fields, and a choice
                                         to pick a record instead
-    a ``oneOf`` with a                  a choice of the alternatives of a
-    ``discriminator``                   union, each with its fields
-    any other schema, a scalar's        an input for the value, inline
-    ==================================  =================================
+    ``oneOf``, with ``discriminator``   a choice of the alternatives of a
+                                        union, each with its fields
+    ``null`` in ``anyOf``               a toggle: ``X | None``
+    an array                            a list of rows
+    ==================================  ===================================
 
-    ``dataType`` names the type of the data a picker takes, as the outputs
-    schema names the type of each output. A union of groups is a ``oneOf``
-    of its alternatives, each the object of its fields with its tag, and has
-    no reference form, since no reference fits a union. A list is an array
-    of these, and an optional value has ``null`` in ``anyOf``. The metadata
-    of a file model, under ``metadata``, say which files fit. The forms
-    at three places, the parameter ``reduction``, a parameter ``mask`` of a
+    The schema of a file, or of a reference to an output, is the ``@ref``
+    object of each kind it may be (see :mod:`ess.spec.refs`), with the name
+    of the type it must fit under ``dataType``, as the outputs schema names
+    the type of each output. The schema of a file also has the metadata of
+    the file model, under ``metadata``, which say which files fit. A field
+    of a group has the JSON schema of its type, or the schema of a file. The
+    schemas of the parameter ``reduction``, a parameter ``mask`` typed the
     file model ``MaskFile``, and the field ``Reduction.bins``::
 
         "reduction": {"anyOf": [{"$ref": "#/$defs/Reduction", ...},
@@ -513,8 +608,8 @@ def _found(
 def _alias_problems(annotation: Any) -> list[str]:
     """
     Refuse each ``NewType`` or type alias that ``annotation`` is made of,
-    named by the field of the class that holds it, if any: a spec names a
-    role by a class.
+    named by the field of the class that holds it, if any: a class says what
+    a value is.
     """
     return [
         f'{where}{alias.__name__} is '
@@ -529,8 +624,8 @@ def _path_problems(annotation: Any) -> list[str]:
     """
     Refuse each ``Path`` that ``annotation`` is made of outside a file
     model, named by the field of the class that holds it, if any: a
-    parameter or a field that takes a file is typed a file model and given by
-    reference, so that the file source checks each file a workflow reads.
+    parameter or a field that takes a file is typed a file model, so that
+    the file source checks each file a workflow reads.
     """
     found = _found(annotation, _is_path, skip=field_types.is_file_model)
     return [
@@ -554,18 +649,20 @@ def _has_alias(field: FieldInfo) -> bool:
 
 def _group_problems(group: type[BaseModel]) -> list[str]:
     """
-    Refuse a group at a parameter whose fields a request cannot write: of a
-    group without a data value, a serializer or a computed field, which
-    would make the group's JSON form differ from the object of its fields, a
-    field with an alias, a default that is not a value, since a field left
-    out holds its default, and of a file model a default but ``None``, or
-    ``[]`` for a list, since a request gives each file by reference. Field
-    and model validators of any mode are allowed: they run whenever the group
-    is validated whole (see :mod:`ess.spec.places`). A group with a data
-    value, a field that is not interpreted, is given by reference only, to an
-    output, so it holds no file model, as no output does (see
-    :func:`_output_file_problems`); its fields are not looked at otherwise. A
-    file model is checked by :func:`_file_model_problems` alone.
+    The problems of a group at a parameter or a row.
+
+    A group without a data value is refused if it has a serializer or a
+    computed field, which would make its JSON form differ from the object of
+    its fields; a field with an alias; a default that is not a value, since a
+    field left out takes its default; or a file model at a field with a
+    default but ``None`` or ``[]``. Field and model validators of any mode
+    are allowed: they run whenever the group is validated (see
+    :mod:`ess.spec.places`).
+
+    A group with a data value is given by reference to an output only, so it
+    has no file model, as no output does (see :func:`_output_file_problems`).
+    Its fields are not checked otherwise. A file model is checked by
+    :func:`_file_model_problems` alone.
     """
     if field_types.is_file_model(group):
         return _file_model_problems(group)
@@ -712,7 +809,7 @@ def _default_problem(
 def _parameter_value(model: type[BaseModel], name: str, value: Any) -> Any:
     """
     ``value`` of the parameter ``name`` of ``model`` as validating it gives,
-    if a request may write it with no reference to an output and no file
+    if a request may write it without a reference to an output or a file
     (see :func:`ess.spec.places.held`).
     """
     held = places.held(model, name, value, _no_file)
@@ -812,15 +909,16 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
 
 
 def _not_a_ref(schema: dict[str, Any]) -> None:
-    """The schema of a value written inline: an object with ``@ref`` is a reference."""
+    """Refuse an object with the key ``@ref`` in ``schema``: it is a reference."""
     schema['not'] = {'required': ['@ref']}
 
 
 def _ref_form(tp: Any) -> Any:
     """
-    The reference a value of type ``tp`` takes, with the name of ``tp``; of a
-    file model, a reference to a file, with the model's metadata, so
-    that a file picker lists the files that fit.
+    The type of the ``@ref`` object that fills a value of type ``tp``, with
+    the name of ``tp``: of a file model, a file, with the model's metadata,
+    so that a file picker lists the files that fit; of a group, a reference
+    to an output.
     """
     if field_types.is_file_model(tp):
         extra = {'dataType': field_types.type_name(tp), 'metadata': tp.metadata}
@@ -831,9 +929,9 @@ def _ref_form(tp: Any) -> Any:
 
 def _field_forms(model: type[BaseModel], name: str) -> Any:
     """
-    The type of the parameter ``name`` of ``model`` with the type at each of
-    its root places replaced by the forms it takes (see :func:`_forms`); the
-    constraints of a list parameter on the list.
+    The type of the parameter ``name`` of ``model``, or of its rows, replaced
+    by the forms a request may write there (see :func:`_forms`). The
+    constraints of a list parameter stay on the list.
     """
     forms = _forms(*places.root_type(model, name))
     if not field_types.is_list(model, name):
@@ -845,12 +943,12 @@ def _field_forms(model: type[BaseModel], name: str) -> Any:
 
 def _forms(tp: Any, none: bool, metadata: tuple[Any, ...]) -> Any:
     """
-    The forms a root place of type ``tp`` takes (see
-    :func:`~ess.spec.places.root_type`): of a file model, a reference to a
-    file; of a union, the fields of each alternative inline (see
-    :func:`_group_forms`); of a group, its fields inline unless it holds a
-    data value, and a reference if an output can fit it. The constraints of
-    the place are on the fields given inline.
+    The forms a request may write at a parameter or row of type ``tp`` (see
+    :func:`~ess.spec.places.root_type`): of a file model, a file; of a union,
+    the object of the fields of each alternative (see :func:`_group_forms`);
+    of a group, the object of its fields unless it has a data value, and a
+    reference to an output if one can fit it. The constraints of the
+    parameter or row apply to the objects of fields.
     """
     forms = []
     if (union := places.alternatives(tp, *metadata)) is not None:
@@ -866,7 +964,7 @@ def _forms(tp: Any, none: bool, metadata: tuple[Any, ...]) -> Any:
 
 
 def _inline_form(groups: Sequence[Any], metadata: Sequence[Any]) -> Any:
-    """The object of the fields of one of ``groups``, inline, never a reference."""
+    """The object of the fields of one of ``groups``, never a ``@ref`` object."""
     # Only an object reads as a reference; JSON Schema's ``required`` holds
     # for any other value, so ``not`` would refuse it.
     return Annotated[
@@ -880,8 +978,8 @@ def _inline_form(groups: Sequence[Any], metadata: Sequence[Any]) -> Any:
 def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
     """
     A model of the fields of a group, each a scalar or a list of scalars,
-    written inline, or of a file model, a reference to a file
-    (see :func:`_ref_form`), with its constraints; the tag field ``tag`` of an
+    or a file, or a list of files (see :func:`_ref_form`), with its
+    constraints; the tag field ``tag`` of an
     alternative of a union without its default, required, since a request
     always writes it. The title of a tag labels its alternative, so a tag
     without one is titled by its value, as a parameter is by its name;
@@ -918,7 +1016,7 @@ def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
 def _file_field_form(annotation: Any) -> Any:
     """
     ``annotation`` of a field of a group, with a file model, or the element
-    of a list of one, replaced by the reference it takes.
+    of a list of one, replaced by the type of a file (see :func:`_ref_form`).
     """
     tp, is_optional, _ = field_types.taken_apart(annotation)
     if not field_types.is_file_model(tp):

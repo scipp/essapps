@@ -4,17 +4,15 @@
 The specs of workflows, which UIs and backends read, and the bindings that
 the backend calls to compute a spec's requests.
 
-The package exports the specs, the references a request gives data by,
-the file models that take references to files, the bindings and their
-protocols, and :class:`Quantity`. See
-:mod:`ess.spec._workflow_spec` for the design and ADR 0001
+The package exports the specs, the references to outputs, the file models,
+the bindings and their protocols, and :class:`Quantity`. See
+:mod:`ess.spec._workflow_spec` for the rules of a spec's models and ADR 0001
 (docs/developer/adr in the package) for the rationale. The helpers are in
 their modules: :mod:`~.field_types` for what the framework reads from field
 types, such as :func:`~.field_types.fits`, and how it validates a value by
-its field, :mod:`~.refs` for finding the
-references of a request, :mod:`~.places` for what a request writes at each
-root place by its type, and :mod:`~.binding` for the values a binding is made
-with.
+its field, :mod:`~.refs` for finding the references of a request,
+:mod:`~.places` for what a request may write at each parameter and how it is
+validated, and :mod:`~.binding` for the values a binding is made with.
 
 The package does not import :mod:`~.conversions` (needs scipp),
 :mod:`~.pipeline` (``PipelineBinding``, needs sciline), and :mod:`~.testing`

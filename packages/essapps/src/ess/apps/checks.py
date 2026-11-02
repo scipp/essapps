@@ -16,47 +16,32 @@ method for each thing checked::
     rows = checks.push(blanks, rows, proposal)
     refused = checks.state(plain, blanks)                  # at a pin or a read
 
-The checks of a request; a template, a push, and a state check part of these:
+The rules of what a request may write are stated in
+:mod:`ess.spec._workflow_spec`, with the terms used here. The checks of a
+request, of which a template, a push, and a state check a part:
 
 - *Names.* Each name is a parameter of the spec. A required parameter must
-  be given; one left out takes its default.
-- *Places.* A request writes a value or a reference to an output at each
-  place: the value of a parameter, or an element of a list parameter (see
-  :mod:`ess.spec.places`). A reference to an output at a tag, for a whole
-  list, at a union of groups, or inside a group is refused. A group is
-  written as an object of its fields; a field left out takes its default.
-- *Inline values.* An inline value is allowed where the type at the place
-  is a group without a data value, a union of groups, or a file model, and
-  ``None`` where it is optional. A file is given by reference to it, such
-  as ``file(path=...)``, not as a path. Each group, file model, or
-  row of a list, given inline is validated whole, so that its validators
-  run, by its field, or for an element of a list by its element type, from
-  its JSON form, an instance by its dump, and a field that a model lacks is
-  refused, since validating would drop it silently. The log holds the JSON
-  form of each validated value, and the call phase makes the value of that,
-  so it must read back as the value: a number that is not finite has none,
-  nor has a group whose validators change a value they validated already
-  (see :func:`ess.spec.field_types.inline`). A list parameter that is not a
+  be given. One left out takes its default.
+- *Values.* Each parameter, or each row of a list parameter, is validated
+  by :func:`ess.spec.places.held`. It refuses what a request may not write
+  there, validates each group, row, and file whole from its JSON form, and
+  returns what the record stores. A field that a model lacks is refused,
+  since validating would drop it silently. The JSON form of a value must
+  read back as the value, since the call phase makes the value from it (see
+  :func:`ess.spec.field_types.inline`). A list parameter that is not a
   table meets its length constraints.
-- *Files.* A file model, at a parameter or at a field of a group, is
-  given by reference to a file, and only a file model is (see
-  :class:`ess.spec.FileModel`). Validating it resolves the file: the file
-  source checks that the proposal may read it, the file fits the model by
-  its metadata, as a :class:`~.files.Selector` of the model's metadata
-  matches it, and the record holds its identity, to which its name is
-  resolved, so it must be known.
-- *References.* A reference to an output stands for a whole group. A union
-  of groups is written inline only, with the tag of an alternative: no
-  reference fits it, so that a producer need not output a tagged class to
-  feed it. A reference to a record or an accumulator
-  is checked by the backend, which knows what the client may read (see
-  :func:`check_fit`): its data fit the place. No output holds a file
-  model, so a path comes only from a file.
+- *Files.* Validating a file resolves it with the file source (see
+  :class:`ess.spec.FileModel`): the file must be known, the proposal must
+  be allowed to read it, and its metadata must fit the file model, as a
+  :class:`~.files.Selector` of the model's metadata matches it. The record
+  stores the file's identity.
+- *References to outputs.* The backend checks each reference to a record or
+  an accumulator, since it knows what the client may read (see
+  :func:`check_fit`): the output exists and its type fits the parameter.
 - *Table rules.* The number of rows of a table meets its length
-  constraints, and its rows are distinct, compared as the record holds them:
-  a file by its identity, a reference to an output by record, output, and
-  key, and an inline value by its JSON form, each at its place (see
-  :func:`distinct`).
+  constraints, and its rows are distinct, compared as the record stores
+  them: a file by its identity, a reference to an output by record, output,
+  and key, and any other value by its JSON form (see :func:`distinct`).
 
 The params model's model validators never run: a stage and a driver never
 get a whole params instance. A template's fixed values are checked each by

@@ -1,24 +1,27 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The field types of a spec, taken apart.
+Type introspection of the fields of a spec's models.
 
 A spec's models carry no annotations for the framework: what the framework
-needs, it reads from the field types. A field's type is built from a few
-pieces, which these functions take apart::
+needs, it reads from the field types. These functions take a field's type
+apart::
 
     BeamCentre | None       optional(...)   -> (BeamCentre, True)
     list[SampleRun]         element(...)    -> SampleRun
     dict[str, IofQ]         value_type(...) -> IofQ
 
-Each function sees through ``Annotated`` metadata, such as a validator:
-``Annotated[X, ...]`` is ``X`` (see :func:`plain`). :func:`fits` says whether
-data of one type can be the value of a field of another, so that an output of
-one spec can feed a parameter of another. :func:`model_of` makes a model of one
-field, which validates a value, or a row of a list, by that field alone:
-:func:`inline` validates a value written inline at one root place, and
-:func:`ess.spec.places.validated` a parameter's value whole, in the call
-phase.
+``dict[str, X]`` occurs only in outputs. Each function sees through
+``Annotated`` metadata, such as a validator: ``Annotated[X, ...]`` is ``X``
+(see :func:`plain`).
+
+:func:`fits` says whether data of one type can be the value of a field of
+another, so that an output of one spec can fill a parameter of another.
+:func:`model_of` makes a model of one field, which validates a value, or a
+row of a list parameter, by that field alone. :func:`inline` uses it to
+validate a value from its JSON form in the request phase, and
+:func:`ess.spec.places.validated` to validate a parameter in the call phase.
+The rules these serve are stated in :mod:`ess.spec._workflow_spec`.
 """
 
 from __future__ import annotations
@@ -325,14 +328,14 @@ def inline(
     context: dict[str, Any] | None = None,
 ) -> Any:
     """
-    The JSON form of ``value``, written inline for the field ``name`` of
-    ``model``, or a row of it unless ``whole`` (see :func:`model_of`), as the
-    framework holds it: of a group, the JSON form of the group validated.
+    The JSON form of ``value`` validated, as the record stores it. ``value``
+    is a value of the field ``name`` of ``model``, or of a row of it unless
+    ``whole`` (see :func:`model_of`).
 
-    ``value``, plain data such as :func:`ess.spec.places.held` makes of
-    Python objects, is validated from its JSON form, with
-    ``context``, and with a field that a model lacks refused at any depth,
-    since validating would drop it silently. Its JSON form must read back as
+    ``value`` is plain data, such as :func:`ess.spec.places.held` makes of
+    Python objects. It is validated from its JSON form, with ``context``. A
+    field that a model lacks is refused at any depth, since validating would
+    drop it silently. The JSON form of the validated value must read back as
     the value, validated without ``context``. Raises:
 
     - ``PydanticSerializationError`` if it has no JSON form;

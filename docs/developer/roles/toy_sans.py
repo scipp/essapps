@@ -18,10 +18,11 @@ the counts of several runs side by side, a 2-D output, and takes
 ``SECONDS_PER_RUN`` per run, so that an app shows its record pending.
 ``FORWARD`` takes
 the I(Q) that ``IOFQ`` or ``IOFQ_MULTI`` outputs, as the group ``IofQ``, since a
-reference stands for a group only.
+reference to an output fills a parameter, which is a group.
 
 Each parameter is a group. A parameter that takes a file is typed a file
-model, a group given by reference to a file: ``Sample``, ``Can``, or ``Run``. A
+model, ``Sample``, ``Can``, or ``Run``, and a request writes it as
+``file(...)``. A
 ``PipelineBinding`` keys each parameter by its class, so the sample and the can
 are classes of their own.
 

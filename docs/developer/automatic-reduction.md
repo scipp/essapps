@@ -19,7 +19,7 @@ records = client.submit(requests, label='batch', persist=True)
 A batch application submits with `persist=`, so its client keeps nothing, and the results are read later from the store ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 
 A lookup fills further blanks per file. `LastBefore(selector)` takes the matching file with the highest run number below the filled file's.
-Each file fills the one blank the lookup leaves, `at`, a parameter of a file model: the file reference is its value, and `apply` fills no other parameters.
+Each file fills the one blank the lookup leaves, `at`, a parameter of a file model: the file is its value, and `apply` fills no other parameters.
 A lookup names the blank it fills the same way, such as `Lookup({'empty_beam': LastBefore(...)})`.
 So each file that a rule or a lookup finds needs a parameter of its own in the spec, such as `run` and `empty_beam`.
 A batch whose parameters differ per file, such as the thickness of each sample, is a list of requests, each with its own params.

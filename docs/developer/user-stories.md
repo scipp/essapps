@@ -33,19 +33,19 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `SLICES` | `sample: Sample`, `time_range: list[TimeRange]`, a table | `sliced` | the sample's counts in each time range, summed | a reduction of one run sliced in time |
 | `CENTRED_MULTI` | `centre: BeamCentre`; `transmission: Transmission`; `sample: list[Sample]`, a table; `can: list[Can]`, a table | `centred` | the sample runs' counts summed, times `transmission.fraction`; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and the transmission of the summed runs |
 
-The type at a root place, the value of a parameter or an element of a list parameter, decides how a request gives the value there (README.md, Terms, and Specs and bindings, which also has the row for a union of groups):
+The type of a parameter, or of the rows of a list parameter, decides how a request gives the value there (README.md, Terms, and Specs and bindings, which also has the row for a union of groups):
 
-| The type at a root place | In the toy specs | Given as |
+| Type | In the toy specs | Given as |
 |---|---|---|
-| a file model | the runs, such as `Sample`; `PublishedNormalization` | a file reference |
-| a group without a data value | `Reduction`, `Scaling`, `Position`, `TimeRange`, `BeamCentre` | an object of its fields, or a reference to an output of its class |
+| a file model | the runs, such as `Sample`; `PublishedNormalization` | a file, `file(...)` |
+| a group with interpreted fields only | `Reduction`, `Scaling`, `Position`, `TimeRange`, `BeamCentre` | an object of its fields, or a reference to an output of its class |
 | a group with a data value | `ComputedNormalization`, `Transmission`, `Parts`, `Volume`, `Reflectivity` | a reference to an output of its class |
-| a list, `list[X]` | each list parameter, such as `runs` and `parts` | a list, each element given as an `X` |
+| a list, `list[X]` | each list parameter, such as `runs` and `parts` | a list of rows, each given as an `X` |
 | `X \| None` | `normalization` of `IOFQ` | `None`, or given as an `X` |
 
 Each parameter of a toy spec is a group or a list of groups, possibly `X | None`.
 Each field of these groups is a scalar, such as `bins` and `scale`, or a data value, such as the `sc.Variable` of `Volume.counts`.
-Each run is a file model, with a class for each role: `Sample`, `Can`, `DirectBeam`, `Vanadium`, `Background`, and `Reference`, each a subclass of `Run`:
+Each run is a file model, with a class for each kind of run: `Sample`, `Can`, `DirectBeam`, `Vanadium`, `Background`, and `Reference`, each a subclass of `Run`:
 
 ```python
 class Run(FileModel): ...    # file: str, from FileModel
@@ -53,15 +53,15 @@ class Run(FileModel): ...    # file: str, from FileModel
 class Sample(Run): ...
 class Can(Run): ...
 
-{'sample': run, 'can': can}     # IOFQ_CAN, each a file reference
+{'sample': run, 'can': can}     # IOFQ_CAN, each a file
 ```
 
-A request gives a table of runs as a list of file references, such as `runs`.
+A request gives a table of runs as a list of files, such as `runs`.
 An output without a type in the list of toy specs is a `sc.Variable`.
-`Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each, named by its role: `fraction`, `counts`, and `curve`.
+`Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each: `fraction`, `counts`, and `curve`.
 `ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` is the file model of a file that holds it.
 `Parts` is a group of two `sc.Variable`s.
-A reference to an output fits a root place when the output is of the class of the group there: `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre` and `CENTRED_MULTI`'s `centre`, `VANADIUM`'s and `LOAD_NORMALIZATION`'s `normalization` fit `IOFQ`'s `normalization`, `CONTRIBUTE`'s `transmission` fits `CENTRED_MULTI`'s `transmission`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
+A reference to an output fits a parameter or row when the output is of the class of the group there: `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre` and `CENTRED_MULTI`'s `centre`, `VANADIUM`'s and `LOAD_NORMALIZATION`'s `normalization` fit `IOFQ`'s `normalization`, `CONTRIBUTE`'s `transmission` fits `CENTRED_MULTI`'s `transmission`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
 The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with a run per row; that of `SLICES` has a time range per row.
 These specs declare their tables with `tables=`, and each table needs a row, with `Field(min_length=1)`, as in `runs: list[Sample] = Field(min_length=1)`.
@@ -395,7 +395,7 @@ assert client.records() == [loaded, result]      # the vanadium record is on the
 ```
 
 Provenance stops at the published file, since what lies behind a file belongs to its source. How the backend reads the published output is system story C2.
-The published normalization is a file of its factor, and a file reference fits a file model only. So `LOAD_NORMALIZATION` reads the file and outputs a `ComputedNormalization`, which `IOFQ`'s `normalization` takes by reference, as it takes the output of `VANADIUM`. `normalization` is a group, not a union of the two ways, since no reference fits a union (README.md, Specs and bindings).
+The published normalization is a file of its factor, and a file fits a file model only. So `LOAD_NORMALIZATION` reads the file and outputs a `ComputedNormalization`, which `IOFQ`'s `normalization` takes by reference, as it takes the output of `VANADIUM`. `normalization` is a group, not a union of the two ways, since no reference fits a union (README.md, Specs and bindings).
 A result of another proposal, such as a direct-beam function an instrument scientist prepared for the users of later proposals, is read the same way, never through the other proposal's records (G5).
 
 ### C4. Reflectometry angle series
@@ -806,7 +806,7 @@ with pytest.raises(NotReadable, match=r'push 1 failed: time_range\[3\]: repeats'
 
 The client reads how many slices there are, since a reference names one row, never a whole list.
 The state's request holds the references, so it says where each slice came from.
-The rows of a table are compared as the request holds them and, since `TimeRange` has a JSON form, also by the rows read.
+The rows of a table are compared as the record stores them and, since `TimeRange` has no data value, also by the JSON form of the rows read.
 So `TimeRange(start=0, stop=2)` and `slicer.ref('slices', key='0')` are one row.
 The repeat is found when the push is read, so the push fails and stops the accumulator, as any push whose data fail does.
 

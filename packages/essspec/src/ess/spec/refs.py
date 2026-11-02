@@ -1,29 +1,26 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-References: how a request names data that exist elsewhere.
+The ``@ref`` key: how a request and a record name data that exist elsewhere.
 
-A request gives the value at a root place by reference to data that exist
-elsewhere, or inline: an output of an earlier record, a file the
-framework did not compute, or, in a request not yet accepted, an output of an
-accumulator that the framework holds. A *root place* is the value of a
-parameter, or an element of a list parameter (see :mod:`ess.spec.places`). A
-reference to an output stands for a whole group, at a root place. A file is a
-value: the JSON form of a file model is the reference to its file (see
-:class:`ess.spec.parameters.FileModel`), at a root place or at a field of a
-group typed one. A reference is what a request names and what a record keeps;
-turning it into the data a workflow takes, a local path or an object, is the
-business of whatever runs the workflow.
+A JSON object with the key ``"@ref"`` is a *reference*, at any depth of a
+request's params. The value of ``"@ref"`` names its kind::
 
-The JSON form of a reference is an object with the key ``"@ref"``, which
-names its kind. The key is reserved: an object with it is a reference, at any
-depth, so a reference is found in plain data without a spec, and a reference
-to an output that is not at a root place is refused::
-
-    {"@ref": "file", "file": "run:loki/60339"}
     {"@ref": "output", "record": "r17", "output": "centre"}
     {"@ref": "output", "record": "r18", "output": "slices", "key": "2"}
     {"@ref": "accumulator", "accumulator": "a3", "output": "iofq"}
+    {"@ref": "file", "file": "run:loki/60339"}
+
+The first three are references to an output: of a record, of one element of
+a list or dict output of a record, and of an accumulator. The last is the
+JSON form of a file (see :class:`~ess.spec.parameters.FileModel`). Since the
+key marks a reference wherever it is, code that reads a record lists its
+references and files without the spec: :func:`iter_refs` finds each one, and
+:func:`map_refs` replaces each one.
+
+Where a request may write each kind is a rule of the params language, stated
+in :mod:`ess.spec._workflow_spec`. Turning a reference into the data a
+workflow takes is the business of whatever runs the workflow.
 """
 
 from __future__ import annotations
@@ -37,8 +34,8 @@ from pydantic.config import JsonDict
 
 def _kind_required(schema: JsonDict) -> None:
     """
-    Require ``"@ref"`` in a reference's JSON schema: without it, an object is
-    a value written inline, not a reference.
+    Require ``"@ref"`` in a reference's JSON schema: an object without it is
+    not a reference.
     """
     required = schema.get('required', [])
     schema['required'] = ['@ref', *(required if isinstance(required, list) else [])]
@@ -75,16 +72,15 @@ class OutputRef(_Ref, frozen=True):
 
 class FileRef(_Ref, frozen=True):
     """
-    Data the framework did not compute, named by an identity the framework owns.
+    A file, named by an identity the framework owns.
 
     The identity string is opaque to the spec and interpreted only by the
     framework that minted it. A framework with several kinds of identity, a
     catalogue PID, an instrument and run number, a path, makes the string
     self-describing, ``pid:...`` or ``run:...``, and normalizes it before it
     enters a record, because two references are equal only when their strings
-    are. A place whose type is a file model (see
-    :class:`ess.spec.parameters.FileModel`) takes a reference to a
-    file, and no other place does.
+    are. It is the JSON form of a file model (see
+    :class:`ess.spec.parameters.FileModel`).
     """
 
     kind: Literal['file'] = Field(default='file', alias='@ref', repr=False)
@@ -115,7 +111,7 @@ class AccumulatorRef(_Ref, frozen=True):
 
 Ref = OutputRef | FileRef | AccumulatorRef
 """
-A reference: the value at a place of a request.
+A reference, the Python form of an object with the key ``"@ref"``.
 
 An ``AccumulatorRef`` is only a placeholder in a request before it is
 submitted; no record holds one.
@@ -196,14 +192,10 @@ def ref_at(loc: Loc, value: Any) -> Ref | None:
 
 def positions(loc: Loc, value: Any) -> Iterator[tuple[Loc, Any]]:
     """
-    Each position in ``value``, at ``loc``, with what it holds: the value,
-    and each element of a list and each field of an object that is not a
-    reference, at any depth, such as ``('runs', 2)`` or
+    Each position in ``value``, at ``loc``, with what is there: the value
+    itself, and each element of a list and each field of an object that is
+    not a reference, at any depth, such as ``('runs', 2)`` or
     ``('reduction', 'bins')``.
-
-    A request holds a reference only at a root place, a parameter or an
-    element of a list parameter, but ``"@ref"`` is reserved at every
-    position, so that a reference is found without the spec wherever it is.
     """
     yield loc, value
     if isinstance(value, list):
