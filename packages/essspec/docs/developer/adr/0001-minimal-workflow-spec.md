@@ -148,14 +148,13 @@ next to a checkbox, and a picker of records fills a whole card:
 
 ```python
 class Sample(BaseModel):
-    run: SampleRun  # a file, known by its identity
-    thickness: float = Field(1.0, gt=0)  # checked when the request arrives
+    run: SampleRun                         # a file, known by its identity
+    thickness: float = Field(1.0, gt=0)    # checked when the request arrives
     mask: MaskFile | None = None
 
-
 class IofQParams(BaseModel):
-    samples: list[Sample]  # a table, each row with its run
-    transmission: ComputedTransmission  # another request's output: a parameter
+    samples: list[Sample]                  # a table, each row with its run
+    transmission: ComputedTransmission     # another request's output: a parameter
 ```
 
 This buys two things:
@@ -302,15 +301,9 @@ the beam centre, so `finder.ref('centre')` names its output `centre`, and `t`
 is the record of a transmission reduction:
 
 ```python
-runs = {
-    'sample': file(run=60339),
-    'can': file(run=60338),
-    'transmission': t.ref('transmission'),
-}
-client.submit(
-    IOFQ, params={**runs, 'beam_centre': BeamCentre(x=0.012, y=-0.003)}
-)  # written inline
-client.submit(IOFQ, params={**runs, 'beam_centre': finder.ref('centre')})  # a reference
+runs = {'sample': file(run=60339), 'can': file(run=60338), 'transmission': t.ref('transmission')}
+client.submit(IOFQ, params={**runs, 'beam_centre': BeamCentre(x=0.012, y=-0.003)})  # written inline
+client.submit(IOFQ, params={**runs, 'beam_centre': finder.ref('centre')})          # a reference
 ```
 
 **Rules.** The models carry no annotations for the framework: what the
@@ -448,26 +441,16 @@ class IofQSettings(BaseModel):
     beam_centre: BeamCentre = Field(default_factory=BeamCentre)
     transmission: ComputedTransmission
 
-
 class IofQParams(IofQSettings):
     sample: Sample
     can: Can
-
 
 class IofQMultiParams(IofQSettings):
     sample: list[Sample] = Field(min_length=1)
     can: list[Can] = Field(min_length=1)
 
-
-IOFQ_MULTI = WorkflowSpec(
-    name='sans-iofq-multi',
-    version=1,
-    title=...,
-    description=...,
-    params=IofQMultiParams,
-    outputs=IofQOutputs,
-    tables=('sample', 'can'),
-)
+IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title=..., description=...,
+                          params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
 ```
 
 Each table is a `list` of the single-run type, without a default, so a request

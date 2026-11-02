@@ -52,18 +52,13 @@ class GivenCentre(BaseModel):
     x: float = 0.0
     y: float = 0.0
 
-
-class FindCentre(BaseModel):  # find it in the sample run
+class FindCentre(BaseModel):              # find it in the sample run
     kind: Literal['find'] = 'find'
     tolerance: float = 0.1
 
-
 class IofQParams(BaseModel):
-    beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = (
-        GivenCentre()
-    )
+    beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
     ...
-
 
 # the params of two requests
 {'beam_centre': {'kind': 'given', 'x': 0.012, 'y': -0.003}}
@@ -96,13 +91,9 @@ So:
 At each parameter, the spec author picks a group or a union:
 
 ```python
-beam_centre: BeamCentre = (
-    BeamCentre()
-)  # typed in, or from a record: finder.ref('centre')
-beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = (
-    GivenCentre()
-)
-# typed in, or found in this graph; no reference fits
+beam_centre: BeamCentre = BeamCentre()        # typed in, or from a record: finder.ref('centre')
+beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
+                                              # typed in, or found in this graph; no reference fits
 ```
 
 A value obtained either as a record's output or in another way is a group, given by reference, and the other way is a workflow that outputs the group.
@@ -112,20 +103,16 @@ A union names only ways that a request writes inline, such as a transmission tak
 A data value that another workflow computes is a field of a group given by reference, such as `ComputedTransmission`, the output of a transmission reduction:
 
 ```python
-class FromFile(BaseModel):  # an alternative without fields
+class FromFile(BaseModel):                # an alternative without fields
     kind: Literal['file'] = Field('file', title="From the sample's file")
-
 
 class TransmissionFraction(BaseModel):
     kind: Literal['given'] = 'given'
     value: float = Field(gt=0, le=1)
 
-
-transmission: Annotated[
-    FromFile | TransmissionFraction, Field(discriminator='kind')
-] = FromFile()
-transmission: ComputedTransmission  # a group with a data value, by reference: t611.ref('transmission'),
-# or the output of a workflow that reads the sample's file
+transmission: Annotated[FromFile | TransmissionFraction, Field(discriminator='kind')] = FromFile()
+transmission: ComputedTransmission        # a group with a data value, by reference: t611.ref('transmission'),
+                                          # or the output of a workflow that reads the sample's file
 ```
 
 A transmission computed from a transmission run is not an alternative of the union, since an alternative has no data value: a spec that computes it takes the run as a parameter typed a file model, `transmission_run: TransmissionRun`, in place of the union, and computes the transmission in a step of its workflow.
@@ -135,9 +122,7 @@ A transmission computed from a transmission run is not an alternative of the uni
 A value obtained in one of several ways that a request writes inline is a union that names each way, not `None` for one of them:
 
 ```python
-transmission: Annotated[
-    FromFile | TransmissionFraction, Field(discriminator='kind')
-] = FromFile()
+transmission: Annotated[FromFile | TransmissionFraction, Field(discriminator='kind')] = FromFile()
 # not: transmission: TransmissionFraction | None = None   # None: the one in the run's file
 ```
 
@@ -178,7 +163,6 @@ The binding sets the key of the alternative that the value's tag names, so scili
 ```python
 def find_centre(settings: FindCentre, sample: SampleData) -> GivenCentre: ...
 
-
 PipelineBinding(IOFQ, lambda fixed: sciline.Pipeline([find_centre, ..., iofq]))
 # tag 'given' -> pipeline[GivenCentre] = value   (replaces find_centre)
 # tag 'find'  -> pipeline[FindCentre] = value    (find_centre computes GivenCentre)
@@ -195,15 +179,12 @@ So `keys=` gives such a parameter `()`, and the binding refuses it otherwise, wi
 
 ```python
 def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
-    pipeline = sciline.Pipeline(providers)  # made for this call, never one it keeps
+    pipeline = sciline.Pipeline(providers)     # made for this call, never one it keeps
     if fixed['direct_beam'] is None:
-        pipeline[sans.DirectBeam] = (
-            None  # esssans' key; its providers take None: no correction
-        )
+        pipeline[sans.DirectBeam] = None       # esssans' key; its providers take None: no correction
     else:
         pipeline[sans.DirectBeamFilename] = fixed['direct_beam'].path
     return pipeline
-
 
 PipelineBinding(IOFQ, make_pipeline, keys={'direct_beam': ()})
 ```
