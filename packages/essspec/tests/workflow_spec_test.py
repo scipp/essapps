@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 import re
 from datetime import datetime
-from enum import Enum
+from enum import Enum, IntEnum
 from pathlib import Path, PosixPath, PurePosixPath
 from typing import Annotated, Any, Literal, NewType, Self, TypedDict
 
@@ -85,13 +85,6 @@ class ByTime(BaseModel):
 
 
 By = Annotated[ByMonitor | ByTime, Field(discriminator='mode')]
-
-
-@pydantic.dataclasses.dataclass
-class ByPair:
-    """A dataclass with a tag, which pydantic takes in a union: not a group."""
-
-    mode: Literal['pair'] = 'pair'
 
 
 class ByWindow(BaseModel):
@@ -194,6 +187,11 @@ class Mode(Enum):
     slow = 'slow'
 
 
+class Level(IntEnum):
+    low = 1
+    high = 2
+
+
 def validated(name: str, **fields: Any) -> type[BaseModel]:
     """A model with ``fields`` and a field validator of its first field."""
 
@@ -249,8 +247,8 @@ class ByCentre(BaseModel, arbitrary_types_allowed=True):
 
 class Centring(BaseModel):
     """
-    A group with a field of a group with a data value, which has no JSON form:
-    a data value itself.
+    A group with a field of a group, and of a tuple: data values, so it is
+    given by reference only.
     """
 
     centre: BeamCentre | None = None
@@ -726,26 +724,16 @@ class TestModelRules:
                     'params': model(
                         'P',
                         by=(
-                            Annotated[ByMonitor | ByPair, Field(discriminator='mode')],
-                            ...,
-                        ),
-                    )
-                },
-                'P.by: a union holds groups only',
-            ),
-            (
-                {
-                    'params': model(
-                        'P',
-                        by=(
                             Annotated[ByTime | ByCentre, Field(discriminator='mode')],
                             ...,
                         ),
                     )
                 },
-                'P.by: ByCentre.centre: no request writes it, since an alternative '
-                'of a union is written inline, with its tag, and no reference fits a '
-                'union; make ByCentre a parameter of its own, given by reference',
+                'P.by: ByCentre.centre, of Variable: no request writes it, since an '
+                'alternative of a union is written inline, with its tag, and no '
+                'reference fits a union; give the field a type that the params '
+                'schema has an input for, or make ByCentre a parameter of its own, '
+                'given by reference',
             ),
             (
                 {
@@ -761,7 +749,7 @@ class TestModelRules:
                         ),
                     )
                 },
-                'P.by: ByCentre.centre: no request writes it',
+                'P.by: ByCentre.centre, of Variable: no request writes it',
             ),
             (
                 {
@@ -801,7 +789,7 @@ class TestModelRules:
                         ),
                     )
                 },
-                'P.by: ByPeak.centre: no request writes it',
+                'P.by: ByPeak.centre, of BeamCentre: no request writes it',
             ),
             *(
                 (
@@ -939,7 +927,8 @@ class TestModelRules:
             *(
                 (
                     {'params': model('P', g=(group, ...))},
-                    f'P.g: {group.__name__} is given by reference to an output only: '
+                    f'P.g: {group.__name__} is given by reference to an output only, '
+                    'since no request writes its field data, of Variable: '
                     f'{where} {FILE_MODEL_OUTPUT}',
                 )
                 for group, where in (
@@ -1259,23 +1248,29 @@ class TestFields:
             bool,
             datetime,
             Mode,
+            Level,
             Literal['a', 'b'],
+            Literal[1, 2.5, True],
             Annotated[float, Gt(0)],
+            Annotated[str, MinLen(1)],
             list[float],
             list[Annotated[int, Ge(0)]],
             list[Mode],
+            list[Literal['a', 'b']],
             list[datetime],
             AwareDatetime,
             NaiveDatetime,
             list[AwareDatetime],
+            SampleRun,
+            SampleRun | None,
+            list[SampleRun],
         ],
     )
-    def test_a_field_of_a_group_is_a_scalar_or_a_list_of_scalars(self, tp: Any) -> None:
-        spec(params=model('P', g=(_group_with(tp), ...)))
-
-    @pytest.mark.parametrize('tp', [SampleRun, list[SampleRun], SampleRun | None])
-    def test_a_field_of_a_group_is_a_file_model(self, tp: Any) -> None:
-        spec(params=model('P', g=(_group_with(tp), ...)))
+    def test_a_field_of_a_group_is_a_scalar_a_file_model_or_a_list_of_one(
+        self, tp: Any
+    ) -> None:
+        params = model('P', g=(_group_with(tp), ...))
+        assert _takes_inline(spec(params=params), 'g')
 
     @pytest.mark.parametrize(
         ('tp', 'default'),
@@ -1318,6 +1313,7 @@ class TestFields:
             Tagged,
             list[Tagged],
             Literal[Tagged.a],
+            Literal[Mode.fast],
             tuple[float, float],
             dict[str, float],
             set[float],
@@ -1336,7 +1332,7 @@ class TestFields:
         ('tp', 'value', 'shown'),
         [
             (float | None, None, 'float | None'),
-            (tuple[float, float], (0.0, 1.0), 'tuple'),
+            (tuple[float, float], (0.0, 1.0), 'tuple[float, float]'),
             (TimeRange, TimeRange(start=0.0, stop=1.0), 'TimeRange'),
             (Tagged, Tagged.a, 'Tagged'),
         ],
@@ -1367,12 +1363,6 @@ class TestFields:
     ) -> None:
         group = _group_with(tuple[float, float])
         assert not _takes_inline(spec(params=params(group)), 'g')
-
-    def test_an_alternative_of_a_union_has_no_data_value(self) -> None:
-        group = _group_with(tuple[float, float])
-        params = model('P', by=(Annotated[group | ByTime, By.__metadata__[0]], ...))
-        with pytest.raises(ValueError, match=r'P\.by: G\.value: no request writes it'):
-            spec(params=params)
 
     def test_a_group_with_a_data_value_holds_any_type_an_output_may(self) -> None:
         group = model(

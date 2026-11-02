@@ -23,7 +23,7 @@ from ess.spec import FileModel, OutputRef, WorkflowSpec, function_binding
 
 
 class Blob:
-    """A data value: a type without a JSON form."""
+    """A data value: a type that is not a scalar or a file model."""
 
     def __init__(self, value: float) -> None:
         self.value = value

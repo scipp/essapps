@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -9,10 +8,11 @@ import scipp as sc
 from annotated_types import Gt
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     Discriminator,
     Field,
+    PlainSerializer,
     Strict,
-    create_model,
     field_validator,
     model_validator,
 )
@@ -448,36 +448,37 @@ def test_a_file_model_given_inline_is_refused(
     assert 'is given by reference to a file, such as file(path=...)' in msg
 
 
-class Tagged(Enum):
-    """An enum whose value is an object: not a scalar."""
+class Disguised(BaseModel):
+    """A group whose field a serializer dumps as a reference to an output."""
 
-    a = {'@ref': 'output'}  # noqa: RUF012
+    value: Annotated[
+        int,
+        BeforeValidator(lambda v: int(v['key']) if isinstance(v, dict) else v),
+        PlainSerializer(
+            lambda v: {'@ref': 'output', 'record': 'r', 'output': 'o', 'key': str(v)}
+        ),
+    ] = 1
+
+
+class DisguisedParams(BaseModel):
+    group: Disguised
+    rows: list[Disguised] = []
 
 
 @pytest.mark.parametrize(
-    ('tp', 'value', 'shown'),
-    [
-        (float | None, 1.0, 'float | None'),
-        (tuple[float, float], [0.0, 1.0], 'tuple'),
-        (Sample, {'thickness': 2.0}, 'Sample'),
-        (Tagged, {'@ref': 'output'}, 'Tagged'),
-    ],
+    ('name', 'value', 'loc'),
+    [('group', {'value': 2}, ('group', 'value')), ('rows', [{}], ('rows', 0, 'value'))],
 )
-def test_a_group_with_a_field_that_is_not_interpreted_is_given_by_reference(
-    tp: Any, value: Any, shown: str
+def test_a_reference_to_an_output_in_a_json_form_written_inline_is_refused(
+    name: str, value: Any, loc: Loc
 ) -> None:
-    group = create_model('Group', value=(tp, ...))
-    params = create_model('P', group=(group, ...))
-    assert unwritten(group) == 'value'
-    assert takes_output(group)
     with pytest.raises(ParamsError) as raised:
-        held(params, 'group', {'value': value}, _named)
-    assert raised.value.errors == (
-        (
-            ('group',),
-            f'Group is given by reference: no request writes its field value, of '
-            f'{shown}',
-        ),
+        held(DisguisedParams, name, value, _named)
+    ((at, msg),) = raised.value.errors
+    assert at == loc
+    assert msg.endswith(
+        'the JSON form of a value written inline holds a reference to an output, '
+        'which fills a whole parameter or a whole row'
     )
 
 

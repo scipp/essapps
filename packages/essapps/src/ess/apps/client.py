@@ -198,8 +198,8 @@ class Accumulator:
         files or outputs of records, never an accumulator. Each row is
         checked by the table's element type; the number of rows of a table,
         such as a row in a table that needs one, is checked when a state is
-        pinned. When the push is added, its rows read, unless each is a group
-        with a data value, are compared with those read before by their JSON
+        pinned. When the push is added, its rows read, unless the table's rows
+        are groups with a data value, are compared with those read before by their JSON
         form, so an inline value and a reference to equal data are one row,
         and a repeat fails the push. A record that has failed or was
         cancelled is refused, and one that is pending is not waited for. The

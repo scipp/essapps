@@ -84,7 +84,7 @@ in place of each reference and each file model given its file's local path
 (see :func:`ess.spec.places.validated`). For a plain request it makes the params
 instance from these values without validating again, so the params model's
 model validators never run; a stage or an accumulator gets the values by
-name. The rows of a table, unless each is a group with a data value, are
+name. The rows of a table, unless its rows are groups with a data value, are
 distinct by the JSON forms of the rows read, as the element type dumps
 them, too: an inline value and a reference to equal data are one row. A
 table that a request, a template, or a stage call gives whole is compared
@@ -1286,8 +1286,8 @@ class Backend:
         :func:`ess.spec.places.validated`). A plain request makes the
         params instance from them, and a stage or a driver takes them by name.
 
-        The rows of each table in ``values``, unless each is a group with a
-        data value (see :func:`ess.spec.places.unwritten`), are distinct by
+        The rows of each table in ``values``, unless its rows are groups with
+        a data value (see :func:`ess.spec.places.unwritten`), are distinct by
         the JSON forms of the rows read, as the element type dumps them, so
         an inline value and a reference to equal data are one row, and a file
         model is its file's identity. They are compared with those in

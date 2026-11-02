@@ -50,9 +50,9 @@ results it returns. A spec of an I(Q) reduction::
 
 Each field of ``IofQParams`` is a *parameter*. A *group* is a model, such
 as ``Reduction``, whose fields a request writes as an object. A *data
-value* is a field for which a form has no input: any field but a scalar, a
-file model, or a list of one (see :mod:`ess.spec.places`), such as a scipp
-array, or ``start: float | None``. A group with a data value is given by
+value* is a field for which the params schema has no input: any field but a
+scalar, a file model, or a list of one (see :mod:`ess.spec.places`), such as
+a scipp array, or ``start: float | None``. A group with a data value is given by
 reference only. A request for
 ``IOFQ``, with ``file(...)`` a reference to a file and
 ``m.ref('pixel_mask')`` a reference to the output ``pixel_mask`` of an
@@ -472,7 +472,7 @@ def _shape_problem(annotation: Any) -> str | None:
     is not ``list[X] | None``, and a row is a value, so its element is not
     ``X | None``.
     """
-    tp, is_optional, item_optional = _taken_apart(annotation)
+    tp, is_optional, item_optional = field_types.taken_apart(annotation)
     if item_optional is not None and is_optional:
         return 'a list parameter is not typed list[X] | None; a list without rows is []'
     if item_optional:
@@ -485,20 +485,6 @@ def _shape_problem(annotation: Any) -> str | None:
         'a parameter is a group, a union of groups, or a list of one, possibly '
         'typed X | None'
     )
-
-
-def _taken_apart(annotation: Any) -> tuple[Any, bool, bool | None]:
-    """
-    The type of one value of ``annotation``, ``X`` of ``X``, ``X | None``,
-    ``list[X]``, ``list[X] | None``, or ``list[X | None]``; whether
-    ``annotation`` is typed ``X | None``; and for a list whether its element
-    is, else ``None``.
-    """
-    tp, is_optional = field_types.optional(annotation)
-    if get_origin(tp) is not list:
-        return tp, is_optional, None
-    tp, item_optional = field_types.optional(get_args(tp)[0])
-    return tp, is_optional, item_optional
 
 
 def _found(
@@ -583,9 +569,11 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
     """
     if field_types.is_file_model(group):
         return _file_model_problems(group)
-    if places.unwritten(group) is not None:
+    if (data := places.unwritten(group)) is not None:
+        held_type = field_types.type_name(group.model_fields[data].annotation)
         return [
-            f'{group.__name__} is given by reference to an output only: {problem}'
+            f'{group.__name__} is given by reference to an output only, since no '
+            f'request writes its field {data}, of {held_type}: {problem}'
             for problem in _output_file_problems(group)
         ]
     problems = []
@@ -932,7 +920,7 @@ def _file_field_form(annotation: Any) -> Any:
     ``annotation`` of a field of a group, with a file model, or the element
     of a list of one, replaced by the reference it takes.
     """
-    tp, is_optional, _ = _taken_apart(annotation)
+    tp, is_optional, _ = field_types.taken_apart(annotation)
     if not field_types.is_file_model(tp):
         return annotation
     form = _ref_form(tp)

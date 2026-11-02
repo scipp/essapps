@@ -27,10 +27,12 @@ import dataclasses
 import functools
 import operator
 from collections.abc import Iterable, Iterator
+from datetime import datetime
 from types import NoneType, UnionType
 from typing import (
     Annotated,
     Any,
+    Literal,
     NewType,
     TypeAliasType,
     Union,
@@ -40,11 +42,22 @@ from typing import (
     is_typeddict,
 )
 
-from pydantic import BaseModel, Field, RootModel, ValidationError, create_model
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    Field,
+    NaiveDatetime,
+    RootModel,
+    ValidationError,
+    create_model,
+)
 from pydantic_core import PydanticCustomError, from_json, to_json
 
 from .parameters import FileModel
 from .refs import Loc, ParamsError
+
+TIMES = (datetime, AwareDatetime, NaiveDatetime)
+"""The types of a time, which a request writes as a string."""
 
 
 def plain(tp: Any) -> Any:
@@ -74,6 +87,20 @@ def optional(tp: Any) -> tuple[Any, bool]:
             inner = args[0] if len(args) == 1 else Union[tuple(args)]  # noqa: UP007
             return inner, True
     return tp, False
+
+
+def taken_apart(annotation: Any) -> tuple[Any, bool, bool | None]:
+    """
+    The type of one value of ``annotation``, ``X`` of ``X``, ``X | None``,
+    ``list[X]``, ``list[X] | None``, or ``list[X | None]``; whether
+    ``annotation`` is typed ``X | None``; and for a list whether its element
+    is, else ``None``.
+    """
+    tp, is_optional = optional(annotation)
+    if get_origin(tp) is not list:
+        return tp, is_optional, None
+    tp, item_optional = optional(get_args(tp)[0])
+    return tp, is_optional, item_optional
 
 
 def element(tp: Any) -> Any | None:
@@ -189,13 +216,23 @@ def _is_model(tp: Any) -> bool:
 
 def type_name(tp: Any) -> str:
     """
-    The name of a type, as a serialized spec shows it; of a union, the names
-    of its members, ``BeamCentre | FindCentre``.
+    The name of a type, as a serialized spec shows it, without ``Annotated``
+    metadata; of a union, the names of its members, ``BeamCentre |
+    FindCentre``; of a generic alias, with its arguments, ``tuple[float,
+    float]`` or ``Literal['a', 'b']``.
     """
-    if get_origin(tp) in (Union, UnionType):
-        return ' | '.join(map(type_name, get_args(tp)))
+    tp = plain(tp)
+    origin, args = get_origin(tp), get_args(tp)
+    if origin in (Union, UnionType):
+        return ' | '.join(map(type_name, args))
     if tp is NoneType:
         return 'None'
+    if tp is Ellipsis:
+        return '...'
+    if origin is Literal:
+        return f'Literal[{", ".join(map(repr, args))}]'
+    if origin is not None:
+        return f'{type_name(origin)}[{", ".join(map(type_name, args))}]'
     return getattr(tp, '__name__', None) or repr(tp)
 
 
