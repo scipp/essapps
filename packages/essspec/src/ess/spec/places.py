@@ -88,19 +88,19 @@ possibly typed ``X | None``, not a union::
 
 The params schema of a spec and a form that a UI makes from the models
 both follow the table above so: :func:`root_type` gives the type at the root
-places of a parameter, and the caller tells a file model, a union, and a
-group apart. A group is written inline unless it holds a data value
-(:func:`unwritten`), and by reference if an output can fit it
-(:func:`takes_output`). For the two ``beam_centre`` above::
+places of a parameter, and each way to write it has a predicate of its own.
+A group is written inline unless it holds a data value
+(:func:`written_inline`), and by reference if an output can fit it
+(:func:`takes_output`); a union is written inline as one of its
+alternatives (:func:`alternatives`). For the two ``beam_centre`` above::
 
     tp, none, metadata = root_type(Params, 'beam_centre')
-    if field_types.is_file_model(tp):
-        ...  # a reference to a file
-    elif (union := alternatives(tp, *metadata)) is not None:
-        tag, groups = union  # 'kind', {'given': GivenCentre, 'find': FindCentre}
-    else:
-        unwritten(tp) is None  # True for BeamCentre: written inline
-        takes_output(tp)  # True for BeamCentre: or by reference to an output
+    written_inline(tp)  # True for BeamCentre
+    takes_output(tp)  # True for BeamCentre
+    field_types.is_file_model(tp)  # False: a reference to a file
+    alternatives(tp, *metadata)
+    # None for BeamCentre; for the union:
+    # ('kind', {'given': GivenCentre, 'find': FindCentre})
 
 In the request phase, :func:`held` validates each group, row, or file model
 given inline whole, from its JSON form, so that its validators run and each
@@ -169,7 +169,8 @@ class _Slot:
     @property
     def union(self) -> tuple[str, dict[str, Any]] | None:
         """The union of groups of the type, as :func:`alternatives` has it."""
-        field = () if self.element else (self.model.model_fields[self.name],)
+        info = self.model.model_fields[self.name]
+        field = () if self.element else field_metadata(info)
         return alternatives(self.annotation, *field)
 
 
@@ -445,10 +446,17 @@ def root_type(model: type[BaseModel], name: str) -> tuple[Any, bool, tuple[Any, 
     if field_types.is_list(model, name):
         return _unwrapped(get_args(info.annotation)[0])
     tp, none, inner = _unwrapped(info.annotation)
-    field = tuple(info.metadata)
-    if info.discriminator is not None:
-        field += (Field(discriminator=info.discriminator),)
-    return tp, none, (*field, *inner)
+    return tp, none, (*field_metadata(info), *inner)
+
+
+def field_metadata(info: FieldInfo) -> tuple[Any, ...]:
+    """
+    The metadata of a field with ``info``, with its discriminator, which
+    pydantic keeps apart from the rest as ``Field(discriminator='kind')``.
+    """
+    if info.discriminator is None:
+        return tuple(info.metadata)
+    return (*info.metadata, Field(discriminator=info.discriminator))
 
 
 def title(name: str, info: FieldInfo) -> str:
@@ -491,9 +499,9 @@ def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] 
     The tag and the alternatives, by the value of their tag, of the union of
     groups that ``annotation``, possibly typed ``X | None``, is; ``None`` if
     it is not a union with a group in it, such as ``int | str``. ``metadata``
-    is that of the field, such as its ``FieldInfo`` or
-    ``Field(discriminator='kind')``, if the annotation does not carry its
-    discriminator; that in the annotation comes first. An alternative
+    is that of the field (see :func:`field_metadata`), which may give the
+    discriminator, such as ``Field(discriminator='kind')``; one in the
+    annotation takes precedence over it. An alternative
     is as declared, without ``Annotated`` metadata. The alternatives are in
     the order of the union.
 
@@ -570,6 +578,19 @@ def unwritten(group: type[BaseModel]) -> str | None:
     return next(
         (n for n in group.model_fields if not field_types.has_json_form(group, n)),
         None,
+    )
+
+
+def written_inline(tp: Any) -> bool:
+    """
+    Whether a request writes a root place of type ``tp`` as an object of the
+    fields of ``tp``: a group, not a file model, which a request gives by
+    reference to a file, with no data value (see :func:`unwritten`).
+    """
+    return (
+        field_types.is_group(tp)
+        and not field_types.is_file_model(tp)
+        and unwritten(tp) is None
     )
 
 

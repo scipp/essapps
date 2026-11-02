@@ -6,7 +6,14 @@ from typing import Annotated, Any, Literal
 import pytest
 import scipp as sc
 from annotated_types import Gt
-from pydantic import BaseModel, Field, Strict, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Discriminator,
+    Field,
+    Strict,
+    field_validator,
+    model_validator,
+)
 
 from ess.spec import FileModel, FileRef, OutputRef
 from ess.spec.places import (
@@ -239,6 +246,28 @@ def test_the_discriminator_of_a_field_is_in_its_metadata() -> None:
     assert alternatives(tp, *metadata) == (
         'kind',
         {'given': GivenCentre, 'find': FindCentre},
+    )
+
+
+class NamedCentre(BaseModel):
+    beam_centre: Annotated[GivenCentre | FindCentre, Discriminator('kind')]
+
+
+def test_a_discriminator_in_the_metadata_of_a_field_names_the_tag() -> None:
+    tp, _, metadata = root_type(NamedCentre, 'beam_centre')
+    assert alternatives(tp, *metadata) == (
+        'kind',
+        {'given': GivenCentre, 'find': FindCentre},
+    )
+    value = {'kind': 'find', 'tolerance': 0.5}
+    assert held(NamedCentre, 'beam_centre', value, _named) == value
+    with pytest.raises(ParamsError) as raised:
+        held(NamedCentre, 'beam_centre', {'tolerance': 0.5}, _named)
+    assert raised.value.errors == (
+        (
+            ('beam_centre',),
+            "the tag 'kind' is not given; it is one of ['given', 'find']",
+        ),
     )
 
 

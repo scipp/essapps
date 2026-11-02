@@ -1660,7 +1660,13 @@ class TestSerialization:
         assert properties['masks']['items'] == file_ref('MaskFile', {'kind': 'mask'})
 
     def test_a_union_is_its_alternatives_inline_never_a_reference(self) -> None:
-        params = model('P', by=(By, ...), maybe=(By | None, None), each=(list[By], []))
+        params = model(
+            'P',
+            by=(By, ...),
+            maybe=(By | None, None),
+            each=(list[By], []),
+            named=(Annotated[ByMonitor | ByTime, pydantic.Discriminator('mode')], ...),
+        )
         properties = spec(params=params).serialize().params_schema['properties']
         alternatives = inline(
             {
@@ -1677,6 +1683,7 @@ class TestSerialization:
         assert properties['by'] == {**alternatives, 'title': 'By'}
         assert properties['maybe']['anyOf'] == [alternatives, {'type': 'null'}]
         assert properties['each']['items'] == alternatives
+        assert properties['named'] == {**alternatives, 'title': 'Named'}
 
     def test_a_list_parameter_has_the_forms_per_row(self) -> None:
         params = model(

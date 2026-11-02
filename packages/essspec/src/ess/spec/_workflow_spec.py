@@ -942,18 +942,16 @@ def _forms(tp: Any, none: bool, metadata: tuple[Any, ...]) -> Any:
     data value, and a reference if an output can fit it. The constraints of
     the place are on the fields given inline.
     """
-    if field_types.is_file_model(tp):
-        form = _ref_form(tp)
-    elif (union := places.alternatives(tp, *metadata)) is not None:
+    forms = []
+    if (union := places.alternatives(tp, *metadata)) is not None:
         tag, groups = union
-        form = _inline_form([_group_forms(g, tag) for g in groups.values()], metadata)
-    else:
-        forms = []
-        if places.unwritten(tp) is None:
-            forms.append(_inline_form([_group_forms(tp)], metadata))
-        if places.takes_output(tp):
-            forms.append(_ref_form(tp))
-        form = Union[tuple(forms)]  # noqa: UP007
+        alts = [_group_forms(g, tag) for g in groups.values()]
+        forms.append(_inline_form(alts, metadata))
+    if places.written_inline(tp):
+        forms.append(_inline_form([_group_forms(tp)], metadata))
+    if field_types.is_file_model(tp) or places.takes_output(tp):
+        forms.append(_ref_form(tp))
+    form = Union[tuple(forms)]  # noqa: UP007
     return Union[form, None] if none else form  # noqa: UP007
 
 

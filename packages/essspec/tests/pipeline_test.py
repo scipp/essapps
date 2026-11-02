@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal, NewType
 import numpy as np
 import pytest
 import sciline
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Discriminator, Field
 
 from ess.spec import DriverBinding, FileModel, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
@@ -670,6 +670,23 @@ def test_one_graph_serves_both_alternatives_of_a_union(
     centre = BeamCentre(x=0.5 * mean)
     assert find == CentredOutputs(centred=total - 0.5 * mean, centre=centre)
     assert found == [settings]
+
+
+def test_a_discriminator_in_the_metadata_of_a_union_names_its_tag(
+    find_centre: Callable[..., BeamCentre],
+) -> None:
+    class Params(BaseModel):
+        sample: SampleRun
+        beam_centre: Annotated[BeamCentre | FindCentre, Discriminator('kind')] = (
+            BeamCentre()
+        )
+
+    binding = PipelineBinding(
+        _spec('centred', params=Params, outputs=CentredOutputs),
+        lambda _: sciline.Pipeline([load_counts, find_centre, centred, used_centre]),
+        keys=CENTRE_KEYS,
+    )
+    assert binding.keys['beam_centre'] == (BeamCentre, FindCentre)
 
 
 def test_a_union_left_out_takes_the_key_of_its_default(

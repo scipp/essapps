@@ -20,7 +20,7 @@ Where                      Widget
 a parameter                a choice of ways: of a file model, a file that
                            fits it; of a union, the fields of each
                            alternative; of a group, its fields unless it
-                           holds a data value (``places.unwritten``), and
+                           holds a data value (``places.written_inline``), and
                            an output of a record that fits it if one can
                            (``places.takes_output``); and ``None`` if
                            typed ``X | None``. A record is offered while
@@ -207,7 +207,7 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice |
         return _choice(label, tp, none, metadata, _default(info), listing)
     if places.alternatives(tp, *metadata) is not None:
         raise NotImplementedError(f'{name}: a list of a union of groups')
-    return _Rows(label, tp, none, _default(info), listing)
+    return _Rows(label, tp, none, metadata, _default(info), listing)
 
 
 def _choice(
@@ -224,18 +224,17 @@ def _choice(
     """
     tag = None
     ways: dict[str, _Way] = {}
-    if field_types.is_file_model(tp):
-        ways[_Choice.FILE] = _File(tp, listing)
-    elif (union := places.alternatives(tp, *metadata)) is not None:
+    if (union := places.alternatives(tp, *metadata)) is not None:
         tag, groups = union
         for value, group in groups.items():
             way = places.title(value, group.model_fields[tag])
             ways[way] = _Group(group, {tag: value}, listing)
-    else:
-        if places.unwritten(tp) is None:
-            ways['Given'] = _Group(tp, {}, listing)
-        if places.takes_output(tp):
-            ways[_Choice.RECORD] = _Record(tp, listing)
+    if places.written_inline(tp):
+        ways['Given'] = _Group(tp, {}, listing)
+    if field_types.is_file_model(tp):
+        ways[_Choice.FILE] = _File(tp, listing)
+    if places.takes_output(tp):
+        ways[_Choice.RECORD] = _Record(tp, listing)
     if none:
         ways[_Choice.NONE] = _Nothing()
     return _Choice(label, ways, tag, default)
@@ -685,7 +684,13 @@ class _Rows:
     """
 
     def __init__(
-        self, label: str, tp: Any, none: bool, default: Any, listing: Listing
+        self,
+        label: str,
+        tp: Any,
+        none: bool,
+        metadata: tuple[Any, ...],
+        default: Any,
+        listing: Listing,
     ) -> None:
         self._default = default
         self._listing = listing
@@ -695,8 +700,7 @@ class _Rows:
         self._shown: Any = UNSET
         # A union is not covered.
         self._model = tp if field_types.is_file_model(tp) else None
-        inline = self._model is None and places.unwritten(tp) is None
-        fields = tp.model_fields if inline else {}
+        fields = tp.model_fields if places.written_inline(tp) else {}
         self._fields = {
             name: (places.title(name, info), field_types.file_model(info.annotation))
             for name, info in fields.items()
@@ -707,7 +711,7 @@ class _Rows:
             self._ref = 'File'
         elif places.takes_output(tp):
             self._ref = 'Record'
-        self._editor = _choice('', tp, none, (), UNSET, listing)
+        self._editor = _choice('', tp, none, metadata, UNSET, listing)
         self._table = pn.widgets.Tabulator(
             disabled=True,
             selectable=True,
