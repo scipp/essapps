@@ -724,14 +724,12 @@ def test_a_file_that_does_not_fit_a_file_model_is_refused(
 
 
 def test_the_schema_of_a_file_model_holds_its_metadata() -> None:
-    properties = MASKED.serialize().params_schema['properties']
+    schema = MASKED.serialize().params_schema
 
-    assert properties['mask'] == {
-        '$ref': '#/$defs/FileRef',
-        'dataType': 'MaskFile',
-        'metadata': {'kind': 'mask'},
-        'title': 'Mask',
-    }
+    assert schema['properties']['mask'] == {'$ref': '#/$defs/MaskFile', 'title': 'Mask'}
+    mask = schema['$defs']['MaskFile']
+    assert (mask['dataType'], mask['metadata']) == ('MaskFile', {'kind': 'mask'})
+    assert mask['properties']['@ref']['const'] == 'file'
 
 
 def _failed(client: Client, record: Record) -> str:
