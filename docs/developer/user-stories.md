@@ -10,40 +10,41 @@ A story that needs what the design leaves open or defers says so in a "Gap" line
 
 Toy specs stand in for instrument workflows, so that a story's numbers can be checked by hand.
 A file made by `measure` holds a list of counts.
-Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate record is made only for a result worth keeping by itself, for a value that one user types in and another computes (section I), or for a value that a workflow computes and a file also holds, which a loader workflow reads (C2).
+Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate record is made only for a result worth keeping by itself, or for a value that one user types in and another computes (section I).
 
 | Spec | Params | Outputs | Computes | Stands in for |
 |---|---|---|---|---|
-| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: Sample`, `beam_centre: BeamCentre` (`x=0.0`), `normalization: ComputedNormalization \| None` (no default) | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre.x`; divided by the normalization's `factor`; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, of one run |
+| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: Sample`, `beam_centre: BeamCentre \| Referenced[BeamCentre]` (`x=0.0`), `normalization: PublishedNormalization \| Referenced[ComputedNormalization] \| None` (no default) | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre.x`; divided by the normalization's `factor`, read from the file if it is published; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, of one run |
 | `IOFQ_CAN` | the params of `IOFQ`, and `can: Can` | `iofq`, `masked` | as `IOFQ`, of the counts minus the can's counts | a SANS reduction of one run with the can subtracted |
 | `BEAM_CENTRE` | `direct_beam: DirectBeam` | `centre: BeamCentre` | `BeamCentre(x=...)`, with the mean of the counts | beam-centre finding |
 | `VANADIUM` | `scaling: Scaling` (`scale=1.0`), `vanadium: Vanadium` | `normalization: ComputedNormalization` | `ComputedNormalization(factor=...)`, with the sum of the counts times `scale` | vanadium processing |
-| `LOAD_NORMALIZATION` | `published: PublishedNormalization` | `normalization: ComputedNormalization` | `ComputedNormalization(factor=...)`, with the factor read from the file | reading a result published to a catalogue |
 | `NORMALIZE` | `scaling: Scaling`, `runs: list[Sample]`, a table | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
 | `BACKGROUND` | `sample_runs: list[Sample]`, `background_runs: list[Background]`, a table each | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
 | `CONTRIBUTE` | `sample: Sample` | `parts: Parts` (`numerator`, `denominator`), `transmission: Transmission` | a copy of the counts and their total; `Transmission(fraction=...)`, with the first count divided by the total | a reduction of one run whose outputs another request sums |
-| `PARTS_SUM` | `parts: list[Parts]` | `numerator`, `denominator` | each field of `Parts` summed over the list | a sum of outputs of other records |
+| `PARTS_SUM` | `parts: list[Referenced[Parts]]` | `numerator`, `denominator` | each field of `Parts` summed over the list | a sum of outputs of other records |
 | `ANGLE` | `sample: Sample` | `volume: Volume` | `Volume(counts=...)`, with a copy of the counts | a reduction of one run into a volume |
-| `CUT` | `position: Position` (`index`), `volume: Volume` | `cut` | the value of `volume.counts` at `index` | a cut through a volume, from another package |
+| `CUT` | `position: Position` (`index`), `volume: Referenced[Volume]` | `cut` | the value of `volume.counts` at `index` | a cut through a volume, from another package |
 | `VOLUME` | `runs: list[Sample]`, a table | `volume: Volume` | `Volume(counts=...)`, with the counts summed over the runs | a rotation scan reduced into one volume, one run per angle |
 | `STITCH` | `runs: list[Sample]`, a table; `reference: Reference` | `stitched: Reflectivity` | `Reflectivity(curve=...)`, with each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
-| `EXPORT` | `result: Reflectivity` | `text: str` | the values of `result.curve`, separated by commas | writing a file for another program |
+| `EXPORT` | `result: Referenced[Reflectivity]` | `text: str` | the values of `result.curve`, separated by commas | writing a file for another program |
 | `IOFQ_V2` | `reduction: ReductionV2` (`bins=4`, `mask_below=0.0`), the others as `IOFQ` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed field of `reduction` and a new default |
 | `SLICER` | `sample: Sample` | `slices: list[TimeRange]` | a `TimeRange` (`start`, `stop`) for every two bins of the run's log | a first reduction that finds time slices in a log |
-| `SLICES` | `sample: Sample`, `time_range: list[TimeRange]`, a table | `sliced` | the sample's counts in each time range, summed | a reduction of one run sliced in time |
-| `CENTRED_MULTI` | `centre: BeamCentre`; `transmission: Transmission`; `sample: list[Sample]`, a table; `can: list[Can]`, a table | `centred` | the sample runs' counts summed, times `transmission.fraction`; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and the transmission of the summed runs |
+| `SLICES` | `sample: Sample`, `time_range: list[TimeRange \| Referenced[TimeRange]]`, a table | `sliced` | the sample's counts in each time range, summed | a reduction of one run sliced in time |
+| `CENTRED_MULTI` | `centre: BeamCentre \| Referenced[BeamCentre]`; `transmission: Referenced[Transmission]`; `sample: list[Sample]`, a table; `can: list[Can]`, a table | `centred` | the sample runs' counts summed, times `transmission.fraction`; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and the transmission of the summed runs |
 
-The type of a parameter, or of the rows of a list parameter, decides how a request gives the value there (README.md, Terms, and Specs and bindings, which also has the row for a union of groups):
+The type of a place, a parameter or a row, says how a request gives the value there; the spec marks each place that a reference to an output fills, `Referenced[T]` (README.md, Terms, and Specs and bindings, which also has the row for a union of groups):
 
 | Type | In the toy specs | Given as |
 |---|---|---|
-| a file model | the runs, such as `Sample`; `PublishedNormalization` | a file, `file(...)` |
-| a group with interpreted fields only | `Reduction`, `Scaling`, `Position`, `TimeRange`, `BeamCentre` | an object of its fields, or a reference to an output of its class |
-| a group with a data value | `ComputedNormalization`, `Transmission`, `Parts`, `Volume`, `Reflectivity` | a reference to an output of its class |
+| a file model | the runs, such as `Sample` | a file, `file(...)` |
+| a group | `Reduction`, `Scaling`, `Position` | an object of its fields |
+| `Referenced[T]` | `Referenced[Transmission]`, `Referenced[Parts]`, `Referenced[Volume]`, `Referenced[Reflectivity]` | a reference to an output of the class `T` |
+| a union of these | `BeamCentre \| Referenced[BeamCentre]`, `TimeRange \| Referenced[TimeRange]`, `PublishedNormalization \| Referenced[ComputedNormalization]` | what one of its members takes |
 | a list, `list[X]` | each list parameter, such as `runs` and `parts` | a list of rows, each given as an `X` |
 | `X \| None` | `normalization` of `IOFQ` | `None`, or given as an `X` |
 
-Each parameter of a toy spec is a group or a list of groups, possibly `X | None`.
+`ComputedNormalization`, `Transmission`, `Parts`, `Volume`, and `Reflectivity` hold a data value, so no request writes them, and their places are `Referenced[...]`.
+Each parameter of a toy spec is a group, a union of groups, or a list of one, possibly `X | None`.
 Each field of these groups is a scalar, such as `bins` and `scale`, or a data value, such as the `sc.Variable` of `Volume.counts`.
 Each run is a file model, with a class for each kind of run: `Sample`, `Can`, `DirectBeam`, `Vanadium`, `Background`, and `Reference`, each a subclass of `Run`:
 
@@ -61,11 +62,11 @@ An output without a type in the list of toy specs is a `sc.Variable`.
 `Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each: `fraction`, `counts`, and `curve`.
 `ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` is the file model of a file that holds it.
 `Parts` is a group of two `sc.Variable`s.
-A reference to an output fits a parameter or row when the output is of the class of the group there: `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre` and `CENTRED_MULTI`'s `centre`, `VANADIUM`'s and `LOAD_NORMALIZATION`'s `normalization` fit `IOFQ`'s `normalization`, `CONTRIBUTE`'s `transmission` fits `CENTRED_MULTI`'s `transmission`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
+A reference to an output fits a place when the output is of the class `T` of a `Referenced[T]` there: `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre` and `CENTRED_MULTI`'s `centre`, `VANADIUM`'s `normalization` fits `IOFQ`'s `normalization`, `CONTRIBUTE`'s `transmission` fits `CENTRED_MULTI`'s `transmission`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
 The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with a run per row; that of `SLICES` has a time range per row.
 These specs declare their tables with `tables=`, and each table needs a row, with `Field(min_length=1)`, as in `runs: list[Sample] = Field(min_length=1)`.
-`CENTRED_MULTI` has the params `centre: BeamCentre`, `transmission: Transmission`, `sample: list[Sample] = Field(min_length=1)`, and `can: list[Can] = Field(min_length=1)`, with `tables=('sample', 'can')`.
+`CENTRED_MULTI` has the params `centre: BeamCentre | Referenced[BeamCentre]`, `transmission: Referenced[Transmission]`, `sample: list[Sample] = Field(min_length=1)`, and `can: list[Can] = Field(min_length=1)`, with `tables=('sample', 'can')`.
 So both `sample` and `can` are tables that need a row, and one transmission applies to the summed sample runs.
 `PARTS_SUM` declares no table, so its `parts` is a value like any other, given whole in a request.
 
@@ -75,7 +76,7 @@ So both `sample` and `can` are tables that need a row, and one transmission appl
 `PARTS_SUM` is bound with `function_binding` to a function that sums each field of `Parts` over the list `parts`.
 The other toy specs are bound with `function_binding`.
 No toy spec returns an output that shares memory with a value it takes.
-A story may add a toy spec to the list of toy specs; it must take runs directly, or be a loader of a file, and be checkable by hand.
+A story may add a toy spec to the list of toy specs; it must take runs directly, and be checkable by hand.
 
 ## Conventions
 
@@ -385,17 +386,16 @@ pid = other.publish(vanadium.ref('normalization'), 'scicat')
 published = files.add_published(scicat.entries[pid])
 
 sample = measure(2, [4.0, 8.0])
-loaded = client.compute(LOAD_NORMALIZATION, params={'published': file(pid=pid)})
-result = client.compute(IOFQ, params={'sample': sample,
-                                      'normalization': loaded.ref('normalization')})
+result = client.compute(IOFQ, params={'sample': sample, 'normalization': file(pid=pid)})
 
 assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]    # [4, 8] / ((1 + 1) * 2)
+assert result.request.params['normalization'] == published
 assert set(client.provenance(result).files()) == {sample, published}
-assert client.records() == [loaded, result]      # the vanadium record is on the other backend
+assert client.records() == [result]              # the vanadium record is on the other backend
 ```
 
 Provenance stops at the published file, since what lies behind a file belongs to its source. How the backend reads the published output is system story C2.
-The published normalization is a file of its factor, and a file fits a file model only. So `LOAD_NORMALIZATION` reads the file and outputs a `ComputedNormalization`, which `IOFQ`'s `normalization` takes by reference, as it takes the output of `VANADIUM`. `normalization` is a group, not a union of the two ways, since no reference fits a union (README.md, Specs and bindings).
+The published normalization is a file of its factor. `IOFQ`'s `normalization` takes it as a file, `PublishedNormalization`, or the output of `VANADIUM` by reference, `Referenced[ComputedNormalization]`: one place takes either way (README.md, Specs and bindings). The binding reads the factor from the file.
 A result of another proposal, such as a direct-beam function an instrument scientist prepared for the users of later proposals, is read the same way, never through the other proposal's records (G5).
 
 ### C4. Reflectometry angle series
@@ -780,7 +780,7 @@ System story only; see [system-stories.md](system-stories.md).
 
 ## I. Values typed in or computed
 
-A value is typed in by one user and computed by another, or computed by an earlier request; the request writes each value, or each row, inline or gives it by reference.
+A value is typed in by one user and computed by another, or computed by an earlier request. The spec types such a place `X | Referenced[X]`, and the request writes each value, or each row, inline or gives a reference to an output.
 
 ### I1. Time slices found by a first reduction
 
@@ -806,7 +806,7 @@ with pytest.raises(NotReadable, match=r'push 1 failed: time_range\[3\]: repeats'
 
 The client reads how many slices there are, since a reference names one row, never a whole list.
 The state's request holds the references, so it says where each slice came from.
-The rows of a table are compared as the record stores them and, since `TimeRange` has no data value, also by the JSON form of the rows read.
+The rows of a table are compared as the record stores them and, since a row of `time_range` may be a reference, `Referenced[TimeRange]`, and `TimeRange` has no data value, also by the JSON form of the rows read.
 So `TimeRange(start=0, stop=2)` and `slicer.ref('slices', key='0')` are one row.
 The repeat is found when the push is read, so the push fails and stops the accumulator, as any push whose data fail does.
 
@@ -839,7 +839,7 @@ assert client.provenance(typed).request.params['centre'] == {'x': 1.0}
 Both drivers get a `BeamCentre`; neither sees whether it was typed in or computed.
 The record of the typed-in centre holds the value written inline in its JSON form, and that of the computed one holds the reference, so its provenance reaches the finder.
 Both accumulators give the transmission by reference, as in I3.
-`IOFQ`'s `normalization`, a `ComputedNormalization`, has a field that is a data value, so it takes a reference only (C2).
+`IOFQ`'s `normalization` takes no value written inline: `ComputedNormalization` has a field that is a data value, so the spec types it `Referenced[ComputedNormalization]`, next to the file model `PublishedNormalization` (C2).
 
 ### I3. A transmission computed for the summed runs
 
@@ -861,7 +861,7 @@ assert client.provenance(total).records() == [t]
 
 Each row of `sample` is a file model, which holds only its file's identity.
 The transmission applies to the summed runs, so it is a parameter of its own, given by reference to the record that computed it.
-`Transmission` has a field that is a data value, so a transmission takes a reference only.
+`Transmission` has a field that is a data value, so no request writes it, and the spec types the parameter `Referenced[Transmission]`.
 The provenance of the sum reaches that record.
 
 ## Open
