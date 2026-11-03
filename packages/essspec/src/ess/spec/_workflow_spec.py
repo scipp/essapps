@@ -136,7 +136,7 @@ The framework derives from the params model a *request type*, the type of
 what a request writes at each place, which follows this list (see
 :mod:`ess.spec.request_types`). It validates a request, its JSON schema is
 the params schema of the spec (see :meth:`WorkflowSpec.serialize`), and a
-form made from the params model offers the forms it takes. The rules behind
+form made from the params model offers the sources it takes. The rules behind
 it:
 
 - A reference to an output fills a whole parameter or a whole row, never a
@@ -401,10 +401,10 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         Project to the plain-data form.
 
         The params schema gives each parameter, or the rows of a list
-        parameter, the forms a request may write there (see the module
+        parameter, the sources a request may write there (see the module
         docstring), and each field of a group the JSON schema of its type,
         or of a file. :class:`SerializedWorkflowSpec` shows the schema of each
-        form. The projection is one-way: pydantic validators do not survive
+        source. The projection is one-way: pydantic validators do not survive
         it, so a consumer of the serialized form can validate only
         optimistically.
         """
@@ -426,9 +426,9 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
 
     Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON.
     ``params_schema`` is a JSON schema of the params. At each parameter, or
-    the rows of a list parameter, it allows the forms that a request may
+    the rows of a list parameter, it allows the sources that a request may
     write there (see :mod:`ess.spec._workflow_spec`). A UI made from it
-    picks a widget by these forms:
+    picks a widget by these sources:
 
     ==================================  ===================================
     Schema at a parameter or row        Widget
@@ -447,7 +447,7 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
 
     The params schema is the JSON schema of the spec's request type (see
     :mod:`ess.spec.request_types`), which also validates a request, so the
-    two agree. The forms a place takes are its ``oneOf``. The schema of a
+    two agree. The sources a place takes are its ``oneOf``. The schema of a
     reference to an output is the ``@ref`` object of each kind it may be
     (see :mod:`ess.spec.refs`), with the name of the type it must fit under
     ``dataType``, as the outputs schema names the type of each output. A

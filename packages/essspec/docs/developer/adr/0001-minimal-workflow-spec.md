@@ -86,7 +86,7 @@ pin. The *call phase* starts when the backend reads data for the binding.
 
 A field of the params model is a *parameter*. An element of a list parameter
 is a *row*. A request gives each parameter, or each row, in one of three
-forms:
+sources:
 
 - *written inline*: the value itself, such as `Reduction(bins=100)` or
   `{'bins': 100}`;
@@ -115,7 +115,7 @@ by another: a beam centre is typed in, or found by a first reduction; the time
 slices of a slicing reduction are typed in, or found from a log. A *place* is
 any position in the params, named by its path, such as `reduction.bins` or
 `samples[2]`. The type of a parameter, or of the rows of a list parameter,
-decides which forms it accepts, with `| None` removed:
+decides which sources it accepts, with `| None` removed:
 
 | Type | Example | Value | Reference to an output |
 |---|---|---|---|
@@ -126,13 +126,13 @@ decides which forms it accepts, with `| None` removed:
 | a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag | no |
 | a list, `list[X]` | a list parameter | a list of rows, each as for `X` | no; each row as for `X` |
 
-**The forms are a type.** The framework derives from the params model a
+**The sources are a type.** The framework derives from the params model a
 *request type* (`ess.spec.request_types`): at each parameter or row, the union
-of the forms the table gives it, each with the type that validates it, the
+of the sources the table gives it, each with the type that validates it, the
 group's own class written inline, the file model, or a reference to an output.
-The form of a value is known from its `@ref` key alone, so the request phase
-validates a value by the type of its form, the JSON schema of the request type
-is the params schema, and a form offers a widget for each form the place
+The source of a value is known from its `@ref` key alone, so the request phase
+validates a value by the type of its source, the JSON schema of the request type
+is the params schema, and a form offers a widget for each source the place
 takes. The backend, the schema, and a form thus agree by construction. The
 params model stays the type of the call phase; the record holds the JSON form
 of the request type.
@@ -508,9 +508,9 @@ plain-data pydantic model that round-trips through JSON and is what a service
 announces to remote consumers. It holds a schema of the params
 (`params_schema`), one of the outputs (`outputs_schema`), and the tables. The
 params schema is the JSON schema of the request type, so it gives each
-parameter the forms it takes, and a UI renders the widget of each parameter or
+parameter the sources it takes, and a UI renders the widget of each parameter or
 row, as the table above has it; a file model's definition in the schema holds
-its metadata, so that a remote picker offers only the files that fit. `SerializedWorkflowSpec` states the forms and the widget of
+its metadata, so that a remote picker offers only the files that fit. `SerializedWorkflowSpec` states the sources and the widget of
 each.
 
 There is deliberately no inverse. Validators do not survive JSON Schema, so a
@@ -600,9 +600,9 @@ output, and dims and units of an output for a UI.
 ## Alternatives considered
 
 - **Two models, params inline and inputs by reference.** The spec fixes the
-  form per field. A value used both ways, such as a beam centre, then needs a
+  source per field. A value used both ways, such as a beam centre, then needs a
   client that reads it and sends it again, which loses the record of where it
-  came from, or a spec per form; and moving a field between the models breaks
+  came from, or a spec per source; and moving a field between the models breaks
   every client.
 - **Inputs that also take a value inline.** Keeps two models, but the inputs
   then hold values written inline, which removes the reason for two.

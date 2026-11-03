@@ -19,7 +19,7 @@ from pydantic import (
 from ess.spec import FileModel, FileRef, OutputRef, request_types
 from ess.spec.places import alternatives, root_type, validated
 from ess.spec.refs import Loc, ParamsError, Ref
-from ess.spec.request_types import held, row_forms
+from ess.spec.request_types import held, row_sources
 
 
 class RunFile(FileModel, kind='raw'):
@@ -416,13 +416,13 @@ def test_each_place_takes_the_forms_its_type_allows() -> None:
         request_types.FILE,
         request_types.OUTPUT,
     )
-    assert list(row_forms(Params, 'sample')) == [inline, output]
-    assert list(row_forms(Params, 'mask')) == [output]
-    assert list(row_forms(Params, 'beam_centre')) == [inline]
-    assert list(row_forms(Params, 'samples')) == [inline, output]
-    assert list(row_forms(MaskParams, 'mask')) == [file]
-    assert list(row_forms(MaskParams, 'runs')) == [file]
-    assert list(row_forms(MeasuredParams, 'measured')) == [inline]
+    assert list(row_sources(Params, 'sample')) == [inline, output]
+    assert list(row_sources(Params, 'mask')) == [output]
+    assert list(row_sources(Params, 'beam_centre')) == [inline]
+    assert list(row_sources(Params, 'samples')) == [inline, output]
+    assert list(row_sources(MaskParams, 'mask')) == [file]
+    assert list(row_sources(MaskParams, 'runs')) == [file]
+    assert list(row_sources(MeasuredParams, 'measured')) == [inline]
 
 
 def _only_pid_1(mask: MaskFile) -> MaskFile:

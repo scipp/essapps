@@ -21,11 +21,11 @@ JSON schema of the params::
     runs: list[RunFile]              list[RunFile]
 
 The request type of a parameter, or of a row of a list parameter, is the
-union of the *forms* that the place takes (see :func:`forms`), tagged by
-:func:`form_of`: a group or a union of groups written ``inline``, a
-``file``, or a reference to an ``output``. The form of a value is known
+union of the *sources* that the place takes (see :func:`sources`), tagged by
+:func:`source_of`: a group or a union of groups written ``inline``, a
+``file``, or a reference to an ``output``. The source of a value is known
 from the value alone, by its key ``"@ref"``, so a value is validated by
-the type of its form (see :func:`form_model`). A group written inline is
+the type of its source (see :func:`source_model`). A group written inline is
 the group's own class, with its validators, and a file is the file model's
 own class, which a backend validates with a resolver of files (see
 :class:`~ess.spec.parameters.FileModel`). So validating a request by its
@@ -65,17 +65,17 @@ from .refs import (
 )
 
 INLINE: Final = 'inline'
-"""The form of a group, or a union of groups, written as an object of its fields."""
+"""A group, or a union of groups, written inline as an object of its fields."""
 FILE: Final = 'file'
-"""The form of a file, an object with ``"@ref": "file"``."""
+"""A file, an object with ``"@ref": "file"``."""
 OUTPUT: Final = 'output'
-"""The form of a reference to an output, of a record or of an accumulator."""
+"""A reference to an output, of a record or of an accumulator."""
 
 
-def form_of(value: Any) -> str | None:
+def source_of(value: Any) -> str | None:
     """
-    The form of ``value``, as a request writes it at a place, or its Python
-    form: :data:`FILE` or :data:`OUTPUT` for an object with the key
+    The source of ``value``, as a request writes it at a place or as a Python
+    object: :data:`FILE` or :data:`OUTPUT` for an object with the key
     ``"@ref"`` of that kind, ``None`` for one of no kind, and :data:`INLINE`
     for any other value.
     """
@@ -95,9 +95,9 @@ def _not_a_ref(schema: dict[str, Any]) -> None:
     schema['not'] = {'required': ['@ref']}
 
 
-def forms(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
+def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
     """
-    The forms that a parameter or row of type ``tp`` takes, by tag, each the
+    The sources that a parameter or row of type ``tp`` takes, by tag, each the
     type that validates it, with the constraints of the place (see
     :func:`~ess.spec.places.root_type` for ``tp`` and ``metadata``):
 
@@ -108,11 +108,11 @@ def forms(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
       :func:`~ess.spec.places.takes_output`), with the name of ``tp`` as its
       ``dataType`` in the JSON schema.
 
-    In the JSON schema, an inline form refuses an object with the key
+    In the JSON schema, an inline source refuses an object with the key
     ``@ref``, and each alternative of a union requires its tag, since a
     request always writes it, and is titled by its tag (see
     :func:`~ess.spec.places.title`). A form panel shows a widget for each
-    form a place takes.
+    source a place takes.
     """
     taken: dict[str, Any] = {}
     if (union := places.alternatives(tp, *metadata)) is not None:
@@ -150,26 +150,26 @@ def _alternative(group: type[BaseModel], tag: str, value: str) -> Any:
 
 def tagged(taken: Mapping[str, Any], none: bool) -> Any:
     """
-    The type of a place that takes the forms ``taken`` (see :func:`forms`):
-    the form, if one, else their union tagged by :func:`form_of`; ``| None``
+    The type of a place that takes the sources ``taken`` (see :func:`sources`):
+    the source, if one, else their union tagged by :func:`source_of`; ``| None``
     if ``none``.
     """
     if len(taken) == 1:
-        (form,) = taken.values()
+        (source,) = taken.values()
     else:
         members = tuple(Annotated[tp, Tag(tag)] for tag, tp in taken.items())
-        form = Annotated[Union[members], Discriminator(form_of)]  # noqa: UP007
-    return Union[form, None] if none else form  # noqa: UP007
+        source = Annotated[Union[members], Discriminator(source_of)]  # noqa: UP007
+    return Union[source, None] if none else source  # noqa: UP007
 
 
 @functools.cache
-def row_forms(model: type[BaseModel], name: str) -> dict[str, Any]:
+def row_sources(model: type[BaseModel], name: str) -> dict[str, Any]:
     """
-    The :func:`forms` of the parameter ``name`` of ``model``, or of one row
+    The :func:`sources` of the parameter ``name`` of ``model``, or of one row
     of it if it is a list parameter.
     """
     tp, _, metadata = places.root_type(model, name)
-    return forms(tp, metadata)
+    return sources(tp, metadata)
 
 
 @functools.cache
@@ -178,7 +178,7 @@ def row_type(model: type[BaseModel], name: str) -> Any:
     The request type of the parameter ``name`` of ``model``, or of one row of
     it if it is a list parameter.
     """
-    return tagged(row_forms(model, name), places.root_type(model, name)[1])
+    return tagged(row_sources(model, name), places.root_type(model, name)[1])
 
 
 def parameter_type(model: type[BaseModel], name: str) -> Any:
@@ -196,13 +196,13 @@ def parameter_type(model: type[BaseModel], name: str) -> Any:
 
 
 @functools.cache
-def form_model(model: type[BaseModel], name: str, form: str) -> type[BaseModel]:
+def source_model(model: type[BaseModel], name: str, source: str) -> type[BaseModel]:
     """
-    A model of the field ``name`` alone, typed its form ``form`` (see
-    :func:`row_forms`), with the config of ``model``: it validates one value
-    of that form that a request writes at the parameter, or one row of it.
+    A model of the field ``name`` alone, typed its source ``source`` (see
+    :func:`row_sources`), with the config of ``model``: it validates one value
+    from that source that a request writes at the parameter, or one row of it.
     """
-    field = (row_forms(model, name)[form], ...)
+    field = (row_sources(model, name)[source], ...)
     return create_model(model.__name__, __config__=model.model_config, **{name: field})
 
 
@@ -246,7 +246,7 @@ def held(model: type[BaseModel], name: str, value: Any, files: Files) -> Any:
     as an instance of a group or a :data:`~ess.spec.refs.Ref`, which are
     dumped to plain data first. For a list parameter, each row is handled
     on its own. Each is validated from its JSON form by its request type
-    (see :func:`form_model`), with each file resolved by
+    (see :func:`source_model`), with each file resolved by
     ``files``, and the JSON form of the validated value is returned (see
     :func:`ess.spec.field_types.inline`): a group, a file, or a reference
     to an output as given. The caller checks that the data of a reference
@@ -323,8 +323,8 @@ def _row(
 ) -> Any:
     """
     ``value``, plain data at ``loc``, of the parameter ``name`` or of a row
-    of it, validated by the type of its form (see
-    :func:`~ess.spec.form_of`); its JSON form.
+    of it, validated by the type of its source (see
+    :func:`source_of`); its JSON form.
     """
     tp, none, metadata = places.root_type(model, name)
     union = places.alternatives(tp, *metadata)
@@ -341,14 +341,14 @@ def _row(
         )
     if value is None and none:
         return None
-    form = form_of(value)
-    if form not in row_forms(model, name):
-        raise _refused(loc, _form_refused(tp, union, value, form))
+    source = source_of(value)
+    if source not in row_sources(model, name):
+        raise _refused(loc, _source_refused(tp, union, value, source))
 
     def problem(error: ErrorDetails) -> tuple[Loc, str]:
         return _problem(loc, union, value, error)
 
-    one = form_model(model, name, form)
+    one = source_model(model, name, source)
     return places.inline_at(loc, one, name, value, problem, whole=True, context=context)
 
 
@@ -380,14 +380,14 @@ def _problem(
     return (*loc, *inner[1:]), error['msg']
 
 
-def _form_refused(
-    tp: Any, union: tuple[str, dict[str, Any]] | None, value: Any, form: str | None
+def _source_refused(
+    tp: Any, union: tuple[str, dict[str, Any]] | None, value: Any, source: str | None
 ) -> str:
-    """Why a place of type ``tp`` refuses ``value``, of the form ``form``."""
+    """Why a place of type ``tp`` refuses ``value``, of the source ``source``."""
     name = field_types.type_name(tp)
-    if form == FILE:
+    if source == FILE:
         return f'file {as_ref(value)} does not fit {name}, which is not a file model'
-    if form == OUTPUT:
+    if source == OUTPUT:
         ref = as_ref(value)
         if union is not None:
             return (

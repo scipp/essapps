@@ -415,22 +415,22 @@ class TestMetadata:
 
 def _takes_inline(spec: WorkflowSpec[Any, Any], name: str) -> bool:
     """
-    Whether the params schema offers an inline form for the parameter
-    ``name``, or each row of it: a form that refuses an object with the key
-    ``@ref``, which only an inline form does.
+    Whether the params schema offers an inline source for the parameter
+    ``name``, or each row of it: a source that refuses an object with the key
+    ``@ref``, which only an inline source does.
     """
     prop = spec.serialize().params_schema['properties'][name]
-    return _has_inline_form(prop.get('items', prop))
+    return _has_inline_source(prop.get('items', prop))
 
 
-def _has_inline_form(schema: Any) -> bool:
+def _has_inline_source(schema: Any) -> bool:
     if isinstance(schema, list):
-        return any(_has_inline_form(s) for s in schema)
+        return any(_has_inline_source(s) for s in schema)
     if not isinstance(schema, dict):
         return False
     if schema.get('not') == {'required': ['@ref']}:
         return True
-    return any(_has_inline_form(schema.get(k)) for k in ('anyOf', 'oneOf'))
+    return any(_has_inline_source(schema.get(k)) for k in ('anyOf', 'oneOf'))
 
 
 NOT_A_VALUE = 'the default is not a value a request may write'
