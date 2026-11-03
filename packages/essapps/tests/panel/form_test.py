@@ -7,7 +7,7 @@ import panel as pn
 import pytest
 from pydantic import AwareDatetime, BaseModel, Field, NaiveDatetime
 
-from ess.apps import Client, SubmitError
+from ess.apps import Client, Record, SubmitError
 from ess.apps.panel import Form, Listing
 from ess.apps.testing import FakeFiles
 from ess.spec import FileModel, FileRef, OutputRef, Referenced, WorkflowSpec
@@ -131,46 +131,51 @@ def widget(form: Form, label: str) -> Any:
     return found
 
 
-def tab(form: Form, title: str) -> Any:
-    """The tab titled ``title``."""
+def section(form: Form, title: str) -> Any:
+    """The tab titled ``title``, or the card of a field of a group so titled."""
     (tabs,) = form.panel().select(pn.Tabs)
-    (found,) = (t for t in tabs.objects if t.name == title)
+    (found,) = [
+        *(t for t in tabs.objects if t.name == title),
+        *(c for c in form.panel().select(pn.Card) if c.title == title),
+    ]
     return found
 
 
 def table(form: Form, title: str) -> Any:
-    """The table of the tab ``title``."""
-    (found,) = tab(form, title).select(pn.widgets.Tabulator)
+    """The table of the section ``title``."""
+    (found,) = section(form, title).select(pn.widgets.Tabulator)
     return found
 
 
 def rows(form: Form, title: str) -> list[dict[str, str]]:
-    """The rows shown in the table of the tab ``title``, each by column."""
+    """The rows shown in the table of the section ``title``, each by column."""
     return table(form, title).value.to_dict('records')
 
 
 def click(form: Form, title: str, label: str) -> None:
-    """Click the button labelled ``label`` in the tab ``title``."""
+    """Click the button labelled ``label`` in the section ``title``."""
     widget_in(form, title, label).clicks += 1
 
 
 def widget_in(form: Form, title: str, label: str) -> Any:
-    """The input labelled ``label`` in the tab ``title``."""
+    """The input labelled ``label`` in the section ``title``."""
     (found,) = (
-        w for w in tab(form, title).select(pn.widgets.Widget) if w.label == label
+        w for w in section(form, title).select(pn.widgets.Widget) if w.label == label
     )
     return found
 
 
 def way(form: Form, title: str) -> Any:
-    """The radio buttons of the ways of the tab ``title``."""
-    (found,) = tab(form, title).select(pn.widgets.RadioBoxGroup)
-    return found
+    """
+    The radio buttons of the ways of the section ``title``, not those of a
+    field in it.
+    """
+    return section(form, title).select(pn.widgets.RadioBoxGroup)[0]
 
 
 def picker(form: Form, title: str) -> Any:
-    """The picker of a file, or of a record, of the tab ``title``."""
-    (found,) = tab(form, title).select(pn.widgets.Select)
+    """The picker of a file, or of a record, of the section ``title``."""
+    (found,) = section(form, title).select(pn.widgets.Select)
     return found
 
 
@@ -644,7 +649,7 @@ def measured(client: Client, files: FakeFiles, run: FileRef) -> Form:
     return Form(MEASURED, client)
 
 
-def test_a_file_at_a_field_of_a_group_is_a_picker_in_its_tab(
+def test_a_file_at_a_field_of_a_group_is_a_picker_and_x_or_none_a_choice(
     measured: Form, run: FileRef
 ) -> None:
     assert measured.ways('measured') == ['Given']
@@ -652,7 +657,8 @@ def test_a_file_at_a_field_of_a_group_is_a_picker_in_its_tab(
         '(choose a file)',
         'run 101 (sample)',
     ]
-    assert list(widget(measured, 'Mask').options) == ['(none)', 'run 202']
+    assert way(measured, 'Mask').options == ['A file', 'None']
+    assert list(picker(measured, 'Mask').options) == ['(choose a file)', 'run 202']
     assert missing(measured) == {(('measured', 'run'), 'choose a file')}
     widget(measured, 'Run').value = run
     assert measured.params == {'measured': {'run': run, 'thickness': 1.0, 'mask': None}}
@@ -778,7 +784,7 @@ def test_a_row_may_be_an_output_of_a_record_that_fits(
     client: Client, stack: Form, find_spec: Spec, run: FileRef
 ) -> None:
     assert way(stack, 'Centres').options == ['Given', 'From a record']
-    with pytest.raises(TypeError, match='edited a row at a time'):
+    with pytest.raises(TypeError, match='centres: not a choice of ways'):
         stack.ways('centres')
     found = client.compute(find_spec, params={'run': run})
     stack.refresh()
@@ -853,6 +859,152 @@ def test_tables_round_trip_through_a_record(
     assert rows(stack, 'Shots') == [{'Run': 'run 102 (sample)', 'Thickness': '2.0'}]
 
 
-def test_a_list_of_a_union_is_not_covered(client: Client) -> None:
-    with pytest.raises(NotImplementedError, match='sides: a list of a union'):
-        Form(SIDES, client)
+def test_a_list_of_a_union_has_a_column_for_the_tag(client: Client) -> None:
+    sides = Form(SIDES, client)
+    click(sides, 'Sides', 'Add as new row')  # no way chosen: no row
+    assert missing(sides) == {(('sides',), 'add a row, or remove for none')}
+    for side in ('Right', 'Left'):
+        way(sides, 'Sides').value = side
+        click(sides, 'Sides', 'Add as new row')
+    assert sides.params == {'sides': [{'kind': 'right'}, {'kind': 'left'}]}
+    assert rows(sides, 'Sides') == [{'Kind': 'Right'}, {'Kind': 'Left'}]
+
+
+@pytest.fixture
+def nested(client: Client, nested_spec: Spec) -> Form:
+    return Form(nested_spec, client)
+
+
+@pytest.fixture
+def found(client: Client, find_spec: Spec, run: FileRef) -> Record:
+    return client.compute(find_spec, params={'run': run})
+
+
+@pytest.fixture
+def filled(nested: Form, found: Record, run: FileRef) -> Form:
+    """The nested form with a value at each field without a default."""
+    nested.set(
+        {
+            'bins': 2,
+            'specimen': {
+                'run': run,
+                'window': {'start': 0.5},
+                'centre': found.ref('centre'),
+            },
+        }
+    )
+    return nested
+
+
+def test_fields_at_any_depth_start_at_their_default_or_with_nothing_given(
+    nested: Form,
+) -> None:
+    assert missing(nested) == {
+        (('bins',), 'give a value'),
+        (('specimen', 'run'), 'choose a file'),
+        (('specimen', 'window', 'start'), 'give a value'),
+        (('specimen', 'centre'), 'choose a record'),
+    }
+
+
+def test_a_scalar_parameter_is_an_input_in_its_tab(filled: Form) -> None:
+    widget_in(filled, 'Bins', 'Bins').value = 3
+    assert filled.params['bins'] == 3
+    with pytest.raises(TypeError, match='bins: not a choice of ways'):
+        filled.ways('bins')
+
+
+def test_a_group_at_a_field_is_a_card_of_its_fields(filled: Form) -> None:
+    assert not way(filled, 'Window').visible
+    assert way(filled, 'Window').options == ['Given']
+    widget_in(filled, 'Frame', 'Start').value = 2.0
+    specimen = filled.params['specimen']
+    assert specimen['window'] == {'start': 0.5, 'stop': 1.0}
+    assert specimen['frame'] == {'start': 2.0, 'stop': 1.0}
+
+
+def test_a_union_at_a_field_offers_its_alternatives(filled: Form) -> None:
+    assert way(filled, 'Shape').options == ['Disc', 'Slab']
+    assert filled.params['specimen']['shape'] == {'kind': 'disc', 'radius': 1.0}
+    way(filled, 'Shape').value = 'Slab'
+    assert filled.params['specimen']['shape'] == {'kind': 'slab', 'width': 1.0}
+
+
+def test_x_or_none_at_a_field_is_a_choice_with_none(filled: Form) -> None:
+    for title in ('Scale', 'Crop'):
+        assert way(filled, title).options == ['Given', 'None']
+        way(filled, title).value = 'Given'
+    assert way(filled, 'Mask').options == ['A file', 'None']
+    assert missing(filled) == {
+        (('specimen', 'scale'), 'give a value'),
+        (('specimen', 'crop', 'start'), 'give a value'),
+    }
+    widget_in(filled, 'Scale', 'Scale').value = 2.0
+    widget_in(filled, 'Crop', 'Start').value = 0.0
+    assert filled.params['specimen']['scale'] == 2.0
+    assert filled.params['specimen']['crop'] == {'start': 0.0, 'stop': 1.0}
+
+
+def test_a_record_at_a_field_is_listed_when_the_form_is_refreshed(
+    client: Client, nested: Form, find_spec: Spec, run: FileRef
+) -> None:
+    assert way(nested, 'Centre').options == ['From a record']
+    assert set(picker(nested, 'Centre').options) == {'(choose a record)'}
+    found = client.compute(find_spec, params={'run': run})
+    nested.refresh()
+    picker(nested, 'Centre').value = found.ref('centre')
+    assert (('specimen', 'centre'), 'choose a record') not in missing(nested)
+
+
+def test_a_list_of_groups_at_a_field_is_a_table(filled: Form, run: FileRef) -> None:
+    assert rows(filled, 'Shots') == []
+    widget_in(filled, 'Shots', 'Run').value = run
+    click(filled, 'Shots', 'Add as new row')
+    assert filled.params['specimen']['shots'] == [{'run': run, 'thickness': 1.0}]
+    assert rows(filled, 'Shots') == [{'Run': 'run 101 (sample)', 'Thickness': '1.0'}]
+
+
+def test_a_list_of_a_union_at_a_field_has_a_column_per_field_of_each_alternative(
+    filled: Form,
+) -> None:
+    for shape in ('Slab', 'Disc'):
+        way(filled, 'Shapes').value = shape
+        click(filled, 'Shapes', 'Add as new row')
+    assert filled.params['specimen']['shapes'] == [
+        {'kind': 'slab', 'width': 1.0},
+        {'kind': 'disc', 'radius': 1.0},
+    ]
+    assert rows(filled, 'Shapes') == [
+        {'Kind': 'Slab', 'Radius': '', 'Width': '1.0'},
+        {'Kind': 'Disc', 'Radius': '1.0', 'Width': ''},
+    ]
+
+
+def test_values_at_any_depth_round_trip_through_a_record(
+    client: Client,
+    files: FakeFiles,
+    nested: Form,
+    nested_spec: Spec,
+    found: Record,
+    run: FileRef,
+) -> None:
+    mask = files.measure(201, {'counts': 2.0}, kind='mask')
+    params = {
+        'bins': 3,
+        'specimen': {
+            'run': run,
+            'window': {'start': 0.5, 'stop': 2.0},
+            'frame': {'start': 1.0, 'stop': 1.0},
+            'shape': {'kind': 'slab', 'width': 2.0},
+            'scale': 2.0,
+            'crop': {'start': 0.0, 'stop': 1.0},
+            'mask': mask,
+            'centre': found.ref('centre'),
+            'shots': [{'run': run, 'thickness': 2.0}],
+            'shapes': [{'kind': 'disc', 'radius': 1.0}, {'kind': 'slab', 'width': 3.0}],
+        },
+    }
+    record = client.compute(nested_spec, params=params)
+    assert client.output(record, 'total').value == 3 * 1.5
+    nested.set(record.request.params)
+    assert nested.params == record.request.params

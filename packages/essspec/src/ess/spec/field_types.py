@@ -110,20 +110,6 @@ def optional(tp: Any) -> tuple[Any, bool]:
     return tp, False
 
 
-def taken_apart(annotation: Any) -> tuple[Any, bool, bool | None]:
-    """
-    The type of one value of ``annotation``, ``X`` of ``X``, ``X | None``,
-    ``list[X]``, ``list[X] | None``, or ``list[X | None]``; whether
-    ``annotation`` is typed ``X | None``; and for a list whether its element
-    is, else ``None``.
-    """
-    tp, is_optional = optional(annotation)
-    if get_origin(tp) is not list:
-        return tp, is_optional, None
-    tp, item_optional = optional(get_args(tp)[0])
-    return tp, is_optional, item_optional
-
-
 def element(tp: Any) -> Any | None:
     """
     ``X`` if ``tp`` is ``list[X]`` or ``dict[str, X]``, else ``None``; without
@@ -229,15 +215,6 @@ def is_scalar(tp: Any) -> bool:
     else:
         return False
     return all(type(v) in (str, int, float, bool) for v in values)
-
-
-def file_model(annotation: Any) -> Any:
-    """
-    The file model of a field typed ``annotation``, ``X``, ``X | None``,
-    or ``list[X]`` of one, or ``None``.
-    """
-    tp = value_type(annotation)
-    return tp if is_file_model(tp) else None
 
 
 def is_group(tp: Any) -> bool:
