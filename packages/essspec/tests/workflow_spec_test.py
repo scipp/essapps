@@ -843,8 +843,8 @@ class TestModelRules:
                     )
                 },
                 re.escape(
-                    'P.by: ByMonitor | ByTime: Referenced[...] is at a parameter, a '
-                    'row, or a member of a union there, not inside another type'
+                    'P.by: Referenced[...] is at a parameter, a row, or a member of '
+                    'a union there, not inside another type'
                 ),
             ),
             (

@@ -49,8 +49,7 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from types import UnionType
-from typing import Annotated, Any, Final, Union, get_args, get_origin
+from typing import Annotated, Any, Final, Union
 
 from pydantic import (
     BaseModel,
@@ -64,7 +63,7 @@ from pydantic import (
 from pydantic_core import ErrorDetails, to_json
 
 from . import field_types, places
-from .parameters import REFERENCED, FileModel
+from .parameters import FileModel
 from .refs import (
     AccumulatorRef,
     FileRef,
@@ -387,19 +386,8 @@ def _data_model(model: type[BaseModel], name: str) -> type[BaseModel]:
     A model of the field ``name`` alone, typed the groups that
     ``Referenced[...]`` marks at the parameter, or at one row of it, each with
     its own metadata: it validates the data of a reference to an output.
-    :func:`~ess.spec.places.split` gives these groups without their metadata.
     """
-    tp, _, metadata = places.root_type(model, name)
-    if REFERENCED in metadata:
-        marked: tuple[Any, ...] = (Annotated[tp, *metadata],)
-    else:
-        members = get_args(tp) if get_origin(tp) in (Union, UnionType) else (tp,)
-        marked = tuple(
-            m
-            for m in members
-            if get_origin(m) is Annotated and REFERENCED in m.__metadata__
-        )
-    field: Any = (Union[marked], ...)  # noqa: UP007
+    field: Any = (places.referenced_type(model, name), ...)
     return create_model(model.__name__, **{name: field})
 
 

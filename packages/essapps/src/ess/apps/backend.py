@@ -352,7 +352,9 @@ def _compares_rows_read(spec: Spec, table: str) -> bool:
     """
     tp, _, metadata = places.root_type(spec.params, table)
     referenced = places.split(tp, *metadata)[2]
-    return bool(referenced) and all(places.unwritten(t) is None for t in referenced)
+    return bool(referenced) and all(
+        places.unwritten(field_types.plain(t)) is None for t in referenced
+    )
 
 
 def _output_reads(params: Mapping[str, Any]) -> list[tuple[str, str]]:

@@ -162,9 +162,7 @@ form made from the params model offers the sources it takes. The rules
 behind it:
 
 - An unmarked place is one that a request can write: a group without a
-  data value, a union of such groups with a tag, or a file model. A place
-  of a group with a data value, such as ``PixelMask``, is
-  ``Referenced[...]``.
+  data value, a union of such groups with a tag, or a file model.
 - A reference to an output fills a whole parameter or a whole row, never a
   field of a group. The backend validates a group when the request is
   submitted, so that its validators see all its fields, and an output may
@@ -187,13 +185,10 @@ behind it:
   source, which checks it. So ``T`` has no file model, at any depth.
 - A union at a place has members that a request writes, and members
   ``Referenced[...]``. Two or more groups that a request writes are a union
-  of groups, with a tag. The discriminator is on their own union, as in
-  ``centre``, or on the whole union,
-  ``A | B | Referenced[C] = Field(discriminator='kind')``, where pydantic
-  requires the tag on ``C`` too. A reference fits the place if its data fit
-  one of the groups that ``Referenced[...]`` marks. A referenced group needs
-  no tag, so the workflow that computes one need know nothing of the specs
-  that take it.
+  of groups, with a discriminator on their own union, as in ``centre``, or
+  on the whole union, which then requires the tag of ``C`` in
+  ``Referenced[C]`` too. A referenced group needs no tag, so the workflow
+  that computes one need know nothing of the specs that take it.
 - A default is a value that a request may write, as validating it gives: an
   instance of a group, not a dict, and never a reference or a file. So a
   place that only a reference fills has no default but ``None``, and a file
@@ -312,12 +307,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from pathlib import PurePath
-from types import UnionType
+from types import NoneType, UnionType
 from typing import (
+    Annotated,
     Any,
     Self,
     TypeAliasType,
     Union,
+    get_args,
     get_origin,
 )
 
@@ -331,7 +328,7 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 
 from . import field_types, places, request_types
-from .parameters import REFERENCED, FileModel
+from .parameters import FileModel
 from .refs import ParamsError
 
 
@@ -577,12 +574,10 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
         if _has_alias(field):
             problems.append(f'{where}: a parameter has no alias')
         listed = get_origin(field_types.optional(field.annotation)[0]) is list
-        if listed and REFERENCED in field.metadata:
-            problems.append(
-                f'{where}: a reference fills a row of a list parameter, '
-                'list[Referenced[X]], not the list'
-            )
-        elif listed and (
+        if marked := _marker_problems(field.rebuild_annotation(), listed):
+            problems.extend(f'{where}: {problem}' for problem in marked)
+            continue
+        if listed and (
             other := [m for m in field.metadata if not isinstance(m, MinLen | MaxLen)]
         ):
             problems.append(
@@ -591,9 +586,6 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
             )
         tp, _, metadata = places.root_type(model, name)
         inline, inline_metadata, referenced = places.split(tp, *metadata)
-        if marked := _marker_problems(field.annotation, inline, referenced):
-            problems.extend(f'{where}: {problem}' for problem in marked)
-            continue
         try:
             union = places.alternatives(inline, *inline_metadata)
         except ValueError as error:
@@ -714,51 +706,64 @@ def _has_alias(field: FieldInfo) -> bool:
     )
 
 
-def _marker_problems(
-    annotation: Any, inline: Any, referenced: tuple[Any, ...]
-) -> list[str]:
+def _marker_problems(annotation: Any, listed: bool) -> list[str]:
     """
-    Refuse ``Referenced[...]`` but at a parameter or a row of type
-    ``annotation``, or at a member of a union there: at a field of a group,
-    at any depth, or inside the part that a request writes or the type of
-    the data (see :func:`~ess.spec.places.split` for ``inline`` and
-    ``referenced``).
+    Refuse each marker of ``Referenced[...]`` in ``annotation``, of a
+    parameter, a list parameter if ``listed``, but at a place or a member of
+    a union there (see :func:`_markers`).
     """
     problems = [
-        f'{where}Referenced[...] is at a parameter or a row, not at a field of a '
-        'group: a group is validated whole when the request is submitted, and an '
-        'output may not exist then'
-        for where in _referenced_fields(annotation)
+        f'{where}{_MISPLACED["field" if where else at]}'
+        for where, at in _markers(annotation, 'list' if listed else 'place')
+        if at in ('list', 'inside')
     ]
-    problems.extend(
-        f'{field_types.type_name(tp)}: Referenced[...] is at a parameter, a row, '
-        'or a member of a union there, not inside another type'
-        for tp in (inline, *referenced)
-        if _marked(tp)
-    )
-    return problems
+    return list(dict.fromkeys(problems))
 
 
-def _referenced_fields(annotation: Any) -> list[str]:
-    """
-    ``'Class.field: '`` of each field marked ``Referenced[...]`` of a group
-    that ``annotation`` is made of, at any depth.
-    """
-    return [
-        f'{cls.__name__}.{name}: '
-        for cls in dict.fromkeys(field_types.reachable(annotation))
-        if field_types.is_group(cls)
-        for name, info in cls.model_fields.items()
-        if _marked(info.annotation, *info.metadata)
-    ]
+_MISPLACED = {
+    'list': 'a reference fills a row of a list parameter, list[Referenced[X]], '
+    'not the list',
+    'field': 'Referenced[...] is at a parameter or a row, not at a field of a '
+    'group: a group is validated whole when the request is submitted, and an '
+    'output may not exist then',
+    'inside': 'Referenced[...] is at a parameter, a row, or a member of a union '
+    'there, not inside another type',
+}
 
 
-def _marked(annotation: Any, *metadata: Any) -> bool:
+def _markers(
+    tp: Any, at: str, where: str = '', seen: frozenset[type] = frozenset()
+) -> list[tuple[str, str]]:
     """
-    Whether ``annotation``, or a type it is made of, or ``metadata``, those of
-    its field, hold the marker of ``Referenced[...]``.
+    Where each marker of ``Referenced[...]`` is in ``tp``, and in the fields
+    of each group that ``tp`` is made of, at any depth: ``'Class.field: '``
+    in a field of a group, else ``''``; and what the marked type is, ``at``
+    as given for ``tp``: ``'list'``, a list parameter; ``'place'``, a
+    parameter or a row, or ``X`` of ``X | None`` there; ``'member'``, a
+    member of a union at a place; or ``'inside'``, any other type, such as a
+    field of a group, an output, or the ``T`` of ``Referenced[T]``::
+
+        _markers(Referenced[list[Mask]], 'list')  # [('', 'list')]
+        _markers(Reduction | Referenced[Mask], 'place')  # [('', 'member')]
+        _markers(Referenced[G], 'place')  # with G.mask: Referenced[Mask]
+        # [('', 'place'), ('G.mask: ', 'inside')]
     """
-    return REFERENCED in (*metadata, *field_types.arguments(annotation))
+    found = [(where, at)] if places.is_referenced(tp) else []
+    if field_types.is_group(tp) and tp not in seen:
+        for name, info in tp.model_fields.items():
+            field = f'{tp.__name__}.{name}: '
+            found += _markers(info.rebuild_annotation(), 'inside', field, seen | {tp})
+        return found
+    origin, args = get_origin(tp), get_args(tp)
+    if origin is Annotated:
+        return found + _markers(args[0], 'inside' if found else at, where, seen)
+    if origin is list and at == 'list':
+        at = 'place'
+    elif origin in (Union, UnionType) and at == 'place':
+        at = 'place' if len(args) == 2 and NoneType in args else 'member'
+    else:
+        at = 'inside'
+    return found + [m for arg in args for m in _markers(arg, at, where, seen)]
 
 
 def _group_problems(group: type[BaseModel], alternative: bool) -> list[str]:
@@ -827,8 +832,8 @@ def _referenced_problems(data: Any) -> list[str]:
     names a role, without a file model at any depth (see
     :func:`_output_file_problems`).
     """
-    if field_types.is_group(data):
-        return _output_file_problems(data)
+    if field_types.is_group(group := field_types.plain(data)):
+        return _output_file_problems(group)
     name = field_types.type_name(data)
     return [
         f'Referenced[{name}]: {name} is not a group; a reference fills a place '
@@ -972,7 +977,7 @@ def _outputs_problems(model: type[BaseModel]) -> list[str]:
                 f'{where}: an output is a type, possibly typed X | None, or a '
                 'list or a dict of one'
             )
-        elif _marked(tp, *field.metadata) or _referenced_fields(tp):
+        elif _markers(field.rebuild_annotation(), 'inside'):
             problems.append(
                 f'{where}: Referenced[...] marks a place of the params, not an output'
             )

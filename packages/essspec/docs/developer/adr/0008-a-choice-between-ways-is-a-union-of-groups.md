@@ -74,7 +74,7 @@ class BeamCentre(BaseModel):
     y: float = 0.0
 ```
 
-- The tag is a `Literal` of one string, its own, without an alias, and the union is discriminated by the tag's name, not by a callable. The framework walks a value without running code of the spec, so it reads the tag by name.
+- The tag is a `Literal` of one string, its own, without an alias, and the union is discriminated by the tag's name, not by a callable. The params schema maps each tag to its alternative, a form labels each alternative by its tag, and the position of an error inside the union leaves the tag out: each reads the tag by its field's name, without running code of the spec.
 - A request writes the tag inline, even where the alternative has a default for it: the tag says which alternative's fields the object has.
 - A union that holds a group holds groups only: a value of another type has no tag.
 
@@ -207,7 +207,7 @@ PipelineBinding(IOFQ, make_pipeline, keys={'direct_beam': ()})
 ```
 
 **Neither a union nor a parameter typed `X | None` is a blank of a `PipelineBinding` stage.**
-A union's key may depend on each value's tag, and `make_pipeline`, which gets no blank, may branch on it; this holds for `(K, K)` too, so that the rule has no exception.
+A union's key may depend on each value's class, and `make_pipeline`, which gets no blank, may branch on it; this holds for `(K, K)` too, so that the rule has no exception.
 A parameter typed `X | None` has no key, since `make_pipeline` decides what `None` means.
 `BeamCentre | Referenced[BeamCentre]` is not a union to the binding, so it may be a blank.
 A client that varies a union or a parameter typed `X | None` submits plain requests, which are correct but compute everything each time.

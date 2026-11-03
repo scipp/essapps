@@ -244,12 +244,12 @@ def split(tp: Any, *metadata: Any) -> tuple[Any, tuple[Any, ...], tuple[Any, ...
     """
     The part of a place of type ``tp`` that a request writes, with its
     metadata; and the types whose data a reference fills the place with,
-    the ``T`` of each ``Referenced[T]``. ``tp`` and ``metadata`` are as
-    :func:`root_type` gives them. The part written is ``None`` if only a
-    reference fills the place. Its metadata are ``metadata``, then those of
-    its ``Annotated``. A discriminator in ``metadata`` tells alternatives
-    written inline apart, so a single group written inline does not get
-    it::
+    the ``T`` of each ``Referenced[T]`` with its own metadata, such as an
+    ``AfterValidator``. ``tp`` and ``metadata`` are as :func:`root_type`
+    gives them. The part written is ``None`` if only a reference fills the
+    place. Its metadata are ``metadata``, then those of its ``Annotated``. A
+    discriminator in ``metadata`` tells alternatives written inline apart,
+    so a single group written inline does not get it::
 
         split(Reduction)  # (Reduction, (), ())
         split(PixelMask, REFERENCED)  # (None, (), (PixelMask,))
@@ -265,12 +265,14 @@ def split(tp: Any, *metadata: Any) -> tuple[Any, tuple[Any, ...], tuple[Any, ...
         # (GivenCentre, (), (Centre,))
     """
     if REFERENCED in metadata:
-        return None, (), (tp,)
+        return None, (), (_data(tp, *metadata),)
     members = get_args(tp) if get_origin(tp) in (Union, UnionType) else (tp,)
-    referenced = tuple(get_args(m)[0] for m in members if _marked(m))
+    referenced = tuple(
+        _data(get_args(m)[0], *m.__metadata__) for m in members if is_referenced(m)
+    )
     if not referenced:
         return tp, metadata, ()
-    written = tuple(m for m in members if not _marked(m))
+    written = tuple(m for m in members if not is_referenced(m))
     if not written:
         return None, (), referenced
     if len(written) == 1:
@@ -281,9 +283,15 @@ def split(tp: Any, *metadata: Any) -> tuple[Any, tuple[Any, ...], tuple[Any, ...
     return get_args(inline)[0], (*metadata, *inline.__metadata__), referenced
 
 
-def _marked(tp: Any) -> bool:
-    """Whether ``tp`` is ``Referenced[T]``."""
+def is_referenced(tp: Any) -> bool:
+    """Whether ``tp`` is ``Referenced[T]``, with the marker in its metadata."""
     return get_origin(tp) is Annotated and REFERENCED in tp.__metadata__
+
+
+def _data(tp: Any, *metadata: Any) -> Any:
+    """``tp`` with ``metadata`` but the marker of ``Referenced[T]``."""
+    kept = tuple(m for m in metadata if m is not REFERENCED)
+    return Annotated[tp, *kept] if kept else tp
 
 
 def _discriminates(meta: Any) -> bool:
@@ -423,13 +431,16 @@ def ref_types(
     the spec marks so. Files are left out.
     """
     return [
-        (loc, ref, _referenced_type(model, str(loc[0])))
+        (loc, ref, referenced_type(model, str(loc[0])))
         for loc, ref in iter_refs(params)
         if not isinstance(ref, FileRef)
     ]
 
 
-def _referenced_type(model: type[BaseModel], name: str) -> Any:
-    """The union of the groups that a reference fills the place ``name`` with."""
+def referenced_type(model: type[BaseModel], name: str) -> Any:
+    """
+    The union of the groups, with their metadata, that a reference fills the
+    place ``name`` with.
+    """
     tp, _, metadata = root_type(model, name)
     return Union[split(tp, *metadata)[2]]  # noqa: UP007
