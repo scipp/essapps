@@ -512,7 +512,7 @@ def test_a_table_takes_a_list_of_rows(client: Client) -> None:
 
 
 def test_a_file_model_given_inline_is_refused(client: Client) -> None:
-    refused = 'is not a reference; SampleRun is given by reference to a file'
+    refused = r'is not a file; SampleRun is a file model, written as file\(\.\.\.\)'
 
     with pytest.raises(SubmitError, match=rf"^sample: '/data/run-1.json' {refused}"):
         client.submit(LOAD, params={'sample': '/data/run-1.json'})
@@ -542,8 +542,8 @@ def test_a_file_fits_a_file_model_only(client: Client) -> None:
 def test_no_output_fits_a_file_model(client: Client) -> None:
     loaded = client.submit(load(1))
     refused = (
-        'is a reference to an output; SampleRun is given by reference to a file, '
-        r'such as file\(path=\.\.\.\)'
+        'is a reference to an output; SampleRun is a file model, '
+        r'written as file\(\.\.\.\)'
     )
     by_ref = loaded.ref('value')
 

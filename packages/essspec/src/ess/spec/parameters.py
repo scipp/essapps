@@ -149,8 +149,8 @@ class FileModel(BaseModel, frozen=True, extra='forbid'):
         ):
             raise PydanticCustomError(
                 'file_ref',
-                f'{value!r} is not a reference; {cls.__name__} is given by '
-                'reference to a file, such as file(path=...)',
+                f'{value!r} is not a file; {cls.__name__} is a file model, '
+                'written as file(...)',
             )
         resolve = (info.context or {}).get('files')
         if resolve is not None and isinstance(value.get('file'), str):

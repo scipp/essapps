@@ -488,18 +488,18 @@ def _source_refused(
         ref = as_ref(value)
         if field_types.is_file_model(inline):
             return (
-                f'{ref} is a reference to an output; {name} is given by reference '
-                'to a file, such as file(path=...)'
+                f'{ref} is a reference to an output; {name} is a file model, '
+                'written as file(...)'
             )
         return (
             f'{ref} is a reference to an output; {name} is written inline, since '
             'the spec does not mark the place Referenced[...]'
         )
     if field_types.is_file_model(inline):
-        output = ', or to an output' if referenced else ''
+        output = ', or a reference to an output' if referenced else ''
         return (
-            f'{value!r} is not a reference; {name} is given by reference to a '
-            f'file, such as file(path=...){output}'
+            f'{value!r} is not a file; {name} is a file model, written as '
+            f'file(...){output}'
         )
     return f'{value!r} is not a reference; {name} is given by reference to an output'
 

@@ -917,8 +917,7 @@ def test_a_file_model_given_inline_is_refused(client: Client, inline: Any) -> No
     (error,) = raised.value.errors
     assert error.loc == ('sample',)
     assert error.msg.endswith(
-        ' is not a reference; SampleRun is given by reference to a file, such as '
-        'file(path=...)'
+        ' is not a file; SampleRun is a file model, written as file(...)'
     )
 
 

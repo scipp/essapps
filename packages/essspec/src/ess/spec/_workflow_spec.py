@@ -480,7 +480,7 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     ==================================  ===================================
     Schema at a parameter or row        Widget
     ==================================  ===================================
-    a file only                         a picker of files (a file model)
+    a file                              a picker of files (a file model)
     the object of a group's fields      the group's fields
     ``oneOf``, with ``discriminator``   a choice of the alternatives of a
                                         union, each with its fields
@@ -698,7 +698,7 @@ def _path_problems(annotation: Any) -> list[str]:
     return [
         f'{where}a Path is outside a file model; a parameter or a field that '
         "takes a file is typed a file model, such as mask: MaskFile with class "
-        "MaskFile(FileModel, kind='mask'), and given by reference"
+        "MaskFile(FileModel, kind='mask'), and written as file(...)"
         for where in dict.fromkeys(where for where, _ in found)
     ]
 

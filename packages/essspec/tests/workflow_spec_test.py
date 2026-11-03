@@ -475,7 +475,7 @@ NOT_AN_OUTPUT = re.escape(
 OUTSIDE_A_FILE_MODEL = re.escape(
     "a Path is outside a file model; a parameter or a field that takes a file is "
     "typed a file model, such as mask: MaskFile with class MaskFile(FileModel, "
-    "kind='mask'), and given by reference"
+    "kind='mask'), and written as file(...)"
 )
 
 KEEPS_THE_FILE = re.escape(

@@ -231,8 +231,8 @@ def test_a_reference_to_an_output_at_a_file_model_is_refused() -> None:
     assert raised.value.errors == (
         (
             ('mask',),
-            'r1.sample is a reference to an output; MaskFile is given by reference '
-            'to a file, such as file(path=...)',
+            'r1.sample is a reference to an output; MaskFile is a file model, '
+            'written as file(...)',
         ),
     )
 
@@ -404,8 +404,8 @@ def test_a_file_model_given_inline_is_refused(
         held(model, name, value, _named)
     ((at, msg),) = raised.value.errors
     assert at == loc
-    assert 'is not a reference; ' in msg
-    assert 'is given by reference to a file, such as file(path=...)' in msg
+    assert 'is not a file; ' in msg
+    assert 'is a file model, written as file(...)' in msg
 
 
 def test_a_value_inline_at_a_file_or_an_output_names_both_references() -> None:
@@ -417,8 +417,8 @@ def test_a_value_inline_at_a_file_or_an_output_names_both_references() -> None:
     assert raised.value.errors == (
         (
             ('run',),
-            "{'thickness': 1.0} is not a reference; RunFile | Sample is given by "
-            'reference to a file, such as file(path=...), or to an output',
+            "{'thickness': 1.0} is not a file; RunFile | Sample is a file model, "
+            'written as file(...), or a reference to an output',
         ),
     )
 
