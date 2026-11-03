@@ -4,7 +4,7 @@
 Shared vocabulary of workflow parameter models.
 
 Common building blocks for workflow params models: the file model, the
-marker of a place that a reference fills, constrained unit choices, and
+marker of a field that a reference fills, constrained unit choices, and
 range/edges models with cross-field validation. Purely declarative — no scipp;
 converting validated values into scipp objects is the workflow implementation's
 concern (see :mod:`ess.spec.conversions`).
@@ -209,7 +209,7 @@ class DataRefused(Exception):
     ``T`` of ``Referenced[T]``, with ``errors``. It is not a ``ValueError``, so
     that pydantic does not try the next member of a union with the
     reference: the request phase checked that the output is of ``T``, so the
-    data are refused (see :func:`ess.spec.places.validated`).
+    data are refused (see :func:`ess.spec.request_types.validated`).
     """
 
     def __init__(

@@ -168,7 +168,7 @@ def loc_text(loc: Loc) -> str:
 
 class ParamsError(ValueError):
     """
-    Params that are refused, with each reason at its place: ``errors`` lists
+    Params that are refused, with each reason at its position: ``errors`` lists
     ``(loc, msg)`` pairs, as pydantic's errors give them, and the message
     joins them, such as ``runs[1]: ...; sample: a required parameter, not
     given``.
@@ -182,7 +182,7 @@ class ParamsError(ValueError):
         return '; '.join(f'{loc_text(loc)}: {msg}' for loc, msg in self.errors)
 
 
-def ref_at(loc: Loc, value: Any) -> Ref | None:
+def _ref_at(loc: Loc, value: Any) -> Ref | None:
     """:func:`as_ref` of ``value``; its error is a ``ParamsError`` at ``loc``."""
     try:
         return as_ref(value)
@@ -219,11 +219,11 @@ def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[Loc, Ref]]:
     The params are by name. A reference is a :data:`Ref` or its plain (JSON)
     form, and is looked for at every position (see :func:`positions`). Any
     other value is skipped; a malformed reference raises
-    :class:`ParamsError` at its place (see :func:`as_ref`).
+    :class:`ParamsError` at its position (see :func:`as_ref`).
     """
     for name, value in params.items():
         for loc, item in positions((name,), value):
-            if (ref := ref_at(loc, item)) is not None:
+            if (ref := _ref_at(loc, item)) is not None:
                 yield loc, ref
 
 
@@ -232,7 +232,7 @@ def map_refs(params: Mapping[str, Any], fn: Callable[[Ref], Any]) -> dict[str, A
     The params of a request, by name, with each reference replaced by
     ``fn(ref)``; the params are as :func:`iter_refs` takes them, and any other
     value is kept. A malformed reference raises :class:`ParamsError` at its
-    place.
+    position.
     """
     return {name: _mapped((name,), value, fn) for name, value in params.items()}
 
@@ -243,7 +243,7 @@ def _mapped(loc: Loc, value: Any, fn: Callable[[Ref], Any]) -> Any:
     function of the module, since a nested one that calls itself would hold
     ``fn``, and the data it reads, in a reference cycle.
     """
-    if (ref := ref_at(loc, value)) is not None:
+    if (ref := _ref_at(loc, value)) is not None:
         return fn(ref)
     if isinstance(value, list):
         return [_mapped((*loc, i), v, fn) for i, v in enumerate(value)]

@@ -115,8 +115,8 @@ class Driver[O: BaseModel](Protocol):
       the rows were grouped into pushes, and whatever the order of pushes
       into different tables.
     - Within a table, the rows keep the order in which they were pushed.
-    - :meth:`push` does not modify a value it is given. A driver that adds in
-      place copies the first contribution, so that adding never changes a
+    - :meth:`push` does not modify a value it is given. A driver that adds
+      into the first contribution copies it first, so that adding never changes a
       value that another record returned.
     - :meth:`outputs` may share memory with what the driver holds; the
       caller reads them before the next push.

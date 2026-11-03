@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args, get_origin
 
 import pytest
 import scipp as sc
@@ -27,9 +27,9 @@ from ess.spec import (
     WorkflowSpec,
     request_types,
 )
-from ess.spec.places import alternatives, root_type, validated
+from ess.spec.field_types import alternatives, field_metadata, unwrapped
 from ess.spec.refs import Loc, ParamsError, Ref
-from ess.spec.request_types import held, sources
+from ess.spec.request_types import held, sources, validated
 
 
 def _stored(
@@ -133,7 +133,11 @@ def value_of(
 
 def row_sources(model: type[BaseModel], name: str) -> dict[str, Any]:
     """The sources of a parameter, or of one row of a list parameter."""
-    tp, _, metadata = root_type(model, name)
+    info = model.model_fields[name]
+    if get_origin(info.annotation) is list:
+        tp, _, metadata = unwrapped(get_args(info.annotation)[0])
+    else:
+        tp, _, metadata = unwrapped(info.annotation, field_metadata(info))
     return sources(tp, metadata)
 
 
@@ -227,7 +231,8 @@ def test_a_file_that_a_validator_makes_is_refused() -> None:
 
 
 def test_a_discriminator_in_the_metadata_of_a_field_names_the_tag() -> None:
-    tp, _, metadata = root_type(NamedCentre, 'beam_centre')
+    info = NamedCentre.model_fields['beam_centre']
+    tp, _, metadata = unwrapped(info.annotation, field_metadata(info))
     assert alternatives(tp, *metadata) == (
         'kind',
         {'given': GivenCentre, 'find': FindCentre},
@@ -961,3 +966,8 @@ def test_a_list_is_validated_whole_and_a_table_without_its_length() -> None:
     stored, _ = held(Params, 'samples', one_row, _named, table=True)
     assert stored == one_row
     assert validated(Params, 'samples', one_row, table=True) == [Sample(thickness=2)]
+
+
+def test_a_binding_gives_a_file_model_as_data() -> None:
+    given = validated(MaskParams, 'mask', {'file': 'pid-1'})
+    assert given == MaskFile(file='pid-1')

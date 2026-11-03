@@ -10,12 +10,10 @@ the marker :data:`Referenced`, and the bindings and their protocols. See
 spec's models and ADR 0001 (docs/developer/adr in the package) for the
 rationale. The helpers are in their modules: :mod:`~.field_types` for what
 the framework reads from field types, such as :func:`~.field_types.fits`,
-and how it validates a value by its field, :mod:`~.refs` for finding the
-references of a request, :mod:`~.places` for what a request may write at
-each parameter, read from its type, and how the call phase makes a value,
+:mod:`~.refs` for finding the references of a request,
 :mod:`~.request_types` for the request type, which validates a request and
-is the params schema, and :mod:`~.binding` for the values a binding is made
-with.
+is the params schema, and how the call phase makes a value, and
+:mod:`~.binding` for the values a binding is made with.
 
 The package does not import :mod:`~.conversions` (needs scipp),
 :mod:`~.pipeline` (``PipelineBinding``, needs sciline), and :mod:`~.testing`

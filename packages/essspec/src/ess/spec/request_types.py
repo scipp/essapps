@@ -35,7 +35,7 @@ of groups, or a scalar written ``inline``, a ``file``, or a reference to an
 group's own class, with its validators, so validating a request validates
 it whole. A group that holds one is a model derived from it without its
 validators (see :func:`group_type`): they run when the request runs, on the
-data read (see :func:`ess.spec.places.validated`). A file is the file
+data read (see :func:`validated`). A file is the file
 model's own class, which a backend validates with a resolver of files (see
 :class:`~ess.spec.parameters.FileModel`).
 
@@ -45,14 +45,49 @@ holds, the JSON form of the request type: each group and file validated,
 each reference as given. It also returns each reference to an output with
 the type its data must fit, :data:`Reads`, which the backend checks against
 history. The call phase validates the params model itself from the record
-(see :func:`ess.spec.places.validated`).
+(see :func:`validated`).
+
+A request is validated one parameter at a time, in two phases, and a spec
+checks its defaults the same way:
+
+=============  =================================  ==========================
+When           Function                           What it does
+=============  =================================  ==========================
+spec made      :func:`validated`                  validates the default of
+                                                  a field as a binding
+                                                  takes it
+request phase  :func:`held`                       validates a parameter by
+                                                  its request type, and
+                                                  returns what the record
+                                                  stores: the JSON form of
+                                                  each group and file, and
+                                                  each reference to an
+                                                  output as it is
+call phase     :func:`validated`, with the        validates a parameter by
+               context ``read`` and ``paths``     the params model from
+                                                  what the record stores:
+                                                  each reference to an
+                                                  output replaced by its
+                                                  data, each file with its
+                                                  local path
+=============  =================================  ==========================
+
+The *request phase* is when a request is submitted, before any data is
+read. The *call phase* is when the request runs, once the backend has read
+the data of each reference to an output. :func:`validated` validates by the
+params model, not by the request type, so this module holds the request
+type and the validation of a value in each phase.
+
+An error is a :class:`~ess.spec.refs.ParamsError` that names the position of
+each problem in the params, such as ``reduction.bins`` or ``runs[1]``.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import functools
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from types import UnionType
 from typing import Annotated, Any, Final, Union, get_args, get_origin
 
 from pydantic import (
@@ -71,10 +106,12 @@ from pydantic_core import (
     ErrorDetails,
     PydanticCustomError,
     PydanticSerializationError,
+    from_json,
+    to_json,
 )
 
-from . import field_types, places
-from .parameters import REFERENCED, FileModel
+from . import field_types
+from .parameters import REFERENCED, DataRefused, FileModel
 from .refs import (
     AccumulatorRef,
     FileRef,
@@ -97,7 +134,7 @@ OUTPUT: Final = 'output'
 
 def source_of(value: Any) -> str | None:
     """
-    The source of ``value``, as a request writes it at a place or as a Python
+    The source of ``value``, as a request writes it at a field or as a Python
     object: :data:`FILE` or :data:`OUTPUT` for an object with the key
     ``"@ref"`` of that kind, ``None`` for one of no kind, and :data:`INLINE`
     for any other value.
@@ -117,8 +154,8 @@ def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
     """
     The sources that a field of type ``tp`` takes, by tag, each the type
     that validates it, with the constraints of the field (see
-    :func:`~ess.spec.places.unwrapped` for ``tp`` and ``metadata``). Of the
-    part of ``tp`` that a request writes (see :func:`~ess.spec.places.split`):
+    :func:`~ess.spec.field_types.unwrapped` for ``tp`` and ``metadata``). Of the
+    part of ``tp`` that a request writes (see :func:`~ess.spec.field_types.split`):
 
     - :data:`INLINE`: the union of groups, with its discriminator, the
       group, or the scalar, each group as :func:`group_type` gives it;
@@ -132,12 +169,12 @@ def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
 
     In the JSON schema, each alternative of a union requires its tag, since a
     request always writes it, and is titled by its tag (see
-    :func:`~ess.spec.places.title`). A form panel shows a widget for each
+    :func:`~ess.spec.field_types.title`). A form panel shows a widget for each
     source a field takes.
     """
     taken: dict[str, Any] = {}
-    inline, inline_metadata, referenced = places.split(tp, *metadata)
-    union = places.alternatives(inline, *inline_metadata)
+    inline, inline_metadata, referenced = field_types.split(tp, *metadata)
+    union = field_types.alternatives(inline, *inline_metadata)
     if union is not None:
         tag, groups = union
         members = tuple(_alternative(group, tag, v) for v, group in groups.items())
@@ -191,7 +228,7 @@ def _alternative(group: type[BaseModel], tag: str, value: str) -> Any:
     alternative by the class; it requires the tag when it validates.
     """
     extra: JsonDict = {
-        'title': places.title(value, group.model_fields[tag]),
+        'title': field_types.title(value, group.model_fields[tag]),
         'required': [tag],
     }
     return Annotated[group_type(group), Field(json_schema_extra=extra)]
@@ -227,11 +264,11 @@ def tagged(taken: Mapping[str, Any], none: bool) -> Any:
 def type_of(annotation: Any, metadata: tuple[Any, ...] = ()) -> Any:
     """
     The request type of a field typed ``annotation``, with ``metadata`` (see
-    :func:`~ess.spec.places.field_metadata`): a list of the request type of
+    :func:`~ess.spec.field_types.field_metadata`): a list of the request type of
     its element, with the list's constraints, or the :func:`tagged` union of
     its :func:`sources`.
     """
-    tp, none, metadata = places.unwrapped(annotation, metadata)
+    tp, none, metadata = field_types.unwrapped(annotation, metadata)
     if REFERENCED not in metadata and get_origin(tp) is list:
         listed: Any = list[type_of(get_args(tp)[0])]  # type: ignore[misc]
         made = Annotated[listed, *metadata] if metadata else listed
@@ -248,7 +285,7 @@ def group_type(group: type[BaseModel]) -> type[BaseModel]:
     docstring, and config, with each field that holds one typed its request
     type, and its metadata, default, title, and description kept. It has no
     validators of the group, which run when the request runs, on the data
-    read (see :func:`~ess.spec.places.validated`).
+    read (see :func:`~ess.spec.request_types.validated`).
     """
     if not field_types.holds_ref(group):
         return group
@@ -274,12 +311,12 @@ def _request_field(name: str, info: FieldInfo) -> tuple[Any, FieldInfo]:
     The field ``name`` with ``info``, typed its request type, with its title,
     description, examples, extra JSON schema, and default.
     """
-    tp = type_of(info.annotation, places.field_metadata(info))
+    tp = type_of(info.annotation, field_types.field_metadata(info))
     # Undefined, and so required, if the field is.
     default = info.get_default(call_default_factory=True)
     field = Field(
         default=default,
-        title=places.title(name, info),
+        title=field_types.title(name, info),
         description=info.description,
         examples=info.examples,
         json_schema_extra=info.json_schema_extra,
@@ -308,7 +345,8 @@ def _one(model: type[BaseModel], name: str, table: bool) -> type[BaseModel]:
     """
     A model of the field ``name`` of ``model`` alone, typed its request type,
     with the config of ``model``; without the length constraints of a list
-    if it is a ``table`` (see :func:`~ess.spec.field_types.model_of`).
+    if it is a ``table`` (see :func:`model_of`). It is made from the one
+    field, so that a problem of another field does not hide that of this one.
     """
     info = model.model_fields[name]
     field: Any = (
@@ -344,9 +382,9 @@ def held(
     as an instance of a group or a :data:`~ess.spec.refs.Ref`, which are
     dumped to plain data first. It is validated from its JSON form by its
     request type, without the length constraints of a list if it is a
-    ``table`` (see :func:`~ess.spec.field_types.model_of`), with each file
+    ``table`` (see :func:`model_of`), with each file
     resolved by ``files``, and the JSON form of the validated value is
-    returned (see :func:`ess.spec.field_types.inline`): a group, a file, or
+    returned (see :func:`inline`): a group, a file, or
     a reference to an output as given. The type that the data of each
     reference must fit is read from the request type of the field that
     holds it, in the validated value, so the backend checks the reference
@@ -440,13 +478,13 @@ def _inline(
     """
     ``value``, plain data of the field ``name``, validated by ``one``, the
     request type of that field alone, with ``context``, and its JSON form
-    (see :func:`~ess.spec.field_types.inline`). A value without a JSON form
+    (see :func:`inline`). A value without a JSON form
     is validated as it is, since it may be one that the field does not take.
     """
     loc = (name,)
-    tp = places.field_type(one.model_fields[name])
+    tp = field_types.field_type(one.model_fields[name])
     try:
-        return field_types.inline(one, name, value, context=context)
+        return inline(one, name, value, context=context)
     except PydanticSerializationError as error:
         why = f'cannot be stored as JSON: {error}'
     except ValidationError as error:
@@ -468,13 +506,13 @@ def _located(
     """
     The ``errors`` of validating ``value``, of the request type ``tp``,
     given at ``loc``, each at its position in ``value`` (see
-    :func:`~ess.spec.places.position`), once. The errors at a reference or
+    :func:`position`), once. The errors at a reference or
     inside it are one error at the reference, since the field does not take
     its source, unless each is an error of a file that the field takes: of
     the file source, or of a validator. At a list, the reference is one to a
     whole list.
     """
-    found = [(places.position(tp, e['loc'][1:]), e['msg'], e['type']) for e in errors]
+    found = [(position(tp, e['loc'][1:]), e['msg'], e['type']) for e in errors]
     for at, item in positions((), value):
         inside = {kind for p, _, kind in found if p[: len(at)] == at}
         if (ref := as_ref(item)) is None or inside <= _TAKEN:
@@ -503,3 +541,201 @@ def _whole_list(ref: Any) -> str:
 
 def _refused(loc: Loc, msg: str) -> ParamsError:
     return ParamsError([(loc, msg)])
+
+
+@functools.cache
+def model_of(model: type[BaseModel], name: str, table: bool = False) -> type[BaseModel]:
+    """
+    A model of the field ``name`` of ``model`` alone, with its config and
+    without the decorators of ``model``: it validates one value by its own
+    field. The params model has no decorators but model validators, which
+    the framework never calls; a check of one value belongs to the value's
+    type.
+
+    With ``table``, the field is a table, validated without its length
+    constraints: an accumulator takes a table a few rows at a time, and the
+    backend checks the number of rows of the whole table.
+    """
+    info = model.model_fields[name]
+    field = (info.annotation, Field()) if table else (info.annotation, info)
+    return create_model(model.__name__, __config__=model.model_config, **{name: field})
+
+
+def _json_form(one: type[BaseModel], name: str, value: Any) -> Any:
+    """
+    The JSON form of ``value``, a valid value of the field ``name`` of
+    ``one``, a model of that field alone, as its declared type dumps it to
+    JSON and JSON reads back: an instance of a subclass of a model type
+    without the subclass's fields, and a number that is not finite as
+    ``None``.
+    """
+    made = one.model_construct(**{name: value})
+    return from_json(made.model_dump_json(by_alias=True))[name]
+
+
+def inline(
+    one: type[BaseModel],
+    name: str,
+    value: Any,
+    context: dict[str, Any] | None = None,
+) -> tuple[Any, Any]:
+    """
+    ``value`` validated, and its JSON form, as the record stores it. ``value``
+    is a value of the field ``name`` of ``one``, a model of that field alone,
+    such as the request type of a parameter.
+
+    ``value`` is plain data, such as :func:`held` makes of
+    Python objects. It is validated from its JSON form, with ``context``. A
+    field that a model lacks is refused at any depth, since validating would
+    drop it silently. The JSON form of the validated value must read back as
+    a value with the same JSON form, validated without ``context``. Raises:
+
+    - ``PydanticSerializationError`` if it has no JSON form;
+    - ``ValidationError`` if it is not valid, or if its JSON form is not,
+      such as of a number that is not finite, which JSON holds as ``null``;
+    - :class:`~ess.spec.refs.ParamsError` at the position inside the value,
+      without ``name``, whose JSON form reads back as another value, such as
+      a field of a group whose validator changes a value it has validated
+      already.
+    """
+    given = to_json({name: value}, inf_nan_mode='constants')
+    made = getattr(
+        one.model_validate_json(given, extra='forbid', context=context), name
+    )
+    stored = _json_form(one, name, made)
+    try:
+        again = getattr(one.model_validate_json(to_json({name: stored})), name)
+    except ValidationError as error:
+        (first, *_) = error.errors()
+        raise ValidationError.from_exception_data(
+            one.__name__,
+            [{'type': _NO_JSON_FORM_ERROR, 'loc': first['loc'], 'input': None}],
+        ) from None
+    if (read := _json_form(one, name, again)) != stored:
+        raise ParamsError([(_differs((), stored, read), _NO_JSON_FORM)])
+    return made, stored
+
+
+_NO_JSON_FORM = 'has no JSON form that reads back as the value'
+_NO_JSON_FORM_ERROR = PydanticCustomError('no_json_form', _NO_JSON_FORM)
+
+
+def _differs(loc: Loc, a: Any, b: Any) -> Loc:
+    """
+    The first position at which ``a`` and ``b``, two JSON forms at ``loc``,
+    differ: a field of an object or an element of a list, at any depth.
+    """
+    if isinstance(a, dict) and isinstance(b, dict) and a.keys() == b.keys():
+        pairs: Iterable[tuple[str | int, Any, Any]] = ((k, a[k], b[k]) for k in a)
+    elif isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        pairs = ((i, x, y) for i, (x, y) in enumerate(zip(a, b, strict=True)))
+    else:
+        return loc
+    for at, x, y in pairs:
+        if x != y:
+            return _differs((*loc, at), x, y)
+    return loc
+
+
+def validated(
+    model: type[BaseModel],
+    name: str,
+    value: Any,
+    table: bool = False,
+    context: dict[str, Any] | None = None,
+) -> Any:
+    """
+    ``value`` of the field ``name`` of ``model`` as the binding takes it,
+    validated by its field alone (see
+    :func:`model_of`); without the length constraints
+    of a list if it is a ``table``. Raises
+    :class:`~ess.spec.refs.ParamsError` at the position of each problem in
+    ``value`` (see :func:`position`).
+
+    Without ``context``, ``value`` is data, as in direct use, so that each
+    field typed ``Referenced[T]`` takes ``T``. A spec checks a default with
+    it, and :func:`ess.spec.testing.instance` makes a params instance.
+
+    With ``context``, ``value`` is what the record stores, validated from
+    its JSON form, in the call phase. ``context`` holds ``read``, which gives
+    the data of each reference to an output (see
+    :data:`~ess.spec.parameters.Referenced`), and ``paths``, the local path
+    of each file by its identity (see
+    :class:`~ess.spec.parameters.FileModel`). A field that a model lacks is
+    refused. A group that holds a reference to an output, at any depth, is
+    validated only here, so its validators run when the request runs and
+    see the data read. Every other group was validated whole when the
+    request was submitted too.
+
+    pydantic tries the members of a union with a member ``Referenced[...]``
+    in order, each with the stored value. A member written inline is given a
+    reference too, and refuses it, since a field that a model lacks is
+    refused. So a validator of such a member, such as a
+    ``model_validator(mode='before')``, raises ``ValueError`` for a value it
+    does not take, as it must for a malformed request when it is submitted:
+    any other exception fails the call. When a member written inline refuses
+    a value written inline, the error that the member ``Referenced[...]``
+    adds, that the value is not a reference, is dropped. When the data read
+    for a reference fail a check of ``T``, they are one error, at the
+    reference.
+    """
+    one = model_of(model, name, table)
+    try:
+        if context is None:
+            made = one.model_validate({name: value})
+        else:
+            given = to_json({name: value})
+            made = one.model_validate_json(given, context=context, extra='forbid')
+    except ValidationError as error:
+        tp = field_types.field_type(one.model_fields[name])
+        found = [(position(tp, e['loc'][1:]), e) for e in error.errors()]
+        raise ParamsError(
+            ((name, *at), e['msg'])
+            for at, e in found
+            if e['type'] != 'output_ref' or not _inside(at, found)
+        ) from None
+    except DataRefused as refused:
+        at = next(loc for loc, ref in iter_refs({name: value}) if ref == refused.ref)
+        msg = '; '.join(dict.fromkeys(e['msg'] for e in refused.errors))
+        raise ParamsError([(at, msg)]) from None
+    return getattr(made, name)
+
+
+def _inside(at: Loc, found: list[tuple[Loc, ErrorDetails]]) -> bool:
+    """Whether an error of ``found``, but ``output_ref``, is at ``at`` or inside."""
+    return any(p[: len(at)] == at and e['type'] != 'output_ref' for p, e in found)
+
+
+def position(tp: Any, loc: Loc) -> Loc:
+    """
+    The position in a value of type ``tp`` that ``loc``, the location of a
+    pydantic error inside the value, names. ``tp`` is a request type (see
+    :mod:`ess.spec.request_types`), or a type of the params model. Of
+    ``loc``, each part that steps into the value is kept: a field of a group
+    or an index of a list, and the field that an error of a missing field
+    names. A part that names a member of a union is not: the tag of a tagged
+    union, of a source or of a group, and the label of a member of a union
+    with a member ``Referenced[...]``, which only the params model has::
+
+        position(Centre, ('find', 'tolerance'))  # ('tolerance',)
+
+    Read along the type, a field named like a tag is a field. After the
+    label of a member of a union with a member ``Referenced[...]``, the
+    position is read along the member written inline, whose errors are the
+    ones that remain (see :func:`validated`).
+    """
+    at: list[str | int] = []
+    for part in loc:
+        tp, _, metadata = field_types.unwrapped(tp)
+        if (members := field_types.tagged_members(tp, metadata)) is not None:
+            tp = members.get(part, Any)
+        elif get_origin(tp) in (Union, UnionType):
+            inline, inline_metadata, _ = field_types.split(tp)
+            tp = Annotated[inline, *inline_metadata] if inline_metadata else inline
+        else:
+            at.append(part)
+            if field_types.is_group(tp) and part in tp.model_fields:
+                tp = field_types.field_type(tp.model_fields[part])
+            elif get_origin(tp) is list:
+                tp = get_args(tp)[0]
+    return tuple(at)

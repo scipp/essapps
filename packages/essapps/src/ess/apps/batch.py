@@ -60,14 +60,13 @@ class Lookup:
         return {blank: rule.find(ref, source) for blank, rule in self.rules.items()}
 
 
-def file_place(template: Template, lookup: Lookup | None, at: str) -> str:
-    """The place a file fills, ``at``: the one blank the lookup leaves."""
+def check_at(template: Template, lookup: Lookup | None, at: str) -> None:
+    """Refuse ``at`` unless it is the one blank the lookup leaves for a file."""
     left = [b for b in template.blanks if lookup is None or b not in lookup.blanks]
     if len(left) != 1:
         raise ValueError(f'a file fills one blank; {template.blanks} leave {left}')
     if at != left[0]:
         raise ValueError(f'a file fills the blank {left[0]!r}, not {at!r}')
-    return at
 
 
 def apply(
@@ -124,7 +123,7 @@ def try_apply(
     its metadata lacks ``member_field``. Returns the requests, and the error of
     each file left out.
     """
-    place = file_place(template, lookup, at)
+    check_at(template, lookup, at)
     requests: dict[str, Request] = {}
     failed: dict[FileRef, LookupError] = {}
     for ref in files:
@@ -136,5 +135,5 @@ def try_apply(
             continue
         if member in requests:
             raise ValueError(f'two files have {member_field} {member}')
-        requests[member] = template.fill(params={place: ref, **found})
+        requests[member] = template.fill(params={at: ref, **found})
     return requests, failed

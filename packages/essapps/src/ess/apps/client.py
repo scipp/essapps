@@ -346,14 +346,14 @@ class Client:
         :meth:`Accumulator.ref`.
 
         The backend checks the values against its own spec, so a ``SpecId``
-        in place of the spec gets the same checks. A request that cannot run
+        instead of the spec gets the same checks. A request that cannot run
         raises ``SubmitError``: an invalid value, an unknown spec or file,
-        a value written inline at a place that only a reference fills, a
+        a value written inline at a field that only a reference fills, a
         reference where none may stand, inside a group (except a file at a
-        field typed a file model), at a place the spec does not mark
+        field typed a file model), at a field the spec does not mark
         ``Referenced[...]``, or to a whole list, a reference the client may
         not read, or one whose data do not fit its field. Each of its
-        ``errors`` names the field at fault by its place, ``loc``, and the
+        ``errors`` names the field at fault by its position, ``loc``, and the
         request by its key or index, ``entry``, if several are given (see
         :class:`~ess.apps.errors.FieldError`)::
 

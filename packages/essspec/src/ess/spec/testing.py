@@ -36,7 +36,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from . import places
+from . import request_types
 from ._workflow_spec import WorkflowSpec
 from .binding import Binding, Driver, StageBinding, fixed_values
 
@@ -90,7 +90,7 @@ def instance(spec: WorkflowSpec[Any, Any], values: Mapping[str, Any]) -> BaseMod
     model: type[BaseModel] = spec.params
     return model.model_construct(
         **{
-            n: places.validated(model, n, v, n in spec.tables)
+            n: request_types.validated(model, n, v, n in spec.tables)
             for n, v in values.items()
         }
     )
@@ -248,7 +248,7 @@ def _check_no_shared_memory(outputs: Any, values: Any, *, where: str) -> None:
 
 
 def _arrays(value: Any, at: str) -> Iterator[tuple[str, Any]]:
-    """The numpy arrays that hold ``value``, recursively, each with its place."""
+    """The numpy arrays that hold ``value``, recursively, each with its position."""
     if isinstance(value, BaseModel):
         yield from _arrays(dict(value), at)
     elif isinstance(value, Mapping):

@@ -82,7 +82,7 @@ validators run. In the *call phase*, on a worker, the backend reads the
 output each reference names, and validates each value, a row of a list on
 its own, by the params model from the JSON form the log holds, with each
 reference replaced by the data read and each file model given its file's
-local path (see :func:`ess.spec.places.validated`). A group that holds a
+local path (see :func:`ess.spec.request_types.validated`). A group that holds a
 reference is validated then, so its validators see the data read. For a
 plain request the backend makes the params instance from these values
 without validating again, so the params model's model validators never run;
@@ -124,7 +124,7 @@ Each accumulator then works through its steps one at a time, in the order they
 were logged, on the workers: opening has the binding make the driver from the
 template's values by name, each read and validated by its own field, and each
 push is one push into the driver per table it gives rows of, in the order
-given, which may add the rows in place; each row is first read and
+given, which may add the rows to what it holds; each row is first read and
 validated by its table's element type, and a row that fails its check fails
 the push. A step starts once the records it references have completed, and a
 push once the readers of the state before it are done. If a step fails, or a record it
@@ -155,7 +155,7 @@ the first time a record of the state or a read of its outputs reads it, and
 kept until the next push. The record of a state is computed from the
 driver, as a call through a stage is from what the stage holds: its outputs
 are what the driver returns, not a copy, and may share memory with the
-driver, which the next push may change in place. They are kept until the
+driver, which the next push may change. They are kept until the
 requests that read them have run, and the record holds the state as its
 reader until then. Reading the outputs of the accumulator copies them, or
 only the part that a selection names. So the next push waits until the
@@ -215,7 +215,7 @@ from ess.spec import (
     StageCall,
     WorkflowSpec,
     field_types,
-    places,
+    request_types,
 )
 from ess.spec.refs import Loc, ParamsError, iter_refs, map_refs
 from ess.spec.request_types import Reads
@@ -1268,8 +1268,9 @@ class Backend:
         The data each reference names is read, and each value is validated by
         the params model from what the log holds, a table without its length
         constraints, with each reference replaced by its data and each file
-        given its local path (see :func:`ess.spec.places.validated`). A group that
-        holds a reference is validated only here, so its validators run now.
+        given its local path (see
+        :func:`ess.spec.request_types.validated`). A group that holds a
+        reference is validated only here, so its validators run now.
         A plain request makes the params instance from them, and a stage or a
         driver takes them by name.
         """
@@ -1281,7 +1282,7 @@ class Backend:
         }
         context = {'read': self._reader(values), 'paths': paths}
         return {
-            n: places.validated(spec.params, n, v, n in spec.tables, context)
+            n: request_types.validated(spec.params, n, v, n in spec.tables, context)
             for n, v in values.items()
         }
 

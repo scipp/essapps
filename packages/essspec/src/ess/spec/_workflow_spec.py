@@ -270,7 +270,7 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         # No output holds a file model or a Path: every file comes from the
         # file source.
         raw: RunFile
-        # Referenced[...] marks a place of the params.
+        # Referenced[...] marks a field of the params.
         pixel_mask: Referenced[PixelMask]
 
     WorkflowSpec(..., params=Params, outputs=Outputs, tables=('sample_runs',))
@@ -315,7 +315,7 @@ from pydantic import (
 )
 from pydantic.fields import FieldInfo
 
-from . import field_types, places, request_types
+from . import field_types, request_types
 from .parameters import REFERENCED, FileModel
 from .refs import ParamsError, iter_refs
 
@@ -478,7 +478,7 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
 
     The params schema is the JSON schema of the spec's request type (see
     :mod:`ess.spec.request_types`), which also validates a request, so the
-    two agree. The sources a place takes are its ``oneOf``. The schema of a
+    two agree. The sources a field takes are its ``oneOf``. The schema of a
     reference to an output is the ``@ref`` object of each kind it may be
     (see :mod:`ess.spec.refs`), with the name of the type it must fit under
     ``dataType``, as the outputs schema names the type of each output. A
@@ -576,7 +576,7 @@ def _fields_problems(
                 'the JSON form, which would leave out the value'
             )
             continue
-        metadata = places.field_metadata(field)
+        metadata = field_types.field_metadata(field)
         if found := _type_problems(field.annotation, metadata, stack):
             problems.extend(f'{where}: {problem}' for problem in found)
         elif field.default_factory_takes_validated_data:
@@ -604,11 +604,11 @@ def _type_problems(
     - ``X | None``, and ``list[X]``, with ``X`` not a list and not
       ``X | None``.
     """
-    tp, none, metadata = places.unwrapped(annotation, metadata)
+    tp, none, metadata = field_types.unwrapped(annotation, metadata)
     if field_types.is_alias(tp):
         return [_alias_text(tp)]
     if REFERENCED not in metadata and get_origin(tp) is list:
-        item, item_none, _ = places.unwrapped(get_args(tp)[0])
+        item, item_none, _ = field_types.unwrapped(get_args(tp)[0])
         if none:
             return ['a list is not typed list[X] | None; a list without elements is []']
         if item_none:
@@ -618,19 +618,19 @@ def _type_problems(
         if get_origin(item) is list:
             return ['a list is not of lists; its element is a group that holds a list']
         return _type_problems(get_args(tp)[0], (), stack)
-    inline, inline_metadata, referenced = places.split(tp, *metadata)
+    inline, inline_metadata, referenced = field_types.split(tp, *metadata)
     problems = [p for data in referenced for p in _referenced_problems(data)]
     if inline is None:
         return problems
     members = get_args(inline) if get_origin(inline) in (Union, UnionType) else ()
-    if (referenced and any(map(places.discriminates, metadata))) or any(
+    if (referenced and any(map(field_types.discriminates, metadata))) or any(
         map(field_types.is_referenced, members)
     ):
         return [*problems, _TAGGED_REFERENCE]
     if aliases := [m for m in members if field_types.is_alias(field_types.plain(m))]:
         return [*problems, *map(_alias_text, aliases)]
     try:
-        union = places.alternatives(inline, *inline_metadata)
+        union = field_types.alternatives(inline, *inline_metadata)
     except ValueError as error:
         return [*problems, str(error)]
     if union is not None:
@@ -761,7 +761,7 @@ def _group_problems(
     from the object of its fields; or for a problem of a field (see
     :func:`_fields_problems`). Field and model validators of any mode are
     allowed: they run whenever the group is validated (see
-    :mod:`ess.spec.places`). A file model is checked by
+    :func:`ess.spec.request_types.validated`). A file model is checked by
     :func:`_file_model_problems` alone.
     """
     if field_types.is_file_model(group):
@@ -893,7 +893,7 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
     ``None``: what a request may write, without a reference to an output or
     a file (see :func:`ess.spec.request_types.held`), and the value that
     validating it gives, since pydantic does not validate a default, and a
-    binding gets it as it is (see :func:`ess.spec.places.validated`). So a
+    binding gets it as it is (see :func:`ess.spec.request_types.validated`). So a
     group's default is an instance, not the object of its fields, and a
     list's default keeps the length constraints of the list.
     """
@@ -905,7 +905,7 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
             for loc, ref in iter_refs({name: held})
         ]:
             raise ParamsError(refs)
-        made = places.validated(model, name, default)
+        made = request_types.validated(model, name, default)
     except ParamsError as error:
         return f'the default is not a value a request may write: {error}'
     if made != default:
@@ -934,7 +934,7 @@ def _outputs_problems(model: type[BaseModel]) -> list[str]:
             )
         elif field_types.holds_ref(field.rebuild_annotation()):
             problems.append(
-                f'{where}: Referenced[...] marks a place of the params, not an output'
+                f'{where}: Referenced[...] marks a field of the params, not an output'
             )
         else:
             problems.extend(f'{where}: {problem}' for problem in _path_problems(tp))

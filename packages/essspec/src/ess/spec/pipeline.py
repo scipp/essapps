@@ -16,7 +16,7 @@ from typing import Any, NewType, Union, get_args, get_origin
 import sciline
 from pydantic import BaseModel
 
-from . import field_types, places
+from . import field_types
 from ._workflow_spec import WorkflowSpec
 from .binding import StageCall, fixed_values
 
@@ -348,7 +348,7 @@ def _grouped(model: type[BaseModel], name: str) -> bool:
     is typed a group or a union of groups, ``Referenced[T]`` among them,
     possibly ``X | None``.
     """
-    tp = field_types.plain(places.root_type(model, name)[0])
+    tp = field_types.value_type(model.model_fields[name].annotation)
     members = get_args(tp) if get_origin(tp) in (Union, UnionType) else (tp,)
     return all(field_types.is_group(m) for m in members)
 

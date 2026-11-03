@@ -7,14 +7,14 @@ themselves in a tab of their own.
 
 The app needs a client only. It submits the shown form's request through the
 client and shows what the backend says: each reason a request is refused, by
-its place, or why a record failed. Each place of the form with nothing given
+its position, or why a record failed. Each field of the form with nothing given
 is shown as such a reason, and nothing is submitted. A submission returns
 once the backend has logged it, so the app lists the new record pending.
 
 The client tells no one that a record has finished, so the app asks:
 :meth:`App.poll` lists the records again once one listed pending has
 finished, and a periodic callback of Panel calls it while the app is served.
-Each time the records are listed again, the forms are too, so a place that
+Each time the records are listed again, the forms are too, so a field that
 takes a reference offers each new record, pending or not.
 """
 
@@ -71,7 +71,7 @@ class App:
     def submit(self) -> Record | None:
         """
         Submit the shown form's request; its record, pending, or ``None`` if
-        it is refused, or if a place of the form has nothing given.
+        it is refused, or if a field of the form has nothing given.
         """
         try:
             record = self.client.submit(self.form.spec, params=self.form.params)

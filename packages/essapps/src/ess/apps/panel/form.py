@@ -10,10 +10,10 @@ that a record's request can be edited and submitted again.
 
 The form has a tab per parameter, with the tabs on the left, as
 esslivedata's dashboard has. The widget follows from what a request may write
-at each parameter or row, read with :func:`ess.spec.places.split` as the
+at each parameter or row, read with :func:`ess.spec.field_types.split` as the
 sources of its request type are (:func:`ess.spec.request_types.sources`),
 which also validate a request and are the params schema, and is labelled by
-:func:`ess.spec.places.title`, a parameter by the title of its tab:
+:func:`ess.spec.field_types.title`, a parameter by the title of its tab:
 
 =========================  ================================================
 Where                      Widget
@@ -35,7 +35,7 @@ a field of a group         an input of its type, or a picker of its values;
                            it, with ``None`` if it is typed ``X | None``
 =========================  ================================================
 
-A record's output fits if its type, from the record's spec, fits the place,
+A record's output fits if its type, from the record's spec, fits the field,
 and a request of the client may reference it now (``client.readable``), so a
 pending record is offered too. A file fits a file model if a
 :class:`~ess.apps.Selector` of the model's metadata matches it, as the
@@ -45,16 +45,16 @@ it.
 
 The widgets follow those of esslivedata's dashboard
 (scipp/esslivedata#1426), in Panel. A table is a ``Tabulator``, so a
-notebook loads Panel with ``pn.extension('tabulator')``. A place without a
+notebook loads Panel with ``pn.extension('tabulator')``. A field without a
 default starts unset, so that a value a correct reduction needs is never
 filled in for the user; so does a list, of rows or of scalars, until an
 element is added or removed, so that a table, which has no default, is never
-given without rows by mistake. A place is left out of the request only if it
+given without rows by mistake. A field is left out of the request only if it
 is a choice with no way chosen, which it is only without a default, so the
 backend refuses it as required. A way chosen, or an input, with nothing
 given is not left out, since the backend would fill in the default: the
 params name it as missing (see :attr:`Form.params`). An empty text is the
-value ``''`` where the place has a default, and nothing given where it has
+value ``''`` where the field has a default, and nothing given where it has
 none, since a text input cannot tell an empty text from none; an element of
 a list of texts is a text, ``''`` too, since it was added.
 
@@ -90,7 +90,6 @@ from ess.spec import (
     OutputRef,
     WorkflowSpec,
     field_types,
-    places,
 )
 from ess.spec.refs import Loc, as_ref
 
@@ -104,12 +103,12 @@ class _Unset:
 
 UNSET: Any = _Unset()
 """
-The value of a place that the request leaves out; given to ``set``, the
-place as it starts, at its default or unset.
+The value of a field that the request leaves out; given to ``set``, the
+field as it starts, at its default or unset.
 """
 
 type _Missing = list[FieldError]
-"""The places with nothing given, each with what the user is to do."""
+"""The fields with nothing given, each with what the user is to do."""
 
 
 def _default(info: FieldInfo) -> Any:
@@ -119,10 +118,14 @@ def _default(info: FieldInfo) -> Any:
 def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice | _Rows:
     """The widget of the parameter ``name`` of ``model``, the params model."""
     info = model.model_fields[name]
-    label = places.title(name, info)
-    tp, none, metadata = places.root_type(model, name)
-    inline, inline_metadata, _ = places.split(tp, *metadata)
-    union = places.alternatives(inline, *inline_metadata)
+    label = field_types.title(name, info)
+    if field_types.is_list(model, name):
+        tp, none, metadata = field_types.unwrapped(get_args(info.annotation)[0])
+    else:
+        metadata = field_types.field_metadata(info)
+        tp, none, metadata = field_types.unwrapped(info.annotation, metadata)
+    inline, inline_metadata, _ = field_types.split(tp, *metadata)
+    union = field_types.alternatives(inline, *inline_metadata)
     if union is None and inline is not None and not field_types.is_group(inline):
         raise NotImplementedError(
             f'{name}: a parameter of {field_types.type_name(inline)}, not a group'
@@ -144,16 +147,16 @@ def _choice(
 ) -> _Choice:
     """
     The choice of ways at a parameter or row of type ``tp``, as
-    :func:`ess.spec.places.root_type` gives it with ``none`` and ``metadata``.
+    :func:`ess.spec.field_types.unwrapped` gives it with ``none`` and ``metadata``.
     """
     tag = None
     ways: dict[str, _Way] = {}
-    inline, inline_metadata, referenced = places.split(tp, *metadata)
-    union = places.alternatives(inline, *inline_metadata)
+    inline, inline_metadata, referenced = field_types.split(tp, *metadata)
+    union = field_types.alternatives(inline, *inline_metadata)
     if union is not None:
         tag, groups = union
         for value, group in groups.items():
-            way = places.title(value, group.model_fields[tag])
+            way = field_types.title(value, group.model_fields[tag])
             ways[way] = _Group(group, {tag: value}, listing)
     elif field_types.is_file_model(inline):
         ways[_Choice.FILE] = _File(inline, listing)
@@ -189,10 +192,10 @@ def _field(
         if field_types.is_list(group, name):
             raise NotImplementedError(f'{name}: a list of file models at a field')
         optional = field_types.optional(info.annotation)[1]
-        return _File(model, listing, places.title(name, info), optional)
+        return _File(model, listing, field_types.title(name, info), optional)
     widget = _Scalars if field_types.is_list(group, name) else _Scalar
     return widget(
-        places.title(name, info),
+        field_types.title(name, info),
         field_types.value_type(info.annotation),
         _default(info),
         info.description,
@@ -618,11 +621,14 @@ class _Rows:
         # from the row if the editor cannot show it whole.
         self._shown: Any = UNSET
         # A union of groups written inline is not covered.
-        inline, _, referenced = places.split(tp, *metadata)
+        inline, _, referenced = field_types.split(tp, *metadata)
         self._model = inline if field_types.is_file_model(inline) else None
         group = inline if inline is not None and self._model is None else None
         self._fields = {
-            name: (places.title(name, info), field_types.file_model(info.annotation))
+            name: (
+                field_types.title(name, info),
+                field_types.file_model(info.annotation),
+            )
             for name, info in ({} if group is None else group.model_fields).items()
         }
         # The columns of the file and of the output that a row may be given as.
@@ -770,7 +776,7 @@ class _Rows:
 class Form:
     """
     The params of one spec: a widget per parameter, listing what ``client``
-    may give at each place.
+    may give at each field.
     """
 
     def __init__(self, spec: WorkflowSpec[Any, Any], client: Client) -> None:
@@ -795,8 +801,8 @@ class Form:
     @property
     def params(self) -> dict[str, Any]:
         """
-        The params as a request gives them; a place with no way chosen is
-        left out. Raises :class:`~ess.apps.SubmitError` at each place
+        The params as a request gives them; a field with no way chosen is
+        left out. Raises :class:`~ess.apps.SubmitError` at each field
         where a way is chosen, or an input or a list is, with nothing given::
 
             beam_centre: choose a record
@@ -813,7 +819,7 @@ class Form:
     def set(self, params: Mapping[str, Any]) -> None:
         """
         Show ``params``, as a record or a request holds them, such as
-        ``record.request.params``; a place left out is as it starts, at its
+        ``record.request.params``; a field left out is as it starts, at its
         default or unset. A reference that the client may not read now
         chooses the way of a record, with no record picked; a file that
         is not listed stays picked.

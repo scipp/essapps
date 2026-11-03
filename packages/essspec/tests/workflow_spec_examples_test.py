@@ -175,7 +175,7 @@ def refusal() -> str:
         'Params.specimen: Specimen.inner: Specimen contains itself',
         'Params.mask: Referenced[PixelMask | None]: PixelMask | None is not a group',
         'Params.flux: RunFile is a file model; no output holds one',
-        'Outputs.pixel_mask: Referenced[...] marks a place of the params',
+        'Outputs.pixel_mask: Referenced[...] marks a field of the params',
         'Outputs.raw: RunFile is a file model; no output holds one',
         'sample_runs: a table has no default',
         'iofq: a field of both Params and Outputs',

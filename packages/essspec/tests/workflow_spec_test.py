@@ -1506,7 +1506,7 @@ class TestModelRules:
                 (
                     {'outputs': model('O', **fields)},
                     re.escape(
-                        f'{where}: Referenced[...] marks a place of the params, not an '
+                        f'{where}: Referenced[...] marks a field of the params, not an '
                         'output'
                     ),
                 )
