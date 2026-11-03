@@ -18,11 +18,11 @@ are typed ``X | Referenced[X]``: a value written inline, or a reference to an
 output. ``COUNTS`` puts the counts of several runs side by side, a 2-D output,
 and takes ``SECONDS_PER_RUN`` per run, so that an app shows its record pending.
 ``FORWARD`` takes the I(Q) that ``IOFQ`` or ``IOFQ_MULTI`` outputs, as the group
-``IofQ``, typed ``Referenced[IofQ]``: a reference to an output fills a
-parameter, which is a group, and no request writes an ``IofQ``.
+``IofQ``, typed ``Referenced[IofQ]``: no request writes an ``IofQ``, so only
+a reference to an output fills it.
 
-Each parameter is a group. A parameter that takes a file is typed a file
-model, ``Sample``, ``Can``, or ``Run``, and a request writes it as
+By convention each parameter is a group. A parameter that takes a file is
+typed a file model, ``Sample``, ``Can``, or ``Run``, and a request writes it as
 ``file(...)``. A
 ``PipelineBinding`` keys each parameter by its class, so the sample and the can
 are classes of their own.
@@ -86,8 +86,8 @@ class IofQ(BaseModel):
     """
     I(Q) of a sample, minus that of its can: one value per Q bin.
 
-    ``intensity`` is a data value, so a reference to an output fills the
-    place of an ``IofQ``, ``Referenced[IofQ]``.
+    ``intensity`` is not of a field type, so only a reference to an output
+    fills an ``IofQ``, at a field typed ``Referenced[IofQ]``.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

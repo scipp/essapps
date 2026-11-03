@@ -21,18 +21,24 @@ from ess.spec import FileModel, Referenced, WorkflowSpec
 def allowed_spec() -> WorkflowSpec:
     class RunFile(FileModel, kind='raw'): ...
 
-    class Reduction(BaseModel):
-        bins: Annotated[int, Gt(0)] = 50
-        banks: list[int] = []
-
     class WavelengthRange(BaseModel):
         start: float
         stop: float
 
-    class Specimen(BaseModel):
+    class Reduction(BaseModel):
+        bins: Annotated[int, Gt(0)] = 50
+        banks: list[int] = []
+        q_max: float | None = None
+        range: WavelengthRange | None = None
+
+    class Transmission(BaseModel, arbitrary_types_allowed=True):
+        fraction: sc.DataArray
+
+    class Sample(BaseModel):
         run: RunFile
         can: RunFile | None = None
         thickness: float = 1.0
+        transmission: Referenced[Transmission]
 
     class PixelMask(BaseModel, arbitrary_types_allowed=True):
         mask: sc.DataArray
@@ -52,15 +58,13 @@ def allowed_spec() -> WorkflowSpec:
 
     class IofQParams(BaseModel):
         reduction: Reduction = Reduction()
-        range: WavelengthRange | None = None
-        specimen: Specimen
         mask: Referenced[PixelMask] | None = None
         centre: (
             Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
             | Referenced[BeamCentre]
         )
-        transmission: RunFile
-        sample_runs: list[RunFile]
+        direct_beam: RunFile
+        samples: list[Sample]
 
     class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
         iofq: sc.DataArray
@@ -73,7 +77,7 @@ def allowed_spec() -> WorkflowSpec:
         description='Reduce sample runs to I(Q).',
         params=IofQParams,
         outputs=IofQOutputs,
-        tables=('sample_runs',),
+        tables=('samples',),
     )
 
 
@@ -97,19 +101,32 @@ def refused_spec() -> WorkflowSpec:
 
     class Reduction(BaseModel):
         bins: int = Field(10, alias='nbins')
+        width: float = Field(1.0, exclude=True)
 
         @computed_field
-        def width(self) -> float:
+        def area(self) -> float:
             return 0.0
 
     class Binning(BaseModel):
         limits: tuple[float, float] = (0.0, 1.0)
+        groups: list[list[int]] = []
 
     class Sample(BaseModel):
         run: RunNumber
 
     class Specimen(BaseModel):
         inner: Specimen | None = None
+
+    class GivenCentre(BaseModel):
+        kind: Literal['given'] = 'given'
+
+    class FindCentre(BaseModel):
+        kind: Literal['find'] = 'find'
+
+    class FoundCentre(BaseModel):
+        kind: Literal['found'] = 'found'
+        x: float
+        y: float
 
     class Params(BaseModel):
         bins: int = 10
@@ -121,6 +138,10 @@ def refused_spec() -> WorkflowSpec:
         calibration: CalibrationFile
         mask: Referenced[PixelMask | None] = None
         flux: Referenced[RunFile]
+        centre: Annotated[
+            GivenCentre | FindCentre | Referenced[FoundCentre],
+            Field(discriminator='kind'),
+        ]
         transmissions: list[RunFile] | None = None
         masks: list[Referenced[PixelMask] | None] = []
         range: WavelengthRange = {'start': 1.0, 'stop': 2.0}
@@ -171,7 +192,10 @@ def refusal() -> str:
         'Params.transmissions: a list is not typed list[X] | None',
         'Params.masks: the element of a list is not typed X | None',
         'Params.range: the default',
+        'Reduction.width: a field of a group has no exclude or exclude_if',
         'Params.binning: Binning.limits: tuple[float, float] is not a field type',
+        'Binning.groups: a list is not of lists',
+        'Params.centre: the discriminator of a union with a member Referenced[...]',
         'Params.specimen: Specimen.inner: Specimen contains itself',
         'Params.mask: Referenced[PixelMask | None]: PixelMask | None is not a group',
         'Params.flux: RunFile is a file model; no output holds one',

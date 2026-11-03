@@ -8,28 +8,34 @@ A :class:`WorkflowSpec` names a workflow and holds two pydantic models: the
 results it returns. This docstring states the rules for both models, once.
 The other modules of ``ess.spec`` and ``ess.apps`` apply them and link here.
 
-A spec of an I(Q) reduction, with each kind of parameter once::
+A spec of an I(Q) reduction, with each kind of field once::
 
     class RunFile(FileModel, kind='raw'):     # a file model: a raw data file
         ...
 
-    class Reduction(BaseModel):               # a group of scalars
-        bins: Annotated[int, Gt(0)] = 50      # a scalar, with a constraint
-        banks: list[int] = []                 # a list of scalars; [] if empty
-
-    class WavelengthRange(BaseModel):
-        start: float
+    class WavelengthRange(BaseModel):         # a group
+        start: float                          # a scalar
         stop: float
 
-    class Specimen(BaseModel):                # a group with files
+    class Reduction(BaseModel):
+        bins: Annotated[int, Gt(0)] = 50      # a scalar, with a constraint
+        banks: list[int] = []                 # a list of scalars; [] if empty
+        q_max: float | None = None            # a scalar, or None
+        range: WavelengthRange | None = None  # a group in a group, or None
+
+    class Transmission(BaseModel, arbitrary_types_allowed=True):
+        fraction: sc.DataArray                # not a field type: only a
+                                              # reference to an output fills
+                                              # a Transmission
+
+    class Sample(BaseModel):                  # a row of the table samples
         run: RunFile                          # a file
         can: RunFile | None = None            # a file, or None
         thickness: float = 1.0
+        transmission: Referenced[Transmission]  # a reference fills it
 
     class PixelMask(BaseModel, arbitrary_types_allowed=True):
-        mask: sc.DataArray                    # not a field type: only a
-                                              # reference to an output fills
-                                              # a PixelMask
+        mask: sc.DataArray
 
     class GivenCentre(BaseModel):             # an alternative of a union
         kind: Literal['given'] = 'given'      # its tag
@@ -46,15 +52,13 @@ A spec of an I(Q) reduction, with each kind of parameter once::
 
     class IofQParams(BaseModel):
         reduction: Reduction = Reduction()    # a default is an instance
-        range: WavelengthRange | None = None  # None: no range
-        specimen: Specimen                    # no default: required
-        mask: Referenced[PixelMask] | None = None  # a reference fills it
+        mask: Referenced[PixelMask] | None = None  # a reference, or None
         centre: (                             # written, or a reference
             Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
             | Referenced[BeamCentre]
         )
-        transmission: RunFile                 # a file
-        sample_runs: list[RunFile]            # a table: no default
+        direct_beam: RunFile                  # no default: required
+        samples: list[Sample]                 # a table: no default
 
     class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
         iofq: sc.DataArray
@@ -62,21 +66,32 @@ A spec of an I(Q) reduction, with each kind of parameter once::
 
     IOFQ = WorkflowSpec(
         name='iofq', version=1, title='I(Q)', description='...',
-        params=IofQParams, outputs=IofQOutputs, tables=('sample_runs',),
+        params=IofQParams, outputs=IofQOutputs, tables=('samples',),
     )
 
 A request gives the parameters as a dict by name. In this request for
 ``IOFQ``, ``m`` is the record of an earlier request whose spec has the
-output ``pixel_mask``::
+output ``pixel_mask``, and ``t`` that of a request whose spec has the output
+``transmission``, of type ``Transmission``::
 
     {
-        'reduction': {'bins': 100},              # a group: banks takes its default
-        'specimen': {'run': file(run=104), 'thickness': 2.0},  # a file in a group
+        'reduction': {                           # banks and q_max take
+            'bins': 100,                         # their defaults
+            'range': {'start': 1.0, 'stop': 9.0},  # a group in a group
+        },
         'mask': m.ref('pixel_mask'),             # a reference to an output
         'centre': {'kind': 'find'},              # the tag picks FindCentre
-        'transmission': file(run=99),            # a file
-        'sample_runs': [file(run=101), file(run=102)],  # two rows
-    }                                            # range is left out: None
+        'direct_beam': file(run=99),             # a file
+        'samples': [                             # two rows
+            {'run': file(run=101), 'transmission': t.ref('transmission')},
+            {
+                'run': file(run=102),
+                'can': file(run=103),
+                'thickness': 2.0,
+                'transmission': t.ref('transmission'),
+            },
+        ],
+    }
 
 ``'centre': c.ref('beam_centre')``, with ``c`` the record of a centre
 finder, fills ``centre`` with a ``BeamCentre``.
@@ -84,16 +99,18 @@ finder, fills ``centre`` with a ``BeamCentre``.
 Terms
 -----
 
-*Parameter*, *place*
-    A field of the params model, such as ``reduction``. A *list parameter*,
-    ``list[X]``, holds *rows*, each of type ``X``. A *table* is a list
-    parameter whose rows an accumulator takes a push at a time. ``tables``
-    names the tables. A *place* is a parameter or a row.
+*Parameter*
+    A field of the params model, such as ``reduction``.
 *Group*
     A pydantic model, such as ``Reduction``, but not a ``RootModel``. A
     request writes a group as a JSON object of its *fields*. A field left out
-    takes its default. The fields of a group are typed as a parameter is, at
-    any depth.
+    takes its default. A parameter is a field of the params model, which is
+    a group too, so the rules for a field hold for a parameter.
+*List*, *element*, *table*, *row*
+    A list, ``list[X]``, holds *elements*, each of type ``X``. A *table* is a
+    list parameter whose elements an accumulator takes a push at a time,
+    such as ``samples``. ``tables`` names the tables. An element of a table
+    is a *row*.
 *Union of groups*
     A pydantic discriminated union, such as ``GivenCentre | FindCentre`` in
     the type of ``centre``. Each alternative is a group with the *tag* field
@@ -109,86 +126,124 @@ Terms
     such as ``RunFile``. Its value is a *file*. A request writes a file as
     ``file(...)``, such as ``file(run=99)``. The backend resolves it to the
     file's identity when the request is submitted. The binding gets the file
-    model with the file's local path, ``transmission.path``.
-*Field type*
-    The type of a parameter, or of a field of a group, at any depth: a
-    scalar, with constraints such as ``Gt(0)``; a file model; a group; a
-    union of groups; ``Referenced[T]``; a union of members written inline
-    and members ``Referenced[...]``; ``X | None``; or ``list[X]``. Any other
-    type, such as ``tuple[float, float]``, ``int | str``, or
-    ``sc.DataArray``, is refused, but inside the ``T`` of
-    ``Referenced[T]``, which the framework does not look into.
+    model with the file's local path, ``direct_beam.path``.
 *Reference to an output*
     ``m.ref('pixel_mask')`` names the output ``pixel_mask`` of the record
     ``m``. ``acc.ref(...)`` names an output of an accumulator. The backend
     replaces the reference by the output's data when the request runs.
 ``Referenced[T]``
-    The type of a place that a reference to an output fills, with data that
-    fit the group ``T``, such as ``mask``. It is ``Annotated[T, REFERENCED]``
-    (see :data:`~ess.spec.parameters.Referenced`): pydantic, a binding, and
-    any direct use of the params model see ``T``, and take it inline. A
-    place of any other type is *unmarked*.
-*JSON form*
-    What a value dumps to as JSON, ``model_dump(mode='json')``. The record of
-    a request stores the JSON form of each value. The JSON form of a file is
-    ``{'@ref': 'file', 'file': 'run:loki/99'}``, and that of a reference to
-    an output is ``{'@ref': 'output', 'record': ..., 'output': ...}`` (see
+    The type of a field that a reference to an output fills, with data that
+    fit the group ``T``, such as ``mask`` and ``Sample.transmission``. It is
+    ``Annotated[T, REFERENCED]`` (see :data:`~ess.spec.parameters.Referenced`):
+    pydantic, a binding, and any direct use of the params model see ``T``,
+    and take it inline.
+*Field type*
+    The type of a field, at any depth, is one of::
+
+        int, float, str, bool, datetime, an enum, a Literal  # a scalar
+        RunFile                                        # a file model
+        Reduction                                      # a group
+        Annotated[A | B, Field(discriminator='kind')]  # a union of groups
+        Referenced[T]                                  # T a group
+        Annotated[A | B, ...] | Referenced[C]          # members of both
+        X | None, list[X]                   # X a field type, not a list,
+                                            # and not X | None
+
+    A scalar may carry constraints, such as ``Gt(0)``. Any other type is
+    refused, such as ``tuple[float, float]``, ``dict[str, float]``,
+    ``int | str``, or ``sc.DataArray``. The framework does not look inside
+    the ``T`` of ``Referenced[T]``, so a field of ``T`` may be of any type,
+    such as ``PixelMask.mask``, but a file model or ``Referenced[...]``.
+*JSON form*, *stored form*
+    The JSON form of a value is what it dumps to as JSON,
+    ``model_dump(mode='json')``. The record of a request stores what the
+    request writes, in JSON form: the *stored form*. The stored form of a
+    file is ``{'@ref': 'file', 'file': 'run:loki/99'}``, with the identity
+    the backend resolved, and that of a reference to an output is
+    ``{'@ref': 'output', 'record': ..., 'output': ...}`` (see
     :mod:`ess.spec.refs`).
+*Position*
+    Where a value sits in the params, by field names and list indices, such
+    as ``reduction.range.start`` or ``samples[1].transmission``. An error
+    names the position of each problem.
 
 What a request writes
 ---------------------
 
-The type of a place says what a request writes there. A request writes an
-unmarked type; a reference fills ``Referenced[T]``:
+The type of a field says what a request writes there:
 
-- A group, such as ``Reduction``: a JSON object of its fields.
+- A scalar, such as ``float``: its JSON value.
+- A group, such as ``Reduction``: a JSON object of its fields, each what its
+  type takes.
 - A union of groups, such as ``GivenCentre | FindCentre``: a JSON object of
   the fields of one alternative, with its tag.
 - A file model, such as ``RunFile``: a file.
 - ``Referenced[T]``, such as ``Referenced[PixelMask]``: a reference to an
   output whose data fit ``T``.
-- A union of these, such as the type of ``centre``, or
-  ``BeamCentre | Referenced[BeamCentre]``: what one of its members takes.
-  The key ``@ref`` tells a reference from a value written inline, then the
-  tag tells the alternatives apart.
+- A union of members written inline and members ``Referenced[...]``, such as
+  the type of ``centre``, or ``BeamCentre | Referenced[BeamCentre]``: what
+  one of its members takes. The key ``@ref`` tells a reference from a value
+  written inline, then the tag tells the alternatives apart.
 - ``X | None``: what ``X`` takes, or ``None``.
-- ``list[X]``: a list of rows, each what ``X`` takes.
+- ``list[X]``: a list of elements, each what ``X`` takes.
+
+In Python, a request gives a group that holds a reference to an output as a
+dict, such as each row of ``samples`` above: pydantic refuses a reference
+in an instance of the group.
 
 The framework derives from the params model a *request type*, the type of
-what a request writes at each place: the params type with each
-``Referenced[T]`` replaced by a reference whose data fit ``T`` (see
-:mod:`ess.spec.request_types`). It validates a request, its JSON schema is
-the params schema of the spec (see :meth:`WorkflowSpec.serialize`), and a
-form made from the params model offers the sources it takes. The rules
-behind it:
+what a request writes at each field: the params type with each
+``Referenced[T]`` replaced by a reference whose data fit ``T``, at any
+depth (see :mod:`ess.spec.request_types`). It validates a request, its JSON
+schema is the params schema of the spec (see :meth:`WorkflowSpec.serialize`),
+and a form made from the params model offers what each field takes. When
+the request runs, the params model itself validates the stored form, with
+each reference replaced by its data and each file given its local path.
+The rules behind it:
 
-- Each field is of a field type, at any depth. A group does not contain
-  itself, at any depth.
-- ``Referenced[T]`` may type any field of the params, but not of an
-  output. A group is validated whole when the request is submitted, unless
-  it holds a reference to an output, at any depth: an output may not exist
-  yet then, so such a group is validated when the request runs, and its
-  validators see the data read.
+- Each field is of a field type, at any depth, so that a form and the
+  params schema know what a request writes at every field. A group does
+  not contain itself, at any depth, so that the walk through the field
+  types ends.
+- ``Referenced[T]`` may type any field of the params, but no output, since
+  the data of an output are not a reference.
+- A group is validated when the request is submitted, so that an error
+  shows before anything runs. A group that holds a reference to an output,
+  at any depth, is validated when the request runs: the output may not
+  exist when the request is submitted, and the group's validators see the
+  data read. A failure then fails the record, or stops the accumulator
+  for a push. A validator raises ``ValueError`` for a value it does not
+  take.
 - A file is a value, like a scalar. Its identity is known when the request
-  is submitted, so a file can be a field of a group.
-- A reference to an output fits a place if the output's type is the ``T``
+  is submitted, so a group that holds a file is validated then.
+- A reference to an output fits a field if the output's type is the ``T``
   of a ``Referenced[T]`` there, or a subclass of it (see
   :func:`~ess.spec.field_types.fits`). So ``T`` is a group: ``float`` or
   ``sc.DataArray`` would fit every output of that type, and a picker of
   records would list unrelated outputs. An array is a field of a group
   whose class says what it is, such as ``PixelMask``.
-- A binding sets the sciline key of a parameter's type (see
-  :class:`~ess.spec.pipeline.PipelineBinding`), so the class names a role;
-  a parameter typed otherwise than a group or a union of groups, such as
-  ``bins: int``, needs ``keys=`` there.
 - No output holds a file model, so that every file comes from the file
   source, which checks it. So ``T`` has no file model, at any depth.
-- A union at a place has members that a request writes, and members
-  ``Referenced[...]``. Two or more groups that a request writes are a union
-  of groups, with a discriminator on their own union, as in ``centre``,
-  not on the whole union, since a reference to an output has no tag. A
-  referenced group needs no tag, so the workflow that computes one need
-  know nothing of the specs that take it.
+- A union with members ``Referenced[...]`` carries its discriminator on the
+  union of the members written inline, as in ``centre``, since a reference
+  to an output has no tag. A referenced group needs no tag, so the workflow
+  that computes one need know nothing of the specs that take it.
+- A list is ``[]`` when it has no elements, so a list is not typed
+  ``list[X] | None``. Each element is a value, so the element of a list is
+  not typed ``X | None``. A list is not of lists: its element is a group
+  that holds a list, whose class says what each inner list is.
+- A list is validated whole. A table is validated a row at a time, since an
+  accumulator takes a few rows at a time. So a table carries only length
+  constraints, such as ``Field(min_length=1)``, which the backend checks on
+  all rows.
+- The rows of a table are distinct, compared by their stored form: a file by
+  its identity, a reference to an output by its record and output. Two
+  references to equal data are two rows.
+- A binding sets the sciline key of a parameter's class (see
+  :class:`~ess.spec.pipeline.PipelineBinding`). By convention a parameter is
+  a group, which is then one tab of a form and one key of the binding. A
+  parameter of another type, such as ``bins: int``, needs ``keys=`` in the
+  binding.
 - A default is a value that a request may write, as validating it gives: an
   instance of a group, not a dict, and never a reference or a file. So a
   field typed ``Referenced[T]`` has no default but ``None``, and a file
@@ -202,8 +257,8 @@ from the field types (see :mod:`ess.spec.field_types`). Making a spec checks
 them. Each comment below names a rule that a spec breaks, with the fix::
 
     class Geometry(BaseModel):
-        # A parameter or a field that takes a file is typed a file model:
-        # geometry: GeometryFile, with class GeometryFile(FileModel, ...).
+        # A field that takes a file is typed a file model: geometry:
+        # GeometryFile, with class GeometryFile(FileModel, ...).
         file: Path
 
     class CalibrationFile(FileModel, kind='calibration'):
@@ -214,16 +269,23 @@ them. Each comment below names a rule that a spec breaks, with the fix::
     class Reduction(BaseModel):
         # No aliases: a request writes a field by its name.
         bins: int = Field(10, alias='nbins')
+        # No exclude: the record stores the JSON form, which would leave
+        # out the value.
+        width: float = Field(1.0, exclude=True)
 
         # No serializers or computed fields: the JSON form of a group is the
         # JSON object of its fields.
         @computed_field
-        def width(self) -> float: ...
+        def area(self) -> float: ...
 
     class Binning(BaseModel):
-        # A tuple is not a field type: use a group, or, if a reference
-        # fills the field that holds a Binning, type it Referenced[Binning].
+        # A tuple is not a field type: use a group, or, if the data of an
+        # output fill a Binning, type the field that holds it
+        # Referenced[Binning].
         limits: tuple[float, float] = (0.0, 1.0)
+        # Each element is a value: a list is not of lists. Use a list of a
+        # group that holds a list.
+        groups: list[list[int]] = []
 
     class Sample(BaseModel):
         # No NewType or type alias: a class says what a value is.
@@ -232,6 +294,11 @@ them. Each comment below names a rule that a spec breaks, with the fix::
     class Specimen(BaseModel):
         # A group does not contain itself, at any depth.
         inner: Specimen | None = None
+
+    class FoundCentre(BaseModel):             # what a centre finder outputs
+        kind: Literal['found'] = 'found'
+        x: float
+        y: float
 
     class Params(BaseModel):
         bins: int = 10
@@ -245,6 +312,13 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         mask: Referenced[PixelMask | None] = None
         # No output holds a file model: a file is given as file(...).
         flux: Referenced[RunFile]
+        # A reference has no tag: the discriminator is on the union written
+        # inline, Annotated[GivenCentre | FindCentre, Field(...)]
+        # | Referenced[FoundCentre].
+        centre: Annotated[
+            GivenCentre | FindCentre | Referenced[FoundCentre],
+            Field(discriminator='kind'),
+        ]
         # A list without elements is [], not None.
         transmissions: list[RunFile] | None = None
         # An element is a value: the element of a list is not X | None.
@@ -283,7 +357,7 @@ never get a whole params instance. A binding may run it,
 ``IofQParams.model_validate(dict(params))``.
 
 A request gives every table, ``[]`` for one without rows, so that no request
-leaves out a table by mistake. The rows of a table are distinct.
+leaves out a table by mistake.
 
 Two forms
 ---------
@@ -431,13 +505,11 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         """
         Project to the plain-data form.
 
-        The params schema gives each parameter, or the rows of a list
-        parameter, the sources a request may write there (see the module
-        docstring), and each field of a group the JSON schema of its type,
-        or of a file. :class:`SerializedWorkflowSpec` shows the schema of each
-        source. The projection is one-way: pydantic validators do not survive
-        it, so a consumer of the serialized form can validate only
-        optimistically.
+        The params schema gives each field, at any depth, the sources a
+        request may write there (see the module docstring).
+        :class:`SerializedWorkflowSpec` shows the schema of each source. The
+        projection is one-way: pydantic validators do not survive it, so a
+        consumer of the serialized form can validate only optimistically.
         """
         return SerializedWorkflowSpec(
             name=self.name,
@@ -456,14 +528,15 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     Plain-data form of a workflow spec, safe to send across process boundaries.
 
     Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON.
-    ``params_schema`` is a JSON schema of the params. At each parameter, or
-    the rows of a list parameter, it allows the sources that a request may
-    write there (see :mod:`ess.spec._workflow_spec`). A UI made from it
-    picks a widget by these sources:
+    ``params_schema`` is a JSON schema of the params. At each field, at any
+    depth, it allows the sources that a request may write there (see
+    :mod:`ess.spec._workflow_spec`). A UI made from it picks a widget by
+    these sources:
 
     ==================================  ===================================
-    Schema at a parameter or row        Widget
+    Schema at a field                   Widget
     ==================================  ===================================
+    a scalar                            an input of its type
     a file                              a picker of files (a file model)
     the object of a group's fields      the group's fields
     ``oneOf``, with ``discriminator``   a choice of the alternatives of a
@@ -473,7 +546,7 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     one of the first three, and a       its widget, and a choice to pick a
     reference to an output              record instead
     ``null`` in ``anyOf``               a toggle: ``X | None``
-    an array                            a list of rows
+    an array                            a list of elements
     ==================================  ===================================
 
     The params schema is the JSON schema of the spec's request type (see
@@ -484,8 +557,7 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     ``dataType``, as the outputs schema names the type of each output. A
     file is the definition of its file model: the ``@ref`` object of a
     file, with the model's name under ``dataType`` and its metadata under
-    ``metadata``, which say which files fit. A field of a group has the
-    JSON schema of its type, or of its file model. The schemas of the
+    ``metadata``, which say which files fit. The schemas of the
     parameter ``reduction``, a parameter ``centre`` typed
     ``BeamCentre | Referenced[BeamCentre]``, a parameter ``mask`` typed the
     file model ``MaskFile``, its definition, and the field
