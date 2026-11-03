@@ -9,7 +9,7 @@ import pytest
 import sciline
 from pydantic import BaseModel, Discriminator, Field
 
-from ess.spec import DriverBinding, FileModel, WorkflowSpec
+from ess.spec import DriverBinding, FileModel, Referenced, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
 from ess.spec.testing import check_arrival_and_order, check_caching, check_one_row
 
@@ -697,7 +697,7 @@ def test_a_union_left_out_takes_the_key_of_its_default(
     assert found == []
 
 
-def test_the_key_of_a_union_is_chosen_by_tag_not_by_type(
+def test_an_instance_of_a_subclass_of_an_alternative_sets_its_key(
     centring: PipelineBinding, samples: list[SampleRun]
 ) -> None:
     refined = RefinedCentre(x=2.0)
@@ -760,7 +760,7 @@ def test_a_value_held_at_a_key_of_a_union_is_refused(
         (
             {'beam_centre': (BeamCentre,)},
             r"\['beam_centre'\]: a parameter sets one key, or none; a union one "
-            'for each alternative',
+            'for each member',
         ),
         (
             {'centred': (BeamCentre,)},
@@ -781,6 +781,163 @@ def test_keys_of_a_union_that_do_not_fit_are_refused(
             lambda _: sciline.Pipeline([centred]),
             keys={**CENTRE_KEYS, **keys},
         )
+
+
+# A union with a member that a reference fills: ``ComputedCentre``, as a centre
+# finder outputs it, has no tag, and sets the key of its class. The graph that
+# leads from it to ``BeamCentre`` replaces ``find_centre``, so make_pipeline
+# branches on the fixed value.
+
+
+class ComputedCentre(BaseModel):
+    x: float
+
+
+class FoundCentreParams(BaseModel):
+    sample: SampleRun
+    beam_centre: Centre | Referenced[ComputedCentre] = BeamCentre()
+
+
+def given_computed(centre: ComputedCentre) -> BeamCentre:
+    return BeamCentre(x=centre.x)
+
+
+@pytest.fixture
+def found_centring(find_centre: Callable[..., BeamCentre]) -> PipelineBinding:
+    def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
+        computed = isinstance(fixed['beam_centre'], ComputedCentre)
+        adapter = given_computed if computed else find_centre
+        return sciline.Pipeline([load_counts, adapter, centred, used_centre])
+
+    spec = _spec('centred', params=FoundCentreParams, outputs=CentredOutputs)
+    return PipelineBinding(spec, make_pipeline, keys=CENTRE_KEYS)
+
+
+def test_a_member_without_a_tag_sets_the_key_of_its_class(
+    found_centring: PipelineBinding,
+    samples: list[SampleRun],
+    found: list[FindCentre],
+) -> None:
+    assert found_centring.keys['beam_centre'] == (
+        BeamCentre,
+        FindCentre,
+        ComputedCentre,
+    )
+    total, mean = np.sum(SAMPLES[0]), np.mean(SAMPLES[0])
+    for centre, shift in (
+        (ComputedCentre(x=2.0), 2.0),
+        (BeamCentre(x=1.0), 1.0),
+        (FindCentre(tolerance=0.5), 0.5 * mean),
+    ):
+        params = FoundCentreParams(sample=samples[0], beam_centre=centre)
+        assert found_centring.compute(params).centred == total - shift
+    assert found == [FindCentre(tolerance=0.5)]
+
+
+def test_a_union_with_a_member_without_a_tag_cannot_be_a_blank(
+    found_centring: PipelineBinding, samples: list[SampleRun]
+) -> None:
+    with pytest.raises(
+        ValueError, match=r"\['beam_centre'\]: a union cannot be a blank"
+    ):
+        found_centring.make_stage({'sample': samples[0]}, ('beam_centre',))
+
+
+def test_a_value_held_at_the_key_of_a_member_without_a_tag_is_refused(
+    samples: list[SampleRun],
+) -> None:
+    binding = PipelineBinding(
+        _spec('centred', params=FoundCentreParams, outputs=CentredOutputs),
+        lambda _: sciline.Pipeline(
+            [load_counts, centred, used_centre],
+            params={ComputedCentre: ComputedCentre(x=0.0)},
+        ),
+        keys=CENTRE_KEYS,
+    )
+    params = FoundCentreParams(sample=samples[0], beam_centre=BeamCentre(x=1.0))
+    with pytest.raises(
+        ValueError,
+        match='centred: make_pipeline holds a value at ComputedCentre, a key of '
+        'the union beam_centre',
+    ):
+        binding.compute(params)
+
+
+class EitherCentreParams(BaseModel):
+    sample: SampleRun
+    beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
+
+
+def test_a_union_of_one_class_has_one_key_and_may_be_a_blank(
+    samples: list[SampleRun],
+) -> None:
+    binding = PipelineBinding(
+        _spec('centred', params=EitherCentreParams, outputs=CentredOutputs),
+        lambda _: sciline.Pipeline([load_counts, centred, used_centre]),
+        keys=CENTRE_KEYS,
+    )
+    assert binding.keys['beam_centre'] == (BeamCentre,)
+    call = binding.make_stage({'sample': samples[0]}, ('beam_centre',))
+    centre = BeamCentre(x=1.0)
+    assert call({'beam_centre': centre}) == CentredOutputs(
+        centred=np.sum(SAMPLES[0]) - 1.0, centre=centre
+    )
+
+
+# Members of a union whose classes are subclasses of each other: a value sets
+# the key of the member nearest to its class, whatever the order of the union.
+
+
+class Position(BaseModel):
+    x: float = 0.0
+
+
+class GivenPosition(Position):
+    kind: Literal['given'] = 'given'
+
+
+class FindPosition(BaseModel):
+    kind: Literal['find'] = 'find'
+
+
+class ComputedPosition(Position):
+    sigma: float = 1.0
+
+
+class TaggedPositionParams(BaseModel):
+    position: (
+        Annotated[GivenPosition | FindPosition, Field(discriminator='kind')]
+        | Referenced[Position]
+    )
+
+
+class SubclassPositionParams(BaseModel):
+    position: Position | Referenced[ComputedPosition]
+
+
+@pytest.mark.parametrize(
+    ('params', 'value', 'key'),
+    [
+        (TaggedPositionParams, GivenPosition(x=3.0), GivenPosition),
+        (TaggedPositionParams, Position(x=3.0), Position),
+        (SubclassPositionParams, Position(x=3.0), Position),
+        (SubclassPositionParams, ComputedPosition(x=3.0), ComputedPosition),
+    ],
+)
+def test_a_value_sets_the_key_of_the_member_nearest_to_its_class(
+    params: type[BaseModel], value: Position, key: type[Position]
+) -> None:
+    binding = PipelineBinding(
+        _spec('centred', params=params, outputs=CentredOutputs),
+        lambda _: sciline.Pipeline(),
+        keys=CENTRE_KEYS,
+    )
+    pipeline = binding.pipeline({'position': value})
+    assert pipeline.compute(key) is value
+    for other in binding.keys['position']:
+        if other is not key:
+            with pytest.raises(sciline.UnsatisfiedRequirement):
+                pipeline.compute(other)
 
 
 class CentredOnly(BaseModel):

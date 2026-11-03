@@ -61,13 +61,14 @@ The framework is essapps (`ess.apps`) and essspec (`ess.spec`), in this reposito
 | parameter | a field of the params model |
 | JSON form | what a value dumps to as JSON, `model_dump(mode='json')`. The record of a request stores the JSON form of each value. |
 | written inline | given as the value itself, such as `Reduction(bins=100)` or `{'bins': 100}`, not as a reference to an output |
-| reference to an output | names an output of a record, `record.ref('centre')`, or of an accumulator. It fills a whole parameter or row. Its JSON form is an object with the key `@ref` (see References). |
+| reference to an output | names an output of a record, `record.ref('centre')`, or of an accumulator. It fills a place marked `Referenced[T]`. Its JSON form is an object with the key `@ref` (see References). |
+| `Referenced[T]` | the type of a place that a reference to an output fills, with data that fit the group `T`, such as `transmission: Referenced[ComputedTransmission]`. A place of any other type is *unmarked*: a request writes it, inline or as a file. |
 | group | a pydantic model, such as `Reduction`, the settings of one reduction step. A request writes a group as an object of its *fields*. A `RootModel` is not a group. |
-| place | a position in a request's params, named by its path, such as `reduction.bins` or `sample[2]` |
+| place | a parameter or a row, named by its path, such as `reduction` or `sample[2]` |
 | scalar | an `int`, `float`, `str`, `bool`, or `datetime`, or an enum or a `Literal` whose values are of these types, possibly with constraints, such as `Annotated[float, Gt(0)]` |
-| interpreted field, data value | a field of a group is *interpreted* if a form made from the params schema has an input for it: a scalar, a file model, possibly typed `X \| None`, or a list of scalars or of file models. Any other field is a *data value*, such as a scipp array or `float \| None`. A group with a data value is given by reference to an output only. |
+| interpreted field, data value | a field of a group is *interpreted* if a form made from the params schema has an input for it: a scalar, a file model, possibly typed `X \| None`, or a list of scalars or of file models. Any other field is a *data value*, such as a scipp array or `float \| None`. No request writes a group with a data value, so its place is `Referenced[...]`. |
 | file model, file | a *file model* is a subclass of `FileModel`, which holds only `file`, the file's identity. Its value is a *file*, which a request writes as `file(...)`, such as `file(run=611)`. The backend resolves it when the request is submitted. |
-| fits | a reference to an output fits a parameter or row when the data it names can be the value there (see References) |
+| fits | a reference to an output fits a place `Referenced[T]` when the data it names are of the class `T` or a subclass of it (see References) |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
 | request | a spec and its params, each value written inline, a file, or a reference to an output |
 | request phase, call phase | the *request phase* is what the client and the backend do with a request before any data is read: validate, log, record, pin. The *call phase* starts when the backend reads data for the binding. |
@@ -131,18 +132,18 @@ class BeamCentre(BaseModel):                      # a group: written inline, or 
     y: float = 0.0
 
 class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):  # by a transmission reduction
-    transmission: sc.DataArray                    # a data value: the group is given by reference only
+    transmission: sc.DataArray                    # a data value: only a reference fills the group's place
 
 class IofQSettings(BaseModel):                    # the parameters that all runs share
     reduction: Reduction = Field(default_factory=Reduction)
-    beam_centre: BeamCentre = BeamCentre()        # the nominal centre
-    transmission: ComputedTransmission
+    beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()  # the nominal centre, or a reference
+    transmission: Referenced[ComputedTransmission]  # a reference to an output
 
 class IofQParams(IofQSettings):
     sample: Sample
     can: Can
 
-class IofQ(BaseModel, arbitrary_types_allowed=True):  # a group, so another workflow takes it by reference
+class IofQ(BaseModel, arbitrary_types_allowed=True):  # a group, so another workflow takes it, Referenced[IofQ]
     intensity: sc.DataArray
 
 class IofQOutputs(BaseModel):
@@ -166,33 +167,38 @@ Its output `transmission` is a `ComputedTransmission`.
 A parameter left out takes its default, and so does a field of a group left out.
 
 A list parameter, `list[X]`, holds *rows*, each of type `X`.
-The type of a parameter, or of the rows of a list parameter, decides what a request writes there, with `| None` removed:
+The spec marks each place that a reference to an output fills, `Referenced[T]`.
+A place that takes a value typed in by one user and computed by another is a union of both, `BeamCentre | Referenced[BeamCentre]`, and the request chooses one member.
+The type of a place says what a request writes there, with `| None` removed:
 
-| Type | Example | Value | Reference to an output |
-|---|---|---|---|
-| a file model | `Sample`, `Can` | a file that fits, `file(...)` (see Files) | no |
-| a group with interpreted fields only | `Reduction`, `BeamCentre` | an object of its fields | to an output of its class, unless a field is a file model |
-| a group with a data value | `ComputedTransmission` | no | to an output of its class |
-| a union of groups | `GivenCentre \| FindCentre` (see below) | an object of one alternative's fields, with its tag | no |
-| a list, `list[X]` | `sample: list[Sample]` (see Combining runs: tables) | a list of rows, each as for `X` | no; each row as for `X` |
+| Type | Example | A request writes |
+|---|---|---|
+| a group without a data value | `Reduction`, `BeamCentre` | an object of its fields |
+| a union of groups | `GivenCentre \| FindCentre` (see below) | an object of one alternative's fields, with its tag |
+| a file model | `Sample`, `Can` | a file that fits, `file(...)` (see Files) |
+| `Referenced[T]` | `Referenced[ComputedTransmission]` | a reference to an output that fits `T` |
+| a union of these | `BeamCentre \| Referenced[BeamCentre]` | what one of its members takes |
+| a list, `list[X]` | `sample: list[Sample]` (see Combining runs: tables) | a list of rows, each as for `X` |
+
+`Referenced[T]` is `Annotated[T, REFERENCED]`, so pydantic, a binding, and any direct use of the params model see `T`, and take a `T` inline.
 
 **Fields of a group.** The framework interprets the parameters and the fields of each group, nothing deeper.
 A field of a group is *interpreted* if a form made from the params schema has an input for it: a scalar, a file model, possibly typed `X | None`, or a list of scalars or of file models.
 A *scalar* is an `int`, `float`, `str`, `bool`, or `datetime`, or an enum or a `Literal` whose values are of these types, possibly constrained, such as `Annotated[float, Gt(0)]`.
 Any other field is a *data value*.
-No request can write a data value, so a group with one is given by reference to an output only:
+No request can write a data value, so a group with one is at a place marked `Referenced[...]`, and an unmarked place of it is refused:
 
 ```python
-class Reduction(BaseModel):                       # written inline, or a reference to an output
+class Reduction(BaseModel):                       # written inline
     bins: int = 100
     banks: list[int] = []                         # a list of scalars; without elements [], not None
 
-class Binning(BaseModel):                         # each field is a data value: a reference to an output only
+class Binning(BaseModel):                         # each field is a data value: refused at an unmarked place, Referenced[Binning] if an output fills it
     range: WavelengthRange                        # a group: make it a parameter of its own
     limits: tuple[float, float]                   # not a scalar
     start: float | None = None                    # a scalar is not X | None: use a parameter typed X | None, or a bool field
 
-class Specimen(BaseModel):                        # written inline only: no output holds a file model
+class Specimen(BaseModel):                        # written inline; Referenced[Specimen] is refused: no output holds a file model
     run: SampleRun                                # a file
     thickness: float = 1.0
     runs: list[SampleRun] = []                    # a list of files: [] without elements
@@ -207,11 +213,10 @@ A request writes a file at such a field inside the group:
 
 A group is validated whole, once, when the request is submitted.
 So a group holds only what is known then: values typed in, and files, resolved to their identity.
-A value that another request computes may not exist yet, so a reference to an output fills a whole parameter or row.
-No output holds a file model, so a group with a file model is written inline only, and a form offers no record picker for it.
-Of the fields of a group with a data value, the framework refuses a `Path`, a file model, a `NewType`, or a type alias, since no output could fill them.
+A value that another request computes may not exist yet, so a reference to an output fills a whole parameter or row: `Referenced[...]` is at a parameter, a row, or a member of a union there, never at a field of a group.
+No output holds a file model, so the `T` of `Referenced[T]` holds none, at any depth.
 
-**References to outputs fill groups.** A reference to an output fills a whole parameter or row, and fits it by the group's class (see References).
+**References to outputs fill groups.** The `T` of `Referenced[T]` is a group, and a reference to an output fits the place by the class of `T` (see References).
 A parameter typed `float` or `sc.DataArray` would fit every output of that type, so a picker of records would list unrelated outputs.
 A group's class says what the value is, such as `BeamCentre` or `ComputedTransmission`.
 So a data value is a field of a group, such as the field `transmission` of `ComputedTransmission`, and the workflow that computes it outputs the group:
@@ -219,6 +224,7 @@ So a data value is a field of a group, such as the field `transmission` of `Comp
 ```python
 transmission: sc.DataArray                        # refused by WorkflowSpec: a parameter is a group
 {'reduction': {'bins': r.ref('bins')}}            # refused at submission: a reference to an output fills a whole parameter or row
+{'reduction': r.ref('reduction')}                 # refused at submission: reduction is not marked Referenced[...]
 ```
 
 **Files.** A parameter, the element of a list parameter, or a field of a group takes a file when its type is a *file model*: a subclass of `ess.spec.FileModel`, which holds `file: str`, the file's identity, and nothing else.
@@ -237,8 +243,8 @@ The binding gets the model with the local path of its file attached, `mask.path`
 A `Path` anywhere else in the params is refused, and so is an output that is or holds a file model or a `Path`: every path a workflow gets has passed the access check.
 A file model has no validators of its own: what it would check of a file is metadata, which the fit check covers when the request is submitted, or the workflow's to read.
 
-A parameter or row takes a file or an output of another workflow, as its type says; never a choice between the two.
-A value that is read from a file by some users and computed by others is a group, given by reference to an output, and a workflow that reads the file outputs the group: a published normalization is read by a workflow whose output another request references ([user-stories.md](user-stories.md), story C2).
+A value that is read from a file by some users and computed by others is a union of a file model and a referenced group, such as `normalization: PublishedNormalization | Referenced[ComputedNormalization] | None` ([user-stories.md](user-stories.md), story C2).
+The binding gets the file model or the group, and reads the file itself.
 
 **Parameters.** Each parameter is a group, a union of groups, or a list of one, possibly typed `X | None`.
 A number is a field of a group, such as the `bins` of a `Reduction`:
@@ -252,10 +258,11 @@ So a UI generated from the params schema shows each parameter as a section ([ADR
 
 | Parameter or row | Widget |
 |---|---|
-| a group without a data value | a form of its fields, and a picker of records whose output is of its class |
-| a group with a data value | a picker of records whose output is of its class |
+| a group | a form of its fields |
 | a file model | a picker of files of its kind |
+| `Referenced[T]` | a picker of records whose output fits `T` |
 | a union of groups | a choice of alternatives, each a form of its fields |
+| a union with members `Referenced[...]` | the choice of its other members, and "From a record", a picker of records, as one more way |
 | a list | rows, added and edited; each row the widget of its element |
 | `X \| None` | a toggle over the widget of `X` |
 
@@ -285,10 +292,21 @@ beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = 
 {'beam_centre': {'kind': 'find', 'tolerance': 0.05}}
 ```
 
-A union is written inline only: no reference fits it, and the params schema of a union has no reference form.
-So no alternative has a data value.
-A parameter that takes an output of another workflow is a group, such as `beam_centre: BeamCentre`, which takes `centre.ref('centre')` (see References).
-An error inside a union names its place without the tag, `beam_centre.tolerance`.
+An alternative written inline has no data value, since a request writes its fields.
+A reference fits a union through a member `Referenced[T]`, which has no tag, so the workflow that computes `T` knows nothing of the specs that take it:
+
+```python
+beam_centre: (
+    Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
+    | Referenced[BeamCentre]                      # centre.ref('centre'), see References
+) = GivenCentre()
+
+{'beam_centre': {'kind': 'find', 'tolerance': 0.05}}
+{'beam_centre': {'@ref': 'output', 'record': 'r17', 'output': 'centre'}}
+```
+
+The key `@ref` tells a reference from a value written inline, then the tag tells the alternatives apart.
+An error inside a union names the field without the tag, `beam_centre.tolerance`.
 
 `X | None` means *without X*: apply no mask, no direct-beam correction.
 A value obtained in one of several ways that a request writes inline is a union that names each way, not `None` for one of them.
@@ -298,8 +316,8 @@ A toggle that is off must read as what `None` does:
 mask: MaskFile | None = None                      # [ ] Mask
 direct_beam: DirectBeam | None                    # [x] Direct beam  [run 60340 ▾]
 
-beam_centre: BeamCentre = BeamCentre()
-# Beam centre: x [0.0] y [0.0]  [or from a record ▾]
+beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
+# Beam centre: (•) Given: x [0.0] y [0.0]  ( ) From a record
 beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
 # Beam centre: (•) Given: x [0.0] y [0.0]  ( ) Find: tolerance [0.1]
 # not `beam_centre: GivenCentre | None = None  # None: find it`,
@@ -317,19 +335,21 @@ The module that defines a spec imports pydantic, `ess.spec`, and scipp for the t
 A workflow that takes nothing has the params model `NoParams`.
 A request computes every output its spec declares.
 
-**Rules.** The models are ordinary pydantic models: the framework reads what it needs from the field types.
+**Rules.** The models are ordinary pydantic models with one marker for the framework, `Referenced[T]`; the rest the framework reads from the field types.
 A value *round-trips* when its JSON form reads back as the value.
 `WorkflowSpec` checks these rules when it is made:
 
 - The names of params and outputs are distinct.
 - Each parameter is a group, a union of groups, or a list of one, possibly typed `X | None`. A list parameter is not typed `list[X] | None`, since a list without rows is `[]`, and its element is not typed `X | None`, since each row is a value.
-- A group with a data value is given by reference to an output only. Of its fields, the framework refuses a `Path`, a file model, a `NewType`, or a type alias, since no output could fill them. A file model at a field of a group has no default but `None`, or `[]` for a list.
+- An unmarked place is one that a request writes: a group without a data value, a union of such groups with a tag, or a file model. A group with a data value is at a place marked `Referenced[...]`.
+- `Referenced[...]` is at a parameter, a row, or a member of a union there, never at a field of a group. Its `T` is a group, which holds no file model at any depth.
+- A file model at a field of a group has no default but `None`, or `[]` for a list.
 - A file model holds only `file`, as `FileModel` declares it, and has no validators or serializers of its own. A `Path` outside a file model is refused.
 - Each output is a type, possibly typed `X | None`, or a list or a dict of one. No output is or holds a file model or a `Path`, at any depth.
 - No type in the params or the outputs is a `NewType` or a type alias, at any depth: a class says what a value is, and a binding maps it to a key of its own.
-- A union of groups is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag. No alternative has a data value.
+- A union of groups is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag. A union may also hold members `Referenced[T]`, which need no tag.
 - A group has no serializers, computed fields, or aliases, which would make its JSON form differ from the object of its fields. It may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation).
-- A default is a value, never a reference to an output or a file: what a request may write at the place, which round-trips and holds no `@ref` object at any depth. A parameter typed a group with a data value has no default but `None`, or `[]` for a list. A default is the value that validating it gives, since pydantic does not validate a default: a group's default is an instance, not the object of its fields, and an enum's a member, not its value.
+- A default is a value, never a reference to an output or a file: what a request may write at the place, which round-trips and holds no `@ref` object at any depth. A place that only a reference fills has no default but `None`, or `[]` for a list. A default is the value that validating it gives, since pydantic does not validate a default: a group's default is an instance, not the object of its fields, and an enum's a member, not its value.
 - A table has no default (see Combining runs: tables).
 - The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`. The params model may have model validators, but the framework never calls them.
 
@@ -420,7 +440,7 @@ A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)
 | Phase | What is validated |
 |---|---|
 | request phase | each group, or row, written inline, whole, by the type of its parameter or row, from its JSON form; an instance by its dump. The files inside it are resolved and checked first, so its validators run with their identities |
-| call phase, once the references are read | the data of each reference to an output, by the type of its parameter or row; each file, at a parameter, a row, or a field of a group, gets its local path |
+| call phase, once the references are read | the data of each reference to an output, by the groups that `Referenced[...]` marks at its parameter or row; each file, at a parameter, a row, or a field of a group, gets its local path |
 
 In the request phase, at submission, the backend also checks the names and the required parameters, each reference to an output readable and fitting its parameter or row (see References), and the table rules (see Combining runs: tables).
 Every validator of a group written inline runs then, with all its fields at hand:
@@ -436,7 +456,7 @@ The call phase makes each value of the JSON form the record holds, with `strict=
 It fails only for the data of a reference to an output, which fails the record, or the push.
 It makes the params instance from these values.
 A request that cannot run is refused at submission with a `SubmitError`.
-Its `errors` list each reason as a `FieldError`, as pydantic's `ValidationError.errors()` does: the place of the field at fault, `loc`, such as `('reduction', 'bins')` or `('sample', 2)`, the reason, `msg`, and for a call with several requests the request's key or index, `entry`.
+Its `errors` list each reason as a `FieldError`, as pydantic's `ValidationError.errors()` does: the path of the field at fault, `loc`, such as `('reduction', 'bins')` or `('sample', 2)`, the reason, `msg`, and for a call with several requests the request's key or index, `entry`.
 If one request of a call is refused, none is submitted.
 A request that fails in the call phase makes a failed record.
 Its failure, `client.failure(record)`, keeps the framework's own words as they are: a value refused in the call phase, such as `mask.path: Value error, ...`, and the backend's reasons, such as `record r17 failed`, `the workflow of sans-iofq/v1 returned None as iofq`, or `the write failed: ...`.
@@ -463,7 +483,7 @@ A request writes a file as `file(...)` (see Files): `file(path=...)` names a fil
 `record.ref(output, key)` names one element of a list or dict output: by its index for a list, `key='2'`, and by its key for a dict.
 A key that the output lacks fails in the call phase.
 
-A reference to an output fills a whole parameter or row typed a group, such as `beam_centre` or `sample[2]`: never a union of groups, a field of a group, or a whole list.
+A reference to an output fills only a place marked `Referenced[...]`: a parameter, a row, or a member of a union there, such as `beam_centre` or `time_range[2]`; never a field of a group or a whole list.
 A file is a value, at a parameter, a row, or a field of a group typed a file model.
 The JSON form of a reference to an output, and of a file, is an object with the key `@ref`, which names its kind:
 
@@ -475,28 +495,30 @@ The JSON form of a reference to an output, and of a file, is an object with the 
 
 The key `@ref` is reserved at every depth: an object with it is a reference to an output or a file.
 So the framework finds the references and files of a request without the spec, in every array and every object.
-With the spec, it refuses a reference to an output inside a group, and a default whose JSON form holds the key `@ref`.
+With the spec, it refuses a reference to an output inside a group or at an unmarked place, and a default whose JSON form holds the key `@ref`.
 
-A reference to an output *fits* a parameter or row when the data it names can be the value there.
+A reference to an output *fits* a place when the data it names are of the class `T` of a `Referenced[T]` there, or of a subclass of it.
 `| None` is removed on both sides.
 A reference with a key names one element, of the output's element type, and an element of a list parameter takes a reference by the element type.
 A file and a reference to an output differ in where they may be and when they are resolved:
 
 | | Reference to an output | File |
 |---|---|---|
-| Place | a parameter, or a row | the same, or a field of a group typed a file model, or an element of a list field of one |
-| Fills | a whole group, not a file model | a whole file model |
-| Fits if | the output's class is the group's class or a subclass of it | the file's metadata have the model's metadata |
+| Where | a parameter or a row typed `Referenced[T]`, or a member of a union there | a parameter or a row typed a file model, or a member of a union there, or a field of a group typed a file model, or an element of a list field of one |
+| Fills | a whole group, `T`, which holds no file model | a whole file model |
+| Fits if | the output's class is `T` or a subclass of it | the file's metadata have the model's metadata |
 | Resolved | in the call phase, to the stored output | in the request phase, to the file's identity; in the call phase, the file model gets the local path |
 | Found in a record | by its `@ref` key, without the spec | the same |
 | Access check at submission | records the client may read (see How long records and values are kept) | files the proposal may read |
 
 | Data | Type of the parameter or row | Fits |
 |---|---|---|
-| an output `BeamCentre` | `BeamCentre \| None` | yes |
-| an output `BeamCentre` | `GivenCentre \| FindCentre`, a union of groups | no: a union is written inline |
-| an output `list[TimeRange]`, with a key | `TimeRange`, a row of `time_range: list[TimeRange]` | yes |
-| an output `sc.DataArray` | `ComputedTransmission` | no: a reference stands for a group, so the workflow outputs `ComputedTransmission` |
+| an output `BeamCentre` | `Referenced[BeamCentre] \| None` | yes |
+| an output `BeamCentre` | `BeamCentre \| None` | no: the place is unmarked |
+| an output `BeamCentre` | `GivenCentre \| FindCentre`, a union of groups | no: no member is `Referenced[...]` |
+| an output `BeamCentre` | `Annotated[GivenCentre \| FindCentre, ...] \| Referenced[BeamCentre]` | yes |
+| an output `list[TimeRange]`, with a key | a row of `time_range: list[TimeRange \| Referenced[TimeRange]]` | yes |
+| an output `sc.DataArray` | `Referenced[ComputedTransmission]` | no: a reference stands for a group, so the workflow outputs `ComputedTransmission` |
 | a raw file | `Sample`, a file model of kind `'raw'` | yes |
 | a raw file | `MaskFile`, a file model of kind `'mask'` | no |
 
@@ -646,7 +668,7 @@ client.files.metadata(run)['sample']                          # the source's cur
 Many reductions combine several runs, such as the sample and can runs of SANS.
 A spec takes them as *tables*, next to the values that all runs share.
 A table is a list parameter whose *rows* an accumulator takes a push at a time, such as the sample runs.
-Each row is written inline, a file, or a reference to an output, as its type allows.
+Each row is written inline, a file, or a reference to an output, as the spec types its rows.
 The rows of a table are distinct.
 
 A *multi-run spec* combines the runs of the *single-run spec* of the same reduction.
@@ -742,7 +764,7 @@ The backend has the binding make the driver, and pushes each push into it, later
 **Pins.** A call that pins takes state n, where n is the number of pushes logged so far.
 Pinning does not wait for these pushes to be added.
 `client.output` then waits for state n before it copies.
-`EXPORT` writes an I(Q) to a text file; its parameter `result` is an `IofQ`.
+`EXPORT` writes an I(Q) to a text file; its parameter `result` is typed `Referenced[IofQ]`.
 
 | Call | Returns | Holds back push n+1 |
 |---|---|---|
@@ -761,7 +783,7 @@ Only the client that made an accumulator pins it.
 |---|---|---|
 | a template | each fixed value written inline, whole, by the type of its parameter or row; each fixed reference to an output readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the rows of fixed tables read distinct |
 | a stage call | the same, for the values given; the table rules on given tables | each given value read; the rows of given tables read distinct |
-| a push | each row written inline, whole, by the table's element type; each reference readable and fitting; the table rules on the table with the push | the data of each reference read and checked by the table's element type; the rows read distinct from those read before, before the driver gets them |
+| a push | each row written inline, whole, by the table's element type; each reference readable and fitting; the table rules on the table with the push | the data of each reference read and checked by the groups that `Referenced[...]` marks in the table's element type; the rows read distinct from those read before, before the driver gets them |
 | a state, at a pin | the number of rows of each table, by its length constraints | (none) |
 
 A value that fails its check at a push stops the accumulator, as any failing push does.
@@ -773,10 +795,10 @@ So `file(run=611)` and `file(path=...)` of the same file are one row.
 A push checks this against the pushes logged, since a pin that refused the repeat would refuse every later state.
 A plain request with a repeated row is refused too, including one in a template.
 
-In the call phase, for a table whose rows a request may write inline, rows are also compared by the JSON form of each row read.
+In the call phase, for a table whose row type has a member `Referenced[T]`, rows are also compared by the JSON form of each row read, unless such a `T` has a data value.
 The backend keeps the rows read so far for each blank table, and compares each push's rows with them before the driver gets the rows.
 So a value written inline and a reference to an output whose value is equal are one row, and a time slice is never summed twice.
-`SLICES` is a spec like `IOFQ`, with the table `time_range: list[TimeRange] = Field(min_length=1)`:
+`SLICES` is a spec like `IOFQ`, with the table `time_range: list[TimeRange | Referenced[TimeRange]] = Field(min_length=1)`:
 
 ```python
 slicer = client.compute(FIND_SLICES, params={'log': file(run=611)})   # outputs slices: list[TimeRange]
@@ -791,7 +813,7 @@ acc.push(time_range=[TimeRange(start=0, stop=60)])    # equal to slice 0: the pu
 A repeat found in the call phase fails the push, which stops the accumulator.
 The client reads how many slices there are, since a reference names one row.
 Running again a cell that computes a record and pushes its output pushes a reference to a new record.
-Only the call phase catches that repeat, and only for a table whose rows a request may write inline.
+Only the call phase catches that repeat, and only for a table whose row type has a member `Referenced[T]`, with no data value in such a `T`.
 
 The accumulator *stops* if
 
@@ -803,7 +825,7 @@ Later pushes and pins are refused with the reason, and the records of states it 
 
 **Adding waits for readers.** The example uses the toy specs `VOLUME` and `CUT` ([user-stories.md](user-stories.md)).
 `VOLUME` sums the counts of the runs of its table `runs` into its output `volume`, a group `Volume` whose field `counts` is an array with the dimension `q`.
-`CUT` takes the value at `position.index` of its parameter `volume`, a `Volume`:
+`CUT` takes the value at `position.index` of its parameter `volume`, typed `Referenced[Volume]`:
 
 ```python
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
@@ -937,25 +959,27 @@ The spec's groups are named for their role, `Sample` and `Can`, not after esssan
 `binding.keys` gives a tuple of keys for each field, and `keys=` takes the same: `(K,)`, or `()` for a parameter that sets no key, a field that `make_pipeline` uses itself.
 Two parameters of one class need distinct keys: one gets a subclass, `class QyAxis(Axis): ...`, or `keys=` names a key for it.
 An output typed `sc.DataArray` is computed at the key `sc.DataArray` unless `keys=` names another, so two such outputs need `keys=`.
-No two fields, parameters or outputs, share a key, over all alternatives of a union: an output computed at a parameter's key would be the value the binding was given, which an output must not share memory with.
+No two fields, parameters or outputs, share a key, over all members of a union: an output computed at a parameter's key would be the value the binding was given, which an output must not share memory with.
 An output that reports the centre given or found has a key of its own, such as `UsedCentre`, computed by a provider from `GivenCentre`.
 
-A union of groups has a key for each alternative, the alternative's class: `binding.keys['beam_centre'] == (GivenCentre, FindCentre)`, and `keys=` takes one key for each alternative, in the same order.
-`keys=` may give the alternatives one key, `(K, K)`, which then holds the value of either alternative.
-The binding sets the key of the alternative that the value's tag names, not that of the value's type, which may be a subclass of an alternative.
+A union of groups has a key for each member, the member's class: `binding.keys['beam_centre'] == (GivenCentre, FindCentre)`, and `keys=` takes one key for each member, in the same order.
+`keys=` may give the members one key, `(K, K)`, which then holds the value of either member.
+The binding sets the key of the member nearest to the value's class, the first class of `type(value).__mro__` that is a member, so an output of a subclass of `T` at `Referenced[T]` sets the key of `T`.
 Here one graph serves both alternatives, since `find_centre` leads from one alternative's key to the other's:
 
 ```python
 def find_centre(settings: FindCentre, data: SampleData) -> GivenCentre: ...
 
 PipelineBinding(IOFQ, lambda fixed: sciline.Pipeline([find_centre, ..., iofq]))
-# tag 'given' -> pipeline[GivenCentre] = value   (replaces find_centre)
-# tag 'find'  -> pipeline[FindCentre] = value    (find_centre computes GivenCentre)
+# a GivenCentre -> pipeline[GivenCentre] = value   (replaces find_centre)
+# a FindCentre  -> pipeline[FindCentre] = value    (find_centre computes GivenCentre)
 ```
 
-Where the alternatives need different providers for one key, `make_pipeline` branches on the fixed value.
-That always works, since a union is never a blank, even with one key for all alternatives: its key may depend on its value.
-A list of unions sets one key, its type, as any list: a provider reads the tag of each row.
+With `| Referenced[ComputedCentre]`, the keys are `(GivenCentre, FindCentre, ComputedCentre)`.
+A union whose members are of one class, such as `BeamCentre | Referenced[BeamCentre]`, is that class to the binding, with one key, and not a union, so it may be a blank.
+Where the members need different providers for one key, `make_pipeline` branches on the fixed value.
+That always works, since a union is never a blank, even with one key for all members: its key may depend on its value.
+A list of unions sets one key, its type, as any list: a provider tells its rows apart.
 
 A parameter typed `X | None`, a union too, sets no key, so `keys=` must give it `()`.
 Each value of a union sets one key, but `None` has no key to set: setting `X` to `None` would replace a provider of `X`, and setting nothing would leave the meaning of `None` to whatever the pipeline holds or computes at `X`.
@@ -975,7 +999,7 @@ PipelineBinding(SPEC, make_pipeline, keys={'direct_beam': ()})
 
 Defaults belong to the spec: `make_pipeline` holds no value at a key that a parameter's key leads to.
 Such a value replaces the provider that would read the parameter, so the request's value has no effect, and the binding cannot tell, since the provider is gone from the graph.
-A value held at a parameter's own key is harmless, since the binding sets the request's value over it, except at a key of a union whose alternatives have keys of their own, which one alternative sets and the others do not.
+A value held at a parameter's own key is harmless, since the binding sets the request's value over it, except at a key of a union whose members have keys of their own, which one member sets and the others do not.
 If the pipeline of the beam-centre example held a default `GivenCentre`, as esssans' `LokiAtLarmorTutorialWorkflow` holds a `BeamCenter`, the tag `'find'` would set `FindCentre`, but `iofq` would read the default, and `find_centre` would never run.
 The binding refuses a value held at any key of such a union, since it cannot tell which key leads to which: the held value has replaced the provider that would show it.
 `make_pipeline` replaces such a value with a provider, `pipeline.insert(...)`, such as an adapter from the spec's group to the workflow's key.
@@ -984,7 +1008,7 @@ A stage computes what does not depend on the blanks once, through `sciline.Stage
 A plain request is a stage with no blanks, called once.
 The author of the pipeline promises that it is pure: it modifies no value it is given, and returns the same results for the same values.
 `binding.keys` and `binding.pipeline(fixed)` give the keys and the graph of a `PipelineBinding`, so that the driver of the multi-run spec reuses them ([roles/toy_sans.py](roles/toy_sans.py)).
-A table whose single-run parameter is a union has a key per alternative, so a driver cannot cut the graph at one key for its rows, as it cannot for a blank.
+A table whose single-run parameter is a union of several classes has a key per member, so a driver cannot cut the graph at one key for its rows, as it cannot for a blank. A table of `X | Referenced[X]` has one key.
 A driver passes `pipeline` the fixed values it is made with: every value that is not a table, defaults filled in.
 So a parameter that is a table of the multi-run spec cannot shape the graph, as a blank cannot.
 

@@ -8,7 +8,7 @@ Its stories are S7, C1, D1 to D6, and E1 to E4 in [user-stories.md](user-stories
 
 `apply` fills a template for each file and returns the requests keyed by member, the value of a metadata field (by default the run number).
 It reads metadata through `client.files` and builds plain data; it submits nothing.
-The examples of batches, lookups, and rules reduce transmission runs with `TRANSMISSION` ([README.md](README.md#specs-and-bindings)), whose parameters `run` and `empty_beam` are file models, each a run's file given by reference, and whose output is `transmission: ComputedTransmission`.
+The examples of batches, lookups, and rules reduce transmission runs with `TRANSMISSION` ([README.md](README.md#specs-and-bindings)), whose parameters `run` and `empty_beam` are file models, each a run's file, written `file(...)`, and whose output is `transmission: ComputedTransmission`.
 
 ```python
 template = Template(TRANSMISSION, params={'empty_beam': file(run=60336)}, blanks=('run',))

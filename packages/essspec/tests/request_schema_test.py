@@ -12,7 +12,7 @@ import pytest
 from annotated_types import Gt
 from pydantic import BaseModel, Field, TypeAdapter
 
-from ess.spec import FileModel, WorkflowSpec
+from ess.spec import FileModel, Referenced, WorkflowSpec
 from ess.spec.refs import ParamsError
 from ess.spec.request_types import held
 
@@ -49,16 +49,18 @@ Centre = Annotated[Given | Find, Field(discriminator='kind')]
 
 
 class Params(BaseModel):
-    red: Reduction = Reduction()
+    red: Reduction | Referenced[Reduction] = Reduction()
     opt: Reduction | None = None
+    ref: Referenced[Reduction] | None = None
     spec: Specimen | None = None
     centre: Centre = Given()
     ocentre: Centre | None = None
     wf: Annotated[Given | WithFile, Field(discriminator='kind')] | None = None
     run: RunFile | None = None
     runs: list[RunFile] = []
-    reds: list[Reduction] = []
+    reds: list[Reduction | Referenced[Reduction]] = []
     cents: list[Centre] = []
+    found: Centre | Referenced[Reduction] | None = None
     given: Given = Given()  # also an alternative of centre, with its tag optional
 
 
@@ -92,6 +94,12 @@ REQUESTS = [
     ('opt', None),
     ('opt', OUT),
     ('opt', 5),
+    ('opt', {'bins': 2}),
+    ('ref', OUT),
+    ('ref', ACC),
+    ('ref', None),
+    ('ref', {'bins': 2}),
+    ('ref', RUN),
     ('spec', OUT),
     ('spec', {'run': RUN}),
     ('spec', {'run': OUT}),
@@ -136,6 +144,12 @@ REQUESTS = [
     ('cents', [{'kind': 'find'}, OUT]),
     ('cents', [{'kind': 'x'}]),
     ('cents', [5]),
+    ('found', {'kind': 'find'}),
+    ('found', OUT),
+    ('found', None),
+    ('found', {'tol': 1}),
+    ('found', {'kind': 'find', 'tol': OUT}),
+    ('found', RUN),
     ('given', {}),
     ('given', {'kind': 'given'}),
     ('given', OUT),

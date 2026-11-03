@@ -189,18 +189,18 @@ class Accumulator:
         row the table holds already or that the push repeats, and a push of
         no rows into a table. Rows are compared as the record holds them: a
         file by its identity, a reference to an output by record, output,
-        and key, and an inline value by its JSON form; for a table whose
-        rows are not groups with a data value, also by the rows read, before
-        the driver gets them.
+        and key, and an inline value by its JSON form; for a table whose row
+        type has a member ``Referenced[T]``, unless such a ``T`` has a data
+        value, also by the rows read, before the driver gets them.
 
         A push is one push into the binding's driver per table, in the
         order given, and one state. A push references
         files or outputs of records, never an accumulator. Each row is
         checked by the table's element type; the number of rows of a table,
         such as a row in a table that needs one, is checked when a state is
-        pinned. When the push is added, its rows read, unless the table's rows
-        are groups with a data value, are compared with those read before by their JSON
-        form, so an inline value and a reference to equal data are one row,
+        pinned. When the push is added, its rows read are compared with those
+        read before by their JSON form, at a table where they are compared as
+        above, so an inline value and a reference to equal data are one row,
         and a repeat fails the push. A record that has failed or was
         cancelled is refused, and one that is pending is not waited for. The
         push returns once it is logged. The backend adds the pushes one at a
@@ -331,10 +331,12 @@ class Client:
         allows (see :mod:`ess.spec._workflow_spec`):
 
         - a file model, as a file, ``file(...)``;
-        - any other group, as a model or a dict of its fields, unless a field
-          is a data value; or as a reference to an output that fits;
+        - any other group, as a model or a dict of its fields;
         - a union of groups, as a model or a dict of the fields of one
-          alternative, with its tag, never as a reference.
+          alternative, with its tag;
+        - ``Referenced[T]``, as a reference to an output whose data fit
+          ``T``;
+        - a union of these, as one of its members.
 
         For example::
 
@@ -351,13 +353,14 @@ class Client:
         The backend checks the values against its own spec, so a ``SpecId``
         in place of the spec gets the same checks. A request that cannot run
         raises ``SubmitError``: an invalid value, an unknown spec or file,
-        an inline group with a field that is a data value, a reference where
-        none may stand, inside a group (except a file at a field typed a
-        file model), at a union, or to a whole list, a
-        reference the client may not read, or one whose data do not fit its
-        field. Each of its ``errors`` names the field at fault by its place,
-        ``loc``, and the request by its key or index, ``entry``, if several
-        are given (see :class:`~ess.apps.errors.FieldError`)::
+        a value written inline at a place that only a reference fills, a
+        reference where none may stand, inside a group (except a file at a
+        field typed a file model), at a place the spec does not mark
+        ``Referenced[...]``, or to a whole list, a reference the client may
+        not read, or one whose data do not fit its field. Each of its
+        ``errors`` names the field at fault by its place, ``loc``, and the
+        request by its key or index, ``entry``, if several are given (see
+        :class:`~ess.apps.errors.FieldError`)::
 
             except SubmitError as error:
                 for e in error.errors:

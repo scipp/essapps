@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import pytest
@@ -12,14 +13,22 @@ from pydantic import (
     Discriminator,
     Field,
     PlainSerializer,
+    create_model,
     field_validator,
     model_validator,
 )
 
-from ess.spec import FileModel, FileRef, OutputRef, request_types
-from ess.spec.places import alternatives, root_type, validated
+from ess.spec import (
+    FileModel,
+    FileRef,
+    OutputRef,
+    Referenced,
+    WorkflowSpec,
+    request_types,
+)
+from ess.spec.places import alternatives, root_type
 from ess.spec.refs import Loc, ParamsError, Ref
-from ess.spec.request_types import held, row_sources
+from ess.spec.request_types import held, row_sources, value_of
 
 
 class RunFile(FileModel, kind='raw'):
@@ -58,17 +67,18 @@ Centre = Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
 
 
 class Params(BaseModel):
-    mask: Mask
-    sample: Sample
+    mask: Referenced[Mask]
+    sample: Sample | Referenced[Sample]
     reduction: Reduction | None = None
     beam_centre: Centre
     centres: list[Centre]
-    samples: list[Sample] = Field(min_length=2)
+    samples: list[Sample | Referenced[Sample]] = Field(min_length=2)
+    found: Centre | Referenced[Mask] = GivenCentre()
 
 
 class MaskParams(BaseModel):
     mask: MaskFile | None = None
-    sample: Sample | None = None
+    sample: Sample | Referenced[Sample] | None = None
     runs: list[RunFile] = []
 
 
@@ -221,17 +231,21 @@ def test_a_reference_to_an_output_at_a_file_model_is_refused() -> None:
     assert raised.value.errors == (
         (
             ('mask',),
-            'r1.sample is a reference to an output; MaskFile is given by reference '
-            'to a file, such as file(path=...)',
+            'r1.sample is a reference to an output; MaskFile is a file model, '
+            'written as file(...)',
         ),
     )
 
 
-def test_a_reference_to_an_output_at_a_group_with_a_file_model_is_refused() -> None:
+def test_a_reference_to_an_output_at_an_unmarked_group_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
         held(MeasuredParams, 'measured', OUTPUT, _named)
     assert raised.value.errors == (
-        (('measured',), 'r1.sample: no output fits Measured, which holds a file model'),
+        (
+            ('measured',),
+            'r1.sample is a reference to an output; Measured is written inline, '
+            'since the spec does not mark the place Referenced[...]',
+        ),
     )
 
 
@@ -263,12 +277,30 @@ def test_a_reference_to_a_whole_list_is_refused() -> None:
     )
 
 
-def test_no_reference_fits_a_union() -> None:
+def test_a_reference_to_an_output_at_an_unmarked_union_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
         held(Params, 'beam_centre', OUTPUT, _named)
-    ((at, msg),) = raised.value.errors
-    assert at == ('beam_centre',)
-    assert 'a union of groups is written inline' in msg
+    assert raised.value.errors == (
+        (
+            ('beam_centre',),
+            'r1.sample is a reference to an output; GivenCentre | FindCentre is '
+            'written inline, since the spec does not mark the place Referenced[...]',
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ('name', 'value'),
+    [
+        ('sample', {'thickness': 2.0}),
+        ('sample', OUTPUT),
+        ('found', {'kind': 'find', 'tolerance': 0.5}),
+        ('found', OUTPUT),
+    ],
+)
+def test_a_union_with_a_referenced_member_takes_either(name: str, value: Any) -> None:
+    form = value if isinstance(value, dict) else value.model_dump()
+    assert held(Params, name, value, _named) == form
 
 
 @pytest.mark.parametrize(
@@ -372,8 +404,23 @@ def test_a_file_model_given_inline_is_refused(
         held(model, name, value, _named)
     ((at, msg),) = raised.value.errors
     assert at == loc
-    assert 'is not a reference; ' in msg
-    assert 'is given by reference to a file, such as file(path=...)' in msg
+    assert 'is not a file; ' in msg
+    assert 'is a file model, written as file(...)' in msg
+
+
+def test_a_value_inline_at_a_file_or_an_output_names_both_references() -> None:
+    class RunOrSample(BaseModel):
+        run: RunFile | Referenced[Sample]
+
+    with pytest.raises(ParamsError) as raised:
+        held(RunOrSample, 'run', {'thickness': 1.0}, _named)
+    assert raised.value.errors == (
+        (
+            ('run',),
+            "{'thickness': 1.0} is not a file; RunFile | Sample is a file model, "
+            'written as file(...), or a reference to an output',
+        ),
+    )
 
 
 @pytest.mark.parametrize(
@@ -393,21 +440,97 @@ def test_a_reference_to_an_output_in_a_json_form_written_inline_is_refused(
     )
 
 
-def test_a_group_with_a_data_value_given_inline_is_refused() -> None:
+def test_a_value_written_inline_at_a_referenced_place_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
         held(Params, 'mask', {'mask': None}, _named)
     assert raised.value.errors == (
         (
             ('mask',),
-            'Mask is given by reference: no request writes its field mask, of '
-            'DataArray',
+            "{'mask': None} is not a reference; Mask is given by reference to an "
+            'output',
         ),
     )
 
 
 def test_a_value_held_inline_is_made_of_its_json_form() -> None:
     stored = held(Params, 'reduction', {'bins': 3}, _named)
-    assert validated(Params, 'reduction', stored, _unread) == Reduction(bins=3)
+    assert value_of(Params, 'reduction', stored, _unread, {}) == Reduction(bins=3)
+
+
+def test_a_file_model_in_a_group_gets_its_local_path_from_paths() -> None:
+    form = FILE.model_dump(by_alias=True)
+    measured = value_of(
+        MeasuredParams,
+        'measured',
+        {'run': form, 'thickness': 2.0, 'masks': [form]},
+        _unread,
+        {FILE_ID: Path('run.nxs')},
+    )
+    assert measured.run.path == Path('run.nxs')
+    assert measured.masks[0].path == Path('run.nxs')
+
+
+def test_a_file_model_is_made_of_the_reference_and_the_path_given_for_it() -> None:
+    form = FILE.model_dump(by_alias=True)
+    paths = {FILE_ID: Path('mask.xml')}
+    made = value_of(MaskParams, 'mask', form, _unread, paths)
+    assert made == MaskFile(file=FILE_ID)
+    assert made.path == Path('mask.xml')
+    (run,) = value_of(MaskParams, 'runs', [form], _unread, paths)
+    assert run == RunFile(file=FILE_ID)
+    assert run.path == Path('mask.xml')
+
+
+def test_a_file_model_without_a_path_given_has_none() -> None:
+    made = value_of(MaskParams, 'mask', FILE.model_dump(by_alias=True), _unread, {})
+    with pytest.raises(ValueError, match='only when the request runs'):
+        made.path
+
+
+def test_an_output_read_for_a_reference_is_kept_as_it_is() -> None:
+    class LabelledSample(Sample):
+        label: str
+
+    output = LabelledSample(thickness=2.0, label='a')
+    stored = OUTPUT.model_dump(by_alias=True)
+    made = value_of(MaskParams, 'sample', stored, lambda ref: output, {})
+    assert made is output
+
+
+class Typed(BaseModel):
+    x: float = 0.0
+
+
+class Computed(BaseModel):
+    x: float = 0.0
+
+
+class EitherParams(BaseModel):
+    centre: Referenced[Computed] | Typed = Typed()
+
+
+def test_each_value_is_made_by_the_type_of_its_source() -> None:
+    # Computed, the first member, could validate the value written inline too.
+    stored = held(EitherParams, 'centre', {'x': 1.0}, _named)
+    assert type(value_of(EitherParams, 'centre', stored, _unread, {})) is Typed
+    ref = OUTPUT.model_dump(by_alias=True)
+    data = value_of(EitherParams, 'centre', ref, lambda ref: Computed(x=1.0), {})
+    assert type(data) is Computed
+
+
+def test_the_data_of_a_reference_are_checked_by_the_metadata_of_its_type() -> None:
+    def thin(sample: Sample) -> Sample:
+        if sample.thickness > 1.0:
+            raise ValueError('too thick')
+        return sample
+
+    class Checked(BaseModel):
+        sample: Referenced[Annotated[Sample, AfterValidator(thin)]]
+
+    ref = OUTPUT.model_dump(by_alias=True)
+    assert value_of(Checked, 'sample', ref, lambda ref: Sample(), {}) == Sample()
+    with pytest.raises(ParamsError, match='too thick'):
+        value_of(Checked, 'sample', ref, lambda ref: Sample(thickness=2.0), {})
 
 
 def test_each_place_takes_the_forms_its_type_allows() -> None:
@@ -416,9 +539,11 @@ def test_each_place_takes_the_forms_its_type_allows() -> None:
         request_types.FILE,
         request_types.OUTPUT,
     )
+    assert list(row_sources(Params, 'reduction')) == [inline]
     assert list(row_sources(Params, 'sample')) == [inline, output]
     assert list(row_sources(Params, 'mask')) == [output]
     assert list(row_sources(Params, 'beam_centre')) == [inline]
+    assert list(row_sources(Params, 'found')) == [inline, output]
     assert list(row_sources(Params, 'samples')) == [inline, output]
     assert list(row_sources(MaskParams, 'mask')) == [file]
     assert list(row_sources(MaskParams, 'runs')) == [file]
@@ -446,3 +571,44 @@ def test_the_validators_of_a_file_model_at_a_place_run_when_it_is_written() -> N
         ((at, msg),) = raised.value.errors
         assert at == loc
         assert f'only {FILE_ID} is allowed here' in msg
+
+
+class TaggedCentre(BaseModel):
+    """A centre that a finder outputs, with a tag of its own."""
+
+    kind: Literal['found'] = 'found'
+    x: float = 0.0
+
+
+class Found(BaseModel):
+    found: TaggedCentre
+
+
+@pytest.mark.parametrize(
+    ('annotation', 'field'),
+    [
+        (Centre | Referenced[TaggedCentre], Field()),
+        (
+            GivenCentre | FindCentre | Referenced[TaggedCentre],
+            Field(discriminator='kind'),
+        ),
+        (GivenCentre | Referenced[TaggedCentre], Field(discriminator='kind')),
+    ],
+)
+def test_a_discriminator_on_the_inline_union_or_the_whole_union_takes_either_way(
+    annotation: Any, field: Any
+) -> None:
+    params = create_model('Params', centre=(annotation, field))
+    WorkflowSpec(
+        name='centre',
+        version=1,
+        title='Centre',
+        description='A centre',
+        params=params,
+        outputs=Found,
+    )
+    stored = held(params, 'centre', {'kind': 'given', 'x': 1.0}, _named)
+    assert value_of(params, 'centre', stored, _unread, {}) == GivenCentre(x=1.0)
+    found = TaggedCentre(x=2.0)
+    stored = held(params, 'centre', OUTPUT, _named)
+    assert value_of(params, 'centre', stored, lambda ref: found, {}) is found

@@ -42,6 +42,7 @@ from ess.spec import (
     FileModel,
     FileRef,
     OutputRef,
+    Referenced,
     WorkflowSpec,
 )
 
@@ -85,7 +86,7 @@ class Weight(BaseModel):
 
 class TotalParams(BaseModel):
     weight: Weight | None = None
-    part: list[Amount] = Field(min_length=1)
+    part: list[Referenced[Amount]] = Field(min_length=1)
 
 
 TOTAL = WorkflowSpec(

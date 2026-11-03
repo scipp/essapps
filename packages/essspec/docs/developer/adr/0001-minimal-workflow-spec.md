@@ -109,27 +109,37 @@ instance: `compute(params) -> outputs`.
 | params | everything the workflow takes: settings, files, data | each value written inline, a file, or a reference to an output | the values, files with their local paths, and the data the references name |
 | outputs | results | (none) | the data the workflow returns |
 
-Whether a parameter is written inline or a reference to an output is the
-request's choice, since the same value is typed in by one user and computed
-by another: a beam centre is typed in, or found by a first reduction; the time
-slices of a slicing reduction are typed in, or found from a log. A *place* is
-any position in the params, named by its path, such as `reduction.bins` or
-`samples[2]`. The type of a parameter, or of the rows of a list parameter,
-decides which sources it accepts, with `| None` removed:
+A *place* is a parameter or a row, named by its path, such as `reduction` or
+`samples[2]`.
 
-| Type | Example | Value | Reference to an output |
-|---|---|---|---|
-| a file model | `SampleRun`, `MaskFile` | a file that fits | no |
-| a group without a data value or a file model | `Reduction`, `BeamCentre` | an object of its fields | to an output of its class |
-| a group with a file model | `Sample(run, thickness)` | an object of its fields, each file as `file(...)` | no |
-| a group with a data value | `ComputedTransmission` | no | to an output of its class |
-| a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag | no |
-| a list, `list[X]` | a list parameter | a list of rows, each as for `X` | no; each row as for `X` |
+**The spec marks each place that a reference to an output fills.** Such a
+place is typed `Referenced[T]`, where the data of the output fit `T`. A place
+of any other type is *unmarked*, and a request writes it: inline, or as a file.
+The same value may be typed in by one user and computed by another: a beam
+centre is typed in, or found by a first reduction; the time slices of a slicing
+reduction are typed in, or found from a log. Such a place is a union of both,
+`BeamCentre | Referenced[BeamCentre]`, and the request chooses one member of
+the union that the spec declares. The type of a place, with `| None` removed,
+says which sources it takes:
+
+| Type | Example | A request writes |
+|---|---|---|
+| a group without a data value | `Reduction`, `Sample(run, thickness)` | an object of its fields, each file as `file(...)` |
+| a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag |
+| a file model | `SampleRun`, `MaskFile` | a file that fits |
+| `Referenced[T]` | `Referenced[ComputedTransmission]` | a reference to an output that fits `T` |
+| a union of these | `BeamCentre \| Referenced[BeamCentre]` | what one of its members takes |
+| a list, `list[X]` | a list parameter | a list of rows, each as for `X` |
+
+`Referenced[T]` is `Annotated[T, REFERENCED]`, so pydantic, a binding, and any
+direct use of the params model see `T`, and take a `T` inline.
 
 **The sources are a type.** The framework derives from the params model a
-*request type* (`ess.spec.request_types`): at each parameter or row, the union
-of the sources the table gives it, each with the type that validates it, the
-group's own class written inline, the file model, or a reference to an output.
+*request type* (`ess.spec.request_types`): the params type with each
+`Referenced[T]` replaced by a reference to an output whose data fit `T`. At
+each parameter or row, it is the union of the sources the table above gives it, each
+with the type that validates it: the group's own class written inline, the file
+model, or a reference to an output.
 The source of a value is known from its `@ref` key alone, so the request phase
 validates a value by the type of its source, the JSON schema of the request type
 is the params schema, and a form offers a widget for each source the place
@@ -139,8 +149,9 @@ of the request type.
 
 | | Params model | Request type |
 |---|---|---|
-| `reduction: Reduction` | `Reduction` | `Reduction \| OutputRef \| AccumulatorRef` |
-| `transmission: ComputedTransmission` | `ComputedTransmission` | `OutputRef \| AccumulatorRef` |
+| `reduction: Reduction` | `Reduction` | `Reduction` |
+| `transmission: Referenced[ComputedTransmission]` | `ComputedTransmission` | `OutputRef \| AccumulatorRef` |
+| `beam_centre: BeamCentre \| Referenced[BeamCentre]` | `BeamCentre` | `BeamCentre \| OutputRef \| AccumulatorRef` |
 | `sample: SampleRun` | the file model, with its local path | the file model, as `{"@ref": "file", ...}` |
 | `centre: GivenCentre \| FindCentre` | the alternative | the alternative, with its tag |
 
@@ -154,15 +165,16 @@ may be left out; or a list of scalars or of file models. A scalar is an `int`,
 are of these types, possibly constrained, such as `Annotated[float, Gt(0)]`.
 Any other field is a *data value*, such as a scipp array, `float | None`, or
 `tuple[float, float]`. No request can write a data value, so a group with one
-is given by reference to an output only. Of its fields, the framework refuses
-a `Path`, a file model, a `NewType`, or a type alias, since no output could
-fill them. The framework looks no deeper.
+is at a place marked `Referenced[...]`, and an unmarked place of it is refused.
+The framework looks no deeper.
 
 **A group is validated whole, once, when the request arrives.** So a group
 holds only what is known then: values typed in, and files, resolved to their
 identity. A value that another request computes may not exist yet, so a
-reference to an output fills a whole parameter or row. So a file picker sits
-next to a checkbox, and a picker of records fills a whole card:
+reference to an output fills a whole parameter or row: `Referenced[...]` is at
+a parameter, a row, or a member of a union there, never at a field of a group.
+So a file picker sits next to a checkbox, and a picker of records fills a whole
+card:
 
 ```python
 class Sample(BaseModel):
@@ -172,7 +184,7 @@ class Sample(BaseModel):
 
 class IofQParams(BaseModel):
     samples: list[Sample]                  # a table, each row with its run
-    transmission: ComputedTransmission     # another request's output: a parameter
+    transmission: Referenced[ComputedTransmission]  # another request's output
 ```
 
 This buys two things:
@@ -187,10 +199,11 @@ This buys two things:
 
   | Parameter or row | Widget |
   |---|---|
-  | a group with interpreted fields only | a form of its fields, a file picker for a file model, and a picker of records whose output is of its class, unless it has a file model |
-  | a group with a data value | a picker of records whose output is of its class |
+  | a group | a form of its fields, with a file picker for a file model |
   | a file model | a picker of files of its kind |
+  | `Referenced[T]` | a picker of records whose output fits `T` |
   | a union of groups | a choice of alternatives, each a form of its fields |
+  | a union with members `Referenced[...]` | the choice of its other members, and a picker of records as one more way |
   | a list | rows, added and edited; each row the widget of its element |
   | `X \| None` | a toggle over the widget of `X` |
 
@@ -224,8 +237,8 @@ file with `MaskFile.local(path)`. No output is or holds a file model or a
 metadata let a picker offer only the files that fit. A field of the model for
 a metadata value, such as the run number, waits for a workflow that needs it.
 
-**References to outputs fill groups.** A reference to an output fits a
-parameter or row by the class of the group there. A parameter typed `float`
+**References to outputs fill groups.** The `T` of `Referenced[T]` is a group,
+and a reference to an output fits the place by the class of `T`. A place typed `float`
 or `sc.DataArray` would fit every output of that type, so a UI that offers
 the outputs that fit would list every number, or every array, that any record
 holds. A group's class says what the value is. So a value that another
@@ -251,8 +264,8 @@ The key `@ref` is reserved at every depth: an object with it is a reference to
 an output or a file. So a framework finds the references and files of a
 request without the spec, as a remote client that holds only the serialized
 spec must, and a value written inline never reads as a reference. With the
-spec, the framework refuses a reference to an output inside a group, and a
-default whose JSON form holds the key.
+spec, the framework refuses a reference to an output inside a group or at an
+unmarked place, and a default whose JSON form holds the key.
 
 The identity string of a `FileRef` is opaque to the spec and interpreted
 only by the framework that minted it, which makes it self-describing where it
@@ -265,23 +278,25 @@ are resolved:
 
 | | Reference to an output | File |
 |---|---|---|
-| Place | a parameter, or a row | the same, or a field of a group typed a file model, or an element of a list field of one |
-| Fills | a whole group, not a file model | a whole file model |
-| Fits if | the output's class is the group's class or a subclass of it | the file's metadata have the model's metadata |
+| Where | a parameter or a row typed `Referenced[T]`, or a member of a union there | a parameter or a row typed a file model, or a member of a union there, or a field of a group typed a file model, or an element of a list field of one |
+| Fills | a whole group, `T`, which holds no file model | a whole file model |
+| Fits if | the output's class is `T` or a subclass of it | the file's metadata have the model's metadata |
 | Resolved | in the call phase, to the stored output | in the request phase, to the file's identity; in the call phase, the file model gets the local path |
 | Found in a record | by its `@ref` key, without the spec | the same |
 | Access check at submission | records the client may read | files the proposal may read |
 
-No reference to an output fits a union, and none fills a whole list
-parameter. A subclass fits a parameter typed by its base class too, so a
-parameter that takes only the subclass is typed by the subclass. A framework
-checks fit in the request phase, so that a chain of requests is refused before
-anything runs. `ess.spec.field_types.fits` states the rule.
+A reference to an output fits a union through its members `Referenced[T]`.
+Such a member needs no tag, so the workflow that computes `T` knows nothing of
+the specs that take it. No reference fills a whole list parameter: each row is
+a place, `list[Referenced[X]]`. A subclass fits a place typed by its base
+class too, so a place that takes only the subclass is typed by the subclass. A
+framework checks fit in the request phase, so that a chain of requests is
+refused before anything runs. `ess.spec.field_types.fits` states the rule.
 
-A parameter or row takes a file or an output of another workflow, as its type
-says; never a choice between the two. A value that some users read from a
-file and others compute is a group given by reference to an output, and a
-workflow that reads the file outputs the group.
+A value that some users read from a file and others compute is a union of a
+file model and a referenced group, such as
+`normalization: PublishedNormalization | Referenced[ComputedNormalization] | None`.
+The binding gets the file model or the group, and reads the file itself.
 
 ```python
 class Sample(FileModel, kind='raw'): ...          # the file of a sample run
@@ -295,16 +310,16 @@ class BeamCentre(BaseModel):                      # written inline, or a finder'
     y: float = 0.0
 
 class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):  # by a transmission reduction
-    transmission: sc.DataArray                    # a data value: given by reference only
+    transmission: sc.DataArray                    # a data value: only a reference fills it
 
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-    beam_centre: BeamCentre = BeamCentre()        # the nominal centre
-    transmission: ComputedTransmission
+    beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()  # the nominal centre
+    transmission: Referenced[ComputedTransmission]
     sample: Sample
     can: Can
 
-class IofQ(BaseModel, arbitrary_types_allowed=True):  # a group, so another workflow takes it by reference
+class IofQ(BaseModel, arbitrary_types_allowed=True):  # a group, so another workflow takes it, Referenced[IofQ]
     intensity: sc.DataArray
 
 class IofQOutputs(BaseModel):
@@ -324,20 +339,24 @@ client.submit(IOFQ, params={**runs, 'beam_centre': BeamCentre(x=0.012, y=-0.003)
 client.submit(IOFQ, params={**runs, 'beam_centre': finder.ref('centre')})          # a reference
 ```
 
-**Rules.** The models carry no annotations for the framework: what the
-framework needs, it reads from the field types (`ess.spec.field_types`).
-`WorkflowSpec` checks these rules when it is made:
+**Rules.** The models carry one marker for the framework, `Referenced[T]`, at
+each place that a reference to an output fills. The rest of what the framework
+needs, it reads from the field types (`ess.spec.field_types`). `WorkflowSpec`
+checks these rules when it is made:
 
 - The names of params and outputs are distinct.
 - Each parameter is a group, a union of groups, or a list of one, possibly
   typed `X | None`. A list parameter is not typed `list[X] | None`, since a
   list without rows is `[]`, and its element is not typed `X | None`, since
   each row is a value.
-- A group with a data value is given by reference to an output only. Of its
-  fields, the framework refuses a `Path`, a file model, a `NewType`, or a
-  type alias, since no output could fill them. A file model at a field of a
-  group has no default but `None`, or `[]` for a list. A group with a file
-  model is written inline only, since no output holds one.
+- An unmarked place is one that a request writes: a group without a data
+  value, a union of such groups with a tag, or a file model. A group with a
+  data value is at a place marked `Referenced[...]`.
+- `Referenced[...]` is at a parameter, a row, or a member of a union there,
+  never at a field of a group. Its `T` is a group, which holds no file model
+  at any depth, since no output holds one.
+- A file model at a field of a group has no default but `None`, or `[]` for a
+  list.
 - A file model holds only `file`, as `FileModel` declares it, and
   has no validators or serializers of its own: what it would check of a file
   is metadata, which the fit check covers, or the workflow's to read. A `Path`
@@ -353,14 +372,15 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
   callable. The tag field of each alternative is a `Literal` of one string,
   its own, such as `Literal['find']`, without an alias. A union that holds a
   group holds groups only: a value of a type that is not a group has no tag.
-  No alternative has a data value: a request writes a union inline only.
+  A union may also hold members `Referenced[T]`, which need no tag: the key
+  `@ref` tells a reference from a value written inline.
 - A group has no serializers, computed fields, or aliases, which would make
   its JSON form differ from the object of its fields. It may have field and
   model validators of any mode.
 - A default is a value, never a reference to an output or a file: what a
   request may write at the place, which round-trips and holds no `@ref`
-  object at any depth. A parameter typed a group with a data value has no
-  default but `None`, or `[]` for a list. A default is the value that
+  object at any depth. A place that only a reference fills has no default
+  but `None`, or `[]` for a list. A default is the value that
   validating it gives, since pydantic does not validate a default: a group's default is an
   instance, not the object of its fields, and an enum's a member, not its
   value.
@@ -431,7 +451,7 @@ own, such as `iofq: IofQ` or `centre: BeamCentre`, or is a list or a dict of
 one, and a reference with a key names one element.
 
 "Outputs can be parameters" is a fit check between an output's type and the
-group of a parameter or row. An output that another workflow takes is a group, such as
+`T` of a `Referenced[T]` at a parameter or row. An output that another workflow takes is a group, such as
 `centre: BeamCentre` or `iofq: IofQ`; one that none takes need not be. Where a
 framework stores an output is not a spec concept. Output *selection* (choosing
 which sciline targets to compute) is not modeled: like parameter slicing, it is
@@ -447,7 +467,7 @@ carries its own unit.
 
 A *table* is a list parameter whose *rows* an accumulator takes a push at a
 time, such as the sample runs. Each row is written inline, a file, or a
-reference to an output, as its type allows. The rows of a table are distinct. A
+reference to an output, as the spec types its rows. The rows of a table are distinct. A
 *single-run spec* takes one run per parameter. A *multi-run spec* of the same
 reduction takes a table in place of such a parameter. Its params model is a
 plain model, and the fields the two models have in common are shared by
@@ -456,8 +476,8 @@ inheritance:
 ```python
 class IofQSettings(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-    beam_centre: BeamCentre = Field(default_factory=BeamCentre)
-    transmission: ComputedTransmission
+    beam_centre: BeamCentre | Referenced[BeamCentre] = Field(default_factory=BeamCentre)
+    transmission: Referenced[ComputedTransmission]
 
 class IofQParams(IofQSettings):
     sample: Sample
@@ -491,9 +511,10 @@ for the summed sample runs (see the alternative "A file model at a field of
 a group").
 
 The framework compares rows whole, as the record holds them. For a table whose
-rows a request may write inline, it also compares the rows read, so that a time
-slice is never summed twice (the essapps README, `docs/developer/README.md`,
-section Stages and accumulators).
+row type has a member `Referenced[T]`, it also compares the rows read, so that a
+time slice typed in and the same slice found from a log are never summed twice,
+unless such a `T` has a data value (the essapps README,
+`docs/developer/README.md`, section Stages and accumulators).
 
 With one row in each table, a request of the multi-run spec is a request of the
 single-run spec. `ess.spec.testing.check_one_row` checks that a package's
@@ -560,8 +581,9 @@ those of esslivedata's for exactly this reason, and esslivedata already
 declares outputs as a model class with title and description as field metadata.
 
 esslivedata's params model holds settings only, each written inline: its specs
-are the special case of this one in which every value is written inline, so a
-request may give their params as an instance of the model. Its data arrive as
+are the special case of this one with no place marked `Referenced[...]`, so a
+request may give their params as an instance of the model, and their params
+schema holds no reference to an output. Its data arrive as
 streams, which this spec does not model. A value that changes during a stream,
 such as a motor position, arrives on a stream of its own and is set as a
 *context key* of `StreamProcessor`, never taken from the params; here, such a
@@ -600,19 +622,32 @@ output, and dims and units of an output for a UI.
 ## Alternatives considered
 
 - **Two models, params inline and inputs by reference.** The spec fixes the
-  source per field. A value used both ways, such as a beam centre, then needs a
-  client that reads it and sends it again, which loses the record of where it
-  came from, or a spec per source; and moving a field between the models breaks
-  every client.
+  source per field, as `Referenced[T]` does per place. A value used both ways,
+  such as a beam centre, then needs a client that reads it and sends it again,
+  which loses the record of where it came from, or a spec per source; and
+  moving a field between the models breaks every client. With one model and a
+  marker per place, a value used both ways is a union in one spec,
+  `BeamCentre | Referenced[BeamCentre]`, and marking a place changes one type.
+- **The sources of a place worked out from its type.** A group of plain fields
+  takes its fields or a reference, a group with a data value a reference only,
+  a group with a file field its fields only, and a union of groups its
+  alternatives only. A property of a type, a data value, a file field, or a
+  union, then changes how a request fills every place of that type: a group
+  that gains a file field takes no reference at any of its places; every group
+  of settings, such as `Reduction`, has a picker of records that no request
+  needs; and "typed in, or found by a centre finder" cannot be stated as a
+  union.
 - **Inputs that also take a value inline.** Keeps two models, but the inputs
   then hold values written inline, which removes the reason for two.
 - **A constant spec per typed value**, which outputs the value typed in, for a
   request to reference. Needs no framework change, but a submission per typed
   value.
 - **A field typed as the reference.** The binding gets references, not data.
-- **A union of the reference and the data.** Wrong in both phases: it needs a
-  validator that accepts anything that is not plain data, and it hides that
-  member from the JSON Schema.
+- **A union of the reference and the data**, `ComputedTransmission | OutputRef`.
+  Wrong in both phases: it needs a validator that accepts anything that is not
+  plain data, and it hides that member from the JSON Schema. `Referenced[T]`
+  is `T` to the params type, and only the request type puts a reference in its
+  place.
 - **A field typed as the data, with validation switched by phase.** The field
   holds a reference where its type says a group, and every validator runs on
   references in the request phase.
@@ -643,7 +678,8 @@ output, and dims and units of an output for a UI.
   such as `limits: tuple[float, float]` or `scales: dict[str, float]`, written
   inline as one value. A form has no widget for it, and no spec needs one: its
   parts are the fields of a group, a parameter of its own. Such a field is a
-  data value, so its group is given by reference to an output only.
+  data value, so no request writes its group, and its place is
+  `Referenced[...]`.
 - **A reference to an output at any depth**: groups
   inside groups, unions and `X | None` at fields, each field a place of its
   own. A group with a reference inside cannot be validated whole when the
@@ -674,8 +710,8 @@ output, and dims and units of an output for a UI.
   the file.
 - **A group inside a group**, written inline. It is known when the request
   arrives, so the outer group would still be validated whole. Left out because
-  no workflow needs it: the inner group would lose its picker of records, the
-  checks of fields and the fit check of files would recurse, and a cell of
+  no workflow needs it: the checks of fields and the fit check of files would
+  recurse, and a cell of
   a table would hold a group. Adding it later breaks nothing.
 - **A reference to a whole list** filling a list parameter. The table rules,
   such as distinct rows, could then be checked only in the call phase.
@@ -686,10 +722,10 @@ output, and dims and units of an output for a UI.
 - **The framework running model validators of the params model.** A stage and a
   driver never make a whole params instance, so such a check would hold for
   some requests of a spec and not for others.
-- **Annotations on the fields that hold data**, marking what the framework
-  resolves, the format of the bytes, and the array structure. The field types
-  tell the framework the same, and the author writes no metadata for the
-  framework.
+- **Annotations on the fields that hold data**, marking the format of the
+  bytes and the array structure. The field types tell the framework the same.
+  The one marker the framework reads, `Referenced[T]`, says how a request
+  fills a place, which no field type says.
 - **A `tabulate` that derives the multi-run model** from the single-run spec
   by naming its tables. The model has no static type, drops the model
   validators of the single-run model, and needs framework rules for where the

@@ -18,7 +18,7 @@ import pytest
 import scipp as sc
 from pydantic import BaseModel, Field
 
-from ess.spec import DriverBinding, WorkflowSpec
+from ess.spec import DriverBinding, Referenced, WorkflowSpec
 from ess.spec.binding import fixed_values
 from ess.spec.testing import (
     Rows,
@@ -284,7 +284,7 @@ class Measured(BaseModel, arbitrary_types_allowed=True):
 
 class DataParams(BaseModel):
     scale: Scale = Field(default_factory=Scale)
-    data: Measured | None = None
+    data: Referenced[Measured] | None = None
 
 
 class DataOutputs(BaseModel):

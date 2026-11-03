@@ -20,7 +20,7 @@ from ess.apps import Client, Record, Status, local
 from ess.apps.panel import App, Listing, Outputs, Records
 from ess.apps.panel.records import describe
 from ess.apps.testing import FakeFiles, read_file
-from ess.spec import FileModel, FileRef, WorkflowSpec, function_binding
+from ess.spec import FileModel, FileRef, Referenced, WorkflowSpec, function_binding
 
 
 class Run(FileModel):
@@ -70,7 +70,7 @@ class CurveOutputs(BaseModel):
 
 
 class ScaleParams(BaseModel):
-    curve: Curve
+    curve: Referenced[Curve]
 
 
 class ScaleOutputs(BaseModel):
