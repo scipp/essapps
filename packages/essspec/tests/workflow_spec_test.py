@@ -240,7 +240,7 @@ class BeamCentre(BaseModel, arbitrary_types_allowed=True):
 
 
 class ByCentre(BaseModel, arbitrary_types_allowed=True):
-    """An alternative that holds a data value: refused, no request writes it."""
+    """An alternative that holds a data value: refused, a form has no input for it."""
 
     mode: Literal['centre'] = 'centre'
     centre: sc.Variable
@@ -437,21 +437,25 @@ class TestMetadata:
 def _takes_inline(spec: WorkflowSpec[Any, Any], name: str) -> bool:
     """
     Whether the params schema offers an inline source for the parameter
-    ``name``, or each row of it: a source that refuses an object with the key
-    ``@ref``, which only an inline source does.
+    ``name``, or each row of it: a source that is neither a reference to an
+    output nor a file, each an object with the key ``@ref``.
     """
-    prop = spec.serialize().params_schema['properties'][name]
-    return _has_inline_source(prop.get('items', prop))
+    schema = spec.serialize().params_schema
+    prop = schema['properties'][name]
+    return _has_inline_source(prop.get('items', prop), schema.get('$defs', {}))
 
 
-def _has_inline_source(schema: Any) -> bool:
-    if isinstance(schema, list):
-        return any(_has_inline_source(s) for s in schema)
-    if not isinstance(schema, dict):
+def _has_inline_source(schema: dict[str, Any], defs: dict[str, Any]) -> bool:
+    if 'anyOf' in schema:  # X | None
+        return any(_has_inline_source(s, defs) for s in schema['anyOf'])
+    if schema.get('type') == 'null':
         return False
-    if schema.get('not') == {'required': ['@ref']}:
-        return True
-    return any(_has_inline_source(schema.get(k)) for k in ('anyOf', 'oneOf'))
+    if 'discriminator' in schema:  # a reference to an output, or a union
+        return schema['discriminator']['propertyName'] != '@ref'
+    if 'oneOf' in schema:  # the sources of a place
+        return any(_has_inline_source(s, defs) for s in schema['oneOf'])
+    (*_, name) = schema['$ref'].split('/')
+    return '@ref' not in defs[name]['properties']
 
 
 NOT_A_VALUE = 'the default is not a value a request may write'
@@ -715,10 +719,10 @@ class TestModelRules:
                 (
                     {'params': model('P', centre=(tp, ...))},
                     re.escape(
-                        'P.centre: BeamCentre.position, of Variable: no request '
-                        'writes it; give the field a type that a form has an input '
-                        'for, or mark the place Referenced[BeamCentre], which a '
-                        'reference to an output fills'
+                        'P.centre: BeamCentre.position, of Variable: a form has no '
+                        'input for it; give the field a type that a form has an '
+                        'input for, or mark the place Referenced[BeamCentre], which '
+                        'a reference to an output fills'
                     ),
                 )
                 for tp in (BeamCentre, BeamCentre | None, list[BeamCentre])
@@ -726,8 +730,8 @@ class TestModelRules:
             (
                 {'params': model('P', centring=(Centring, ...))},
                 re.escape(
-                    'P.centring: Centring.centre, of BeamCentre | None: no request '
-                    'writes it'
+                    'P.centring: Centring.centre, of BeamCentre | None: a form has '
+                    'no input for it'
                 ),
             ),
             (
@@ -829,22 +833,6 @@ class TestModelRules:
                     'params': model(
                         'P',
                         by=(
-                            ByMonitor | Referenced[ByTime],
-                            Field(discriminator='mode'),
-                        ),
-                    )
-                },
-                re.escape(
-                    'P.by: the discriminator of a union with Referenced[...] is on '
-                    'the union of its alternatives, Annotated[A | B, '
-                    'Field(discriminator=...)] | Referenced[C]'
-                ),
-            ),
-            (
-                {
-                    'params': model(
-                        'P',
-                        by=(
                             Annotated[
                                 ByMonitor | Referenced[ByTime],
                                 Field(discriminator='mode'),
@@ -903,9 +891,11 @@ class TestModelRules:
                     )
                 },
                 re.escape(
-                    'P.by: ByCentre.centre, of Variable: no request writes it; give '
-                    'the field a type that a form has an input for, or mark the place '
-                    'Referenced[ByCentre], which a reference to an output fills'
+                    'P.by: ByCentre.centre, of Variable: a form has no input for it; '
+                    'give the field a type that a form has an input for, or take '
+                    'ByCentre out of the union written inline, Annotated[A | B, '
+                    'Field(discriminator=...)] | Referenced[ByCentre], which a '
+                    'reference to an output fills'
                 ),
             ),
             (
@@ -922,7 +912,7 @@ class TestModelRules:
                         ),
                     )
                 },
-                'P.by: ByCentre.centre, of Variable: no request writes it',
+                'P.by: ByCentre.centre, of Variable: a form has no input for it',
             ),
             (
                 {
@@ -962,7 +952,7 @@ class TestModelRules:
                         ),
                     )
                 },
-                'P.by: ByPeak.centre, of BeamCentre: no request writes it',
+                'P.by: ByPeak.centre, of BeamCentre: a form has no input for it',
             ),
             *(
                 (
@@ -1519,7 +1509,9 @@ class TestFields:
     )
     def test_any_other_field_is_a_data_value(self, tp: Any) -> None:
         params = model('P', g=(_group_with(tp), ...))
-        with pytest.raises(ValueError, match=r'P\.g: G\.value, of .*: no request'):
+        with pytest.raises(
+            ValueError, match=r'P\.g: G\.value, of .*: a form has no input'
+        ):
             spec(params=params)
         marked = model('P', g=(Referenced[_group_with(tp)], ...))
         assert not _takes_inline(spec(params=marked), 'g')
@@ -1540,8 +1532,8 @@ class TestFields:
         with pytest.raises(
             ValueError,
             match=re.escape(
-                f'P.g: G.value, of {shown}: no request writes it; give the field a '
-                'type that a form has an input for, or mark the place '
+                f'P.g: G.value, of {shown}: a form has no input for it; give the '
+                'field a type that a form has an input for, or mark the place '
                 'Referenced[G], which a reference to an output fills'
             ),
         ):
@@ -1702,11 +1694,6 @@ def data_ref(data_type: str) -> dict[str, Any]:
     }
 
 
-def inline(schema: dict[str, Any]) -> dict[str, Any]:
-    """The schema of an inline value: an object with the key ``@ref`` is not one."""
-    return {**schema, 'not': {'required': ['@ref']}}
-
-
 SAMPLE = FileRef(file='run:loki/1')
 CAN = {'can': FileRef(file='run:loki/3')}
 """The can that each request of ``IOFQ`` gives, left out of the cases below."""
@@ -1722,7 +1709,7 @@ class TestSerialization:
         params = model('P', reduction=(Reduction, Reduction()))
         schema = spec(params=params).serialize().params_schema
         assert schema['properties']['reduction'] == {
-            **inline({'$ref': '#/$defs/Reduction'}),
+            '$ref': '#/$defs/Reduction',
             'default': {'bins': 2},
             'title': 'Reduction',
         }
@@ -1732,7 +1719,7 @@ class TestSerialization:
         assert schema['title'] == 'IofQParams'
         assert list(schema['properties']) == list(IofQParams.model_fields)
         assert schema['properties']['reduction'] == {
-            'oneOf': [inline({'$ref': '#/$defs/Reduction'}), data_ref('Reduction')],
+            'oneOf': [{'$ref': '#/$defs/Reduction'}, data_ref('Reduction')],
             'default': {'bins': 2},
             'title': 'Reduction',
         }
@@ -1846,7 +1833,6 @@ class TestSerialization:
         schema = spec(params=model('P', g=(group, ...))).serialize().params_schema
         assert schema['properties']['g'] == {
             '$ref': '#/$defs/G',
-            'not': {'required': ['@ref']},
             'title': 'G',
         }
         properties = schema['$defs']['G']['properties']
@@ -1862,21 +1848,19 @@ class TestSerialization:
             named=(Annotated[ByMonitor | ByTime, pydantic.Discriminator('mode')], ...),
         )
         properties = spec(params=params).serialize().params_schema['properties']
-        alternatives = inline(
-            {
-                'oneOf': [
-                    {'$ref': f'#/$defs/{name}', 'title': title, 'required': ['mode']}
-                    for name, title in (('ByMonitor', 'Monitor'), ('ByTime', 'Time'))
-                ],
-                'discriminator': {
-                    'propertyName': 'mode',
-                    'mapping': {
-                        'monitor': '#/$defs/ByMonitor',
-                        'time': '#/$defs/ByTime',
-                    },
+        alternatives = {
+            'oneOf': [
+                {'$ref': f'#/$defs/{name}', 'title': title, 'required': ['mode']}
+                for name, title in (('ByMonitor', 'Monitor'), ('ByTime', 'Time'))
+            ],
+            'discriminator': {
+                'propertyName': 'mode',
+                'mapping': {
+                    'monitor': '#/$defs/ByMonitor',
+                    'time': '#/$defs/ByTime',
                 },
-            }
-        )
+            },
+        }
         assert properties['by'] == {**alternatives, 'title': 'By'}
         assert properties['maybe']['anyOf'] == [alternatives, {'type': 'null'}]
         assert properties['each']['items'] == alternatives
@@ -1897,7 +1881,6 @@ class TestSerialization:
             '#/$defs/ByTime',
         ]
         assert written['discriminator']['propertyName'] == 'mode'
-        assert written['not'] == {'required': ['@ref']}
         assert ref == data_ref('BeamCentre')
         assert properties['either']['anyOf'] == [
             data_ref('BeamCentre | Centring'),
@@ -1915,9 +1898,7 @@ class TestSerialization:
         properties = spec(params=params).serialize().params_schema['properties']
         assert properties['time_range'] == {
             'type': 'array',
-            'items': {
-                'oneOf': [inline({'$ref': '#/$defs/TimeRange'}), data_ref('TimeRange')]
-            },
+            'items': {'oneOf': [{'$ref': '#/$defs/TimeRange'}, data_ref('TimeRange')]},
             'minItems': 2,
             'title': 'Slices',
         }

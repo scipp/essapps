@@ -20,7 +20,7 @@ another, so that an output of one spec can fill a parameter of another.
 :func:`model_of` makes a model of one field, which validates a value, or a
 row of a list parameter, by that field alone. :func:`inline` uses it to
 validate a value from its JSON form in the request phase, and
-:func:`ess.spec.places.validated` to validate a parameter in the call phase.
+:func:`ess.spec.places.validated` to validate data, as a binding takes it.
 The rules these serve are stated in :mod:`ess.spec._workflow_spec`.
 """
 

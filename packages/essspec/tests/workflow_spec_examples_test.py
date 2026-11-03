@@ -171,7 +171,7 @@ def refusal() -> str:
         'Params.transmissions: a list parameter is not typed list[X] | None',
         'Params.masks: the element of a list parameter is not typed X | None',
         'Params.range: the default',
-        'Params.binning: Binning.start, of float | None: no request writes it',
+        'Params.binning: Binning.start, of float | None: a form has no input for it',
         'Params.specimen: Specimen.mask: Referenced[...] is at a parameter or a '
         'row, not at a field of a group',
         'Params.mask: Referenced[PixelMask | None]: PixelMask | None is not a group',

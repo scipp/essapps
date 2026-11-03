@@ -2,30 +2,35 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 What a request may write at a parameter or a row, read from its type, and
-how a value is made of what the record stores.
+the phases in which a value is validated.
 
 The rules are stated once, in :mod:`ess.spec._workflow_spec`, with the terms
 used here: parameter, row, group, field, file, reference to an output, data
 value, JSON form. A request is validated one parameter at a time, in two
 phases, and a spec checks its defaults the same way:
 
-=============  ===========================  =================================
-When           Function                     What it does
-=============  ===========================  =================================
-spec made      :func:`field_value`          validates the default of a field
-                                            of a group as a request would
-                                            write it
-request phase  :func:`.request_types.held`  validates a parameter by its
-                                            request type, and returns what
-                                            the record stores: the JSON form
-                                            of each group and file, and each
-                                            reference to an output as it is
-call phase     :func:`validated`            makes the value of a parameter
-                                            from what the record stores: each
-                                            reference to an output replaced
-                                            by its data, each file with its
-                                            local path
-=============  ===========================  =================================
+=============  =================================  ==========================
+When           Function                           What it does
+=============  =================================  ==========================
+spec made      :func:`field_value`                validates the default of
+                                                  a field of a group as a
+                                                  request would write it
+request phase  :func:`.request_types.held`        validates a parameter by
+                                                  its request type, and
+                                                  returns what the record
+                                                  stores: the JSON form of
+                                                  each group and file, and
+                                                  each reference to an
+                                                  output as it is
+call phase     :func:`.request_types.value_of`    makes the value of a
+                                                  parameter from what the
+                                                  record stores, each value
+                                                  by the type of its
+                                                  source: each reference to
+                                                  an output replaced by its
+                                                  data, each file with its
+                                                  local path
+=============  =================================  ==========================
 
 The *request phase* is when a request is submitted, before any data is
 read. The *call phase* is when the request runs, once the backend has read
@@ -67,7 +72,6 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable, Mapping
 from enum import Enum
-from pathlib import Path
 from types import NoneType, UnionType
 from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
@@ -84,48 +88,23 @@ from .refs import (
     OutputRef,
     ParamsError,
     iter_refs,
-    map_refs,
 )
 
 
-def validated(
-    model: type[BaseModel],
-    name: str,
-    value: Any,
-    read: Callable[[OutputRef | AccumulatorRef], Any] | None = None,
-    paths: Mapping[str, Path] | None = None,
-) -> Any:
+def validated(model: type[BaseModel], name: str, value: Any) -> Any:
     """
-    The value of the parameter ``name`` of ``model``, validated by its field
-    alone (see :func:`~ess.spec.field_types.model_of`); for a list
-    parameter, each row by the element type.
-
-    With ``read=None``, ``value`` is data, as a binding takes it. Otherwise
-    ``value`` is what the record stores (see
-    :func:`~ess.spec.request_types.held`), in the call phase: ``read`` gives
-    the data of each reference to an output, which replace it, and ``paths``
-    gives the local path of each file by its identity (see
-    :class:`~ess.spec.parameters.FileModel`).
-
-    The request phase validated each group from its JSON form already, so
-    this fails only for the data of a reference to an output. It validates
-    in Python mode with ``strict=False``, since a strict model takes an enum
-    from its value only in JSON mode, and the request phase applied the
-    model's strictness already. Raises
+    ``value``, data as a binding takes it, of the parameter ``name`` of
+    ``model``, validated by its field alone (see
+    :func:`~ess.spec.field_types.model_of`); for a list parameter, each row
+    by the element type. A spec checks the default of a parameter with it,
+    and :func:`ess.spec.testing.instance` makes a params instance. Raises
     :class:`~ess.spec.refs.ParamsError` at the position of each problem.
     """
     one = field_types.model_of(model, name)
-    if read is not None:
-        value = map_refs(
-            {name: value}, lambda ref: ref if isinstance(ref, FileRef) else read(ref)
-        )[name]
-    strict = False if read is not None else None
-    context = None if paths is None else {'paths': paths}
 
     def check(loc: Loc, v: Any) -> Any:
         try:
-            given = one.model_validate({name: v}, strict=strict, context=context)
-            return getattr(given, name)
+            return getattr(one.model_validate({name: v}), name)
         except ValidationError as error:
             raise ParamsError(
                 ((*loc, *e['loc'][1:]), e['msg']) for e in error.errors()
@@ -268,7 +247,9 @@ def split(tp: Any, *metadata: Any) -> tuple[Any, tuple[Any, ...], tuple[Any, ...
     the ``T`` of each ``Referenced[T]``. ``tp`` and ``metadata`` are as
     :func:`root_type` gives them. The part written is ``None`` if only a
     reference fills the place. Its metadata are ``metadata``, then those of
-    its ``Annotated``::
+    its ``Annotated``. A discriminator in ``metadata`` tells alternatives
+    written inline apart, so a single group written inline does not get
+    it::
 
         split(Reduction)  # (Reduction, (), ())
         split(PixelMask, REFERENCED)  # (None, (), (PixelMask,))
@@ -280,6 +261,8 @@ def split(tp: Any, *metadata: Any) -> tuple[Any, tuple[Any, ...], tuple[Any, ...
         )
         # (GivenCentre | FindCentre, (Field(discriminator='kind'),),
         #  (ComputedBeamCentre,))
+        split(GivenCentre | Referenced[Centre], Field(discriminator='kind'))
+        # (GivenCentre, (), (Centre,))
     """
     if REFERENCED in metadata:
         return None, (), (tp,)
@@ -290,6 +273,8 @@ def split(tp: Any, *metadata: Any) -> tuple[Any, tuple[Any, ...], tuple[Any, ...
     written = tuple(m for m in members if not _marked(m))
     if not written:
         return None, (), referenced
+    if len(written) == 1:
+        metadata = tuple(m for m in metadata if not _discriminates(m))
     inline: Any = written[0] if len(written) == 1 else Union[written]  # noqa: UP007
     if get_origin(inline) is not Annotated:
         return inline, metadata, referenced
@@ -301,6 +286,13 @@ def _marked(tp: Any) -> bool:
     return get_origin(tp) is Annotated and REFERENCED in tp.__metadata__
 
 
+def _discriminates(meta: Any) -> bool:
+    """Whether ``meta``, metadata of a type, is a discriminator."""
+    return isinstance(meta, Discriminator) or (
+        isinstance(meta, FieldInfo) and meta.discriminator is not None
+    )
+
+
 def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] | None:
     """
     The tag field and the alternatives by tag value, if ``annotation``,
@@ -310,7 +302,8 @@ def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] 
         # ('kind', {'given': GivenCentre, 'find': FindCentre})
 
     ``None`` if ``annotation`` is not a union with a group in it, such as
-    ``int | str``. ``metadata`` are those of the field (see
+    ``int | str``, or is ``None``, as :func:`split` gives it for a place
+    that only a reference fills. ``metadata`` are those of the field (see
     :func:`field_metadata`), which may give the discriminator. A
     discriminator in ``annotation`` takes precedence. The alternatives are
     in the order of the union, without their ``Annotated`` metadata.
@@ -322,6 +315,8 @@ def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] 
     callable ``Discriminator``; a tag field with an alias or not typed a
     ``Literal`` of one string.
     """
+    if annotation is None:
+        return None
     tp, _, inner = _unwrapped(annotation)
     discriminator = None
     for meta in (*metadata, *inner):
@@ -374,8 +369,8 @@ def _tags(annotation: Any) -> tuple[Any, ...]:
 def unwritten(group: type[BaseModel]) -> str | None:
     """
     The name of the first data value of ``group``, or ``None`` if it has
-    none. No request writes a group with a data value, so only a reference
-    fills its place, ``Referenced[...]``.
+    none. A form has no input for a data value, so the place of a group with
+    one is marked ``Referenced[...]``.
     """
     return next(
         (n for n, f in group.model_fields.items() if not _interpreted(f.annotation)),

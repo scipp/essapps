@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import pytest
@@ -103,19 +102,6 @@ def test_an_unmarked_place_is_written_by_the_request() -> None:
     assert root_type(MeasuredParams, 'measured') == (Measured, False, ())
     assert split(Measured) == (Measured, (), ())
     assert unwritten(Measured) is None
-
-
-def test_a_file_model_in_a_group_gets_its_local_path_from_paths() -> None:
-    form = FILE.model_dump(by_alias=True)
-    measured = validated(
-        MeasuredParams,
-        'measured',
-        {'run': form, 'thickness': 2.0, 'masks': [form]},
-        read=_unread,
-        paths={FILE.file: Path('run.nxs')},
-    )
-    assert measured.run.path == Path('run.nxs')
-    assert measured.masks[0].path == Path('run.nxs')
 
 
 def test_a_place_marked_referenced_is_filled_by_a_reference_only() -> None:
@@ -237,31 +223,6 @@ def test_a_reference_at_several_referenced_groups_has_their_union() -> None:
     assert ref_types(Params, {'either': OUTPUT}) == [
         (('either',), OUTPUT, Sample | Mask)
     ]
-
-
-def test_a_file_model_is_made_of_the_reference_and_the_path_given_for_it() -> None:
-    paths = {FILE.file: Path('mask.xml')}
-    made = validated(MaskParams, 'mask', FILE, _unread, paths)
-    assert made == MaskFile(file=FILE.file)
-    assert made.path == Path('mask.xml')
-    (run,) = validated(MaskParams, 'runs', [FILE], _unread, paths)
-    assert run == RunFile(file=FILE.file)
-    assert run.path == Path('mask.xml')
-
-
-def test_a_file_model_without_a_path_given_has_none() -> None:
-    made = validated(MaskParams, 'mask', FILE, _unread)
-    with pytest.raises(ValueError, match='only when the request runs'):
-        made.path
-
-
-def test_an_output_read_for_a_reference_is_kept_as_it_is() -> None:
-    class LabelledSample(Sample):
-        label: str
-
-    output = LabelledSample(thickness=2.0, label='a')
-    made = validated(MaskParams, 'sample', OUTPUT, lambda ref: output)
-    assert made is output
 
 
 def test_a_binding_gives_a_file_model_as_data() -> None:

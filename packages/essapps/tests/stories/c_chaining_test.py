@@ -14,7 +14,6 @@ from .conftest import (
     BEAM_CENTRE,
     EXPORT,
     IOFQ,
-    LOAD_NORMALIZATION,
     STITCH,
     VANADIUM,
     Measure,
@@ -65,19 +64,15 @@ def test_c2_vanadium_from_the_catalogue(
     pid = other.publish(vanadium.ref('normalization'), 'scicat')
     published = files.add_published(scicat.entries[pid])
 
-    loaded = client.compute(LOAD_NORMALIZATION, params={'published': file(pid=pid)})
     sample = measure(2, [4.0, 8.0])
     result = client.compute(
-        IOFQ,
-        params={
-            'sample': sample,
-            'normalization': loaded.ref('normalization'),
-        },
+        IOFQ, params={'sample': sample, 'normalization': file(pid=pid)}
     )
 
     assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]
+    assert result.request.params['normalization'] == published
     assert set(client.provenance(result).files()) == {sample, published}
-    assert client.records() == [loaded, result]
+    assert client.records() == [result]
 
 
 def test_c4_reflectometry_angle_series(client: Client, measure: Measure) -> None:

@@ -293,12 +293,34 @@ def test_a_file_model_typed_x_or_none_offers_a_file_and_none(
 def test_a_group_typed_x_or_none_without_a_default_starts_unset(
     client: Client, subtract: Form, subtract_spec: Spec
 ) -> None:
-    assert way(subtract, 'Centre').options == ['Given', 'None']
+    assert way(subtract, 'Centre').options == ['Given', 'From a record', 'None']
     assert way(subtract, 'Centre').value is None
     assert subtract.params == {'background': {'scale': 1.0}}
     with pytest.raises(SubmitError) as refused:
         client.submit(subtract_spec, params=subtract.params)
     assert [e.loc for e in refused.value.errors] == [('centre',)]
+
+
+def test_a_place_written_inline_or_by_reference_without_a_default_starts_unset(
+    client: Client, find_spec: Spec
+) -> None:
+    found = find_spec.outputs.model_fields['centre'].annotation
+
+    class CentreParams(BaseModel):
+        centre: found | Referenced[found]  # type: ignore[valid-type]
+
+    spec: Spec = WorkflowSpec(
+        name='centre',
+        version=1,
+        title='Centre',
+        description='A centre, given or from a record.',
+        params=CentreParams,
+        outputs=Value,
+    )
+    form = Form(spec, client)
+    assert form.ways('centre') == ['Given', 'From a record']
+    assert way(form, 'Centre').value is None
+    assert form.params == {}
 
 
 def test_a_group_typed_x_or_none_is_given_each_way(
@@ -363,22 +385,25 @@ def test_set_refuses_a_tag_of_no_alternative(form: Form) -> None:
         form.set({'detector': {'kind': 'side'}})
 
 
-def test_a_group_offers_a_record_while_a_fitting_output_is_readable(
+def test_a_record_is_offered_and_lists_each_fitting_output_while_readable(
     client: Client, form: Form, find_spec: Spec, reduce_spec: Spec, run: FileRef
 ) -> None:
-    assert form.ways('beam_centre') == ['Given']
+    assert form.ways('beam_centre') == ['Given', 'From a record']
+    nothing = {'(choose a record)'}
+    assert set(picker(form, 'Beam Centre').options) == nothing
 
     client.compute(reduce_spec, params={'run': run, 'sample': {'thickness': 2.0}})
     form.refresh()
-    assert form.ways('beam_centre') == ['Given']  # its output does not fit
+    assert set(picker(form, 'Beam Centre').options) == nothing  # does not fit
 
     found = client.compute(find_spec, params={'run': run})
     form.refresh()
     assert form.ways('beam_centre') == ['Given', 'From a record']
+    assert found.ref('centre') in picker(form, 'Beam Centre').options.values()
 
     client.release(found)
     form.refresh()
-    assert form.ways('beam_centre') == ['Given']
+    assert set(picker(form, 'Beam Centre').options) == nothing
 
 
 def test_the_way_of_a_record_with_no_record_picked_is_not_given_the_default(
@@ -752,12 +777,11 @@ def test_remove_removes_the_rows_selected(stack: Form, run: FileRef) -> None:
 def test_a_row_may_be_an_output_of_a_record_that_fits(
     client: Client, stack: Form, find_spec: Spec, run: FileRef
 ) -> None:
-    assert way(stack, 'Centres').options == ['Given']
+    assert way(stack, 'Centres').options == ['Given', 'From a record']
     with pytest.raises(TypeError, match='edited a row at a time'):
         stack.ways('centres')
     found = client.compute(find_spec, params={'run': run})
     stack.refresh()
-    assert way(stack, 'Centres').options == ['Given', 'From a record']
     way(stack, 'Centres').value = 'From a record'
     picker(stack, 'Centres').value = found.ref('centre')
     click(stack, 'Centres', 'Add as new row')
@@ -766,6 +790,32 @@ def test_a_row_may_be_an_output_of_a_record_that_fits(
     assert stack.params['centres'] == [{'x': 1.0, 'y': 0.0}, found.ref('centre')]
     label = f'BeamCentre ({found.created.astimezone():%H:%M})'
     assert rows(stack, 'Centres')[1] == {'X': '', 'Y': '', 'Record': label}
+
+
+def test_a_row_is_shown_under_the_file_or_the_record_it_is_given_as(
+    client: Client, find_spec: Spec, run: FileRef
+) -> None:
+    centre = find_spec.outputs.model_fields['centre'].annotation
+
+    class RunsParams(BaseModel):
+        runs: list[Raw | Referenced[centre]]  # type: ignore[valid-type]
+
+    spec: Spec = WorkflowSpec(
+        name='runs',
+        version=1,
+        title='Runs',
+        description='Runs, each a file or the centre of a record.',
+        params=RunsParams,
+        outputs=Value,
+    )
+    found = client.compute(find_spec, params={'run': run})
+    form = Form(spec, client)
+    form.set({'runs': [run, found.ref('centre')]})
+    label = f'BeamCentre ({found.created.astimezone():%H:%M})'
+    assert rows(form, 'Runs') == [
+        {'File': 'run 101 (sample)', 'Record': ''},
+        {'File': '', 'Record': label},
+    ]
 
 
 def test_the_editor_offers_no_record_of_a_row_shown_before(

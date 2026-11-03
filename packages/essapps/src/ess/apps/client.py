@@ -189,19 +189,19 @@ class Accumulator:
         row the table holds already or that the push repeats, and a push of
         no rows into a table. Rows are compared as the record holds them: a
         file by its identity, a reference to an output by record, output,
-        and key, and an inline value by its JSON form; for a table whose
-        rows may not be groups with a data value, also by the rows read,
-        before the driver gets them.
+        and key, and an inline value by its JSON form; for a table whose row
+        type has a member ``Referenced[T]``, unless such a ``T`` has a data
+        value, also by the rows read, before the driver gets them.
 
         A push is one push into the binding's driver per table, in the
         order given, and one state. A push references
         files or outputs of records, never an accumulator. Each row is
         checked by the table's element type; the number of rows of a table,
         such as a row in a table that needs one, is checked when a state is
-        pinned. When the push is added, its rows read, unless a row may be a
-        group with a data value, are compared with those read before by their
-        JSON form, so an inline value and a reference to equal data are one
-        row, and a repeat fails the push. A record that has failed or was
+        pinned. When the push is added, its rows read are compared with those
+        read before by their JSON form, at a table where they are compared as
+        above, so an inline value and a reference to equal data are one row,
+        and a repeat fails the push. A record that has failed or was
         cancelled is refused, and one that is pending is not waited for. The
         push returns once it is logged. The backend adds the pushes one at a
         time, in the order logged, each once the records it references have

@@ -697,7 +697,7 @@ def test_a_union_left_out_takes_the_key_of_its_default(
     assert found == []
 
 
-def test_the_key_of_a_union_is_chosen_by_tag_not_by_type(
+def test_an_instance_of_a_subclass_of_an_alternative_sets_its_key(
     centring: PipelineBinding, samples: list[SampleRun]
 ) -> None:
     refined = RefinedCentre(x=2.0)
@@ -882,6 +882,62 @@ def test_a_union_of_one_class_has_one_key_and_may_be_a_blank(
     assert call({'beam_centre': centre}) == CentredOutputs(
         centred=np.sum(SAMPLES[0]) - 1.0, centre=centre
     )
+
+
+# Members of a union whose classes are subclasses of each other: a value sets
+# the key of the member nearest to its class, whatever the order of the union.
+
+
+class Position(BaseModel):
+    x: float = 0.0
+
+
+class GivenPosition(Position):
+    kind: Literal['given'] = 'given'
+
+
+class FindPosition(BaseModel):
+    kind: Literal['find'] = 'find'
+
+
+class ComputedPosition(Position):
+    sigma: float = 1.0
+
+
+class TaggedPositionParams(BaseModel):
+    position: (
+        Annotated[GivenPosition | FindPosition, Field(discriminator='kind')]
+        | Referenced[Position]
+    )
+
+
+class SubclassPositionParams(BaseModel):
+    position: Position | Referenced[ComputedPosition]
+
+
+@pytest.mark.parametrize(
+    ('params', 'value', 'key'),
+    [
+        (TaggedPositionParams, GivenPosition(x=3.0), GivenPosition),
+        (TaggedPositionParams, Position(x=3.0), Position),
+        (SubclassPositionParams, Position(x=3.0), Position),
+        (SubclassPositionParams, ComputedPosition(x=3.0), ComputedPosition),
+    ],
+)
+def test_a_value_sets_the_key_of_the_member_nearest_to_its_class(
+    params: type[BaseModel], value: Position, key: type[Position]
+) -> None:
+    binding = PipelineBinding(
+        _spec('centred', params=params, outputs=CentredOutputs),
+        lambda _: sciline.Pipeline(),
+        keys=CENTRE_KEYS,
+    )
+    pipeline = binding.pipeline({'position': value})
+    assert pipeline.compute(key) is value
+    for other in binding.keys['position']:
+        if other is not key:
+            with pytest.raises(sciline.UnsatisfiedRequirement):
+                pipeline.compute(other)
 
 
 class CentredOnly(BaseModel):

@@ -1937,8 +1937,8 @@ def test_an_accumulator_value_that_does_not_fit_the_spec_fails_the_reader(
         ]
 
 
-# The toy specs over arrays. An array is a data value, which no request
-# writes, so an array that one workflow outputs and another takes is the field
+# The toy specs over arrays. An array is a data value, which a form has no
+# input for, so an array that one workflow outputs and another takes is the field
 # of a group, Counts, whose place a reference fills, Referenced[Counts].
 
 

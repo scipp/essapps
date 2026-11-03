@@ -136,9 +136,9 @@ class BeamCentre(BaseModel):
 
 class ComputedNormalization(Data):
     """
-    The normalization that ``VANADIUM`` computes from a vanadium run, or that
-    ``LOAD_NORMALIZATION`` reads from the catalogue: a group that holds a
-    data value, so a reference fills its place, ``Referenced[...]``.
+    The normalization that ``VANADIUM`` computes from a vanadium run: a group
+    that holds a data value, so a reference fills its place,
+    ``Referenced[...]``.
     """
 
     factor: sc.Variable
@@ -147,7 +147,8 @@ class ComputedNormalization(Data):
 class PublishedNormalization(FileModel):
     """
     A normalization published to the catalogue, read back as a file that holds
-    its factor (C2).
+    its factor (C2). A place takes it, or a computed normalization by
+    reference, ``PublishedNormalization | Referenced[ComputedNormalization]``.
     """
 
 
@@ -155,7 +156,7 @@ class IofQParams(Data):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: Sample
     beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
-    normalization: Referenced[ComputedNormalization] | None
+    normalization: PublishedNormalization | Referenced[ComputedNormalization] | None
 
 
 class IofQOutputs(Data):
@@ -175,12 +176,22 @@ def _reduce(params: IofQParams, counts: np.ndarray) -> IofQOutputs:
     reduction = params.reduction
     masked = np.where(counts < reduction.threshold, 0.0, counts)
     reduced = masked - params.beam_centre.x
-    normalization = params.normalization
-    reduced = reduced / (1.0 if normalization is None else normalization.factor.value)
+    reduced = reduced / _factor(params.normalization)
     return IofQOutputs(
         iofq=_array(reduced.reshape(reduction.bins, -1).sum(axis=1)),
         masked=_array(masked),
     )
+
+
+def _factor(
+    normalization: PublishedNormalization | ComputedNormalization | None,
+) -> float:
+    """The factor of a normalization, read from the file if it is published (C2)."""
+    if normalization is None:
+        return 1.0
+    if isinstance(normalization, PublishedNormalization):
+        return float(read_file(normalization.path))
+    return normalization.factor.value
 
 
 class IofQCanParams(IofQParams):
@@ -203,7 +214,7 @@ class IofQV2Params(Data):
     reduction: ReductionV2 = Field(default_factory=ReductionV2)
     sample: Sample
     beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
-    normalization: Referenced[ComputedNormalization] | None
+    normalization: PublishedNormalization | Referenced[ComputedNormalization] | None
 
 
 IOFQ_V2 = WorkflowSpec(
@@ -264,21 +275,6 @@ def vanadium(params: VanadiumParams) -> VanadiumOutputs:
             factor=sc.scalar(total * params.scaling.scale)
         )
     )
-
-
-class LoadNormalizationParams(Data):
-    published: PublishedNormalization
-
-
-LOAD_NORMALIZATION = _spec(
-    'load-normalization', VanadiumOutputs, params=LoadNormalizationParams
-)
-
-
-def load_normalization(params: LoadNormalizationParams) -> VanadiumOutputs:
-    """The normalization read from a published file that holds its factor (C2)."""
-    factor = sc.scalar(float(read_file(params.published.path)))
-    return VanadiumOutputs(normalization=ComputedNormalization(factor=factor))
 
 
 class NormalizeParams(Data):
@@ -584,7 +580,6 @@ TOYS: dict[SpecId, Binding[Any, Any]] = {
         function_binding(IOFQ_CAN, iofq_can),
         function_binding(BEAM_CENTRE, beam_centre),
         StagedFunction(VANADIUM, vanadium),
-        function_binding(LOAD_NORMALIZATION, load_normalization),
         summing(NORMALIZE, normalize),
         summing(BACKGROUND, background),
         function_binding(CONTRIBUTE, contribute),

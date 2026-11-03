@@ -115,7 +115,8 @@ Terms
     as ``Gt(0)``, are allowed.
     Any other field is a *data value*, such as ``mask: sc.DataArray``,
     ``start: float | None``, ``limits: tuple[float, float]``, or a field
-    typed a group. No request can write a data value.
+    typed a group. A form has no input for a data value, so a group with
+    one is at a place marked ``Referenced[...]``.
 *Reference to an output*
     ``m.ref('pixel_mask')`` names the output ``pixel_mask`` of the record
     ``m``. ``acc.ref(...)`` names an output of an accumulator. The backend
@@ -175,19 +176,24 @@ behind it:
   of a ``Referenced[T]`` there, or a subclass of it (see
   :func:`~ess.spec.field_types.fits`). So ``T`` is a group: ``float`` or
   ``sc.DataArray`` would fit every output of that type, and a picker of
-  records would list unrelated outputs. A number is a field of a group,
-  such as ``Reduction.bins``, and an array is a field of a group whose
-  class says what it is, such as ``PixelMask``. A parameter that a request
-  writes is a group too, whose class names a role: a binding sets the
-  sciline key of its type (see :class:`~ess.spec.pipeline.PipelineBinding`).
+  records would list unrelated outputs. An array is a field of a group
+  whose class says what it is, such as ``PixelMask``.
+- A parameter that a request writes is a group too, and a number is a
+  field of one, such as ``Reduction.bins``: a binding sets the sciline key
+  of a parameter's type (see :class:`~ess.spec.pipeline.PipelineBinding`),
+  so the class names a role; ``int`` would be the key of every parameter
+  typed ``int``.
 - No output holds a file model, so that every file comes from the file
   source, which checks it. So ``T`` has no file model, at any depth.
 - A union at a place has members that a request writes, and members
   ``Referenced[...]``. Two or more groups that a request writes are a union
-  of groups, with a tag, and with the discriminator on their own union, as
-  in ``centre``. A reference fits the place if its data fit one of the
-  groups ``Referenced[...]`` marks. These groups have no tag, so the
-  workflow that computes one knows nothing of the specs that take it.
+  of groups, with a tag. The discriminator is on their own union, as in
+  ``centre``, or on the whole union,
+  ``A | B | Referenced[C] = Field(discriminator='kind')``, where pydantic
+  requires the tag on ``C`` too. A reference fits the place if its data fit
+  one of the groups that ``Referenced[...]`` marks. A referenced group needs
+  no tag, so the workflow that computes one need know nothing of the specs
+  that take it.
 - A default is a value that a request may write, as validating it gives: an
   instance of a group, not a dict, and never a reference or a file. So a
   place that only a reference fills has no default but ``None``, and a file
@@ -220,7 +226,7 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         def width(self) -> float: ...
 
     class Binning(BaseModel):
-        # float | None is a data value, so no request writes a Binning. Use
+        # float | None is a data value, which a form has no input for. Use
         # a bool field, or make the optional part a parameter typed X | None,
         # or, if a reference fills the place, mark it Referenced[Binning].
         start: float | None = None
@@ -319,7 +325,6 @@ from annotated_types import MaxLen, MinLen
 from pydantic import (
     BaseModel,
     ConfigDict,
-    Discriminator,
     Field,
     model_validator,
 )
@@ -481,9 +486,8 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
                                         union, each with its fields
     a reference to an output only       a picker of records
                                         (``Referenced[T]``)
-    one of the last three, and a        the fields, or the alternatives,
-    reference to an output              and a choice to pick a record
-                                        instead
+    one of the first three, and a       its widget, and a choice to pick a
+    reference to an output              record instead
     ``null`` in ``anyOf``               a toggle: ``X | None``
     an array                            a list of rows
     ==================================  ===================================
@@ -587,15 +591,11 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
             )
         tp, _, metadata = places.root_type(model, name)
         inline, inline_metadata, referenced = places.split(tp, *metadata)
-        if marked := _marker_problems(field.annotation, metadata, inline, referenced):
+        if marked := _marker_problems(field.annotation, inline, referenced):
             problems.extend(f'{where}: {problem}' for problem in marked)
             continue
         try:
-            union = (
-                None
-                if inline is None
-                else places.alternatives(inline, *inline_metadata)
-            )
+            union = places.alternatives(inline, *inline_metadata)
         except ValueError as error:
             problems.append(f'{where}: {error}')
             continue
@@ -611,7 +611,7 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
                 'a reduction'
             )
         elif inside := [
-            *(p for group in groups for p in _group_problems(group)),
+            *(p for group in groups for p in _group_problems(group, union is not None)),
             *(p for data in referenced for p in _referenced_problems(data)),
         ]:
             problems.extend(f'{where}: {problem}' for problem in inside)
@@ -715,19 +715,14 @@ def _has_alias(field: FieldInfo) -> bool:
 
 
 def _marker_problems(
-    annotation: Any,
-    metadata: tuple[Any, ...],
-    inline: Any,
-    referenced: tuple[Any, ...],
+    annotation: Any, inline: Any, referenced: tuple[Any, ...]
 ) -> list[str]:
     """
     Refuse ``Referenced[...]`` but at a parameter or a row of type
     ``annotation``, or at a member of a union there: at a field of a group,
     at any depth, or inside the part that a request writes or the type of
     the data (see :func:`~ess.spec.places.split` for ``inline`` and
-    ``referenced``). Refuse a discriminator in ``metadata``, those of the
-    place, if a member is ``Referenced[...]``: the discriminator of the
-    alternatives is on their own union.
+    ``referenced``).
     """
     problems = [
         f'{where}Referenced[...] is at a parameter or a row, not at a field of a '
@@ -741,20 +736,7 @@ def _marker_problems(
         for tp in (inline, *referenced)
         if _marked(tp)
     )
-    if inline is not None and referenced and any(_discriminates(m) for m in metadata):
-        problems.append(
-            'the discriminator of a union with Referenced[...] is on the union of '
-            'its alternatives, Annotated[A | B, Field(discriminator=...)] | '
-            'Referenced[C]'
-        )
     return problems
-
-
-def _discriminates(meta: Any) -> bool:
-    """Whether ``meta``, metadata of a type, is a discriminator."""
-    return isinstance(meta, Discriminator) or (
-        isinstance(meta, FieldInfo) and meta.discriminator is not None
-    )
 
 
 def _referenced_fields(annotation: Any) -> list[str]:
@@ -779,12 +761,13 @@ def _marked(annotation: Any, *metadata: Any) -> bool:
     return REFERENCED in (*metadata, *field_types.arguments(annotation))
 
 
-def _group_problems(group: type[BaseModel]) -> list[str]:
+def _group_problems(group: type[BaseModel], alternative: bool) -> list[str]:
     """
-    The problems of a group that a request writes at a parameter or a row.
+    The problems of a group that a request writes at a parameter or a row,
+    an alternative of a union if ``alternative``.
 
-    A group is refused if it has a data value, which no request writes, so
-    that only a reference fills its place (see
+    A group is refused if it has a data value, which a form has no input
+    for, so that its place is marked ``Referenced[...]`` (see
     :func:`~ess.spec.places.unwritten`); a serializer or a computed field,
     which would make its JSON form differ from the object of its fields; a
     field with an alias; a default that is not a value, since a field left
@@ -797,10 +780,17 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
         return _file_model_problems(group)
     if (data := places.unwritten(group)) is not None:
         held_type = field_types.type_name(group.model_fields[data].annotation)
+        name = group.__name__
+        marked = (
+            f'take {name} out of the union written inline, '
+            f'Annotated[A | B, Field(discriminator=...)] | Referenced[{name}]'
+            if alternative
+            else f'mark the place Referenced[{name}]'
+        )
         return [
-            f'{group.__name__}.{data}, of {held_type}: no request writes it; give '
-            'the field a type that a form has an input for, or mark the place '
-            f'Referenced[{group.__name__}], which a reference to an output fills'
+            f'{name}.{data}, of {held_type}: a form has no input for it; give the '
+            f'field a type that a form has an input for, or {marked}, which a '
+            'reference to an output fills'
         ]
     problems = []
     if found := _decorators(group, _SERIALIZERS):

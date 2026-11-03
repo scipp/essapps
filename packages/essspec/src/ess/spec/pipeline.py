@@ -16,7 +16,7 @@ from typing import Any, NewType, Union, get_args, get_origin
 import sciline
 from pydantic import BaseModel
 
-from . import field_types, places
+from . import field_types
 from ._workflow_spec import WorkflowSpec
 from .binding import StageCall, fixed_values
 
@@ -58,11 +58,12 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         PipelineBinding(SPEC, make_pipeline, keys={'direct_beam': ()})
 
     A union of groups has a key for each member, the group as declared, in
-    the order of the union. The binding sets the key of the alternative that
-    the value's tag names, read from the value's tag field, and not that of
-    the value's type: the value may be an instance of a subclass of an
-    alternative. Here one graph serves both alternatives, since
-    ``find_centre`` leads from one alternative's key to the other's::
+    the order of the union. A value sets the key of the member nearest to
+    its class, the first class of ``type(value).__mro__`` that is a member,
+    so an instance of a subclass of a member, such as an output of a
+    subclass of ``T`` at ``Referenced[T]``, sets that member's key. Here one
+    graph serves both alternatives, since ``find_centre`` leads from one
+    alternative's key to the other's::
 
         class IofQParams(BaseModel):
             sample: Sample
@@ -76,14 +77,12 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
             IOFQ, lambda fixed: sciline.Pipeline([find_centre, ..., iofq])
         )
         binding.keys['beam_centre']  # (GivenCentre, FindCentre)
-        # tag 'given': pipeline[GivenCentre] = value, which replaces find_centre
-        # tag 'find':  pipeline[FindCentre] = value, and find_centre computes
-        #              GivenCentre
+        # a GivenCentre: pipeline[GivenCentre] = value, which replaces
+        #                find_centre
+        # a FindCentre:  pipeline[FindCentre] = value, and find_centre
+        #                computes GivenCentre
 
-    A value of a member without a tag, such as a group that
-    ``Referenced[...]`` marks, sets the key of that member: of the first
-    such member, in the order of the union, that the value is an instance
-    of. A union whose members are of one class is that class to the binding,
+    A union whose members are of one class is that class to the binding,
     with one key, and not a union::
 
         beam_centre: (
@@ -170,10 +169,12 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         if wrong := sorted(n for n in outputs if n in keys and len(keys[n]) != 1):
             raise ValueError(f'{wrong}: an output is computed as one key')
         unions = {
-            n: union for n in declared if (union := _union(spec.params, n)) is not None
+            n: members
+            for n in declared
+            if (members := _members(spec.params, n)) is not None
         }
         own = {
-            n: unions[n][2] if n in unions else (field_types.plain(f.annotation),)
+            n: unions.get(n, (field_types.plain(f.annotation),))
             for n, f in declared.items()
         }
         if wrong := sorted(
@@ -213,18 +214,12 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
             )
         self.spec = spec
         self._keys = MappingProxyType(all_keys)
-        # Of each union with keys: the tag field and the key by tag of its
-        # alternatives, and the key of each other member by class, in the
-        # order of the union.
-        self._unions: dict[str, tuple[str | None, dict[str, Key], dict[Any, Key]]] = {}
-        for name, (tag, groups, members) in unions.items():
-            if all_keys[name]:
-                key_of = dict(zip(members, all_keys[name], strict=True))
-                self._unions[name] = (
-                    tag,
-                    {t: key_of[g] for t, g in groups.items()},
-                    {m: key_of[m] for m in members if m not in groups.values()},
-                )
+        # Of each union with keys: the key of each member, by its class.
+        self._unions = {
+            n: dict(zip(members, all_keys[n], strict=True))
+            for n, members in unions.items()
+            if all_keys[n]
+        }
         self._make_pipeline = make_pipeline
 
     @property
@@ -312,38 +307,27 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     def _set(self, name: str, value: Any) -> tuple[Key, ...]:
         """
         The keys that ``value`` of the field ``name`` sets: of a union, that
-        of the first member without a tag that ``value`` is an instance of,
-        else that of the alternative its tag names.
+        of the member nearest to the class of ``value``.
         """
-        if name not in self._unions:
+        if (key_of := self._unions.get(name)) is None:
             return self._keys[name]
-        tag, by_tag, by_class = self._unions[name]
-        for member, key in by_class.items():
-            if isinstance(value, member):
-                return (key,)
-        if tag is None:
-            raise TypeError(f'{name}: {value!r} is of no member of the union')
-        return (by_tag[getattr(value, tag)],)
+        for cls in type(value).__mro__:
+            if cls in key_of:
+                return (key_of[cls],)
+        raise TypeError(f'{name}: {value!r} is of no member of the union')
 
 
-def _union(
-    model: type[BaseModel], name: str
-) -> tuple[str | None, dict[str, Any], tuple[Any, ...]] | None:
+def _members(model: type[BaseModel], name: str) -> tuple[Any, ...] | None:
     """
-    Of the parameter ``name`` of ``model``, a union of groups of more than
-    one class: the tag field and the alternatives by tag of its tagged
-    union, or ``None`` and none (see :func:`ess.spec.places.split`); and
-    each member, in the order of the union. ``None`` for any other
-    parameter, such as a list or ``BeamCentre | Referenced[BeamCentre]``.
+    The members of the parameter ``name`` of ``model``, if it is a union of
+    groups of more than one class, without ``| None`` and in the order of
+    the union. ``None`` for any other parameter, such as a list or
+    ``BeamCentre | Referenced[BeamCentre]``.
     """
-    tp, _, metadata = places.root_type(model, name)
-    plain = field_types.plain(tp)
-    if field_types.is_list(model, name) or get_origin(plain) not in (Union, UnionType):
+    if field_types.is_list(model, name):
         return None
-    inline, inline_metadata, _ = places.split(tp, *metadata)
-    tagged = None if inline is None else places.alternatives(inline, *inline_metadata)
-    tag, groups = (None, {}) if tagged is None else tagged
-    return tag, groups, get_args(plain)
+    tp = field_types.optional(model.model_fields[name].annotation)[0]
+    return get_args(tp) if get_origin(tp) in (Union, UnionType) else None
 
 
 def _key_text(key: Key) -> str:

@@ -41,20 +41,30 @@ The backend validates each parameter of a request with :func:`held`, which
 it gives a resolver of files, :data:`Files`. The record of a request holds
 the JSON form of its request type: each group and file validated, each
 reference as given. The call phase makes the params model's values from it
-(see :func:`ess.spec.places.validated`).
+with :func:`value_of`, each value again by the type of its source.
 """
 
 from __future__ import annotations
 
 import functools
 from collections.abc import Callable, Mapping
-from typing import Annotated, Any, Final, Union
+from pathlib import Path
+from types import UnionType
+from typing import Annotated, Any, Final, Union, get_args, get_origin
 
-from pydantic import BaseModel, Discriminator, Field, Tag, TypeAdapter, create_model
-from pydantic_core import ErrorDetails
+from pydantic import (
+    BaseModel,
+    Discriminator,
+    Field,
+    Tag,
+    TypeAdapter,
+    ValidationError,
+    create_model,
+)
+from pydantic_core import ErrorDetails, to_json
 
 from . import field_types, places
-from .parameters import FileModel
+from .parameters import REFERENCED, FileModel
 from .refs import (
     AccumulatorRef,
     FileRef,
@@ -94,11 +104,6 @@ def source_of(value: Any) -> str | None:
     )
 
 
-def _not_a_ref(schema: dict[str, Any]) -> None:
-    """Refuse an object with the key ``@ref`` in ``schema``: it is a reference."""
-    schema['not'] = {'required': ['@ref']}
-
-
 def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
     """
     The sources that a parameter or row of type ``tp`` takes, by tag, each the
@@ -115,27 +120,27 @@ def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
     - :data:`OUTPUT`: a reference to an output, with the name of the group,
       or of the union of the groups, as its ``dataType`` in the JSON schema.
 
-    In the JSON schema, an inline source refuses an object with the key
-    ``@ref``, and each alternative of a union requires its tag, since a
+    In the JSON schema, each alternative of a union requires its tag, since a
     request always writes it, and is titled by its tag (see
     :func:`~ess.spec.places.title`). A form panel shows a widget for each
     source a place takes.
     """
     taken: dict[str, Any] = {}
     inline, inline_metadata, referenced = places.split(tp, *metadata)
-    union = None if inline is None else places.alternatives(inline, *inline_metadata)
+    union = places.alternatives(inline, *inline_metadata)
     if union is not None:
         tag, groups = union
         members = tuple(_alternative(group, tag, v) for v, group in groups.items())
         alternatives = Union[members]  # noqa: UP007
-        written = Annotated[alternatives, *inline_metadata, Field(discriminator=tag)]
-        taken[INLINE] = Annotated[written, Field(json_schema_extra=_not_a_ref)]
+        taken[INLINE] = Annotated[
+            alternatives, *inline_metadata, Field(discriminator=tag)
+        ]
     elif field_types.is_file_model(inline):
         taken[FILE] = Annotated[inline, *inline_metadata] if inline_metadata else inline
     elif inline is not None:
-        taken[INLINE] = Annotated[
-            inline, *inline_metadata, Field(json_schema_extra=_not_a_ref)
-        ]
+        taken[INLINE] = (
+            Annotated[inline, *inline_metadata] if inline_metadata else inline
+        )
     if referenced:
         data_type = {'dataType': field_types.type_name(Union[referenced])}  # noqa: UP007
         taken[OUTPUT] = Annotated[
@@ -325,6 +330,79 @@ def _stored_ref_problem(ref: Ref, at_root: bool, resolved: set[str]) -> str | No
     )
 
 
+def value_of(
+    model: type[BaseModel],
+    name: str,
+    stored: Any,
+    read: Callable[[OutputRef | AccumulatorRef], Any],
+    paths: Mapping[str, Path],
+) -> Any:
+    """
+    The value of the parameter ``name`` of ``model`` as the binding takes it,
+    made in the call phase from ``stored``, what the record stores (see
+    :func:`held`). For a list parameter, each row is made on its own.
+
+    Each value is validated by the type of its source, as in the request
+    phase. A value written inline, or a file, is validated from its JSON form
+    by :func:`source_model`, with ``paths`` giving the local path of each
+    file by its identity (see :class:`~ess.spec.parameters.FileModel`). A
+    reference to an output is replaced by its data, which ``read`` gives,
+    validated in Python mode by the groups that ``Referenced[...]`` marks at
+    the place, each with its own metadata, such as a validator::
+
+        centre: Referenced[ComputedCentre] | GivenCentre
+        # {'x': 1.0}, written inline:          GivenCentre(x=1.0)
+        # {'@ref': 'output', ...}, its data:   ComputedCentre(x=1.0)
+
+    The request phase validated each value written inline and each file, so
+    this fails only for the data of a reference to an output. Raises
+    :class:`~ess.spec.refs.ParamsError` at the position of each problem.
+    """
+    none = places.root_type(model, name)[1]
+    context = {'paths': paths}
+
+    def one(loc: Loc, v: Any) -> Any:
+        if v is None and none:
+            return None
+        try:
+            if isinstance(ref := as_ref(v), OutputRef | AccumulatorRef):
+                data = _data_model(model, name).model_validate({name: read(ref)})
+            else:
+                source = source_model(model, name, source_of(v))
+                data = source.model_validate_json(to_json({name: v}), context=context)
+        except ValidationError as error:
+            raise ParamsError(
+                ((*loc, *e['loc'][1:]), e['msg']) for e in error.errors()
+            ) from None
+        return getattr(data, name)
+
+    if field_types.is_list(model, name):
+        return [one((name, i), v) for i, v in enumerate(stored)]
+    return one((name,), stored)
+
+
+@functools.cache
+def _data_model(model: type[BaseModel], name: str) -> type[BaseModel]:
+    """
+    A model of the field ``name`` alone, typed the groups that
+    ``Referenced[...]`` marks at the parameter, or at one row of it, each with
+    its own metadata: it validates the data of a reference to an output.
+    :func:`~ess.spec.places.split` gives these groups without their metadata.
+    """
+    tp, _, metadata = places.root_type(model, name)
+    if REFERENCED in metadata:
+        marked: tuple[Any, ...] = (Annotated[tp, *metadata],)
+    else:
+        members = get_args(tp) if get_origin(tp) in (Union, UnionType) else (tp,)
+        marked = tuple(
+            m
+            for m in members
+            if get_origin(m) is Annotated and REFERENCED in m.__metadata__
+        )
+    field: Any = (Union[marked], ...)  # noqa: UP007
+    return create_model(model.__name__, **{name: field})
+
+
 _ANY = TypeAdapter(Any)
 """Dumps Python objects to plain data, keeping a number that is not finite."""
 
@@ -338,8 +416,8 @@ def _row(
     :func:`source_of`); its JSON form.
     """
     tp, none, metadata = places.root_type(model, name)
-    inline, inline_metadata, _ = places.split(tp, *metadata)
-    union = None if inline is None else places.alternatives(inline, *inline_metadata)
+    inline, inline_metadata, referenced = places.split(tp, *metadata)
+    union = places.alternatives(inline, *inline_metadata)
     for at, item in positions(loc, value):
         ref = ref_at(at, item)
         if at == loc or ref is None or isinstance(ref, FileRef):
@@ -355,7 +433,9 @@ def _row(
         return None
     source = source_of(value)
     if source not in row_sources(model, name):
-        raise _refused(loc, _source_refused(tp, inline, value, source))
+        raise _refused(
+            loc, _source_refused(tp, inline, bool(referenced), value, source)
+        )
 
     def problem(error: ErrorDetails) -> tuple[Loc, str]:
         return _problem(loc, union, value, error)
@@ -392,10 +472,13 @@ def _problem(
     return (*loc, *inner[1:]), error['msg']
 
 
-def _source_refused(tp: Any, inline: Any, value: Any, source: str | None) -> str:
+def _source_refused(
+    tp: Any, inline: Any, referenced: bool, value: Any, source: str | None
+) -> str:
     """
     Why a place of type ``tp`` refuses ``value``, of the source ``source``;
-    ``inline`` is the part of ``tp`` that a request writes, or ``None`` (see
+    ``inline`` is the part of ``tp`` that a request writes, or ``None``, and
+    ``referenced`` says whether a reference to an output fills it too (see
     :func:`~ess.spec.places.split`).
     """
     name = field_types.type_name(tp)
@@ -413,9 +496,10 @@ def _source_refused(tp: Any, inline: Any, value: Any, source: str | None) -> str
             'the spec does not mark the place Referenced[...]'
         )
     if field_types.is_file_model(inline):
+        output = ', or to an output' if referenced else ''
         return (
             f'{value!r} is not a reference; {name} is given by reference to a '
-            'file, such as file(path=...)'
+            f'file, such as file(path=...){output}'
         )
     return f'{value!r} is not a reference; {name} is given by reference to an output'
 

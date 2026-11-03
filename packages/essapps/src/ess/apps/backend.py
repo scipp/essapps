@@ -78,17 +78,19 @@ its lock, what depends on history and on what the client keeps: each reference
 to a record or an accumulator is one the client may read, and its data fit the
 type at its place. Each group given inline is validated whole then, so that
 its validators run. In the *call phase*, on a worker, the backend reads the
-output each reference names, and makes each value by its field, a row of a
-list by its element type, of the JSON form the log holds, with the data read
-in place of each reference and each file model given its file's local path
-(see :func:`ess.spec.places.validated`). For a plain request it makes the params
-instance from these values without validating again, so the params model's
-model validators never run; a stage or an accumulator gets the values by
-name. The rows of a table, unless a row may be a group with a data value,
-are distinct by the JSON forms of the rows read, as the element type dumps
-them, too: an inline value and a reference to equal data are one row. A
-table that a request, a template, or a stage call gives whole is compared
-within itself when it is read. The binding returns an instance of the
+output each reference names, and makes each value, a row of a list on its
+own, by the type of its source: a value written inline or a file of the JSON
+form the log holds, each file model given its file's local path, and the
+data read for a reference by the groups that ``Referenced[...]`` marks there
+(see :func:`ess.spec.request_types.value_of`). For a plain request it makes
+the params instance from these values without validating again, so the
+params model's model validators never run; a stage or an accumulator gets
+the values by name. The rows of a table whose row type has a member
+``Referenced[T]`` are distinct by the JSON forms of the rows read, as the
+element type dumps them, too: an inline value and a reference to equal data
+are one row. This holds unless such a ``T`` has a data value. A table that
+a request, a template, or a stage call gives whole is compared within itself
+when it is read. The binding returns an instance of the
 outputs model: an output that the spec declares optional and the binding
 returns as ``None`` is left out, and a record whose binding returns anything
 else fails.
@@ -202,8 +204,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from types import UnionType
-from typing import Any, Union, get_args, get_origin
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -220,6 +221,7 @@ from ess.spec import (
     WorkflowSpec,
     field_types,
     places,
+    request_types,
 )
 from ess.spec.refs import Loc, ParamsError, iter_refs, map_refs
 
@@ -340,16 +342,17 @@ def _selected(value: Any, select: Selection) -> Any:
     return value.model_copy(update=copy.deepcopy(fields))
 
 
-def _holds_data(spec: Spec, table: str) -> bool:
+def _compares_rows_read(spec: Spec, table: str) -> bool:
     """
-    Whether a row of ``table`` of ``spec`` may be a group with a data value
-    (see :func:`ess.spec.places.unwritten`): a member of its element type is.
+    Whether the rows read of ``table`` of ``spec`` are compared: if its row
+    type has a member ``Referenced[T]``, and no such ``T`` has a data value
+    (see :func:`ess.spec.places.unwritten`). Rows of a table without one are
+    written inline or are files, whose JSON forms the request phase compared
+    already.
     """
-    row = field_types.value_type(spec.params.model_fields[table].annotation)
-    members = get_args(row) if get_origin(row) in (Union, UnionType) else (row,)
-    return any(
-        field_types.is_group(m) and places.unwritten(m) is not None for m in members
-    )
+    tp, _, metadata = places.root_type(spec.params, table)
+    referenced = places.split(tp, *metadata)[2]
+    return bool(referenced) and all(places.unwritten(t) is None for t in referenced)
 
 
 def _output_reads(params: Mapping[str, Any]) -> list[tuple[str, str]]:
@@ -445,8 +448,8 @@ class _Accumulator:
     ``seen`` holds the rows of each blank table logged so far, by JSON form,
     with their indexes (see :func:`.checks.distinct`). ``rows_read`` holds
     those of the rows read in the steps done so far, for a table whose rows
-    may not be groups with a data value (see :meth:`Backend._typed`); only
-    the worker that does a step changes it.
+    read are compared (see :meth:`Backend._typed`); only the worker that
+    does a step changes it.
 
     ``checked`` holds the number of pushes of the last state whose plain
     request was checked, and why it would be refused, or ``None``. Two
@@ -1288,16 +1291,17 @@ class Backend:
     ) -> dict[str, Any]:
         """
         ``values`` of a request by name as the binding takes them; no lock.
-        The data each reference names is read, and each value is made by its
-        field, a row of a list by its element type (see
-        :func:`ess.spec.places.validated`). A plain request makes the
+        The data each reference names is read, and each value is made by the
+        type of its source, a row of a list on its own (see
+        :func:`ess.spec.request_types.value_of`). A plain request makes the
         params instance from them, and a stage or a driver takes them by name.
 
-        The rows of each table in ``values``, unless a row may be a group
-        with a data value (see :func:`ess.spec.places.unwritten`), are
-        distinct by the JSON forms of the rows read, as the element type
-        dumps them, so an inline value and a reference to equal data are one
-        row, and a file model is its file's identity. They are compared with
+        The rows of each table in ``values`` whose row type has a member
+        ``Referenced[T]``, unless such a ``T`` has a data value (see
+        :func:`ess.spec.places.unwritten`), are distinct by the JSON forms of
+        the rows read, as the element type dumps them, so an inline value and
+        a reference to equal data are one row, and a file model is its file's
+        identity. They are compared with
         those in ``rows``, the rows read before by table, which they join
         (see :func:`.checks.distinct`).
         """
@@ -1309,12 +1313,12 @@ class Backend:
             if isinstance(ref, FileRef)
         }
         typed = {
-            n: places.validated(spec.params, n, v, read, paths)
+            n: request_types.value_of(spec.params, n, v, read, paths)
             for n, v in values.items()
         }
         rows = {} if rows is None else rows
         for table in spec.tables:
-            if table in typed and not _holds_data(spec, table):
+            if table in typed and _compares_rows_read(spec, table):
                 seen = rows.setdefault(table, {})
                 forms = [
                     field_types.json_form(spec.params, table, v) for v in typed[table]

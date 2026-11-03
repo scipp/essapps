@@ -82,6 +82,20 @@ class AddParams(BaseModel):
     terms: Terms = Field(default_factory=Terms)
 
 
+class TypedShift(BaseModel):
+    """A shift typed in: the fields of a ``Shift``, of a class of its own."""
+
+    offset: float = 0.0
+
+
+class EitherShiftParams(BaseModel):
+    shift: Referenced[Shift] | TypedShift = Field(default_factory=TypedShift)
+
+
+class Named(BaseModel):
+    name: str
+
+
 class SumParams(BaseModel):
     part: list[Shift | Referenced[Shift]] = Field(min_length=1)
 
@@ -129,6 +143,7 @@ def _spec(
 
 LOAD = _spec('load', LoadParams, LoadOutputs)
 ADD = _spec('add', AddParams, Value)
+EITHER_SHIFT = _spec('either-shift', EitherShiftParams, Named)
 SUM = _spec('sum', SumParams, Value, tables=('part',))
 STAGED_SUM = _spec('staged-sum', SumParams, Value, tables=('part',))
 SHIFTS = _spec('shifts', ShiftsParams, Value, tables=('shifts',))
@@ -298,6 +313,9 @@ def client(tmp_path: Path) -> Iterator[Client]:
         [
             function_binding(LOAD, load),
             function_binding(ADD, add),
+            function_binding(
+                EITHER_SHIFT, lambda p: Named(name=type(p.shift).__name__)
+            ),
             kept_rows(SUM, total),
             StagedFunction(STAGED_SUM, total),
             function_binding(
@@ -339,6 +357,17 @@ def test_a_group_is_given_by_value_or_by_reference(
     assert client.output(by_value, 'value') == 4.0
     assert by_reference.request.params['shift'] == loaded.ref('shift')
     assert by_value.request.params['shift'] == {'offset': 1.0}
+
+
+def test_a_value_reaches_the_binding_as_the_member_of_its_source(
+    client: Client, loaded: Record
+) -> None:
+    # Shift, the first member, could validate the value written inline too.
+    typed_in = client.compute(EITHER_SHIFT, params={'shift': {'offset': 1.0}})
+    by_reference = client.compute(EITHER_SHIFT, params={'shift': loaded.ref('shift')})
+
+    assert client.output(typed_in, 'name') == 'TypedShift'
+    assert client.output(by_reference, 'name') == 'Shift'
 
 
 @pytest.mark.parametrize(

@@ -10,10 +10,10 @@ that a record's request can be edited and submitted again.
 
 The form has a tab per parameter, with the tabs on the left, as
 esslivedata's dashboard has. The widget follows from what a request may write
-at each parameter or row, the sources of its request type
-(:func:`ess.spec.request_types.sources`), which also validate a request and
-are the params schema, and is labelled by :func:`ess.spec.places.title`, a
-parameter by the title of its tab:
+at each parameter or row, read with :func:`ess.spec.places.split` as the
+sources of its request type are (:func:`ess.spec.request_types.sources`),
+which also validate a request and are the params schema, and is labelled by
+:func:`ess.spec.places.title`, a parameter by the title of its tab:
 
 =========================  ================================================
 Where                      Widget
@@ -25,8 +25,7 @@ a parameter                a choice of ways: of a file model, a file that
                            a record that fits ``T`` (the source
                            ``output``); and ``None`` if typed
                            ``X | None``. A union of these offers the ways
-                           of each member in one choice. A record is
-                           offered while an output fits.
+                           of each member in one choice.
 a list parameter           a table of the rows, and the editor of a row,
                            the choice of ways of the element, as at a
                            parameter of its type
@@ -89,7 +88,6 @@ from ess.spec import (
     WorkflowSpec,
     field_types,
     places,
-    request_types,
 )
 from ess.spec.refs import Loc, as_ref
 
@@ -123,7 +121,7 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice |
     if not field_types.is_list(model, name):
         return _choice(label, tp, none, metadata, _default(info), listing)
     inline, inline_metadata, _ = places.split(tp, *metadata)
-    if inline is not None and places.alternatives(inline, *inline_metadata) is not None:
+    if places.alternatives(inline, *inline_metadata) is not None:
         raise NotImplementedError(f'{name}: a list of a union of groups')
     return _Rows(label, tp, none, metadata, _default(info), listing)
 
@@ -142,19 +140,18 @@ def _choice(
     """
     tag = None
     ways: dict[str, _Way] = {}
-    sources = request_types.sources(tp, metadata)
     inline, inline_metadata, referenced = places.split(tp, *metadata)
-    union = None if inline is None else places.alternatives(inline, *inline_metadata)
+    union = places.alternatives(inline, *inline_metadata)
     if union is not None:
         tag, groups = union
         for value, group in groups.items():
             way = places.title(value, group.model_fields[tag])
             ways[way] = _Group(group, {tag: value}, listing)
-    elif request_types.INLINE in sources:
-        ways['Given'] = _Group(inline, {}, listing)
-    if request_types.FILE in sources:
+    elif field_types.is_file_model(inline):
         ways[_Choice.FILE] = _File(inline, listing)
-    if request_types.OUTPUT in sources:
+    elif inline is not None:
+        ways['Given'] = _Group(inline, {}, listing)
+    if referenced:
         ways[_Choice.RECORD] = _Record(Union[referenced], listing)  # noqa: UP007
     if none:
         ways[_Choice.NONE] = _Nothing()
@@ -443,10 +440,6 @@ class _Record:
         self.widget = pn.widgets.Select(sizing_mode='stretch_width')
         self.refresh(listing)
 
-    @property
-    def offered(self) -> bool:
-        return len(self.widget.options) > 1
-
     def refresh(self, listing: Listing) -> None:
         _picked(self.widget, {'(choose a record)': UNSET, **listing.fitting(self._tp)})
 
@@ -489,10 +482,7 @@ class _Choice:
     tab of a parameter titled ``label``, or in the editor of a row.
 
     It starts at its default's way. Without a default, it starts unset,
-    unless there is no ``None`` and one way only is written inline, or none
-    is: then the choice of a record over the fields is not one of meaning.
-    The way of a record is offered while an output fits, while it is chosen,
-    or if it is the only way. Set, each way not chosen is as it starts, so
+    unless it has one way only. Set, each way not chosen is as it starts, so
     that it shows no value set before, such as a row shown before.
     """
 
@@ -527,14 +517,7 @@ class _Choice:
 
     def _offer(self) -> None:
         chosen = self._selector.value
-        self._selector.options = [
-            label
-            for label, way in self._ways.items()
-            if not isinstance(way, _Record)
-            or way.offered
-            or label == chosen
-            or len(self._ways) == 1
-        ]
+        self._selector.options = list(self._ways)
         self._selector.value = chosen  # Panel picks the first option otherwise
         self._selector.visible = len(self._selector.options) > 1 or chosen is None
         self._show()
@@ -559,10 +542,7 @@ class _Choice:
     def _label(self, value: Any) -> str | None:
         """The label of the way that writes ``value``, or ``None`` if unset."""
         if value is UNSET:
-            groups = [label for label, w in self._ways.items() if isinstance(w, _Group)]
-            refs = [w for w in (self.RECORD, self.FILE) if w in self._ways]
-            first = groups or refs
-            return first[0] if len(first) == 1 and self.NONE not in self._ways else None
+            return next(iter(self._ways)) if len(self._ways) == 1 else None
         if value is None:
             return self.NONE
         if isinstance(value, OutputRef):
@@ -582,7 +562,9 @@ class _Choice:
 class _Rows:
     """
     A list parameter: a table with a row per element, and a column per field
-    of the element, or one of the file or the output it is given as; and
+    of the element, of the file, and of the output that a row may be given
+    as, such as ``File`` and ``Record`` for ``list[Run | Referenced[X]]``;
+    and
     below it the editor of a row, the choice of ways of the element as a
     parameter of its type has it. The rows are held as a request writes
     them, so the widgets do not grow with the rows.
@@ -617,20 +599,19 @@ class _Rows:
         # from the row if the editor cannot show it whole.
         self._shown: Any = UNSET
         # A union of groups written inline is not covered.
-        sources = request_types.sources(tp, metadata)
-        inline = places.split(tp, *metadata)[0]
-        self._model = inline if request_types.FILE in sources else None
-        fields = inline.model_fields if request_types.INLINE in sources else {}
+        inline, _, referenced = places.split(tp, *metadata)
+        self._model = inline if field_types.is_file_model(inline) else None
+        group = inline if inline is not None and self._model is None else None
         self._fields = {
             name: (places.title(name, info), field_types.file_model(info.annotation))
-            for name, info in fields.items()
+            for name, info in ({} if group is None else group.model_fields).items()
         }
-        # The column of the file or the output that a row may be given as.
-        self._ref = None
+        # The columns of the file and of the output that a row may be given as.
+        self._refs: dict[str, type[FileRef | OutputRef]] = {}
         if self._model is not None:
-            self._ref = 'File'
-        elif request_types.OUTPUT in sources:
-            self._ref = 'Record'
+            self._refs['File'] = FileRef
+        if referenced:
+            self._refs['Record'] = OutputRef
         self._editor = _choice('', tp, none, metadata, UNSET, listing)
         self._table = pn.widgets.Tabulator(
             disabled=True,
@@ -710,15 +691,18 @@ class _Rows:
                 return listed[model].get(ref, str(ref))
             return '' if value is None else str(value)
 
+        refs = [as_ref(r) for r in rows]
         columns = {
             title: [
-                text(r.get(name), model) if isinstance(r, Mapping) else '' for r in rows
+                text(r.get(name), model) if ref is None else ''
+                for r, ref in zip(rows, refs, strict=True)
             ]
             for name, (title, model) in self._fields.items()
         }
-        if self._ref is not None:
-            columns[self._ref] = [
-                '' if isinstance(r, Mapping) else text(r, self._model) for r in rows
+        for column, kind in self._refs.items():
+            columns[column] = [
+                text(r, self._model) if isinstance(ref, kind) else ''
+                for r, ref in zip(rows, refs, strict=True)
             ]
         # Of text, since Tabulator formats a column by its type when first
         # shown, and a column without rows would be one of numbers.
