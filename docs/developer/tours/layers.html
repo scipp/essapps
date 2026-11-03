@@ -41,12 +41,13 @@
 
 <script src="tour.js"></script>
 <script>
-// the step at which each layer appears
+// the level at which each layer appears; one level can have several slides
 const LV = { spec: 2, binding: 3, files: 4, list: 5, labels: 6, backend: 7, client: 8, values: 9, caller: 10, persist: 11 };
 const FULL = LV.persist;  // the stack is complete
 
 // ---------- slides: positions in the configuration space, with narration ----------
 const SERVICE = 'the service and connect() do not exist yet';
+const README = 'https://github.com/scipp/essapps/blob/main/docs/developer/README.md';
 const SLIDES = [
   { level: 1, title: 'A workflow',
     body: `<p>esssans computes I(Q) with a sciline pipeline. Its providers form a graph, and the pipeline computes the keys you ask for.</p>
@@ -75,7 +76,7 @@ outputs = iofq.compute(params)        # IofQParams -> IofQOutputs` },
     title: 'Files, without a backend',
     body: `<p>A <em>file source</em> knows which files exist and where they are. It resolves a name, such as <code>file(run=611)</code>, a path, or a SciCat PID, to the file's identity, and gives a local path. Behind it can be SciCat and the ESS file system, a local folder, or files downloaded with Scitacean.</p>
            <p>A script can use it with the spec and the binding alone: find the files, make the params instance, call the binding. The binding reads each file itself; file contents never pass through the file source.</p>`,
-    code: `files = ...                          # a file source: SciCat, a folder, Scitacean
+    code: `files = ...   # a file source: SciCat, a folder, Scitacean
 sample = files.resolve(file(run=60339))
 params = IofQParams(sample=Sample.local(files.path(sample)), ...)
 outputs = iofq.compute(params)` },
@@ -84,15 +85,15 @@ outputs = iofq.compute(params)` },
     body: `<p>The params model is a schema. A form made from it needs no code per workflow: a section per parameter, a file picker for each file model, an input for each scalar field. The form makes the params instance and calls the binding, as the script did.</p>
            <p>This is why the spec exists apart from the pipeline: a caller, script or GUI, knows what a workflow takes without importing sciline.</p>
            <p>One parameter stays empty. <code>transmission</code> holds a data value, so only a reference to another record's output can fill it, and without a backend there are no records.</p>`,
-    code: `IOFQ.params.model_json_schema()      # what the form is made from
+    code: `IOFQ.params.model_json_schema()   # what the form is made from
 
-form = Form(IOFQ, files=files)        # hypothetical: a file source, not a client
-outputs = iofq.compute(...)           # the params instance the form holds` },
+form = Form(IOFQ, files=files)    # hypothetical: no client
+outputs = iofq.compute(...)       # with the params the form holds` },
   { level: 5, caller: 'app', planned: 'a form takes a client today, not a file source (#131)',
     title: 'The form keeps its outputs',
     body: `<p>To fill <code>transmission</code>, the form needs an output of an earlier run. So it keeps each output it computed in a list, and offers the entries in the dropdowns of the next form, by class: a <code>ComputedTransmission</code> at <code>transmission</code>.</p>
            <p>The field is filled. But an entry called <em>output #1</em> says nothing about what it is.</p>`,
-    code: `kept.append(iofq.compute(params))     # every output the form computed
+    code: `kept.append(iofq.compute(params))  # every output of the form
 
 # the next form offers the entries of each parameter's class
 [o for o in kept if isinstance(o, ComputedTransmission)]` },
@@ -126,12 +127,13 @@ client.output(record, 'iofq')` },
     body: `<p>The binding returns an outputs instance. The backend keeps each value in memory while something holds it, such as the client that submitted the record, until it releases the record.</p>
            <p><code>client.output</code> reads a kept value; in your process it is the value itself, not a copy. A later request can reference the output instead of a value written inline, and the call phase puts the value into its params.</p>
            <p>History holds none of these values, only requests and what came of them.</p>`,
-    code: `t = client.submit(TRANSMISSION, params={'run': file(run=611),
-                                        'empty_beam': file(run=60336)})
-client.output(t, 'transmission')        # the value itself
+    code: `t = client.submit(TRANSMISSION, params={
+    'run': file(run=611), 'empty_beam': file(run=60336)})
+client.output(t, 'transmission')   # the value itself
 
-r = client.submit(IOFQ, params={..., 'transmission': t.ref('transmission')})
-client.release(t)                       # r keeps the value until it has run` },
+r = client.submit(IOFQ, params={
+    ..., 'transmission': t.ref('transmission')})
+client.release(t)   # r keeps the value until it has run` },
   { level: 10, title: 'A notebook drives the client',
     body: `<p>The notebook is a <em>controller</em>: ordinary code that decides what to submit, and when.</p>
            <p>Everything here runs in one Python process, on a laptop or on VISA.</p>`,
@@ -147,9 +149,9 @@ client.output(records[60339], 'iofq')` },
   { level: 11, planned: 'client.publish does not exist yet', title: 'Persist and publish',
     body: `<p>With <code>persist=</code>, the backend has the store write an output to a file. The store keys it by record ID and output name, so the history names no file.</p>
            <p><code>client.publish</code> makes the output a SciCat dataset. Its metadata holds the provenance, taken from the history: the records that led to the output, the raw datasets they read, and the software versions. The dataset links to the written file, and stays after the proposal's history is dropped.</p>`,
-    code: `client.submit(requests, label='transmission', persist=True)
+    code: `r = client.submit(IOFQ, params={...}, label='iofq', persist=True)
 
-pid = client.publish(result.ref('iofq'), 'scicat')   # planned` },
+pid = client.publish(r.ref('iofq'), 'scicat')   # planned` },
   { level: 11, caller: 'app', title: 'Swap the notebook for an app',
     body: `<p>The Panel app makes a form for each spec the backend runs, from the spec's params schema, and submits through the same client.</p>
            <p>Only the box on the left changed. The app needs no specs of its own: <code>client.specs()</code> lists them.</p>`,
@@ -187,26 +189,27 @@ t = client.latest('transmission', member='250K')
 record = client.submit(IOFQ, params={
     ..., 'transmission': t.ref('transmission')})
 client.provenance(record).records()` },
-  { level: 11, binding: 'driver', title: 'Swap the binding: a driver',
-    body: `<p>A <code>DriverBinding</code> makes a driver that takes rows one push at a time. The backend holds the accumulator for the client, so adding run 101 does not reduce the first hundred again.</p>
-           <p>A pipeline binding serves stages and refuses accumulators. A driver binding serves accumulators and refuses stages.</p>`,
+  { level: 11, binding: 'driver', title: 'Another binding: a driver',
+    body: `<p>A <code>DriverBinding</code> wraps a <em>driver</em> instead of a pipeline. Rows of the spec's tables are pushed into a driver, and it gives the outputs of the rows so far. For a request, the binding makes a driver, pushes all rows at once, and reads the outputs.</p>
+           <p>Only the workflow package changed. The backend calls every binding the same way, with a params instance, and gets an outputs instance back.</p>
+           <p>A driver pays off in an <em>accumulator</em>, which adds run 101 to the sum of a hundred runs without reducing the hundred again. Accumulators and stages keep work in memory between requests. This tour shows plain requests only; see <a href="${README}#stages-and-accumulators">Stages and accumulators</a>.</p>`,
     code: `multi = DriverBinding(IOFQ_MULTI, IofQDriver)
+client = local(proposal='p1', files=files, bind=[iofq, multi])
 
-acc = client.accumulator(
-    Template(IOFQ_MULTI, params={...}, blanks=('sample',)))
-acc.push(sample=[file(run=611)])
-client.output(acc, 'iofq')
-total = client.freeze(acc)` },
-  { level: 11, binding: 'function', title: 'Swap the binding: a plain function',
-    body: `<p><code>function_binding</code> wraps a function that takes a params instance and returns an outputs instance.</p>
-           <p>It serves plain requests only: no stage, no accumulator.</p>`,
+record = client.submit(IOFQ_MULTI, params={
+    'sample': [file(run=611), file(run=612)], ...})
+client.output(record, 'iofq')   # one push of two rows` },
+  { level: 11, binding: 'function', title: 'Another binding: a plain function',
+    body: `<p><code>function_binding</code> wraps a function that takes a params instance and returns an outputs instance, for work that needs no graph, such as writing an I(Q) to a text file.</p>
+           <p>The kind of binding decides which requests a spec can serve beyond plain ones: a pipeline also stages, a driver also accumulates, a function neither.</p>`,
     code: `def export_csv(params: ExportParams) -> ExportOutputs: ...
 
 export = function_binding(EXPORT, export_csv)` },
 ];
 const DEFAULT = { level: 11, caller: 'notebook', placement: 'local', binding: 'pipeline' };
 SLIDES.forEach(s => { for (const k of ['caller', 'placement', 'binding']) s[k] ??= DEFAULT[k]; });
-const GROUPS = [['Workflow', 0, 3], ['Without a backend', 3, 7], ['Backend', 7, 12], ['Swap caller or placement', 12, 17], ['Swap the binding', 17, 19]];
+const FIRST_FULL = SLIDES.findIndex(s => s.level === FULL) + 1;  // the step
+const GROUPS = [['Workflow', 0, 3], ['Without a backend', 3, 7], ['Backend', 7, 12], ['Swap caller or placement', 12, 17], ['Other bindings', 17, 19]];
 
 const NAMES = {
   caller: { notebook: 'Notebook', app: 'Panel app', trigger: 'Trigger loop', all: 'All three' },
@@ -298,12 +301,11 @@ function layout(cfg, { box, arrow }) {
   box('params', pk.params, L >= LV.spec, 'port wf', h('params'));
   box('outputs', pk.outputs, L >= LV.spec, 'port wf', h('outputs'));
   box('binding', pk.binding, L >= LV.binding, 'container inner wf', h(BINDING[cfg.binding]));
-  box('pkg', pk.pkg, L >= LV.binding, 'group wf', h('ess.instruments.loki', 'specs and bindings', svc ? '<div class="sub">installed on the service</div>' : ''));
+  box('pkg', pk.pkg, L >= LV.binding, 'group wf', h('ess.instruments.loki', svc ? 'specs and bindings, installed on the service' : 'specs and bindings'));
 
   box('backend', [530, 90, 640, 530], L >= LV.backend, 'container backend fw',
       h('Backend', svc ? 'the service, at DMSC' : '<span class="mono">local()</span>: in your process'));
   box('values', [552, 150, 132, 64], L >= LV.list, 'leaf fw', L < LV.backend ? h('outputs', 'kept by the form') : h('values', 'kept while held'));
-  box('held', [590, 400, 122, 64], L >= LV.backend && cfg.binding === 'driver', 'leaf fw', h('accumulator', 'held for a client'));
   box('history', historyR, L >= LV.labels, 'leaf fw', L < LV.backend ? h('log', 'params of each call') : h('history', 'append-only log'));
   box('files', [580, 520, 132, 72], L >= LV.files, 'leaf fw', h('file source', 'resolves file(run=611)'));
   box('store', [960, 520, 180, 72], L >= LV.persist, 'leaf fw', h('store', 'by record ID and output'));
@@ -353,7 +355,7 @@ function layout(cfg, { box, arrow }) {
   arrow('link', L >= LV.persist, [[752, 719], [800, 719]], 'links to', [776, 709], { cls: 'link' });
 
   // kept values: read by the client, and by later requests that reference them
-  arrow('o2v', L >= LV.list, [[right(pk.outputs), oY], [1157, oY], [1157, 100], [704, 100], [704, 182], [684, 182]], 'output values', [930, 104]);
+  arrow('o2v', L >= LV.list, [[right(pk.outputs), oY], [1157, oY], [1157, 100], [704, 100], [704, 182], [684, 182]], 'outputs', [930, 104]);
   arrow('v2p', L >= LV.values, [[684, 204], [740, 204], [740, pk.params[1]]], 'reference', [746, 248], { anchor: 'start' });
   arrow('v2c', L >= LV.values && !multi, [[552, 182], [395, 182], [395, 260]], 'value', [470, 174]);
 
@@ -387,9 +389,9 @@ const ABOUT = {
     service: 'The backend runs at DMSC; the client talks HTTP to it. Records and outputs are the same as with <code>local()</code>.',
   },
   binding: {
-    pipeline: 'A <code>PipelineBinding</code> serves plain requests and stages.',
-    driver: 'A <code>DriverBinding</code> serves plain requests and accumulators.',
-    function: 'A <code>function_binding</code> serves plain requests only.',
+    pipeline: 'A <code>PipelineBinding</code> sets the pipeline keys from the params and computes the outputs.',
+    driver: 'A <code>DriverBinding</code> makes a driver, pushes all rows of the request into it, and reads the outputs.',
+    function: 'A <code>function_binding</code> calls a function with the params instance.',
   },
 };
 const CODE = {
@@ -432,7 +434,7 @@ function panel(cfg, tour) {
     <div><h3 style="margin-bottom:6px">Binding</h3><div class="seg">
       ${Object.keys(NAMES.binding).map(k => `<button data-binding="${k}" aria-pressed="${full && cfg.binding === k}">${NAMES.binding[k]}</button>`).join('')}
     </div></div>
-    <p>${full ? 'Each cell is a configuration; numbers are tour steps. Click any cell to leave the tour.' : `Step ${tour.current + 1} builds the stack; the grid applies from step ${FULL}.`}</p>`;
+    <p>${full ? 'Each cell is a configuration; numbers are tour steps. Click any cell to leave the tour.' : `Step ${tour.current + 1} builds the stack; the grid applies from step ${FIRST_FULL}.`}</p>`;
 }
 
 function click(t, tour) {
