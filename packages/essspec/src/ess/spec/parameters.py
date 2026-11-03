@@ -23,6 +23,7 @@ authors set them at the use site, next to the field's title and description::
 
 from __future__ import annotations
 
+import inspect
 from abc import ABC
 from collections.abc import Mapping
 from enum import StrEnum
@@ -38,7 +39,8 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
-from pydantic_core import PydanticCustomError
+from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
+from pydantic_core import CoreSchema, PydanticCustomError
 
 from .refs import FileRef
 
@@ -168,6 +170,22 @@ class FileModel(BaseModel, frozen=True, extra='forbid'):
     @model_serializer
     def _as_ref(self) -> dict[str, str]:
         return {'@ref': 'file', 'file': self.file}
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler
+    ) -> JsonSchemaValue:
+        """
+        The JSON schema of a file as a request writes it, that of its
+        :class:`~ess.spec.refs.FileRef`, titled by the model, with its name
+        under ``dataType`` and its metadata under ``metadata``, which say
+        which files fit.
+        """
+        schema = {**handler(FileRef.__pydantic_core_schema__), 'title': cls.__name__}
+        schema.pop('description', None)
+        if doc := cls.__dict__.get('__doc__'):
+            schema['description'] = inspect.cleandoc(doc)
+        return {**schema, 'dataType': cls.__name__, 'metadata': cls.metadata}
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, FileModel):

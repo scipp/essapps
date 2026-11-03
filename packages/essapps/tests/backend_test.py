@@ -541,14 +541,17 @@ def test_a_file_fits_a_file_model_only(client: Client) -> None:
 
 def test_no_output_fits_a_file_model(client: Client) -> None:
     loaded = client.submit(load(1))
-    refused = 'of type Amount, does not fit SampleRun'
+    refused = (
+        'is a reference to an output; SampleRun is given by reference to a file, '
+        r'such as file\(path=\.\.\.\)'
+    )
     by_ref = loaded.ref('value')
 
-    with pytest.raises(SubmitError, match=rf'^sample: {loaded.id}.value, {refused}$'):
+    with pytest.raises(SubmitError, match=rf'^sample: {loaded.id}.value {refused}$'):
         client.submit(LOAD, params={'sample': by_ref})
-    with pytest.raises(SubmitError, match=rf'^runs\[0\]: .*, {refused}$'):
+    with pytest.raises(SubmitError, match=rf'^runs\[0\]: .* {refused}$'):
         client.submit(RUNS, params={'runs': [by_ref]})
-    with pytest.raises(SubmitError, match=rf'^sample: .*, {refused}$'):
+    with pytest.raises(SubmitError, match=rf'^sample: .* {refused}$'):
         client.stage(Template(MODES, params={'sample': by_ref}, blanks=('values',)))
 
 

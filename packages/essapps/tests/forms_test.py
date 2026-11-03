@@ -631,9 +631,7 @@ def test_the_schema_of_a_union_requires_the_tag_of_each_alternative() -> None:
     inline = schema['properties']['beam_centre']
 
     for alternative in inline['oneOf']:
-        form = schema['$defs'][alternative['$ref'].rsplit('/', 1)[1]]
-        assert 'kind' in form['required']
-        assert 'default' not in form['properties']['kind']
+        assert alternative['required'] == ['kind']
 
 
 def test_a_key_that_an_output_lacks_fails_the_record(
@@ -724,14 +722,12 @@ def test_a_file_that_does_not_fit_a_file_model_is_refused(
 
 
 def test_the_schema_of_a_file_model_holds_its_metadata() -> None:
-    properties = MASKED.serialize().params_schema['properties']
+    schema = MASKED.serialize().params_schema
 
-    assert properties['mask'] == {
-        '$ref': '#/$defs/FileRef',
-        'dataType': 'MaskFile',
-        'metadata': {'kind': 'mask'},
-        'title': 'Mask',
-    }
+    assert schema['properties']['mask'] == {'$ref': '#/$defs/MaskFile', 'title': 'Mask'}
+    mask = schema['$defs']['MaskFile']
+    assert (mask['dataType'], mask['metadata']) == ('MaskFile', {'kind': 'mask'})
+    assert mask['properties']['@ref']['const'] == 'file'
 
 
 def _failed(client: Client, record: Record) -> str:

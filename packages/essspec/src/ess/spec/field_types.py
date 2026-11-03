@@ -332,7 +332,7 @@ def inline(
     is a value of the field ``name`` of ``model``, or of a row of it unless
     ``whole`` (see :func:`model_of`).
 
-    ``value`` is plain data, such as :func:`ess.spec.places.held` makes of
+    ``value`` is plain data, such as :func:`ess.spec.request_types.held` makes of
     Python objects. It is validated from its JSON form, with ``context``. A
     field that a model lacks is refused at any depth, since validating would
     drop it silently. The JSON form of the validated value must read back as

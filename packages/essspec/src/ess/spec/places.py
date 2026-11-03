@@ -1,40 +1,41 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What a request may write at a parameter or a row, and how its values are
-validated.
+What a request may write at a parameter or a row, read from its type, and
+how a value is made of what the record stores.
 
 The rules are stated once, in :mod:`ess.spec._workflow_spec`, with the terms
 used here: parameter, row, group, field, file, reference to an output, data
-value, JSON form. This module applies them. A request is validated one
-parameter at a time, in two phases, and a spec checks its defaults the same
-way:
+value, JSON form. A request is validated one parameter at a time, in two
+phases, and a spec checks its defaults the same way:
 
-=============  ======================  ======================================
-When           Function                What it does
-=============  ======================  ======================================
-spec made      :func:`field_value`     validates the default of a field of a
-                                       group as a request would write it
-request phase  :func:`held`            validates a parameter as a request
-                                       writes it, and returns what the
-                                       record stores: the JSON form of each
-                                       group and file, and each reference to
-                                       an output as it is
-call phase     :func:`validated`       makes the value of a parameter from
-                                       what the record stores: each
-                                       reference to an output replaced by
-                                       its data, each file with its local
-                                       path
-=============  ======================  ======================================
+=============  ===========================  =================================
+When           Function                     What it does
+=============  ===========================  =================================
+spec made      :func:`field_value`          validates the default of a field
+                                            of a group as a request would
+                                            write it
+request phase  :func:`.request_types.held`  validates a parameter by its
+                                            request type, and returns what
+                                            the record stores: the JSON form
+                                            of each group and file, and each
+                                            reference to an output as it is
+call phase     :func:`validated`            makes the value of a parameter
+                                            from what the record stores: each
+                                            reference to an output replaced
+                                            by its data, each file with its
+                                            local path
+=============  ===========================  =================================
 
 The *request phase* is when a request is submitted, before any data is
-read. The backend passes :func:`held` a resolver of files, :data:`Files`.
-The *call phase* is when the request runs, once the backend has read the
-data of each reference to an output.
+read. The *call phase* is when the request runs, once the backend has read
+the data of each reference to an output. The request type of a place (see
+:mod:`ess.spec.request_types`) is derived from its type with the functions
+here.
 
-The params schema of a spec and the Panel form both decide what to show at
-a parameter, or at each row of a list parameter, from its type, with these
-functions::
+The request type, and so the params schema of a spec and the Panel form,
+decide what a request writes at a parameter, or at each row of a list
+parameter, from its type, with these functions::
 
     # The type without | None, whether it is X | None, and its metadata.
     tp, none, metadata = root_type(Params, 'centre')
@@ -63,223 +64,25 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from types import NoneType, UnionType
 from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel, Discriminator, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, Discriminator, Field, ValidationError
 from pydantic.fields import FieldInfo
-from pydantic_core import PydanticSerializationError
+from pydantic_core import ErrorDetails, PydanticSerializationError
 
 from . import field_types
-from .parameters import FileModel
 from .refs import (
     AccumulatorRef,
     FileRef,
     Loc,
     OutputRef,
     ParamsError,
-    Ref,
     iter_refs,
     map_refs,
-    positions,
-    ref_at,
 )
-
-type Files = Callable[[str, type[FileModel]], str]
-"""
-Resolves a file in the request phase. It takes the file as the request names
-it, such as ``'run:101'``, and the file model of the field, and returns the
-file's identity, or raises ``ValueError`` (see
-:class:`~ess.spec.parameters.FileModel`).
-"""
-
-
-@dataclass(frozen=True)
-class _Slot:
-    """
-    The type of the field ``name`` of ``model``, a parameter or a field of a
-    group, or of an element of it, a list, if ``element``.
-    """
-
-    model: type[BaseModel]
-    name: str
-    element: bool = False
-
-    @property
-    def annotation(self) -> Any:
-        tp = self.model.model_fields[self.name].annotation
-        return get_args(tp)[0] if self.element else tp
-
-    @property
-    def union(self) -> tuple[str, dict[str, Any]] | None:
-        """The union of groups of the type, as :func:`alternatives` has it."""
-        info = self.model.model_fields[self.name]
-        field = () if self.element else field_metadata(info)
-        return alternatives(self.annotation, *field)
-
-
-def held(model: type[BaseModel], name: str, value: Any, files: Files) -> Any:
-    """
-    The value of the parameter ``name`` of ``model`` as the record stores
-    it, in the request phase.
-
-    ``value`` is what the request gives: plain data, or Python objects such
-    as an instance of a group or a :data:`~ess.spec.refs.Ref`, which are
-    dumped to plain data first. For a list parameter, each row is handled
-    on its own:
-
-    - A reference to an output is returned as its JSON form. The caller
-      checks that its data fit the parameter (see :func:`ref_types`).
-    - ``None`` is returned as is, if the parameter is ``X | None``.
-    - A group, or a file, is validated whole from its JSON form, with each
-      file resolved by ``files``. The JSON form of the validated value is
-      returned, with each field left out at its default (see
-      :func:`ess.spec.field_types.inline`).
-
-    Refused, besides what validation refuses: a file that ``files`` did not
-    resolve, such as one that a validator of a group makes from a name,
-    since the file source has not checked it; and a reference to an output
-    in the JSON form of a group, such as one that a serializer makes. Raises
-    :class:`~ess.spec.refs.ParamsError` at the position of each problem.
-    """
-    resolved: set[str] = set()
-
-    def resolve(file: str, model: type[FileModel]) -> str:
-        identity = files(file, model)
-        resolved.add(identity)
-        return identity
-
-    stored = _parameter(model, name, _ANY.dump_python(value), {'files': resolve})
-    root = 2 if field_types.is_list(model, name) else 1
-    problems = [
-        (loc, problem)
-        for loc, ref in iter_refs({name: stored})
-        if (problem := _stored_ref_problem(ref, len(loc) == root, resolved))
-    ]
-    if problems:
-        raise ParamsError(problems)
-    return stored
-
-
-def _stored_ref_problem(ref: Ref, at_root: bool, resolved: set[str]) -> str | None:
-    """
-    Why the record cannot store ``ref``, or ``None``. ``at_root`` says whether
-    ``ref`` fills a whole parameter or row. ``resolved`` holds the identities
-    of the files resolved.
-    """
-    if isinstance(ref, FileRef):
-        if ref.file in resolved:
-            return None
-        return (
-            f'file {ref} was not resolved: a validator made it, so the file '
-            'source has not checked it'
-        )
-    if at_root:
-        return None
-    return (
-        f'{ref}: the JSON form of a value written inline holds a reference to an '
-        'output, which fills a whole parameter or a whole row'
-    )
-
-
-def _parameter(
-    model: type[BaseModel], name: str, value: Any, context: dict[str, Any]
-) -> Any:
-    """``value``, plain data, of the parameter ``name`` as :func:`held` returns it."""
-    if not field_types.is_list(model, name):
-        return _held((name,), _Slot(model, name), value, context)
-    if (ref := ref_at((name,), value)) is not None:
-        raise _refused(
-            (name,),
-            f'{ref} is a reference to a whole list; a reference stands for one '
-            'element of a list',
-        )
-    if not isinstance(value, list):
-        raise _refused((name,), f'{value!r} is not a list')
-    slot = _Slot(model, name, element=True)
-    return [_held((name, i), slot, v, context) for i, v in enumerate(value)]
-
-
-_ANY = TypeAdapter(Any)
-"""Dumps Python objects to plain data, keeping a number that is not finite."""
-
-
-def _held(loc: Loc, slot: _Slot, value: Any, context: dict[str, Any]) -> Any:
-    tp, nullable = field_types.optional(slot.annotation)
-    union = slot.union
-    ref = ref_at(loc, value)
-    if ref is not None and union is not None:
-        raise _refused(
-            loc,
-            f'{ref}: a union of groups is written inline, with the tag of an '
-            'alternative; no reference fits it',
-        )
-    if ref is not None and not isinstance(ref, FileRef):
-        return ref.model_dump()
-    if value is None and nullable:
-        return None
-    if not field_types.is_file_model(tp):
-        if isinstance(ref, FileRef):
-            raise _refused(
-                loc,
-                f'file {ref} does not fit {field_types.type_name(tp)}, which is '
-                'not a file model',
-            )
-        if not isinstance(value, Mapping):
-            raise _refused(
-                loc,
-                f'{value!r} is not an object; a group is written as an object '
-                'of its fields',
-            )
-        _written(loc, _group(loc, slot, value))
-    for at, item in positions(loc, value):
-        if (
-            at != loc
-            and (ref := ref_at(at, item)) is not None
-            and not isinstance(ref, FileRef)
-        ):
-            raise _refused(
-                at,
-                f'{ref}: a reference to an output fills a whole parameter or a '
-                'whole row, never a field of a group',
-            )
-    return _inline(loc, slot, value, context)
-
-
-def _written(loc: Loc, group: type[BaseModel]) -> None:
-    """Refuse ``group`` written at ``loc`` if it is given by reference only."""
-    if (data := unwritten(group)) is not None:
-        held_type = field_types.type_name(group.model_fields[data].annotation)
-        raise _refused(
-            loc,
-            f'{field_types.type_name(group)} is given by reference: no request '
-            f'writes its field {data}, of {held_type}',
-        )
-
-
-def _group(loc: Loc, slot: _Slot, value: Mapping[str, Any]) -> type[BaseModel]:
-    """
-    The group whose fields ``value`` at ``loc`` gives: the group at the
-    place, or of a union the alternative its tag names.
-    """
-    if (union := slot.union) is None:
-        return field_types.optional(slot.annotation)[0]
-    tag, groups = union
-    if tag not in value:
-        raise _refused(
-            loc, f'the tag {tag!r} is not given; it is one of {list(groups)}'
-        )
-    if (ref := ref_at((*loc, tag), value[tag])) is not None:
-        raise _refused(
-            (*loc, tag), f'{ref}: a tag is written inline, never as a reference'
-        )
-    given = value[tag]
-    if not isinstance(given, str) or (group := groups.get(given)) is None:
-        raise _refused((*loc, tag), f'{given!r} is not a tag, one of {list(groups)}')
-    return group
 
 
 def validated(
@@ -295,10 +98,11 @@ def validated(
     parameter, each row by the element type.
 
     With ``read=None``, ``value`` is data, as a binding takes it. Otherwise
-    ``value`` is what the record stores (see :func:`held`), in the call
-    phase: ``read`` gives the data of each reference to an output, which
-    replace it, and ``paths`` gives the local path of each file by its
-    identity (see :class:`~ess.spec.parameters.FileModel`).
+    ``value`` is what the record stores (see
+    :func:`~ess.spec.request_types.held`), in the call phase: ``read`` gives
+    the data of each reference to an output, which replace it, and ``paths``
+    gives the local path of each file by its identity (see
+    :class:`~ess.spec.parameters.FileModel`).
 
     The request phase validated each group from its JSON form already, so
     this fails only for the data of a reference to an output. It validates
@@ -337,48 +141,39 @@ def field_value(group: type[BaseModel], name: str, value: Any) -> Any:
     spec checks the default of each field of a group with it. Raises
     :class:`~ess.spec.refs.ParamsError` at ``name``.
     """
-    slot = _Slot(group, name)
-    _inline((name,), slot, value)
+
+    def problem(error: ErrorDetails) -> tuple[Loc, str]:
+        return (name, *error['loc'][1:]), error['msg']
+
+    inline_at((name,), group, name, value, problem, whole=True)
     one = field_types.model_of(group, name, whole=True)
     try:
         return getattr(one.model_validate({name: value}), name)
     except ValidationError as error:
-        raise _at((name,), slot, error) from None
+        raise ParamsError(map(problem, error.errors())) from None
 
 
-def _at(loc: Loc, slot: _Slot, error: ValidationError) -> ParamsError:
-    """
-    ``error`` of a value at ``loc`` of the type ``slot``, validated by a model
-    of its field, at the place of each problem. pydantic puts the tag of a
-    union after the union's place, ``('beam_centre', 'find', 'tolerance')``,
-    which is left out, ``beam_centre.tolerance``, so that the place is the
-    same whichever way the alternative is chosen.
-    """
-    union = slot.union
-    tags = {} if union is None else union[1]
-
-    def place(inner: Loc) -> Loc:
-        return (*loc, *(inner[1:] if inner and inner[0] in tags else inner))
-
-    return ParamsError((place(e['loc'][1:]), e['msg']) for e in error.errors())
-
-
-def _inline(
-    loc: Loc, slot: _Slot, value: Any, context: dict[str, Any] | None = None
+def inline_at(
+    loc: Loc,
+    model: type[BaseModel],
+    name: str,
+    value: Any,
+    problem: Callable[[ErrorDetails], tuple[Loc, str]],
+    whole: bool,
+    context: dict[str, Any] | None = None,
 ) -> Any:
     """
-    The JSON form of ``value``, a group, a file, or a field of a group, at
-    ``loc``, validated with ``context`` (see
-    :func:`~ess.spec.field_types.inline`).
+    The JSON form of ``value`` at ``loc``, of the field ``name`` of
+    ``model``, validated with ``context`` (see
+    :func:`~ess.spec.field_types.inline`); ``problem`` places each error of
+    validation and words it.
     """
     try:
-        return field_types.inline(
-            slot.model, slot.name, value, whole=not slot.element, context=context
-        )
+        return field_types.inline(model, name, value, whole=whole, context=context)
     except PydanticSerializationError as error:
         raise _refused(loc, f'cannot be stored as JSON: {error}') from None
     except ValidationError as error:
-        raise _at(loc, slot, error) from None
+        raise ParamsError(map(problem, error.errors())) from None
     except ParamsError as error:
         raise ParamsError(((*loc, *at), msg) for at, msg in error.errors) from None
     except ValueError as error:
@@ -565,8 +360,8 @@ def _is_scalar(tp: Any) -> bool:
     Whether ``tp`` is a scalar, by the type alone: a type whose JSON form is
     a number, a string, or a bool; a ``Literal`` of such values, not of enum
     members; or an enum whose values are such. A serializer in the metadata
-    of a field may still dump it to something else, which :func:`held`
-    checks.
+    of a field may still dump it to something else, which
+    :func:`~ess.spec.request_types.held` checks.
     """
     if tp in (int, float, str, bool, *field_types.TIMES):
         return True
@@ -615,8 +410,9 @@ def ref_types(
     """
     Each reference to an output in ``params``, with its position and the
     type its data must fit: that of the parameter or its rows, without
-    ``| None``. ``params`` are by name, as :func:`held` returns them, so a
-    reference to an output fills a whole parameter or row. Files are left
+    ``| None``. ``params`` are by name, as
+    :func:`~ess.spec.request_types.held` returns them, so a reference to an
+    output fills a whole parameter or row. Files are left
     out.
     """
     return [

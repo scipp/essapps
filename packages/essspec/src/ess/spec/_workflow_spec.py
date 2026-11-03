@@ -132,8 +132,12 @@ request writes there:
 - ``X | None``: what ``X`` takes, or ``None``.
 - ``list[X]``: a list of rows, each what ``X`` takes.
 
-The params schema of a spec (see :meth:`WorkflowSpec.serialize`) and a form
-made from the params model follow this list. The rules behind it:
+The framework derives from the params model a *request type*, the type of
+what a request writes at each place, which follows this list (see
+:mod:`ess.spec.request_types`). It validates a request, its JSON schema is
+the params schema of the spec (see :meth:`WorkflowSpec.serialize`), and a
+form made from the params model offers the sources it takes. The rules behind
+it:
 
 - A reference to an output fills a whole parameter or a whole row, never a
   field of a group. The backend validates a group when the request is
@@ -259,17 +263,14 @@ Both examples are tests, in ``workflow_spec_examples_test.py``.
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Callable, Sequence
 from pathlib import PurePath
 from types import UnionType
 from typing import (
-    Annotated,
     Any,
     Self,
     TypeAliasType,
     Union,
-    get_args,
     get_origin,
 )
 
@@ -278,15 +279,13 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    create_model,
     model_validator,
 )
 from pydantic.fields import FieldInfo
-from pydantic_core import PydanticUndefined
 
-from . import field_types, places
+from . import field_types, places, request_types
 from .parameters import FileModel
-from .refs import AccumulatorRef, FileRef, OutputRef, ParamsError
+from .refs import ParamsError
 
 
 class NoParams(BaseModel):
@@ -402,10 +401,10 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         Project to the plain-data form.
 
         The params schema gives each parameter, or the rows of a list
-        parameter, the forms a request may write there (see the module
+        parameter, the sources a request may write there (see the module
         docstring), and each field of a group the JSON schema of its type,
         or of a file. :class:`SerializedWorkflowSpec` shows the schema of each
-        form. The projection is one-way: pydantic validators do not survive
+        source. The projection is one-way: pydantic validators do not survive
         it, so a consumer of the serialized form can validate only
         optimistically.
         """
@@ -427,9 +426,9 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
 
     Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON.
     ``params_schema`` is a JSON schema of the params. At each parameter, or
-    the rows of a list parameter, it allows the forms that a request may
+    the rows of a list parameter, it allows the sources that a request may
     write there (see :mod:`ess.spec._workflow_spec`). A UI made from it
-    picks a widget by these forms:
+    picks a widget by these sources:
 
     ==================================  ===================================
     Schema at a parameter or row        Widget
@@ -446,20 +445,25 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     an array                            a list of rows
     ==================================  ===================================
 
-    The schema of a file, or of a reference to an output, is the ``@ref``
-    object of each kind it may be (see :mod:`ess.spec.refs`), with the name
-    of the type it must fit under ``dataType``, as the outputs schema names
-    the type of each output. The schema of a file also has the metadata of
-    the file model, under ``metadata``, which say which files fit. A field
-    of a group has the JSON schema of its type, or the schema of a file. The
-    schemas of the parameter ``reduction``, a parameter ``mask`` typed the
-    file model ``MaskFile``, and the field ``Reduction.bins``::
+    The params schema is the JSON schema of the spec's request type (see
+    :mod:`ess.spec.request_types`), which also validates a request, so the
+    two agree. The sources a place takes are its ``oneOf``. The schema of a
+    reference to an output is the ``@ref`` object of each kind it may be
+    (see :mod:`ess.spec.refs`), with the name of the type it must fit under
+    ``dataType``, as the outputs schema names the type of each output. A
+    file is the definition of its file model: the ``@ref`` object of a
+    file, with the model's name under ``dataType`` and its metadata under
+    ``metadata``, which say which files fit. A field of a group has the
+    JSON schema of its type, or of its file model. The schemas of the
+    parameter ``reduction``, a parameter ``mask`` typed the file model
+    ``MaskFile``, its definition, and the field ``Reduction.bins``::
 
-        "reduction": {"anyOf": [{"$ref": "#/$defs/Reduction", ...},
-                                {"anyOf": [OutputRef, AccumulatorRef],
-                                 "dataType": "Reduction"}]}
-        "mask":      {"$ref": "#/$defs/FileRef", "dataType": "MaskFile",
-                      "metadata": {"kind": "mask"}}
+        "reduction": {"oneOf": [{"$ref": "#/$defs/Reduction", ...},
+                                {"oneOf": [OutputRef, AccumulatorRef],
+                                 "dataType": "Reduction", ...}]}
+        "mask":      {"$ref": "#/$defs/MaskFile"}
+        "MaskFile":  {"properties": {"@ref": {"const": "file"}, "file": ...},
+                      "dataType": "MaskFile", "metadata": {"kind": "mask"}}
         "bins":      {"type": "integer", "default": 10}
     """
 
@@ -810,9 +814,9 @@ def _parameter_value(model: type[BaseModel], name: str, value: Any) -> Any:
     """
     ``value`` of the parameter ``name`` of ``model`` as validating it gives,
     if a request may write it without a reference to an output or a file
-    (see :func:`ess.spec.places.held`).
+    (see :func:`ess.spec.request_types.held`).
     """
-    held = places.held(model, name, value, _no_file)
+    held = request_types.held(model, name, value, _no_file)
     if refs := places.ref_types(model, {name: held}):
         raise ParamsError(
             (loc, f'{ref} is a reference; a default is a value') for loc, ref, _ in refs
@@ -877,154 +881,20 @@ def _tables_problems(spec: WorkflowSpec[Any, Any]) -> list[str]:
 
 def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
     """
-    The JSON Schema of the params: that of a model of the same fields, each
-    with its title, description, default, and length constraints, and with
-    the type at each place replaced by the forms it takes (see
-    :func:`_field_forms`). As the backend does, it refuses a field that a
-    model lacks.
+    The JSON Schema of the params: that of the spec's request type (see
+    :func:`ess.spec.request_types.request_model`), which validates a
+    request. As the backend does, it refuses a field that a model lacks.
     """
-    model: type[BaseModel] = spec.params
-    fields: dict[str, Any] = {}
-    for name, info in model.model_fields.items():
-        fields[name] = (
-            _field_forms(model, name),
-            Field(
-                # Undefined, and so required, if the field is.
-                default=info.get_default(call_default_factory=True),
-                title=places.title(name, info),
-                description=info.description,
-            ),
-        )
-    schema: dict[str, Any] = create_model(
-        model.__name__, __config__=model.model_config, **fields
-    ).model_json_schema()
+    model = request_types.request_model(spec.params)
+    schema = model.model_json_schema()
     for name, prop in schema.get('properties', {}).items():
         # pydantic leaves out the title of a field that is a $ref, if it is
         # the one it would make of the name.
-        prop.setdefault('title', fields[name][1].title)
+        prop.setdefault('title', model.model_fields[name].title)
     for group in [schema, *schema.get('$defs', {}).values()]:
         if 'properties' in group:
             group['additionalProperties'] = False
     return schema
-
-
-def _not_a_ref(schema: dict[str, Any]) -> None:
-    """Refuse an object with the key ``@ref`` in ``schema``: it is a reference."""
-    schema['not'] = {'required': ['@ref']}
-
-
-def _ref_form(tp: Any) -> Any:
-    """
-    The type of the ``@ref`` object that fills a value of type ``tp``, with
-    the name of ``tp``: of a file model, a file, with the model's metadata,
-    so that a file picker lists the files that fit; of a group, a reference
-    to an output.
-    """
-    if field_types.is_file_model(tp):
-        extra = {'dataType': field_types.type_name(tp), 'metadata': tp.metadata}
-        return Annotated[FileRef, Field(json_schema_extra=extra)]
-    data_type = Field(json_schema_extra={'dataType': field_types.type_name(tp)})
-    return Annotated[OutputRef | AccumulatorRef, data_type]
-
-
-def _field_forms(model: type[BaseModel], name: str) -> Any:
-    """
-    The type of the parameter ``name`` of ``model``, or of its rows, replaced
-    by the forms a request may write there (see :func:`_forms`). The
-    constraints of a list parameter stay on the list.
-    """
-    forms = _forms(*places.root_type(model, name))
-    if not field_types.is_list(model, name):
-        return forms
-    listed: Any = list[forms]  # type: ignore[valid-type]
-    metadata = model.model_fields[name].metadata
-    return Annotated[listed, *metadata] if metadata else listed
-
-
-def _forms(tp: Any, none: bool, metadata: tuple[Any, ...]) -> Any:
-    """
-    The forms a request may write at a parameter or row of type ``tp`` (see
-    :func:`~ess.spec.places.root_type`): of a file model, a file; of a union,
-    the object of the fields of each alternative (see :func:`_group_forms`);
-    of a group, the object of its fields unless it has a data value, and a
-    reference to an output if one can fit it. The constraints of the
-    parameter or row apply to the objects of fields.
-    """
-    forms = []
-    if (union := places.alternatives(tp, *metadata)) is not None:
-        tag, groups = union
-        alts = [_group_forms(g, tag) for g in groups.values()]
-        forms.append(_inline_form(alts, metadata))
-    if places.written_inline(tp):
-        forms.append(_inline_form([_group_forms(tp)], metadata))
-    if field_types.is_file_model(tp) or places.takes_output(tp):
-        forms.append(_ref_form(tp))
-    form = Union[tuple(forms)]  # noqa: UP007
-    return Union[form, None] if none else form  # noqa: UP007
-
-
-def _inline_form(groups: Sequence[Any], metadata: Sequence[Any]) -> Any:
-    """The object of the fields of one of ``groups``, never a ``@ref`` object."""
-    # Only an object reads as a reference; JSON Schema's ``required`` holds
-    # for any other value, so ``not`` would refuse it.
-    return Annotated[
-        Union[tuple(groups)],  # noqa: UP007
-        *metadata,
-        Field(json_schema_extra=_not_a_ref),
-    ]
-
-
-@functools.cache
-def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
-    """
-    A model of the fields of a group, each a scalar or a list of scalars,
-    or a file, or a list of files (see :func:`_ref_form`), with its
-    constraints; the tag field ``tag`` of an
-    alternative of a union without its default, required, since a request
-    always writes it. The title of a tag labels its alternative, so a tag
-    without one is titled by its value, as a parameter is by its name;
-    pydantic's title, made of the name of the field, would be that of every
-    alternative.
-    """
-    fields: dict[str, Any] = {}
-    for name, info in group.model_fields.items():
-        label = (
-            places.title(get_args(info.annotation)[0], info) if name == tag else None
-        )
-        annotation = _file_field_form(info.annotation)
-        fields[name] = (
-            Annotated[annotation, *info.metadata] if info.metadata else annotation,
-            Field(
-                default=PydanticUndefined
-                if name == tag
-                else info.get_default(call_default_factory=True),
-                title=label or info.title,
-                description=info.description,
-                examples=info.examples,
-                **(
-                    {}
-                    if info.json_schema_extra is None
-                    else {'json_schema_extra': info.json_schema_extra}
-                ),
-            ),
-        )
-    return create_model(
-        group.__name__, __config__=group.model_config, __doc__=group.__doc__, **fields
-    )
-
-
-def _file_field_form(annotation: Any) -> Any:
-    """
-    ``annotation`` of a field of a group, with a file model, or the element
-    of a list of one, replaced by the type of a file (see :func:`_ref_form`).
-    """
-    tp, is_optional, _ = field_types.taken_apart(annotation)
-    if not field_types.is_file_model(tp):
-        return annotation
-    form = _ref_form(tp)
-    if get_origin(field_types.optional(annotation)[0]) is list:
-        form = list[form]  # type: ignore[valid-type]
-    return Union[form, None] if is_optional else form  # noqa: UP007
 
 
 def _outputs_schema(model: type[BaseModel]) -> dict[str, Any]:

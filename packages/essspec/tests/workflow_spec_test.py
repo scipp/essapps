@@ -415,16 +415,22 @@ class TestMetadata:
 
 def _takes_inline(spec: WorkflowSpec[Any, Any], name: str) -> bool:
     """
-    Whether the params schema offers an inline form for the parameter
-    ``name``, or each row of it: a form that is not a reference, which names
-    its type in ``dataType``, or ``null``.
+    Whether the params schema offers an inline source for the parameter
+    ``name``, or each row of it: a source that refuses an object with the key
+    ``@ref``, which only an inline source does.
     """
     prop = spec.serialize().params_schema['properties'][name]
-    prop = prop.get('items', prop)
-    if 'dataType' in prop:
+    return _has_inline_source(prop.get('items', prop))
+
+
+def _has_inline_source(schema: Any) -> bool:
+    if isinstance(schema, list):
+        return any(_has_inline_source(s) for s in schema)
+    if not isinstance(schema, dict):
         return False
-    forms = prop.get('anyOf', [prop])
-    return any('dataType' not in f and f.get('type') != 'null' for f in forms)
+    if schema.get('not') == {'required': ['@ref']}:
+        return True
+    return any(_has_inline_source(schema.get(k)) for k in ('anyOf', 'oneOf'))
 
 
 NOT_A_VALUE = 'the default is not a value a request may write'
@@ -1461,19 +1467,41 @@ class TestTables:
             with pytest.raises(pydantic.ValidationError, match='unknown run'):
                 runs.params(**{**known_rows, **rows})
         assert runs.serialize().params_schema['properties']['sample']['items'] == (
-            file_ref('SampleRun', {'kind': 'raw'})
+            file_ref('SampleRun')
         )
 
 
-def file_ref(data_type: str, metadata: dict[str, Any]) -> dict[str, Any]:
-    """The schema of a reference to a file, of a file model."""
-    return {'$ref': '#/$defs/FileRef', 'dataType': data_type, 'metadata': metadata}
+def file_ref(name: str) -> dict[str, Any]:
+    """
+    The schema of a file, of the file model ``name``, whose definition holds
+    its metadata (see :func:`file_model_def`).
+    """
+    return {'$ref': f'#/$defs/{name}'}
+
+
+def file_model_def(name: str, metadata: dict[str, Any]) -> dict[str, Any]:
+    """The definition of the file model ``name``: a reference to a file."""
+    schema = FileRef.model_json_schema()
+    del schema['description']  # a file model's own docstring, if any, describes it
+    return {
+        **schema,
+        'title': name,
+        'dataType': name,
+        'metadata': metadata,
+    }
 
 
 def data_ref(data_type: str) -> dict[str, Any]:
     """The schema of a reference to a group: an output."""
-    kinds = ('OutputRef', 'AccumulatorRef')
-    return {'anyOf': [{'$ref': f'#/$defs/{k}'} for k in kinds], 'dataType': data_type}
+    kinds = {'output': 'OutputRef', 'accumulator': 'AccumulatorRef'}
+    return {
+        'oneOf': [{'$ref': f'#/$defs/{k}'} for k in kinds.values()],
+        'discriminator': {
+            'propertyName': '@ref',
+            'mapping': {tag: f'#/$defs/{k}' for tag, k in kinds.items()},
+        },
+        'dataType': data_type,
+    }
 
 
 def inline(schema: dict[str, Any]) -> dict[str, Any]:
@@ -1497,7 +1525,7 @@ class TestSerialization:
         assert schema['title'] == 'IofQParams'
         assert list(schema['properties']) == list(IofQParams.model_fields)
         assert schema['properties']['reduction'] == {
-            'anyOf': [inline({'$ref': '#/$defs/Reduction'}), data_ref('Reduction')],
+            'oneOf': [inline({'$ref': '#/$defs/Reduction'}), data_ref('Reduction')],
             'default': {'bins': 2},
             'title': 'Reduction',
         }
@@ -1512,9 +1540,14 @@ class TestSerialization:
 
     def test_a_reference_is_an_object_with_its_kind_under_at_ref(self) -> None:
         defs = IOFQ.serialize().params_schema['$defs']
-        for kind in (OutputRef, FileRef, AccumulatorRef):
+        for kind in (OutputRef, AccumulatorRef):
             assert defs[kind.__name__] == kind.model_json_schema()
             assert '@ref' in defs[kind.__name__]['required']
+        assert defs['SampleRun'] == {
+            **file_model_def('SampleRun', {'kind': 'raw'}),
+            'description': "A sample run's file.",
+        }
+        assert '@ref' in defs['SampleRun']['required']
 
     def test_a_float_and_an_enum_are_their_json_schema_only(self) -> None:
         params = model('P', scaling=(Scaling, Scaling()))
@@ -1539,18 +1572,29 @@ class TestSerialization:
             )
 
         by = (Annotated[ByCount | ByTime, Field(discriminator='mode')], ...)
-        defs = spec(params=model('P', by=by)).serialize().params_schema['$defs']
-        assert defs['ByCount']['properties']['mode'] == {
+        schema = spec(params=model('P', by=by)).serialize().params_schema
+        assert schema['properties']['by']['oneOf'] == [
+            {'$ref': '#/$defs/ByCount', 'title': 'Per count', 'required': ['mode']},
+            {'$ref': '#/$defs/ByTime', 'title': 'Time', 'required': ['mode']},
+        ]
+        # The definition of a group is its own, which another place may share.
+        assert schema['$defs']['ByCount']['properties']['mode'] == {
             'const': 'by_count',
             'type': 'string',
             'title': 'Per count',
             'description': 'By the counts of the run.',
         }
-        assert defs['ByTime']['properties']['mode'] == {
-            'const': 'time',
-            'type': 'string',
-            'title': 'Time',
-        }
+
+    def test_a_group_that_is_an_alternative_and_a_parameter_keeps_its_default_tag(
+        self,
+    ) -> None:
+        jsonschema = pytest.importorskip('jsonschema')
+        by = (Annotated[ByWindow | ByTime, Field(discriminator='mode')], ...)
+        params = model('P', by=by, window=(ByWindow, ByWindow()))
+        schema = spec(params=params).serialize().params_schema
+        jsonschema.validate({'by': {'mode': 'window'}, 'window': {}}, schema)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({'by': {}, 'window': {}}, schema)
 
     def test_a_file_model_or_a_group_with_a_data_value_is_a_reference_to_its_type(
         self,
@@ -1559,10 +1603,10 @@ class TestSerialization:
         properties = schema['properties']
         assert {n: properties[n] for n in ('sample', 'can', 'beam_centre')} == {
             'sample': {
-                **file_ref('SampleRun', {'kind': 'raw'}),
+                **file_ref('SampleRun'),
                 'title': 'Sample run',
             },
-            'can': {**file_ref('CanRun', {'kind': 'raw'}), 'title': 'Can'},
+            'can': {**file_ref('CanRun'), 'title': 'Can'},
             'beam_centre': {
                 'anyOf': [data_ref('BeamCentre'), {'type': 'null'}],
                 'default': None,
@@ -1574,20 +1618,16 @@ class TestSerialization:
     def test_a_file_model_is_a_reference_to_a_file_with_its_metadata(
         self,
     ) -> None:
-        properties = FILES.serialize().params_schema['properties']
-        assert properties['mask']['anyOf'] == [
-            {
-                '$ref': '#/$defs/FileRef',
-                'dataType': 'MaskFile',
-                'metadata': {'kind': 'mask'},
-            },
-            {'type': 'null'},
-        ]
+        schema = FILES.serialize().params_schema
+        properties = schema['properties']
+        assert properties['mask']['anyOf'] == [file_ref('MaskFile'), {'type': 'null'}]
+        mask = file_model_def('MaskFile', {'kind': 'mask'})
+        assert schema['$defs']['MaskFile'] == mask
         assert properties['geometry'] == {
-            **file_ref('GeometryFile', {'kind': 'raw'}),
+            **file_ref('GeometryFile'),
             'title': 'Geometry',
         }
-        assert properties['runs']['items'] == file_ref('RunFile', {'kind': 'raw'})
+        assert properties['runs']['items'] == file_ref('RunFile')
 
     def test_a_file_model_at_a_field_is_a_reference_to_a_file(self) -> None:
         group = model(
@@ -1603,8 +1643,8 @@ class TestSerialization:
             'title': 'G',
         }
         properties = schema['$defs']['G']['properties']
-        assert properties['run'] == file_ref('SampleRun', {'kind': 'raw'})
-        assert properties['masks']['items'] == file_ref('MaskFile', {'kind': 'mask'})
+        assert properties['run'] == file_ref('SampleRun')
+        assert properties['masks']['items'] == file_ref('MaskFile')
 
     def test_a_union_is_its_alternatives_inline_never_a_reference(self) -> None:
         params = model(
@@ -1617,7 +1657,10 @@ class TestSerialization:
         properties = spec(params=params).serialize().params_schema['properties']
         alternatives = inline(
             {
-                'oneOf': [{'$ref': '#/$defs/ByMonitor'}, {'$ref': '#/$defs/ByTime'}],
+                'oneOf': [
+                    {'$ref': f'#/$defs/{name}', 'title': title, 'required': ['mode']}
+                    for name, title in (('ByMonitor', 'Monitor'), ('ByTime', 'Time'))
+                ],
                 'discriminator': {
                     'propertyName': 'mode',
                     'mapping': {
@@ -1640,7 +1683,7 @@ class TestSerialization:
         assert properties['time_range'] == {
             'type': 'array',
             'items': {
-                'anyOf': [inline({'$ref': '#/$defs/TimeRange'}), data_ref('TimeRange')]
+                'oneOf': [inline({'$ref': '#/$defs/TimeRange'}), data_ref('TimeRange')]
             },
             'minItems': 2,
             'title': 'Slices',
@@ -1651,13 +1694,13 @@ class TestSerialization:
         properties = serialized.params_schema['properties']
         assert properties['sample'] == {
             'type': 'array',
-            'items': file_ref('SampleRun', {'kind': 'raw'}),
+            'items': file_ref('SampleRun'),
             'title': 'Sample run',
             'minItems': 1,
         }
         assert properties['can'] == {
             'type': 'array',
-            'items': file_ref('CanRun', {'kind': 'raw'}),
+            'items': file_ref('CanRun'),
             'title': 'Can',
             'minItems': 1,
         }
