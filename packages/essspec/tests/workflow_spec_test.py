@@ -546,6 +546,12 @@ class TestModelRules:
             {
                 'params': model(
                     'P',
+                    steps=(Annotated[list[TimeRange], AfterValidator(lambda r: r)], []),
+                )
+            },
+            {
+                'params': model(
+                    'P',
                     mask=(Referenced[model('Mask', pixels=(sc.Variable, ...))], ...),
                 )
             },
@@ -1358,14 +1364,40 @@ class TestModelRules:
                 {
                     'params': model(
                         'P',
-                        steps=(Annotated[list[TimeRange], AfterValidator(len)], []),
-                    )
+                        steps=(Annotated[list[TimeRange], AfterValidator(len)], ...),
+                    ),
+                    'tables': ('steps',),
                 },
-                'P.steps: a list parameter carries only length constraints',
+                'steps: a table carries only length constraints',
             ),
             (
-                {'params': model('P', steps=(list[TimeRange], Field([], strict=True)))},
-                'P.steps: a list parameter carries only length constraints',
+                {
+                    'params': model('P', steps=(list[TimeRange], Field(strict=True))),
+                    'tables': ('steps',),
+                },
+                'steps: a table carries only length constraints',
+            ),
+            (
+                {
+                    'params': model(
+                        'P', steps=(list[TimeRange], Field([], min_length=2))
+                    )
+                },
+                rf'P.steps: {NOT_A_VALUE}: steps: List should have at least 2 items',
+            ),
+            *(
+                (
+                    {'params': model('P', r=(model('R', x=(float, excluded)), ...))},
+                    'P.r: R.x: a field of a group has no exclude or exclude_if',
+                )
+                for excluded in (
+                    Field(1.0, exclude=True),
+                    Field(1.0, exclude_if=lambda x: x == 0),
+                )
+            ),
+            (
+                {'params': model('P', x=(float, Field(1.0, exclude=True)))},
+                'P.x: a parameter has no exclude or exclude_if',
             ),
             (
                 {
@@ -1412,7 +1444,7 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', steps=(list[TimeRange], None))},
-                f'P.steps: {NOT_A_VALUE}: steps: None is not a list',
+                f'P.steps: {NOT_A_VALUE}: steps: Input should be a valid array',
             ),
             (
                 {'params': model('P', runs=(list[list[SampleRun]], []))},
@@ -2041,6 +2073,39 @@ class TestSerialization:
         }
         assert serialized.tables == ('sample', 'can')
         assert serialized.params_schema['required'] == ['sample', 'can']
+
+    def test_the_params_keep_their_docstring_examples_and_extra_schema(self) -> None:
+        class P(BaseModel):
+            """The params of a reduction."""
+
+            width: float = Field(1.0, examples=[2.0], json_schema_extra={'unit': 'mm'})
+
+        schema = spec(params=P).serialize().params_schema
+        assert schema['description'] == 'The params of a reduction.'
+        assert schema['properties']['width'] == {
+            'default': 1.0,
+            'examples': [2.0],
+            'title': 'Width',
+            'type': 'number',
+            'unit': 'mm',
+        }
+
+    def test_groups_of_one_name_that_hold_references_keep_their_own_names(
+        self,
+    ) -> None:
+        class Sample(BaseModel):
+            class Row(BaseModel):
+                sample: Referenced[Reduction]
+
+        class Can(BaseModel):
+            class Row(BaseModel):
+                can: Referenced[Reduction]
+
+        params = model('P', samples=(list[Sample.Row], []), cans=(list[Can.Row], []))
+        properties = spec(params=params).serialize().params_schema['properties']
+        samples, cans = (properties[n]['items']['$ref'] for n in ('samples', 'cans'))
+        assert samples.endswith('Sample__Row')
+        assert cans.endswith('Can__Row')
 
     def test_outputs_name_the_type_of_each_value(self) -> None:
         assert IOFQ.serialize().outputs_schema['properties'] == {

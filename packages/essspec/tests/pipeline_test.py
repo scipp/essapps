@@ -591,7 +591,9 @@ def test_a_scalar_parameter_sets_the_key_that_keys_gives() -> None:
 
 def test_a_scalar_parameter_without_keys_is_refused() -> None:
     with pytest.raises(
-        ValueError, match=r"bins: \['bins'\]: a parameter whose type.* gives its keys="
+        ValueError,
+        match=r"bins: \['bins'\]: a parameter whose type.* gives its keys=: a key "
+        'such as int names no role, so no provider would read it',
     ):
         PipelineBinding(
             BINS, lambda _: sciline.Pipeline([double]), keys={'doubled': (Doubled,)}

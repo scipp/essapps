@@ -91,7 +91,6 @@ from ess.spec import (
     WorkflowSpec,
     field_types,
     places,
-    request_types,
 )
 from ess.spec.refs import Loc, as_ref
 
@@ -177,7 +176,7 @@ def _field(
     info = group.model_fields[name]
     tp, none, item_none = field_types.taken_apart(info.annotation)
     if (
-        request_types.holds_ref(info.rebuild_annotation())
+        field_types.holds_ref(info.rebuild_annotation())
         or item_none
         or not (
             field_types.is_file_model(tp) or (field_types.is_scalar(tp) and not none)

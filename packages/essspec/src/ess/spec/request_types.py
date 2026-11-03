@@ -85,7 +85,6 @@ from .refs import (
     as_ref,
     iter_refs,
     positions,
-    ref_at,
 )
 
 INLINE: Final = 'inline'
@@ -240,42 +239,22 @@ def type_of(annotation: Any, metadata: tuple[Any, ...] = ()) -> Any:
     return tagged(sources(tp, metadata), none)
 
 
-def holds_ref(annotation: Any) -> bool:
-    """
-    Whether a field typed ``annotation`` holds ``Referenced[...]``, at any
-    depth, but inside its ``T``. A spec refuses a group that contains
-    itself, so this ends.
-    """
-    if places.is_referenced(annotation):
-        return True
-    if field_types.is_group(annotation):
-        return _group_holds_ref(annotation)
-    return any(holds_ref(arg) for arg in get_args(annotation))
-
-
-@functools.cache
-def _group_holds_ref(group: type[BaseModel]) -> bool:
-    return any(
-        holds_ref(info.rebuild_annotation()) for info in group.model_fields.values()
-    )
-
-
 @functools.cache
 def group_type(group: type[BaseModel]) -> type[BaseModel]:
     """
     The request type of ``group``: the group itself, if it holds no
     ``Referenced[...]``, so that validating a request validates it whole.
-    Otherwise a model derived from it, of the group's name, docstring, and
-    config, with each field that holds one typed its request type, and its
-    metadata, default, title, and description kept. It has no validators of
-    the group, which run when the request runs, on the data read (see
-    :func:`~ess.spec.places.validated`).
+    Otherwise a model derived from it, of the group's name, qualified name,
+    docstring, and config, with each field that holds one typed its request
+    type, and its metadata, default, title, and description kept. It has no
+    validators of the group, which run when the request runs, on the data
+    read (see :func:`~ess.spec.places.validated`).
     """
-    if not _group_holds_ref(group):
+    if not field_types.holds_ref(group):
         return group
     fields: dict[str, Any] = {
         name: _request_field(name, info)
-        if holds_ref(info.rebuild_annotation())
+        if field_types.holds_ref(info.rebuild_annotation())
         # A field that holds no reference keeps its type and field info.
         else (info.annotation, info)
         for name, info in group.model_fields.items()
@@ -285,6 +264,7 @@ def group_type(group: type[BaseModel]) -> type[BaseModel]:
         __config__=group.model_config,
         __doc__=group.__doc__,
         __module__=group.__module__,
+        __qualname__=group.__qualname__,
         **fields,
     )
 
@@ -292,13 +272,17 @@ def group_type(group: type[BaseModel]) -> type[BaseModel]:
 def _request_field(name: str, info: FieldInfo) -> tuple[Any, FieldInfo]:
     """
     The field ``name`` with ``info``, typed its request type, with its title,
-    description, and default.
+    description, examples, extra JSON schema, and default.
     """
     tp = type_of(info.annotation, places.field_metadata(info))
     # Undefined, and so required, if the field is.
     default = info.get_default(call_default_factory=True)
     field = Field(
-        default=default, title=places.title(name, info), description=info.description
+        default=default,
+        title=places.title(name, info),
+        description=info.description,
+        examples=info.examples,
+        json_schema_extra=info.json_schema_extra,
     )
     return tp, field
 
@@ -307,29 +291,29 @@ def _request_field(name: str, info: FieldInfo) -> tuple[Any, FieldInfo]:
 def request_model(model: type[BaseModel]) -> type[BaseModel]:
     """
     The request type of the params model ``model``: a model of the same
-    fields, each typed its :func:`type_of`, with its title, description, and
-    default. Its JSON schema is the params schema of a spec (see
-    :meth:`ess.spec.WorkflowSpec.serialize`).
+    docstring and fields, each typed its :func:`type_of`, with its field
+    info as :func:`_request_field` keeps it. Its JSON schema is the params
+    schema of a spec (see :meth:`ess.spec.WorkflowSpec.serialize`).
     """
     fields: dict[str, Any] = {
         name: _request_field(name, info) for name, info in model.model_fields.items()
     }
-    return create_model(model.__name__, __config__=model.model_config, **fields)
+    return create_model(
+        model.__name__, __config__=model.model_config, __doc__=model.__doc__, **fields
+    )
 
 
 @functools.cache
-def _one(model: type[BaseModel], name: str, whole: bool) -> type[BaseModel]:
+def _one(model: type[BaseModel], name: str, table: bool) -> type[BaseModel]:
     """
     A model of the field ``name`` of ``model`` alone, typed its request type,
-    with the config of ``model``; of one row of a list parameter, unless
-    ``whole``.
+    with the config of ``model``; without the length constraints of a list
+    if it is a ``table`` (see :func:`~ess.spec.field_types.model_of`).
     """
     info = model.model_fields[name]
-    field: Any
-    if field_types.is_list(model, name) and not whole:
-        field = (type_of(get_args(info.annotation)[0]), ...)
-    else:
-        field = _request_field(name, info)
+    field: Any = (
+        (type_of(info.annotation), ...) if table else _request_field(name, info)
+    )
     return create_model(model.__name__, __config__=model.model_config, **{name: field})
 
 
@@ -350,7 +334,7 @@ union of these.
 
 
 def held(
-    model: type[BaseModel], name: str, value: Any, files: Files, whole: bool = False
+    model: type[BaseModel], name: str, value: Any, files: Files, table: bool = False
 ) -> tuple[Any, Reads]:
     """
     The value of the field ``name`` of ``model`` as the record stores it, in
@@ -358,9 +342,9 @@ def held(
 
     ``value`` is what the request gives: plain data, or Python objects such
     as an instance of a group or a :data:`~ess.spec.refs.Ref`, which are
-    dumped to plain data first. For a list parameter, each row is handled
-    on its own, unless ``whole``, as for a field of a group. Each is
-    validated from its JSON form by its request type, with each file
+    dumped to plain data first. It is validated from its JSON form by its
+    request type, without the length constraints of a list if it is a
+    ``table`` (see :func:`~ess.spec.field_types.model_of`), with each file
     resolved by ``files``, and the JSON form of the validated value is
     returned (see :func:`ess.spec.field_types.inline`): a group, a file, or
     a reference to an output as given. The type that the data of each
@@ -385,16 +369,8 @@ def held(
     context = {'files': resolve}
     given = _ANY.dump_python(value)
     written = {loc for loc, _ in iter_refs({name: given})}
-    one = _one(model, name, whole)
-    if whole or not field_types.is_list(model, name):
-        made, stored = _inline(one, name, (name,), given, context)
-    elif (ref := ref_at((name,), given)) is not None:
-        raise _refused((name,), _whole_list(ref))
-    elif not isinstance(given, list):
-        raise _refused((name,), f'{given!r} is not a list')
-    else:
-        rows = [_inline(one, name, (name, i), v, context) for i, v in enumerate(given)]
-        made, stored = [m for m, _ in rows], [s for _, s in rows]
+    one = _one(model, name, table)
+    made, stored = _inline(one, name, given, context)
     refs = list(iter_refs({name: stored}))
     if problems := [
         (loc, problem)
@@ -459,20 +435,22 @@ _ANY = TypeAdapter(Any)
 
 
 def _inline(
-    one: type[BaseModel], name: str, loc: Loc, value: Any, context: dict[str, Any]
+    one: type[BaseModel], name: str, value: Any, context: dict[str, Any]
 ) -> tuple[Any, Any]:
     """
-    ``value``, plain data at ``loc``, validated by ``one``, the request type
-    of the field ``name`` alone, with ``context``, and its JSON form (see
-    :func:`~ess.spec.field_types.inline`). A value without a JSON form is
-    validated as it is, since it may be one that the field does not take.
+    ``value``, plain data of the field ``name``, validated by ``one``, the
+    request type of that field alone, with ``context``, and its JSON form
+    (see :func:`~ess.spec.field_types.inline`). A value without a JSON form
+    is validated as it is, since it may be one that the field does not take.
     """
+    loc = (name,)
+    tp = places.field_type(one.model_fields[name])
     try:
         return field_types.inline(one, name, value, context=context)
     except PydanticSerializationError as error:
         why = f'cannot be stored as JSON: {error}'
     except ValidationError as error:
-        raise ParamsError(_located(loc, value, error.errors())) from None
+        raise ParamsError(_located(loc, tp, value, error.errors())) from None
     except ParamsError as error:
         raise ParamsError(((*loc, *at), msg) for at, msg in error.errors) from None
     except ValueError as error:
@@ -480,20 +458,23 @@ def _inline(
     try:
         one.model_validate({name: value})
     except ValidationError as error:
-        raise ParamsError(_located(loc, value, error.errors())) from None
+        raise ParamsError(_located(loc, tp, value, error.errors())) from None
     raise _refused(loc, why)
 
 
-def _located(loc: Loc, value: Any, errors: list[ErrorDetails]) -> list[tuple[Loc, str]]:
+def _located(
+    loc: Loc, tp: Any, value: Any, errors: list[ErrorDetails]
+) -> list[tuple[Loc, str]]:
     """
-    The ``errors`` of validating ``value``, given at ``loc``, each at its
-    position in ``value`` (see :func:`_position`), once. The errors at a
-    reference or inside it are one error at the reference, since the field
-    does not take its source, unless each is an error of a file that the
-    field takes: of the file source, or of a validator. At a list, the
-    reference is one to a whole list.
+    The ``errors`` of validating ``value``, of the request type ``tp``,
+    given at ``loc``, each at its position in ``value`` (see
+    :func:`~ess.spec.places.position`), once. The errors at a reference or
+    inside it are one error at the reference, since the field does not take
+    its source, unless each is an error of a file that the field takes: of
+    the file source, or of a validator. At a list, the reference is one to a
+    whole list.
     """
-    found = [(_position(value, e), e['msg'], e['type']) for e in errors]
+    found = [(places.position(tp, e['loc'][1:]), e['msg'], e['type']) for e in errors]
     for at, item in positions((), value):
         inside = {kind for p, _, kind in found if p[: len(at)] == at}
         if (ref := as_ref(item)) is None or inside <= _TAKEN:
@@ -505,27 +486,6 @@ def _located(loc: Loc, value: Any, errors: list[ErrorDetails]) -> list[tuple[Loc
 
 
 _TAKEN: Final = frozenset({'file', 'value_error', 'assertion_error'})
-
-
-def _position(value: Any, error: ErrorDetails) -> Loc:
-    """
-    The position of ``error`` in ``value``, as given. Of the error's
-    location, each element that steps into the value is kept, a key of an
-    object there or an index of a list there, and the field that a missing
-    field names. The others are tags of unions, of a source or of a group,
-    which a position in the value never holds: ``('centre', 'inline',
-    'find', 'tolerance')`` is ``centre.tolerance``.
-    """
-    at: list[str | int] = []
-    for part in error['loc'][1:]:
-        lists = isinstance(value, list)
-        keys = range(len(value)) if lists else value if isinstance(value, dict) else ()
-        if part in keys:
-            at.append(part)
-            value = value[part]
-    if error['type'] == 'missing':
-        at.append(error['loc'][-1])
-    return tuple(at)
 
 
 def _wrong_source(ref: Ref) -> str:

@@ -17,10 +17,10 @@ apart::
 
 :func:`fits` says whether data of one type can be the value of a field of
 another, so that an output of one spec can fill a parameter of another.
-:func:`model_of` makes a model of one field, which validates a value, or a
-row of a list parameter, by that field alone, as
-:func:`ess.spec.places.validated` does. :func:`inline` validates a value
-of a model of one field from its JSON form in the request phase.
+:func:`model_of` makes a model of one field, which validates a value by
+that field alone, as :func:`ess.spec.places.validated` does.
+:func:`inline` validates a value of a model of one field from its JSON form
+in the request phase.
 The rules these serve are stated in :mod:`ess.spec._workflow_spec`.
 """
 
@@ -57,7 +57,7 @@ from pydantic import (
 )
 from pydantic_core import PydanticCustomError, from_json, to_json
 
-from .parameters import FileModel
+from .parameters import REFERENCED, FileModel
 from .refs import Loc, ParamsError
 
 TIMES = (datetime, AwareDatetime, NaiveDatetime)
@@ -235,6 +235,27 @@ def _is_model(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, BaseModel)
 
 
+def is_referenced(tp: Any) -> bool:
+    """Whether ``tp`` is ``Referenced[T]``, with the marker in its metadata."""
+    return get_origin(tp) is Annotated and REFERENCED in tp.__metadata__
+
+
+def holds_ref(annotation: Any, seen: frozenset[type] = frozenset()) -> bool:
+    """
+    Whether ``annotation`` holds ``Referenced[...]``, at any depth, in the
+    fields of each group too. ``seen`` holds the groups looked into already,
+    so that a group that contains itself ends.
+    """
+    if is_referenced(annotation):
+        return True
+    if is_group(annotation):
+        return annotation not in seen and any(
+            holds_ref(info.rebuild_annotation(), seen | {annotation})
+            for info in annotation.model_fields.values()
+        )
+    return any(holds_ref(arg, seen) for arg in get_args(annotation))
+
+
 def is_array(tp: Any) -> bool:
     """
     Whether ``tp``, ``X`` or ``X | None``, is an array: a type with named
@@ -299,26 +320,20 @@ def fits(data: Any, field: Any) -> bool:
 
 
 @functools.cache
-def model_of(model: type[BaseModel], name: str, whole: bool = False) -> type[BaseModel]:
+def model_of(model: type[BaseModel], name: str, table: bool = False) -> type[BaseModel]:
     """
-    A model of one value of the field ``name`` of ``model`` alone, with its
-    config and without the decorators of ``model``: it validates one value by
-    its own field. The params model has no decorators but model validators,
-    which the framework never calls; a check of one value belongs to the
-    value's type.
+    A model of the field ``name`` of ``model`` alone, with its config and
+    without the decorators of ``model``: it validates one value by its own
+    field. The params model has no decorators but model validators, which
+    the framework never calls; a check of one value belongs to the value's
+    type.
 
-    For a list field, the model validates one row: by its element type alone,
-    with that type's metadata, without the field's length constraints, which
-    hold for the whole list. A reference stands for one row. With ``whole``,
-    the model validates the whole field, a list too, as for a field of a
-    group, whose elements are not places.
+    With ``table``, the field is a table, validated without its length
+    constraints: an accumulator takes a table a few rows at a time, and the
+    backend checks the number of rows of the whole table.
     """
     info = model.model_fields[name]
-    field = (
-        (get_args(info.annotation)[0], Field())
-        if is_list(model, name) and not whole
-        else (info.annotation, info)
-    )
+    field = (info.annotation, Field()) if table else (info.annotation, info)
     return create_model(model.__name__, __config__=model.model_config, **{name: field})
 
 

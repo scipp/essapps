@@ -70,29 +70,29 @@ from __future__ import annotations
 from types import NoneType, UnionType
 from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel, Discriminator, Field, ValidationError
+from pydantic import BaseModel, Discriminator, Field, Tag, ValidationError
 from pydantic.fields import FieldInfo
-from pydantic_core import to_json
+from pydantic_core import ErrorDetails, to_json
 
 from . import field_types
-from .parameters import REFERENCED
-from .refs import Loc, ParamsError
+from .parameters import REFERENCED, DataRefused
+from .refs import Loc, ParamsError, iter_refs
 
 
 def validated(
     model: type[BaseModel],
     name: str,
     value: Any,
-    whole: bool = False,
+    table: bool = False,
     context: dict[str, Any] | None = None,
 ) -> Any:
     """
     ``value`` of the field ``name`` of ``model`` as the binding takes it,
     validated by its field alone (see
-    :func:`~ess.spec.field_types.model_of`); for a list parameter, each row
-    by the element type, unless ``whole``, as for a field of a group.
-    Raises :class:`~ess.spec.refs.ParamsError` at the position of each
-    problem.
+    :func:`~ess.spec.field_types.model_of`); without the length constraints
+    of a list if it is a ``table``. Raises
+    :class:`~ess.spec.refs.ParamsError` at the position of each problem in
+    ``value`` (see :func:`position`).
 
     Without ``context``, ``value`` is data, as in direct use, so that each
     field typed ``Referenced[T]`` takes ``T``. A spec checks a default with
@@ -108,25 +108,133 @@ def validated(
     validated only here, so its validators run when the request runs and
     see the data read. Every other group was validated whole when the
     request was submitted too.
+
+    pydantic tries the members of a union with a member ``Referenced[...]``
+    in order, each with the stored value. A member written inline is given a
+    reference too, and refuses it, since a field that a model lacks is
+    refused. So a validator of such a member, such as a
+    ``model_validator(mode='before')``, raises ``ValueError`` for a value it
+    does not take, as it must for a malformed request when it is submitted:
+    any other exception fails the call. When a member written inline refuses
+    a value written inline, the error that the member ``Referenced[...]``
+    adds, that the value is not a reference, is dropped. When the data read
+    for a reference fail a check of ``T``, they are one error, at the
+    reference.
     """
-    one = field_types.model_of(model, name, whole)
+    one = field_types.model_of(model, name, table)
+    try:
+        if context is None:
+            made = one.model_validate({name: value})
+        else:
+            given = to_json({name: value})
+            made = one.model_validate_json(given, context=context, extra='forbid')
+    except ValidationError as error:
+        tp = field_type(one.model_fields[name])
+        found = [(position(tp, e['loc'][1:]), e) for e in error.errors()]
+        raise ParamsError(
+            ((name, *at), e['msg'])
+            for at, e in found
+            if e['type'] != 'output_ref' or not _inside(at, found)
+        ) from None
+    except DataRefused as refused:
+        at = next(loc for loc, ref in iter_refs({name: value}) if ref == refused.ref)
+        msg = '; '.join(dict.fromkeys(e['msg'] for e in refused.errors))
+        raise ParamsError([(at, msg)]) from None
+    return getattr(made, name)
 
-    def check(loc: Loc, v: Any) -> Any:
-        try:
-            if context is None:
-                made = one.model_validate({name: v})
-            else:
-                given = to_json({name: v})
-                made = one.model_validate_json(given, context=context, extra='forbid')
-        except ValidationError as error:
-            raise ParamsError(
-                ((*loc, *e['loc'][1:]), e['msg']) for e in error.errors()
-            ) from None
-        return getattr(made, name)
 
-    if field_types.is_list(model, name) and not whole:
-        return [check((name, i), v) for i, v in enumerate(value)]
-    return check((name,), value)
+def _inside(at: Loc, found: list[tuple[Loc, ErrorDetails]]) -> bool:
+    """Whether an error of ``found``, but ``output_ref``, is at ``at`` or inside."""
+    return any(p[: len(at)] == at and e['type'] != 'output_ref' for p, e in found)
+
+
+def position(tp: Any, loc: Loc) -> Loc:
+    """
+    The position in a value of type ``tp`` that ``loc``, the location of a
+    pydantic error inside the value, names. ``tp`` is a request type (see
+    :mod:`ess.spec.request_types`), or a type of the params model. Of
+    ``loc``, each part that steps into the value is kept: a field of a group
+    or an index of a list, and the field that an error of a missing field
+    names. A part that names a member of a union is not: the tag of a tagged
+    union, of a source or of a group, and the label of a member of a union
+    with a member ``Referenced[...]``, which only the params model has::
+
+        position(Centre, ('find', 'tolerance'))  # ('tolerance',)
+
+    Read along the type, a field named like a tag is a field. After the
+    label of a member of a union with a member ``Referenced[...]``, the
+    position is read along the member written inline, whose errors are the
+    ones that remain (see :func:`validated`).
+    """
+    at: list[str | int] = []
+    for part in loc:
+        tp = _bare(tp)
+        if (members := _tagged(tp)) is not None:
+            tp = members.get(part, Any)
+        elif get_origin(tp) in (Union, UnionType):
+            inline, metadata, _ = split(tp)
+            tp = Annotated[inline, *metadata] if metadata else inline
+        else:
+            at.append(part)
+            if field_types.is_group(tp) and part in tp.model_fields:
+                tp = field_type(tp.model_fields[part])
+            elif get_origin(tp) is list:
+                tp = get_args(tp)[0]
+    return tuple(at)
+
+
+def _bare(tp: Any) -> Any:
+    """``tp`` without ``| None`` and the ``Annotated`` of any but a tagged union."""
+    while True:
+        origin, args = get_origin(tp), get_args(tp)
+        if origin in (Union, UnionType) and NoneType in args:
+            rest = tuple(a for a in args if a is not NoneType)
+            tp = rest[0] if len(rest) == 1 else Union[rest]  # noqa: UP007
+        elif origin is Annotated and _tagged(tp) is None:
+            tp = args[0]
+        else:
+            return tp
+
+
+def _tagged(tp: Any) -> dict[Any, Any] | None:
+    """
+    The members of ``tp`` by tag, if it is a tagged union: by a callable
+    discriminator, such as :func:`~ess.spec.request_types.source_of`, each
+    member with its ``Tag``, or by a tag field. ``None`` for any other type.
+    """
+    if get_origin(tp) is not Annotated:
+        return None
+    union, *metadata = get_args(tp)
+    if get_origin(union) not in (Union, UnionType):
+        return None
+    members = [m for m in get_args(union) if m is not NoneType]
+    for meta in metadata:
+        if callable(by := _discriminator(meta)):
+            return {_tag(m): m for m in members}
+        if isinstance(by, str):
+            plain = map(field_types.plain, members)
+            return {
+                get_args(g.model_fields[by].annotation)[0]: m
+                for g, m in zip(plain, members, strict=True)
+            }
+    return None
+
+
+def _discriminator(meta: Any) -> Any:
+    """The discriminator in ``meta``, a field's name or a callable, or ``None``."""
+    by = meta.discriminator if isinstance(meta, FieldInfo | Discriminator) else None
+    return by.discriminator if isinstance(by, Discriminator) else by
+
+
+def _tag(member: Any) -> str:
+    """The tag of ``member``, a member of a union by a callable discriminator."""
+    return next(m.tag for m in member.__metadata__ if isinstance(m, Tag))
+
+
+def field_type(info: FieldInfo) -> Any:
+    """The type of a field with ``info``, with its :func:`field_metadata`."""
+    metadata = field_metadata(info)
+    return Annotated[info.annotation, *metadata] if metadata else info.annotation
 
 
 def root_type(model: type[BaseModel], name: str) -> tuple[Any, bool, tuple[Any, ...]]:
@@ -232,11 +340,13 @@ def split(tp: Any, *metadata: Any) -> tuple[Any, tuple[Any, ...], tuple[Any, ...
         return None, (), (_data(tp, *metadata),)
     members = get_args(tp) if get_origin(tp) in (Union, UnionType) else (tp,)
     referenced = tuple(
-        _data(get_args(m)[0], *m.__metadata__) for m in members if is_referenced(m)
+        _data(get_args(m)[0], *m.__metadata__)
+        for m in members
+        if field_types.is_referenced(m)
     )
     if not referenced:
         return tp, metadata, ()
-    written = tuple(m for m in members if not is_referenced(m))
+    written = tuple(m for m in members if not field_types.is_referenced(m))
     if not written:
         return None, (), referenced
     if len(written) == 1:
@@ -245,11 +355,6 @@ def split(tp: Any, *metadata: Any) -> tuple[Any, tuple[Any, ...], tuple[Any, ...
     if get_origin(inline) is not Annotated:
         return inline, metadata, referenced
     return get_args(inline)[0], (*metadata, *inline.__metadata__), referenced
-
-
-def is_referenced(tp: Any) -> bool:
-    """Whether ``tp`` is ``Referenced[T]``, with the marker in its metadata."""
-    return get_origin(tp) is Annotated and REFERENCED in tp.__metadata__
 
 
 def _data(tp: Any, *metadata: Any) -> Any:

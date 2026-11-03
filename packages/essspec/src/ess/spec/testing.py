@@ -83,13 +83,16 @@ def instance(spec: WorkflowSpec[Any, Any], values: Mapping[str, Any]) -> BaseMod
     """
     An instance of the spec's params model from ``values`` by name, as a
     stage or a driver takes them, made as the backend makes one from data it
-    read: each value, or each row of a list, validated from the object by its
-    own field, without the length constraints of a list, which the backend
-    checks when a request is submitted, and without the model validators.
+    read: each value validated from the object by its own field, a table
+    without its length constraints, which the backend checks when a request
+    is submitted, and without the model validators.
     """
     model: type[BaseModel] = spec.params
     return model.model_construct(
-        **{n: places.validated(model, n, v) for n, v in values.items()}
+        **{
+            n: places.validated(model, n, v, n in spec.tables)
+            for n, v in values.items()
+        }
     )
 
 

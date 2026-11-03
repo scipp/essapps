@@ -183,21 +183,15 @@ class Checks:
         outputs in it (see :func:`ess.spec.request_types.held`).
         """
         try:
-            stored, reads = request_types.held(
+            return request_types.held(
                 self.spec.params,
                 name,
                 value,
                 lambda file, model: self._file(file, model, proposal),
+                table=name in self.spec.tables,
             )
         except ParamsError as error:
             raise SubmitError.of(error) from None
-        if (
-            field_types.is_list(self.spec.params, name)
-            and name not in self.spec.tables
-            and (need := _length_problem(self.spec, name, len(stored)))
-        ):
-            raise SubmitError.at((name,), f'{_rows_text(len(stored))}; it needs {need}')
-        return stored, reads
 
     def _file(self, name: str, model: type[FileModel], proposal: str) -> str:
         """

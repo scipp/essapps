@@ -1266,9 +1266,9 @@ class Backend:
         """
         ``values`` of a request by name as the binding takes them; no lock.
         The data each reference names is read, and each value is validated by
-        the params model from what the log holds, a row of a list on its own,
-        with each reference replaced by its data and each file given its
-        local path (see :func:`ess.spec.places.validated`). A group that
+        the params model from what the log holds, a table without its length
+        constraints, with each reference replaced by its data and each file
+        given its local path (see :func:`ess.spec.places.validated`). A group that
         holds a reference is validated only here, so its validators run now.
         A plain request makes the params instance from them, and a stage or a
         driver takes them by name.
@@ -1281,7 +1281,7 @@ class Backend:
         }
         context = {'read': self._reader(values), 'paths': paths}
         return {
-            n: places.validated(spec.params, n, v, context=context)
+            n: places.validated(spec.params, n, v, n in spec.tables, context)
             for n, v in values.items()
         }
 
@@ -1326,7 +1326,8 @@ class Backend:
         What reads the data each reference in ``params`` names: outputs held
         in memory, or one element of each, taken under the backend's lock
         now, and outside it, outputs written and no longer held from the
-        store. The caller reads only what something keeps for it, so an
+        store, each once, so that the references to one output give one
+        object. The caller reads only what something keeps for it, so an
         output is held or written.
         """
         held: dict[Ref, Any] = {}
@@ -1341,7 +1342,9 @@ class Backend:
                     held[ref] = _element(self._outputs[key], ref)
 
         def read(ref: OutputRef | AccumulatorRef) -> Any:
-            return held[ref] if ref in held else self._stored(ref)
+            if ref not in held:
+                held[ref] = self._stored(ref)
+            return held[ref]
 
         return read
 

@@ -548,53 +548,40 @@ _VALIDATORS = ('validators', 'field_validators', 'root_validators', 'model_valid
 def _params_problems(model: type[BaseModel]) -> list[str]:
     problems = [
         *_model_validators_only(model),
-        *_fields_problems(model, (model,), parameters=True),
+        *_fields_problems(model, (model,)),
     ]
     return list(dict.fromkeys(problems))
 
 
 def _fields_problems(
-    model: type[BaseModel], stack: tuple[type[BaseModel], ...], parameters: bool
+    model: type[BaseModel], stack: tuple[type[BaseModel], ...]
 ) -> list[str]:
     """
-    The problems of each field of ``model``, the params model if
-    ``parameters``, else a group, inside the groups ``stack``, the params
-    model first. Each field is typed as :func:`_type_problems` checks, has
-    no alias, and has a default that is a value (see
-    :func:`_default_problem`). A list parameter carries only length
-    constraints, since each row is validated alone.
+    The problems of each field of ``model``, the params model or a group,
+    inside the groups ``stack``, the params model first. Each field is typed
+    as :func:`_type_problems` checks, has no alias, is not excluded from the
+    JSON form, and has a default that is a value (see
+    :func:`_default_problem`).
     """
+    kind = 'a parameter' if len(stack) == 1 else 'a field of a group'
     problems = []
     for name, field in model.model_fields.items():
         where = f'{model.__name__}.{name}'
         if _has_alias(field):
-            kind = 'a parameter' if parameters else 'a field of a group'
             problems.append(f'{where}: {kind} has no alias')
             continue
-        metadata = places.field_metadata(field)
-        tp, _, marked = places.unwrapped(field.annotation, metadata)
-        listed = REFERENCED not in marked and get_origin(tp) is list
-        if (
-            parameters
-            and listed
-            and (
-                other := [
-                    m for m in field.metadata if not isinstance(m, MinLen | MaxLen)
-                ]
-            )
-        ):
+        if field.exclude or field.exclude_if is not None:
             problems.append(
-                f'{where}: a list parameter carries only length constraints, '
-                f'not {other}; a check of one row belongs to the element type'
+                f'{where}: {kind} has no exclude or exclude_if; the record holds '
+                'the JSON form, which would leave out the value'
             )
             continue
+        metadata = places.field_metadata(field)
         if found := _type_problems(field.annotation, metadata, stack):
             problems.extend(f'{where}: {problem}' for problem in found)
         elif field.default_factory_takes_validated_data:
             problems.append(f'{where}: the default_factory takes no other values')
-        elif not field.is_required() and (
-            problem := _default_problem(model, name, whole=not parameters)
-        ):
+        elif not field.is_required() and (problem := _default_problem(model, name)):
             problems.append(f'{where}: {problem}')
     return problems
 
@@ -637,7 +624,7 @@ def _type_problems(
         return problems
     members = get_args(inline) if get_origin(inline) in (Union, UnionType) else ()
     if (referenced and any(map(places.discriminates, metadata))) or any(
-        map(places.is_referenced, members)
+        map(field_types.is_referenced, members)
     ):
         return [*problems, _TAGGED_REFERENCE]
     if aliases := [m for m in members if field_types.is_alias(field_types.plain(m))]:
@@ -762,21 +749,6 @@ def _has_alias(field: FieldInfo) -> bool:
     )
 
 
-def _marked(annotation: Any, seen: frozenset[type] = frozenset()) -> bool:
-    """
-    Whether ``annotation`` holds ``Referenced[...]``, at any depth, in the
-    fields of each group too.
-    """
-    if places.is_referenced(annotation):
-        return True
-    if field_types.is_group(annotation):
-        return annotation not in seen and any(
-            _marked(info.rebuild_annotation(), seen | {annotation})
-            for info in annotation.model_fields.values()
-        )
-    return any(_marked(arg, seen) for arg in get_args(annotation))
-
-
 def _group_problems(
     group: type[BaseModel], stack: tuple[type[BaseModel], ...]
 ) -> list[str]:
@@ -802,7 +774,7 @@ def _group_problems(
     problems = []
     if found := _decorators(group, _SERIALIZERS):
         problems.append(f'{group.__name__}: no serializers or computed fields, {found}')
-    return [*problems, *_fields_problems(group, (*stack, group), parameters=False)]
+    return [*problems, *_fields_problems(group, (*stack, group))]
 
 
 def _referenced_problems(data: Any) -> list[str]:
@@ -826,7 +798,7 @@ def _referenced_problems(data: Any) -> list[str]:
         *_path_problems(group),
         *_output_file_problems(group),
     ]
-    if _marked(group):
+    if field_types.holds_ref(group):
         problems.append(
             f'Referenced[{name}]: {name} holds Referenced[...]; a reference is '
             'never inside the data of an output'
@@ -915,26 +887,25 @@ def _config(model: type[BaseModel]) -> dict[str, Any]:
     return {k: v for k, v in model.model_config.items() if k != 'title'}
 
 
-def _default_problem(model: type[BaseModel], name: str, whole: bool) -> str | None:
+def _default_problem(model: type[BaseModel], name: str) -> str | None:
     """
     Why the default of the field ``name`` of ``model`` is not a value, or
     ``None``: what a request may write, without a reference to an output or
     a file (see :func:`ess.spec.request_types.held`), and the value that
     validating it gives, since pydantic does not validate a default, and a
     binding gets it as it is (see :func:`ess.spec.places.validated`). So a
-    group's default is an instance, not the object of its fields. A list
-    parameter's default is validated a row at a time, and that of a field of
-    a group, ``whole``, with the length constraints of a list.
+    group's default is an instance, not the object of its fields, and a
+    list's default keeps the length constraints of the list.
     """
     default = model.model_fields[name].get_default(call_default_factory=True)
     try:
-        held, _ = request_types.held(model, name, default, _no_file, whole=whole)
+        held, _ = request_types.held(model, name, default, _no_file)
         if refs := [
             (loc, f'{ref} is a reference; a default is a value')
             for loc, ref in iter_refs({name: held})
         ]:
             raise ParamsError(refs)
-        made = places.validated(model, name, default, whole=whole)
+        made = places.validated(model, name, default)
     except ParamsError as error:
         return f'the default is not a value a request may write: {error}'
     if made != default:
@@ -961,7 +932,7 @@ def _outputs_problems(model: type[BaseModel]) -> list[str]:
                 f'{where}: an output is a type, possibly typed X | None, or a '
                 'list or a dict of one'
             )
-        elif _marked(field.rebuild_annotation()):
+        elif field_types.holds_ref(field.rebuild_annotation()):
             problems.append(
                 f'{where}: Referenced[...] marks a place of the params, not an output'
             )
@@ -1001,6 +972,12 @@ def _tables_problems(spec: WorkflowSpec[Any, Any]) -> list[str]:
             problems.append(f'{name}: a table is a list parameter')
         elif not field.is_required():
             problems.append(f'{name}: a table has no default')
+        elif other := [m for m in field.metadata if not isinstance(m, MinLen | MaxLen)]:
+            problems.append(
+                f'{name}: a table carries only length constraints, not {other}; '
+                'an accumulator takes a few rows at a time, so a check of one row '
+                'belongs to the element type'
+            )
     return problems
 
 

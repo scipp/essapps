@@ -23,6 +23,7 @@ authors set them at the use site, next to the field's title and description::
 
 from __future__ import annotations
 
+import functools
 import inspect
 from abc import ABC
 from collections.abc import Mapping
@@ -35,13 +36,15 @@ from pydantic import (
     Field,
     GetCoreSchemaHandler,
     PrivateAttr,
+    ValidationError,
     ValidationInfo,
+    ValidatorFunctionWrapHandler,
     field_validator,
     model_serializer,
     model_validator,
 )
 from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
-from pydantic_core import CoreSchema, PydanticCustomError, core_schema
+from pydantic_core import CoreSchema, ErrorDetails, PydanticCustomError, core_schema
 
 from .refs import AccumulatorRef, FileRef, OutputRef, as_ref
 
@@ -200,12 +203,31 @@ class FileModel(BaseModel, frozen=True, extra='forbid'):
 _SCALARS = (str, int, float, bool)
 
 
+class DataRefused(Exception):
+    """
+    The data read for ``ref``, a reference to an output, fail a check of the
+    ``T`` of ``Referenced[T]``, with ``errors``. It is not a ``ValueError``, so
+    that pydantic does not try the next member of a union with the
+    reference: the request phase checked that the output is of ``T``, so the
+    data are refused (see :func:`ess.spec.places.validated`).
+    """
+
+    def __init__(
+        self, ref: OutputRef | AccumulatorRef, errors: list[ErrorDetails]
+    ) -> None:
+        super().__init__(ref, errors)
+        self.ref = ref
+        self.errors = errors
+
+
 class _Referenced:
     """
     The marker of :data:`Referenced`. Validated with the context
     ``{'read': read}``, as the backend validates a request when it runs, it
-    replaces a reference to an output with its data, ``read(ref)``, and
-    refuses any other value. Validated without ``read``, as in direct use, it
+    replaces a reference to an output with its data, ``read(ref)``,
+    validated as ``T``, and refuses any other value. Data of ``T`` that fail
+    a check of ``T``, such as an ``AfterValidator``, raise
+    :class:`DataRefused`. Validated without ``read``, as in direct use, it
     takes ``T`` as it is.
     """
 
@@ -215,21 +237,38 @@ class _Referenced:
     def __get_pydantic_core_schema__(
         self, source: Any, handler: GetCoreSchemaHandler
     ) -> CoreSchema:
-        return core_schema.with_info_before_validator_function(_read, handler(source))
+        return core_schema.with_info_wrap_validator_function(
+            functools.partial(_read, source), handler(source)
+        )
 
 
-def _read(value: Any, info: ValidationInfo) -> Any:
-    """The data of ``value``, a reference to an output, read by the context."""
+def _read(
+    data_type: Any,
+    value: Any,
+    validate: ValidatorFunctionWrapHandler,
+    info: ValidationInfo,
+) -> Any:
+    """
+    The data of ``value``, a reference to an output, read by the context and
+    validated as ``data_type``, the ``T`` of ``Referenced[T]``.
+    """
     read = (info.context or {}).get('read')
     if read is None:
-        return value
+        return validate(value)
     ref = as_ref(value) if isinstance(value, Mapping) else None
     if not isinstance(ref, OutputRef | AccumulatorRef):
         raise PydanticCustomError(
             'output_ref',
             'is not a reference to an output, as the field is typed Referenced[...]',
         )
-    return read(ref)
+    data = read(ref)
+    if not isinstance(data, data_type):
+        # Data of another member Referenced[...] of a union, which takes them.
+        return validate(data)
+    try:
+        return validate(data)
+    except ValidationError as error:
+        raise DataRefused(ref, error.errors()) from None
 
 
 REFERENCED: Final = _Referenced()

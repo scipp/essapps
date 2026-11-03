@@ -845,3 +845,119 @@ def test_the_default_of_a_group_that_holds_a_reference_is_held_as_its_form() -> 
         'holder': {'transmission': None, 'x': 2.0},
         'holders': [{'transmission': None, 'x': 1.0}],
     }
+
+
+class Scaled(BaseModel):
+    """An alternative whose tag is the name of one of its fields."""
+
+    kind: Literal['scale'] = 'scale'
+    scale: float = 1.0
+    unit: str = 'm'
+    transmission: Referenced[Transmission]
+
+    @field_validator('unit')
+    @classmethod
+    def _length(cls, unit: str) -> str:
+        if unit not in ('m', 'mm'):
+            raise ValueError('not a length')
+        return unit
+
+    @model_validator(mode='after')
+    def _positive(self) -> 'Scaled':
+        if self.scale <= 0:
+            raise ValueError('the scale is not positive')
+        return self
+
+
+class Fixed(BaseModel):
+    kind: Literal['fixed']
+
+
+class Corrected(BaseModel):
+    corr: (
+        Annotated[Scaled | Fixed, Field(discriminator='kind')]
+        | Referenced[Transmission]
+    )
+
+
+class CorrectedParams(BaseModel):
+    rows: list[Corrected] = []
+
+
+def _run_errors(stored: Any, read: Callable[[Ref], Any]) -> tuple[Any, ...]:
+    """The errors of the call phase of ``rows``, from what the record stores."""
+    with pytest.raises(ParamsError) as raised:
+        value_of(CorrectedParams, 'rows', stored, read, {})
+    return raised.value.errors
+
+
+def test_a_request_error_at_a_field_named_like_a_tag_is_at_its_field() -> None:
+    corr = {'kind': 'scale', 'scale': 2.0, 'unit': 1, 'transmission': OUTPUT}
+    with pytest.raises(ParamsError) as raised:
+        held(CorrectedParams, 'rows', [{'corr': corr}], _named)
+    assert raised.value.errors == (
+        (('rows', 0, 'corr', 'unit'), 'Input should be a valid string'),
+    )
+
+
+@pytest.mark.parametrize(
+    ('corr', 'error'),
+    [
+        (
+            {'unit': 's'},
+            (('rows', 0, 'corr', 'unit'), 'Value error, not a length'),
+        ),
+        (
+            {'scale': -1.0},
+            (('rows', 0, 'corr'), 'Value error, the scale is not positive'),
+        ),
+    ],
+)
+def test_a_call_error_is_at_its_position_in_the_stored_value_once(
+    corr: dict[str, Any], error: tuple[Loc, str]
+) -> None:
+    data = Transmission(fraction=sc.scalar(0.5))
+    row = {'corr': {'kind': 'scale', 'transmission': OUTPUT, **corr}}
+    stored, _ = held(CorrectedParams, 'rows', [row], _named)
+    assert _run_errors(stored, lambda ref: data) == (error,)
+
+
+def test_data_that_fail_a_check_of_their_type_are_one_error_at_the_reference() -> None:
+    def thin(sample: Sample) -> Sample:
+        if sample.thickness > 1.0:
+            raise ValueError('too thick')
+        return sample
+
+    class Either(BaseModel):
+        sample: Sample | Referenced[Annotated[Sample, AfterValidator(thin)]]
+
+    class EitherSamples(BaseModel):
+        samples: list[Either] = []
+
+    stored, _ = held(EitherSamples, 'samples', [{'sample': OUTPUT}], _named)
+    with pytest.raises(ParamsError) as raised:
+        value_of(EitherSamples, 'samples', stored, lambda r: Sample(thickness=2.0), {})
+    assert raised.value.errors == (
+        (('samples', 0, 'sample'), 'Value error, too thick'),
+    )
+
+
+def test_a_union_of_referenced_groups_takes_the_data_of_any_member() -> None:
+    class Pick(BaseModel):
+        pick: Referenced[Computed] | Referenced[Transmission]
+
+    data = Transmission(fraction=sc.scalar(0.5))
+    ref = OUTPUT.model_dump(by_alias=True)
+    assert value_of(Pick, 'pick', ref, lambda r: data, {}) is data
+
+
+def test_a_list_is_validated_whole_and_a_table_without_its_length() -> None:
+    one_row = [{'thickness': 2.0}]
+    with pytest.raises(ParamsError) as raised:
+        held(Params, 'samples', one_row, _named)
+    assert raised.value.errors == (
+        (('samples',), 'List should have at least 2 items after validation, not 1'),
+    )
+    stored, _ = held(Params, 'samples', one_row, _named, table=True)
+    assert stored == one_row
+    assert validated(Params, 'samples', one_row, table=True) == [Sample(thickness=2)]

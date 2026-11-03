@@ -193,8 +193,8 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
             raise ValueError(
                 f'{spec.name}: {keyless}: a parameter whose type, or whose element '
                 'type for a list, is not a group or a union of groups gives its '
-                'keys=: its class names no role, and two parameters typed int '
-                'would set one key'
+                'keys=: a key such as int names no role, so no provider would read '
+                'it, and the value would have no effect'
             )
         if optional_params := sorted(
             n

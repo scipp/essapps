@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ess.apps import (
     Backend,
@@ -151,6 +151,35 @@ def slow(params: ModeParams) -> ValueOutputs:
     return ValueOutputs(value=Amount(value=value))
 
 
+class Scaled(BaseModel):
+    """A row that holds a reference: validated when the request runs."""
+
+    scale: float = 1.0
+    amount: Referenced[Amount]
+
+    @model_validator(mode='after')
+    def _not_negative(self) -> 'Scaled':
+        if self.scale < 0:
+            raise ValueError('the scale is negative')
+        return self
+
+
+class Offset(BaseModel):
+    amount: Referenced[Amount]
+
+
+class ScaledParams(BaseModel):
+    rows: list[Scaled] = Field(min_length=1)
+    offset: Offset | None = None
+
+
+def scaled(params: ScaledParams) -> ValueOutputs:
+    value = sum(row.scale * row.amount.value for row in params.rows)
+    if params.offset is not None:
+        value += params.offset.amount.value
+    return ValueOutputs(value=Amount(value=value))
+
+
 SPLIT = _spec('split', outputs=PartsOutputs)
 PIECES = _spec('pieces', outputs=PiecesOutputs)
 BOXED = _spec('boxed', params=BoxParams)  # a box of a number
@@ -159,6 +188,9 @@ LOKI_MASKED = _spec('loki-masked', params=LokiMaskParams)
 RUNS = _spec('runs', params=RunsParams, tables=('runs',))
 MODES = _spec('modes', params=ModeParams)
 SUM = _spec('sum', params=SumParams, tables=('terms',))
+SCALED = _spec('scaled', params=ScaledParams, tables=('rows',))
+SCALED_STAGE = _spec('scaled-stage', params=ScaledParams, tables=('rows',))
+SCALED_ROWS = _spec('scaled-rows', params=ScaledParams, tables=('rows',))
 
 
 def add(params: AddParams) -> ValueOutputs:
@@ -235,6 +267,9 @@ def backend(files: FakeFiles, gate: Gate) -> Iterator[Backend]:
         function_binding(MASKED, lambda p: ValueOutputs(value=_read(p.mask))),
         function_binding(LOKI_MASKED, lambda p: ValueOutputs(value=_read(p.mask))),
         kept_rows(RUNS, runs),
+        function_binding(SCALED, scaled),
+        StagedFunction(SCALED_STAGE, scaled),
+        kept_rows(SCALED_ROWS, scaled),
     ]
     backend = Backend(files, bindings)
     yield backend
@@ -509,7 +544,7 @@ def test_a_file_fits_a_file_model_by_each_key_of_its_metadata(
 
 
 def test_a_table_takes_a_list_of_rows(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r'^terms: .* is not a list$'):
+    with pytest.raises(SubmitError, match=r'^terms: Input should be a valid array$'):
         client.submit(SUM, params={'terms': {'value': 1.0}})
 
 
@@ -819,3 +854,73 @@ def test_rows_of_file_models_are_distinct_by_identity_not_by_path(
     assert client.output(acc, 'value') == Amount(value=4.0)
     with pytest.raises(SubmitError, match=r'^runs\[2\]: repeats runs\[0\]'):
         acc.push(runs=[file(pid='x')])
+
+
+def test_a_reference_inside_a_row_waits_for_its_pending_record(
+    client: Client, gate: Gate
+) -> None:
+    a = client.submit(load(1))
+    rows = [{'amount': a.ref('value')}, {'scale': 2.0, 'amount': a.ref('value')}]
+    summed = client.submit(SCALED, params={'rows': rows})
+
+    assert client.status(summed) is Status.PENDING
+    gate.open.set()
+    assert client.output(summed, 'value') == Amount(value=3.0)
+
+
+def test_a_row_that_holds_a_reference_is_checked_when_it_runs(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+    a = client.submit(load(1))
+    rows = [{'amount': a.ref('value')}, {'scale': -1.0, 'amount': a.ref('value')}]
+    failed = client.submit(SCALED, params={'rows': rows})
+
+    assert client.wait(failed) is Status.FAILED
+    assert client.failure(failed) == 'rows[1]: Value error, the scale is negative'
+
+
+def test_a_stage_reads_a_reference_inside_a_group_of_its_template(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+    a, b = client.submit([load(1), load(2)])
+    offset = {'offset': {'amount': a.ref('value')}}
+    stage = client.stage(Template(SCALED_STAGE, params=offset, blanks=('rows',)))
+    client.release(a)  # the stage keeps what its template references
+
+    first = client.compute(stage, params={'rows': [{'amount': b.ref('value')}]})
+    rows = [{'amount': b.ref('value')}, {'scale': 2.0, 'amount': b.ref('value')}]
+    second = client.compute(stage, params={'rows': rows})
+
+    assert client.output(first, 'value') == Amount(value=3.0)
+    assert client.output(second, 'value') == Amount(value=7.0)
+
+
+def test_an_accumulator_takes_rows_that_hold_references(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+    a, b = client.submit([load(1), load(2)])
+    acc = client.accumulator(Template(SCALED_ROWS, blanks=('rows',)))
+    acc.push(rows=[{'amount': a.ref('value')}])
+    acc.push(rows=[{'scale': 2.0, 'amount': b.ref('value')}])
+
+    assert client.output(acc, 'value') == Amount(value=5.0)
+    # A row that leaves its default out repeats one that gives it.
+    with pytest.raises(SubmitError, match=r'^rows\[2\]: repeats rows\[0\]'):
+        acc.push(rows=[{'scale': 1.0, 'amount': a.ref('value')}])
+
+
+def test_a_reference_to_an_accumulator_inside_a_row_reads_its_state(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+    a = client.submit(load(2))
+    acc = client.accumulator(Template(SCALED_ROWS, blanks=('rows',)))
+    acc.push(rows=[{'amount': a.ref('value')}])
+
+    rows = [{'scale': 3.0, 'amount': acc.ref('value')}]
+    summed = client.compute(SCALED, params={'rows': rows})
+
+    assert client.output(summed, 'value') == Amount(value=6.0)

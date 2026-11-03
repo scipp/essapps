@@ -8,13 +8,14 @@ import pytest
 import scipp as sc
 from pydantic import BaseModel
 
-from ess.spec import FileModel
+from ess.spec import FileModel, Referenced
 from ess.spec.field_types import (
     arguments,
     element,
     fields_of,
     fits,
     has_array,
+    holds_ref,
     is_alias,
     is_array,
     is_file_model,
@@ -180,6 +181,23 @@ def test_reachable_looks_through_arguments_and_fields_and_ends_on_recursion() ->
     assert RunFile in found
     assert 'a validator' not in found  # not the metadata
     assert sc.DataArray in list(reachable(dict[str, SampleParts]))
+
+
+class Tree(BaseModel):
+    children: list['Tree'] = []
+
+
+class Holder(BaseModel):
+    tree: Tree
+    leaves: list[Referenced[BeamCentre]] = []
+
+
+def test_holds_ref_looks_into_the_fields_of_groups_and_ends_on_recursion() -> None:
+    assert holds_ref(Holder | None)
+    assert holds_ref(Annotated[list[Holder], 'a validator'])
+    assert holds_ref(Referenced[Tree])
+    assert not holds_ref(Tree)
+    assert not holds_ref(list[BeamCentre])
 
 
 def test_type_name_is_the_name_of_the_class() -> None:
