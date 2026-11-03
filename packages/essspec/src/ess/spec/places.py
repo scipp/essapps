@@ -1,20 +1,20 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What a request may write at a parameter or a row, read from its type, and
-the phases in which a value is validated.
+What a request may write at a field, read from its type, and the phases in
+which a value is validated.
 
 The rules are stated once, in :mod:`ess.spec._workflow_spec`, with the terms
-used here: parameter, row, group, field, file, reference to an output, data
-value, JSON form. A request is validated one parameter at a time, in two
-phases, and a spec checks its defaults the same way:
+used here: parameter, row, group, field, file, reference to an output, JSON
+form. A request is validated one parameter at a time, in two phases, and a
+spec checks its defaults the same way:
 
 =============  =================================  ==========================
 When           Function                           What it does
 =============  =================================  ==========================
-spec made      :func:`field_value`                validates the default of
-                                                  a field of a group as a
-                                                  request would write it
+spec made      :func:`validated`                  validates the default of
+                                                  a field as a binding
+                                                  takes it
 request phase  :func:`.request_types.held`        validates a parameter by
                                                   its request type, and
                                                   returns what the record
@@ -22,30 +22,31 @@ request phase  :func:`.request_types.held`        validates a parameter by
                                                   each group and file, and
                                                   each reference to an
                                                   output as it is
-call phase     :func:`.request_types.value_of`    makes the value of a
-                                                  parameter from what the
-                                                  record stores, each value
-                                                  by the type of its
-                                                  source: each reference to
-                                                  an output replaced by its
+call phase     :func:`validated`, with the        validates a parameter by
+               context ``read`` and ``paths``     the params model from
+                                                  what the record stores:
+                                                  each reference to an
+                                                  output replaced by its
                                                   data, each file with its
                                                   local path
 =============  =================================  ==========================
 
 The *request phase* is when a request is submitted, before any data is
 read. The *call phase* is when the request runs, once the backend has read
-the data of each reference to an output. The request type of a place (see
+the data of each reference to an output. The request type of a field (see
 :mod:`ess.spec.request_types`) is derived from its type with the functions
 here.
 
 The request type, and so the params schema of a spec and the Panel form,
-decide what a request writes at a parameter, or at each row of a list
-parameter, from its type, with these functions::
+decide what a request writes at a field from its type, with these
+functions::
 
     # The type without | None, whether it is X | None, and its metadata.
     tp, none, metadata = root_type(Params, 'centre')
+    # The same of any field typed annotation, with the field's metadata.
+    tp, none, metadata = unwrapped(annotation, metadata)
     # The part that a request writes, with its metadata, and the groups
-    # whose data a reference fills the place with, each T of Referenced[T].
+    # whose data a reference fills the field with, each T of Referenced[T].
     inline, inline_metadata, referenced = split(tp, *metadata)
     # A union of groups: show the fields of each alternative. None for any
     # other type.
@@ -53,117 +54,79 @@ parameter, from its type, with these functions::
     # A file model: offer a picker of files. Any other group: show its
     # fields.
     field_types.is_file_model(inline)
-    # Groups that a reference fills the place with: offer a picker of
+    # Groups that a reference fills the field with: offer a picker of
     # records.
     referenced  # (ComputedBeamCentre,)
 
-:func:`unwritten` gives the first data value of a group, :func:`field_metadata`
-the metadata of a field with its discriminator, and :func:`title` the label
-of a field.
+:func:`field_metadata` gives the metadata of a field with its
+discriminator, and :func:`title` the label of a field.
 
 An error is a :class:`~ess.spec.refs.ParamsError` that names the position of
 each problem in the params, such as ``reduction.bins`` or ``runs[1]``.
-Inside a union of groups, the position leaves out the tag:
-``centre.tolerance``.
 """
 
 from __future__ import annotations
 
-import functools
-from collections.abc import Callable, Mapping
-from enum import Enum
 from types import NoneType, UnionType
 from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, Discriminator, Field, ValidationError
 from pydantic.fields import FieldInfo
-from pydantic_core import ErrorDetails, PydanticSerializationError
+from pydantic_core import to_json
 
 from . import field_types
 from .parameters import REFERENCED
-from .refs import (
-    AccumulatorRef,
-    FileRef,
-    Loc,
-    OutputRef,
-    ParamsError,
-    iter_refs,
-)
+from .refs import Loc, ParamsError
 
 
-def validated(model: type[BaseModel], name: str, value: Any) -> Any:
+def validated(
+    model: type[BaseModel],
+    name: str,
+    value: Any,
+    whole: bool = False,
+    context: dict[str, Any] | None = None,
+) -> Any:
     """
-    ``value``, data as a binding takes it, of the parameter ``name`` of
-    ``model``, validated by its field alone (see
+    ``value`` of the field ``name`` of ``model`` as the binding takes it,
+    validated by its field alone (see
     :func:`~ess.spec.field_types.model_of`); for a list parameter, each row
-    by the element type. A spec checks the default of a parameter with it,
-    and :func:`ess.spec.testing.instance` makes a params instance. Raises
-    :class:`~ess.spec.refs.ParamsError` at the position of each problem.
+    by the element type, unless ``whole``, as for a field of a group.
+    Raises :class:`~ess.spec.refs.ParamsError` at the position of each
+    problem.
+
+    Without ``context``, ``value`` is data, as in direct use, so that each
+    field typed ``Referenced[T]`` takes ``T``. A spec checks a default with
+    it, and :func:`ess.spec.testing.instance` makes a params instance.
+
+    With ``context``, ``value`` is what the record stores, validated from
+    its JSON form, in the call phase. ``context`` holds ``read``, which gives
+    the data of each reference to an output (see
+    :data:`~ess.spec.parameters.Referenced`), and ``paths``, the local path
+    of each file by its identity (see
+    :class:`~ess.spec.parameters.FileModel`). A field that a model lacks is
+    refused. A group that holds a reference to an output, at any depth, is
+    validated only here, so its validators run when the request runs and
+    see the data read. Every other group was validated whole when the
+    request was submitted too.
     """
-    one = field_types.model_of(model, name)
+    one = field_types.model_of(model, name, whole)
 
     def check(loc: Loc, v: Any) -> Any:
         try:
-            return getattr(one.model_validate({name: v}), name)
+            if context is None:
+                made = one.model_validate({name: v})
+            else:
+                given = to_json({name: v})
+                made = one.model_validate_json(given, context=context, extra='forbid')
         except ValidationError as error:
             raise ParamsError(
                 ((*loc, *e['loc'][1:]), e['msg']) for e in error.errors()
             ) from None
+        return getattr(made, name)
 
-    if field_types.is_list(model, name):
+    if field_types.is_list(model, name) and not whole:
         return [check((name, i), v) for i, v in enumerate(value)]
     return check((name,), value)
-
-
-def field_value(group: type[BaseModel], name: str, value: Any) -> Any:
-    """
-    ``value`` of the field ``name`` of ``group`` as validating the group
-    makes it: a list with its length constraints, and its JSON form checked
-    to read back as the value (see :func:`~ess.spec.field_types.inline`). A
-    spec checks the default of each field of a group with it. Raises
-    :class:`~ess.spec.refs.ParamsError` at ``name``.
-    """
-
-    def problem(error: ErrorDetails) -> tuple[Loc, str]:
-        return (name, *error['loc'][1:]), error['msg']
-
-    inline_at((name,), group, name, value, problem, whole=True)
-    one = field_types.model_of(group, name, whole=True)
-    try:
-        return getattr(one.model_validate({name: value}), name)
-    except ValidationError as error:
-        raise ParamsError(map(problem, error.errors())) from None
-
-
-def inline_at(
-    loc: Loc,
-    model: type[BaseModel],
-    name: str,
-    value: Any,
-    problem: Callable[[ErrorDetails], tuple[Loc, str]],
-    whole: bool,
-    context: dict[str, Any] | None = None,
-) -> Any:
-    """
-    The JSON form of ``value`` at ``loc``, of the field ``name`` of
-    ``model``, validated with ``context`` (see
-    :func:`~ess.spec.field_types.inline`); ``problem`` places each error of
-    validation and words it.
-    """
-    try:
-        return field_types.inline(model, name, value, whole=whole, context=context)
-    except PydanticSerializationError as error:
-        raise _refused(loc, f'cannot be stored as JSON: {error}') from None
-    except ValidationError as error:
-        raise ParamsError(map(problem, error.errors())) from None
-    except ParamsError as error:
-        raise ParamsError(((*loc, *at), msg) for at, msg in error.errors) from None
-    except ValueError as error:
-        raise _refused(loc, str(error)) from None
-
-
-def _refused(loc: Loc, msg: str) -> ParamsError:
-    return ParamsError([(loc, msg)])
 
 
 def root_type(model: type[BaseModel], name: str) -> tuple[Any, bool, tuple[Any, ...]]:
@@ -186,8 +149,8 @@ def root_type(model: type[BaseModel], name: str) -> tuple[Any, bool, tuple[Any, 
     """
     info = model.model_fields[name]
     if field_types.is_list(model, name):
-        return _unwrapped(get_args(info.annotation)[0])
-    return _unwrapped(info.annotation, field_metadata(info))
+        return unwrapped(get_args(info.annotation)[0])
+    return unwrapped(info.annotation, field_metadata(info))
 
 
 def field_metadata(info: FieldInfo) -> tuple[Any, ...]:
@@ -214,14 +177,15 @@ def title(name: str, info: FieldInfo) -> str:
     return info.title or name.replace('_', ' ').title()
 
 
-def _unwrapped(
+def unwrapped(
     annotation: Any, metadata: tuple[Any, ...] = ()
 ) -> tuple[Any, bool, tuple[Any, ...]]:
     """
-    ``annotation`` without its outer ``Annotated`` and ``| None``, at any
-    depth, up to the marker of ``Referenced[T]``, which leaves ``T``;
-    whether it had ``| None``; and ``metadata``, then the metadata of each
-    ``Annotated``, the outer first. Unlike
+    ``annotation``, of a field with ``metadata`` (see
+    :func:`field_metadata`), without its outer ``Annotated`` and
+    ``| None``, at any depth, up to the marker of ``Referenced[T]``, which
+    leaves ``T``; whether it had ``| None``; and ``metadata``, then the
+    metadata of each ``Annotated``, the outer first. Unlike
     :func:`~ess.spec.field_types.optional`, it keeps the metadata of the
     members of a union and the elements of a list.
     """
@@ -276,7 +240,7 @@ def split(tp: Any, *metadata: Any) -> tuple[Any, tuple[Any, ...], tuple[Any, ...
     if not written:
         return None, (), referenced
     if len(written) == 1:
-        metadata = tuple(m for m in metadata if not _discriminates(m))
+        metadata = tuple(m for m in metadata if not discriminates(m))
     inline: Any = written[0] if len(written) == 1 else Union[written]  # noqa: UP007
     if get_origin(inline) is not Annotated:
         return inline, metadata, referenced
@@ -294,7 +258,7 @@ def _data(tp: Any, *metadata: Any) -> Any:
     return Annotated[tp, *kept] if kept else tp
 
 
-def _discriminates(meta: Any) -> bool:
+def discriminates(meta: Any) -> bool:
     """Whether ``meta``, metadata of a type, is a discriminator."""
     return isinstance(meta, Discriminator) or (
         isinstance(meta, FieldInfo) and meta.discriminator is not None
@@ -325,7 +289,7 @@ def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] 
     """
     if annotation is None:
         return None
-    tp, _, inner = _unwrapped(annotation)
+    tp, _, inner = unwrapped(annotation)
     discriminator = None
     for meta in (*metadata, *inner):
         if isinstance(meta, FieldInfo) and meta.discriminator is not None:
@@ -371,76 +335,3 @@ def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] 
 def _tags(annotation: Any) -> tuple[Any, ...]:
     """The values of ``annotation`` if it is a ``Literal``, else none."""
     return get_args(annotation) if get_origin(annotation) is Literal else ()
-
-
-@functools.cache
-def unwritten(group: type[BaseModel]) -> str | None:
-    """
-    The name of the first data value of ``group``, or ``None`` if it has
-    none. A form has no input for a data value, so the place of a group with
-    one is marked ``Referenced[...]``.
-    """
-    return next(
-        (n for n, f in group.model_fields.items() if not _interpreted(f.annotation)),
-        None,
-    )
-
-
-def _interpreted(annotation: Any) -> bool:
-    """
-    Whether a field typed ``annotation`` is interpreted: a scalar; a file
-    model, possibly typed ``X | None``; or a list of scalars or of file
-    models, typed neither ``list[X] | None`` nor ``list[X | None]``.
-    """
-    tp, none, item_none = field_types.taken_apart(annotation)
-    if item_none is not None:
-        return not (none or item_none) and (
-            _is_scalar(tp) or field_types.is_file_model(tp)
-        )
-    return field_types.is_file_model(tp) or (not none and _is_scalar(tp))
-
-
-def _is_scalar(tp: Any) -> bool:
-    """
-    Whether ``tp`` is a scalar, by the type alone: a type whose JSON form is
-    a number, a string, or a bool; a ``Literal`` of such values, not of enum
-    members; or an enum whose values are such. A serializer in the metadata
-    of a field may still dump it to something else, which
-    :func:`~ess.spec.request_types.held` checks.
-    """
-    if tp in (int, float, str, bool, *field_types.TIMES):
-        return True
-    if get_origin(tp) is Literal:
-        values = get_args(tp)
-    elif isinstance(tp, type) and issubclass(tp, Enum):
-        values = tuple(member.value for member in tp)
-    else:
-        return False
-    return all(type(v) in (str, int, float, bool) for v in values)
-
-
-def ref_types(
-    model: type[BaseModel], params: Mapping[str, Any]
-) -> list[tuple[Loc, OutputRef | AccumulatorRef, Any]]:
-    """
-    Each reference to an output in ``params``, with its position and the
-    type its data must fit: the group of ``Referenced[...]`` at its place,
-    or the union of the groups if there are several (see :func:`split`).
-    ``params`` are by name, as :func:`~ess.spec.request_types.held` returns
-    them, so a reference to an output fills a whole parameter or row that
-    the spec marks so. Files are left out.
-    """
-    return [
-        (loc, ref, referenced_type(model, str(loc[0])))
-        for loc, ref in iter_refs(params)
-        if not isinstance(ref, FileRef)
-    ]
-
-
-def referenced_type(model: type[BaseModel], name: str) -> Any:
-    """
-    The union of the groups, with their metadata, that a reference fills the
-    place ``name`` with.
-    """
-    tp, _, metadata = root_type(model, name)
-    return Union[split(tp, *metadata)[2]]  # noqa: UP007

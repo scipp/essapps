@@ -33,6 +33,7 @@ from typing import Annotated, Any, ClassVar, Final, Self, TypeVar
 from pydantic import (
     BaseModel,
     Field,
+    GetCoreSchemaHandler,
     PrivateAttr,
     ValidationInfo,
     field_validator,
@@ -40,9 +41,9 @@ from pydantic import (
     model_validator,
 )
 from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
-from pydantic_core import CoreSchema, PydanticCustomError
+from pydantic_core import CoreSchema, PydanticCustomError, core_schema
 
-from .refs import FileRef
+from .refs import AccumulatorRef, FileRef, OutputRef, as_ref
 
 
 class FileModel(BaseModel, frozen=True, extra='forbid'):
@@ -200,8 +201,35 @@ _SCALARS = (str, int, float, bool)
 
 
 class _Referenced:
+    """
+    The marker of :data:`Referenced`. Validated with the context
+    ``{'read': read}``, as the backend validates a request when it runs, it
+    replaces a reference to an output with its data, ``read(ref)``, and
+    refuses any other value. Validated without ``read``, as in direct use, it
+    takes ``T`` as it is.
+    """
+
     def __repr__(self) -> str:
         return 'REFERENCED'
+
+    def __get_pydantic_core_schema__(
+        self, source: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.with_info_before_validator_function(_read, handler(source))
+
+
+def _read(value: Any, info: ValidationInfo) -> Any:
+    """The data of ``value``, a reference to an output, read by the context."""
+    read = (info.context or {}).get('read')
+    if read is None:
+        return value
+    ref = as_ref(value) if isinstance(value, Mapping) else None
+    if not isinstance(ref, OutputRef | AccumulatorRef):
+        raise PydanticCustomError(
+            'output_ref',
+            'is not a reference to an output, as the field is typed Referenced[...]',
+        )
+    return read(ref)
 
 
 REFERENCED: Final = _Referenced()
@@ -211,19 +239,22 @@ _T = TypeVar('_T')
 
 Referenced = Annotated[_T, REFERENCED]
 """
-``Referenced[T]`` marks a place, a parameter or a row, that a reference to
-an output fills, whose data fit ``T``, a group. A place that takes a value
-written inline too is a union::
+``Referenced[T]`` types a field that a reference to an output fills, whose
+data fit ``T``, a group. A field that takes a value written inline too is a
+union::
 
     class IofQParams(BaseModel):
         mask: Referenced[PixelMask] | None = None
         centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
 
+    class Sample(BaseModel):
+        run: RunFile
+        transmission: Referenced[Transmission]
+
 It is ``Annotated[T, REFERENCED]``, so pydantic and a type checker see
 ``T``: the params model holds the data, as the binding takes them. The
-request type has a reference in its place (see
-:mod:`ess.spec.request_types`). The rules are stated in
-:mod:`ess.spec._workflow_spec`.
+request type has a reference instead (see :mod:`ess.spec.request_types`).
+The rules are stated in :mod:`ess.spec._workflow_spec`.
 """
 
 
@@ -285,20 +316,6 @@ class EnergyUnit(StrEnum):
 
     MILLI_EV = 'meV'
     MICRO_EV = 'µeV'
-
-
-class Quantity(BaseModel, frozen=True):
-    """
-    A scalar or short vector with a unit, as plain data that a request can
-    give inline.
-
-    The small-value type for values that a user reads or types, such as a
-    scale factor. As a parameter it is a group like any other, or a field of
-    one.
-    """
-
-    value: float | tuple[float, ...] = Field(description="The value(s).")
-    unit: str | None = Field(default=None, description="Unit, if any.")
 
 
 class RangeModel(BaseModel, ABC):

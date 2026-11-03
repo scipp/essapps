@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -26,9 +27,17 @@ from ess.spec import (
     WorkflowSpec,
     request_types,
 )
-from ess.spec.places import alternatives, root_type
+from ess.spec.places import alternatives, root_type, validated
 from ess.spec.refs import Loc, ParamsError, Ref
-from ess.spec.request_types import held, row_sources, value_of
+from ess.spec.request_types import held, sources
+
+
+def _stored(
+    model: type[BaseModel], name: str, value: Any, files: request_types.Files
+) -> Any:
+    """What the record stores of ``value``, as :func:`held` gives it."""
+    stored, _ = held(model, name, value, files)
+    return stored
 
 
 class RunFile(FileModel, kind='raw'):
@@ -111,6 +120,23 @@ def _unknown(name: str, model: type[FileModel]) -> str:
     raise ValueError(f'unknown file {name}')
 
 
+def value_of(
+    model: type[BaseModel],
+    name: str,
+    stored: Any,
+    read: Callable[[Ref], Any],
+    paths: dict[str, Path],
+) -> Any:
+    """The value of a parameter in the call phase, from what the record stores."""
+    return validated(model, name, stored, context={'read': read, 'paths': paths})
+
+
+def row_sources(model: type[BaseModel], name: str) -> dict[str, Any]:
+    """The sources of a parameter, or of one row of a list parameter."""
+    tp, _, metadata = root_type(model, name)
+    return sources(tp, metadata)
+
+
 class NamedCentre(BaseModel):
     beam_centre: Annotated[GivenCentre | FindCentre, Discriminator('kind')]
 
@@ -141,7 +167,7 @@ def test_a_file_in_a_group_is_held_as_files_resolves_it() -> None:
 
     value = {'run': FILE, 'masks': [FILE]}
     form = FileRef(file='pid-2').model_dump(by_alias=True)
-    assert held(MeasuredParams, 'measured', value, resolve) == {
+    assert _stored(MeasuredParams, 'measured', value, resolve) == {
         'run': form,
         'thickness': 1.0,
         'masks': [form],
@@ -167,7 +193,7 @@ def test_a_file_that_files_refuses_is_refused_at_its_place(
     model: type[BaseModel], name: str, value: Any, locs: list[Loc]
 ) -> None:
     with pytest.raises(ParamsError) as raised:
-        held(model, name, value, _unknown)
+        _stored(model, name, value, _unknown)
     assert raised.value.errors == tuple((loc, 'unknown file pid-1') for loc in locs)
 
 
@@ -187,7 +213,7 @@ def test_a_file_that_a_validator_makes_is_refused() -> None:
         named: Named
 
     with pytest.raises(ParamsError) as raised:
-        held(NamedParams, 'named', {'name': 'pid-1'}, _named)
+        _stored(NamedParams, 'named', {'name': 'pid-1'}, _named)
     assert raised.value.errors == (
         (
             ('named', 'mask'),
@@ -195,7 +221,7 @@ def test_a_file_that_a_validator_makes_is_refused() -> None:
             'has not checked it',
         ),
     )
-    assert held(NamedParams, 'named', {'mask': FILE}, _named) == {
+    assert _stored(NamedParams, 'named', {'mask': FILE}, _named) == {
         'mask': FILE.model_dump()
     }
 
@@ -207,59 +233,62 @@ def test_a_discriminator_in_the_metadata_of_a_field_names_the_tag() -> None:
         {'given': GivenCentre, 'find': FindCentre},
     )
     value = {'kind': 'find', 'tolerance': 0.5}
-    assert held(NamedCentre, 'beam_centre', value, _named) == value
+    assert _stored(NamedCentre, 'beam_centre', value, _named) == value
     with pytest.raises(ParamsError) as raised:
-        held(NamedCentre, 'beam_centre', {'tolerance': 0.5}, _named)
+        _stored(NamedCentre, 'beam_centre', {'tolerance': 0.5}, _named)
     assert raised.value.errors == (
         (
             ('beam_centre',),
-            "the tag 'kind' is not given; it is one of ['given', 'find']",
+            "Unable to extract tag using discriminator 'kind'",
         ),
     )
 
 
 def test_a_reference_to_an_output_at_a_parameter_is_held_as_its_json_form() -> None:
     form = OUTPUT.model_dump()
-    assert held(MaskParams, 'sample', OUTPUT, _named) == form
+    assert _stored(MaskParams, 'sample', OUTPUT, _named) == form
     given = {'@ref': 'output', 'record': 'r1', 'output': 'sample'}
-    assert held(MaskParams, 'sample', given, _named) == form
+    assert _stored(MaskParams, 'sample', given, _named) == form
+
+
+NOT_REFERENCED = (
+    'r1.sample is a reference to an output; the field is not typed Referenced[...]'
+)
 
 
 def test_a_reference_to_an_output_at_a_file_model_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(MaskParams, 'mask', OUTPUT, _named)
+        _stored(MaskParams, 'mask', OUTPUT, _named)
     assert raised.value.errors == (
         (
             ('mask',),
-            'r1.sample is a reference to an output; MaskFile is a file model, '
-            'written as file(...)',
+            NOT_REFERENCED,
         ),
     )
 
 
 def test_a_reference_to_an_output_at_an_unmarked_group_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(MeasuredParams, 'measured', OUTPUT, _named)
+        _stored(MeasuredParams, 'measured', OUTPUT, _named)
     assert raised.value.errors == (
         (
             ('measured',),
-            'r1.sample is a reference to an output; Measured is written inline, '
-            'since the spec does not mark the place Referenced[...]',
+            NOT_REFERENCED,
         ),
     )
 
 
 def test_a_file_at_a_parameter_typed_a_group_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(MaskParams, 'sample', FILE, _named)
+        _stored(MaskParams, 'sample', FILE, _named)
     assert raised.value.errors == (
-        (('sample',), 'file pid-1 does not fit Sample, which is not a file model'),
+        (('sample',), 'file pid-1: the field is not a file model'),
     )
 
 
 def test_a_reference_at_an_element_of_a_list_parameter_stands_for_one_row() -> None:
-    assert held(MaskParams, 'runs', [FILE], _named) == [FILE.model_dump()]
-    assert held(Params, 'samples', [{'thickness': 2.0}, OUTPUT], _named) == [
+    assert _stored(MaskParams, 'runs', [FILE], _named) == [FILE.model_dump()]
+    assert _stored(Params, 'samples', [{'thickness': 2.0}, OUTPUT], _named) == [
         {'thickness': 2.0},
         OUTPUT.model_dump(),
     ]
@@ -267,7 +296,7 @@ def test_a_reference_at_an_element_of_a_list_parameter_stands_for_one_row() -> N
 
 def test_a_reference_to_a_whole_list_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(MaskParams, 'runs', OUTPUT, _named)
+        _stored(MaskParams, 'runs', OUTPUT, _named)
     assert raised.value.errors == (
         (
             ('runs',),
@@ -279,12 +308,11 @@ def test_a_reference_to_a_whole_list_is_refused() -> None:
 
 def test_a_reference_to_an_output_at_an_unmarked_union_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(Params, 'beam_centre', OUTPUT, _named)
+        _stored(Params, 'beam_centre', OUTPUT, _named)
     assert raised.value.errors == (
         (
             ('beam_centre',),
-            'r1.sample is a reference to an output; GivenCentre | FindCentre is '
-            'written inline, since the spec does not mark the place Referenced[...]',
+            NOT_REFERENCED,
         ),
     )
 
@@ -300,49 +328,66 @@ def test_a_reference_to_an_output_at_an_unmarked_union_is_refused() -> None:
 )
 def test_a_union_with_a_referenced_member_takes_either(name: str, value: Any) -> None:
     form = value if isinstance(value, dict) else value.model_dump()
-    assert held(Params, name, value, _named) == form
+    assert _stored(Params, name, value, _named) == form
 
 
 @pytest.mark.parametrize(
-    ('name', 'value', 'loc'),
+    ('name', 'value', 'loc', 'msg'),
     [
-        ('sample', {'thickness': OUTPUT}, ('sample', 'thickness')),
-        ('reduction', {'angles': [1.0, OUTPUT]}, ('reduction', 'angles', 1)),
-        ('samples', [{'thickness': OUTPUT}], ('samples', 0, 'thickness')),
-        ('beam_centre', {'kind': 'given', 'x': OUTPUT}, ('beam_centre', 'x')),
-        ('measured', {'run': OUTPUT}, ('measured', 'run')),
+        ('sample', {'thickness': OUTPUT}, ('sample', 'thickness'), NOT_REFERENCED),
+        (
+            'reduction',
+            {'angles': [1.0, OUTPUT]},
+            ('reduction', 'angles', 1),
+            NOT_REFERENCED,
+        ),
+        (
+            'samples',
+            [{'thickness': OUTPUT}],
+            ('samples', 0, 'thickness'),
+            NOT_REFERENCED,
+        ),
+        (
+            'beam_centre',
+            {'kind': 'given', 'x': OUTPUT},
+            ('beam_centre', 'x'),
+            NOT_REFERENCED,
+        ),
+        (
+            'measured',
+            {'run': OUTPUT},
+            ('measured', 'run'),
+            NOT_REFERENCED,
+        ),
     ],
 )
-def test_a_reference_to_an_output_inside_a_group_is_refused(
-    name: str, value: Any, loc: Loc
+def test_a_reference_to_an_output_at_a_field_not_typed_referenced_is_refused(
+    name: str, value: Any, loc: Loc, msg: str
 ) -> None:
     model = {'sample': MaskParams, 'measured': MeasuredParams}.get(name, Params)
     with pytest.raises(ParamsError) as raised:
-        held(model, name, value, _named)
-    assert raised.value.errors == (
-        (
-            loc,
-            'r1.sample: a reference to an output fills a whole parameter or a '
-            'whole row, never a field of a group',
-        ),
-    )
+        _stored(model, name, value, _named)
+    assert raised.value.errors == ((loc, msg),)
 
 
 def test_a_file_at_a_field_that_is_not_a_file_model_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(Params, 'reduction', {'angles': [1.0, FILE]}, _named)
-    ((at, msg),) = raised.value.errors
-    assert at == ('reduction', 'angles', 1)
-    assert 'valid number' in msg
+        _stored(Params, 'reduction', {'angles': [1.0, FILE]}, _named)
+    assert raised.value.errors == (
+        (
+            ('reduction', 'angles', 1),
+            'file pid-1: the field is not a file model',
+        ),
+    )
 
 
 def test_a_group_given_inline_is_held_as_the_json_form_of_it_validated() -> None:
-    assert held(Params, 'reduction', {'bins': 3}, _named) == {
+    assert _stored(Params, 'reduction', {'bins': 3}, _named) == {
         'bins': 3,
         'limits': 1.0,
         'angles': [],
     }
-    assert held(Params, 'reduction', Reduction(bins=3), _named) == held(
+    assert _stored(Params, 'reduction', Reduction(bins=3), _named) == _stored(
         Params, 'reduction', {'bins': 3}, _named
     )
 
@@ -363,7 +408,7 @@ def test_a_group_given_inline_is_validated_whole() -> None:
         range: Range
 
     with pytest.raises(ParamsError) as raised:
-        held(RangeParams, 'range', {'start': 10.0, 'stop': 5.0}, _named)
+        _stored(RangeParams, 'range', {'start': 10.0, 'stop': 5.0}, _named)
     ((at, msg),) = raised.value.errors
     assert at == ('range', 'stop')
     assert 'stop must be after start' in msg
@@ -371,14 +416,14 @@ def test_a_group_given_inline_is_validated_whole() -> None:
 
 def test_an_error_inside_a_union_names_its_place_without_the_tag() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(Params, 'beam_centre', {'kind': 'find', 'tolerance': -1.0}, _named)
+        _stored(Params, 'beam_centre', {'kind': 'find', 'tolerance': -1.0}, _named)
     ((at, _),) = raised.value.errors
     assert at == ('beam_centre', 'tolerance')
 
 
 def test_a_file_model_instance_is_held_as_the_reference_to_its_file() -> None:
     ref = FileRef(file='path:mask.xml')
-    held_mask = held(MaskParams, 'mask', MaskFile.local('mask.xml'), _named)
+    held_mask = _stored(MaskParams, 'mask', MaskFile.local('mask.xml'), _named)
     assert held_mask == ref.model_dump()
 
 
@@ -401,24 +446,23 @@ def test_a_file_model_given_inline_is_refused(
     model: type[BaseModel], name: str, value: Any, loc: Loc
 ) -> None:
     with pytest.raises(ParamsError) as raised:
-        held(model, name, value, _named)
+        _stored(model, name, value, _named)
     ((at, msg),) = raised.value.errors
     assert at == loc
     assert 'is not a file; ' in msg
     assert 'is a file model, written as file(...)' in msg
 
 
-def test_a_value_inline_at_a_file_or_an_output_names_both_references() -> None:
+def test_a_value_inline_at_a_file_or_an_output_names_the_sources_taken() -> None:
     class RunOrSample(BaseModel):
         run: RunFile | Referenced[Sample]
 
     with pytest.raises(ParamsError) as raised:
-        held(RunOrSample, 'run', {'thickness': 1.0}, _named)
+        _stored(RunOrSample, 'run', {'thickness': 1.0}, _named)
     assert raised.value.errors == (
         (
             ('run',),
-            "{'thickness': 1.0} is not a file; RunFile | Sample is a file model, "
-            'written as file(...), or a reference to an output',
+            'the field takes a file or a reference to an output',
         ),
     )
 
@@ -431,29 +475,28 @@ def test_a_reference_to_an_output_in_a_json_form_written_inline_is_refused(
     name: str, value: Any, loc: Loc
 ) -> None:
     with pytest.raises(ParamsError) as raised:
-        held(DisguisedParams, name, value, _named)
+        _stored(DisguisedParams, name, value, _named)
     ((at, msg),) = raised.value.errors
     assert at == loc
     assert msg.endswith(
-        'the JSON form of a value written inline holds a reference to an output, '
-        'which fills a whole parameter or a whole row'
+        'the JSON form of a value written inline holds a reference to an output '
+        'that the request did not give'
     )
 
 
 def test_a_value_written_inline_at_a_referenced_place_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(Params, 'mask', {'mask': None}, _named)
+        _stored(Params, 'mask', {'mask': None}, _named)
     assert raised.value.errors == (
         (
             ('mask',),
-            "{'mask': None} is not a reference; Mask is given by reference to an "
-            'output',
+            'is not a reference to an output, as the field is typed Referenced[...]',
         ),
     )
 
 
 def test_a_value_held_inline_is_made_of_its_json_form() -> None:
-    stored = held(Params, 'reduction', {'bins': 3}, _named)
+    stored = _stored(Params, 'reduction', {'bins': 3}, _named)
     assert value_of(Params, 'reduction', stored, _unread, {}) == Reduction(bins=3)
 
 
@@ -511,7 +554,7 @@ class EitherParams(BaseModel):
 
 def test_each_value_is_made_by_the_type_of_its_source() -> None:
     # Computed, the first member, could validate the value written inline too.
-    stored = held(EitherParams, 'centre', {'x': 1.0}, _named)
+    stored = _stored(EitherParams, 'centre', {'x': 1.0}, _named)
     assert type(value_of(EitherParams, 'centre', stored, _unread, {})) is Typed
     ref = OUTPUT.model_dump(by_alias=True)
     data = value_of(EitherParams, 'centre', ref, lambda ref: Computed(x=1.0), {})
@@ -562,12 +605,12 @@ class Checked(BaseModel):
 
 
 def test_the_validators_of_a_file_model_at_a_place_run_when_it_is_written() -> None:
-    assert held(Checked, 'mask', FILE, _named) == FILE.model_dump()
+    assert _stored(Checked, 'mask', FILE, _named) == FILE.model_dump()
     other = FileRef(file='pid-2')
     places = (('mask', other, ('mask',)), ('masks', [other], ('masks', 0)))
     for name, value, loc in places:
         with pytest.raises(ParamsError) as raised:
-            held(Checked, name, value, _named)
+            _stored(Checked, name, value, _named)
         ((at, msg),) = raised.value.errors
         assert at == loc
         assert f'only {FILE_ID} is allowed here' in msg
@@ -584,21 +627,8 @@ class Found(BaseModel):
     found: TaggedCentre
 
 
-@pytest.mark.parametrize(
-    ('annotation', 'field'),
-    [
-        (Centre | Referenced[TaggedCentre], Field()),
-        (
-            GivenCentre | FindCentre | Referenced[TaggedCentre],
-            Field(discriminator='kind'),
-        ),
-        (GivenCentre | Referenced[TaggedCentre], Field(discriminator='kind')),
-    ],
-)
-def test_a_discriminator_on_the_inline_union_or_the_whole_union_takes_either_way(
-    annotation: Any, field: Any
-) -> None:
-    params = create_model('Params', centre=(annotation, field))
+def test_a_discriminator_on_the_union_written_inline_takes_either_way() -> None:
+    params = create_model('Params', centre=(Centre | Referenced[TaggedCentre], Field()))
     WorkflowSpec(
         name='centre',
         version=1,
@@ -607,8 +637,211 @@ def test_a_discriminator_on_the_inline_union_or_the_whole_union_takes_either_way
         params=params,
         outputs=Found,
     )
-    stored = held(params, 'centre', {'kind': 'given', 'x': 1.0}, _named)
+    stored = _stored(params, 'centre', {'kind': 'given', 'x': 1.0}, _named)
     assert value_of(params, 'centre', stored, _unread, {}) == GivenCentre(x=1.0)
     found = TaggedCentre(x=2.0)
-    stored = held(params, 'centre', OUTPUT, _named)
+    stored = _stored(params, 'centre', OUTPUT, _named)
     assert value_of(params, 'centre', stored, lambda ref: found, {}) is found
+
+
+@pytest.mark.parametrize(
+    'annotation',
+    [
+        GivenCentre | FindCentre | Referenced[TaggedCentre],
+        GivenCentre | Referenced[TaggedCentre],
+    ],
+)
+def test_a_discriminator_on_a_whole_union_with_a_referenced_member_is_refused(
+    annotation: Any,
+) -> None:
+    params = create_model('Params', centre=(annotation, Field(discriminator='kind')))
+    with pytest.raises(ValueError, match='is on the union written inline'):
+        WorkflowSpec(
+            name='centre',
+            version=1,
+            title='Centre',
+            description='A centre',
+            params=params,
+            outputs=Found,
+        )
+
+
+class Window(BaseModel):
+    start: float = 0.0
+    stop: float | None = None
+
+
+class Transmission(BaseModel, arbitrary_types_allowed=True):
+    fraction: sc.Variable
+
+
+class Specimen(BaseModel):
+    run: RunFile
+    window: Window = Window()
+    windows: list[Window] = []
+    transmission: Referenced[Transmission] | None = None
+    centre: Referenced[Computed] | Typed = Typed()
+
+
+class SpecimenParams(BaseModel):
+    specimen: Specimen
+    specimens: list[Specimen] = []
+
+
+class SpecimenOutputs(BaseModel, arbitrary_types_allowed=True):
+    transmission: Transmission
+    centre: Computed
+
+
+def _spec(params: type[BaseModel]) -> WorkflowSpec:
+    return WorkflowSpec(
+        name='specimen',
+        version=1,
+        title='Specimen',
+        description='A specimen',
+        params=params,
+        outputs=SpecimenOutputs,
+    )
+
+
+def test_a_group_holds_groups_and_lists_of_groups_written_inline() -> None:
+    _spec(SpecimenParams)
+    value = {
+        'run': FILE,
+        'window': {'start': 1.0, 'stop': 2.0},
+        'windows': [{'stop': None}, {'start': 3.0}],
+    }
+    stored = _stored(SpecimenParams, 'specimen', value, _named)
+    assert stored['window'] == {'start': 1.0, 'stop': 2.0}
+    assert stored['windows'] == [
+        {'start': 0.0, 'stop': None},
+        {'start': 3.0, 'stop': None},
+    ]
+    made = value_of(SpecimenParams, 'specimen', stored, _unread, {})
+    assert made.window == Window(start=1.0, stop=2.0)
+    assert made.windows == [Window(), Window(start=3.0)]
+
+
+def test_a_field_of_a_nested_group_is_validated_at_its_position() -> None:
+    value = {'run': FILE, 'windows': [{}, {'stop': 'x'}]}
+    with pytest.raises(ParamsError) as raised:
+        _stored(SpecimenParams, 'specimen', value, _named)
+    ((at, msg),) = raised.value.errors
+    assert at == ('specimen', 'windows', 1, 'stop')
+    assert 'valid number' in msg
+
+
+def test_a_field_typed_x_or_none_takes_none_or_x() -> None:
+    for stop in (None, 2.0):
+        stored = _stored(
+            SpecimenParams, 'specimen', {'run': FILE, 'window': {'stop': stop}}, _named
+        )
+        made = value_of(SpecimenParams, 'specimen', stored, _unread, {})
+        assert made.window.stop == stop
+
+
+def test_a_reference_at_a_field_of_a_row_is_replaced_by_its_data() -> None:
+    data = Transmission(fraction=sc.scalar(0.5))
+    rows = [{'run': FILE, 'transmission': OUTPUT}, {'run': FILE}]
+    stored = _stored(SpecimenParams, 'specimens', rows, _named)
+    assert stored[0]['transmission'] == OUTPUT.model_dump()
+    made = value_of(SpecimenParams, 'specimens', stored, lambda ref: data, {})
+    assert made[0].transmission is data
+    assert made[1].transmission is None
+
+
+def test_a_field_typed_referenced_or_a_group_takes_either_by_its_source() -> None:
+    # Computed, the referenced member, has the fields of Typed, and comes first.
+    computed = Computed(x=7.0)
+    for centre, made_type in ((OUTPUT, Computed), ({'x': 1.0}, Typed), ({}, Typed)):
+        value = {'run': FILE, 'centre': centre}
+        stored = _stored(SpecimenParams, 'specimen', value, _named)
+        made = value_of(SpecimenParams, 'specimen', stored, lambda ref: computed, {})
+        assert type(made.centre) is made_type
+    assert made.centre == Typed()
+
+
+def test_a_group_that_holds_a_reference_runs_its_validators_when_it_runs() -> None:
+    class Checked(BaseModel):
+        transmission: Referenced[Transmission]
+
+        @model_validator(mode='after')
+        def _dimensionless(self) -> 'Checked':
+            if self.transmission.fraction.unit != sc.units.one:
+                raise ValueError('a fraction is dimensionless')
+            return self
+
+    class CheckedParams(BaseModel):
+        checked: Checked
+
+    _spec(CheckedParams)
+    stored = _stored(CheckedParams, 'checked', {'transmission': OUTPUT}, _named)
+    good = Transmission(fraction=sc.scalar(0.5))
+    made = value_of(CheckedParams, 'checked', stored, lambda ref: good, {})
+    assert made.transmission is good
+    bad = Transmission(fraction=sc.scalar(0.5, unit='m'))
+    with pytest.raises(ParamsError, match='a fraction is dimensionless'):
+        value_of(CheckedParams, 'checked', stored, lambda ref: bad, {})
+
+
+def test_a_value_written_inline_at_a_field_typed_referenced_is_refused() -> None:
+    value = {'run': FILE, 'transmission': {'fraction': 1.0}}
+    with pytest.raises(ParamsError) as raised:
+        _stored(SpecimenParams, 'specimen', value, _named)
+    assert raised.value.errors == (
+        (
+            ('specimen', 'transmission'),
+            'is not a reference to an output, as the field is typed Referenced[...]',
+        ),
+    )
+
+
+def test_each_reference_to_an_output_is_given_with_the_type_its_data_fit() -> None:
+    other = OutputRef(record='r2', output='transmission')
+    rows = [
+        {'run': FILE, 'transmission': other},
+        {'run': FILE, 'centre': OUTPUT},
+        {'run': FILE, 'centre': {'x': 1.0}},
+    ]
+    _, reads = held(SpecimenParams, 'specimens', rows, _named)
+    assert reads == [
+        (('specimens', 0, 'transmission'), other, Transmission),
+        (('specimens', 1, 'centre'), OUTPUT, Computed),
+    ]
+    _, reads = held(Params, 'samples', [{'thickness': 2.0}, OUTPUT], _named)
+    assert reads == [(('samples', 1), OUTPUT, Sample)]
+
+
+def test_a_group_that_contains_itself_is_refused() -> None:
+    class Node(BaseModel):
+        child: 'Node | None' = None
+
+    class Outer(BaseModel):
+        nodes: list[Node] = []
+
+    class NodeParams(BaseModel):
+        outer: Outer
+
+    with pytest.raises(
+        ValueError, match=r'NodeParams\.outer: Outer\.nodes: .*Node contains itself'
+    ):
+        _spec(NodeParams)
+
+
+def test_the_default_of_a_group_that_holds_a_reference_is_held_as_its_form() -> None:
+    class Holder(BaseModel):
+        transmission: Referenced[Transmission] | None = None
+        x: float = 1.0
+
+    class Outer(BaseModel):
+        holder: Holder = Holder(x=2.0)
+        holders: list[Holder] = [Holder()]
+
+    class OuterParams(BaseModel):
+        outer: Outer
+
+    _spec(OuterParams)
+    assert _stored(OuterParams, 'outer', {}, _named) == {
+        'holder': {'transmission': None, 'x': 2.0},
+        'holders': [{'transmission': None, 'x': 1.0}],
+    }

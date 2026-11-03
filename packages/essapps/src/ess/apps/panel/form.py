@@ -63,8 +63,11 @@ set to, or of the default, which its label names: ``Start (UTC)``. A time
 without a zone stays without one, and a time of ``AwareDatetime`` without a
 value is in UTC. The fraction of a second of the value is kept.
 
-Not covered: a list parameter of a union of groups, whose row would pick its
-alternative, and a list of file models at a field of a group.
+Not covered, each raising ``NotImplementedError`` that names the parameter
+or the field: a parameter that is not a group; a list parameter of a union
+of groups, whose row would pick its alternative; and at a field of a group,
+a list of file models, a group, a union of groups, ``Referenced[...]``,
+``X | None`` but of a file model, and a list of any of these.
 """
 
 from __future__ import annotations
@@ -88,6 +91,7 @@ from ess.spec import (
     WorkflowSpec,
     field_types,
     places,
+    request_types,
 )
 from ess.spec.refs import Loc, as_ref
 
@@ -118,10 +122,15 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice |
     info = model.model_fields[name]
     label = places.title(name, info)
     tp, none, metadata = places.root_type(model, name)
+    inline, inline_metadata, _ = places.split(tp, *metadata)
+    union = places.alternatives(inline, *inline_metadata)
+    if union is None and inline is not None and not field_types.is_group(inline):
+        raise NotImplementedError(
+            f'{name}: a parameter of {field_types.type_name(inline)}, not a group'
+        )
     if not field_types.is_list(model, name):
         return _choice(label, tp, none, metadata, _default(info), listing)
-    inline, inline_metadata, _ = places.split(tp, *metadata)
-    if places.alternatives(inline, *inline_metadata) is not None:
+    if union is not None:
         raise NotImplementedError(f'{name}: a list of a union of groups')
     return _Rows(label, tp, none, metadata, _default(info), listing)
 
@@ -163,9 +172,20 @@ def _field(
 ) -> _Scalar | _Scalars | _File:
     """
     The input of the field ``name`` of ``group``: of a scalar or a list of
-    scalars, or the picker of a file model.
+    scalars, or the picker of a file model, possibly typed ``X | None``.
     """
     info = group.model_fields[name]
+    tp, none, item_none = field_types.taken_apart(info.annotation)
+    if (
+        request_types.holds_ref(info.rebuild_annotation())
+        or item_none
+        or not (
+            field_types.is_file_model(tp) or (field_types.is_scalar(tp) and not none)
+        )
+    ):
+        raise NotImplementedError(
+            f'{name}: a field of {field_types.type_name(info.annotation)}'
+        )
     if (model := field_types.file_model(info.annotation)) is not None:
         if field_types.is_list(group, name):
             raise NotImplementedError(f'{name}: a list of file models at a field')

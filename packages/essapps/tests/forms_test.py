@@ -23,7 +23,7 @@ from ess.spec import FileModel, OutputRef, Referenced, WorkflowSpec, function_bi
 
 
 class Blob:
-    """A data value: a type that is not a scalar or a file model."""
+    """A type that is not a field type: only the T of Referenced[T] holds it."""
 
     def __init__(self, value: float) -> None:
         self.value = value
@@ -35,8 +35,8 @@ class Shift(BaseModel):
 
 class MeasuredTransmission(BaseModel, arbitrary_types_allowed=True):
     """
-    A group that holds a data value, so a reference fills its place,
-    ``Referenced[...]``.
+    A group that holds a type that is not a field type, so a reference fills
+    the field that holds it, ``Referenced[...]``.
     """
 
     fraction: Blob
@@ -370,31 +370,45 @@ def test_a_value_reaches_the_binding_as_the_member_of_its_source(
     assert client.output(by_reference, 'name') == 'Shift'
 
 
+NOT_REFERENCED = 'is a reference to an output; the field is not typed Referenced[...]'
+WHOLE_LIST = (
+    'is a reference to a whole list; a reference stands for one element of a list'
+)
+
+
 @pytest.mark.parametrize(
-    ('spec', 'params', 'place'),
+    ('spec', 'params', 'at', 'why'),
     [
-        (ADD, lambda ref: {'terms': {'offset': ref}}, 'terms.offset'),
-        (ADD, lambda ref: {'terms': {'values': ref}}, 'terms.values'),
-        (ADD, lambda ref: {'terms': {'values': [ref]}}, 'terms.values[0]'),
-        (ADD, lambda ref: {'shift': {'offset': ref}}, 'shift.offset'),
-        (RUNS, lambda ref: {'runs': [{'number': ref}]}, 'runs[0].number'),
+        (ADD, lambda ref: {'terms': {'offset': ref}}, 'terms.offset', NOT_REFERENCED),
+        (ADD, lambda ref: {'terms': {'values': ref}}, 'terms.values', WHOLE_LIST),
+        (
+            ADD,
+            lambda ref: {'terms': {'values': [ref]}},
+            'terms.values[0]',
+            NOT_REFERENCED,
+        ),
+        (ADD, lambda ref: {'shift': {'offset': ref}}, 'shift.offset', NOT_REFERENCED),
+        (
+            RUNS,
+            lambda ref: {'runs': [{'number': ref}]},
+            'runs[0].number',
+            NOT_REFERENCED,
+        ),
     ],
 )
-def test_a_reference_to_an_output_inside_a_group_is_refused(
+def test_a_reference_to_an_output_at_a_field_not_typed_referenced_is_refused(
     client: Client,
     loaded: Record,
     spec: WorkflowSpec[Any, Any],
     params: Callable[[OutputRef], dict[str, Any]],
-    place: str,
+    at: str,
+    why: str,
 ) -> None:
     ref = loaded.ref('value')
 
     with pytest.raises(SubmitError) as raised:
         client.submit(spec, params=params(ref))
-    assert str(raised.value) == (
-        f'{place}: {ref}: a reference to an output fills a whole parameter or a '
-        'whole row, never a field of a group'
-    )
+    assert str(raised.value) == f'{at}: {ref} {why}'
 
 
 def test_a_reference_at_an_element_of_a_list_stands_for_one_row(
@@ -482,8 +496,7 @@ def test_a_file_for_a_whole_group_is_refused(
 ) -> None:
     with pytest.raises(
         SubmitError,
-        match=rf'^{place}: file run:\d does not fit Run, which is not a file '
-        'model',
+        match=rf'^{place}: file run:\d: the field is not a file model$',
     ):
         client.submit(RUNS, params=params)
 
@@ -511,9 +524,7 @@ def test_a_value_at_a_group_that_is_not_an_object_is_refused(
         client.submit(RUNS, params=params)
     (error,) = raised.value.errors
     assert error.loc == place
-    assert error.msg.endswith(
-        'is not an object; a group is written as an object of its fields'
-    )
+    assert error.msg == 'Input should be an object'
 
 
 def test_a_reference_at_a_tag_is_refused(client: Client, loaded: Record) -> None:
@@ -522,8 +533,10 @@ def test_a_reference_at_a_tag_is_refused(client: Client, loaded: Record) -> None
     with pytest.raises(SubmitError) as raised:
         client.submit(CENTRED, params={'beam_centre': centre})
     (error,) = raised.value.errors
-    assert error.loc == ('beam_centre', 'kind')
-    assert error.msg.endswith('a tag is written inline, never as a reference')
+    assert error.loc == ('beam_centre',)
+    assert error.msg.endswith(
+        "found using 'kind' does not match any of the expected tags: 'given', 'find'"
+    )
 
 
 def test_a_union_value_without_its_tag_is_refused(client: Client) -> None:
@@ -531,18 +544,23 @@ def test_a_union_value_without_its_tag_is_refused(client: Client) -> None:
         client.submit(CENTRED, params={'beam_centre': {'tolerance': 0.5}})
     (error,) = raised.value.errors
     assert error.loc == ('beam_centre',)
-    assert error.msg == "the tag 'kind' is not given; it is one of ['given', 'find']"
+    assert error.msg == "Unable to extract tag using discriminator 'kind'"
 
 
 @pytest.mark.parametrize('tag', [['find'], {'kind': 'find'}, 1, 'other'])
-def test_a_value_that_is_no_tag_is_refused_at_the_tag(client: Client, tag: Any) -> None:
+def test_a_value_that_is_no_tag_is_refused_at_the_union(
+    client: Client, tag: Any
+) -> None:
     centre = {'kind': tag, 'tolerance': 0.5}
 
     with pytest.raises(SubmitError) as raised:
         client.submit(CENTRED, params={'beam_centre': centre})
     (error,) = raised.value.errors
-    assert error.loc == ('beam_centre', 'kind')
-    assert error.msg == f"{tag!r} is not a tag, one of ['given', 'find']"
+    assert error.loc == ('beam_centre',)
+    assert error.msg == (
+        f"Input tag '{tag}' found using 'kind' does not match any of the expected "
+        "tags: 'given', 'find'"
+    )
 
 
 def test_a_group_written_inline_is_validated_whole_when_submitted(
@@ -636,10 +654,7 @@ def test_no_reference_fits_a_union_that_the_spec_does_not_mark(
         client.submit(CENTRED, params=params(ref))
     (error,) = raised.value.errors
     assert error.loc == place
-    assert error.msg == (
-        f'{ref} is a reference to an output; BeamCentre | FindCentre is written '
-        'inline, since the spec does not mark the place Referenced[...]'
-    )
+    assert error.msg == f'{ref} {NOT_REFERENCED}'
 
 
 def test_a_union_marked_referenced_takes_an_alternative_or_a_reference(
@@ -675,10 +690,7 @@ def test_a_reference_is_refused_at_a_group_that_the_spec_does_not_mark(
         client.submit(ADD, params={'terms': ref})
     (error,) = raised.value.errors
     assert error.loc == ('terms',)
-    assert error.msg == (
-        f'{ref} is a reference to an output; Terms is written inline, since the '
-        'spec does not mark the place Referenced[...]'
-    )
+    assert error.msg == f'{ref} {NOT_REFERENCED}'
 
 
 def test_an_error_inside_a_union_names_its_place_without_the_tag(
@@ -730,7 +742,7 @@ def test_a_key_names_an_element_of_an_output(client: Client, loaded: Record) -> 
     assert client.output(computed, 'value') == 2.0
 
 
-def test_a_group_that_holds_a_data_value_is_filled_by_reference_only(
+def test_a_field_typed_referenced_is_filled_by_reference_only(
     client: Client, loaded: Record
 ) -> None:
     computed = client.compute(ADD, params={'transmission': loaded.ref('transmission')})
@@ -741,8 +753,8 @@ def test_a_group_that_holds_a_data_value_is_filled_by_reference_only(
     for inline in ({'fraction': 1.0}, MeasuredTransmission(fraction=Blob(1.0))):
         with pytest.raises(
             SubmitError,
-            match=r'^transmission: .* is not a reference; MeasuredTransmission is '
-            r'given by reference to an output$',
+            match=r'^transmission: is not a reference to an output, as the field is '
+            r'typed Referenced\[\.\.\.\]$',
         ):
             client.submit(ADD, params={'transmission': inline})
 
@@ -764,7 +776,7 @@ def test_a_reference_must_fit_its_parameter(
 
 def test_a_file_fits_a_file_model_only(client: Client) -> None:
     with pytest.raises(
-        SubmitError, match=r'^shift: file run:1 does not fit Shift, which is not'
+        SubmitError, match=r'^shift: file run:1: the field is not a file model$'
     ):
         client.submit(ADD, params={'shift': file_ref(run=1)})
 
@@ -814,56 +826,88 @@ def _failed(client: Client, record: Record) -> str:
     return client.failure(record)
 
 
-def test_an_inline_value_and_a_reference_to_equal_data_are_one_row(
+def test_an_inline_value_and_a_reference_to_equal_data_are_two_rows(
     client: Client, loaded: Record
 ) -> None:
+    # Rows are distinct by what the record stores: a reference by its record
+    # and output, not by the data it reads.
     summed = client.accumulator(Template(SUM, blanks=('part',)))
     summed.push(part=[loaded.ref('shift')])
-    assert client.output(summed, 'value') == 1.0
-
-    summed.push(part=[Shift(offset=2.0), Shift(offset=1.0)])  # distinct as held
-    with pytest.raises(
-        LookupError,
-        match=r'push 1 failed: part\[2\]: repeats part\[0\], \{"offset":1.0\}$',
-    ):
-        client.output(summed, 'value')
-    plain = client.submit(
+    summed.push(part=[Shift(offset=1.0)])
+    assert client.output(summed, 'value') == 2.0
+    with pytest.raises(SubmitError, match=r'part\[2\]: repeats part\[0\]'):
+        summed.push(part=[loaded.ref('shift')])
+    plain = client.compute(
         SUM, params={'part': [Shift(offset=1.0), loaded.ref('shift')]}
     )
-    assert _failed(client, plain) == 'part[1]: repeats part[0], {"offset":1.0}'
+    assert client.output(plain, 'value') == 2.0
 
 
-def test_references_to_two_records_with_equal_data_are_one_row(
+def test_references_to_two_records_with_equal_data_are_two_rows(
     client: Client, loaded: Record
 ) -> None:
     again = client.compute(LOAD, params={'sample': file_ref(run=1)})
-    plain = client.submit(
+    plain = client.compute(
         SUM, params={'part': [loaded.ref('shift'), again.ref('shift')]}
     )
 
-    assert _failed(client, plain) == 'part[1]: repeats part[0], {"offset":1.0}'
+    assert client.output(plain, 'value') == 2.0
 
 
-def test_rows_read_are_compared_as_the_element_type_dumps_them(
-    client: Client, loaded: Record
+class Sample(BaseModel):
+    """A row of a table with a field that a reference fills."""
+
+    run: SampleRun
+    transmission: Referenced[MeasuredTransmission]
+
+
+class SamplesParams(BaseModel):
+    samples: list[Sample]
+
+
+SAMPLES = _spec('samples', SamplesParams, Value, tables=('samples',))
+
+
+def test_a_reference_at_a_field_of_a_row_reaches_the_binding_as_its_data(
+    tmp_path: Path,
 ) -> None:
-    plain = client.submit(
-        SHIFTS, params={'shifts': [Shift(offset=1.0), loaded.ref('labelled')]}
+    files = FakeFiles(proposal='p1', directory=tmp_path)
+    files.measure(1, 1.0)
+    made: list[MeasuredTransmission] = []
+    given: list[MeasuredTransmission] = []
+
+    def measure(params: LoadParams) -> LoadOutputs:
+        outputs = load(params)
+        made.append(outputs.transmission)
+        return outputs
+
+    def samples(params: SamplesParams) -> Value:
+        given.extend(row.transmission for row in params.samples)
+        return Value(value=sum(r.transmission.fraction.value for r in params.samples))
+
+    backend = Backend(
+        files, [function_binding(LOAD, measure), function_binding(SAMPLES, samples)]
     )
-
-    assert _failed(client, plain) == 'shifts[1]: repeats shifts[0], {"offset":1.0}'
-
-
-def test_a_stage_call_with_a_repeated_row_read_fails(
-    client: Client, loaded: Record
-) -> None:
-    stage = client.stage(Template(STAGED_SUM, blanks=('part',)))
-    distinct = client.submit(
-        stage, params={'part': [loaded.ref('shift'), Shift(offset=2.0)]}
-    )
-    repeated = client.submit(
-        stage, params={'part': [loaded.ref('shift'), Shift(offset=1.0)]}
-    )
-
-    assert client.output(distinct, 'value') == 3.0
-    assert _failed(client, repeated) == 'part[1]: repeats part[0], {"offset":1.0}'
+    client = Client(backend, proposal='p1', submitter='anna')
+    try:
+        loaded = client.compute(LOAD, params={'sample': file_ref(run=1)})
+        row = {'run': file_ref(run=1), 'transmission': loaded.ref('transmission')}
+        computed = client.submit(SAMPLES, params={'samples': [row]})
+        assert client.output(computed, 'value') == 1.0
+        assert computed.request.params['samples'][0]['transmission'] == loaded.ref(
+            'transmission'
+        )
+        (data,) = made
+        assert given == [data]
+        assert given[0] is data
+        with pytest.raises(SubmitError) as raised:
+            client.submit(
+                SAMPLES,
+                params={'samples': [{**row, 'transmission': loaded.ref('shift')}]},
+            )
+        assert str(raised.value).startswith(
+            f"samples[0].transmission: {loaded.ref('shift')}, of type Shift, does "
+            'not fit MeasuredTransmission'
+        )
+    finally:
+        backend.close()

@@ -11,9 +11,10 @@ worker, the backend reads the data each reference names and validates them
 method for each thing checked::
 
     checks = Checks(IOFQ, files)
-    request = checks.request(request, proposal)            # a plain request
-    template, fixed = checks.template(template, proposal)  # a stage or an accumulator
-    rows = checks.push(blanks, rows, proposal)
+    request, reads = checks.request(request, proposal)  # a plain request
+    # a stage or an accumulator
+    template, fixed, reads = checks.template(template, proposal)
+    rows, reads = checks.push(blanks, rows, proposal)
     refused = checks.state(plain, blanks)                  # at a pin or a read
 
 The rules of what a request may write are stated in
@@ -24,8 +25,9 @@ request, of which a template, a push, and a state check a part:
   be given. One left out takes its default.
 - *Values.* Each parameter, or each row of a list parameter, is validated
   by its request type (see :func:`ess.spec.request_types.held`). It refuses
-  what a request may not write there, validates each group, row, and file
-  whole from its JSON form, and returns what the record stores. A field
+  what a request may not write there, validates each file, and each group
+  that holds no reference to an output, whole from its JSON form, and
+  returns what the record stores. A field
   that a model lacks is refused, since validating would drop it silently.
   The JSON form of a value must read back as the value, since the call
   phase makes the value from it (see :func:`ess.spec.field_types.inline`).
@@ -35,9 +37,11 @@ request, of which a template, a push, and a state check a part:
   be allowed to read it, and its metadata must fit the file model, as a
   :class:`~.files.Selector` of the model's metadata matches it. The record
   stores the file's identity.
-- *References to outputs.* The backend checks each reference to a record or
-  an accumulator, since it knows what the client may read (see
-  :func:`check_fit`): the output exists and its type fits the parameter.
+- *References to outputs.* Each check returns the references to outputs
+  in the values, each with its position and the type its data must fit
+  (see :data:`ess.spec.request_types.Reads`). The backend checks each,
+  since it knows what the client may read (see :func:`check_fit`): the
+  output exists and its type fits the field.
 - *Table rules.* The number of rows of a table meets its length
   constraints, and its rows are distinct, compared as the record stores
   them: a file by its identity, a reference to an output by record, output,
@@ -70,6 +74,7 @@ from ess.spec import (
 )
 from ess.spec.binding import fixed_values
 from ess.spec.refs import Loc, ParamsError
+from ess.spec.request_types import Reads
 
 from .errors import SubmitError
 from .files import FileSource, Selector, readable
@@ -89,23 +94,23 @@ class Checks:
         self.id = SpecId.of(spec)
         self._files = files
 
-    def request(self, request: Request, proposal: str) -> Request:
+    def request(self, request: Request, proposal: str) -> tuple[Request, Reads]:
         """
         The request as the record holds it: names resolved, defaults filled
-        in, inline values in JSON's types.
+        in, inline values in JSON's types; and the references to outputs in it.
         """
         spec = self.spec
-        params = self._values(_fixed(spec, request.params, ()), proposal)
+        params, reads = self._values(_fixed(spec, request.params, ()), proposal)
         _rows(spec, params, spec.tables)
-        return Request(self.id, params=params)
+        return Request(self.id, params=params), reads
 
     def template(
         self, template: Template, proposal: str
-    ) -> tuple[Template, dict[str, Any]]:
+    ) -> tuple[Template, dict[str, Any], Reads]:
         """
         The template as given, with file names resolved, as the stage or
-        the accumulator holds it, and its fixed values by name, defaults
-        filled in.
+        the accumulator holds it, its fixed values by name, defaults filled
+        in, and the references to outputs in these.
 
         A blank is a parameter, a table among them. A parameter in neither
         the values nor the blanks takes its default, so it must have one. Each
@@ -114,16 +119,17 @@ class Checks:
         """
         spec, blanks = self.spec, template.blanks
         given = {n: v for n, v in template.params.items() if n not in blanks}
-        fixed = self._values(_fixed(spec, given, blanks), proposal)
+        fixed, reads = self._values(_fixed(spec, given, blanks), proposal)
         _rows(spec, fixed, [t for t in spec.tables if t not in blanks])
         stored = Template(self.id, params={n: fixed[n] for n in given}, blanks=blanks)
-        return stored, fixed
+        return stored, fixed, reads
 
     def push(
         self, blanks: Collection[str], rows: Mapping[str, Any], proposal: str
-    ) -> dict[str, list[Any]]:
+    ) -> tuple[dict[str, list[Any]], Reads]:
         """
-        The rows of a push by the name of their table, as the log holds them.
+        The rows of a push by the name of their table, as the log holds them,
+        and the references to outputs in them.
 
         A push gives one or more rows of each of one or more of the
         ``blanks``, tables. Each row is checked by its table's element type,
@@ -157,20 +163,27 @@ class Checks:
             return str(error)
         return None
 
-    def _values(self, values: Mapping[str, Any], proposal: str) -> dict[str, Any]:
-        """``values`` by name as the record holds them (see :meth:`_value`)."""
-        return {
-            name: self._value(name, value, proposal) for name, value in values.items()
-        }
-
-    def _value(self, name: str, value: Any, proposal: str) -> Any:
+    def _values(
+        self, values: Mapping[str, Any], proposal: str
+    ) -> tuple[dict[str, Any], Reads]:
         """
-        The value of parameter ``name`` as the record holds it: at each place,
-        the JSON form of an inline value, each file resolved, a reference to
-        an output, or ``None`` (see :func:`ess.spec.request_types.held`).
+        ``values`` by name as the record holds them, and the references to
+        outputs in them (see :meth:`_value`).
+        """
+        stored, reads = {}, []
+        for name, value in values.items():
+            stored[name], found = self._value(name, value, proposal)
+            reads.extend(found)
+        return stored, reads
+
+    def _value(self, name: str, value: Any, proposal: str) -> tuple[Any, Reads]:
+        """
+        The value of parameter ``name`` as the record holds it, the JSON form
+        of an inline value with each file resolved, and the references to
+        outputs in it (see :func:`ess.spec.request_types.held`).
         """
         try:
-            stored = request_types.held(
+            stored, reads = request_types.held(
                 self.spec.params,
                 name,
                 value,
@@ -184,7 +197,7 @@ class Checks:
             and (need := _length_problem(self.spec, name, len(stored)))
         ):
             raise SubmitError.at((name,), f'{_rows_text(len(stored))}; it needs {need}')
-        return stored
+        return stored, reads
 
     def _file(self, name: str, model: type[FileModel], proposal: str) -> str:
         """

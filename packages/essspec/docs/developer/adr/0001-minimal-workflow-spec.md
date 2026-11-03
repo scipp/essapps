@@ -562,10 +562,9 @@ development branch is honest about what ran. The interface version stays
 
 ### Shared parameter vocabulary, scipp-free
 
-`ess.spec.parameters` provides constrained unit enums, range/edges models with
-cross-field validation (`stop > start`, log-scale positivity) — the models
-that esslivedata and package code also define — and
-`Quantity`. They contain no scipp: conversion of validated values into scipp
+`ess.spec.parameters` provides constrained unit enums and range/edges models
+with cross-field validation (`stop > start`, log-scale positivity), the models
+that esslivedata and package code also define. They contain no scipp: conversion of validated values into scipp
 objects (`edges_to_variable`, `range_to_variables`) lives in
 `ess.spec.conversions`, called by providers of the workflow that take the
 model. This keeps every parameter JSON-Schema-clean, and `ess.spec` importable

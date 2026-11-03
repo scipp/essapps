@@ -722,7 +722,7 @@ def test_a_stage_refuses_a_template_that_a_request_would_refuse(
         r'sample: unknown file run:9': Template(
             SCALE, params={'sample': file(run=9)}, blanks=('scaling',)
         ),
-        r'source: file .* does not fit Amount': Template(
+        r'source: file .*: the field is not a file model': Template(
             SHIFT, params={'source': file(run=1)}, blanks=('shift',)
         ),
         f'source: record {cancelled.id} cancelled': Template(

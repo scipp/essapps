@@ -18,9 +18,9 @@ apart::
 :func:`fits` says whether data of one type can be the value of a field of
 another, so that an output of one spec can fill a parameter of another.
 :func:`model_of` makes a model of one field, which validates a value, or a
-row of a list parameter, by that field alone. :func:`inline` uses it to
-validate a value from its JSON form in the request phase, and
-:func:`ess.spec.places.validated` to validate data, as a binding takes it.
+row of a list parameter, by that field alone, as
+:func:`ess.spec.places.validated` does. :func:`inline` validates a value
+of a model of one field from its JSON form in the request phase.
 The rules these serve are stated in :mod:`ess.spec._workflow_spec`.
 """
 
@@ -31,6 +31,7 @@ import functools
 import operator
 from collections.abc import Iterable, Iterator
 from datetime import datetime
+from enum import Enum
 from types import NoneType, UnionType
 from typing import (
     Annotated,
@@ -196,6 +197,23 @@ def is_file_model(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, FileModel)
 
 
+def is_scalar(tp: Any) -> bool:
+    """
+    Whether ``tp`` is a scalar, by the type alone: a type whose JSON form is
+    a number, a string, or a bool; a ``Literal`` of such values, not of enum
+    members; or an enum whose values are such.
+    """
+    if tp in (int, float, str, bool, *TIMES):
+        return True
+    if get_origin(tp) is Literal:
+        values = get_args(tp)
+    elif isinstance(tp, type) and issubclass(tp, Enum):
+        values = tuple(member.value for member in tp)
+    else:
+        return False
+    return all(type(v) in (str, int, float, bool) for v in values)
+
+
 def file_model(annotation: Any) -> Any:
     """
     The file model of a field typed ``annotation``, ``X``, ``X | None``,
@@ -309,37 +327,34 @@ def is_list(model: type[BaseModel], name: str) -> bool:
     return get_origin(model.model_fields[name].annotation) is list
 
 
-def json_form(
-    model: type[BaseModel], name: str, value: Any, whole: bool = False
-) -> Any:
+def json_form(one: type[BaseModel], name: str, value: Any) -> Any:
     """
-    The JSON form of ``value``, a valid value, or row, of the field ``name``
-    of ``model`` (see :func:`model_of`), as its declared type dumps it to
+    The JSON form of ``value``, a valid value of the field ``name`` of
+    ``one``, a model of that field alone, as its declared type dumps it to
     JSON and JSON reads back: an instance of a subclass of a model type
     without the subclass's fields, and a number that is not finite as
     ``None``.
     """
-    made = model_of(model, name, whole).model_construct(**{name: value})
+    made = one.model_construct(**{name: value})
     return from_json(made.model_dump_json(by_alias=True))[name]
 
 
 def inline(
-    model: type[BaseModel],
+    one: type[BaseModel],
     name: str,
     value: Any,
-    whole: bool = False,
     context: dict[str, Any] | None = None,
-) -> Any:
+) -> tuple[Any, Any]:
     """
-    The JSON form of ``value`` validated, as the record stores it. ``value``
-    is a value of the field ``name`` of ``model``, or of a row of it unless
-    ``whole`` (see :func:`model_of`).
+    ``value`` validated, and its JSON form, as the record stores it. ``value``
+    is a value of the field ``name`` of ``one``, a model of that field alone,
+    such as the request type of a parameter.
 
     ``value`` is plain data, such as :func:`ess.spec.request_types.held` makes of
     Python objects. It is validated from its JSON form, with ``context``. A
     field that a model lacks is refused at any depth, since validating would
     drop it silently. The JSON form of the validated value must read back as
-    the value, validated without ``context``. Raises:
+    a value with the same JSON form, validated without ``context``. Raises:
 
     - ``PydanticSerializationError`` if it has no JSON form;
     - ``ValidationError`` if it is not valid, or if its JSON form is not,
@@ -349,12 +364,11 @@ def inline(
       a field of a group whose validator changes a value it has validated
       already.
     """
-    one = model_of(model, name, whole)
     given = to_json({name: value}, inf_nan_mode='constants')
     made = getattr(
         one.model_validate_json(given, extra='forbid', context=context), name
     )
-    stored = json_form(model, name, made, whole)
+    stored = json_form(one, name, made)
     try:
         again = getattr(one.model_validate_json(to_json({name: stored})), name)
     except ValidationError as error:
@@ -363,9 +377,9 @@ def inline(
             one.__name__,
             [{'type': _NO_JSON_FORM_ERROR, 'loc': first['loc'], 'input': None}],
         ) from None
-    if again != made:
-        raise ParamsError([(_differs((), made, again), _NO_JSON_FORM)])
-    return stored
+    if (read := json_form(one, name, again)) != stored:
+        raise ParamsError([(_differs((), stored, read), _NO_JSON_FORM)])
+    return made, stored
 
 
 _NO_JSON_FORM = 'has no JSON form that reads back as the value'
@@ -374,13 +388,11 @@ _NO_JSON_FORM_ERROR = PydanticCustomError('no_json_form', _NO_JSON_FORM)
 
 def _differs(loc: Loc, a: Any, b: Any) -> Loc:
     """
-    The first position at which ``a`` and ``b``, two values at ``loc``,
-    differ: a field of a group or an element of a list, at any depth.
+    The first position at which ``a`` and ``b``, two JSON forms at ``loc``,
+    differ: a field of an object or an element of a list, at any depth.
     """
-    if isinstance(a, BaseModel) and type(a) is type(b):
-        pairs: Iterable[tuple[str | int, Any, Any]] = (
-            (n, getattr(a, n), getattr(b, n)) for n in type(a).model_fields
-        )
+    if isinstance(a, dict) and isinstance(b, dict) and a.keys() == b.keys():
+        pairs: Iterable[tuple[str | int, Any, Any]] = ((k, a[k], b[k]) for k in a)
     elif isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
         pairs = ((i, x, y) for i, (x, y) in enumerate(zip(a, b, strict=True)))
     else:

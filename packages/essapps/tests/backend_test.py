@@ -350,7 +350,9 @@ def _boxed(value: Any) -> Request:
 
 
 def test_a_value_that_cannot_be_stored_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r'^second: box: cannot be stored as JSON'):
+    with pytest.raises(
+        SubmitError, match=r'^second: box\.value: Input should be a valid number$'
+    ):
         client.submit({'first': _boxed(1), 'second': _boxed(len)})
     assert client.records() == []
 
@@ -534,7 +536,7 @@ def test_a_path_names_the_file_at_that_path(
 def test_a_file_fits_a_file_model_only(client: Client) -> None:
     with pytest.raises(
         SubmitError,
-        match=r'^a: file run:1 does not fit Amount, which is not a file model$',
+        match=r'^a: file run:1: the field is not a file model$',
     ):
         client.submit(ADD, params=operands(file(run=1), file(run=2)))
 
@@ -542,8 +544,7 @@ def test_a_file_fits_a_file_model_only(client: Client) -> None:
 def test_no_output_fits_a_file_model(client: Client) -> None:
     loaded = client.submit(load(1))
     refused = (
-        'is a reference to an output; SampleRun is a file model, '
-        r'written as file\(\.\.\.\)'
+        r'is a reference to an output; the field is not typed Referenced\[\.\.\.\]'
     )
     by_ref = loaded.ref('value')
 

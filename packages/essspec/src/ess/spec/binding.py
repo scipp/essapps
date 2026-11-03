@@ -26,8 +26,8 @@ request, :class:`StageBinding` for a stage, and :class:`AccumulatorBinding`
 for an accumulator. A plain request passes an instance of the params model,
 ``compute(params) -> outputs``. A stage or an accumulator is made from some
 values only, so these pass by name, each as its type, whether given inline
-or by reference: a group as the model, with a data value in it as the object,
-a file model with the local path of its file, and a table as the list of
+or by reference: a group as the model, with the data of each reference in
+it, a file model with the local path of its file, and a table as the list of
 its rows::
 
     {'reduction': Reduction(bins=2), 'beam_centre': centre,

@@ -561,6 +561,43 @@ def test_an_optional_parameter_without_a_key_reaches_make_pipeline() -> None:
     assert binding.compute(OffsetParams()).shifted == -1.0
 
 
+NBins = NewType('NBins', int)
+Doubled = NewType('Doubled', int)
+
+
+class BinsParams(BaseModel):
+    bins: int = 3
+
+
+class BinsOutputs(BaseModel):
+    doubled: int
+
+
+BINS = _spec('bins', params=BinsParams, outputs=BinsOutputs)
+
+
+def double(bins: NBins) -> Doubled:
+    return Doubled(2 * bins)
+
+
+def test_a_scalar_parameter_sets_the_key_that_keys_gives() -> None:
+    binding = PipelineBinding(
+        BINS,
+        lambda _: sciline.Pipeline([double]),
+        keys={'bins': (NBins,), 'doubled': (Doubled,)},
+    )
+    assert binding.compute(BinsParams(bins=4)).doubled == 8
+
+
+def test_a_scalar_parameter_without_keys_is_refused() -> None:
+    with pytest.raises(
+        ValueError, match=r"bins: \['bins'\]: a parameter whose type.* gives its keys="
+    ):
+        PipelineBinding(
+            BINS, lambda _: sciline.Pipeline([double]), keys={'doubled': (Doubled,)}
+        )
+
+
 class RequiredOffsetParams(BaseModel):
     offset: Offset
 

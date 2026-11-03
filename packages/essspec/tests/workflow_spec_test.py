@@ -99,7 +99,6 @@ SampleFile = NewType('SampleFile', RunFile)
 ReductionOfCan = NewType('ReductionOfCan', Reduction)
 TimeOfCan = NewType('TimeOfCan', ByTime)
 IofQ = NewType('IofQ', sc.DataArray)
-Seconds = NewType('Seconds', float)
 type RawFile = RunFile
 
 
@@ -107,13 +106,6 @@ class RoleRun(BaseModel):
     """A group with a field typed as a NewType."""
 
     file: SampleFile
-
-
-@pydantic.dataclasses.dataclass
-class Exposure:
-    """A dataclass with a field typed as a NewType."""
-
-    seconds: Seconds
 
 
 class CalibrationFile(FileModel, kind='calibration'):
@@ -157,7 +149,7 @@ class LocalPath(Path):
 
 
 class TimeRangeAt(TimeRange):
-    """An output type that fits a TimeRange place and holds a Path."""
+    """An output type that fits a TimeRange and holds a Path."""
 
     where: Path
 
@@ -234,13 +226,13 @@ class ComputedParams(BaseModel):
 
 
 class BeamCentre(BaseModel, arbitrary_types_allowed=True):
-    """A group that holds a data value: only a reference fills its place."""
+    """A group with a field that is not a field type: only a reference fills it."""
 
     position: sc.Variable
 
 
 class ByCentre(BaseModel, arbitrary_types_allowed=True):
-    """An alternative that holds a data value: refused, a form has no input for it."""
+    """An alternative with a field that is not a field type: refused."""
 
     mode: Literal['centre'] = 'centre'
     centre: sc.Variable
@@ -248,8 +240,8 @@ class ByCentre(BaseModel, arbitrary_types_allowed=True):
 
 class Centring(BaseModel):
     """
-    A group with a field of a group, and of a tuple: data values, so only a
-    reference fills its place.
+    A group with a field of a group that is not a field type, and of a tuple:
+    only a reference fills it.
     """
 
     centre: BeamCentre | None = None
@@ -257,7 +249,7 @@ class Centring(BaseModel):
 
 
 class ByPeak(BaseModel):
-    """An alternative with a field of a group with a data value."""
+    """An alternative with a field of a group that is not a field type."""
 
     mode: Literal['peak'] = 'peak'
     centre: BeamCentre
@@ -267,7 +259,7 @@ class ByPeak(BaseModel):
     config=pydantic.ConfigDict(arbitrary_types_allowed=True)
 )
 class CentrePeak:
-    """A dataclass that holds a data value: a data value itself."""
+    """A dataclass: not a field type."""
 
     centre: sc.Variable
 
@@ -313,6 +305,25 @@ class Tagged(Enum):
     """An enum whose value is an object: not a scalar."""
 
     a = {'@ref': 'a'}  # noqa: RUF012
+
+
+class SelfContained(BaseModel):
+    """A group that contains itself: refused."""
+
+    child: 'SelfContained | None' = None
+
+
+class ContainsA(BaseModel):
+    """A group that contains itself by another group: refused."""
+
+    b: 'ContainsB | None' = None
+
+
+class ContainsB(BaseModel):
+    a: ContainsA | None = None
+
+
+ContainsA.model_rebuild()
 
 
 def spec(**fields: Any) -> WorkflowSpec[Any, Any]:
@@ -391,7 +402,7 @@ class TestMetadata:
         with pytest.raises(pydantic.ValidationError):
             IOFQ.title = 'Other'
 
-    def test_a_group_takes_an_inline_value_unless_it_holds_a_data_value(
+    def test_a_parameter_takes_an_inline_value_unless_only_a_reference_fills_it(
         self,
     ) -> None:
         assert [n for n in IofQParams.model_fields if _takes_inline(IOFQ, n)] == [
@@ -417,7 +428,7 @@ class TestMetadata:
         'tp',
         [Referenced[BeamCentre], list[Referenced[BeamCentre]], Referenced[Centring]],
     )
-    def test_a_place_marked_referenced_takes_no_inline_value(self, tp: Any) -> None:
+    def test_a_referenced_parameter_takes_no_inline_value(self, tp: Any) -> None:
         assert not _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
 
     @pytest.mark.parametrize(
@@ -452,23 +463,23 @@ def _has_inline_source(schema: dict[str, Any], defs: dict[str, Any]) -> bool:
         return False
     if 'discriminator' in schema:  # a reference to an output, or a union
         return schema['discriminator']['propertyName'] != '@ref'
-    if 'oneOf' in schema:  # the sources of a place
+    if 'oneOf' in schema:  # the sources of a parameter
         return any(_has_inline_source(s, defs) for s in schema['oneOf'])
     (*_, name) = schema['$ref'].split('/')
     return '@ref' not in defs[name]['properties']
 
 
 NOT_A_VALUE = 'the default is not a value a request may write'
-NOT_A_PARAMETER = re.escape(
-    'a parameter is a group, a union of groups, or a list of one, possibly typed '
-    'X | None'
+NO_FILE_DEFAULT = re.escape(
+    'a default names no file; a file model has no default but None or []'
 )
 OPTIONAL_LIST = re.escape(
-    'a list parameter is not typed list[X] | None; a list without rows is []'
+    'a list is not typed list[X] | None; a list without elements is []'
 )
-OPTIONAL_ROW = re.escape(
-    'the element of a list parameter is not typed X | None; each row is a value'
+OPTIONAL_ELEMENT = re.escape(
+    'the element of a list is not typed X | None; each element is a value'
 )
+LIST_OF_LISTS = re.escape('a list is not of lists; ')
 NOT_AN_OUTPUT = re.escape(
     'an output is a type, possibly typed X | None, or a list or a dict of one'
 )
@@ -477,6 +488,16 @@ OUTSIDE_A_FILE_MODEL = re.escape(
     "typed a file model, such as mask: MaskFile with class MaskFile(FileModel, "
     "kind='mask'), and written as file(...)"
 )
+
+
+def not_a_field_type(where: str, name: str) -> str:
+    """The regex of the refusal of ``name``, the type of the field ``where``."""
+    return re.escape(
+        f'{where}: {name} is not a field type, which is a scalar, a file model, a '
+        'group, a union of groups, Referenced[T], X | None, or list[X]; give the '
+        'field one of these types, '
+    )
+
 
 KEEPS_THE_FILE = re.escape(
     'a file model keeps the field file of FileModel, without a default or an alias'
@@ -496,6 +517,15 @@ class TestModelRules:
         'fields',
         [
             {'params': model('P', reduction=(list[Reduction], []))},
+            {
+                'params': model(
+                    'P',
+                    bins=(int, 10),
+                    mode=(Mode, Mode.fast),
+                    values=(list[float], []),
+                    level=(float | None, None),
+                )
+            },
             {'params': model('P', reduction=(Reduction, Reduction(bins=3)))},
             {'params': model('P', runs=(list[SampleRun], []))},
             {'params': model('P', mask=(MaskFile | None, None))},
@@ -543,6 +573,34 @@ class TestModelRules:
             {
                 'params': model(
                     'P',
+                    g=(
+                        model(
+                            'G',
+                            mask=(Referenced[BeamCentre], ...),
+                            maybe=(Referenced[BeamCentre] | None, None),
+                            masks=(list[Referenced[BeamCentre]], []),
+                            inner=(
+                                model('H', mask=(Referenced[BeamCentre], ...)),
+                                ...,
+                            ),
+                        ),
+                        ...,
+                    ),
+                )
+            },
+            {
+                'params': model(
+                    'P',
+                    by=(
+                        Annotated[ByMonitor | ByTime, Field(discriminator='mode')]
+                        | Referenced[ByWindow],
+                        ...,
+                    ),
+                )
+            },
+            {
+                'params': model(
+                    'P',
                     centre=(Referenced[BeamCentre] | None, None),
                     centres=(list[Referenced[BeamCentre]], []),
                 )
@@ -581,13 +639,10 @@ class TestModelRules:
             *(
                 (
                     {'params': model('P', value=value)},
-                    f'P.value: {name} is not a group; a parameter is a group, a '
-                    'union of groups, or a list of one',
+                    not_a_field_type('P.value', name),
                 )
                 for value, name in (
-                    ((int, ...), 'int'),
                     ((int | float, 1), 'int | float'),
-                    ((Mode, Mode.fast), 'Mode'),
                     ((sc.Variable, sc.scalar(1.0)), 'Variable'),
                     ((sc.DataArray | None, None), 'DataArray'),
                     ((list[sc.Variable], []), 'Variable'),
@@ -606,7 +661,7 @@ class TestModelRules:
                         'ReductionOfCan',
                     ),
                     (
-                        {'params': model('P', runs=(list[SampleFile | None], []))},
+                        {'params': model('P', runs=(list[SampleFile], []))},
                         'P.runs',
                         'SampleFile',
                     ),
@@ -676,17 +731,8 @@ class TestModelRules:
                                 ),
                             )
                         },
-                        'P.run: Inner.file',
+                        'P.run: Run.parts: Inner.file',
                         'SampleFile',
-                    ),
-                    (
-                        {
-                            'params': model(
-                                'P', run=(model('Run', exposure=(Exposure, ...)), ...)
-                            )
-                        },
-                        'P.run: Exposure.seconds',
-                        'Seconds',
                     ),
                     ({'outputs': model('O', iofq=(IofQ, ...))}, 'O.iofq', 'IofQ'),
                     (
@@ -718,20 +764,22 @@ class TestModelRules:
             *(
                 (
                     {'params': model('P', centre=(tp, ...))},
-                    re.escape(
-                        'P.centre: BeamCentre.position, of Variable: a form has no '
-                        'input for it; give the field a type that a form has an '
-                        'input for, or mark the place Referenced[BeamCentre], which '
-                        'a reference to an output fills'
+                    not_a_field_type('P.centre: BeamCentre.position', 'Variable')
+                    + re.escape(
+                        'or, if the data of an output fill BeamCentre, type the '
+                        'field that holds it Referenced[BeamCentre]'
                     ),
                 )
                 for tp in (BeamCentre, BeamCentre | None, list[BeamCentre])
             ),
             (
                 {'params': model('P', centring=(Centring, ...))},
-                re.escape(
-                    'P.centring: Centring.centre, of BeamCentre | None: a form has '
-                    'no input for it'
+                not_a_field_type(
+                    'P.centring: Centring.centre: BeamCentre.position', 'Variable'
+                )
+                + '.*'
+                + not_a_field_type(
+                    'P.centring: Centring.tolerance', 'tuple[float, float]'
                 ),
             ),
             (
@@ -744,8 +792,8 @@ class TestModelRules:
                         ),
                     )
                 },
-                f'P.centre: {NOT_A_VALUE}: centre: .* is not a reference; BeamCentre '
-                'is given by reference to an output',
+                f'P.centre: {NOT_A_VALUE}: centre: is not a reference to an output, '
+                r'as the field is typed Referenced\[\.\.\.\]',
             ),
             (
                 {
@@ -763,40 +811,23 @@ class TestModelRules:
                 (
                     {'params': model('P', g=(group, ...))},
                     re.escape(
-                        f'P.g: {where}: Referenced[...] is at a parameter or a row, '
-                        'not at a field of a group: a group is validated whole when '
-                        'the request is submitted, and an output may not exist then'
+                        'P.g: Referenced[G]: G holds Referenced[...]; a reference is '
+                        'never inside the data of an output'
                     ),
                 )
-                for group, where in (
-                    (model('G', mask=(Referenced[BeamCentre], ...)), 'G.mask'),
-                    (
-                        model('G', mask=(Referenced[BeamCentre] | None, None)),
-                        'G.mask',
-                    ),
-                    (
-                        model('G', masks=(list[Referenced[BeamCentre]], [])),
-                        'G.masks',
-                    ),
-                    (
+                for group in (
+                    Referenced[model('G', mask=(Referenced[BeamCentre], ...))],
+                    Reduction
+                    | Referenced[model('G', mask=(Referenced[BeamCentre], ...))],
+                    Referenced[
                         model(
                             'G',
                             inner=(
-                                model('H', mask=(Referenced[BeamCentre], ...)),
+                                model('H', masks=(list[Referenced[BeamCentre]], [])),
                                 ...,
                             ),
-                        ),
-                        'H.mask',
-                    ),
-                    (
-                        Referenced[model('G', mask=(Referenced[BeamCentre], ...))],
-                        'G.mask',
-                    ),
-                    (
-                        Reduction
-                        | Referenced[model('G', mask=(Referenced[BeamCentre], ...))],
-                        'G.mask',
-                    ),
+                        )
+                    ],
                 )
             ),
             *(
@@ -804,7 +835,7 @@ class TestModelRules:
                     {'params': model('P', c=(tp, None))},
                     re.escape(
                         f'P.c: Referenced[{name}]: {name} is not a group; a reference '
-                        'fills a place with a group, so that a picker of records '
+                        'fills a field with a group, so that a picker of records '
                         'lists the outputs of a class that names a role'
                     ),
                 )
@@ -814,12 +845,27 @@ class TestModelRules:
                     (Referenced[float] | None, 'float'),
                 )
             ),
-            (
-                {'params': model('P', c=(Referenced[list[BeamCentre]], ...))},
-                re.escape(
-                    'P.c: a reference fills a row of a list parameter, '
-                    'list[Referenced[X]], not the list'
-                ),
+            *(
+                (
+                    {'params': params},
+                    re.escape(
+                        f'{where}: Referenced[list[BeamCentre]]: list[BeamCentre] is '
+                        'not a group'
+                    ),
+                )
+                for params, where in (
+                    (model('P', c=(Referenced[list[BeamCentre]], ...)), 'P.c'),
+                    (
+                        model(
+                            'P',
+                            g=(
+                                model('G', c=(Referenced[list[BeamCentre]], ...)),
+                                ...,
+                            ),
+                        ),
+                        'P.g: G.c',
+                    ),
+                )
             ),
             *(
                 (
@@ -828,24 +874,73 @@ class TestModelRules:
                 )
                 for tp in (Referenced[RunFile], list[Referenced[RunFile]])
             ),
+            *(
+                (
+                    {'params': model('P', by=(tp, ...))},
+                    re.escape(
+                        'P.by: the discriminator of a union with a member '
+                        'Referenced[...] is on the union written inline, '
+                        "Annotated[A | B, Field(discriminator='kind')] | "
+                        'Referenced[C], since a reference to an output has no tag'
+                    ),
+                )
+                for tp in (
+                    # A member Referenced[...] inside the union written inline.
+                    Annotated[
+                        ByMonitor | Referenced[ByTime], Field(discriminator='mode')
+                    ]
+                    | Referenced[BeamCentre],
+                )
+            ),
             (
                 {
                     'params': model(
                         'P',
                         by=(
                             Annotated[
-                                ByMonitor | Referenced[ByTime],
+                                ByMonitor | ByTime | Referenced[ByWindow],
                                 Field(discriminator='mode'),
-                            ]
-                            | Referenced[BeamCentre],
+                            ],
                             ...,
                         ),
                     )
                 },
                 re.escape(
-                    'P.by: Referenced[...] is at a parameter, a row, or a member of '
-                    'a union there, not inside another type'
+                    'P.by: the discriminator of a union with a member Referenced[...] '
+                    'is on the union written inline, Annotated[A | B, '
+                    "Field(discriminator='kind')] | Referenced[C], since a reference "
+                    'to an output has no tag'
                 ),
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        g=(
+                            model(
+                                'G',
+                                by=(
+                                    Annotated[
+                                        ByMonitor | ByTime | Referenced[ByWindow],
+                                        Field(discriminator='mode'),
+                                    ],
+                                    ...,
+                                ),
+                            ),
+                            ...,
+                        ),
+                    )
+                },
+                'P.g: G.by: the discriminator of a union with a member Referenced',
+            ),
+            (
+                {'params': model('P', g=(SelfContained, ...))},
+                'P.g: SelfContained.child: SelfContained contains itself; a group '
+                'holds no field of its own type, at any depth',
+            ),
+            (
+                {'params': model('P', g=(list[ContainsB], []))},
+                'P.g: ContainsB.a: ContainsA.b: ContainsB contains itself',
             ),
             (
                 {
@@ -857,7 +952,7 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', reduction=(dict[str, Reduction], {}))},
-                f'P.reduction: {NOT_A_PARAMETER}',
+                not_a_field_type('P.reduction', 'dict[str, Reduction]'),
             ),
             (
                 {'params': model('P', reduction=(list[Reduction] | None, None))},
@@ -865,7 +960,7 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', reduction=(list[Reduction | None], []))},
-                f'P.reduction: {OPTIONAL_ROW}',
+                f'P.reduction: {OPTIONAL_ELEMENT}',
             ),
             (
                 {'params': model('P', by=(list[ByMonitor | ByTime], []))},
@@ -890,13 +985,7 @@ class TestModelRules:
                         ),
                     )
                 },
-                re.escape(
-                    'P.by: ByCentre.centre, of Variable: a form has no input for it; '
-                    'give the field a type that a form has an input for, or take '
-                    'ByCentre out of the union written inline, Annotated[A | B, '
-                    'Field(discriminator=...)] | Referenced[ByCentre], which a '
-                    'reference to an output fills'
-                ),
+                not_a_field_type('P.by: ByCentre.centre', 'Variable'),
             ),
             (
                 {
@@ -912,7 +1001,7 @@ class TestModelRules:
                         ),
                     )
                 },
-                'P.by: ByCentre.centre, of Variable: a form has no input for it',
+                not_a_field_type('P.by: ByCentre.centre', 'Variable'),
             ),
             (
                 {
@@ -940,7 +1029,7 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', by=(dict[str, By], {}))},
-                f'P.by: {NOT_A_PARAMETER}',
+                not_a_field_type('P.by', 'dict[str, ByMonitor | ByTime]'),
             ),
             (
                 {
@@ -952,7 +1041,9 @@ class TestModelRules:
                         ),
                     )
                 },
-                'P.by: ByPeak.centre, of BeamCentre: a form has no input for it',
+                not_a_field_type(
+                    'P.by: ByPeak.centre: BeamCentre.position', 'Variable'
+                ),
             ),
             *(
                 (
@@ -966,12 +1057,6 @@ class TestModelRules:
                     ({'path': (PurePosixPath, ...)}, 'P.path'),
                     ({'path': (PosixPath, ...)}, 'P.path'),
                     ({'path': (LocalPath, ...)}, 'P.path'),
-                    ({'pair': (tuple[Path, Path], ...)}, 'P.pair'),
-                    ({'runs': (RunFiles, ...)}, 'P.runs: RunFiles.sample'),
-                    (
-                        {'runs': (RootModel[list[Path]], ...)},
-                        r'P.runs: RootModel\[.*\]\.root',
-                    ),
                     (
                         {'run': (model('Run', path=(Path, ...)), ...)},
                         'P.run: Run.path',
@@ -992,18 +1077,6 @@ class TestModelRules:
                         'P.run: Run.paths',
                     ),
                     (
-                        {'run': (model('Run', files=(RunPaths, ...)), ...)},
-                        'P.run: RunPaths.sample',
-                    ),
-                    (
-                        {'run': (model('Run', file=(tuple[Path, float], ...)), ...)},
-                        'P.run: Run.file',
-                    ),
-                    (
-                        {'run': (model('Run', files=(dict[str, Path], {})), ...)},
-                        'P.run: Run.files',
-                    ),
-                    (
                         {
                             'run': (
                                 model(
@@ -1012,7 +1085,37 @@ class TestModelRules:
                                 ...,
                             )
                         },
-                        'P.run: G.path',
+                        'P.run: Run.geometry: G.path',
+                    ),
+                )
+            ),
+            *(
+                (
+                    {'params': model('P', **fields)},
+                    not_a_field_type(where, name),
+                )
+                for fields, where, name in (
+                    ({'pair': (tuple[Path, Path], ...)}, 'P.pair', 'tuple[Path, Path]'),
+                    ({'runs': (RunFiles, ...)}, 'P.runs', 'RunFiles'),
+                    (
+                        {'runs': (RootModel[list[Path]], ...)},
+                        'P.runs',
+                        'RootModel[list[Path]]',
+                    ),
+                    (
+                        {'run': (model('Run', files=(RunPaths, ...)), ...)},
+                        'P.run: Run.files',
+                        'RunPaths',
+                    ),
+                    (
+                        {'run': (model('Run', file=(tuple[Path, float], ...)), ...)},
+                        'P.run: Run.file',
+                        'tuple[Path, float]',
+                    ),
+                    (
+                        {'run': (model('Run', files=(dict[str, Path], {})), ...)},
+                        'P.run: Run.files',
+                        'dict[str, Path]',
                     ),
                 )
             ),
@@ -1230,7 +1333,7 @@ class TestModelRules:
                         ),
                     )
                 },
-                'P.reduction: the default_factory of a parameter takes no other',
+                'P.reduction: the default_factory takes no other values',
             ),
             (
                 {
@@ -1249,7 +1352,7 @@ class TestModelRules:
                         ),
                     )
                 },
-                'P.r: R.twice: the default_factory of a field of a group takes no',
+                'P.r: R.twice: the default_factory takes no other values',
             ),
             (
                 {
@@ -1280,8 +1383,7 @@ class TestModelRules:
                         'P', loose=(Loose, Loose(**{'@ref': 'file', 'file': 'a'}))
                     )
                 },
-                f'P.loose: {NOT_A_VALUE}: loose: file a does not fit Loose, which '
-                'is not a file model',
+                f'P.loose: {NOT_A_VALUE}: loose: file a: the field is not a file model',
             ),
             (
                 {
@@ -1293,7 +1395,8 @@ class TestModelRules:
                         ),
                     )
                 },
-                f'P.r: R.x: {NOT_A_VALUE}: x: Input should be a valid number',
+                rf'P.r: R.x: {NOT_A_VALUE}: x: .*not a reference to output: record: '
+                'Field required',
             ),
             *(
                 (
@@ -1313,7 +1416,7 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', runs=(list[list[SampleRun]], []))},
-                f'P.runs: {NOT_A_PARAMETER}',
+                f'P.runs: {LIST_OF_LISTS}',
             ),
             (
                 {'params': model('P', runs=(list[SampleRun] | None, None))},
@@ -1321,12 +1424,12 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', runs=(list, []))},
-                f'P.runs: {NOT_A_PARAMETER}',
+                not_a_field_type('P.runs', 'list'),
             ),
             (
                 {'params': model('P', sample=(SampleRun, SampleRun.local('run.nxs')))},
-                f'P.sample: {NOT_A_VALUE}: sample: file path:run.nxs: a default '
-                'cannot name a file',
+                f'P.sample: {NOT_A_VALUE}: sample: file path:run.nxs: '
+                f'{NO_FILE_DEFAULT}',
             ),
             (
                 {
@@ -1334,8 +1437,8 @@ class TestModelRules:
                         'P', runs=(list[SampleRun], [SampleRun.local('run.nxs')])
                     )
                 },
-                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: file path:run.nxs: a default '
-                'cannot name a file',
+                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: file path:run.nxs: '
+                rf'{NO_FILE_DEFAULT}',
             ),
             (
                 {
@@ -1343,8 +1446,8 @@ class TestModelRules:
                         'P', measured=(Measured, Measured(run=RunFile(file='run-1')))
                     )
                 },
-                f'P.measured: {NOT_A_VALUE}: measured.run: file run-1: a default '
-                'cannot name a file',
+                f'P.measured: {NOT_A_VALUE}: measured.run: file run-1: '
+                f'{NO_FILE_DEFAULT}',
             ),
             (
                 {
@@ -1444,107 +1547,125 @@ class TestFields:
             AwareDatetime,
             NaiveDatetime,
             list[AwareDatetime],
+            int | None,
+            float | None,
+            Mode | None,
+            Literal['a', 'b'] | None,
             SampleRun,
             SampleRun | None,
             list[SampleRun],
+            Reduction,
+            Reduction | None,
+            list[Reduction],
+            By,
+            By | None,
+            list[By],
+            model('Inner', group=(Reduction, ...), runs=(list[SampleRun], [])),
+            Referenced[Reduction],
+            Referenced[Reduction] | None,
+            list[Referenced[Reduction]],
+            Reduction | Referenced[Reduction],
+            Referenced[BeamCentre],
+            By | Referenced[BeamCentre],
         ],
     )
-    def test_a_field_of_a_group_is_a_scalar_a_file_model_or_a_list_of_one(
-        self, tp: Any
-    ) -> None:
+    def test_a_field_of_a_group_is_of_a_field_type(self, tp: Any) -> None:
         params = model('P', g=(_group_with(tp), ...))
         assert _takes_inline(spec(params=params), 'g')
 
     @pytest.mark.parametrize(
         ('tp', 'default'),
         [
-            (SampleRun | None, SampleRun.local('run.nxs')),
-            (list[SampleRun], [SampleRun.local('run.nxs')]),
+            (Reduction, Reduction(bins=3)),
+            (Reduction | None, None),
+            (list[Reduction], []),
+            (Mode, Mode.fast),
+            (float | None, None),
+            (SampleRun | None, None),
+            (list[SampleRun], []),
+            (Referenced[Reduction] | None, None),
         ],
     )
-    def test_a_file_model_at_a_field_has_no_default_file(
-        self, tp: Any, default: Any
+    def test_a_default_at_a_field_is_a_value(self, tp: Any, default: Any) -> None:
+        group = model('G', value=(tp, default))
+        spec(params=model('P', g=(group, ...)))
+
+    @pytest.mark.parametrize(
+        ('tp', 'default', 'reason'),
+        [
+            (
+                Reduction,
+                {'bins': 3},
+                r"the default {'bins': 3} is not the value validating it gives",
+            ),
+            (SampleRun | None, SampleRun.local('run.nxs'), NO_FILE_DEFAULT),
+            (list[SampleRun], [SampleRun.local('run.nxs')], NO_FILE_DEFAULT),
+            (
+                Referenced[Reduction],
+                Reduction(),
+                r'is not a reference to an output, as the field is typed Referenced',
+            ),
+        ],
+    )
+    def test_a_default_at_a_field_that_is_not_a_value_is_refused(
+        self, tp: Any, default: Any, reason: str
     ) -> None:
         group = model('G', value=(tp, default))
-        with pytest.raises(
-            ValueError,
-            match=r'P\.g: G\.value: a file model at a field has no default but None',
-        ):
+        with pytest.raises(ValueError, match=rf'P\.g: G\.value: .*{reason}'):
             spec(params=model('P', g=(group, ...)))
 
     @pytest.mark.parametrize(
-        'tp',
+        ('tp', 'name'),
         [
-            sc.DataArray,
-            list[sc.DataArray],
-            sc.Variable | sc.DataArray,
-            sc.DataArray | None,
-            BeamCentre,
-            int | None,
-            Mode | None,
-            Literal['a', 'b'] | None,
-            Literal['a', None],  # noqa: PYI061
-            list[Literal['a', None]],  # noqa: PYI061
-            list[float] | None,
-            list[float | None],
-            list[list[float]],
-            Reduction,
-            Reduction | None,
-            list[Reduction],
-            By,
-            ByMonitor | ByTime,
-            Tagged,
-            list[Tagged],
-            Literal[Tagged.a],
-            Literal[Mode.fast],
-            tuple[float, float],
-            dict[str, float],
-            set[float],
-            Limits,
-            Pair,
-            RootModel[list[float]],
-            int | float,
-            Any,
+            (sc.DataArray, 'DataArray'),
+            (list[sc.DataArray], 'DataArray'),
+            (sc.Variable | sc.DataArray, 'Variable | DataArray'),
+            (sc.DataArray | None, 'DataArray'),
+            (Literal['a', None], "Literal['a', None]"),  # noqa: PYI061
+            (list[Literal['a', None]], "Literal['a', None]"),  # noqa: PYI061
+            (Tagged, 'Tagged'),
+            (list[Tagged], 'Tagged'),
+            (Literal[Tagged.a], "Literal[<Tagged.a: {'@ref': 'a'}>]"),
+            (Literal[Mode.fast], "Literal[<Mode.fast: 'fast'>]"),
+            (tuple[float, float], 'tuple[float, float]'),
+            (dict[str, float], 'dict[str, float]'),
+            (set[float], 'set[float]'),
+            (Limits, 'Limits'),
+            (Pair, 'Pair'),
+            (RootModel[list[float]], 'RootModel[list[float]]'),
+            (int | float, 'int | float'),
+            (Any, 'Any'),
         ],
     )
-    def test_any_other_field_is_a_data_value(self, tp: Any) -> None:
-        params = model('P', g=(_group_with(tp), ...))
-        with pytest.raises(
-            ValueError, match=r'P\.g: G\.value, of .*: a form has no input'
-        ):
-            spec(params=params)
-        marked = model('P', g=(Referenced[_group_with(tp)], ...))
-        assert not _takes_inline(spec(params=marked), 'g')
+    def test_any_other_field_is_refused_unless_a_reference_fills_its_group(
+        self, tp: Any, name: str
+    ) -> None:
+        with pytest.raises(ValueError, match=not_a_field_type('P.g: G.value', name)):
+            spec(params=model('P', g=(_group_with(tp), ...)))
+        # The framework does not look inside the T of Referenced[T].
+        referenced = model('P', g=(Referenced[_group_with(tp)], ...))
+        assert not _takes_inline(spec(params=referenced), 'g')
 
     @pytest.mark.parametrize(
-        ('tp', 'value', 'shown'),
+        ('tp', 'reason'),
         [
-            (float | None, None, 'float | None'),
-            (tuple[float, float], (0.0, 1.0), 'tuple[float, float]'),
-            (TimeRange, TimeRange(start=0.0, stop=1.0), 'TimeRange'),
-            (Tagged, Tagged.a, 'Tagged'),
+            (list[float] | None, OPTIONAL_LIST),
+            (list[float | None], OPTIONAL_ELEMENT),
+            (list[list[float]], LIST_OF_LISTS),
+            (ByMonitor | ByTime, re.escape('a union of groups has a discriminator')),
         ],
     )
-    def test_a_place_that_only_a_reference_fills_has_no_default_but_none(
-        self, tp: Any, value: Any, shown: str
+    def test_the_shape_rules_hold_at_a_field(self, tp: Any, reason: str) -> None:
+        with pytest.raises(ValueError, match=rf'P\.g: G\.value: {reason}'):
+            spec(params=model('P', g=(_group_with(tp), ...)))
+
+    @pytest.mark.parametrize('tp', [BeamCentre, BeamCentre | None, list[BeamCentre]])
+    def test_the_fields_of_a_group_at_a_field_are_checked_in_turn(
+        self, tp: Any
     ) -> None:
-        group = model('G', value=(tp, ...))
-        with pytest.raises(
-            ValueError,
-            match=re.escape(
-                f'P.g: G.value, of {shown}: a form has no input for it; give the '
-                'field a type that a form has an input for, or mark the place '
-                'Referenced[G], which a reference to an output fills'
-            ),
-        ):
-            spec(params=model('P', g=(group, group(value=value))))
-        with pytest.raises(
-            ValueError,
-            match=rf'P\.g: {NOT_A_VALUE}: g: .* is not a reference; G is given by '
-            'reference to an output',
-        ):
-            spec(params=model('P', g=(Referenced[group], group(value=value))))
-        spec(params=model('P', g=(Referenced[group] | None, None)))
+        reason = not_a_field_type('P.g: G.value: BeamCentre.position', 'Variable')
+        with pytest.raises(ValueError, match=reason):
+            spec(params=model('P', g=(_group_with(tp), ...)))
 
     @pytest.mark.parametrize(
         'params',
@@ -1554,7 +1675,7 @@ class TestFields:
             lambda g: model('P', g=(list[Referenced[g]], [])),
         ],
     )
-    def test_a_group_with_a_data_value_is_referenced_at_each_place(
+    def test_a_group_of_any_field_types_is_referenced_at_each_parameter_or_row(
         self, params: Any
     ) -> None:
         group = _group_with(tuple[float, float])

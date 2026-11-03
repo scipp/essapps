@@ -103,13 +103,13 @@ def refused_spec() -> WorkflowSpec:
             return 0.0
 
     class Binning(BaseModel):
-        start: float | None = None
+        limits: tuple[float, float] = (0.0, 1.0)
 
     class Sample(BaseModel):
         run: RunNumber
 
     class Specimen(BaseModel):
-        mask: Referenced[PixelMask]
+        inner: Specimen | None = None
 
     class Params(BaseModel):
         bins: int = 10
@@ -168,17 +168,15 @@ def refusal() -> str:
         'Sample.run: RunNumber is a NewType',
         'Geometry.file: a Path is outside a file model',
         "CalibrationFile: a file model holds only the field file, not ['run']",
-        'Params.transmissions: a list parameter is not typed list[X] | None',
-        'Params.masks: the element of a list parameter is not typed X | None',
+        'Params.transmissions: a list is not typed list[X] | None',
+        'Params.masks: the element of a list is not typed X | None',
         'Params.range: the default',
-        'Params.binning: Binning.start, of float | None: a form has no input for it',
-        'Params.specimen: Specimen.mask: Referenced[...] is at a parameter or a '
-        'row, not at a field of a group',
+        'Params.binning: Binning.limits: tuple[float, float] is not a field type',
+        'Params.specimen: Specimen.inner: Specimen contains itself',
         'Params.mask: Referenced[PixelMask | None]: PixelMask | None is not a group',
         'Params.flux: RunFile is a file model; no output holds one',
         'Outputs.pixel_mask: Referenced[...] marks a place of the params',
         'Outputs.raw: RunFile is a file model; no output holds one',
-        'Params.bins: int is not a group',
         'sample_runs: a table has no default',
         'iofq: a field of both Params and Outputs',
         "Params: no decorators but model validators, {'field_validators'",

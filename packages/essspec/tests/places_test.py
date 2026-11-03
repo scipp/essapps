@@ -1,23 +1,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 import pytest
 import scipp as sc
 from annotated_types import Gt
 from pydantic import BaseModel, Field, Strict
 
-from ess.spec import FileModel, FileRef, OutputRef, Referenced
+from ess.spec import FileModel, Referenced
 from ess.spec.parameters import REFERENCED
-from ess.spec.places import (
-    alternatives,
-    ref_types,
-    root_type,
-    split,
-    unwritten,
-    validated,
-)
-from ess.spec.refs import Ref
+from ess.spec.places import alternatives, root_type, split, validated
 
 
 class RunFile(FileModel, kind='raw'):
@@ -82,32 +74,16 @@ class MeasuredParams(BaseModel):
     measured: Measured
 
 
-FILE = FileRef(file='pid-1')
-
-OUTPUT = OutputRef(record='r1', output='sample')
-
-
-def _named(name: str, model: type[FileModel]) -> str:
-    """A resolver that takes each name for the identity of a file."""
-    return name
-
-
-def _unread(ref: Ref) -> Any:
-    raise AssertionError(f'{ref} is read; a file is never read')
-
-
 def test_an_unmarked_place_is_written_by_the_request() -> None:
     assert root_type(MaskParams, 'mask') == (MaskFile, True, ())
     assert split(MaskFile) == (MaskFile, (), ())
     assert root_type(MeasuredParams, 'measured') == (Measured, False, ())
     assert split(Measured) == (Measured, (), ())
-    assert unwritten(Measured) is None
 
 
 def test_a_place_marked_referenced_is_filled_by_a_reference_only() -> None:
     assert root_type(Params, 'mask') == (Mask, False, (REFERENCED,))
     assert split(Mask, REFERENCED) == (None, (), (Mask,))
-    assert unwritten(Mask) == 'mask'
 
 
 def test_the_marker_of_a_place_typed_x_or_none_is_in_its_metadata() -> None:
@@ -142,7 +118,6 @@ def test_the_alternatives_written_keep_their_discriminator() -> None:
 def test_a_group_of_scalars_is_written_inline() -> None:
     assert root_type(Params, 'reduction') == (Reduction, True, ())
     assert split(Reduction) == (Reduction, (), ())
-    assert unwritten(Reduction) is None
 
 
 def test_the_metadata_of_the_field_comes_before_that_in_its_type() -> None:
@@ -202,27 +177,6 @@ def test_a_union_without_a_discriminator_is_refused() -> None:
     tp, _, metadata = root_type(Undiscriminated, 'beam_centre')
     with pytest.raises(ValueError, match='discriminator'):
         alternatives(tp, *metadata)
-
-
-def test_a_request_writes_no_data_value() -> None:
-    assert unwritten(MaskFile) is None
-    assert unwritten(Mask) == 'mask'
-    assert unwritten(Sample) is None
-
-
-def test_each_reference_to_an_output_has_the_type_referenced_at_its_place() -> None:
-    params = {'mask': FILE, 'sample': OUTPUT, 'runs': [FILE, FILE]}
-    assert ref_types(MaskParams, params) == [(('sample',), OUTPUT, Sample)]
-    assert ref_types(Params, {'samples': [OUTPUT], 'found': OUTPUT}) == [
-        (('samples', 0), OUTPUT, Sample),
-        (('found',), OUTPUT, Mask),
-    ]
-
-
-def test_a_reference_at_several_referenced_groups_has_their_union() -> None:
-    assert ref_types(Params, {'either': OUTPUT}) == [
-        (('either',), OUTPUT, Sample | Mask)
-    ]
 
 
 def test_a_binding_gives_a_file_model_as_data() -> None:
