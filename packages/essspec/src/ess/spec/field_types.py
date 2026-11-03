@@ -265,11 +265,14 @@ def fits(data: Any, field: Any) -> bool:
     Whether data of type ``data`` can be the value of a field of type ``field``.
 
     ``| None`` is removed on both sides. Then the data fit when ``data`` is
-    ``field`` or a subclass of it. A generic alias, such as ``list[int]``,
-    fits only itself.
+    ``field`` or a subclass of it, or for a union ``field``, such as the
+    groups of ``Referenced[A] | Referenced[B]``, one of its members. A
+    generic alias, such as ``list[int]``, fits only itself.
     """
     data, _ = optional(data)
     field, _ = optional(field)
+    if get_origin(field) in (Union, UnionType):
+        return any(fits(data, member) for member in get_args(field))
     if get_origin(data) is not None or get_origin(field) is not None:
         return data == field
     return data is field or (

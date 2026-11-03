@@ -27,8 +27,8 @@ A spec of an I(Q) reduction, with each kind of parameter once::
         thickness: float = 1.0
 
     class PixelMask(BaseModel, arbitrary_types_allowed=True):
-        mask: sc.DataArray                    # a data value: PixelMask is given
-                                              # by reference to an output only
+        mask: sc.DataArray                    # a data value: only a reference
+                                              # to an output fills a PixelMask
 
     class GivenCentre(BaseModel):             # an alternative of a union
         kind: Literal['given'] = 'given'      # its tag
@@ -39,12 +39,19 @@ A spec of an I(Q) reduction, with each kind of parameter once::
         kind: Literal['find'] = 'find'
         tolerance: Annotated[float, Gt(0)] = 1e-3
 
+    class BeamCentre(BaseModel):              # what a centre finder outputs
+        x: float
+        y: float
+
     class IofQParams(BaseModel):
         reduction: Reduction = Reduction()    # a default is an instance
         range: WavelengthRange | None = None  # None: no range
         specimen: Specimen                    # no default: required
-        mask: PixelMask | None = None
-        centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
+        mask: Referenced[PixelMask] | None = None  # a reference fills it
+        centre: (                             # written, or a reference
+            Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
+            | Referenced[BeamCentre]
+        )
         transmission: RunFile                 # a file
         sample_runs: list[RunFile]            # a table: no default
 
@@ -70,23 +77,27 @@ output ``pixel_mask``::
         'sample_runs': [file(run=101), file(run=102)],  # two rows
     }                                            # range is left out: None
 
+``'centre': c.ref('beam_centre')``, with ``c`` the record of a centre
+finder, fills ``centre`` with a ``BeamCentre``.
+
 Terms
 -----
 
-*Parameter*
+*Parameter*, *place*
     A field of the params model, such as ``reduction``. A *list parameter*,
     ``list[X]``, holds *rows*, each of type ``X``. A *table* is a list
     parameter whose rows an accumulator takes a push at a time. ``tables``
-    names the tables.
+    names the tables. A *place* is a parameter or a row.
 *Group*
     A pydantic model, such as ``Reduction``, but not a ``RootModel``. A
     request writes a group as a JSON object of its *fields*. A field left out
     takes its default.
 *Union of groups*
-    A pydantic discriminated union, such as the type of ``centre``. Each
-    alternative is a group with the *tag* field named by ``discriminator``,
-    typed a ``Literal`` of one string. A request writes the fields of one
-    alternative and its tag, which says which alternative it is.
+    A pydantic discriminated union, such as ``GivenCentre | FindCentre`` in
+    the type of ``centre``. Each alternative is a group with the *tag* field
+    named by ``discriminator``, typed a ``Literal`` of one string. A request
+    writes the fields of one alternative and its tag, which says which
+    alternative it is.
 *Scalar*
     An ``int``, ``float``, ``str``, ``bool``, or ``datetime`` (also
     pydantic's ``AwareDatetime`` and ``NaiveDatetime``), or an enum or a
@@ -109,6 +120,12 @@ Terms
     ``m.ref('pixel_mask')`` names the output ``pixel_mask`` of the record
     ``m``. ``acc.ref(...)`` names an output of an accumulator. The backend
     replaces the reference by the output's data when the request runs.
+``Referenced[T]``
+    The type of a place that a reference to an output fills, with data that
+    fit the group ``T``, such as ``mask``. It is ``Annotated[T, REFERENCED]``
+    (see :data:`~ess.spec.parameters.Referenced`): pydantic, a binding, and
+    any direct use of the params model see ``T``, and take it inline. A
+    place of any other type is *unmarked*.
 *JSON form*
     What a value dumps to as JSON, ``model_dump(mode='json')``. The record of
     a request stores the JSON form of each value. The JSON form of a file is
@@ -119,49 +136,61 @@ Terms
 What a request writes
 ---------------------
 
-The type of a parameter, or of the rows of a list parameter, says what a
-request writes there:
+The type of a place says what a request writes there. A request writes an
+unmarked type; a reference fills ``Referenced[T]``:
 
-- A group, such as ``Reduction``: a JSON object of its fields, or a
-  reference to an output. A group with a file model, such as ``Specimen``,
-  takes no reference to an output. A group with a data value, such as
-  ``PixelMask``, takes only a reference to an output.
-- A union of groups, such as the type of ``centre``: a JSON object of the
-  fields of one alternative, with its tag.
+- A group, such as ``Reduction``: a JSON object of its fields.
+- A union of groups, such as ``GivenCentre | FindCentre``: a JSON object of
+  the fields of one alternative, with its tag.
 - A file model, such as ``RunFile``: a file.
+- ``Referenced[T]``, such as ``Referenced[PixelMask]``: a reference to an
+  output whose data fit ``T``.
+- A union of these, such as the type of ``centre``, or
+  ``BeamCentre | Referenced[BeamCentre]``: what one of its members takes.
+  The key ``@ref`` tells a reference from a value written inline, then the
+  tag tells the alternatives apart.
 - ``X | None``: what ``X`` takes, or ``None``.
 - ``list[X]``: a list of rows, each what ``X`` takes.
 
 The framework derives from the params model a *request type*, the type of
-what a request writes at each place, which follows this list (see
+what a request writes at each place: the params type with each
+``Referenced[T]`` replaced by a reference whose data fit ``T`` (see
 :mod:`ess.spec.request_types`). It validates a request, its JSON schema is
 the params schema of the spec (see :meth:`WorkflowSpec.serialize`), and a
-form made from the params model offers the sources it takes. The rules behind
-it:
+form made from the params model offers the sources it takes. The rules
+behind it:
 
+- An unmarked place is one that a request can write: a group without a
+  data value, a union of such groups with a tag, or a file model. A place
+  of a group with a data value, such as ``PixelMask``, is
+  ``Referenced[...]``.
 - A reference to an output fills a whole parameter or a whole row, never a
   field of a group. The backend validates a group when the request is
   submitted, so that its validators see all its fields, and an output may
-  not exist yet then.
+  not exist yet then. So ``Referenced[...]`` is at a parameter, a row, or a
+  member of a union there.
 - A file is a value, like a scalar. Its identity is known when the request
   is submitted, so a file can be a field of a group.
-- A reference to an output fits a parameter or a row if the output's type is
-  the group's class or a subclass of it (see
-  :func:`~ess.spec.field_types.fits`). So a parameter is a group: a
-  parameter typed ``float`` or ``sc.DataArray`` would fit every output of
-  that type, and a picker of records would list unrelated outputs. A number
-  is a field of a group, such as ``Reduction.bins``, and an array is a field
-  of a group whose class says what it is, such as ``PixelMask``.
+- A reference to an output fits a place if the output's type is the ``T``
+  of a ``Referenced[T]`` there, or a subclass of it (see
+  :func:`~ess.spec.field_types.fits`). So ``T`` is a group: ``float`` or
+  ``sc.DataArray`` would fit every output of that type, and a picker of
+  records would list unrelated outputs. A number is a field of a group,
+  such as ``Reduction.bins``, and an array is a field of a group whose
+  class says what it is, such as ``PixelMask``. A parameter that a request
+  writes is a group too, whose class names a role: a binding sets the
+  sciline key of its type (see :class:`~ess.spec.pipeline.PipelineBinding`).
 - No output holds a file model, so that every file comes from the file
-  source, which checks it. So a group with a file model takes no reference to
-  an output, and a group with a data value has no file model.
-- No reference to an output fits a union. An output that fit one would
-  carry the tag of an alternative, so the workflow that computes it would
-  know the specs that take it (see ADR 0008). A parameter that takes either
-  a value typed in or an output is a group, such as ``BeamCentre``, not a
-  union. So no alternative of a union has a data value.
+  source, which checks it. So ``T`` has no file model, at any depth.
+- A union at a place has members that a request writes, and members
+  ``Referenced[...]``. Two or more groups that a request writes are a union
+  of groups, with a tag, and with the discriminator on their own union, as
+  in ``centre``. A reference fits the place if its data fit one of the
+  groups ``Referenced[...]`` marks. These groups have no tag, so the
+  workflow that computes one knows nothing of the specs that take it.
 - A default is a value that a request may write, as validating it gives: an
-  instance of a group, not a dict, and never a reference or a file. A file
+  instance of a group, not a dict, and never a reference or a file. So a
+  place that only a reference fills has no default but ``None``, and a file
   model at a field of a group has no default but ``None`` or ``[]``.
 
 What a spec refuses
@@ -191,14 +220,19 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         def width(self) -> float: ...
 
     class Binning(BaseModel):
-        # float | None is a data value, so Binning is given by reference to
-        # an output only, and its default Binning() is refused. Use a bool
-        # field, or make the optional part a parameter typed X | None.
+        # float | None is a data value, so no request writes a Binning. Use
+        # a bool field, or make the optional part a parameter typed X | None,
+        # or, if a reference fills the place, mark it Referenced[Binning].
         start: float | None = None
 
     class Sample(BaseModel):
         # No NewType or type alias: a class says what a value is.
         run: RunNumber
+
+    class Specimen(BaseModel):
+        # Referenced[...] is at a parameter or a row, not at a field of a
+        # group: a group is validated whole when the request is submitted.
+        mask: Referenced[PixelMask]
 
     class Params(BaseModel):
         # A parameter is a group, a union of groups, or a list of one:
@@ -207,12 +241,17 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         reduction: Reduction
         binning: Binning = Binning()
         sample: Sample
+        specimen: Specimen
         geometry: Geometry
         calibration: CalibrationFile
+        # T of Referenced[T] is a group: Referenced[PixelMask] | None.
+        mask: Referenced[PixelMask | None] = None
+        # No output holds a file model: a file is given as file(...).
+        flux: Referenced[RunFile]
         # A list without rows is [], not None.
         transmissions: list[RunFile] | None = None
         # A row is a value: the element of a list is not X | None.
-        masks: list[PixelMask | None] = []
+        masks: list[Referenced[PixelMask] | None] = []
         # Pydantic does not validate a default, so a default is the value
         # validating it gives: WavelengthRange(start=1.0, stop=2.0).
         range: WavelengthRange = {'start': 1.0, 'stop': 2.0}
@@ -234,6 +273,8 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         # No output holds a file model or a Path: every file comes from the
         # file source.
         raw: RunFile
+        # Referenced[...] marks a place of the params.
+        pixel_mask: Referenced[PixelMask]
 
     WorkflowSpec(..., params=Params, outputs=Outputs, tables=('sample_runs',))
 
@@ -278,13 +319,14 @@ from annotated_types import MaxLen, MinLen
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Discriminator,
     Field,
     model_validator,
 )
 from pydantic.fields import FieldInfo
 
 from . import field_types, places, request_types
-from .parameters import FileModel
+from .parameters import REFERENCED, FileModel
 from .refs import ParamsError
 
 
@@ -435,12 +477,13 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     ==================================  ===================================
     a file only                         a picker of files (a file model)
     the object of a group's fields      the group's fields
-    a reference to an output only       a picker of records (a group with
-                                        a data value)
-    both of the last two                the group's fields, and a choice
-                                        to pick a record instead
     ``oneOf``, with ``discriminator``   a choice of the alternatives of a
                                         union, each with its fields
+    a reference to an output only       a picker of records
+                                        (``Referenced[T]``)
+    one of the last three, and a        the fields, or the alternatives,
+    reference to an output              and a choice to pick a record
+                                        instead
     ``null`` in ``anyOf``               a toggle: ``X | None``
     an array                            a list of rows
     ==================================  ===================================
@@ -455,12 +498,15 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     file, with the model's name under ``dataType`` and its metadata under
     ``metadata``, which say which files fit. A field of a group has the
     JSON schema of its type, or of its file model. The schemas of the
-    parameter ``reduction``, a parameter ``mask`` typed the file model
-    ``MaskFile``, its definition, and the field ``Reduction.bins``::
+    parameter ``reduction``, a parameter ``centre`` typed
+    ``BeamCentre | Referenced[BeamCentre]``, a parameter ``mask`` typed the
+    file model ``MaskFile``, its definition, and the field
+    ``Reduction.bins``::
 
-        "reduction": {"oneOf": [{"$ref": "#/$defs/Reduction", ...},
+        "reduction": {"$ref": "#/$defs/Reduction", ...}
+        "centre":    {"oneOf": [{"$ref": "#/$defs/BeamCentre", ...},
                                 {"oneOf": [OutputRef, AccumulatorRef],
-                                 "dataType": "Reduction", ...}]}
+                                 "dataType": "BeamCentre", ...}]}
         "mask":      {"$ref": "#/$defs/MaskFile"}
         "MaskFile":  {"properties": {"@ref": {"const": "file"}, "file": ...},
                       "dataType": "MaskFile", "metadata": {"kind": "mask"}}
@@ -526,7 +572,13 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
             continue
         if _has_alias(field):
             problems.append(f'{where}: a parameter has no alias')
-        if get_origin(field_types.optional(field.annotation)[0]) is list and (
+        listed = get_origin(field_types.optional(field.annotation)[0]) is list
+        if listed and REFERENCED in field.metadata:
+            problems.append(
+                f'{where}: a reference fills a row of a list parameter, '
+                'list[Referenced[X]], not the list'
+            )
+        elif listed and (
             other := [m for m in field.metadata if not isinstance(m, MinLen | MaxLen)]
         ):
             problems.append(
@@ -534,23 +586,34 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
                 f'not {other}; a check of one row belongs to the element type'
             )
         tp, _, metadata = places.root_type(model, name)
+        inline, inline_metadata, referenced = places.split(tp, *metadata)
+        if marked := _marker_problems(field.annotation, metadata, inline, referenced):
+            problems.extend(f'{where}: {problem}' for problem in marked)
+            continue
         try:
-            union = places.alternatives(tp, *metadata)
+            union = (
+                None
+                if inline is None
+                else places.alternatives(inline, *inline_metadata)
+            )
         except ValueError as error:
             problems.append(f'{where}: {error}')
             continue
         if union is not None:
             groups = list(union[1].values())
         else:
-            groups = [tp] if field_types.is_group(tp) else []
-        if not groups:
-            value = field_types.value_type(field.annotation)
+            groups = [inline] if field_types.is_group(inline) else []
+        if inline is not None and not groups:
             problems.append(
-                f'{where}: {field_types.type_name(value)} is not a group; a parameter '
-                'is a group, a union of groups, or a list of one, and a value of '
-                'another type is a field of a group, such as the bins of a reduction'
+                f'{where}: {field_types.type_name(inline)} is not a group; a '
+                'parameter is a group, a union of groups, or a list of one, and a '
+                'value of another type is a field of a group, such as the bins of '
+                'a reduction'
             )
-        elif inside := [p for group in groups for p in _group_problems(group)]:
+        elif inside := [
+            *(p for group in groups for p in _group_problems(group)),
+            *(p for data in referenced for p in _referenced_problems(data)),
+        ]:
             problems.extend(f'{where}: {problem}' for problem in inside)
         elif field.default_factory_takes_validated_data:
             problems.append(
@@ -651,31 +714,93 @@ def _has_alias(field: FieldInfo) -> bool:
     )
 
 
+def _marker_problems(
+    annotation: Any,
+    metadata: tuple[Any, ...],
+    inline: Any,
+    referenced: tuple[Any, ...],
+) -> list[str]:
+    """
+    Refuse ``Referenced[...]`` but at a parameter or a row of type
+    ``annotation``, or at a member of a union there: at a field of a group,
+    at any depth, or inside the part that a request writes or the type of
+    the data (see :func:`~ess.spec.places.split` for ``inline`` and
+    ``referenced``). Refuse a discriminator in ``metadata``, those of the
+    place, if a member is ``Referenced[...]``: the discriminator of the
+    alternatives is on their own union.
+    """
+    problems = [
+        f'{where}Referenced[...] is at a parameter or a row, not at a field of a '
+        'group: a group is validated whole when the request is submitted, and an '
+        'output may not exist then'
+        for where in _referenced_fields(annotation)
+    ]
+    problems.extend(
+        f'{field_types.type_name(tp)}: Referenced[...] is at a parameter, a row, '
+        'or a member of a union there, not inside another type'
+        for tp in (inline, *referenced)
+        if _marked(tp)
+    )
+    if inline is not None and referenced and any(_discriminates(m) for m in metadata):
+        problems.append(
+            'the discriminator of a union with Referenced[...] is on the union of '
+            'its alternatives, Annotated[A | B, Field(discriminator=...)] | '
+            'Referenced[C]'
+        )
+    return problems
+
+
+def _discriminates(meta: Any) -> bool:
+    """Whether ``meta``, metadata of a type, is a discriminator."""
+    return isinstance(meta, Discriminator) or (
+        isinstance(meta, FieldInfo) and meta.discriminator is not None
+    )
+
+
+def _referenced_fields(annotation: Any) -> list[str]:
+    """
+    ``'Class.field: '`` of each field marked ``Referenced[...]`` of a group
+    that ``annotation`` is made of, at any depth.
+    """
+    return [
+        f'{cls.__name__}.{name}: '
+        for cls in dict.fromkeys(field_types.reachable(annotation))
+        if field_types.is_group(cls)
+        for name, info in cls.model_fields.items()
+        if _marked(info.annotation, *info.metadata)
+    ]
+
+
+def _marked(annotation: Any, *metadata: Any) -> bool:
+    """
+    Whether ``annotation``, or a type it is made of, or ``metadata``, those of
+    its field, hold the marker of ``Referenced[...]``.
+    """
+    return REFERENCED in (*metadata, *field_types.arguments(annotation))
+
+
 def _group_problems(group: type[BaseModel]) -> list[str]:
     """
-    The problems of a group at a parameter or a row.
+    The problems of a group that a request writes at a parameter or a row.
 
-    A group without a data value is refused if it has a serializer or a
-    computed field, which would make its JSON form differ from the object of
-    its fields; a field with an alias; a default that is not a value, since a
-    field left out takes its default; or a file model at a field with a
-    default but ``None`` or ``[]``. Field and model validators of any mode
-    are allowed: they run whenever the group is validated (see
-    :mod:`ess.spec.places`).
-
-    A group with a data value is given by reference to an output only, so it
-    has no file model, as no output does (see :func:`_output_file_problems`).
-    Its fields are not checked otherwise. A file model is checked by
-    :func:`_file_model_problems` alone.
+    A group is refused if it has a data value, which no request writes, so
+    that only a reference fills its place (see
+    :func:`~ess.spec.places.unwritten`); a serializer or a computed field,
+    which would make its JSON form differ from the object of its fields; a
+    field with an alias; a default that is not a value, since a field left
+    out takes its default; or a file model at a field with a default but
+    ``None`` or ``[]``. Field and model validators of any mode are allowed:
+    they run whenever the group is validated (see :mod:`ess.spec.places`).
+    A file model is checked by :func:`_file_model_problems` alone.
     """
     if field_types.is_file_model(group):
         return _file_model_problems(group)
     if (data := places.unwritten(group)) is not None:
         held_type = field_types.type_name(group.model_fields[data].annotation)
         return [
-            f'{group.__name__} is given by reference to an output only, since no '
-            f'request writes its field {data}, of {held_type}: {problem}'
-            for problem in _output_file_problems(group)
+            f'{group.__name__}.{data}, of {held_type}: no request writes it; give '
+            'the field a type that a form has an input for, or mark the place '
+            f'Referenced[{group.__name__}], which a reference to an output fills'
         ]
     problems = []
     if found := _decorators(group, _SERIALIZERS):
@@ -703,6 +828,23 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
                 '[]: a request gives each file by reference'
             )
     return problems
+
+
+def _referenced_problems(data: Any) -> list[str]:
+    """
+    The problems of ``T`` of ``Referenced[T]``, typed as an output is: a
+    group, so that a picker of records lists the outputs of a class that
+    names a role, without a file model at any depth (see
+    :func:`_output_file_problems`).
+    """
+    if field_types.is_group(data):
+        return _output_file_problems(data)
+    name = field_types.type_name(data)
+    return [
+        f'Referenced[{name}]: {name} is not a group; a reference fills a place '
+        'with a group, so that a picker of records lists the outputs of a class '
+        'that names a role: mark each group, Referenced[A] | Referenced[B] | None'
+    ]
 
 
 def _file_model_problems(model: type[BaseModel]) -> list[str]:
@@ -839,6 +981,10 @@ def _outputs_problems(model: type[BaseModel]) -> list[str]:
             problems.append(
                 f'{where}: an output is a type, possibly typed X | None, or a '
                 'list or a dict of one'
+            )
+        elif _marked(tp, *field.metadata) or _referenced_fields(tp):
+            problems.append(
+                f'{where}: Referenced[...] marks a place of the params, not an output'
             )
         else:
             problems.extend(f'{where}: {problem}' for problem in _path_problems(tp))

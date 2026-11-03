@@ -26,7 +26,7 @@ from ess.apps import (
 )
 from ess.apps.log import Event, Log
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
-from ess.spec import FileModel, WorkflowSpec, function_binding
+from ess.spec import FileModel, Referenced, WorkflowSpec, function_binding
 
 
 class SampleRun(FileModel): ...
@@ -52,8 +52,8 @@ class Shift(BaseModel):
 
 class AddParams(BaseModel):
     shift: Shift = Field(default_factory=Shift)
-    a: Amount
-    b: Amount
+    a: Referenced[Amount]
+    b: Referenced[Amount]
 
 
 def _spec(

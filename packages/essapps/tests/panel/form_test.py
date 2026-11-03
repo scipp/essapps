@@ -10,7 +10,7 @@ from pydantic import AwareDatetime, BaseModel, Field, NaiveDatetime
 from ess.apps import Client, SubmitError
 from ess.apps.panel import Form, Listing
 from ess.apps.testing import FakeFiles
-from ess.spec import FileModel, FileRef, OutputRef, WorkflowSpec
+from ess.spec import FileModel, FileRef, OutputRef, Referenced, WorkflowSpec
 
 type Spec = WorkflowSpec[Any, Any]
 
@@ -327,6 +327,35 @@ def test_a_union_offers_its_alternatives_and_no_record(
     client.compute(find_spec, params={'run': run})
     form.refresh()
     assert form.ways('detector') == ['Front', 'Rear bank']
+
+
+def test_a_union_marked_referenced_offers_one_choice_of_alternatives_and_record(
+    client: Client, find_spec: Spec, run: FileRef
+) -> None:
+    centre = find_spec.outputs.model_fields['centre'].annotation
+
+    class SideParams(BaseModel):
+        side: (
+            Annotated[Left | Right, Field(discriminator='kind')] | Referenced[centre]  # type: ignore[valid-type]
+        )
+
+    spec: Spec = WorkflowSpec(
+        name='side',
+        version=1,
+        title='Side',
+        description='A side, or the centre of a record.',
+        params=SideParams,
+        outputs=Value,
+    )
+    found = client.compute(find_spec, params={'run': run})
+    side = Form(spec, client)
+    assert side.ways('side') == ['Left', 'Right', 'From a record']
+
+    way(side, 'Side').value = 'From a record'
+    picker(side, 'Side').value = found.ref('centre')
+    assert side.params == {'side': found.ref('centre')}
+    way(side, 'Side').value = 'Right'
+    assert side.params == {'side': {'kind': 'right'}}
 
 
 def test_set_refuses_a_tag_of_no_alternative(form: Form) -> None:

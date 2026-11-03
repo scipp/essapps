@@ -19,7 +19,7 @@ from pydantic import (
 from ess.apps import Backend, Client, Record, Status, SubmitError, Template
 from ess.apps import file as file_ref
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
-from ess.spec import FileModel, OutputRef, WorkflowSpec, function_binding
+from ess.spec import FileModel, OutputRef, Referenced, WorkflowSpec, function_binding
 
 
 class Blob:
@@ -34,7 +34,10 @@ class Shift(BaseModel):
 
 
 class MeasuredTransmission(BaseModel, arbitrary_types_allowed=True):
-    """A group that holds a data value, so is given by reference only."""
+    """
+    A group that holds a data value, so a reference fills its place,
+    ``Referenced[...]``.
+    """
 
     fraction: Blob
 
@@ -74,17 +77,17 @@ class Terms(BaseModel):
 
 
 class AddParams(BaseModel):
-    shift: Shift = Field(default_factory=Shift)
-    transmission: MeasuredTransmission | None = None
+    shift: Shift | Referenced[Shift] = Field(default_factory=Shift)
+    transmission: Referenced[MeasuredTransmission] | None = None
     terms: Terms = Field(default_factory=Terms)
 
 
 class SumParams(BaseModel):
-    part: list[Shift] = Field(min_length=1)
+    part: list[Shift | Referenced[Shift]] = Field(min_length=1)
 
 
 class ShiftsParams(BaseModel):
-    shifts: list[Shift] = Field(min_length=1)
+    shifts: list[Shift | Referenced[Shift]] = Field(min_length=1)
 
 
 class Value(BaseModel):
@@ -217,6 +220,12 @@ class CentredParams(BaseModel):
     centres: list[Centre] = Field(default_factory=list)
 
 
+class MarkedCentredParams(CentredParams):
+    """A centre as an alternative written inline, or by reference to a BeamCentre."""
+
+    beam_centre: Centre | Referenced[BeamCentre] = BeamCentre()
+
+
 class CentreOutputs(BaseModel):
     centre: BeamCentre
 
@@ -232,6 +241,7 @@ RANGE = _spec('range', RangeParams, Value)
 EDGES = _spec('edges', EdgesParams, Value, tables=('edges',))
 LENGTH = _spec('length', LengthParams, Value)
 CENTRED = _spec('centred', CentredParams, Value)
+MARKED_CENTRED = _spec('marked-centred', MarkedCentredParams, Value)
 FIND = _spec('find', LoadParams, CentreOutputs)
 MASKED = _spec('masked', MaskedParams, Value)
 
@@ -298,6 +308,7 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(EDGES, lambda p: Value(value=p.edges[0].values[0])),
             function_binding(LENGTH, lambda p: Value(value=0.0)),
             function_binding(CENTRED, centred),
+            function_binding(MARKED_CENTRED, centred),
             function_binding(
                 FIND,
                 lambda p: CentreOutputs(centre=BeamCentre(x=read_file(p.sample.path))),
@@ -584,12 +595,13 @@ def test_a_union_parameter_takes_either_alternative(client: Client) -> None:
         (lambda ref: {'centres': [BeamCentre(), ref]}, ('centres', 1)),
     ],
 )
-def test_no_reference_fits_a_union(
+def test_no_reference_fits_a_union_that_the_spec_does_not_mark(
     client: Client,
     params: Callable[[OutputRef], dict[str, Any]],
     place: tuple[str | int, ...],
 ) -> None:
-    # Not even an output of an alternative's type.
+    # Not even an output of an alternative's type, since a union of groups is
+    # written inline unless the spec marks the place Referenced[...].
     centre = client.compute(FIND, params={'sample': file_ref(run=2)})
     ref = centre.ref('centre')
     with pytest.raises(SubmitError) as raised:
@@ -597,8 +609,47 @@ def test_no_reference_fits_a_union(
     (error,) = raised.value.errors
     assert error.loc == place
     assert error.msg == (
-        f'{ref}: a union of groups is written inline, with the tag of an '
-        'alternative; no reference fits it'
+        f'{ref} is a reference to an output; BeamCentre | FindCentre is written '
+        'inline, since the spec does not mark the place Referenced[...]'
+    )
+
+
+def test_a_union_marked_referenced_takes_an_alternative_or_a_reference(
+    client: Client,
+) -> None:
+    found = client.compute(FIND, params={'sample': file_ref(run=2)})
+    by_reference = client.compute(
+        MARKED_CENTRED, params={'beam_centre': found.ref('centre')}
+    )
+    by_tag = client.compute(
+        MARKED_CENTRED, params={'beam_centre': {'kind': 'find', 'tolerance': 0.25}}
+    )
+
+    assert [client.output(r, 'value') for r in (by_reference, by_tag)] == [2.0, 0.25]
+    assert by_reference.request.params['beam_centre'] == found.ref('centre')
+
+
+def test_the_schema_of_a_union_marked_referenced_has_a_reference_form() -> None:
+    schema = MARKED_CENTRED.serialize().params_schema['properties']['beam_centre']
+    inline, reference = schema['oneOf']
+
+    assert inline['discriminator']['propertyName'] == 'kind'
+    assert reference['dataType'] == 'BeamCentre'
+    assert reference['discriminator']['propertyName'] == '@ref'
+
+
+def test_a_reference_is_refused_at_a_group_that_the_spec_does_not_mark(
+    client: Client, loaded: Record
+) -> None:
+    ref = loaded.ref('shift')
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(ADD, params={'terms': ref})
+    (error,) = raised.value.errors
+    assert error.loc == ('terms',)
+    assert error.msg == (
+        f'{ref} is a reference to an output; Terms is written inline, since the '
+        'spec does not mark the place Referenced[...]'
     )
 
 
@@ -651,7 +702,7 @@ def test_a_key_names_an_element_of_an_output(client: Client, loaded: Record) -> 
     assert client.output(computed, 'value') == 2.0
 
 
-def test_a_group_that_holds_a_data_value_is_given_by_reference_only(
+def test_a_group_that_holds_a_data_value_is_filled_by_reference_only(
     client: Client, loaded: Record
 ) -> None:
     computed = client.compute(ADD, params={'transmission': loaded.ref('transmission')})
@@ -662,8 +713,8 @@ def test_a_group_that_holds_a_data_value_is_given_by_reference_only(
     for inline in ({'fraction': 1.0}, MeasuredTransmission(fraction=Blob(1.0))):
         with pytest.raises(
             SubmitError,
-            match=r'^transmission: MeasuredTransmission is given by reference: no '
-            r'request writes its field fraction, of Blob$',
+            match=r'^transmission: .* is not a reference; MeasuredTransmission is '
+            r'given by reference to an output$',
         ):
             client.submit(ADD, params={'transmission': inline})
 

@@ -35,7 +35,7 @@ from ess.apps.testing import (
     kept_rows,
     read_file,
 )
-from ess.spec import Binding, FileModel, WorkflowSpec, function_binding
+from ess.spec import Binding, FileModel, Referenced, WorkflowSpec, function_binding
 
 
 class Amount(BaseModel):
@@ -66,16 +66,16 @@ class Loaded(BaseModel):
 
 
 class SourceParams(BaseModel):
-    source: Amount
+    source: Referenced[Amount]
 
 
 class OffsetParams(BaseModel):
-    source: Amount
-    shift: Amount
+    source: Referenced[Amount]
+    shift: Referenced[Amount]
 
 
 class TotalParams(BaseModel):
-    part: list[Amount] = Field(min_length=1)
+    part: list[Referenced[Amount]] = Field(min_length=1)
 
 
 class Value(BaseModel):
@@ -87,7 +87,10 @@ class Listed(BaseModel):
 
 
 class Boxed(BaseModel, arbitrary_types_allowed=True):
-    """A group that holds a data value, so is given by reference only."""
+    """
+    A group that holds a data value, so a reference fills its place,
+    ``Referenced[...]``.
+    """
 
     box: Box
 
@@ -97,7 +100,7 @@ class BoxOutputs(BaseModel):
 
 
 class BoxParams(BaseModel):
-    source: Boxed
+    source: Referenced[Boxed]
 
 
 def _spec(

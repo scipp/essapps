@@ -15,7 +15,7 @@ import scipp as sc
 from annotated_types import Gt
 from pydantic import BaseModel, Field, computed_field, field_validator
 
-from ess.spec import FileModel, WorkflowSpec
+from ess.spec import FileModel, Referenced, WorkflowSpec
 
 
 def allowed_spec() -> WorkflowSpec:
@@ -46,12 +46,19 @@ def allowed_spec() -> WorkflowSpec:
         kind: Literal['find'] = 'find'
         tolerance: Annotated[float, Gt(0)] = 1e-3
 
+    class BeamCentre(BaseModel):
+        x: float
+        y: float
+
     class IofQParams(BaseModel):
         reduction: Reduction = Reduction()
         range: WavelengthRange | None = None
         specimen: Specimen
-        mask: PixelMask | None = None
-        centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
+        mask: Referenced[PixelMask] | None = None
+        centre: (
+            Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
+            | Referenced[BeamCentre]
+        )
         transmission: RunFile
         sample_runs: list[RunFile]
 
@@ -101,15 +108,21 @@ def refused_spec() -> WorkflowSpec:
     class Sample(BaseModel):
         run: RunNumber
 
+    class Specimen(BaseModel):
+        mask: Referenced[PixelMask]
+
     class Params(BaseModel):
         bins: int = 10
         reduction: Reduction
         binning: Binning = Binning()
         sample: Sample
+        specimen: Specimen
         geometry: Geometry
         calibration: CalibrationFile
+        mask: Referenced[PixelMask | None] = None
+        flux: Referenced[RunFile]
         transmissions: list[RunFile] | None = None
-        masks: list[PixelMask | None] = []
+        masks: list[Referenced[PixelMask] | None] = []
         range: WavelengthRange = {'start': 1.0, 'stop': 2.0}
         sample_runs: list[RunFile] = []
         iofq: RunFile
@@ -123,6 +136,7 @@ def refused_spec() -> WorkflowSpec:
         iofq: sc.DataArray
         width: float | str
         raw: RunFile
+        pixel_mask: Referenced[PixelMask]
 
     return WorkflowSpec(
         name='bad',
@@ -157,8 +171,12 @@ def refusal() -> str:
         'Params.transmissions: a list parameter is not typed list[X] | None',
         'Params.masks: the element of a list parameter is not typed X | None',
         'Params.range: the default',
-        'Params.binning: the default is not a value a request may write: '
-        'binning: Binning is given by reference',
+        'Params.binning: Binning.start, of float | None: no request writes it',
+        'Params.specimen: Specimen.mask: Referenced[...] is at a parameter or a '
+        'row, not at a field of a group',
+        'Params.mask: Referenced[PixelMask | None]: PixelMask | None is not a group',
+        'Params.flux: RunFile is a file model; no output holds one',
+        'Outputs.pixel_mask: Referenced[...] marks a place of the params',
         'Outputs.raw: RunFile is a file model; no output holds one',
         'Params.bins: int is not a group',
         'sample_runs: a table has no default',

@@ -47,6 +47,7 @@ from ess.spec import (
     Binding,
     DriverBinding,
     FileModel,
+    Referenced,
     WorkflowSpec,
     function_binding,
 )
@@ -94,8 +95,8 @@ class LoadOutputs(BaseModel):
 
 
 class ShiftParams(BaseModel):
-    shift: Shift = Field(default_factory=Shift)
-    source: Amount
+    shift: Shift | Referenced[Shift] = Field(default_factory=Shift)
+    source: Amount | Referenced[Amount]
 
 
 class ShiftOutputs(BaseModel):
@@ -108,7 +109,7 @@ class ScaleParams(BaseModel):
 
 
 class Parts(BaseModel):
-    parts: list[Amount] = Field(min_length=1)
+    parts: list[Amount | Referenced[Amount]] = Field(min_length=1)
 
 
 def _spec(
@@ -144,7 +145,7 @@ class SumParams(BaseModel):
     scale: Factor = Field(default_factory=Factor)
     labels: Labels = Field(default_factory=Labels)
     runs: list[RunFile]
-    offset: Amount | None = None
+    offset: Amount | Referenced[Amount] | None = None
 
 
 SUM = _spec('sum', params=SumParams, tables=('runs',))
@@ -158,7 +159,7 @@ class WeightedPart(BaseModel):
 
 
 class WeightedParams(BaseModel):
-    parts: list[WeightedPart] = Field(min_length=1)
+    parts: list[WeightedPart | Referenced[WeightedPart]] = Field(min_length=1)
 
 
 WEIGHTED = _spec('weighted', params=WeightedParams, tables=('parts',))
@@ -178,8 +179,8 @@ class Reference(BaseModel):
 
 class StitchParams(BaseModel):
     reference: Reference
-    low: list[Amount]
-    high: list[Amount]
+    low: list[Amount | Referenced[Amount]]
+    high: list[Amount | Referenced[Amount]]
 
 
 class Curve(BaseModel):
@@ -1938,7 +1939,7 @@ def test_an_accumulator_value_that_does_not_fit_the_spec_fails_the_reader(
 
 # The toy specs over arrays. An array is a data value, which no request
 # writes, so an array that one workflow outputs and another takes is the field
-# of a group, Counts, which a request gives by reference.
+# of a group, Counts, whose place a reference fills, Referenced[Counts].
 
 
 class Data(BaseModel):
@@ -1961,11 +1962,11 @@ class ArrayValue(Data):
 
 
 class ArrayParts(Data):
-    parts: list[Counts] = Field(min_length=1)
+    parts: list[Referenced[Counts]] = Field(min_length=1)
 
 
 class CopyParams(Data):
-    source: Counts
+    source: Referenced[Counts]
 
 
 class CopyOutputs(Data):
@@ -1973,13 +1974,13 @@ class CopyOutputs(Data):
 
 
 class SidesParams(Data):
-    samples: list[Counts]
-    backgrounds: list[Counts]
+    samples: list[Referenced[Counts]]
+    backgrounds: list[Referenced[Counts]]
 
 
 class BothParams(Data):
-    samples: list[Counts] = Field(min_length=1)
-    backgrounds: list[Counts] = Field(min_length=1)
+    samples: list[Referenced[Counts]] = Field(min_length=1)
+    backgrounds: list[Referenced[Counts]] = Field(min_length=1)
 
 
 class Sides(Data):
@@ -2860,7 +2861,7 @@ class GridOutputs(Data):
 
 
 class GridParts(Data):
-    parts: list[Grid] = Field(min_length=1)
+    parts: list[Referenced[Grid]] = Field(min_length=1)
 
 
 class GridTotal(Data):

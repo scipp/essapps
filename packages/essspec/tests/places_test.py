@@ -8,12 +8,13 @@ import scipp as sc
 from annotated_types import Gt
 from pydantic import BaseModel, Field, Strict
 
-from ess.spec import FileModel, FileRef, OutputRef
+from ess.spec import FileModel, FileRef, OutputRef, Referenced
+from ess.spec.parameters import REFERENCED
 from ess.spec.places import (
     alternatives,
     ref_types,
     root_type,
-    takes_output,
+    split,
     unwritten,
     validated,
 )
@@ -56,17 +57,19 @@ Centre = Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
 
 
 class Params(BaseModel):
-    mask: Mask
+    mask: Referenced[Mask]
     sample: Sample
     reduction: Reduction | None = None
     beam_centre: Centre
     centres: list[Centre]
-    samples: list[Sample] = Field(min_length=2)
+    samples: list[Sample | Referenced[Sample]] = Field(min_length=2)
+    found: Centre | Referenced[Mask] = GivenCentre()
+    either: Referenced[Sample] | Referenced[Mask] | None = None
 
 
 class MaskParams(BaseModel):
     mask: MaskFile | None = None
-    sample: Sample | None = None
+    sample: Referenced[Sample] | None = None
     runs: list[RunFile] = []
 
 
@@ -94,15 +97,12 @@ def _unread(ref: Ref) -> Any:
     raise AssertionError(f'{ref} is read; a file is never read')
 
 
-def test_a_file_model_takes_no_output() -> None:
+def test_an_unmarked_place_is_written_by_the_request() -> None:
     assert root_type(MaskParams, 'mask') == (MaskFile, True, ())
-    assert not takes_output(MaskFile)
-
-
-def test_a_group_holding_a_file_model_is_written_inline_only() -> None:
+    assert split(MaskFile) == (MaskFile, (), ())
     assert root_type(MeasuredParams, 'measured') == (Measured, False, ())
+    assert split(Measured) == (Measured, (), ())
     assert unwritten(Measured) is None
-    assert not takes_output(Measured)
 
 
 def test_a_file_model_in_a_group_gets_its_local_path_from_paths() -> None:
@@ -118,16 +118,45 @@ def test_a_file_model_in_a_group_gets_its_local_path_from_paths() -> None:
     assert measured.masks[0].path == Path('run.nxs')
 
 
-def test_a_group_with_a_data_value_takes_a_reference_only() -> None:
-    assert root_type(Params, 'mask') == (Mask, False, ())
+def test_a_place_marked_referenced_is_filled_by_a_reference_only() -> None:
+    assert root_type(Params, 'mask') == (Mask, False, (REFERENCED,))
+    assert split(Mask, REFERENCED) == (None, (), (Mask,))
     assert unwritten(Mask) == 'mask'
-    assert takes_output(Mask)
 
 
-def test_a_group_of_scalars_is_written_inline_or_by_reference() -> None:
+def test_the_marker_of_a_place_typed_x_or_none_is_in_its_metadata() -> None:
+    assert root_type(MaskParams, 'sample') == (Sample, True, (REFERENCED,))
+
+
+def test_referenced_x_or_none_keeps_its_none_in_the_type_of_the_data() -> None:
+    class MaybeMask(BaseModel):
+        mask: Referenced[Mask | None] = None
+
+    assert root_type(MaybeMask, 'mask') == (Mask | None, False, (REFERENCED,))
+
+
+def test_a_union_with_referenced_members_splits_into_both_parts() -> None:
+    tp, none, metadata = root_type(Params, 'samples')
+    assert not none
+    assert split(tp, *metadata) == (Sample, (), (Sample,))
+    tp, _, metadata = root_type(Params, 'either')
+    assert split(tp, *metadata) == (None, (), (Sample, Mask))
+
+
+def test_the_alternatives_written_keep_their_discriminator() -> None:
+    tp, _, metadata = root_type(Params, 'found')
+    inline, inline_metadata, referenced = split(tp, *metadata)
+    assert referenced == (Mask,)
+    assert alternatives(inline, *inline_metadata) == (
+        'kind',
+        {'given': GivenCentre, 'find': FindCentre},
+    )
+
+
+def test_a_group_of_scalars_is_written_inline() -> None:
     assert root_type(Params, 'reduction') == (Reduction, True, ())
+    assert split(Reduction) == (Reduction, (), ())
     assert unwritten(Reduction) is None
-    assert takes_output(Reduction)
 
 
 def test_the_metadata_of_the_field_comes_before_that_in_its_type() -> None:
@@ -144,7 +173,7 @@ def test_a_union_is_written_inline_with_the_tag_of_an_alternative() -> None:
         'kind',
         {'given': GivenCentre, 'find': FindCentre},
     )
-    assert not takes_output(tp)
+    assert split(tp, *metadata) == (tp, metadata, ())
 
 
 def test_a_union_typed_x_or_none_takes_none() -> None:
@@ -171,7 +200,7 @@ def test_the_discriminator_of_a_field_is_in_its_metadata() -> None:
 
 
 def test_the_root_type_of_a_list_parameter_is_that_of_an_element() -> None:
-    assert root_type(Params, 'samples') == (Sample, False, ())
+    assert root_type(MaskParams, 'runs') == (RunFile, False, ())
     tp, none, metadata = root_type(Params, 'centres')
     assert not none
     assert alternatives(tp, *metadata) == (
@@ -195,11 +224,18 @@ def test_a_request_writes_no_data_value() -> None:
     assert unwritten(Sample) is None
 
 
-def test_each_reference_to_an_output_has_the_type_of_its_parameter_or_element() -> None:
+def test_each_reference_to_an_output_has_the_type_referenced_at_its_place() -> None:
     params = {'mask': FILE, 'sample': OUTPUT, 'runs': [FILE, FILE]}
     assert ref_types(MaskParams, params) == [(('sample',), OUTPUT, Sample)]
-    assert ref_types(Params, {'samples': [OUTPUT]}) == [
-        (('samples', 0), OUTPUT, Sample)
+    assert ref_types(Params, {'samples': [OUTPUT], 'found': OUTPUT}) == [
+        (('samples', 0), OUTPUT, Sample),
+        (('found',), OUTPUT, Mask),
+    ]
+
+
+def test_a_reference_at_several_referenced_groups_has_their_union() -> None:
+    assert ref_types(Params, {'either': OUTPUT}) == [
+        (('either',), OUTPUT, Sample | Mask)
     ]
 
 

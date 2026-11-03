@@ -39,16 +39,18 @@ parameter, from its type, with these functions::
 
     # The type without | None, whether it is X | None, and its metadata.
     tp, none, metadata = root_type(Params, 'centre')
+    # The part that a request writes, with its metadata, and the groups
+    # whose data a reference fills the place with, each T of Referenced[T].
+    inline, inline_metadata, referenced = split(tp, *metadata)
     # A union of groups: show the fields of each alternative. None for any
     # other type.
-    alternatives(tp, *metadata)  # ('kind', {'given': ..., 'find': ...})
-    # A group, not a file model, without a data value: show its fields.
-    written_inline(tp)
-    # A group, not a file model, without a file model in a field: offer a
-    # picker of records.
-    takes_output(tp)
-    # A file model: offer a picker of files.
-    field_types.is_file_model(tp)
+    alternatives(inline, *inline_metadata)  # ('kind', {'given': ..., ...})
+    # A file model: offer a picker of files. Any other group: show its
+    # fields.
+    field_types.is_file_model(inline)
+    # Groups that a reference fills the place with: offer a picker of
+    # records.
+    referenced  # (ComputedBeamCentre,)
 
 :func:`unwritten` gives the first data value of a group, :func:`field_metadata`
 the metadata of a field with its discriminator, and :func:`title` the label
@@ -74,6 +76,7 @@ from pydantic.fields import FieldInfo
 from pydantic_core import ErrorDetails, PydanticSerializationError
 
 from . import field_types
+from .parameters import REFERENCED
 from .refs import (
     AccumulatorRef,
     FileRef,
@@ -192,18 +195,20 @@ def root_type(model: type[BaseModel], name: str) -> tuple[Any, bool, tuple[Any, 
     field, with its discriminator, then those of each ``Annotated`` in the
     type, the outer first. The metadata of the field of a list parameter,
     such as its length, belong to the list, so a row has only those of its
-    type::
+    type. The marker of ``Referenced[T]`` ends the type at ``T``, the type
+    of the data, so ``Referenced[X | None]`` keeps its ``| None``::
 
         root_type(Params, 'beam_centre')
         # (GivenCentre | FindCentre, False, (Field(discriminator='kind'),))
+        root_type(Params, 'mask')  # mask: Referenced[PixelMask] | None = None
+        # (PixelMask, True, (REFERENCED,))
         root_type(Params, 'samples')  # samples: list[Sample] = Field(min_length=2)
         # (Sample, False, ())
     """
     info = model.model_fields[name]
     if field_types.is_list(model, name):
         return _unwrapped(get_args(info.annotation)[0])
-    tp, none, inner = _unwrapped(info.annotation)
-    return tp, none, (*field_metadata(info), *inner)
+    return _unwrapped(info.annotation, field_metadata(info))
 
 
 def field_metadata(info: FieldInfo) -> tuple[Any, ...]:
@@ -230,15 +235,19 @@ def title(name: str, info: FieldInfo) -> str:
     return info.title or name.replace('_', ' ').title()
 
 
-def _unwrapped(annotation: Any) -> tuple[Any, bool, tuple[Any, ...]]:
+def _unwrapped(
+    annotation: Any, metadata: tuple[Any, ...] = ()
+) -> tuple[Any, bool, tuple[Any, ...]]:
     """
     ``annotation`` without its outer ``Annotated`` and ``| None``, at any
-    depth; whether it had ``| None``; and the metadata of each ``Annotated``,
-    the outer first. Unlike :func:`~ess.spec.field_types.optional`, it
-    keeps the metadata of the members of a union and the elements of a list.
+    depth, up to the marker of ``Referenced[T]``, which leaves ``T``;
+    whether it had ``| None``; and ``metadata``, then the metadata of each
+    ``Annotated``, the outer first. Unlike
+    :func:`~ess.spec.field_types.optional`, it keeps the metadata of the
+    members of a union and the elements of a list.
     """
-    tp, metadata, none = annotation, (), False
-    while True:
+    tp, none = annotation, False
+    while REFERENCED not in metadata:
         origin, args = get_origin(tp), get_args(tp)
         if origin is Annotated:
             metadata = (*metadata, *tp.__metadata__)
@@ -248,7 +257,48 @@ def _unwrapped(annotation: Any) -> tuple[Any, bool, tuple[Any, ...]]:
             tp = rest[0] if len(rest) == 1 else Union[rest]  # noqa: UP007
             none = True
         else:
-            return tp, none, metadata
+            break
+    return tp, none, metadata
+
+
+def split(tp: Any, *metadata: Any) -> tuple[Any, tuple[Any, ...], tuple[Any, ...]]:
+    """
+    The part of a place of type ``tp`` that a request writes, with its
+    metadata; and the types whose data a reference fills the place with,
+    the ``T`` of each ``Referenced[T]``. ``tp`` and ``metadata`` are as
+    :func:`root_type` gives them. The part written is ``None`` if only a
+    reference fills the place. Its metadata are ``metadata``, then those of
+    its ``Annotated``::
+
+        split(Reduction)  # (Reduction, (), ())
+        split(PixelMask, REFERENCED)  # (None, (), (PixelMask,))
+        split(BeamCentre | Referenced[BeamCentre])
+        # (BeamCentre, (), (BeamCentre,))
+        split(
+            Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
+            | Referenced[ComputedBeamCentre]
+        )
+        # (GivenCentre | FindCentre, (Field(discriminator='kind'),),
+        #  (ComputedBeamCentre,))
+    """
+    if REFERENCED in metadata:
+        return None, (), (tp,)
+    members = get_args(tp) if get_origin(tp) in (Union, UnionType) else (tp,)
+    referenced = tuple(get_args(m)[0] for m in members if _marked(m))
+    if not referenced:
+        return tp, metadata, ()
+    written = tuple(m for m in members if not _marked(m))
+    if not written:
+        return None, (), referenced
+    inline: Any = written[0] if len(written) == 1 else Union[written]  # noqa: UP007
+    if get_origin(inline) is not Annotated:
+        return inline, metadata, referenced
+    return get_args(inline)[0], (*metadata, *inline.__metadata__), referenced
+
+
+def _marked(tp: Any) -> bool:
+    """Whether ``tp`` is ``Referenced[T]``."""
+    return get_origin(tp) is Annotated and REFERENCED in tp.__metadata__
 
 
 def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] | None:
@@ -265,12 +315,12 @@ def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] 
     discriminator in ``annotation`` takes precedence. The alternatives are
     in the order of the union, without their ``Annotated`` metadata.
 
-    Raises ``ValueError`` for a union that breaks a rule of
+    ``annotation`` is the part of a place that a request writes (see
+    :func:`split`). Raises ``ValueError`` for a union that breaks a rule of
     :mod:`ess.spec._workflow_spec`: a member that is not a group; no
     discriminator, or one that is not the name of a field, such as a
     callable ``Discriminator``; a tag field with an alias or not typed a
-    ``Literal`` of one string; an alternative with a data value (see
-    :func:`unwritten`).
+    ``Literal`` of one string.
     """
     tp, _, inner = _unwrapped(annotation)
     discriminator = None
@@ -311,15 +361,6 @@ def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] 
             for a in ('alias', 'validation_alias', 'serialization_alias')
         ):
             raise ValueError(f'{where}: a tag has no alias')
-        if (data := unwritten(member)) is not None:
-            held_type = field_types.type_name(member.model_fields[data].annotation)
-            raise ValueError(
-                f'{member.__name__}.{data}, of {held_type}: no request writes it, '
-                'since an alternative of a union is written inline, with its tag, '
-                'and no reference fits a union; give the field a type that the '
-                f'params schema has an input for, or make {member.__name__} a '
-                'parameter of its own, given by reference'
-            )
         groups[tags[0]] = member  # pydantic refuses two alternatives of one tag
     return discriminator, groups
 
@@ -333,7 +374,8 @@ def _tags(annotation: Any) -> tuple[Any, ...]:
 def unwritten(group: type[BaseModel]) -> str | None:
     """
     The name of the first data value of ``group``, or ``None`` if it has
-    none. A group with a data value is given by reference to an output only.
+    none. No request writes a group with a data value, so only a reference
+    fills its place, ``Referenced[...]``.
     """
     return next(
         (n for n, f in group.model_fields.items() if not _interpreted(f.annotation)),
@@ -374,49 +416,25 @@ def _is_scalar(tp: Any) -> bool:
     return all(type(v) in (str, int, float, bool) for v in values)
 
 
-def written_inline(tp: Any) -> bool:
-    """
-    Whether a request may write a parameter or row of type ``tp`` as a JSON
-    object of the fields of ``tp``: whether ``tp`` is a group without a data
-    value (see :func:`unwritten`). A file model is not, since a request
-    writes a file as ``file(...)``.
-    """
-    return (
-        field_types.is_group(tp)
-        and not field_types.is_file_model(tp)
-        and unwritten(tp) is None
-    )
-
-
-def takes_output(tp: Any) -> bool:
-    """
-    Whether a reference to an output may fill a parameter or row of type
-    ``tp``: whether ``tp`` is a group, not a file model, without a field
-    typed a file model, since no output holds a file model.
-    """
-    return (
-        field_types.is_group(tp)
-        and not field_types.is_file_model(tp)
-        and all(
-            field_types.file_model(f.annotation) is None
-            for f in tp.model_fields.values()
-        )
-    )
-
-
 def ref_types(
     model: type[BaseModel], params: Mapping[str, Any]
 ) -> list[tuple[Loc, OutputRef | AccumulatorRef, Any]]:
     """
     Each reference to an output in ``params``, with its position and the
-    type its data must fit: that of the parameter or its rows, without
-    ``| None``. ``params`` are by name, as
-    :func:`~ess.spec.request_types.held` returns them, so a reference to an
-    output fills a whole parameter or row. Files are left
-    out.
+    type its data must fit: the group of ``Referenced[...]`` at its place,
+    or the union of the groups if there are several (see :func:`split`).
+    ``params`` are by name, as :func:`~ess.spec.request_types.held` returns
+    them, so a reference to an output fills a whole parameter or row that
+    the spec marks so. Files are left out.
     """
     return [
-        (loc, ref, field_types.value_type(model.model_fields[str(loc[0])].annotation))
+        (loc, ref, _referenced_type(model, str(loc[0])))
         for loc, ref in iter_refs(params)
         if not isinstance(ref, FileRef)
     ]
+
+
+def _referenced_type(model: type[BaseModel], name: str) -> Any:
+    """The union of the groups that a reference fills the place ``name`` with."""
+    tp, _, metadata = root_type(model, name)
+    return Union[split(tp, *metadata)[2]]  # noqa: UP007

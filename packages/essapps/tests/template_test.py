@@ -28,6 +28,7 @@ from ess.spec import (
     DriverBinding,
     FileModel,
     NoParams,
+    Referenced,
     StageCall,
     WorkflowSpec,
     function_binding,
@@ -66,11 +67,13 @@ def _positive(number: Amount) -> Amount:
 
 
 class PositiveParams(BaseModel):
-    positive: Annotated[Amount, AfterValidator(_positive)]
+    positive: Referenced[Annotated[Amount, AfterValidator(_positive)]]
 
 
 class PositivesParams(BaseModel):
-    positive: list[Annotated[Amount, AfterValidator(_positive)]] = Field(min_length=1)
+    positive: list[Referenced[Annotated[Amount, AfterValidator(_positive)]]] = Field(
+        min_length=1
+    )
 
 
 class Made(BaseModel):

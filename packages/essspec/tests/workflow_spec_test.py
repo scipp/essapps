@@ -30,6 +30,7 @@ from ess.spec import (
     FileRef,
     NoParams,
     OutputRef,
+    Referenced,
     SerializedWorkflowSpec,
     WorkflowSpec,
 )
@@ -233,7 +234,7 @@ class ComputedParams(BaseModel):
 
 
 class BeamCentre(BaseModel, arbitrary_types_allowed=True):
-    """A group that holds a data value: given by reference only."""
+    """A group that holds a data value: only a reference fills its place."""
 
     position: sc.Variable
 
@@ -247,8 +248,8 @@ class ByCentre(BaseModel, arbitrary_types_allowed=True):
 
 class Centring(BaseModel):
     """
-    A group with a field of a group, and of a tuple: data values, so it is
-    given by reference only.
+    A group with a field of a group, and of a tuple: data values, so only a
+    reference fills its place.
     """
 
     centre: BeamCentre | None = None
@@ -272,9 +273,9 @@ class CentrePeak:
 
 
 class IofQSettings(BaseModel):
-    reduction: Reduction = Field(default_factory=Reduction)
-    time_range: TimeRange | None = None
-    beam_centre: BeamCentre | None = None
+    reduction: Reduction | Referenced[Reduction] = Field(default_factory=Reduction)
+    time_range: TimeRange | Referenced[TimeRange] | None = None
+    beam_centre: Referenced[BeamCentre] | None = None
 
 
 class IofQParams(IofQSettings):
@@ -341,7 +342,13 @@ def model(name: str, **fields: Any) -> type[BaseModel]:
 
 GEOMETRIES = spec(
     name='sans-geometries',
-    params=model('P', geometry=(list[SampleGeometry], Field(min_length=1))),
+    params=model(
+        'P',
+        geometry=(
+            list[SampleGeometry | Referenced[SampleGeometry]],
+            Field(min_length=1),
+        ),
+    ),
     tables=('geometry',),
 )
 FILES = spec(
@@ -406,11 +413,25 @@ class TestMetadata:
     def test_a_union_of_groups_takes_an_inline_value(self, tp: Any) -> None:
         assert _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
 
-    @pytest.mark.parametrize('tp', [BeamCentre, list[BeamCentre], Centring])
-    def test_a_group_that_holds_a_data_value_takes_no_inline_value(
+    @pytest.mark.parametrize(
+        'tp',
+        [Referenced[BeamCentre], list[Referenced[BeamCentre]], Referenced[Centring]],
+    )
+    def test_a_place_marked_referenced_takes_no_inline_value(self, tp: Any) -> None:
+        assert not _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
+
+    @pytest.mark.parametrize(
+        'tp',
+        [
+            Reduction | Referenced[Reduction],
+            list[TimeRange | Referenced[TimeRange]],
+            By | Referenced[BeamCentre],
+        ],
+    )
+    def test_a_union_with_a_referenced_member_takes_an_inline_value(
         self, tp: Any
     ) -> None:
-        assert not _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
+        assert _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
 
 
 def _takes_inline(spec: WorkflowSpec[Any, Any], name: str) -> bool:
@@ -490,7 +511,8 @@ class TestModelRules:
             },
             {
                 'params': model(
-                    'P', mask=(model('Mask', pixels=(sc.Variable, ...)), ...)
+                    'P',
+                    mask=(Referenced[model('Mask', pixels=(sc.Variable, ...))], ...),
                 )
             },
             {'outputs': model('O', iofq=(list[sc.DataArray], ...))},
@@ -517,8 +539,19 @@ class TestModelRules:
             {
                 'params': model(
                     'P',
-                    centre=(BeamCentre | None, None),
-                    centres=(list[BeamCentre], []),
+                    centre=(Referenced[BeamCentre] | None, None),
+                    centres=(list[Referenced[BeamCentre]], []),
+                )
+            },
+            {
+                'params': model(
+                    'P',
+                    reduction=(Reduction | Referenced[Reduction], Reduction()),
+                    window=(ByWindow | Referenced[Reduction] | None, ByWindow()),
+                    by=(By | Referenced[BeamCentre], ByTime(mode='time', seconds=1)),
+                    centre=(Referenced[BeamCentre] | Referenced[Centring], ...),
+                    steps=(list[TimeRange | Referenced[TimeRange]], []),
+                    found=(list[By | Referenced[BeamCentre]], []),
                 )
             },
         ],
@@ -678,27 +711,161 @@ class TestModelRules:
                 'P.a: RoleRun.file: SampleFile is a NewType.*; '
                 'P.b: RoleRun.file: SampleFile is a NewType',
             ),
+            *(
+                (
+                    {'params': model('P', centre=(tp, ...))},
+                    re.escape(
+                        'P.centre: BeamCentre.position, of Variable: no request '
+                        'writes it; give the field a type that a form has an input '
+                        'for, or mark the place Referenced[BeamCentre], which a '
+                        'reference to an output fills'
+                    ),
+                )
+                for tp in (BeamCentre, BeamCentre | None, list[BeamCentre])
+            ),
+            (
+                {'params': model('P', centring=(Centring, ...))},
+                re.escape(
+                    'P.centring: Centring.centre, of BeamCentre | None: no request '
+                    'writes it'
+                ),
+            ),
             (
                 {
                     'params': model(
-                        'P', centre=(BeamCentre, BeamCentre(position=sc.scalar(1.0)))
+                        'P',
+                        centre=(
+                            Referenced[BeamCentre],
+                            BeamCentre(position=sc.scalar(1.0)),
+                        ),
                     )
                 },
-                f'P.centre: {NOT_A_VALUE}: centre: BeamCentre is given by reference: '
-                'no request writes its field position, of Variable',
+                f'P.centre: {NOT_A_VALUE}: centre: .* is not a reference; BeamCentre '
+                'is given by reference to an output',
             ),
             (
                 {
                     'params': model(
                         'P',
                         centring=(
-                            Centring,
+                            Reduction | Referenced[Centring],
                             Centring(centre=BeamCentre(position=sc.scalar(1.0))),
                         ),
                     )
                 },
-                f'P.centring: {NOT_A_VALUE}: centring: Centring is given by '
-                'reference: no request writes its field centre, of BeamCentre | None',
+                f'P.centring: {NOT_A_VALUE}: centring: cannot be stored as JSON',
+            ),
+            *(
+                (
+                    {'params': model('P', g=(group, ...))},
+                    re.escape(
+                        f'P.g: {where}: Referenced[...] is at a parameter or a row, '
+                        'not at a field of a group: a group is validated whole when '
+                        'the request is submitted, and an output may not exist then'
+                    ),
+                )
+                for group, where in (
+                    (model('G', mask=(Referenced[BeamCentre], ...)), 'G.mask'),
+                    (
+                        model('G', mask=(Referenced[BeamCentre] | None, None)),
+                        'G.mask',
+                    ),
+                    (
+                        model('G', masks=(list[Referenced[BeamCentre]], [])),
+                        'G.masks',
+                    ),
+                    (
+                        model(
+                            'G',
+                            inner=(
+                                model('H', mask=(Referenced[BeamCentre], ...)),
+                                ...,
+                            ),
+                        ),
+                        'H.mask',
+                    ),
+                    (
+                        Referenced[model('G', mask=(Referenced[BeamCentre], ...))],
+                        'G.mask',
+                    ),
+                    (
+                        Reduction
+                        | Referenced[model('G', mask=(Referenced[BeamCentre], ...))],
+                        'G.mask',
+                    ),
+                )
+            ),
+            *(
+                (
+                    {'params': model('P', c=(tp, None))},
+                    re.escape(
+                        f'P.c: Referenced[{name}]: {name} is not a group; a reference '
+                        'fills a place with a group, so that a picker of records '
+                        'lists the outputs of a class that names a role'
+                    ),
+                )
+                for tp, name in (
+                    (Referenced[BeamCentre | None], 'BeamCentre | None'),
+                    (Referenced[BeamCentre | Centring] | None, 'BeamCentre | Centring'),
+                    (Referenced[float] | None, 'float'),
+                )
+            ),
+            (
+                {'params': model('P', c=(Referenced[list[BeamCentre]], ...))},
+                re.escape(
+                    'P.c: a reference fills a row of a list parameter, '
+                    'list[Referenced[X]], not the list'
+                ),
+            ),
+            *(
+                (
+                    {'params': model('P', run=(tp, ...))},
+                    f'P.run: RunFile {FILE_MODEL_OUTPUT}',
+                )
+                for tp in (Referenced[RunFile], list[Referenced[RunFile]])
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        by=(
+                            ByMonitor | Referenced[ByTime],
+                            Field(discriminator='mode'),
+                        ),
+                    )
+                },
+                re.escape(
+                    'P.by: the discriminator of a union with Referenced[...] is on '
+                    'the union of its alternatives, Annotated[A | B, '
+                    'Field(discriminator=...)] | Referenced[C]'
+                ),
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        by=(
+                            Annotated[
+                                ByMonitor | Referenced[ByTime],
+                                Field(discriminator='mode'),
+                            ]
+                            | Referenced[BeamCentre],
+                            ...,
+                        ),
+                    )
+                },
+                re.escape(
+                    'P.by: ByMonitor | ByTime: Referenced[...] is at a parameter, a '
+                    'row, or a member of a union there, not inside another type'
+                ),
+            ),
+            (
+                {
+                    'params': model(
+                        'P', by=(ByMonitor | ByTime | Referenced[BeamCentre], ...)
+                    )
+                },
+                'P.by: a union of groups has a discriminator',
             ),
             (
                 {'params': model('P', reduction=(dict[str, Reduction], {}))},
@@ -735,11 +902,11 @@ class TestModelRules:
                         ),
                     )
                 },
-                'P.by: ByCentre.centre, of Variable: no request writes it, since an '
-                'alternative of a union is written inline, with its tag, and no '
-                'reference fits a union; give the field a type that the params '
-                'schema has an input for, or make ByCentre a parameter of its own, '
-                'given by reference',
+                re.escape(
+                    'P.by: ByCentre.centre, of Variable: no request writes it; give '
+                    'the field a type that a form has an input for, or mark the place '
+                    'Referenced[ByCentre], which a reference to an output fills'
+                ),
             ),
             (
                 {
@@ -932,10 +1099,8 @@ class TestModelRules:
             ),
             *(
                 (
-                    {'params': model('P', g=(group, ...))},
-                    f'P.g: {group.__name__} is given by reference to an output only, '
-                    'since no request writes its field data, of Variable: '
-                    f'{where} {FILE_MODEL_OUTPUT}',
+                    {'params': model('P', g=(Referenced[group], ...))},
+                    f'P.g: {where} {FILE_MODEL_OUTPUT}',
                 )
                 for group, where in (
                     (
@@ -1196,7 +1361,7 @@ class TestModelRules:
                     'params': model(
                         'P',
                         reduction=(
-                            Reduction,
+                            Reduction | Referenced[Reduction],
                             OutputRef(record='r1', output='reduction'),
                         ),
                     )
@@ -1211,6 +1376,28 @@ class TestModelRules:
             (
                 {'outputs': model('O', iofq=(list[list[sc.DataArray]], ...))},
                 f'O.iofq: {NOT_AN_OUTPUT}',
+            ),
+            *(
+                (
+                    {'outputs': model('O', **fields)},
+                    re.escape(
+                        f'{where}: Referenced[...] marks a place of the params, not an '
+                        'output'
+                    ),
+                )
+                for fields, where in (
+                    ({'mask': (Referenced[BeamCentre], ...)}, 'O.mask'),
+                    ({'masks': (list[Referenced[BeamCentre]], ...)}, 'O.masks'),
+                    (
+                        {
+                            'g': (
+                                model('G', mask=(Referenced[BeamCentre], ...)),
+                                ...,
+                            )
+                        },
+                        'O.g',
+                    ),
+                )
             ),
         ],
     )
@@ -1332,7 +1519,10 @@ class TestFields:
     )
     def test_any_other_field_is_a_data_value(self, tp: Any) -> None:
         params = model('P', g=(_group_with(tp), ...))
-        assert not _takes_inline(spec(params=params), 'g')
+        with pytest.raises(ValueError, match=r'P\.g: G\.value, of .*: no request'):
+            spec(params=params)
+        marked = model('P', g=(Referenced[_group_with(tp)], ...))
+        assert not _takes_inline(spec(params=marked), 'g')
 
     @pytest.mark.parametrize(
         ('tp', 'value', 'shown'),
@@ -1343,34 +1533,42 @@ class TestFields:
             (Tagged, Tagged.a, 'Tagged'),
         ],
     )
-    def test_a_group_with_a_data_value_has_no_default(
+    def test_a_place_that_only_a_reference_fills_has_no_default_but_none(
         self, tp: Any, value: Any, shown: str
     ) -> None:
         group = model('G', value=(tp, ...))
         with pytest.raises(
             ValueError,
             match=re.escape(
-                f'P.g: {NOT_A_VALUE}: g: G is given by reference: no request '
-                f'writes its field value, of {shown}'
+                f'P.g: G.value, of {shown}: no request writes it; give the field a '
+                'type that a form has an input for, or mark the place '
+                'Referenced[G], which a reference to an output fills'
             ),
         ):
             spec(params=model('P', g=(group, group(value=value))))
+        with pytest.raises(
+            ValueError,
+            match=rf'P\.g: {NOT_A_VALUE}: g: .* is not a reference; G is given by '
+            'reference to an output',
+        ):
+            spec(params=model('P', g=(Referenced[group], group(value=value))))
+        spec(params=model('P', g=(Referenced[group] | None, None)))
 
     @pytest.mark.parametrize(
         'params',
         [
-            lambda g: model('P', g=(g, ...)),
-            lambda g: model('P', g=(g | None, None)),
-            lambda g: model('P', g=(list[g], [])),
+            lambda g: model('P', g=(Referenced[g], ...)),
+            lambda g: model('P', g=(Referenced[g] | None, None)),
+            lambda g: model('P', g=(list[Referenced[g]], [])),
         ],
     )
-    def test_a_group_with_a_data_value_is_given_by_reference_at_each_place(
+    def test_a_group_with_a_data_value_is_referenced_at_each_place(
         self, params: Any
     ) -> None:
         group = _group_with(tuple[float, float])
         assert not _takes_inline(spec(params=params(group)), 'g')
 
-    def test_a_group_with_a_data_value_holds_any_type_an_output_may(self) -> None:
+    def test_a_referenced_group_holds_any_type_an_output_may(self) -> None:
         group = model(
             'G',
             data=(sc.DataArray, ...),
@@ -1378,7 +1576,7 @@ class TestFields:
             reduction=(Reduction | None, None),
             any=(int | str, 1),
         )
-        spec(params=model('P', g=(group, ...)))
+        spec(params=model('P', g=(Referenced[group], ...)))
 
 
 class TestTables:
@@ -1520,7 +1718,16 @@ class Scaling(BaseModel):
 
 
 class TestSerialization:
-    def test_a_group_is_its_fields_or_a_reference(self) -> None:
+    def test_an_unmarked_group_is_its_fields(self) -> None:
+        params = model('P', reduction=(Reduction, Reduction()))
+        schema = spec(params=params).serialize().params_schema
+        assert schema['properties']['reduction'] == {
+            **inline({'$ref': '#/$defs/Reduction'}),
+            'default': {'bins': 2},
+            'title': 'Reduction',
+        }
+
+    def test_a_group_or_a_reference_is_its_fields_or_a_reference(self) -> None:
         schema = IOFQ.serialize().params_schema
         assert schema['title'] == 'IofQParams'
         assert list(schema['properties']) == list(IofQParams.model_fields)
@@ -1596,7 +1803,7 @@ class TestSerialization:
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate({'by': {}, 'window': {}}, schema)
 
-    def test_a_file_model_or_a_group_with_a_data_value_is_a_reference_to_its_type(
+    def test_a_file_model_or_a_referenced_group_is_a_reference_to_its_type(
         self,
     ) -> None:
         schema = IOFQ.serialize().params_schema
@@ -1646,7 +1853,7 @@ class TestSerialization:
         assert properties['run'] == file_ref('SampleRun')
         assert properties['masks']['items'] == file_ref('MaskFile')
 
-    def test_a_union_is_its_alternatives_inline_never_a_reference(self) -> None:
+    def test_an_unmarked_union_is_its_alternatives_inline(self) -> None:
         params = model(
             'P',
             by=(By, ...),
@@ -1675,9 +1882,35 @@ class TestSerialization:
         assert properties['each']['items'] == alternatives
         assert properties['named'] == {**alternatives, 'title': 'Named'}
 
+    def test_a_union_with_referenced_members_is_its_alternatives_or_a_reference(
+        self,
+    ) -> None:
+        params = model(
+            'P',
+            by=(By | Referenced[BeamCentre], ...),
+            either=(Referenced[BeamCentre] | Referenced[Centring] | None, None),
+        )
+        properties = spec(params=params).serialize().params_schema['properties']
+        (written, ref) = properties['by']['oneOf']
+        assert [a['$ref'] for a in written['oneOf']] == [
+            '#/$defs/ByMonitor',
+            '#/$defs/ByTime',
+        ]
+        assert written['discriminator']['propertyName'] == 'mode'
+        assert written['not'] == {'required': ['@ref']}
+        assert ref == data_ref('BeamCentre')
+        assert properties['either']['anyOf'] == [
+            data_ref('BeamCentre | Centring'),
+            {'type': 'null'},
+        ]
+
     def test_a_list_parameter_has_the_forms_per_row(self) -> None:
         params = model(
-            'P', time_range=(list[TimeRange], Field(min_length=2, title='Slices'))
+            'P',
+            time_range=(
+                list[TimeRange | Referenced[TimeRange]],
+                Field(min_length=2, title='Slices'),
+            ),
         )
         properties = spec(params=params).serialize().params_schema['properties']
         assert properties['time_range'] == {
@@ -1780,11 +2013,12 @@ class TestSerialization:
         jsonschema = pytest.importorskip('jsonschema')
         params = model(
             'P',
-            reduction=(Reduction, Reduction()),
+            reduction=(Reduction | Referenced[Reduction], Reduction()),
+            settings=(Reduction, Reduction()),
             by=(By, ...),
             gate=(Annotated[ByMonitor | ByWindow, Field(discriminator='mode')], ...),
             sample=(SampleRun, ...),
-            ranges=(list[TimeRange], []),
+            ranges=(list[TimeRange | Referenced[TimeRange]], []),
         )
         schema = spec(params=params).serialize().params_schema
         jsonschema.Draft202012Validator.check_schema(schema)
@@ -1800,7 +2034,8 @@ class TestSerialization:
         jsonschema.validate(to_jsonable_python(request), schema)
         for refused in (
             {'reduction': {'bins': ref}},  # a scalar is given inline only
-            {'by': ref},  # no reference fits a union
+            {'settings': ref},  # an unmarked group takes no reference
+            {'by': ref},  # an unmarked union takes no reference
             {'by': {'mode': 'time', 'seconds': ref}},
             {'by': {'mode': ref, 'seconds': 1.0}},  # at a tag
             {'gate': {'mode': 'window', 'start': ref}},

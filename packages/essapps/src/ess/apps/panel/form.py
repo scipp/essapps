@@ -20,12 +20,13 @@ Where                      Widget
 =========================  ================================================
 a parameter                a choice of ways: of a file model, a file that
                            fits it; of a union, the fields of each
-                           alternative; of a group, its fields unless it
-                           holds a data value (the source ``inline``), and
-                           an output of a record that fits it if one can
-                           (the source ``output``); and ``None`` if
-                           typed ``X | None``. A record is offered while
-                           an output fits.
+                           alternative; of a group, its fields (the source
+                           ``inline``); of ``Referenced[T]``, an output of
+                           a record that fits ``T`` (the source
+                           ``output``); and ``None`` if typed
+                           ``X | None``. A union of these offers the ways
+                           of each member in one choice. A record is
+                           offered while an output fits.
 a list parameter           a table of the rows, and the editor of a row,
                            the choice of ways of the element, as at a
                            parameter of its type
@@ -72,7 +73,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, datetime, tzinfo
 from enum import Enum
-from typing import Any, get_args
+from typing import Any, Union, get_args
 
 import pandas as pd
 import panel as pn
@@ -121,7 +122,8 @@ def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice |
     tp, none, metadata = places.root_type(model, name)
     if not field_types.is_list(model, name):
         return _choice(label, tp, none, metadata, _default(info), listing)
-    if places.alternatives(tp, *metadata) is not None:
+    inline, inline_metadata, _ = places.split(tp, *metadata)
+    if inline is not None and places.alternatives(inline, *inline_metadata) is not None:
         raise NotImplementedError(f'{name}: a list of a union of groups')
     return _Rows(label, tp, none, metadata, _default(info), listing)
 
@@ -141,17 +143,19 @@ def _choice(
     tag = None
     ways: dict[str, _Way] = {}
     sources = request_types.sources(tp, metadata)
-    if (union := places.alternatives(tp, *metadata)) is not None:
+    inline, inline_metadata, referenced = places.split(tp, *metadata)
+    union = None if inline is None else places.alternatives(inline, *inline_metadata)
+    if union is not None:
         tag, groups = union
         for value, group in groups.items():
             way = places.title(value, group.model_fields[tag])
             ways[way] = _Group(group, {tag: value}, listing)
     elif request_types.INLINE in sources:
-        ways['Given'] = _Group(tp, {}, listing)
+        ways['Given'] = _Group(inline, {}, listing)
     if request_types.FILE in sources:
-        ways[_Choice.FILE] = _File(tp, listing)
+        ways[_Choice.FILE] = _File(inline, listing)
     if request_types.OUTPUT in sources:
-        ways[_Choice.RECORD] = _Record(tp, listing)
+        ways[_Choice.RECORD] = _Record(Union[referenced], listing)  # noqa: UP007
     if none:
         ways[_Choice.NONE] = _Nothing()
     return _Choice(label, ways, tag, default)
@@ -430,11 +434,11 @@ class _Group:
 
 class _Record:
     """
-    An output of a record that fits the place: a picker of references, with
-    ``UNSET`` for none, as at a file.
+    An output of a record that fits ``tp``, a group or a union of groups: a
+    picker of references, with ``UNSET`` for none, as at a file.
     """
 
-    def __init__(self, tp: type[BaseModel], listing: Listing) -> None:
+    def __init__(self, tp: Any, listing: Listing) -> None:
         self._tp = tp
         self.widget = pn.widgets.Select(sizing_mode='stretch_width')
         self.refresh(listing)
@@ -612,10 +616,11 @@ class _Rows:
         # The editor's value as it showed the row selected, which differs
         # from the row if the editor cannot show it whole.
         self._shown: Any = UNSET
-        # A union is not covered.
+        # A union of groups written inline is not covered.
         sources = request_types.sources(tp, metadata)
-        self._model = tp if request_types.FILE in sources else None
-        fields = tp.model_fields if request_types.INLINE in sources else {}
+        inline = places.split(tp, *metadata)[0]
+        self._model = inline if request_types.FILE in sources else None
+        fields = inline.model_fields if request_types.INLINE in sources else {}
         self._fields = {
             name: (places.title(name, info), field_types.file_model(info.annotation))
             for name, info in fields.items()

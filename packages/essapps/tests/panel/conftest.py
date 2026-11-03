@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 
 from ess.apps import Client, local
 from ess.apps.testing import FakeFiles, read_file
-from ess.spec import FileModel, FileRef, WorkflowSpec, function_binding
+from ess.spec import FileModel, FileRef, Referenced, WorkflowSpec, function_binding
 
 
 class Run(FileModel):
@@ -79,7 +79,7 @@ class ReduceParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
     run: Run
     sample: Sample
-    beam_centre: BeamCentre = Field(default_factory=BeamCentre)
+    beam_centre: BeamCentre | Referenced[BeamCentre] = Field(default_factory=BeamCentre)
     detector: Annotated[Front | Rear, Field(discriminator='kind')] = Front()
     mask: Mask | None = None
 
@@ -114,7 +114,7 @@ class Background(BaseModel):
 
 class SubtractParams(BaseModel):
     background: Background
-    centre: BeamCentre | None
+    centre: BeamCentre | Referenced[BeamCentre] | None
 
 
 class Shot(BaseModel):
@@ -125,7 +125,7 @@ class Shot(BaseModel):
 class StackParams(BaseModel):
     runs: list[Run] = Field(min_length=1)
     shots: list[Shot]
-    centres: list[BeamCentre] = [BeamCentre(x=1.0)]
+    centres: list[BeamCentre | Referenced[BeamCentre]] = [BeamCentre(x=1.0)]
 
 
 type Spec = WorkflowSpec[Any, Any]

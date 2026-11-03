@@ -10,15 +10,19 @@ name, or a reference to an output. This module derives, from the params
 model, the type of what a request writes, the *request type*, so that the
 rules of :mod:`ess.spec._workflow_spec` on what a request writes are stated
 once, as types, and so that one type both validates a request and is the
-JSON schema of the params::
+JSON schema of the params. The request type is the params type with each
+``Referenced[T]`` replaced by a reference to an output whose data fit
+``T``::
 
-    params model (call phase)        request type (request phase)
-    -------------------------        ----------------------------
-    reduction: Reduction             Reduction | OutputRef | AccumulatorRef
-    mask: PixelMask                  OutputRef | AccumulatorRef
-    centre: GivenCentre | Find...    GivenCentre | FindCentre      (by tag)
-    sample: SampleRun                SampleRun                     (@ref file)
-    runs: list[RunFile]              list[RunFile]
+    params model (call phase)              request type (request phase)
+    -------------------------              ----------------------------
+    reduction: Reduction                   Reduction
+    mask: Referenced[PixelMask]            OutputRef | AccumulatorRef
+    centre: BeamCentre                     BeamCentre | OutputRef
+            | Referenced[BeamCentre]                  | AccumulatorRef
+    beam_centre: GivenCentre | Find...     GivenCentre | FindCentre  (by tag)
+    sample: SampleRun                      SampleRun                 (@ref file)
+    runs: list[RunFile]                    list[RunFile]
 
 The request type of a parameter, or of a row of a list parameter, is the
 union of the *sources* that the place takes (see :func:`sources`), tagged by
@@ -99,14 +103,17 @@ def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
     """
     The sources that a parameter or row of type ``tp`` takes, by tag, each the
     type that validates it, with the constraints of the place (see
-    :func:`~ess.spec.places.root_type` for ``tp`` and ``metadata``):
+    :func:`~ess.spec.places.root_type` for ``tp`` and ``metadata``). Of the
+    part of ``tp`` that a request writes (see :func:`~ess.spec.places.split`):
 
     - :data:`INLINE`: the union of groups, with its discriminator, or the
-      group if it has no data value (see :func:`~ess.spec.places.unwritten`);
-    - :data:`FILE`: the file model;
-    - :data:`OUTPUT`: a reference to an output, if one can fit ``tp`` (see
-      :func:`~ess.spec.places.takes_output`), with the name of ``tp`` as its
-      ``dataType`` in the JSON schema.
+      group;
+    - :data:`FILE`: the file model.
+
+    Of the groups that ``Referenced[...]`` marks:
+
+    - :data:`OUTPUT`: a reference to an output, with the name of the group,
+      or of the union of the groups, as its ``dataType`` in the JSON schema.
 
     In the JSON schema, an inline source refuses an object with the key
     ``@ref``, and each alternative of a union requires its tag, since a
@@ -115,18 +122,22 @@ def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
     source a place takes.
     """
     taken: dict[str, Any] = {}
-    if (union := places.alternatives(tp, *metadata)) is not None:
+    inline, inline_metadata, referenced = places.split(tp, *metadata)
+    union = None if inline is None else places.alternatives(inline, *inline_metadata)
+    if union is not None:
         tag, groups = union
         members = tuple(_alternative(group, tag, v) for v, group in groups.items())
         alternatives = Union[members]  # noqa: UP007
-        inline = Annotated[alternatives, *metadata, Field(discriminator=tag)]
-        taken[INLINE] = Annotated[inline, Field(json_schema_extra=_not_a_ref)]
-    elif places.written_inline(tp):
-        taken[INLINE] = Annotated[tp, *metadata, Field(json_schema_extra=_not_a_ref)]
-    if field_types.is_file_model(tp):
-        taken[FILE] = Annotated[tp, *metadata] if metadata else tp
-    if places.takes_output(tp):
-        data_type = {'dataType': field_types.type_name(tp)}
+        written = Annotated[alternatives, *inline_metadata, Field(discriminator=tag)]
+        taken[INLINE] = Annotated[written, Field(json_schema_extra=_not_a_ref)]
+    elif field_types.is_file_model(inline):
+        taken[FILE] = Annotated[inline, *inline_metadata] if inline_metadata else inline
+    elif inline is not None:
+        taken[INLINE] = Annotated[
+            inline, *inline_metadata, Field(json_schema_extra=_not_a_ref)
+        ]
+    if referenced:
+        data_type = {'dataType': field_types.type_name(Union[referenced])}  # noqa: UP007
         taken[OUTPUT] = Annotated[
             OutputRef | AccumulatorRef,
             Field(discriminator='kind', json_schema_extra=data_type),
@@ -327,7 +338,8 @@ def _row(
     :func:`source_of`); its JSON form.
     """
     tp, none, metadata = places.root_type(model, name)
-    union = places.alternatives(tp, *metadata)
+    inline, inline_metadata, _ = places.split(tp, *metadata)
+    union = None if inline is None else places.alternatives(inline, *inline_metadata)
     for at, item in positions(loc, value):
         ref = ref_at(at, item)
         if at == loc or ref is None or isinstance(ref, FileRef):
@@ -343,7 +355,7 @@ def _row(
         return None
     source = source_of(value)
     if source not in row_sources(model, name):
-        raise _refused(loc, _source_refused(tp, union, value, source))
+        raise _refused(loc, _source_refused(tp, inline, value, source))
 
     def problem(error: ErrorDetails) -> tuple[Loc, str]:
         return _problem(loc, union, value, error)
@@ -380,37 +392,32 @@ def _problem(
     return (*loc, *inner[1:]), error['msg']
 
 
-def _source_refused(
-    tp: Any, union: tuple[str, dict[str, Any]] | None, value: Any, source: str | None
-) -> str:
-    """Why a place of type ``tp`` refuses ``value``, of the source ``source``."""
+def _source_refused(tp: Any, inline: Any, value: Any, source: str | None) -> str:
+    """
+    Why a place of type ``tp`` refuses ``value``, of the source ``source``;
+    ``inline`` is the part of ``tp`` that a request writes, or ``None`` (see
+    :func:`~ess.spec.places.split`).
+    """
     name = field_types.type_name(tp)
     if source == FILE:
         return f'file {as_ref(value)} does not fit {name}, which is not a file model'
     if source == OUTPUT:
         ref = as_ref(value)
-        if union is not None:
-            return (
-                f'{ref}: a union of groups is written inline, with the tag of an '
-                'alternative; no reference fits it'
-            )
-        if field_types.is_file_model(tp):
+        if field_types.is_file_model(inline):
             return (
                 f'{ref} is a reference to an output; {name} is given by reference '
                 'to a file, such as file(path=...)'
             )
-        return f'{ref}: no output fits {name}, which holds a file model'
-    if field_types.is_file_model(tp):
+        return (
+            f'{ref} is a reference to an output; {name} is written inline, since '
+            'the spec does not mark the place Referenced[...]'
+        )
+    if field_types.is_file_model(inline):
         return (
             f'{value!r} is not a reference; {name} is given by reference to a '
             'file, such as file(path=...)'
         )
-    data = places.unwritten(tp)
-    held_type = field_types.type_name(tp.model_fields[data].annotation)
-    return (
-        f'{name} is given by reference: no request writes its field {data}, of '
-        f'{held_type}'
-    )
+    return f'{value!r} is not a reference; {name} is given by reference to an output'
 
 
 def _refused(loc: Loc, msg: str) -> ParamsError:

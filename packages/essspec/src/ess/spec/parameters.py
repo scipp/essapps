@@ -3,9 +3,9 @@
 """
 Shared vocabulary of workflow parameter models.
 
-Common building blocks for workflow params models: the file model,
-constrained unit choices, and range/edges models with cross-field
-validation. Purely declarative — no scipp;
+Common building blocks for workflow params models: the file model, the
+marker of a place that a reference fills, constrained unit choices, and
+range/edges models with cross-field validation. Purely declarative — no scipp;
 converting validated values into scipp objects is the workflow implementation's
 concern (see :mod:`ess.spec.conversions`).
 
@@ -28,7 +28,7 @@ from abc import ABC
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, ClassVar, Self
+from typing import Annotated, Any, ClassVar, Final, Self, TypeVar
 
 from pydantic import (
     BaseModel,
@@ -197,6 +197,34 @@ class FileModel(BaseModel, frozen=True, extra='forbid'):
 
 
 _SCALARS = (str, int, float, bool)
+
+
+class _Referenced:
+    def __repr__(self) -> str:
+        return 'REFERENCED'
+
+
+REFERENCED: Final = _Referenced()
+"""The marker of :data:`Referenced`, in the metadata of an ``Annotated`` type."""
+
+_T = TypeVar('_T')
+
+Referenced = Annotated[_T, REFERENCED]
+"""
+``Referenced[T]`` marks a place, a parameter or a row, that a reference to
+an output fills, whose data fit ``T``, a group. A place that takes a value
+written inline too is a union::
+
+    class IofQParams(BaseModel):
+        mask: Referenced[PixelMask] | None = None
+        centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
+
+It is ``Annotated[T, REFERENCED]``, so pydantic and a type checker see
+``T``: the params model holds the data, as the binding takes them. The
+request type has a reference in its place (see
+:mod:`ess.spec.request_types`). The rules are stated in
+:mod:`ess.spec._workflow_spec`.
+"""
 
 
 class Scale(StrEnum):

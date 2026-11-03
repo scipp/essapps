@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from ess.spec import FileModel, FileRef, OutputRef, request_types
+from ess.spec import FileModel, FileRef, OutputRef, Referenced, request_types
 from ess.spec.places import alternatives, root_type, validated
 from ess.spec.refs import Loc, ParamsError, Ref
 from ess.spec.request_types import held, row_sources
@@ -58,17 +58,18 @@ Centre = Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
 
 
 class Params(BaseModel):
-    mask: Mask
-    sample: Sample
+    mask: Referenced[Mask]
+    sample: Sample | Referenced[Sample]
     reduction: Reduction | None = None
     beam_centre: Centre
     centres: list[Centre]
-    samples: list[Sample] = Field(min_length=2)
+    samples: list[Sample | Referenced[Sample]] = Field(min_length=2)
+    found: Centre | Referenced[Mask] = GivenCentre()
 
 
 class MaskParams(BaseModel):
     mask: MaskFile | None = None
-    sample: Sample | None = None
+    sample: Sample | Referenced[Sample] | None = None
     runs: list[RunFile] = []
 
 
@@ -227,11 +228,15 @@ def test_a_reference_to_an_output_at_a_file_model_is_refused() -> None:
     )
 
 
-def test_a_reference_to_an_output_at_a_group_with_a_file_model_is_refused() -> None:
+def test_a_reference_to_an_output_at_an_unmarked_group_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
         held(MeasuredParams, 'measured', OUTPUT, _named)
     assert raised.value.errors == (
-        (('measured',), 'r1.sample: no output fits Measured, which holds a file model'),
+        (
+            ('measured',),
+            'r1.sample is a reference to an output; Measured is written inline, '
+            'since the spec does not mark the place Referenced[...]',
+        ),
     )
 
 
@@ -263,12 +268,30 @@ def test_a_reference_to_a_whole_list_is_refused() -> None:
     )
 
 
-def test_no_reference_fits_a_union() -> None:
+def test_a_reference_to_an_output_at_an_unmarked_union_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
         held(Params, 'beam_centre', OUTPUT, _named)
-    ((at, msg),) = raised.value.errors
-    assert at == ('beam_centre',)
-    assert 'a union of groups is written inline' in msg
+    assert raised.value.errors == (
+        (
+            ('beam_centre',),
+            'r1.sample is a reference to an output; GivenCentre | FindCentre is '
+            'written inline, since the spec does not mark the place Referenced[...]',
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ('name', 'value'),
+    [
+        ('sample', {'thickness': 2.0}),
+        ('sample', OUTPUT),
+        ('found', {'kind': 'find', 'tolerance': 0.5}),
+        ('found', OUTPUT),
+    ],
+)
+def test_a_union_with_a_referenced_member_takes_either(name: str, value: Any) -> None:
+    form = value if isinstance(value, dict) else value.model_dump()
+    assert held(Params, name, value, _named) == form
 
 
 @pytest.mark.parametrize(
@@ -393,14 +416,14 @@ def test_a_reference_to_an_output_in_a_json_form_written_inline_is_refused(
     )
 
 
-def test_a_group_with_a_data_value_given_inline_is_refused() -> None:
+def test_a_value_written_inline_at_a_referenced_place_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
         held(Params, 'mask', {'mask': None}, _named)
     assert raised.value.errors == (
         (
             ('mask',),
-            'Mask is given by reference: no request writes its field mask, of '
-            'DataArray',
+            "{'mask': None} is not a reference; Mask is given by reference to an "
+            'output',
         ),
     )
 
@@ -416,9 +439,11 @@ def test_each_place_takes_the_forms_its_type_allows() -> None:
         request_types.FILE,
         request_types.OUTPUT,
     )
+    assert list(row_sources(Params, 'reduction')) == [inline]
     assert list(row_sources(Params, 'sample')) == [inline, output]
     assert list(row_sources(Params, 'mask')) == [output]
     assert list(row_sources(Params, 'beam_centre')) == [inline]
+    assert list(row_sources(Params, 'found')) == [inline, output]
     assert list(row_sources(Params, 'samples')) == [inline, output]
     assert list(row_sources(MaskParams, 'mask')) == [file]
     assert list(row_sources(MaskParams, 'runs')) == [file]

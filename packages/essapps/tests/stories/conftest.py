@@ -51,6 +51,7 @@ from ess.spec import (
     NoParams,
     OutputRef,
     Ref,
+    Referenced,
     WorkflowSpec,
     function_binding,
 )
@@ -137,7 +138,7 @@ class ComputedNormalization(Data):
     """
     The normalization that ``VANADIUM`` computes from a vanadium run, or that
     ``LOAD_NORMALIZATION`` reads from the catalogue: a group that holds a
-    data value, so a request gives it by reference only.
+    data value, so a reference fills its place, ``Referenced[...]``.
     """
 
     factor: sc.Variable
@@ -153,8 +154,8 @@ class PublishedNormalization(FileModel):
 class IofQParams(Data):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: Sample
-    beam_centre: BeamCentre = BeamCentre()
-    normalization: ComputedNormalization | None
+    beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
+    normalization: Referenced[ComputedNormalization] | None
 
 
 class IofQOutputs(Data):
@@ -201,8 +202,8 @@ class ReductionV2(BaseModel):
 class IofQV2Params(Data):
     reduction: ReductionV2 = Field(default_factory=ReductionV2)
     sample: Sample
-    beam_centre: BeamCentre = BeamCentre()
-    normalization: ComputedNormalization | None
+    beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
+    normalization: Referenced[ComputedNormalization] | None
 
 
 IOFQ_V2 = WorkflowSpec(
@@ -357,7 +358,7 @@ def contribute(params: ContributeParams) -> ContributeOutputs:
 
 
 class PartsParams(Data):
-    parts: list[Parts]
+    parts: list[Referenced[Parts]]
 
 
 class PartsOutputs(Data):
@@ -443,7 +444,7 @@ class Position(BaseModel):
 
 class CutParams(Data):
     position: Position
-    volume: Volume
+    volume: Referenced[Volume]
 
 
 class CutOutputs(Data):
@@ -486,7 +487,7 @@ def stitch(params: StitchParams) -> StitchOutputs:
 
 
 class ExportParams(Data):
-    result: Reflectivity
+    result: Referenced[Reflectivity]
 
 
 class ExportOutputs(BaseModel):
@@ -528,7 +529,7 @@ def slicer(params: SlicerParams) -> SlicerOutputs:
 
 class SlicesParams(Data):
     sample: Sample
-    time_range: list[TimeRange] = Field(min_length=1)
+    time_range: list[TimeRange | Referenced[TimeRange]] = Field(min_length=1)
 
 
 class SlicedOutputs(Data):
@@ -546,8 +547,8 @@ def sliced(params: SlicesParams) -> SlicedOutputs:
 
 
 class CentredParams(Data):
-    centre: BeamCentre
-    transmission: Transmission  # of the summed sample runs
+    centre: BeamCentre | Referenced[BeamCentre]
+    transmission: Referenced[Transmission]  # of the summed sample runs
     sample: list[Sample] = Field(min_length=1)
     can: list[Can] = Field(min_length=1)
 
