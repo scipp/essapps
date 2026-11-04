@@ -445,7 +445,7 @@ On the service, only that part leaves the backend.
 | `client.release(records)` | drops the client's hold on their outputs |
 
 Each takes one request or record, a list, or a dict, and returns the same shape.
-`Request(IOFQ, params=...)` makes a request without submitting it, and `request.upstream()` lists the outputs of other records that it reads.
+`Request(IOFQ, params=...)` makes a request without submitting it, and `request.upstream()` lists the outputs of other records, or of accumulators, that it reads.
 A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)` in place of `IOFQ`.
 `client.spec(record.spec)` gives the spec that the backend runs under that `SpecId`, and `client.specs()` every spec it runs, so a form needs no specs of its own.
 
@@ -494,7 +494,7 @@ result = client.submit(IOFQ, params={**runs, 'beam_centre': centre.ref('centre')
 The backend runs the last request once the one before has completed.
 A request never references another request of the same `submit` call.
 A request writes a file as `file(...)` (see Files): `file(path=...)` names a file by its path, and a string where a file field is expected is refused.
-`record.ref(output, key)` names one element of a list or dict output: by its index for a list, `key='2'`, and by its key for a dict.
+`record.ref(output, key)`, or `acc.ref(output, key)`, names one element of a list or dict output: by its index for a list, `key='2'`, and by its key for a dict.
 A key that the output lacks fails in the call phase.
 
 A reference to an output fills only a field typed `Referenced[...]`, at any depth, or a member of a union there, such as `beam_centre`, `time_range[2]`, or `specimens[0].transmission`; never a whole list.
@@ -506,6 +506,9 @@ The JSON form of a reference to an output, and of a file, is an object with the 
 {"@ref": "output", "record": "r17", "output": "centre"}
 {"@ref": "output", "record": "r18", "output": "slices", "key": "2"}
 ```
+
+`acc.ref(name)` has the same form, with the accumulator's ID under `record`.
+The submission replaces it by the record of the state it pins (see Pins), so a record never names an accumulator.
 
 The key `@ref` is reserved at every depth: an object with it is a reference to an output or a file.
 So the framework finds the references and files of a request without the spec, in every array and every object.

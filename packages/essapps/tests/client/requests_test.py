@@ -108,7 +108,7 @@ def test_a_spec_whose_output_holds_a_file_field_is_refused() -> None:
 def test_a_reference_to_an_unknown_record_is_refused(client: Client) -> None:
     missing = {'@ref': 'output', 'record': 'missing', 'output': 'value'}
 
-    with pytest.raises(SubmitError, match='source: unknown record missing'):
+    with pytest.raises(SubmitError, match='unknown record or accumulator missing'):
         client.submit(toys.SHIFT, params={'source': missing})
 
 

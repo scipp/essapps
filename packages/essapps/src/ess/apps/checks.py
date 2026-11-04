@@ -66,7 +66,6 @@ from annotated_types import MaxLen, MinLen
 from pydantic_core import to_json
 
 from ess.spec import (
-    AccumulatorRef,
     File,
     FileRef,
     OutputRef,
@@ -217,7 +216,7 @@ class Checks:
         return identity.file
 
 
-def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, loc: Loc) -> None:
+def check_fit(spec: Spec, ref: OutputRef, tp: Any, loc: Loc) -> None:
     """
     Refuse a reference to an output that ``spec`` lacks, or whose data do
     not fit ``tp``. A reference with a key names one element of an output, of
@@ -229,7 +228,7 @@ def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, loc: Loc) ->
     if field is None:
         raise SubmitError.at(loc, f'{SpecId.of(spec)} has no output {ref.output!r}')
     data, _ = field_types.optional(field.annotation)
-    if isinstance(ref, OutputRef) and ref.key is not None:
+    if ref.key is not None:
         if (item := field_types.element(data)) is None:
             raise SubmitError.at(
                 loc, f'{ref} names an element of an output without elements'

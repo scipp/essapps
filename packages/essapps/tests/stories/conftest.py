@@ -159,8 +159,9 @@ def replay(backends: list[Backend], clients: list[Client]) -> Iterator[None]:
     This is a safety net over every story: a record says all that its outputs
     depend on. A reference to an output the client does not keep, such as one
     of the record of an accumulator's state, is replaced by the same output of
-    that record run again. No record holds a reference to an accumulator.
-    It runs before the backends are closed.
+    that record run again. No record names an accumulator in a reference:
+    each names a record that the provenance finds. It runs before the
+    backends are closed.
     """
     yield
     for client in list(clients):
@@ -169,7 +170,8 @@ def replay(backends: list[Backend], clients: list[Client]) -> Iterator[None]:
         except ClientEnded:
             continue
         client.wait(list(records.values()))
-        assert not [r for r in records.values() if r.request.accumulators()]
+        for record in records.values():
+            client.provenance(record)
         _replay(client, records)
 
 

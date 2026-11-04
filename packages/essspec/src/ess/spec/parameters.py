@@ -43,7 +43,7 @@ from pydantic import (
 )
 from pydantic_core import CoreSchema, ErrorDetails, PydanticCustomError, core_schema
 
-from .refs import AccumulatorRef, FileRef, OutputRef, Ref, as_ref
+from .refs import FileRef, OutputRef, Ref, as_ref
 
 
 class File:
@@ -182,9 +182,7 @@ class DataRefused(Exception):
     data are refused (see :func:`ess.spec.request_types.validated`).
     """
 
-    def __init__(
-        self, ref: OutputRef | AccumulatorRef, errors: list[ErrorDetails]
-    ) -> None:
+    def __init__(self, ref: OutputRef, errors: list[ErrorDetails]) -> None:
         super().__init__(ref, errors)
         self.ref = ref
         self.errors = errors
@@ -222,7 +220,7 @@ def _read(
     The data of ``value``, a reference to an output, read by the context and
     validated as ``data_type``, the ``T`` of ``Referenced[T]``.
     """
-    given = _given(value, info, 'read', OutputRef | AccumulatorRef)
+    given = _given(value, info, 'read', OutputRef)
     if given is None:
         return validate(value)
     read, ref = given

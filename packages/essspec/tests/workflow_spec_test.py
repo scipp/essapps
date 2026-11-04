@@ -25,7 +25,6 @@ from pydantic import (
 from pydantic_core import to_jsonable_python
 
 from ess.spec import (
-    AccumulatorRef,
     File,
     FileRef,
     MaskFile,
@@ -1798,15 +1797,7 @@ def file_ref(metadata: dict[str, Any] | None = None) -> dict[str, Any]:
 
 def data_ref(data_type: str) -> dict[str, Any]:
     """The schema of a reference to a group: an output."""
-    kinds = {'output': 'OutputRef', 'accumulator': 'AccumulatorRef'}
-    return {
-        'oneOf': [{'$ref': f'#/$defs/{k}'} for k in kinds.values()],
-        'discriminator': {
-            'propertyName': '@ref',
-            'mapping': {tag: f'#/$defs/{k}' for tag, k in kinds.items()},
-        },
-        'dataType': data_type,
-    }
+    return {'$ref': '#/$defs/OutputRef', 'dataType': data_type}
 
 
 SAMPLE = FileRef(file='run:loki/1')
@@ -1849,11 +1840,9 @@ class TestSerialization:
 
     def test_a_reference_is_an_object_with_its_kind_under_at_ref(self) -> None:
         defs = IOFQ.serialize().params_schema['$defs']
-        for kind in (OutputRef, AccumulatorRef):
+        for kind in (OutputRef, FileRef):
             assert defs[kind.__name__] == kind.model_json_schema()
             assert '@ref' in defs[kind.__name__]['required']
-        assert defs['FileRef'] == FileRef.model_json_schema()
-        assert '@ref' in defs['FileRef']['required']
 
     def test_a_float_and_an_enum_are_their_json_schema_only(self) -> None:
         params = model('P', scaling=(Scaling, Scaling()))
@@ -2099,7 +2088,7 @@ class TestSerialization:
             {
                 'sample': SAMPLE,
                 'reduction': OutputRef(record='r1', output='reduction', key='0'),
-                'time_range': AccumulatorRef(accumulator='a1', output='slices'),
+                'time_range': OutputRef(record='r3', output='slices'),
             },
         ],
     )

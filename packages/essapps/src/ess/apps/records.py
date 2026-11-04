@@ -20,7 +20,7 @@ from typing import Annotated, Any, Literal, get_args, get_origin
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, with_config
 from pydantic.fields import FieldInfo
 
-from ess.spec import AccumulatorRef, FileRef, OutputRef, Ref, WorkflowSpec
+from ess.spec import FileRef, OutputRef, Ref, WorkflowSpec
 from ess.spec.refs import ParamsError, iter_refs, map_refs
 
 from .errors import FieldError, SubmitError
@@ -149,18 +149,12 @@ class Request(BaseModel, frozen=True):
         super().__init__(spec=SpecId.of(spec), params=_given(params))
 
     def upstream(self) -> list[OutputRef]:
-        """The outputs of other records this request reads."""
+        """
+        The outputs of other records this request reads, and, before it is
+        submitted, of accumulators: submitting replaces each accumulator by the
+        record of the state it reads.
+        """
         return [ref for _, ref in iter_refs(self.params) if isinstance(ref, OutputRef)]
-
-    def accumulators(self) -> list[AccumulatorRef]:
-        """
-        The outputs of accumulators this request reads; a record's request
-        reads none, since submitting replaces each by an output of the record
-        of the state it reads.
-        """
-        return [
-            ref for _, ref in iter_refs(self.params) if isinstance(ref, AccumulatorRef)
-        ]
 
     def files(self) -> list[FileRef]:
         """The files this request names directly."""

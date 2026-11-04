@@ -2,19 +2,18 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 import pytest
 
-from ess.spec import AccumulatorRef, FileRef, OutputRef
+from ess.spec import FileRef, OutputRef
 from ess.spec.refs import ParamsError, as_ref, iter_refs, loc_text, map_refs
 
 OUTPUT_REF = {'@ref': 'output', 'record': 'r1', 'output': 'data'}
 FILE_REF = {'@ref': 'file', 'file': 'pid-1'}
-ACCUMULATOR_REF = {'@ref': 'accumulator', 'accumulator': 'a1', 'output': 'data'}
+SECOND_REF = {**OUTPUT_REF, 'record': 'r2'}
 
 
 def test_references_print_what_they_name() -> None:
     assert str(OutputRef(record='r1', output='data')) == 'r1.data'
     assert str(OutputRef(record='r1', output='banks', key='a')) == 'r1.banks[a]'
     assert str(FileRef(file='run:dream/1')) == 'run:dream/1'
-    assert str(AccumulatorRef(accumulator='a1', output='data')) == 'a1.data'
 
 
 def test_file_identity_is_an_opaque_string() -> None:
@@ -29,11 +28,11 @@ PARAMS = {
     'sample': OUTPUT_REF,
     'runs': [FILE_REF, None, {'@ref': 'output', 'record': 'f2', 'output': 'file'}],
     'can': None,
-    'sum': AccumulatorRef(accumulator='a1', output='data'),
+    'sum': OutputRef(record='r2', output='data'),
     'centre': 'not a reference',
     'rows': [{'file': FILE_REF, 'shift': {'offset': OUTPUT_REF}}],
     'group': {'centre': OUTPUT_REF, 'x': 1.0},
-    'deep': {'mask': {'by': [{'kind': 'given', 'data': ACCUMULATOR_REF}]}},
+    'deep': {'mask': {'by': [{'kind': 'given', 'data': SECOND_REF}]}},
 }
 
 
@@ -42,11 +41,11 @@ def test_iter_refs_gives_each_reference_of_the_params_at_any_depth() -> None:
         (('sample',), 'r1.data'),
         (('runs', 0), 'pid-1'),
         (('runs', 2), 'f2.file'),
-        (('sum',), 'a1.data'),
+        (('sum',), 'r2.data'),
         (('rows', 0, 'file'), 'pid-1'),
         (('rows', 0, 'shift', 'offset'), 'r1.data'),
         (('group', 'centre'), 'r1.data'),
-        (('deep', 'mask', 'by', 0, 'data'), 'a1.data'),
+        (('deep', 'mask', 'by', 0, 'data'), 'r2.data'),
     ]
 
 
@@ -60,11 +59,11 @@ def test_map_refs_replaces_each_reference_and_keeps_other_values() -> None:
         'sample': 'r1.data',
         'runs': ['pid-1', None, 'f2.file'],
         'can': None,
-        'sum': 'a1.data',
+        'sum': 'r2.data',
         'centre': 'not a reference',
         'rows': [{'file': 'pid-1', 'shift': {'offset': 'r1.data'}}],
         'group': {'centre': 'r1.data', 'x': 1.0},
-        'deep': {'mask': {'by': [{'kind': 'given', 'data': 'a1.data'}]}},
+        'deep': {'mask': {'by': [{'kind': 'given', 'data': 'r2.data'}]}},
     }
 
 
@@ -74,9 +73,6 @@ def test_the_json_form_of_a_reference_names_its_kind() -> None:
         'key': None,
     }
     assert FileRef(file='pid-1').model_dump() == FILE_REF
-    assert AccumulatorRef(accumulator='a1', output='data').model_dump() == (
-        ACCUMULATOR_REF
-    )
     element = OutputRef(record='r1', output='banks', key='a')
     assert element.model_dump_json() == (
         '{"@ref":"output","record":"r1","output":"banks","key":"a"}'
@@ -89,7 +85,6 @@ def test_as_ref_decides_what_a_reference_is_by_its_kind() -> None:
     assert as_ref(ref) is ref
     assert as_ref(OUTPUT_REF) == OutputRef(record='r1', output='data')
     assert as_ref(FILE_REF) == FileRef(file='pid-1')
-    assert as_ref(ACCUMULATOR_REF) == AccumulatorRef(accumulator='a1', output='data')
     assert as_ref({'record': 'r1', 'output': 'data'}) is None
     assert as_ref({'file': 'pid-1'}) is None
     assert as_ref({'value': 1.0}) is None
@@ -109,7 +104,6 @@ def test_as_ref_decides_what_a_reference_is_by_its_kind() -> None:
             {**FILE_REF, 'run': 1},
             'not a reference to file: run: Extra inputs are not permitted',
         ),
-        ({**ACCUMULATOR_REF, 'record': 'r1'}, 'record: Extra inputs'),
         ({**FILE_REF, 'file': ''}, 'file: String should have at least'),
     ],
 )

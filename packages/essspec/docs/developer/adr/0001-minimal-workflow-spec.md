@@ -148,8 +148,8 @@ the request type.
 | | Params model | Request type |
 |---|---|---|
 | `reduction: Reduction` | `Reduction` | `Reduction` |
-| `transmission: Referenced[ComputedTransmission]` | `ComputedTransmission` | `OutputRef \| AccumulatorRef` |
-| `beam_centre: BeamCentre \| Referenced[BeamCentre]` | `BeamCentre` | `BeamCentre \| OutputRef \| AccumulatorRef` |
+| `transmission: Referenced[ComputedTransmission]` | `ComputedTransmission` | `OutputRef` |
+| `beam_centre: BeamCentre \| Referenced[BeamCentre]` | `BeamCentre` | `BeamCentre \| OutputRef` |
 | `sample: RunFile` | the file's local path, a `Path` | a file, `FileRef`, as `{"@ref": "file", ...}` |
 | `centre: GivenCentre \| FindCentre` | the alternative | the alternative, with its tag |
 | `samples: list[Sample]`, with `Sample.transmission: Referenced[...]` | `list[Sample]` | a list of a model derived from `Sample`, with a reference at `transmission` |
@@ -258,12 +258,12 @@ workflow computes comes as a group, which that workflow outputs, such as a
 found beam centre, and an array is a field of a group, such as
 `ComputedTransmission.transmission`.
 
-A reference to an output names an output of an earlier record (`OutputRef`:
-record, output name, and optionally the key of one element of a list or dict
-output), or an output of an accumulator (`AccumulatorRef`: accumulator and
-output name). Only a request holds an `AccumulatorRef`: the framework
-replaces it, when it accepts the request, by an output of a record of the
-accumulator's state. The JSON form of a reference to an output, and of a file
+A reference to an output (`OutputRef`) names a record, an output name, and
+optionally the key of one element of a list or dict output. The identity of
+the record is opaque to the spec, as a file's is. In a request, the framework
+accepts the ID of an accumulator in `record`: it replaces it, when it accepts
+the request, by the record of the accumulator's state, so a record never names
+an accumulator. The JSON form of a reference to an output, and of a file
 (`FileRef`: one identity string), is an object with the key `@ref`, which
 names its kind:
 

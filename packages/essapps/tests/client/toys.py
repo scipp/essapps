@@ -212,6 +212,15 @@ class Pieces(BaseModel):
 SPLIT = make_spec('split', params=Sample, outputs=Pieces)
 
 
+class Amounts(BaseModel):
+    amounts: list[Amount] = Field(min_length=1)
+
+
+SPLIT_TOTAL = make_spec(
+    'split-total', params=Amounts, outputs=Pieces, tables=('amounts',)
+)  # SPLIT of the sum of a table of values
+
+
 LokiMask = Annotated[Path, File(kind='mask', instrument='loki')]
 
 
@@ -261,9 +270,17 @@ def scale(params: ScaleParams) -> Value:
     return as_value(read_file(params.sample) * params.scaling.factor)
 
 
-def split(params: Sample) -> Pieces:
-    whole, half = (Amount(value=read_file(params.sample) / n) for n in (1, 2))
+def halves(value: float) -> Pieces:
+    whole, half = (Amount(value=value / n) for n in (1, 2))
     return Pieces(parts={'whole': whole, 'half': half}, pieces=[whole, half])
+
+
+def split(params: Sample) -> Pieces:
+    return halves(read_file(params.sample))
+
+
+def split_total(params: Amounts) -> Pieces:
+    return halves(sum(amount.value for amount in params.amounts))
 
 
 def read_mask(params: LokiMaskParams) -> Value:

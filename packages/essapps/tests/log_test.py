@@ -38,7 +38,6 @@ from ess.apps.log import (
 )
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
 from ess.spec import (
-    AccumulatorRef,
     FileRef,
     OutputRef,
     Referenced,
@@ -456,7 +455,7 @@ def test_a_refused_call_writes_nothing_to_the_log(
     total = _total(client)
     total.push(part=[load.ref('value')])
     written += 2  # the accumulator opened, and the push
-    other = AccumulatorRef(accumulator=total.id, output='other')
+    other = OutputRef(record=total.id, output='other')
     with pytest.raises(SubmitError, match='has no output'):
         client.submit(TOTAL, params={'part': [other]})
     with pytest.raises(SubmitError, match='not a blank table'):

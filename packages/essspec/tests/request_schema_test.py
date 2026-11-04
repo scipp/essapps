@@ -70,12 +70,10 @@ SPEC = WorkflowSpec(
 )
 
 OUT = {'@ref': 'output', 'record': 'r1', 'output': 'o'}
-ACC = {'@ref': 'accumulator', 'accumulator': 'a1', 'output': 'o'}
 RUN = {'@ref': 'file', 'file': 'run:1'}
 
 REQUESTS = [
     ('red', OUT),
-    ('red', ACC),
     ('red', {**OUT, 'extra': 1}),
     ('red', {'@ref': 'output'}),
     ('red', {'@ref': 'bogus'}),
@@ -93,7 +91,6 @@ REQUESTS = [
     ('opt', 5),
     ('opt', {'bins': 2}),
     ('ref', OUT),
-    ('ref', ACC),
     ('ref', None),
     ('ref', {'bins': 2}),
     ('ref', RUN),
@@ -120,7 +117,6 @@ REQUESTS = [
     ('wf', {'kind': 'wf'}),
     ('run', RUN),
     ('run', OUT),
-    ('run', ACC),
     ('run', {'file': 'run:1'}),
     ('run', 'run:1'),
     ('run', {'@ref': 'file'}),

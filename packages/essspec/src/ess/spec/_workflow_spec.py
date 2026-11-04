@@ -590,8 +590,8 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     The params schema is the JSON schema of the spec's request type (see
     :mod:`ess.spec.request_types`), which also validates a request, so the
     two agree. The sources a field takes are its ``oneOf``. The schema of a
-    reference to an output is the ``@ref`` object of each kind it may be
-    (see :mod:`ess.spec.refs`), with the name of the type it must fit under
+    reference to an output is the ``@ref`` object of an output (see
+    :mod:`ess.spec.refs`), with the name of the type it must fit under
     ``dataType``, as the outputs schema names the type of each output. A
     file is the ``@ref`` object of a file, with the marker's metadata under
     ``metadata``, which say which files fit. The schemas of the parameter
@@ -602,7 +602,7 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
 
         "reduction": {"$ref": "#/$defs/Reduction", ...}
         "centre":    {"oneOf": [{"$ref": "#/$defs/BeamCentre", ...},
-                                {"oneOf": [OutputRef, AccumulatorRef],
+                                {"$ref": "#/$defs/OutputRef",
                                  "dataType": "BeamCentre", ...}]}
         "mask":      {"$ref": "#/$defs/FileRef", "metadata": {"kind": "mask"}}
         "FileRef":   {"properties": {"@ref": {"const": "file"}, "file": ...}}
