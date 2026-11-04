@@ -101,8 +101,14 @@ def test_as_ref_decides_what_a_reference_is_by_its_kind() -> None:
     [
         ({'@ref': 'record', 'record': 'r1'}, "'record' is not a kind of reference"),
         ({'@ref': None, 'file': 'pid-1'}, 'None is not a kind of reference'),
-        ({'@ref': 'output', 'record': 'r1'}, 'output: Field required'),
-        ({**FILE_REF, 'run': 1}, 'run: Extra inputs are not permitted'),
+        (
+            {'@ref': 'output', 'record': 'r1'},
+            'not a reference to output: output: Field required',
+        ),
+        (
+            {**FILE_REF, 'run': 1},
+            'not a reference to file: run: Extra inputs are not permitted',
+        ),
         ({**ACCUMULATOR_REF, 'record': 'r1'}, 'record: Extra inputs'),
         ({**FILE_REF, 'file': ''}, 'file: String should have at least'),
     ],

@@ -9,26 +9,17 @@ import pytest
 
 from ess.apps import Client, SubmitError, Template
 
-from .conftest import (
-    BEAM_CENTRE,
-    CENTRED_MULTI,
-    CONTRIBUTE,
-    SLICER,
-    SLICES,
-    BeamCentre,
-    Measure,
-    TimeRange,
-)
+from . import toys
 
 
 def test_i1_time_slices_found_by_a_first_reduction(
-    client: Client, measure: Measure
+    client: Client, measure: toys.Measure
 ) -> None:
     run = measure(611, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-    slicer = client.compute(SLICER, params={'sample': run})
+    slicer = client.compute(toys.SLICER, params={'sample': run})
     n = len(client.output(slicer, 'slices'))  # a reference names one row
     slices = client.accumulator(
-        Template(SLICES, params={'sample': run}, blanks=('time_range',))
+        Template(toys.SLICES, params={'sample': run}, blanks=('time_range',))
     )
     found = [slicer.ref('slices', key=str(i)) for i in range(n)]
     slices.push(time_range=found)
@@ -40,32 +31,34 @@ def test_i1_time_slices_found_by_a_first_reduction(
 
     with pytest.raises(SubmitError, match=r'time_range\[3\]: repeats time_range\[0\]'):
         slices.push(time_range=[found[0]])  # slice 0 again
-    slices.push(time_range=[TimeRange(start=0, stop=2)])  # slice 0, typed in
+    slices.push(time_range=[toys.TimeRange(start=0, stop=2)])  # slice 0, typed in
     assert client.output(slices, 'sliced').value == 21.0 + 1.0 + 2.0
 
 
-def test_i2_beam_centre_typed_in_or_computed(client: Client, measure: Measure) -> None:
+def test_i2_beam_centre_typed_in_or_computed(
+    client: Client, measure: toys.Measure
+) -> None:
     direct_beam = measure(600, [0.5, 1.5])
     sample = measure(611, [12.0, 36.0])
     can = measure(620, [1.0, 1.0])
-    finder = client.compute(BEAM_CENTRE, params={'direct_beam': direct_beam})
-    t611 = client.compute(CONTRIBUTE, params={'sample': sample})
+    finder = client.compute(toys.BEAM_CENTRE, params={'direct_beam': direct_beam})
+    t611 = client.compute(toys.CONTRIBUTE, params={'sample': sample})
     transmission = t611.ref('transmission')
     computed, typed = (
         client.accumulator(
             Template(
-                CENTRED_MULTI,
+                toys.CENTRED_MULTI,
                 params={'centre': centre, 'transmission': transmission},
                 blanks=('sample', 'can'),
             )
         )
-        for centre in (finder.ref('centre'), BeamCentre(x=1.0))
+        for centre in (finder.ref('centre'), toys.BeamCentre(x=1.0))
     )
     for accumulator in (computed, typed):
         accumulator.push(sample=[sample])
         accumulator.push(can=[can])
 
-    assert client.output(finder, 'centre') == BeamCentre(x=1.0)
+    assert client.output(finder, 'centre') == toys.BeamCentre(x=1.0)
     assert [
         client.output(accumulator, 'centred').values.tolist()
         for accumulator in (computed, typed)
@@ -75,15 +68,18 @@ def test_i2_beam_centre_typed_in_or_computed(client: Client, measure: Measure) -
 
 
 def test_i3_a_transmission_computed_for_the_summed_runs(
-    client: Client, measure: Measure
+    client: Client, measure: toys.Measure
 ) -> None:
     runs = [measure(611, [1.0, 3.0]), measure(612, [4.0, 4.0])]
     can = measure(620, [1.0, 1.0])
-    t = client.compute(CONTRIBUTE, params={'sample': measure(630, [1.0, 3.0])})
+    t = client.compute(toys.CONTRIBUTE, params={'sample': measure(630, [1.0, 3.0])})
     total = client.accumulator(
         Template(
-            CENTRED_MULTI,
-            params={'centre': BeamCentre(x=0.0), 'transmission': t.ref('transmission')},
+            toys.CENTRED_MULTI,
+            params={
+                'centre': toys.BeamCentre(x=0.0),
+                'transmission': t.ref('transmission'),
+            },
             blanks=('sample', 'can'),
         )
     )

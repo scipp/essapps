@@ -10,30 +10,22 @@ import scipp as sc
 from ess.apps import Client, Template, apply, file
 from ess.apps.testing import FakeFiles
 
-from .conftest import (
-    BEAM_CENTRE,
-    EXPORT,
-    IOFQ,
-    STITCH,
-    VANADIUM,
-    Measure,
-    Scaling,
-)
+from . import toys
 
 
 def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
-    client: Client, measure: Measure
+    client: Client, measure: toys.Measure
 ) -> None:
     centre_run = measure(1, [1.0, 1.0, 1.0, 1.0])
     centre = client.compute(
-        BEAM_CENTRE, params={'direct_beam': centre_run}, label='beam-centre'
+        toys.BEAM_CENTRE, params={'direct_beam': centre_run}, label='beam-centre'
     )
     samples = [
         measure(2, [2.0, 3.0, 4.0, 5.0], role='sample'),
         measure(3, [5.0, 4.0, 3.0, 2.0], role='sample'),
     ]
     template = Template(
-        IOFQ,
+        toys.IOFQ,
         params={'beam_centre': centre.ref('centre'), 'normalization': None},
         blanks=('sample',),
     )
@@ -52,12 +44,12 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
     reason='publish, scicat, and files.add_published are not implemented'
 )
 def test_c2_vanadium_from_the_catalogue(
-    client: Client, measure: Measure, files: FakeFiles
+    client: Client, measure: toys.Measure, files: FakeFiles
 ) -> None:
     vanadium = other.compute(
-        VANADIUM,
+        toys.VANADIUM,
         params={
-            'scaling': Scaling(scale=2.0),
+            'scaling': toys.Scaling(scale=2.0),
             'vanadium': measure(1, [1.0, 1.0]),
         },
     )
@@ -66,7 +58,7 @@ def test_c2_vanadium_from_the_catalogue(
 
     sample = measure(2, [4.0, 8.0])
     result = client.compute(
-        IOFQ, params={'sample': sample, 'normalization': file(pid=pid)}
+        toys.IOFQ, params={'sample': sample, 'normalization': file(pid=pid)}
     )
 
     assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]
@@ -75,7 +67,7 @@ def test_c2_vanadium_from_the_catalogue(
     assert client.records() == [result]
 
 
-def test_c4_reflectometry_angle_series(client: Client, measure: Measure) -> None:
+def test_c4_reflectometry_angle_series(client: Client, measure: toys.Measure) -> None:
     reference = measure(10, [2.0, 2.0], role='reference')
     angles = [
         measure(11, [8.0, 4.0], angle=0.5),
@@ -84,20 +76,20 @@ def test_c4_reflectometry_angle_series(client: Client, measure: Measure) -> None
         measure(14, [2.0, 0.5], angle=4.0),
     ]
     series = client.submit(
-        STITCH,
+        toys.STITCH,
         params={
             'runs': angles,
             'reference': reference,
         },
     )
-    exported = client.compute(EXPORT, params={'result': series.ref('stitched')})
+    exported = client.compute(toys.EXPORT, params={'result': series.ref('stitched')})
 
     assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
     assert set(client.provenance(exported).files()) == {reference, *angles}
 
 
 def test_c4_angle_series_accumulated_reads_as_the_plain_request(
-    client: Client, measure: Measure
+    client: Client, measure: toys.Measure
 ) -> None:
     reference = measure(10, [2.0, 2.0], role='reference')
     runs = [
@@ -105,14 +97,14 @@ def test_c4_angle_series_accumulated_reads_as_the_plain_request(
         for n, counts in [(11, [8.0, 4.0]), (12, [2.0, 1.0]), (13, [4.0, 2.0])]
     ]
     series = client.accumulator(
-        Template(STITCH, params={'reference': reference}, blanks=('runs',))
+        Template(toys.STITCH, params={'reference': reference}, blanks=('runs',))
     )
     reads, plains = [], []
     for n, run in enumerate(runs, start=1):
         # STITCH keeps the rows and stitches at each read
         series.push(runs=[run])
         plain = client.compute(
-            STITCH,
+            toys.STITCH,
             params={
                 'runs': runs[:n],
                 'reference': reference,
@@ -126,19 +118,19 @@ def test_c4_angle_series_accumulated_reads_as_the_plain_request(
 
 
 def test_c5_vanadium_and_sample_tuned_together(
-    client: Client, measure: Measure
+    client: Client, measure: toys.Measure
 ) -> None:
     vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
     vanadium = client.stage(
-        Template(VANADIUM, params={'vanadium': vanadium_run}, blanks=('scaling',))
+        Template(toys.VANADIUM, params={'vanadium': vanadium_run}, blanks=('scaling',))
     )
     reduce = client.stage(
-        Template(IOFQ, params={'sample': sample}, blanks=('normalization',))
+        Template(toys.IOFQ, params={'sample': sample}, blanks=('normalization',))
     )
     reduced = []
     for scale in (1.0, 2.0):
         processed = client.compute(
-            vanadium, params={'scaling': Scaling(scale=scale)}, label='vanadium'
+            vanadium, params={'scaling': toys.Scaling(scale=scale)}, label='vanadium'
         )
         normalization = processed.ref('normalization')
         reduced.append(

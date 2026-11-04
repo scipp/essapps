@@ -14,26 +14,15 @@ from ess.apps import (
     apply,
 )
 
-from .conftest import (
-    BACKGROUND,
-    CONTRIBUTE,
-    IOFQ,
-    IOFQ_CAN,
-    NORMALIZE,
-    PARTS_SUM,
-    VANADIUM,
-    Measure,
-    Reduction,
-    Scaling,
-)
+from . import toys
 
 
-def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
+def test_s1_reduce_one_run(client: Client, measure: toys.Measure) -> None:
     run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
     result = client.compute(
-        IOFQ,
+        toys.IOFQ,
         params={
-            'reduction': Reduction(threshold=1.5),
+            'reduction': toys.Reduction(threshold=1.5),
             'sample': run,
             'normalization': None,
         },
@@ -44,34 +33,34 @@ def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
     assert result.request.files() == [run]
 
 
-def test_s2_tune_one_parameter(client: Client, measure: Measure) -> None:
+def test_s2_tune_one_parameter(client: Client, measure: toys.Measure) -> None:
     run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
     tune = client.stage(
         Template(
-            IOFQ,
+            toys.IOFQ,
             params={'sample': run, 'normalization': None},
             blanks=('reduction',),
         )
     )
     for bins in (1, 2, 4):
         result = client.compute(
-            tune, params={'reduction': Reduction(bins=bins)}, label='tuning'
+            tune, params={'reduction': toys.Reduction(bins=bins)}, label='tuning'
         )
 
     assert client.latest('tuning') == result
     assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0, 3.0, 4.0]
-    plain = client.compute(IOFQ, params=result.request.params)
+    plain = client.compute(toys.IOFQ, params=result.request.params)
     assert sc.identical(client.output(plain, 'iofq'), client.output(result, 'iofq'))
 
 
 def test_s3_look_at_a_value_inside_a_reduction(
-    client: Client, measure: Measure
+    client: Client, measure: toys.Measure
 ) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
     result = client.compute(
-        IOFQ,
+        toys.IOFQ,
         params={
-            'reduction': Reduction(threshold=2.5),
+            'reduction': toys.Reduction(threshold=2.5),
             'sample': run,
             'normalization': None,
         },
@@ -81,28 +70,30 @@ def test_s3_look_at_a_value_inside_a_reduction(
     assert client.output(result, 'iofq').values.tolist() == [0.0, 7.0]
 
 
-def test_s4_submit_a_chain_without_waiting(client: Client, measure: Measure) -> None:
+def test_s4_submit_a_chain_without_waiting(
+    client: Client, measure: toys.Measure
+) -> None:
     r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0])
     parts = client.submit(
-        [Request(CONTRIBUTE, params={'sample': run}) for run in (r611, r612)]
+        [Request(toys.CONTRIBUTE, params={'sample': run}) for run in (r611, r612)]
     )
     summed = client.submit(
-        PARTS_SUM,
+        toys.PARTS_SUM,
         params={'parts': [p.ref('parts') for p in parts]},
     )
 
     assert client.output(summed, 'numerator').values.tolist() == [3.0, 9.0]
 
 
-def test_s5_sum_runs(client: Client, measure: Measure) -> None:
+def test_s5_sum_runs(client: Client, measure: toys.Measure) -> None:
     runs = [measure(1, [1.0, 2.0]), measure(2, [1.0, 2.0]), measure(3, [0.0, 2.0])]
     total = client.compute(
-        NORMALIZE,
-        params={'scaling': Scaling(scale=2.0), 'runs': runs},
+        toys.NORMALIZE,
+        params={'scaling': toys.Scaling(scale=2.0), 'runs': runs},
     )
     backgrounds = [measure(4, [1.0, 1.0]), measure(5, [0.0, 1.0])]
     result = client.compute(
-        BACKGROUND,
+        toys.BACKGROUND,
         params={
             'sample_runs': runs,
             'background_runs': backgrounds,
@@ -116,14 +107,14 @@ def test_s5_sum_runs(client: Client, measure: Measure) -> None:
 
 
 def test_s7_reduce_each_sample_with_the_can_measured_before_it(
-    client: Client, measure: Measure
+    client: Client, measure: toys.Measure
 ) -> None:
     can_1 = measure(1, [1.0, 1.0], role='can')
     first = measure(2, [5.0, 6.0], role='sample')
     can_3 = measure(3, [2.0, 2.0], role='can')
     second = measure(4, [6.0, 9.0], role='sample')
     template = Template(
-        IOFQ_CAN, params={'normalization': None}, blanks=('sample', 'can')
+        toys.IOFQ_CAN, params={'normalization': None}, blanks=('sample', 'can')
     )
     cans = Lookup({'can': LastBefore(Selector(role='can'))})
 
@@ -147,14 +138,14 @@ def test_s7_reduce_each_sample_with_the_can_measured_before_it(
     ]
 
 
-def test_s8_trace_a_result_to_raw_data(client: Client, measure: Measure) -> None:
+def test_s8_trace_a_result_to_raw_data(client: Client, measure: toys.Measure) -> None:
     vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
     vanadium = client.compute(
-        VANADIUM,
-        params={'scaling': Scaling(scale=2.0), 'vanadium': vanadium_run},
+        toys.VANADIUM,
+        params={'scaling': toys.Scaling(scale=2.0), 'vanadium': vanadium_run},
     )
     result = client.compute(
-        IOFQ,
+        toys.IOFQ,
         params={
             'sample': sample,
             'normalization': vanadium.ref('normalization'),

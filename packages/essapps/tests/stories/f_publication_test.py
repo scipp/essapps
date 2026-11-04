@@ -10,20 +10,20 @@ import pytest
 
 from ess.apps import Client, SubmitError, Template
 
-from .conftest import BEAM_CENTRE, IOFQ, Measure, Reduction
+from . import toys
 
 
 @pytest.mark.xfail(
     reason='client.publish, scicat, and Provenance.software are not implemented'
 )
 def test_f1_publish_then_trace_six_months_later(
-    client: Client, measure: Measure
+    client: Client, measure: toys.Measure
 ) -> None:
     centre_run, run = measure(1, [1.0, 1.0, 1.0, 1.0]), measure(2, [2.0, 3.0, 4.0, 5.0])
-    centre = client.compute(BEAM_CENTRE, params={'direct_beam': centre_run})
+    centre = client.compute(toys.BEAM_CENTRE, params={'direct_beam': centre_run})
     tune = client.stage(
         Template(
-            IOFQ,
+            toys.IOFQ,
             params={
                 'sample': run,
                 'beam_centre': centre.ref('centre'),
@@ -32,9 +32,9 @@ def test_f1_publish_then_trace_six_months_later(
             blanks=('reduction',),
         )
     )
-    result = client.compute(tune, params={'reduction': Reduction(threshold=1.5)})
+    result = client.compute(tune, params={'reduction': toys.Reduction(threshold=1.5)})
     pid = client.publish(result.ref('iofq'), 'scicat')
-    plain = client.compute(IOFQ, params=result.request.params)
+    plain = client.compute(toys.IOFQ, params=result.request.params)
 
     provenance = scicat.entries[pid].provenance
     assert provenance == client.provenance(result) == client.provenance(plain)
@@ -48,12 +48,12 @@ def test_f1_publish_then_trace_six_months_later(
     'client.recompute and Provenance.software are not implemented'
 )
 def test_f2_reproduce_after_two_upgrades(
-    client: Client, measure: Measure, upgrade: Callable[..., Client]
+    client: Client, measure: toys.Measure, upgrade: Callable[..., Client]
 ) -> None:
     result = client.compute(
-        IOFQ,
+        toys.IOFQ,
         params={
-            'reduction': Reduction(threshold=1.5),
+            'reduction': toys.Reduction(threshold=1.5),
             'sample': measure(1, [1.0, 2.0, 3.0, 4.0]),
             'normalization': None,
         },

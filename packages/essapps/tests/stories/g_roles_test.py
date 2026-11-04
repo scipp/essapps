@@ -10,16 +10,16 @@ from ess.apps import Client, SubmitError, local
 from ess.apps.testing import FakeFiles
 from ess.spec import function_binding
 
-from .conftest import BEAM_CENTRE, IOFQ, Measure, iofq
+from . import toys
 
 
 def test_g2_developer_iterates_on_a_workflow(
-    measure: Measure, files: FakeFiles
+    measure: toys.Measure, files: FakeFiles
 ) -> None:
-    draft = iofq
-    dev = local(proposal='p1', files=files, bind=[function_binding(IOFQ, draft)])
+    draft = toys.iofq
+    dev = local(proposal='p1', files=files, bind=[function_binding(toys.IOFQ, draft)])
     result = dev.compute(
-        IOFQ,
+        toys.IOFQ,
         params={
             'sample': measure(1, [1.0, 2.0, 3.0, 4.0]),
             'normalization': None,
@@ -30,19 +30,19 @@ def test_g2_developer_iterates_on_a_workflow(
 
 
 def test_g5_reference_across_proposals_refused(
-    connect: Callable[..., Client], measure: Measure
+    connect: Callable[..., Client], measure: toys.Measure
 ) -> None:
     theirs = connect(proposal='p1', user='anna')
     mine = connect(proposal='p2', user='eve')
     centre = theirs.compute(
-        BEAM_CENTRE,
+        toys.BEAM_CENTRE,
         params={'direct_beam': measure(1, [1.0, 1.0], proposal='p1')},
     )
     sample = measure(2, [2.0, 2.0], proposal='p2')
 
     with pytest.raises(SubmitError, match='p1'):
         mine.compute(
-            IOFQ,
+            toys.IOFQ,
             params={
                 'sample': sample,
                 'beam_centre': centre.ref('centre'),

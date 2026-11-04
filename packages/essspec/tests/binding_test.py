@@ -140,6 +140,8 @@ def test_fixed_values_fill_in_the_default_of_each_parameter_in_neither() -> None
         'scale': Scale(),
         'sample': SAMPLES[0],
     }
+    plain = {'sample': SAMPLES[0], 'can': CANS[0]}  # a plain request, no blanks
+    assert fixed_values(SUB, plain, ()) == {'scale': Scale(), **plain}
 
 
 def test_fixed_values_take_a_table_as_its_rows() -> None:
@@ -156,6 +158,12 @@ def test_fixed_values_take_a_table_as_its_rows() -> None:
         ({'speed': 1.0}, ('sample',), 'speed: not a parameter of sub-multi'),
         ({}, ('speed',), 'speed: not a parameter of sub-multi'),
         ({}, ('can',), 'sample: a required parameter, not given'),
+        ({'can': CANS}, (), 'sample: a required parameter, not given'),
+        (
+            {'speed': 1.0, 'sample': SAMPLES, 'can': CANS},
+            (),
+            'speed: not a parameter of sub-multi',
+        ),
     ],
 )
 def test_fixed_values_refuse_names_that_do_not_fit(

@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-ALLOWED_NAMES = ("conftest.py",)
+ALLOWED_NAMES = ("conftest.py", "toys.py")
 
 
 def main():
