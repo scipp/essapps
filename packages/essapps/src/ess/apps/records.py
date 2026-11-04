@@ -138,7 +138,7 @@ class Request(BaseModel, frozen=True):
     ``params`` is a dict by name, or an instance of the params model if
     they hold no reference to an output, each value as
     :meth:`~ess.apps.Client.submit` takes it. The rules are stated in
-    :mod:`ess.spec._workflow_spec`. A JSON object with the key
+    ``packages/essspec/docs/params.md``. A JSON object with the key
     ``"@ref"`` is a reference at any depth, so the references and files of a
     request are found without its spec (see :func:`ess.spec.refs.iter_refs`).
 

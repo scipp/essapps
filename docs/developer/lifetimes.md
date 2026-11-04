@@ -52,11 +52,19 @@ client.output(result, 'iofq')       # allowed: this client asked for the record
 client.output(centre, 'centre')     # raises NotReadable: this client released it
 ```
 
+**Release and close.** `client.release(x)` takes a record, a stage, or an accumulator, or a list or dict of them.
+A released record stays, and its outputs are dropped once nothing else keeps them.
+A released stage takes no more calls, and lets go of what its template references if it has not staged.
+Releasing an accumulator is described in [accumulators.md](accumulators.md#freeze-release-stop).
+Releasing what the client does not keep does nothing.
+
 `client.close()`, or the end of a `with client:` block, releases everything the client keeps.
+It first waits until the outputs persisted with `client.persist` are written, and then raises `RuntimeError` naming each whose write failed.
 
 **Work that nothing keeps is cancelled.** A pending record whose outputs nothing would keep finishes as `cancelled`.
 So releasing a pending record that no pending request reads cancels it, and since a cancelled request keeps nothing it reads, cancelling passes along a chain.
 A running workflow is not interrupted: its record is cancelled at once, and its outputs are dropped when it returns.
+`client.cancel(records)` cancels explicitly. A client may cancel any record of its proposal, also one that another client made.
 
 ## Persist
 
@@ -72,7 +80,13 @@ morning.output(morning.records(label='night')[0], 'iofq')   # read from the stor
 
 `persist=` at submission makes the store the only keeper, and outputs not named are dropped.
 Such a record completes once its outputs are written, and fails if a write fails.
-A client reads the values it keeps from memory, and other persisted values from the store, after waiting for their write.
+A client reads the values it keeps from memory, and other persisted values from the store, after waiting for their write. A read, or a request that references the value, fails if the write fails.
+A write replaces what the store holds under that name.
+
+`client.persist(records, *names)` writes the named outputs, or every output, of records the client keeps, each once its record has completed, and returns at once.
+It raises `SubmitError`, and persists nothing, for a record the client does not keep, a record that failed or was cancelled, or an output the record lacks.
+Persisting an output that is persisted does nothing.
+If a write fails, the record stays as it is, a read of the output by another client raises with the reason, and `persist` may be called again.
 
 ## The two deployments
 

@@ -4,11 +4,11 @@
 Request-phase checks: what the backend checks of a request, a template, a
 push, and the state of an accumulator before any data is read.
 
-A request lives in two phases. In the *request phase*, when it is submitted,
-the backend checks what it can without data, here. In the *call phase*, on a
-worker, the backend reads the data each reference names and validates them
-(see ``backend.py``). :class:`Checks` holds the checks of one spec, one
-method for each thing checked::
+The backend checks a request in two phases (see ``backend.py``): this module
+is the part of the request phase that needs neither the backend's lock nor a
+client. What depends on history or on what a client keeps is the backend's.
+:class:`Checks` holds the checks of one spec, one method for each thing
+checked::
 
     checks = Checks(IOFQ, files)
     request, reads = checks.request(request, proposal)  # a plain request
@@ -17,43 +17,38 @@ method for each thing checked::
     rows, reads = checks.push(blanks, rows, proposal)
     refused = checks.state(plain, blanks)                  # at a pin or a read
 
-The rules of what a request may write are stated in
-:mod:`ess.spec._workflow_spec`, with the terms used here. The checks of a
-request, of which a template, a push, and a state check a part:
+The methods differ in what they hold each value against, since a template and
+a push give only some of the params:
 
-- *Names.* Each name is a parameter of the spec. A required parameter must
-  be given. One left out takes its default.
-- *Values.* Each parameter, or each row of a list parameter, is validated
-  by its request type (see :func:`ess.spec.request_types.held`). It refuses
-  what a request may not write there, resolves each file, and returns what
-  the record stores. A parameter that holds no reference to an output is
-  then validated whole by the params model, with the local path of each
-  file, so that the validators of a group that holds a file run now. A
-  field that a model lacks is refused, since validating would drop it
+- ``request``: each parameter by its field, and the table rules on its tables.
+- ``template``: each fixed value by its own field, and the table rules on the
+  fixed tables.
+- ``push``: each row by its table's element type. Whether a row repeats one the
+  table holds is the backend's to check, which knows the table.
+- ``state``: the number of rows of each blank table, since each value was
+  checked when it was given.
+
+They share ``_values``, which validates a value by its request type (see
+:func:`ess.spec.request_types.held`), resolves each file with the file source,
+and returns what the record stores. Three choices in it follow from the call
+phase:
+
+- A parameter that holds no reference to an output is also validated whole by
+  the params model, with the local path of each file, so that the validators of
+  a group that holds a file run at submission.
+- A field that a model lacks is refused, since validating would drop it
   silently.
-  The JSON form of a value must read back as the value, since the call
-  phase makes the value from it (see :func:`ess.spec.field_types.inline`).
-  A list parameter that is not a table meets its length constraints.
-- *Files.* Validating a file resolves it with the file source (see
-  :class:`ess.spec.File`): the file must be known, the proposal must be
-  allowed to read it, and its metadata must fit the marker of the file
-  field, as a :class:`~.files.Selector` of the marker's metadata matches
-  it. The record stores the file's identity.
-- *References to outputs.* Each check returns the references to outputs
-  in the values, each with its position and the type its data must fit
-  (see :data:`ess.spec.request_types.Reads`). The backend checks each,
-  since it knows what the client may read (see :func:`check_fit`): the
-  output exists and its type fits the field.
-- *Table rules.* The number of rows of a table meets its length
-  constraints, and its rows are distinct, compared as the record stores
-  them: a file by its identity, a reference to an output by record, output,
-  and key, and any other value by its JSON form (see :func:`distinct`).
+- The JSON form of a value must read back as the value, since the call phase
+  makes the value from it (see :func:`ess.spec.field_types.inline`).
 
-The params model's model validators never run: a stage and a driver never
-get a whole params instance. A template's fixed values are checked each by
-its own field, and a push by its table's element type. The checks need
-neither the backend's lock nor a client: what depends on history or on what a
-client keeps is the backend's.
+Each check returns the references to outputs in the values, each with its
+position and the type its data must fit (see
+:data:`ess.spec.request_types.Reads`). The backend checks each against what the
+client may read (see :func:`check_fit`).
+
+The params model's model validators never run: a stage and a driver never get a
+whole params instance. The terms (group, file field, reference, table) and the
+rules of what a request may write are in ``packages/essspec/docs/params.md``.
 """
 
 from __future__ import annotations

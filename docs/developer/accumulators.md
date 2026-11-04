@@ -12,7 +12,7 @@ Stages and accumulators keep what such work computes in memory between requests,
 Both make records that are identical to the records of plain requests with the same values (see Symmetries).
 A client keeps a stage or an accumulator until it releases it or ends.
 Making one over a binding that does not serve it is refused.
-[ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md) and [ADR 0003](adr/0003-accumulators-add-in-place.md) give the reasons; the docstrings of `ess.spec.binding` give the binding's side of the contract.
+[ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md) and [ADR 0003](adr/0003-accumulators-add-in-place.md) give the reasons; [bindings.md](../../packages/essspec/docs/bindings.md) gives the binding's side of the contract.
 
 **In short:**
 
@@ -35,8 +35,9 @@ for bins in (50, 100, 200):
 
 The first call has the binding make its stage from the fixed values, and compute what depends only on them.
 Later calls compute only the rest.
-Each call fills the blanks and makes the record of the plain request.
+Each call gives values for the blanks only, fills them, and makes the record of the plain request.
 A blank is a whole parameter, never a field of a group.
+A file name in the template is resolved when the stage is made, so the stage keeps the file that the name meant then.
 If making the stage fails, the stage *stops*: the first call and those waiting fail, and later calls are refused, each with the reason.
 
 ## Accumulator
@@ -60,7 +61,10 @@ The rows of one push enter one state, so states 1 and 2 above, which have no can
 Tables stand side by side: the first sample row is not paired with the first can row.
 
 A push of no rows is refused, and so is a push into a table that the template fixes.
-`client.accumulator` and `push` return once logged; the backend makes the driver and adds the pushes later.
+A push gives rows of one or more tables, each row as a request writes it there: a group as a model or a dict, a file as `file(...)` or a `Path`, a reference to an output.
+A push references files and outputs of records, never an accumulator.
+A reference to a record that failed or was cancelled is refused, and a pending record is not waited for when the push is logged.
+`client.accumulator` and `push` return once logged; the backend makes the driver and adds each push later, once the records it references have completed.
 
 **Distinct rows.** A push refuses a row that its table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
 Rows are compared as the record stores them: a value written inline by its JSON form, a file by its identity, and a reference by record, output, and key.
@@ -78,6 +82,9 @@ It does not wait for these pushes to be added before it returns, except where it
 | `client.submit(EXPORT, params={'result': acc.ref('iofq')})` | the record of the request; the submission also makes the record of state n, which the request reads without a copy | until the request's workflow has returned |
 | `client.freeze(acc)` | the record of state n | no push follows |
 | `client.provenance(acc)` | the provenance of state n's plain request, at once | no |
+
+`select=` copies only the part it names, but the outputs of a state are computed whole, the first time a pin needs them.
+A controller that should skip pins while the backend is behind checks whether the record of its previous pin has finished.
 
 No client keeps the record of a state that a submission makes, so `client.output` of it raises.
 A record never names an accumulator: the submission replaces `acc.ref(...)` by a reference to the record of the state.
@@ -106,13 +113,19 @@ client.output(total, 'iofq')
 client.freeze(volume, persist=True)         # the store keeps the outputs, not the client
 ```
 
-At the end of a scan, freezing makes the final volume an ordinary record, which the client can keep, persist, or reference from another template.
+At the end of a scan, freezing makes the final volume an ordinary record, which the client can keep, persist, or reference from another template or push, where the accumulator itself may not be referenced.
+A freeze is refused, and the accumulator takes pushes again, if the plain request of the state would be refused; a push made meanwhile waits for that answer.
+Once the record has completed, the accumulator is read through it: a read of the accumulator is refused and names the record.
+If the record fails or is cancelled, the accumulator stays readable and may be frozen again.
 
 `client.release(acc)`, or the end of its client, returns at once.
 The pushes up to the last pinned state are still added, later pushes never are, and the driver is dropped once the readers of its states are done.
 
 The accumulator *stops* if adding a push fails, a record that a push references does not complete, or the binding fails to make the driver.
-Later pushes and pins are refused with the reason, and the records of states it did not reach fail.
+Later pushes and pins are refused with the reason: a push raises `SubmitError`, and a read raises `NotReadable`.
+The reason names the step, such as `push 0` for the first push.
+The records of states it did not reach fail, and so do the requests that read them.
+A controller that should skip a run whose reduction failed waits for that record before it pushes.
 
 ## Validation
 

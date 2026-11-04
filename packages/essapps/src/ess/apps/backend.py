@@ -4,6 +4,10 @@
 The backend checks requests, keeps records, and runs requests. It also
 answers its clients' queries about the files of its file source.
 
+The rules that clients see are in ``docs/developer/``: ``lifetimes.md``,
+``accumulators.md``, and ``packages/essspec/docs/params.md``. This docstring
+explains how the backend implements them and how its pieces fit.
+
 What the backend knows of history is its log (see ``log.py``): every
 submission, finished record, opened accumulator, push, persist request, and
 write that ended is appended as one event and then applied to its views (see
@@ -26,168 +30,117 @@ values, and what waits for what are not history. This backend keeps them in
 memory, so a backend started from an existing log has no clients and cannot
 read the outputs of the backend that wrote it.
 
-An output value is kept while the client that made its record keeps it, while
-a stage whose template references it has yet to stage, while a pending
-request or a step of an accumulator that reads it has yet to run, or while a
-persist request waits for its write. Once a stage has staged, or a step is
-done, what the binding holds is its own. A pending record whose outputs
-nothing keeps is cancelled, since they would be dropped the moment they are
-computed; cancelling lets go of what it reads, so this passes along a chain.
-A workflow already running is not interrupted: its record is cancelled at
-once, and its outputs are dropped when it returns.
+Keepers and readers
+-------------------
+A client keeps the outputs of the records in its entry (``_Client.kept``).
+The pending records, steps of accumulators, and stages that have yet to read
+a value are its readers (``_readers``, see ``_Read``). A value is dropped when
+no client keeps it, no reader is left, and no write of it is pending
+(``_drop``). A pending record whose outputs nothing keeps is cancelled, since
+they would be dropped the moment they are computed; cancelling lets go of what
+it reads, so this passes along a chain. A workflow already running is not
+interrupted: its record is cancelled at once, and its outputs are dropped when
+it returns. Once a stage has staged, or a step is done, what the binding holds
+is its own.
 
-To persist an output is to write it to the backend's store, which then keeps
-it; a write replaces what the store holds under that name. A persist request
-made with a submission or a freeze replaces the client's hold: the worker
-writes the outputs named when the workflow returns, and the record finishes
-once they are written, or fails if the write fails. One made later by the
-client for a record it keeps adds the store next to the client: a worker
-writes the outputs once the record has completed, a failed write fails only
-that request, and closing the client raises if it failed. The store may hold
-a value that no event names, written for a record cancelled meanwhile or by
-a write that failed part-way; nothing reads it.
+A persist request made with a submission or a freeze replaces the client's
+hold: the worker writes the outputs named when the workflow returns, and the
+record finishes once they are written. One made later adds the store next to
+the client: a worker writes the outputs once the record has completed, and a
+failed write fails only that request. The store may hold a value that no event
+names, written for a record cancelled meanwhile or by a write that failed
+part-way; nothing reads it.
 
-A client reads, and its requests, stages, and accumulators reference, only the
-outputs of records it keeps, whether they are pending or completed, and
-persisted outputs, written or with their write pending; a request through a
-stage that has yet to stage also those the stage keeps (see
-:meth:`Backend._refusal`), and one through a stage that has staged reads only
-the values of its blanks. So whether a call is accepted does not depend on
-how far other work has run, and a value kept only for another client or for a
-pending request is refused. A request, or a read of outputs, that may read an
-output only because it is persisted waits for its write, and fails if the
-write fails. A client reads the outputs it keeps from memory, and persisted
-ones from the store, so it never gets the value another client holds; a
-workflow reads the outputs it references from memory while the backend holds
-them, whichever client keeps them.
+:meth:`Backend._refusal` decides what a client may read, in the request phase,
+from the record's existence and its keepers alone. So whether a call is accepted
+does not depend on how far other work has run, and a pending record is as
+readable as a completed one. A client reads the outputs it keeps from memory,
+and persisted ones from the store, after the write, so it never gets the value
+another client holds; a workflow reads the outputs it references from memory
+while the backend holds them, whichever client keeps them.
 
 A request waits until every record it references has completed, the record
 of an accumulator's state until the accumulator has reached that state, and
 an accumulator's steps as described below. This is the only scheduling there
 is.
 
+Request and call phase
+----------------------
 A request runs through its spec's binding (see ``ess.spec.binding``): a plain
 request through ``compute``, a stage through ``make_stage``, and an
-accumulator through ``make_accumulator``. A stage is refused when it is made
-unless its spec's binding makes stages, and so is an accumulator unless the
-binding makes accumulators.
+accumulator through ``make_accumulator``.
 
-A request lives in two phases. In the *request phase*, when it is submitted,
-the backend checks what it can without data (see ``checks.py``), and, under
-its lock, what depends on history and on what the client keeps: each reference
-to a record or an accumulator is one the client may read, and its data fit the
-type of its field (see :data:`ess.spec.request_types.Reads`). Each group
-given inline that holds no reference is validated whole then, by the
-params model with the local path of each file, so that its validators run.
-In the *call phase*, on a worker, the backend reads the output each
-reference names, and validates each value, a row of a list on its own, by
-the params model from the JSON form the log holds, with each reference
-replaced by the data read and each file by its local path (see
-:func:`ess.spec.request_types.validated`). A group that holds a
-reference is validated then, so its validators see the data read. For a
-plain request the backend makes the params instance from these values
-without validating again, so the params model's model validators never run;
-a stage or an accumulator gets the values by name. The rows of a table are
-distinct by what the record stores alone (see :func:`.checks.distinct`): an
-inline value and a reference to equal data are two rows. The binding returns
-an instance of the outputs model: an output that the spec declares optional
-and the binding returns as ``None`` is left out, and a record whose binding
-returns anything else fails.
+In the *request phase*, at submission, ``checks.py`` checks what needs no data.
+The backend adds, under its lock, what depends on history and on what the
+client keeps: each reference is one the client may read, and its data fit the
+type of its field (see :data:`ess.spec.request_types.Reads`).
 
-A stage checks its template's values when it is made, and resolves file
-names: each fixed value by its own field. It keeps the outputs they
-reference until it has staged. A request through it must have its values
-outside the blanks. The first such request to run has the binding make its
-stage with the template's values by name, each read and validated by its own
-field, and every request through the stage runs through the callable the
-binding returned, with the values of the blanks, so a binding that holds
-values computes only what depends on the blanks. The record of a request
-through a stage that has staged still names the template's values, but these
-references are provenance only: they are not checked against what the client
-keeps, waited for, or read, except by a restart, which runs the record as its
-plain request (see :meth:`Backend._restart`). If staging fails, the stage
-stops: the requests through it fail, and later ones are refused. A stage
-lives until its client releases it or ends, and the requests made through it
-have run.
+In the *call phase*, on a worker, the backend reads the output each reference
+names and validates each value, a row of a list on its own, by the params model
+from the JSON form the log holds, with each reference replaced by the data read
+and each file by its local path (see :func:`ess.spec.request_types.validated`).
+A group that holds a reference is validated only then, so its validators see
+the data. A plain request makes the params instance from these values without
+validating again, so the params model's model validators never run; a stage or
+an accumulator gets the values by name. An output that the spec declares
+optional and the binding returns as ``None`` is left out; any other output that
+is not an instance of its type fails the record.
 
-An accumulator opens from a template whose blanks are tables, checked as a
-stage's template is. Each push gives one or more rows of one or more blank
-tables, which enter one state. A push is checked by each table's element
-type alone, and refused if it repeats a row its table holds; the
-accumulator keeps the rows logged, by JSON form, so this takes time in
-proportion to the push. The driver gets each step's values as the log
-holds them, so that it and the record of a state agree. Opening and pushing
-return once these checks pass and the event is logged, as a submission does:
-they check the records they reference against what the backend knows now, and refuse
-one that has failed, but do not wait for one that is pending.
+Stages
+------
+A stage keeps the outputs its template references until it has staged. The
+first request to run through it has the binding make its stage with the
+template's values by name, each read and validated by its own field, and every
+request through the stage runs through the callable the binding returned, with
+the values of the blanks. The record of such a request still names the
+template's values, but these references are provenance only: they are not
+checked against what the client keeps, waited for, or read, except by a
+restart, which runs the record as its plain request (see
+:meth:`Backend._restart`).
 
-Each accumulator then works through its steps one at a time, in the order they
-were logged, on the workers: opening has the binding make the driver from the
-template's values by name, each read and validated by its own field, and each
-push is one push into the driver per table it gives rows of, in the order
-given, which may add the rows to what it holds; each row is first read and
-validated by its table's element type, and a row that fails its check fails
-the push. A step starts once the records it references have completed, and a
-push once the readers of the state before it are done. If a step fails, or a record it
-references has not completed, the accumulator stops: it takes no more pushes
-or readers, the steps after it are dropped, and the requests that wait for a
-state it will not reach fail. Its driver is dropped once no reader holds its
-current state, without waiting for its client to release it.
+Accumulators
+------------
+An accumulator keeps the rows logged, by JSON form, to refuse a repeated row, so
+a push takes time in proportion to its rows. The driver gets each step's values
+as the log holds them, so that it and the record of a state agree. Opening and
+pushing return once the checks pass and the event is logged, as a submission
+does; they do not wait for a record that is pending.
 
-A read pins the accumulator's state after the pushes logged so far: a request
-that references the accumulator, when it is submitted; a read of its outputs;
-and its provenance. Pinning never waits for a push to be added. A request
-references an accumulator's output by its ID in place of a record's. The
-submission makes one record of the plain request of the pinned state for each
-accumulator its requests reference, logs it before them, as the accumulator
-and its number of pushes, and the records of the requests reference that
-record's outputs. No client keeps the record of a state, so only the requests
-of that submission read it. A push or a template reads no accumulator. A
-state may be read only if its plain request would be accepted. The first read
-of a state checks the number of rows of each blank table against its length
-constraints, such as a table that needs a row,
-outside the backend's lock, and a read of a state whose request would be
-refused is refused with that request's reason. Every other check was made
-when a value was given, and the params model's model validators run on no
-state.
+Each accumulator works through its steps one at a time, in the order logged, on
+the workers. A step starts once the records it references have completed, and a
+push once the readers of the state before it are done. Opening has the binding
+make the driver. A push is one push into the driver per table it gives rows of,
+in the order given, each row first read and validated by its table's element
+type. If a step fails, or a record it references has not completed, the
+accumulator stops: it takes no more pushes or readers, the steps after it are
+dropped, and the requests that wait for a state it will not reach fail. Its
+driver is dropped once no reader holds its current state, without waiting for
+its client to release it.
 
-The outputs of a state are computed outside the backend's lock, all at once,
-the first time a record of the state or a read of its outputs reads it, and
-kept until the next push. The record of a state is computed from the
-driver, as a call through a stage is from what the stage holds: its outputs
-are what the driver returns, not a copy, and may share memory with the
-driver, which the next push may change. They are kept until the
-requests that read them have run, and the record holds the state as its
-reader until then. Reading the outputs of the accumulator copies them, or
-only the part that a selection names. So the next push waits until the
-readers of the state before it are done, since the driver cannot go back
-to that state and no reader may see its outputs change: the records of that
-state, until the requests that read them have run, even those cancelled while
-they run, and the reads of its outputs in progress. Every wait is for work
-logged before the waiter: a request waits for records submitted before it and
-for pushes logged before its submission, and a push waits for the records of
-the state before it and the requests of their submissions, all logged before
-the push, since only the submission that made a record of a state reads it.
-So no wait goes round in a circle.
-Releasing the accumulator or ending its client keeps the pushes up to the last
-state a reader still holds, which are still added, and drops the later ones,
-again each time a reader lets go; the driver is dropped once its readers
-are done.
+A read pins the accumulator's state after the pushes logged so far, without
+waiting for a push to be added. A submission that references the accumulator
+logs, before its requests, one record of the plain request of the pinned state,
+as the accumulator and its number of pushes; the requests reference that
+record's outputs. No client keeps this record, so only the requests of that
+submission read it. The first read of a state checks the number of rows of each
+blank table against its length constraints, outside the backend's lock.
 
-A freeze is a read whose record of the state the client keeps. While the
-plain request of its state is checked, pushes wait; once the freeze is
-logged, the accumulator takes no more pushes. Once that record has
-completed, it holds the outputs of the last state, the accumulator takes no
-readers, and its driver is dropped once its last reader is done. A
-freeze whose record fails or is cancelled leaves the accumulator readable,
-and it may be frozen again; its computed outputs are dropped once the last
-reader of its state is done, since no push comes to drop them.
+The outputs of a state are computed outside the lock, all at once, the first time
+a record of the state or a read of its outputs needs them, and kept until the next
+push. The record of a state gets what the driver returns, not a copy, which may
+share memory with the driver; a read of the outputs copies them, or only the part
+that a selection names. So the next push waits until the readers of the state
+before it are done, since the driver cannot go back to that state and no reader
+may see its outputs change. The readers are the records of that state, until the
+requests that read them have run (even those cancelled while they run), and the
+reads in progress. Every wait is for work logged before the waiter: a request
+waits for records submitted before it and for pushes logged before its
+submission, and a push waits for the records of the state before it and the
+requests of their submissions, all logged before the push. So no wait goes round
+in a circle.
 
-A selection reads part of an array output of a record or an accumulator's
-state by dimension name, and copies only that part; of a group output, the
-part of each array field that has the dimension, as ``sc.DataGroup`` slices
-its items. A read of an accumulator's state still has the state's outputs
-computed whole.
+Releasing an accumulator, freezing it, and the end of its client are described
+at :meth:`Backend.release` and :meth:`Backend.freeze`.
 """
 
 from __future__ import annotations
@@ -794,9 +747,8 @@ class Backend:
         client keeps their outputs, but not those of the records of states.
 
         With ``persist``, every output or those named, the persist request is
-        logged with the submission, and the store keeps the outputs named
-        instead of the client: each record finishes once they are written,
-        and fails if the write fails.
+        logged with the submission and the store keeps the outputs instead of
+        the client (see the module docstring).
         """
         proposal = self._client(client).proposal
         prepared = [self._prepare(e, proposal) for e in entries]
@@ -1577,8 +1529,7 @@ class Backend:
 
     def close_client(self, client: str) -> None:
         """
-        End the client and release everything it keeps, which cancels the
-        work that nothing else keeps (see :meth:`release`).
+        End the client and release everything it keeps (see :meth:`release`).
 
         It first waits until the outputs the client asked to persist (see
         :meth:`persist`) are written, and once it has ended raises
@@ -1616,15 +1567,14 @@ class Backend:
         """
         Release records, stages, and accumulators the client keeps.
 
-        A released record's outputs are dropped once nothing else keeps
-        them, and a pending record that nothing else keeps is cancelled (see
-        :meth:`_drop`). A released stage takes no more requests, those made
-        through it still run through it, and it lets go of what its template
-        references, if it has not let go already. A released accumulator
-        takes no more pushes or readers; the pushes up to the last state that
-        a reader still holds are added, the later ones are dropped, and its
-        driver is dropped once its readers are done. Releasing what the
-        client does not keep does nothing.
+        A pending record that nothing else keeps is cancelled (see :meth:`_drop`).
+        Requests made through a released stage still run through it, and it lets go of
+        what its template references, if it has not let go already.
+
+        A released accumulator takes no more pushes or readers. The pushes up to the
+        last state that a reader still holds are still added, and the later ones are
+        dropped, again each time a reader lets go (see :meth:`_unneeded`). Its driver is
+        dropped once its readers are done.
         """
         with self._changed:
             caller = self._client(client)
@@ -1647,9 +1597,8 @@ class Backend:
         record, and write those of completed records on a worker.
 
         Every record must be one the client keeps, not failed or cancelled,
-        and have every output named; otherwise nothing is logged. The store
-        then keeps the outputs too, while the client keeps its hold. An
-        output that is persisted is left as it is; one whose write failed is
+        and have every output named; otherwise nothing is logged. An output
+        that is persisted is left as it is; one whose write failed is
         written again. Closing the client reports a write that failed (see
         :meth:`close_client`).
         """
@@ -1819,8 +1768,8 @@ class Backend:
         """
         Freeze the accumulator: the record of the plain request of its state
         after the pushes logged so far, which the client keeps; with
-        ``persist``, every output or those named, the store keeps it instead,
-        as for a submission (see :meth:`submit`).
+        ``persist``, the store keeps it instead, as for a submission (see
+        :meth:`submit`).
 
         The freeze pins that state as a read does, and its plain request is
         checked outside the lock, while pushes wait. If it would be refused,
@@ -1830,7 +1779,8 @@ class Backend:
         copied; once it has completed, the accumulator takes no readers, and
         its driver is dropped when its last reader is done. If the record
         fails or is cancelled, the accumulator may be read and frozen again,
-        but takes no pushes.
+        but takes no pushes. Its computed outputs are then dropped once the
+        last reader of its state is done, since no push comes to drop them.
         """
         with self._changed:
             _, acc = self._settled(client, accumulator_id)

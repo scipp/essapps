@@ -23,10 +23,8 @@ an output is plotted with plopp, in a figure of its own, once its record
 has completed. The spec declares no number of dimensions, so an array of
 none, or of more than two, is found only once read, and is not plotted.
 
-Removing an output releases its record (``client.release``), which drops the
-value of each of the record's outputs, and cancels it if pending; the
-record stays in the proposal's history, and in the graphs of the records
-that read it.
+Removing an output releases its record (``client.release``), so the record
+stays in the proposal's history and in the graphs of the records that read it.
 """
 
 from __future__ import annotations

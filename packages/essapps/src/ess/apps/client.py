@@ -8,27 +8,18 @@ requests accept one, a list, or a dict, and return the same shape;
 :meth:`~Client.cancel`, :meth:`~Client.persist`, and :meth:`~Client.release`
 accept the same and return nothing.
 
-A record never changes; its status changes once, from pending to finished,
-and is asked with :meth:`Client.status` or :meth:`Client.wait`.
-
 A call that starts work returns once the backend has checked and logged it:
 :meth:`Client.submit`, :meth:`Client.accumulator`, :meth:`Accumulator.push`,
-and :meth:`Client.freeze`. It checks models and the references it names
-against what the backend knows now, and leaves reading data and computing to
-the backend's workers. Only the calls that read results wait for that work:
+and :meth:`Client.freeze`. It leaves reading data and computing to the
+backend's workers. Only the calls that read results wait for that work:
 :meth:`Client.wait`, :meth:`Client.compute`, and :meth:`Client.output`; and
 :meth:`Files.watch` waits for new files. So a GUI application can make
 every other call from its UI thread.
 
-A client is the lifetime of what it keeps: the outputs of the records it
-makes, its stages, and its accumulators. It keeps each until it releases it or
-ends. A pending request keeps the values it reads until it has run, and the
-store keeps the outputs a client persists. Work that nothing keeps any more is
-cancelled: a pending record whose outputs neither its client, nor a pending
-request, nor a persist request keeps. A client reads, and its requests
-reference, only the outputs it keeps and those persisted. It reads the outputs
-it keeps from memory and the others from the store, so it never gets the
-value another client holds.
+The rules behind the calls are in ``docs/developer/``: ``lifetimes.md`` for
+what a client keeps and may read, ``accumulators.md`` for stages and
+accumulators. ``packages/essspec/docs/params.md`` defines the terms of a
+request's params.
 """
 
 from __future__ import annotations
@@ -146,22 +137,10 @@ class Accumulator:
     """
     A template whose blanks, tables, are filled one push at a time.
 
-    Its outputs are those of the plain request over the rows pushed so far,
-    read by the client that opened it as a record's are: with
-    ``client.output``, or by a request through :meth:`ref` and :meth:`refs`.
-    The spec's binding makes a driver for it, such as a ``DriverBinding``
-    does, and each push is one push into the driver, which adds the rows, so
-    earlier rows are not computed again. The outputs of a state are computed
-    all at once, at the first pin that needs them, and kept until the next
-    push is added; no output is computed for a state that nobody pins. The
-    first pin of a state also checks its plain request: the number of rows
-    of each table, by its length constraints, such as a table that needs a
-    row.
-
-    A push, and a submission that pins, return once logged, so a controller
-    does not slow down when the backend falls behind. A controller that should
-    skip pins meanwhile checks whether the record of its previous pin has
-    finished.
+    Its outputs are those of the plain request over the rows pushed so far. The
+    client that opened it reads them with :meth:`Client.output`, or references
+    them in a request through :meth:`ref` and :meth:`refs`. The rules are in
+    ``docs/developer/accumulators.md``.
 
     ``template`` holds the other values as the backend accepted them,
     ``outputs`` the output names the spec declares, and ``id`` names the
@@ -182,43 +161,28 @@ class Accumulator:
 
     def push(self, **rows: Sequence[Any]) -> None:
         """
-        Add rows to blank tables of the template, by the name of each, the
-        rows entering one state in order::
+        Add rows to blank tables of the template, the rows entering one state::
 
             acc.push(sample=[file(run=611), file(run=612)])
-            acc.push(sample=[file(run=613)])
             acc.push(sample=[file(run=615)], can=[file(run=614)])
 
-        Each row is given as its type allows, as :meth:`submit` takes a
-        value: a group as a model or a dict, a file as ``file(...)`` or a
-        ``Path``, a reference to an output. A push gives rows of one or more
-        tables, side by side as in a request, never paired: rows of different
-        tables have nothing to do with each other. A table the template fixes
-        is refused, and so are a row the table holds already or that the push
-        repeats, and a push of no rows into a table. Rows are compared as the
-        record holds them: a file by its identity, a reference to an output
-        by record, output, and key, and an inline value by its JSON form.
+        Returns once the push is logged. The backend adds it later.
 
-        A push is one push into the binding's driver per table, in the
-        order given, and one state. A push references
-        files or outputs of records, never an accumulator. Each row is
-        checked by the table's element type; the number of rows of a table,
-        such as a row in a table that needs one, is checked when a state is
-        pinned. A record that has failed or was
-        cancelled is refused, and one that is pending is not waited for. The
-        push returns once it is logged. The backend adds the pushes one at a
-        time, in the order logged, each once the records it references have
-        completed and the readers of the state before it are done (see
-        :mod:`ess.apps.backend`).
+        Parameters
+        ----------
+        **rows:
+            For each table, a list of rows, each given as :meth:`Client.submit`
+            takes a value of that type. Rows of different tables are not paired.
 
-        If adding fails, such as for data that fail their table's check, or
-        a record has not completed, the accumulator stops for good: the
-        records of states it did not reach fail, and so do the requests that
-        read them, and every later push and pin is refused: a push raises
-        ``SubmitError``, and a read ``NotReadable``. The reason names the
-        step, such as ``push 0`` for the first push. A controller that should
-        skip a run whose reduction failed waits for that record before it
-        pushes.
+        Raises
+        ------
+        TypeError
+            If the rows of a table are not a list.
+        SubmitError
+            If a table is not a blank of the template, a table gets no rows, a row
+            is invalid, repeats, or is in its table already, a row references a
+            record that failed or was cancelled, or the accumulator has stopped.
+            The reason of a stopped accumulator names the step, such as ``push 0``.
         """
         for name, given in rows.items():
             if isinstance(given, str | BaseModel | Mapping) or not isinstance(
@@ -232,16 +196,13 @@ class Accumulator:
 
     def ref(self, output: str, key: str | None = None) -> OutputRef:
         """
-        A reference to an output of the accumulator, or to its element ``key``
-        if it is a list or a dict, for a request.
+        A reference to an output of the accumulator, or to its element ``key`` if the
+        output is a list or a dict, for a request.
 
-        Submitting the request pins the state after the rows pushed so far,
-        makes a record of that state's plain request, and replaces the
-        accumulator in the reference by that record. No client keeps that
-        record, so only the requests of that submission read it. The request
-        waits until the accumulator has reached the state, as it waits for a
-        record it references, and is refused if the state's plain request
-        would be refused. A row or a template references no accumulator.
+        Submitting the request pins the state after the rows pushed so far (see
+        ``docs/developer/accumulators.md``). The request waits until the accumulator
+        has reached the state, and is refused if the state's plain request would be
+        refused. Raises ``KeyError`` for an output the spec lacks.
         """
         if output not in self.outputs:
             raise KeyError(f'{self.template.spec} has no output {output!r}')
@@ -285,16 +246,14 @@ class Client:
 
     def close(self) -> None:
         """
-        End the client: release everything it keeps, which cancels the
-        work that nothing else keeps.
+        End the client: release everything it keeps, which cancels the work that
+        nothing else keeps.
 
-        It first waits until the outputs it asked to persist with
-        :meth:`persist` are written, and raises ``RuntimeError`` naming each
-        whose write failed, once it has ended. A client that owns its backend
-        then closes it, which waits for the work that still runs: workflows
-        already running, the pushes that readers of a released accumulator
-        still need, and the records and writes that persist requests wait
-        for. A client that is never closed ends with its process.
+        It first waits until the outputs it asked to persist with :meth:`persist`
+        are written, and raises ``RuntimeError`` naming each whose write failed,
+        once it has ended. A client that owns its backend then closes it, which waits
+        for the work that still runs. A client that is never closed ends with its
+        process.
         """
         try:
             self._backend.close_client(self._id)
@@ -334,63 +293,46 @@ class Client:
         """
         Submit a spec or a stage with values, or requests.
 
-        A spec takes its params, a dict by name, or an instance of its params
-        model if they hold no reference to an output. Each parameter, or each
-        row of a list parameter, is given as its type allows (see
-        :mod:`ess.spec._workflow_spec`):
+        Returns the records, pending, in the shape of ``what``, once the backend has
+        logged the requests. A request never references a record of its own call.
 
-        - a file field, as a file, ``file(...)``, or a ``Path``, which names
-          the file by its path, as ``file(path=...)`` does;
-        - any other group, as a model or a dict of its fields;
-        - a union of groups, as a model or a dict of the fields of one
-          alternative, with its tag;
-        - ``Referenced[T]``, as a reference to an output whose data fit
-          ``T``;
-        - a union of these, as one of its members.
+        Parameters
+        ----------
+        what:
+            A spec (or its ``SpecId``) with ``params``; a :class:`Stage` with the
+            values of its blanks in ``params``; or requests, one, a list, or a dict.
+            An accumulator is not submitted: a request reads it through
+            :meth:`Accumulator.ref`.
+        params:
+            The parameters by name, or an instance of the params model if it holds
+            no reference to an output. Each parameter, or each row of a list
+            parameter, is given as its field type allows (see
+            ``packages/essspec/docs/params.md``)::
 
-        For example::
+                client.submit(IOFQ, params={'reduction': Reduction(bins=4),
+                                            'sample': file(run=60339),
+                                            'transmission': t.ref('t')})
+        label:
+            Names a sequence of records, such as all I(Q) reductions of an
+            experiment. Under a label, the keys of a dict become the members.
+        member:
+            Names one part of the sequence, such as one sample. It is refused with a
+            dict. Records are found by label and member with :meth:`records` and
+            :meth:`latest`. Neither changes the request or its result.
+        persist:
+            ``True``, or the names of outputs: the client does not keep these
+            records, the store keeps the outputs named, and each record completes
+            once they are written (see ``docs/developer/lifetimes.md``).
 
-            client.submit(IOFQ, params={'reduction': Reduction(bins=4),
-                                        'sample': file(run=60339),
-                                        'transmission': t.ref('t')})
-
-        A stage takes the values of its blanks the same way. Requests may be
-        one, a list, or a dict. The records come back pending, in the shape
-        given. An accumulator is not submitted: a request reads it through
-        :meth:`Accumulator.ref`. A request never references a record of its
-        own call, which does not exist yet.
-
-        ``label`` names a sequence of records, such as all I(Q) reductions of
-        an experiment, and ``member`` one part of it, such as one sample. Both
-        are optional, belong to the record and not to the request, and
-        do not change the result. Under a label, the keys of a dict become the
-        members of their records, so ``member`` is refused with a dict. Find
-        records by them with :meth:`records` and :meth:`latest`.
-
-        The backend checks the values against its own spec, so a ``SpecId``
-        instead of the spec gets the same checks. A request that cannot run
-        raises ``SubmitError``: an invalid value, an unknown spec or file,
-        a value written inline at a field that only a reference fills, a
-        reference where none may stand, inside a group (except a file at a
-        file field), at a field the spec does not mark
-        ``Referenced[...]``, or to a whole list, a reference the client may
-        not read, or one whose data do not fit its field. Each of its
-        ``errors`` names the field at fault by its position, ``loc``, and the
-        request by its key or index, ``entry``, if several are given (see
-        :class:`~ess.apps.errors.FieldError`)::
-
-            except SubmitError as error:
-                for e in error.errors:
-                    form.mark(e.entry, e.loc, e.msg)  # 'typo', ('reduction', 'bins')
-
-        Then no request of the call is submitted; the records of earlier
-        calls stay.
-
-        With ``persist=True``, or the names of outputs, the client does not
-        keep these records: the store keeps the outputs named, and the others
-        are dropped once a record completes. Each record completes once they
-        are written, and fails if the write fails. Unattended controllers
-        submit this way.
+        Raises
+        ------
+        SubmitError
+            If a request cannot run: an invalid value, an unknown spec or file, a
+            reference at a field that the spec does not mark ``Referenced[...]``, a
+            reference the client may not read, or one whose data do not fit its
+            field. No request of the call is submitted. Each of its ``errors`` names
+            the field at fault by its position and the request by its key or index
+            (see :class:`~ess.apps.errors.FieldError`).
         """
         stage = None
         if isinstance(what, WorkflowSpec | SpecId):
@@ -440,15 +382,13 @@ class Client:
 
     def failure(self, records: Any) -> Any:
         """
-        Why each record failed, or why the backend cancelled it; ``None`` for
-        a record pending, completed, or cancelled by a client.
+        Why each record failed, or why the backend cancelled it; ``None`` for a
+        record pending, completed, or cancelled by a client.
 
-        The reason is the framework's own words as they stand: a value refused
-        when the record ran, such as ``specimens[0]: Value error, ...``, or
-        ``record r17 failed``, ``the workflow of sans-iofq/v1 returned None as
-        iofq``, ``the write failed: ...``. An error raised by a binding, its
-        driver, the file source, or the store is given with its type, such as
-        ``KeyError: 'counts'``.
+        The reason is the framework's own words, such as ``specimens[0]: Value error,
+        ...``, ``the workflow of sans-iofq/v1 returned None as iofq``, or ``the write
+        failed: ...``. An error raised by a binding, its driver, the file source, or
+        the store is given with its type, such as ``KeyError: 'counts'``.
         """
         failures = [self._backend.failure(r.id, self._id) for r in _items(records)]
         return _reshape(records, failures)
@@ -457,11 +397,8 @@ class Client:
         """
         End the unfinished records as cancelled.
 
-        A client may cancel any record of its proposal, also one that another
-        client made. A running workflow is not interrupted: its record is
-        cancelled at once, and its outputs are dropped when it returns. A
-        cancelled request keeps nothing it reads, so cancelling passes along
-        a chain of pending requests (see :meth:`release`).
+        A client may cancel any record of its proposal. See
+        ``docs/developer/lifetimes.md`` for what cancelling passes along.
         """
         self._backend.cancel([r.id for r in _items(records)], self._id)
 
@@ -470,15 +407,11 @@ class Client:
     def stage(self, template: Template) -> Stage:
         """
         A stage of the template; the client keeps it until it releases it.
-        The spec's binding must make stages, as a ``PipelineBinding`` does.
-        The stage keeps the outputs its template references until its first
-        call has had the binding make its stage, so the records they belong
-        to may be released. If staging fails, the stage stops: the calls through it
-        fail, and later ones are refused.
 
-        A template a request would refuse is refused here. The stage's
-        template holds the values as the backend resolved them, so a file
-        name stays the file it named when the stage was made.
+        The spec's binding must make stages, as a ``PipelineBinding`` does. A template
+        that a request would refuse is refused. The stage's template holds the values
+        as the backend resolved them. The rules are in
+        ``docs/developer/accumulators.md``.
         """
         stage_id, resolved = self._backend.open_stage(template, client=self._id)
         return Stage(resolved, stage_id)
@@ -487,16 +420,11 @@ class Client:
         """
         An accumulator of the template; the client keeps it until it releases it.
 
-        The template's blanks are one or more of the spec's tables. A template a
-        request would refuse is refused here, with the blanks left out, and so is
-        one that references an accumulator, and one whose spec's binding makes no
-        accumulators. The driver gets each value validated by its own field, data
-        read as the object; the accumulator's template holds the values as the
-        backend resolved them. A record the template references that has failed or
-        was cancelled is refused, and one that is pending is not waited for.
-        Opening returns once the template is checked; the backend reads its values
-        once, after the records they reference have completed, and the accumulator
-        stops if the binding then fails to make its driver.
+        The template's blanks are one or more of the spec's tables. The spec's binding
+        must make accumulators, as a ``DriverBinding`` does. A template that a request
+        would refuse is refused, with the blanks left out, and so is one that
+        references an accumulator. Returns once the template is checked; the backend
+        makes the driver later. The rules are in ``docs/developer/accumulators.md``.
         """
         accumulator_id, resolved = self._backend.open_accumulator(
             template, client=self._id
@@ -509,35 +437,31 @@ class Client:
         self, accumulator: Accumulator, *, persist: bool | Sequence[str] = False
     ) -> Record:
         """
-        The record of the accumulator's last state, the state after the pushes
-        so far; the client keeps it, and the accumulator takes no more pushes.
-        With ``persist``, the store keeps it instead, as with ``submit``.
+        The record of the accumulator's last state; the client keeps it, and the
+        accumulator takes no more pushes.
 
-        The record's outputs are what the driver returns, computed once
-        and not copied. Once the record has completed, the accumulator is
-        read through it: a read of the accumulator is refused and names the
-        record, and the driver is dropped once its readers are done. A
-        freeze is refused, and the accumulator takes pushes again, if the
-        plain request of the state would be refused; a push made meanwhile
-        waits for that answer. If the record fails or is cancelled, the
-        accumulator can be read and frozen again. A template or a push, which
-        may not reference an accumulator, references this record instead.
+        Parameters
+        ----------
+        accumulator:
+            The accumulator to freeze.
+        persist:
+            As in :meth:`submit`: the store keeps the outputs instead of the client.
+
+        Raises
+        ------
+        SubmitError
+            If the plain request of the state would be refused.
         """
         return self._backend.freeze(accumulator.id, client=self._id, persist=persist)
 
     def persist(self, records: Any, *outputs: str) -> None:
         """
-        Write the named outputs, or every output, of records the client keeps
-        to the store, each once it has completed; returns at once. It raises
-        ``SubmitError``, and persists nothing, for a record the client does
-        not keep, a failed or cancelled one, or an output a record lacks.
+        Write the named outputs, or every output, of records the client keeps to the
+        store, each once its record has completed. Returns at once.
 
-        The store then keeps them, and every client of the proposal reads and
-        references them. This client keeps its hold until it releases a
-        record, so it reads them from memory until then. If a write fails,
-        the record stays as it is; a read by another client raises with the
-        reason, this call may be made again, and :meth:`close` raises if it
-        still failed. Persisting what is persisted does nothing.
+        Raises ``SubmitError``, and persists nothing, for a record the client does
+        not keep, a failed or cancelled one, or an output a record lacks. See
+        ``docs/developer/lifetimes.md`` for what happens if a write fails.
         """
         ids = [r.id for r in _items(records)]
         self._backend.persist(ids, outputs, client=self._id)
@@ -546,17 +470,9 @@ class Client:
         """
         Release records, stages, or accumulators: one, a list, or a dict.
 
-        A released record's outputs are dropped once nothing else keeps them,
-        such as a pending request that reads them; the record stays. A
-        pending record that nothing else keeps is cancelled. A released stage
-        takes no more calls, and lets go of what its template references if
-        it has not staged. A
-        released accumulator takes no more pushes or readers; the pushes up
-        to the last state a pending read still holds are added, the later
-        ones are dropped, and its state is dropped once its readers are done.
-        Releasing what the client does not keep does nothing. A client reads
-        the outputs of a released record only if they are persisted (see
-        :meth:`persist`); otherwise :meth:`output` raises ``NotReadable``.
+        Releasing what the client does not keep does nothing. See
+        ``docs/developer/lifetimes.md`` for what a release drops and cancels, and
+        ``docs/developer/accumulators.md`` for a released accumulator.
         """
         self._backend.release([x.id for x in _items(what)], client=self._id)
 
@@ -570,35 +486,41 @@ class Client:
         select: Selection | None = None,
     ) -> Any:
         """
-        The value of an output, or every output returned, by name, if ``name``
-        is None; an optional output that was not returned is left out.
+        The value of an output, or every output returned, by name, if ``name`` is
+        None; an optional output that was not returned is left out.
 
-        A record's value is the one the workflow returned, not a copy: the
-        caller must not change it, and the framework never does.
+        A record's value is the one the workflow returned, not a copy: the caller
+        must not change it, and the framework never does. An accumulator's are
+        those of its state after the pushes so far, once they are added, copied. The
+        read makes no record.
 
-        A record's, once it has completed, if the client keeps it, or once
-        written, if persisted; raises ``NotReadable`` for a record it neither
-        keeps nor persisted, whose write failed, or whose value the store no
-        longer holds, and ``RecordFailed`` for one that fails or is
-        cancelled. An accumulator's are those of its state after the pushes
-        so far, once they are added, copied, so that like a record's they do
-        not change. The read makes no record. It raises ``NotReadable`` for
-        an accumulator released or stopped, and if the state's plain request
-        would be refused, with its reason, also for a state with nothing
-        pushed.
+        Parameters
+        ----------
+        what:
+            A record or an accumulator.
+        name:
+            The output to read.
+        select:
+            Picks part of the named array output by dimension name, an index or a
+            slice for each dimension it names, such as ``{'q': slice(0, 10)}``, and
+            copies only that part. Of a group output, it picks that part of each
+            array field that has the dimension, as ``sc.DataGroup`` slices its items,
+            and copies the other fields whole. It needs ``name``.
 
-        ``select`` picks part of the named array output by dimension name, an
-        index or a slice for each dimension it names, such as
-        ``{'q': slice(0, 10)}``, and copies only that part. Of a group output,
-        it picks that part of each array field that has the dimension, as
-        ``sc.DataGroup`` slices its items, and copies the other fields whole:
-        ``client.output(scan, 'volume', select={'q': 0})``. It is refused
-        without ``name``, and for an output declared neither as an array nor
-        as a group with an array field. A dimension that an array lacks, or an
-        index out of range, raises what the slice raises; a dimension that no
-        array field of a group has raises ``ValueError``. A read
-        of an accumulator holds back its next push while the state is checked,
-        its outputs are computed if no reader has yet, and the part is copied.
+        Raises
+        ------
+        NotReadable
+            For a record the client neither keeps nor has persisted, or whose write
+            failed or whose value the store no longer holds; for an accumulator
+            released or stopped, with nothing pushed, or whose state's plain request
+            would be refused.
+        RecordFailed
+            For a record that failed or was cancelled.
+        ValueError
+            If ``select`` is given without ``name``, for an output that is neither
+            an array nor a group with an array field, or if no array field of a group
+            has a dimension of ``select``. A dimension that an array lacks, or an
+            index out of range, raises what the slice raises.
         """
         names = None if name is None else [name]
         if isinstance(what, Accumulator):
@@ -611,19 +533,17 @@ class Client:
 
     def readable(self, records: Any) -> Any:
         """
-        The outputs of each record, by name, that a plain submission of this
-        client, not one through a stage, may reference now: every output of a
-        record the client keeps, pending or completed, and otherwise those
-        persisted, unless their write failed. A record that failed or was
-        cancelled has none, and one that has completed only those its
-        workflow returned. It waits for nothing and reads no value, so a
-        picker of records calls it at each refresh::
+        The outputs of each record, by name, that a plain submission of this client
+        may reference now (see ``docs/developer/lifetimes.md``).
+
+        It waits for nothing and reads no value, so a picker of records calls it at
+        each refresh::
 
             for record, names in zip(records, client.readable(records)):
                 ...  # offer record.ref(name) for each name
 
-        A record persisted in part, such as with ``persist=('iofq',)``, has
-        only those outputs.
+        A record that failed or was cancelled has no outputs, and one that has
+        completed only those its workflow returned.
         """
         ids = [r.id for r in _items(records)]
         return _reshape(records, self._backend.readable(ids, self._id))
