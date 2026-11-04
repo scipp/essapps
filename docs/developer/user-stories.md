@@ -36,7 +36,7 @@ The type of a field says how a request gives the value there, at any depth; the 
 
 | Type | In the toy specs | Given as |
 |---|---|---|
-| a file field | the runs, such as `Sample` | a file, `file(...)` |
+| the type of a file field | the runs, such as `Sample` | a file, `file(...)` |
 | a group | `Reduction`, `Scaling`, `Position` | an object of its fields |
 | `Referenced[T]` | `Referenced[Transmission]`, `Referenced[Parts]`, `Referenced[Volume]`, `Referenced[Reflectivity]` | a reference to an output of the class `T` |
 | a union of these | `BeamCentre \| Referenced[BeamCentre]`, `TimeRange \| Referenced[TimeRange]`, `PublishedNormalization \| Referenced[ComputedNormalization]` | what one of its members takes |
@@ -46,10 +46,10 @@ The type of a field says how a request gives the value there, at any depth; the 
 `ComputedNormalization`, `Transmission`, `Parts`, `Volume`, and `Reflectivity` hold a `sc.Variable`, which is not a field type, so no request writes them, and the fields they fill are typed `Referenced[...]`.
 By convention, each parameter of a toy spec is a group, a union of groups, a file field, or a list of one, possibly `X | None`.
 Each field of the groups that a request writes is a scalar, such as `bins` and `scale`.
-Each run is a file field, `Run`, and each role of a run is a name for it: `Sample`, `Can`, `DirectBeam`, `Vanadium`, `Background`, and `Reference`:
+Each run fills a file field, typed `Run`, and each role of a run is a name for it: `Sample`, `Can`, `DirectBeam`, `Vanadium`, `Background`, and `Reference`:
 
 ```python
-Run = Annotated[Path, File()]    # a file field: a measured run, by its file
+Run = Annotated[Path, File()]    # types a file field: a measured run, by its file
 
 Sample = Run
 Can = Run
@@ -60,7 +60,7 @@ Can = Run
 A request gives a table of runs as a list of files, such as `runs`.
 An output without a type in the list of toy specs is a `sc.Variable`.
 `Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each: `fraction`, `counts`, and `curve`.
-`ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` is a file field, of a file that holds it.
+`ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` types a file field, of a file that holds it.
 `Parts` is a group of two `sc.Variable`s.
 A reference to an output fits a field when the output is of the class `T` of a `Referenced[T]` there: `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre` and `CENTRED_MULTI`'s `centre`, `VANADIUM`'s `normalization` fits `IOFQ`'s `normalization`, `CONTRIBUTE`'s `transmission` fits `CENTRED_MULTI`'s `transmission`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
@@ -840,7 +840,7 @@ assert client.provenance(typed).request.params['centre'] == {'x': 1.0}
 Both drivers get a `BeamCentre`; neither sees whether it was typed in or computed.
 The record of the typed-in centre holds the value written inline in its JSON form, and that of the computed one holds the reference, so its provenance reaches the finder.
 Both accumulators give the transmission by reference, as in I3.
-`IOFQ`'s `normalization` takes no value written inline: `ComputedNormalization` holds a `sc.Variable`, which is not a field type, so the spec types it `Referenced[ComputedNormalization]`, next to the file field `PublishedNormalization` (C2).
+`IOFQ`'s `normalization` takes no value written inline: `ComputedNormalization` holds a `sc.Variable`, which is not a field type, so the spec types it `Referenced[ComputedNormalization]`, next to `PublishedNormalization`, the type of a file field (C2).
 
 ### I3. A transmission computed for the summed runs
 

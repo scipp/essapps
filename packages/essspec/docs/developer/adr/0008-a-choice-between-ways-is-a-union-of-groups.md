@@ -127,7 +127,7 @@ transmission: (
 ```
 
 A field may also take a file or a reference to an output, such as a normalization that some users read from the catalogue and others compute:
-`normalization: PublishedNormalization | Referenced[ComputedNormalization] | None`, with `PublishedNormalization` a file field.
+`normalization: PublishedNormalization | Referenced[ComputedNormalization] | None`, with `PublishedNormalization` the type of a file field.
 The binding gets the file's local path or the group, and reads the file itself.
 
 **`X | None` means *without X*.**

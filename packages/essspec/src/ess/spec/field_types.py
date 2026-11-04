@@ -30,8 +30,8 @@ functions (see :mod:`ess.spec.request_types`)::
     # A union of groups: show the fields of each alternative. None for any
     # other type.
     alternatives(inline, *inline_metadata)  # ('kind', {'given': ..., ...})
-    # A file field, Annotated[Path, File(...)]: offer a picker of the files
-    # that fit the marker's metadata. None for any other type.
+    # The type of a file field, Annotated[Path, File(...)]: offer a picker
+    # of the files that fit the marker's metadata. None for any other type.
     file_marker(inline, *inline_metadata)  # File(kind='mask')
     # Groups that a reference fills the field with: offer a picker of
     # records.

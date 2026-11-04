@@ -10,7 +10,7 @@ The other modules of ``ess.spec`` and ``ess.apps`` apply them and link here.
 
 A spec of an I(Q) reduction, with each kind of field once::
 
-    RunFile = Annotated[Path, File()]         # a file field: a raw data file
+    RunFile = Annotated[Path, File()]         # types a file field: a raw file
 
     class WavelengthRange(BaseModel):         # a group
         start: float                          # a scalar
@@ -128,7 +128,8 @@ Terms
     *file* there as ``file(...)``, such as ``file(run=99)``. The backend
     resolves it to the file's identity when the request is submitted. The
     params model, and so the binding, holds the file's local path, a
-    ``Path``.
+    ``Path``. ``RunFile`` *types* a file field. A *file parameter* is a
+    parameter that is a file field, or a list of one.
 *Reference to an output*
     ``m.ref('pixel_mask')`` names the output ``pixel_mask`` of the record
     ``m``. ``acc.ref(...)`` names an output of an accumulator. The backend
@@ -143,11 +144,13 @@ Terms
     The type of a field, at any depth, is one of::
 
         int, float, str, bool, datetime, an enum, a Literal  # a scalar
-        Annotated[Path, File(...)]                     # a file field
+        Annotated[Path, File(...)]                     # of a file field
         Reduction                                      # a group
         Annotated[A | B, Field(discriminator='kind')]  # a union of groups
         Referenced[T]                                  # T a group
         Annotated[A | B, ...] | Referenced[C]          # members of both
+        RunFile | Referenced[C]                        # a file, or a
+                                                       # reference
         X | None, list[X]                   # X a field type, not a list,
                                             # and not X | None
 
@@ -179,13 +182,15 @@ The type of a field says what a request writes there:
   type takes.
 - A union of groups, such as ``GivenCentre | FindCentre``: a JSON object of
   the fields of one alternative, with its tag.
-- A file field, such as ``RunFile``: a file.
+- A file field, such as ``direct_beam: RunFile``: a file.
 - ``Referenced[T]``, such as ``Referenced[PixelMask]``: a reference to an
   output whose data fit ``T``.
 - A union of members written inline and members ``Referenced[...]``, such as
-  the type of ``centre``, or ``BeamCentre | Referenced[BeamCentre]``: what
-  one of its members takes. The key ``@ref`` tells a reference from a value
-  written inline, then the tag tells the alternatives apart.
+  the type of ``centre``, or ``BeamCentre | Referenced[BeamCentre]``, or of
+  a file field and members ``Referenced[...]``, such as ``RunFile |
+  Referenced[C]``: what one of its members takes. The key ``@ref`` tells a
+  reference from a value written inline, and a file from a reference to an
+  output; then the tag tells the alternatives apart.
 - ``X | None``: what ``X`` takes, or ``None``.
 - ``list[X]``: a list of elements, each what ``X`` takes.
 
@@ -210,20 +215,19 @@ runs, each reference by its data. The rules behind it:
 - ``Referenced[T]`` may type any field of the params, but no output, since
   the data of an output are not a reference.
 - A group is validated when the request is submitted, so that an error
-  shows before anything runs. A group that holds a reference to an output,
-  at any depth, is validated when the request runs: the output may not
-  exist when the request is submitted, and the group's validators see the
-  data read. A failure then fails the record, or stops the accumulator
-  for a push. A validator raises ``ValueError`` for a value it does not
-  take.
-- A file is a value, like a scalar. Its identity and its local path are
-  known when the request is submitted, so a group that holds a file is
-  validated then, and its validators see the path. The file source checks
-  each file then: it is known, the request's proposal may read it, and its
-  metadata fit the marker's. A file field carries no other check of a file:
-  one that reads the file would read it from a network mount when the
-  request is submitted. A check of a file's content belongs to the
-  workflow, and a workflow sees the path only, never the identity.
+  shows before anything runs, with the local path of each file it holds. A
+  group that holds a reference to an output, at any depth, is validated
+  when the request runs: the output may not exist when the request is
+  submitted, and the group's validators see the data read. A failure then
+  fails the record, or stops the accumulator for a push. A validator raises
+  ``ValueError`` for a value it does not take. Which validation runs when
+  is stated in :func:`~ess.spec.request_types.held`.
+- A file is a value, like a scalar. The file source checks each file when
+  the request is submitted: it is known, the request's proposal may read
+  it, and its metadata fit the marker's. A file field carries no other
+  check of a file: one that reads the file would read it from a network
+  mount when the request is submitted. A check of a file's content belongs
+  to the workflow, and a workflow sees the path only, never the identity.
 - A reference to an output fits a field if the output's type is the ``T``
   of a ``Referenced[T]`` there, or a subclass of it (see
   :func:`~ess.spec.field_types.fits`). So ``T`` is a group: ``float`` or
@@ -249,10 +253,11 @@ runs, each reference by its data. The rules behind it:
   references to equal data are two rows.
 - A binding sets the sciline key of a parameter's class (see
   :class:`~ess.spec.pipeline.PipelineBinding`). By convention a parameter is
-  a group, which is then one tab of a form and one key of the binding. A
-  parameter of another type, such as ``bins: int`` or ``direct_beam:
-  RunFile``, needs ``keys=`` in the binding, such as the workflow's own key
-  of a file's path, ``keys={'direct_beam': (DirectBeamFilename,)}``.
+  a group, a union of groups, a file field, or a list of one. A group is
+  one tab of a form and one key of the binding. A parameter of another
+  type, such as ``bins: int`` or ``direct_beam: RunFile``, needs ``keys=``
+  in the binding, such as the workflow's own key of a file's path,
+  ``keys={'direct_beam': (DirectBeamFilename,)}``.
 - Files that vary independently are separate parameters, not fields of one
   group. A stage fixes or blanks whole parameters, and ``sciline.Stage``
   decides what it computes again on each call by the graph alone: all that
@@ -592,8 +597,8 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     file is the ``@ref`` object of a file, with the marker's metadata under
     ``metadata``, which say which files fit. The schemas of the parameter
     ``reduction``, a parameter ``centre`` typed ``BeamCentre |
-    Referenced[BeamCentre]``, a parameter ``mask`` typed the file field
-    ``MaskFile = Annotated[Path, File(kind='mask')]``, the definition of a
+    Referenced[BeamCentre]``, a file field ``mask`` typed ``MaskFile =
+    Annotated[Path, File(kind='mask')]``, the definition of a
     file, and the field ``Reduction.bins``::
 
         "reduction": {"$ref": "#/$defs/Reduction", ...}

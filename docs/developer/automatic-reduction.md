@@ -51,7 +51,7 @@ rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, bl
 ```
 
 A rule whose template leaves no single blank for a file, or whose `at` is not that blank, is refused when it is made.
-`TriggerLoop` refuses a rule whose files could not fill their blanks: each blank it fills, `at` and the lookup's, is a parameter typed a file field, a list one if and only if the rule has `series`, and each selector names each key and value of the marker's metadata, so that every file it lists fits the field.
+`TriggerLoop` refuses a rule whose files could not fill their blanks: each blank it fills, `at` and the lookup's, is a file parameter, a list of one if and only if the rule has `series`, and each selector names each key and value of the marker's metadata, so that every file it lists fits the field.
 `apply` has no spec at hand, so the backend refuses its requests instead.
 
 Templates and rules are frozen dataclasses; `dataclasses.replace` changes them.

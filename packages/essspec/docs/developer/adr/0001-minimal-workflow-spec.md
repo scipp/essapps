@@ -123,7 +123,7 @@ says which sources it takes:
 | a scalar | `float`, `Annotated[int, Gt(0)]` | its JSON value |
 | a group | `Reduction`, `Sample(run, thickness)` | an object of its fields, each as its type says |
 | a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag |
-| a file field | `RunFile`, `MaskFile` | a file that fits |
+| the type of a file field | `RunFile`, `MaskFile` | a file that fits |
 | `Referenced[T]` | `Referenced[ComputedTransmission]` | a reference to an output that fits `T` |
 | a union of these | `BeamCentre \| Referenced[BeamCentre]` | what one of its members takes |
 | a list, `list[X]` | `list[RunFile]` | a list of elements, each as for `X` |
@@ -161,7 +161,7 @@ depth, is typed from a closed list:
 
 ```python
 int, float, str, bool, datetime, an enum, a Literal   # a scalar, possibly constrained
-Annotated[Path, File(...)]                            # a file field
+Annotated[Path, File(...)]                            # the type of a file field
 Reduction                                             # a group
 Annotated[A | B, Field(discriminator='kind')]         # a union of groups
 Referenced[T]                                         # T a group
@@ -310,7 +310,7 @@ file field and a referenced group, such as
 The binding gets the file's local path or the group, and reads the file itself.
 
 ```python
-RunFile = Annotated[Path, File()]                 # a file field: the file of a run
+RunFile = Annotated[Path, File()]                 # types a file field: the file of a run
 
 class Reduction(BaseModel):                       # a group of scalars
     bins: int = 2
@@ -375,10 +375,10 @@ with its reason:
   of one. No output holds a `Path`, at any depth, a file field among them.
 - No type in the params or the outputs is a `NewType` or a type alias of a
   `type` statement, at any depth. A class says what a value is. A name
-  assigned a type, such as `RunFile = Annotated[Path, File()]`, is that type. A `NewType` of a shared type would say
-  it only if the fit check looked through it. A `NewType` that a sciline graph needs
-  as a key belongs to the binding (`keys=`, or a provider that takes the value
-  out of the group).
+  assigned a type, such as `RunFile = Annotated[Path, File()]`, is that type.
+  A `NewType` of a shared type would say it only if the fit check looked
+  through it. A `NewType` that a sciline graph needs as a key belongs to the
+  binding (`keys=`, or a provider that takes the value out of the group).
 - A union of groups is discriminated by the name of its tag field, not by a
   callable. The tag field of each alternative is a `Literal` of one string,
   its own, such as `Literal['find']`, without an alias. A union that holds a
@@ -402,12 +402,12 @@ with its reason:
   fields, and no `default_factory` that takes the other values. It may have
   model validators, but the framework never calls them.
 
-A parameter need not be a group. By convention it is one: a group is a tab of
-a form, and the key of a binding (`PipelineBinding` sets the sciline key of a
-parameter's class). A parameter of another type, such as `bins: int`, needs
-`keys=` in the binding. So does a file parameter, whose type, `Path`, names no
-role: `keys=` names the workflow's own key of the file's path, so that
-providers take plain paths, as esssans' do:
+By convention a parameter is a group, a union of groups, a file field, or a
+list of one. A group is a tab of a form, and the key of a binding
+(`PipelineBinding` sets the sciline key of a parameter's class). A scalar
+parameter, such as `bins: int`, needs `keys=` in the binding. So does a file
+parameter, whose type, `Path`, names no role: `keys=` names the workflow's own
+key of the file's path, so that providers take plain paths, as esssans' do:
 
 ```python
 PipelineBinding(IOFQ, make_pipeline,

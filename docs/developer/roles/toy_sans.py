@@ -21,11 +21,12 @@ and takes ``SECONDS_PER_RUN`` per run, so that an app shows its record pending.
 ``IofQ``, typed ``Referenced[IofQ]``: no request writes an ``IofQ``, so only
 a reference to an output fills it.
 
-By convention each parameter is a group, which a ``PipelineBinding`` keys by its
-class. A parameter that takes a file is a file field, ``RunFile``, which holds
-the file's local path, and a request writes it as ``file(...)``. The binding
-sets each file parameter at the workflow's own key, ``Filename[SampleRun]`` or
-``Filename[CanRun]``, as esssans does, so that a provider takes a plain path.
+By convention a parameter is a group, a union of groups, a file field, or a list
+of one. A ``PipelineBinding`` keys a group by its class. A parameter that takes a
+file is a file field, typed ``RunFile``, which holds the file's local path, and a
+request writes it as ``file(...)``. The binding sets each file parameter at the
+workflow's own key, ``Filename[SampleRun]`` or ``Filename[BackgroundRun]``, with
+``keys=``, as esssans does, so that a provider takes a plain path.
 The sample and the can are separate parameters, not fields of one group: a
 stage that leaves the sample blank computes the can's branch once.
 
@@ -254,7 +255,7 @@ def write_runs(directory: Path) -> dict[int, Path]:
 
 # The workflow package: a sciline pipeline of one sample run and one can run.
 # The keys of the groups and of I(Q) are the classes of the spec's fields.
-# ``SampleRun`` and ``CanRun`` are the pipeline's run types, and
+# ``SampleRun`` and ``BackgroundRun`` are the pipeline's run types, and
 # ``Filename[RunType]`` the key of a run's file, keys of the workflow that the
 # spec never names: the binding maps the parameters ``sample`` and ``can`` to
 # them with ``keys=``.
@@ -262,8 +263,8 @@ def write_runs(directory: Path) -> dict[int, Path]:
 # from the group.
 
 SampleRun = NewType('SampleRun', int)
-CanRun = NewType('CanRun', int)
-RunType = TypeVar('RunType', SampleRun, CanRun)
+BackgroundRun = NewType('BackgroundRun', int)
+RunType = TypeVar('RunType', SampleRun, BackgroundRun)
 
 
 BeamCentrePosition = NewType('BeamCentrePosition', sc.Variable)
@@ -323,15 +324,15 @@ def sample_denominator(
     return Denominator[SampleRun](sc.scalar(value, unit='counts'))
 
 
-def can_denominator(data: RunData[CanRun]) -> Denominator[CanRun]:
-    return Denominator[CanRun](sc.scalar(data['monitor'], unit='counts'))
+def can_denominator(data: RunData[BackgroundRun]) -> Denominator[BackgroundRun]:
+    return Denominator[BackgroundRun](sc.scalar(data['monitor'], unit='counts'))
 
 
 def iofq(
     sample_numerator: Numerator[SampleRun],
     sample_denominator: Denominator[SampleRun],
-    can_numerator: Numerator[CanRun],
-    can_denominator: Denominator[CanRun],
+    can_numerator: Numerator[BackgroundRun],
+    can_denominator: Denominator[BackgroundRun],
 ) -> IofQ:
     sample = sample_numerator / sample_denominator
     return IofQ(intensity=sample - can_numerator / can_denominator)
@@ -354,7 +355,7 @@ def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
 
 # The bindings.
 
-FILE_KEYS = {'sample': (Filename[SampleRun],), 'can': (Filename[CanRun],)}
+FILE_KEYS = {'sample': (Filename[SampleRun],), 'can': (Filename[BackgroundRun],)}
 """The workflow's key of each file parameter, by name."""
 
 single = PipelineBinding(IOFQ, make_pipeline, keys=FILE_KEYS)
@@ -379,10 +380,12 @@ class IofQDriver:
                 inputs=single.keys[table],
                 outputs=(Numerator[run], Denominator[run]),
             )
-            for table, run in (('sample', SampleRun), ('can', CanRun))
+            for table, run in (('sample', SampleRun), ('can', BackgroundRun))
         }
         sums = [
-            key[run] for key in (Numerator, Denominator) for run in (SampleRun, CanRun)
+            key[run]
+            for key in (Numerator, Denominator)
+            for run in (SampleRun, BackgroundRun)
         ]
         self._finalize = sciline.Stage(workflow, inputs=sums, outputs=(IofQ,))
         self._sums: dict[str, dict[Any, sc.Variable]] = {}  # per table, by key

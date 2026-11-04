@@ -67,7 +67,7 @@ The framework is essapps (`ess.apps`) and essspec (`ess.spec`), in this reposito
 | position | where a value sits in the params, by field names and list indices, such as `reduction.bins` or `sample[2]`. An error names the position of each problem. |
 | scalar | an `int`, `float`, `str`, `bool`, or `datetime`, or an enum or a `Literal` whose values are of these types, possibly with constraints, such as `Annotated[float, Gt(0)]` |
 | field type | the type of a field, at any depth: a scalar, a file field, a group, a union of groups, `Referenced[T]`, a union of members written inline and members `Referenced[...]`, `X \| None`, or `list[X]`. Any other type, such as a scipp array, is refused, but inside the `T` of `Referenced[T]`. |
-| file field, file | a *file field* is a field that a file fills, typed `Annotated[Path, File(**metadata)]`, such as `RunFile = Annotated[Path, File()]`. A request writes a *file* there as `file(...)`, such as `file(run=611)`. The backend resolves it when the request is submitted, and the params model holds the file's local path, a `Path` (see Files in Specs and bindings). |
+| file field, file | a *file field* is a field that a file fills, typed `Annotated[Path, File(**metadata)]`, such as `RunFile = Annotated[Path, File()]`. A request writes a *file* there as `file(...)`, such as `file(run=611)`. The backend resolves it when the request is submitted, and the params model holds the file's local path, a `Path` (see Files in Specs and bindings). A *file parameter* is a parameter that is a file field, or a list of one. |
 | fits | a reference to an output fits a field `Referenced[T]` when the data it names are of the class `T` or a subclass of it (see References) |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
 | request | a spec and its params, each value written inline, a file, or a reference to an output |
@@ -118,7 +118,7 @@ A spec has two pydantic models:
 | outputs | results | (none) | the data the workflow returns |
 
 ```python
-RunFile = Annotated[Path, File()]                 # a file field: the file of a run, raw
+RunFile = Annotated[Path, File()]                 # types a file field: the file of a run, raw
 
 class Reduction(BaseModel):                       # a group of scalars
     bins: int = 100
@@ -172,7 +172,7 @@ The type of a field says what a request writes there, with `| None` removed:
 | a scalar | `float`, `Annotated[int, Gt(0)]` | its JSON value |
 | a group | `Reduction`, `BeamCentre` | an object of its fields, each as its type says |
 | a union of groups | `GivenCentre \| FindCentre` (see below) | an object of one alternative's fields, with its tag |
-| a file field | `RunFile` | a file that fits, `file(...)` (see Files) |
+| the type of a file field | `RunFile` | a file that fits, `file(...)` (see Files) |
 | `Referenced[T]` | `Referenced[ComputedTransmission]` | a reference to an output that fits `T` |
 | a union of these | `BeamCentre \| Referenced[BeamCentre]` | what one of its members takes |
 | a list, `list[X]` | `sample: list[RunFile]` (see Combining runs: tables) | a list of elements, each as for `X` |
@@ -257,11 +257,13 @@ A check of a file's content belongs to the workflow.
 A value that is read from a file by some users and computed by others is a union of a file field and a referenced group, such as `normalization: PublishedNormalization | Referenced[ComputedNormalization] | None` ([user-stories.md](user-stories.md), story C2).
 The binding gets the file's local path or the group, and reads the file itself.
 
-**Parameters.** A parameter need not be a group, but by convention it is one: a group is one tab of a form, and one key of a binding.
+**Parameters.** By convention a parameter is a group, a union of groups, a file field, or a list of one.
+A group is one tab of a form, and one key of a binding.
+A file parameter needs `keys=` in a binding.
 A number is a field of a group, such as the `bins` of a `Reduction`:
 
 ```python
-sample: Path                                      # refused by WorkflowSpec: a file field is Annotated[Path, File(...)]
+sample: Path                                      # refused by WorkflowSpec: a file field is typed Annotated[Path, File(...)]
 sample: RunFile                                   # a file parameter: PipelineBinding needs keys= for it
 bins: int = 100                                   # allowed, but PipelineBinding needs keys= for it
 ```
@@ -530,8 +532,8 @@ A file and a reference to an output differ in where they may be and when they ar
 | an output `BeamCentre` | `Annotated[GivenCentre \| FindCentre, ...] \| Referenced[BeamCentre]` | yes |
 | an output `list[TimeRange]`, with a key | an element of `time_range: list[TimeRange \| Referenced[TimeRange]]` | yes |
 | an output `sc.DataArray` | `Referenced[ComputedTransmission]` | no: a reference stands for a group, so the workflow outputs `ComputedTransmission` |
-| a raw file | `RunFile`, a file field of kind `'raw'` | yes |
-| a raw file | `MaskFile`, a file field of kind `'mask'` | no |
+| a raw file | `RunFile`, the type of a file field of kind `'raw'` | yes |
+| a raw file | `MaskFile`, the type of a file field of kind `'mask'` | no |
 
 ## Labels and members
 

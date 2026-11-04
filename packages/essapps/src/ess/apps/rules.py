@@ -189,7 +189,7 @@ def _check(rule: Rule, params: type[BaseModel]) -> None:
     """
     Refuse ``rule``, of a spec with the params model ``params``, if a file
     it lists could not fill its blank: the blank ``at``, and each blank of
-    its lookup, is a file parameter, a parameter typed a file field (see
+    its lookup, is a file parameter, a file field or a list of one (see
     :class:`~ess.spec.File`), a list one if and only if the rule has
     ``series``, and the rule's or the lookup's selector names each key and
     value of the marker's metadata, so that every file it lists fits the
