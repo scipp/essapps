@@ -8,13 +8,12 @@ There are six events: a submission, a record that finished, an accumulator
 that opened, a push into one, a request to persist outputs of a record, and a
 write that ended. A persist request made with a submission or a freeze is
 part of that event, and its write is the record's: the record finishes once
-the outputs are written, so no write event follows. A submission that read
-an accumulator, and a freeze, hold a
-record of the plain request of the state read, as the accumulator and its
-number of pushes, before the records that read it; the views list its
-request when it is read. The backend's views, such as the records by ID, are built by
-applying the events in order, when they are appended and again when a backend
-starts from an existing log.
+the outputs are written, so no write event follows. A submission that read an
+accumulator, and a freeze, hold a record of the plain request of the state
+read, as the accumulator and its number of pushes, before the records that
+read it; the views list its request when it is read. The backend's views, such
+as the records by ID, are built by applying the events in order, when they are
+appended and again when a backend starts from an existing log.
 
 An event names only records and accumulators appended before it, or earlier
 in the same submission: a finish, a persist request, or a write names its

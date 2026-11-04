@@ -15,10 +15,10 @@ Values take memory, so something must decide when they go, and which are written
 
 ## Decision
 
-README, [How long records and values are kept](../README.md#how-long-records-and-values-are-kept), states the rules in full.
+[lifetimes.md](../lifetimes.md) states the rules in full.
 
 **A value lives while something keeps it.**
-The README lists the keepers.
+lifetimes.md lists the keepers.
 A record object, a reference, or a label is not one, since many objects name one record (Alternatives).
 Releasing drops a value, never a record.
 
@@ -80,7 +80,7 @@ Each pending record is
 - A chain may release its intermediate records once the requests that read them are submitted. Releasing the last request cancels the whole chain, unless something else keeps a part of it.
 - An interactive client that persists nothing loses its values when it ends. Its records stay.
 - A kernel restart ends the process, its backend, and everything it keeps. Continuing after the user's process crashed is a non-goal ([requirements](../../requirements/README.md)).
-- The placement symmetry (README, [Symmetries](../README.md#symmetries)) holds only if every output reads back from the store as the workflow returned it. The fake store keeps values in memory, so no test checks this.
+- The placement symmetry ([accumulators.md, Symmetries](../accumulators.md#symmetries)) holds only if every output reads back from the store as the workflow returned it. The fake store keeps values in memory, so no test checks this.
 
 ## Open
 

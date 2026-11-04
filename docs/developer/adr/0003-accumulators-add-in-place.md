@@ -26,7 +26,7 @@ So a call cannot wait for a push to be added.
 
 ## Decision
 
-README, [Stages and accumulators](../README.md#stages-and-accumulators), states the rules in full.
+[accumulators.md](../accumulators.md) states the rules in full.
 
 **One driver, changed in place.**
 An accumulator keeps one driver, made by its binding ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)), and each push changes it in place (the last row of the table).
@@ -35,7 +35,7 @@ An accumulator keeps one driver, made by its binding ([ADR 0006](0006-the-unit-i
 The backend adds the pushes later, in the order logged.
 Only `client.output` waits, for its state, before it copies.
 
-**Push n+1 waits for the readers of state n**, the requests that read its record and the pins of it (README, [Stages and accumulators](../README.md#stages-and-accumulators), Adding waits for readers).
+**Push n+1 waits for the readers of state n**, the requests that read its record and the pins of it ([accumulators.md, Reading a state: pins](../accumulators.md#reading-a-state-pins)).
 There are two reasons.
 The driver only moves forward, so state n cannot be computed once push n+1 is added.
 And the driver's `push` may change in place the arrays its `outputs()` returned.
@@ -89,6 +89,6 @@ Lifting the first rule later breaks no code.
 - An accumulator holds one driver, the rows of the push being added, and a pinned state's outputs until the next push. Outputs that allocate, such as a normalized volume, cost one more volume.
 - A slow reader delays the next addition, not the controller's `push` call.
 - A failure to add reaches the controller at its next push or pin, not from `push` itself.
-- A binding must not return an output that shares memory with a value it is given, or a record's output could change at the next push (README, [Specs and bindings](../README.md#specs-and-bindings)).
+- A binding must not return an output that shares memory with a value it is given, or a record's output could change at the next push ([README, Components](../README.md#components)).
 - The first pin of each state builds the state's plain request, in time proportional to the rows pushed so far, and checks the number of rows of each table.
 - A request that reads two accumulators holds back the next push of both until it has run.

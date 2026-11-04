@@ -9,61 +9,36 @@ is filled from params as a record stores them, so that a record's request
 can be edited and submitted again.
 
 The form has a tab per parameter, with the tabs on the left, as
-esslivedata's dashboard has. The widget of a field follows from its type,
-read with :func:`ess.spec.field_types.split` as the sources of its request
-type are (:func:`ess.spec.request_types.sources`), which also validate a
-request and are the params schema, and is labelled by
+esslivedata's dashboard has (scipp/esslivedata#1426). The widget of a field
+follows from its type, as the table in ``packages/essspec/docs/params.md``
+gives (see :func:`_widget`), and is labelled by
 :func:`ess.spec.field_types.title`, a parameter by the title of its tab. The
-same table holds at a parameter, at a field of a group at any depth, and for
-the element of a list:
+same widgets serve a parameter, a field of a group at any depth, and the
+element of a list. At a field of a group, a choice and a table show in a card
+titled by the field, so that a nested group is a card of its fields.
 
-================================  =========================================
-Type                              Widget
-================================  =========================================
-a scalar                          an input of its type, or a picker of its
-                                  values
-a file field                      a picker of the files that fit it
-a group                           a choice of one way, ``Given``, whose
-                                  selector is hidden: the fields of the
-                                  group
-a union of groups                 a choice of the alternatives, each the
-                                  fields of its group
-``Referenced[T]``                 a choice of one way, ``From a record``: a
-                                  picker of the outputs that fit ``T``
-``X | None``                      a choice of the ways of ``X`` and
-                                  ``None``; a scalar is the way ``Given``,
-                                  a file field the way ``A file``
-``A | Referenced[B]``             a choice of the ways of each member
-``list[X]``, ``X`` a scalar       a list of inputs of ``X``
-``list[X]``, any other ``X``      a table of the rows, and the editor of a
-                                  row, the widget of ``X``
-================================  =========================================
-
-At a field of a group, a choice and a table show in a card titled by the
-field, so that a nested group is a card of its fields.
-
-A record's output fits if its type, from the record's spec, fits the field,
-and a request of the client may reference it now (``client.readable``), so a
-pending record is offered too. A file fits a file field if a
-:class:`~ess.apps.Selector` of the marker's metadata matches it, as the
-backend checks when the request is submitted. A file that the form is set
+A record's output fits a field if its type, from the record's spec, fits the
+field, and a request of the client may reference it now
+(``client.readable``), so a pending record is offered too. A file fits a file
+field if a :class:`~ess.apps.Selector` of the marker's metadata matches it, as
+the backend checks when the request is submitted. A file that the form is set
 to, such as one a record names, stays picked when the listing no longer has
 it.
 
-The widgets follow those of esslivedata's dashboard
-(scipp/esslivedata#1426), in Panel. A table is a ``Tabulator``, so a
-notebook loads Panel with ``pn.extension('tabulator')``. A field without a
-default starts unset, so that a value a correct reduction needs is never
-filled in for the user; so does a list, of rows or of scalars, until an
-element is added or removed, so that a table, which has no default, is never
-given without rows by mistake. A field is left out of the request only if it
-is a choice with no way chosen, which it is only without a default, so the
-backend refuses it as required. A way chosen, or an input, with nothing
-given is not left out, since the backend would fill in the default: the
-params name it as missing (see :attr:`Form.params`). An empty text is the
-value ``''`` where the field has a default, and nothing given where it has
-none, since a text input cannot tell an empty text from none; an element of
-a list of texts is a text, ``''`` too, since it was added.
+A table is a ``Tabulator``, so a notebook loads Panel with
+``pn.extension('tabulator')``.
+
+A field without a default starts unset, so that a value a correct reduction
+needs is never filled in for the user; so does a list, of rows or of scalars,
+until an element is added or removed, so that a table, which has no default, is
+never given without rows by mistake. A field is left out of the request only if
+it is a choice with no way chosen, which it is only without a default, so the
+backend refuses it as required. A way chosen, or an input, with nothing given
+is not left out, since the backend would fill in the default: the params name
+it as missing (see :attr:`Form.params`). An empty text is the value ``''``
+where the field has a default, and nothing given where it has none, since a
+text input cannot tell an empty text from none; an element of a list of texts
+is a text, ``''`` too, since it was added.
 
 A time is picked to the second, in the zone of the value the picker was
 set to, or of the default, which its label names: ``Start (UTC)``. A time
@@ -143,6 +118,15 @@ def _widget(
     """
     The widget of a value of type ``annotation`` with ``metadata`` (see
     :func:`ess.spec.field_types.field_metadata`), at any depth.
+
+    The type is read with :func:`ess.spec.field_types.split`, as the sources of its
+    request type are (:func:`ess.spec.request_types.sources`). A scalar is an input
+    of its type, and a file field a picker of the files that fit it. Anything with
+    more than one way to give the value is a :class:`_Choice`: the alternatives of
+    a union of groups, a group (one way, ``Given``, whose selector is hidden), a
+    scalar or a file field with ``None`` or a ``Referenced[...]`` member
+    (``Given``, ``A file``), ``From a record``, and ``None``. A list of scalars is
+    :class:`_Scalars`, and any other list :class:`_Rows`.
     """
     tp, none, metadata = field_types.unwrapped(annotation, metadata)
     if get_origin(tp) is list:

@@ -106,7 +106,15 @@ def _given(values: Mapping[str, Any] | BaseModel | None) -> dict[str, Any]:
 
 
 class SpecId(BaseModel, frozen=True):
-    """The identity of a spec: its name and interface version."""
+    """
+    The identity of a spec: its name and interface version.
+
+    A caller without the workflow package gives ``SpecId(name='sans-iofq',
+    version=1)`` wherever a spec is expected, such as in :class:`Request`,
+    :class:`Template`, and :meth:`~ess.apps.Client.submit`; the backend runs
+    the spec it knows under that identity (see :meth:`~ess.apps.Client.spec`).
+    ``record.spec`` is one.
+    """
 
     name: str
     version: int
@@ -130,9 +138,14 @@ class Request(BaseModel, frozen=True):
     ``params`` is a dict by name, or an instance of the params model if
     they hold no reference to an output, each value as
     :meth:`~ess.apps.Client.submit` takes it. The rules are stated in
-    :mod:`ess.spec._workflow_spec`. A JSON object with the key
+    ``packages/essspec/docs/params.md``. A JSON object with the key
     ``"@ref"`` is a reference at any depth, so the references and files of a
     request are found without its spec (see :func:`ess.spec.refs.iter_refs`).
+
+    A request is data: making one checks only the form of a reference, and
+    the backend validates the rest at submission. ``spec`` may be a
+    :class:`SpecId`. ``params`` may be left out if every parameter has a
+    default.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra='forbid')
@@ -152,7 +165,7 @@ class Request(BaseModel, frozen=True):
         """
         The outputs of other records this request reads, and, before it is
         submitted, of accumulators: submitting replaces each accumulator by the
-        record of the state it reads.
+        record of the state it reads. Files are not listed: see :meth:`files`.
         """
         return [ref for _, ref in iter_refs(self.params) if isinstance(ref, OutputRef)]
 
@@ -167,10 +180,22 @@ class Template:
     """
     A spec, some values, and blanks that each use fills.
 
-    Values are given as a request's are. A blank is a parameter, a table
-    among them. Naming a field as a blank drops the value given for it, so a
+    Values are given as a request's are. A blank is a whole parameter, a
+    table among them, never a field of a group; a required parameter may be
+    one. Naming a parameter as a blank drops the value given for it, so a
     template can be made from any request's values or a whole params model,
-    which it keeps as a dict. Change a template with ``dataclasses.replace``.
+    which it keeps as a dict::
+
+        final = client.latest('iofq', member='250K')
+        beamtime = Template(final.spec, params=final.request.params,
+                            blanks=('sample',))
+
+    Like a request, a template is data and checks no value when made. The
+    backend validates the fixed values as it does a request's, and checks that
+    each reference to an output is readable and fits its field, when a
+    template is opened with :meth:`~ess.apps.Client.stage` or
+    :meth:`~ess.apps.Client.accumulator`. Change a template with
+    ``dataclasses.replace``.
     """
 
     spec: SpecId
@@ -194,7 +219,8 @@ class Template:
         """
         The request with the blanks filled by ``params``, a blank table by
         its rows. Raises ``SubmitError`` for each blank not filled, and each
-        value the template fixes.
+        value the template fixes. The values are checked when the request is
+        submitted.
         """
         params = _given(params)
         missing = [b for b in self.blanks if b not in params]
@@ -216,7 +242,8 @@ class Status(StrEnum):
 
 class Record(BaseModel, frozen=True):
     """
-    A request as the backend accepted it.
+    A request as the backend accepted it, with the names of its outputs but
+    no output values. Running the same request again makes a new record.
 
     ``request`` has every value filled in, inline values in their JSON form
     and references as :data:`~ess.spec.Ref`: file names resolved, defaults
@@ -247,7 +274,8 @@ class Record(BaseModel, frozen=True):
         """
         A reference to ``output``, or to its element ``key`` if it is a list
         or a dict; the key of an element of a list is its index, such as
-        ``'0'``.
+        ``'0'``. A key that the output lacks fails in the record that reads
+        it. The record may be pending: a chain is submitted without waiting.
         """
         if output not in self.outputs:
             raise KeyError(f'{self.spec} has no output {output!r}')

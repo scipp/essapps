@@ -39,7 +39,7 @@ functions (see :mod:`ess.spec.request_types`)::
 
 :func:`field_metadata` gives the metadata of a field with its
 discriminator, and :func:`title` the label of a field.
-The rules these serve are stated in :mod:`ess.spec._workflow_spec`.
+``packages/essspec/docs/params.md`` states the rules these serve.
 """
 
 from __future__ import annotations
@@ -516,9 +516,9 @@ def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] 
 
     ``annotation`` is the part of a field that a request writes (see
     :func:`split`). Raises ``ValueError`` for a union that breaks a rule of
-    :mod:`ess.spec._workflow_spec`: a member that is not a group; no
-    discriminator, or one that is not the name of a field, such as a
-    callable ``Discriminator``; a tag field with an alias or not typed a
+    ``packages/essspec/docs/params.md`` (Choices): a member that is not a
+    group; no discriminator, or one that is not the name of a field, such as
+    a callable ``Discriminator``; a tag field with an alias or not typed a
     ``Literal`` of one string.
     """
     if annotation is None:

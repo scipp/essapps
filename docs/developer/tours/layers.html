@@ -192,7 +192,7 @@ client.provenance(record).records()` },
   { level: 11, binding: 'driver', title: 'Another binding: a driver',
     body: `<p>A <code>DriverBinding</code> wraps a <em>driver</em> instead of a pipeline. Rows of the spec's tables are pushed into a driver, and it gives the outputs of the rows so far. For a request, the binding makes a driver, pushes all rows at once, and reads the outputs.</p>
            <p>Only the workflow package changed. The backend calls every binding the same way, with a params instance, and gets an outputs instance back.</p>
-           <p>A driver pays off in an <em>accumulator</em>, which adds run 101 to the sum of a hundred runs without reducing the hundred again. Accumulators and stages keep work in memory between requests. This tour shows plain requests only; see <a href="${README}#stages-and-accumulators">Stages and accumulators</a>.</p>`,
+           <p>A driver pays off in an <em>accumulator</em>, which adds run 101 to the sum of a hundred runs without reducing the hundred again. Accumulators and stages keep work in memory between requests. This tour shows plain requests only; see <a href="https://github.com/scipp/essapps/blob/main/docs/developer/accumulators.md">Stages and accumulators</a>.</p>`,
     code: `multi = DriverBinding(IOFQ_MULTI, IofQDriver)
 client = local(proposal='p1', files=files, bind=[iofq, multi])
 

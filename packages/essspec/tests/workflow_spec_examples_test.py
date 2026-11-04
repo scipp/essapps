@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The two examples in the docstring of :mod:`ess.spec._workflow_spec`: keep
-them in step with it.
+Examples of ``packages/essspec/docs/params.md``: keep them in step with it.
+
+:func:`first_spec` is the spec of "A first spec", and :func:`refused_spec`
+breaks at least one rule of each group in "What WorkflowSpec refuses".
+:func:`allowed_spec` has each kind of field once.
 """
 
 from __future__ import annotations
@@ -15,7 +18,48 @@ import scipp as sc
 from annotated_types import Gt
 from pydantic import BaseModel, Field, computed_field, field_validator
 
-from ess.spec import File, Referenced, RunFile, WorkflowSpec
+from ess.spec import (
+    BackgroundRunFile,
+    File,
+    Referenced,
+    RunFile,
+    SampleRunFile,
+    WorkflowSpec,
+)
+
+
+def first_spec() -> WorkflowSpec:
+    class Reduction(BaseModel):
+        bins: int = 100
+
+    class BeamCentre(BaseModel):
+        x: float = 0.0
+        y: float = 0.0
+
+    class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):
+        transmission: sc.DataArray
+
+    class IofQParams(BaseModel):
+        reduction: Reduction = Field(default_factory=Reduction)
+        beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
+        transmission: Referenced[ComputedTransmission]
+        sample: SampleRunFile
+        can: BackgroundRunFile
+
+    class IofQ(BaseModel, arbitrary_types_allowed=True):
+        intensity: sc.DataArray
+
+    class IofQOutputs(BaseModel):
+        iofq: IofQ
+
+    return WorkflowSpec(
+        name='sans-iofq',
+        version=1,
+        title='I(Q)',
+        description='...',
+        params=IofQParams,
+        outputs=IofQOutputs,
+    )
 
 
 def allowed_spec() -> WorkflowSpec:
@@ -167,6 +211,10 @@ def refused_spec() -> WorkflowSpec:
         outputs=Outputs,
         tables=('sample_runs',),
     )
+
+
+def test_first_spec_makes_a_spec() -> None:
+    first_spec().serialize()
 
 
 def test_allowed_example_makes_a_spec() -> None:

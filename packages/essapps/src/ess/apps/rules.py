@@ -1,18 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Rules and the trigger loop: automatic reduction of new files.
+Rules and the trigger loop: automatic reduction of new files, as described in
+``docs/developer/automatic-reduction.md``.
 
-A rule is plain data. The trigger loop is a controller: it uses a client, never
-runs in the backend, and keeps no memory of its own. It persists what it
-submits, so its client keeps nothing, and any client of the proposal reads the
-results. It finds new files
-through the client. Which files a rule has handled is read from the records
-under the rule's label, so a restarted or replaced loop picks up where the last
-one stopped. The label belongs to the rule: any record under it counts,
-whoever submitted it and whether or not it failed. So the loop does not retry a
-failed file, which could fail again at every step; running it again is the
-user's decision.
+A rule is plain data. The trigger loop is a controller of a client and never
+runs in the backend. It keeps no memory of its own: :meth:`TriggerLoop._requests`
+reads which files a rule has handled from the records under the rule's label.
 """
 
 from __future__ import annotations
@@ -38,22 +32,13 @@ class Rule:
     """
     Apply a template to each new file the selector matches.
 
-    A file fills the blank ``at`` that the lookup leaves, a file
-    parameter, as :func:`apply` fills it, such as ``'sample'``. A
-    file is new until a record under the label holds it there: a file
-    that a request holds elsewhere, such as a can that the lookup fills, is
-    not handled by it.
+    A file fills the blank ``at`` that the lookup leaves, as :func:`apply` fills
+    it. With ``series``, a request instead takes every file with the same value of
+    that metadata field so far, in run order, and ``at`` is then a table of files.
 
-    With ``series``, a request instead takes every file with the same
-    value of that metadata field so far, in run order, and that value is its
-    member. The blank ``at`` is then a table of files, with a row
-    for each file, and the lookup is not used: ``at='runs'`` makes the
-    rows ``[file, ...]``. A file is new until a record under the label
-    holds it in a row, ``runs[i]``.
-
-    ``persist`` names the outputs the loop persists, or is ``None`` for every
-    one; the loop always persists, so that its client keeps nothing. What the
-    template references must be persisted for the same reason.
+    ``persist`` names the outputs the loop persists, or is ``None`` for every one.
+    What the template references must be persisted too, since the loop's client
+    keeps nothing.
 
     Raises ``ValueError`` when made if no single blank is left for a file,
     or if ``at`` is not that blank (see :func:`check_at`).

@@ -3,28 +3,15 @@
 """
 Checks of the symmetries that a workflow author promises, for a package's tests.
 
-Each check computes the same outputs in two ways and compares them, so it
-needs no known result. With a single-run binding ``single`` (a
-``PipelineBinding``) of ``IOFQ``, a multi-run binding ``multi`` (a
-``DriverBinding``) of ``IOFQ_MULTI``, whose tables ``sample`` and ``can`` are
-lists of the types of those parameters of ``IOFQ``, and the function
-``make_driver`` that ``multi`` makes its drivers with::
+``packages/essspec/docs/bindings.md`` (Testing the symmetries) shows how a
+package uses them.
 
-    params = IofQParams(reduction=Reduction(bins=2), sample=run_101, can=run_110)
-    check_one_row(single, multi, params)
-    check_caching(single, {'sample': run_101}, [{'reduction': ...}, ...])
-    check_arrival_and_order(
-        make_driver,
-        {'reduction': params.reduction},
-        {'sample': [run_101, run_102], 'can': [run_110]},
-    )
-
-Values are those the binding receives: data read. Outputs are compared up to
-``rtol``, since adding in another order rounds differently, with
-:func:`assert_close`. :func:`check_one_row` and :func:`check_caching` also
-check that no output shares memory with a value the workflow was given. A
-failed check raises ``AssertionError`` naming the symmetry and the call. The
-symmetries are those of docs/developer/README.md (Symmetries).
+Each check computes the same outputs in two ways and compares them with
+:func:`assert_close`. A request is made with :func:`instance`, as the backend
+makes one from data it read, so that a check calls a binding with what the
+backend would pass. The check for shared memory compares only arrays that
+numpy holds. A failed check raises ``AssertionError`` naming the symmetry and
+the call.
 """
 
 from __future__ import annotations
@@ -109,8 +96,7 @@ def check_caching(
 
     The stage is made with ``fixed`` and the names of the first call as its
     blanks, and called in the order given. Values are by name, as
-    ``make_stage`` takes them. Repeat a call after others, as in bins 50,
-    100, and 50 again, to find a stage whose calls change what it holds.
+    ``make_stage`` takes them.
     """
     spec = binding.spec
     blanks = tuple(calls[0])
@@ -150,11 +136,6 @@ def check_arrival_and_order(
     has rows so far. A state whose expected outputs raise is not read, since
     a driver may refuse a state; the state with every row is always read.
     The check fails if a push modifies the values it was given.
-
-    The check compares the driver with itself under other push schedules, so
-    it does not prove that the outputs are right. Only a comparison with an
-    independent reference does, such as :func:`check_one_row` against the
-    single-run binding, if the package writes one.
     """
     pristine = copy.deepcopy(tables)
     for name, schedule in _schedules(tables):

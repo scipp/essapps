@@ -43,7 +43,7 @@ History is six lists, each only appended to:
 - The record of a state ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)) is stored as the accumulator and its number of pushes. Its rows are those of the first n pushes, taken from the pushes list when needed. So history grows by a constant amount per push and per pin. The record that `freeze` returns is stored the same way.
 - A persist request made at submission is part of the record. The outcome of that write is the record's finish, so the writes list holds no entry for it ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)).
 - Output values are not history ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)). History names no file.
-- Once a proposal has been idle (README, [How long records and values are kept](../README.md#how-long-records-and-values-are-kept)) for the retention period, days to weeks as the deployment sets it, its history is dropped as a whole. An output needed for longer is published (README, [Provenance and publication](../README.md#provenance-and-publication)).
+- Once a proposal has been idle ([lifetimes.md](../lifetimes.md)) for the retention period, days to weeks as the deployment sets it, its history is dropped as a whole. An output needed for longer is published (README, [Provenance and publication](../README.md#provenance-and-publication)).
 - How a backend stores the lists is its choice. The in-process backend appends them to one event log, in memory or in a file of JSON lines.
 
 ## Alternatives considered

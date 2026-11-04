@@ -21,7 +21,7 @@ So an ewoks task corresponds to one of our specs with its binding; the fine-grai
 
 **Dependencies exist only inside one graph.**
 A graph is fixed when it is submitted, and `ewoksjob` submits graphs independently: no Celery chain, chord, or group appears in any source read.
-Here a request may reference an output of a pending record from an earlier submission ([References](../README.md#references)), and the backend runs it once that record has completed.
+Here a request may reference an output of a pending record from an earlier submission ([References](../README.md#requests-and-records)), and the backend runs it once that record has completed.
 `ewoksjob` would leave that scheduling to us.
 
 **What happened is kept in events, not in records.**
@@ -57,8 +57,8 @@ Our trigger loop instead counts a file as handled when a record under the rule's
 **Calibrations are chosen from the state at trigger time.**
 ID11 takes the last file in a directory by name (`sorted(glob(pattern))[-1]`, `id11/xrpd_processor.py` L113), ID31 reads the live energy motor (`id31/xrpd_processor.py` L151), and the streamline scanner takes the calibration scan nearest the current motor position (`streamline/scanner.py` L445).
 Reducing a backlog again therefore gets today's choice, not the one valid for each scan.
-For the lookups that applications will provide ([#24][i24], [#33][i33]): match against the run's own metadata, and let the record hold the resolved file identity, as it does ([Files](../README.md#files)).
-`ewoksreprocess`, used by the ID31 reprocessing application, lists submitted jobs as futures in a Qt widget (`submit/jobs_list_widget.py`), lost when the window closes; here a batch is found again by its label ([Labels and members](../README.md#labels-and-members)).
+For the lookups that applications will provide ([#24][i24], [#33][i33]): match against the run's own metadata, and let the record hold the resolved file identity, as it does ([Files](../../../packages/essspec/docs/params.md#files)).
+`ewoksreprocess`, used by the ID31 reprocessing application, lists submitted jobs as futures in a Qt widget (`submit/jobs_list_widget.py`), lost when the window closes; here a batch is found again by its label ([Labels and members](../README.md#requests-and-records)).
 
 **Warm workers pull against memory leaks.**
 `ewoksxrpd` keeps pyFAI integrators in a process-global pool keyed by a hash of the configuration (`ewoksxrpd` 1.10.0, `tasks/worker.py` L22-L102).

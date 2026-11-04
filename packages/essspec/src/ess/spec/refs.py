@@ -17,8 +17,8 @@ wherever it is, code that reads a record lists its references and files
 without the spec: :func:`iter_refs` finds each one, and :func:`map_refs`
 replaces each one.
 
-Where a request may write each kind is a rule of the params language, stated
-in :mod:`ess.spec._workflow_spec`. Turning a reference into the data a
+Where a request may write each kind is stated in
+``packages/essspec/docs/params.md``. Turning a reference into the data a
 workflow takes is the business of whatever runs the workflow.
 """
 
