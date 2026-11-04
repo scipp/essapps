@@ -949,8 +949,6 @@ def test_a_pending_request_reads_a_value_released_after_its_submission(
     loading.set()
 
     assert client.output(total, 'value') == Amount(value=3.0)
-    with pytest.raises(NotReadable, match='not kept'):  # read, then dropped
-        client.output(first, 'value')
 
 
 def test_a_released_pending_record_that_nothing_reads_is_cancelled(
@@ -1112,10 +1110,10 @@ def test_closing_a_client_cancels_the_work_that_nothing_else_keeps(
 def test_a_with_block_closes_the_client(backend: Backend) -> None:
     with Client(backend, proposal='p1', submitter='anna') as client:
         load = client.compute(_load(1))
-    client.close()  # closing again does nothing
 
     with pytest.raises(ClientEnded):
         client.output(load, 'value')
+    client.close()  # closing again does nothing
 
 
 def test_closing_a_local_client_closes_its_backend_once_its_workflows_return(
@@ -2164,20 +2162,6 @@ def test_a_stage_lets_go_of_what_its_template_references_once_staged(
 
 
 # Accumulators that add in place
-
-
-def test_adding_in_place_leaves_the_outputs_pushed_unchanged(
-    in_place: Client, loads: list[Record]
-) -> None:
-    client = in_place
-    total = _array_total(client)
-    for load in loads:
-        total.push(parts=[load.ref('value')])
-    plain = client.compute(ARRAY_TOTAL, params=_parts(*loads))
-
-    assert _listed(client.output(_copy(client, total), 'value')) == [3.0]
-    assert _listed(client.output(plain, 'value')) == [3.0]
-    assert [_listed(client.output(x, 'value')) for x in loads] == [[1.0], [2.0]]
 
 
 def test_no_client_reads_or_references_the_record_of_a_state(

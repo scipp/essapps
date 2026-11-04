@@ -228,9 +228,11 @@ class Gate:
 
     def __init__(self) -> None:
         self.open = threading.Event()
+        self.started = threading.Event()
 
     def load(self, params: LoadParams) -> ValueOutputs:
         run = read_file(params.sample)
+        self.started.set()
         self.open.wait(timeout=5)
         if run < 0:
             raise ValueError('negative run')
@@ -614,13 +616,15 @@ def test_a_client_sees_only_the_files_of_its_proposal(
     mine = Client(backend, proposal='p1', submitter='anna')
     theirs = Client(backend, proposal='p2', submitter='eve')
     other = files.measure(4, 4.0, proposal='p2')
-    later = files.measure(5, 5.0)
+    existing = [files.resolve(file(run=n)) for n in (1, 2, 3)]
 
-    assert mine.files.list(Selector()) == [
-        files.resolve(file(run=n)) for n in (1, 2, 3, 5)
-    ]
+    assert mine.files.list(Selector()) == existing
     assert theirs.files.list(Selector()) == [other]
-    assert list(islice(mine.files.watch(Selector()), 4))[-1] == later
+    watch = mine.files.watch(Selector())
+    assert list(islice(watch, 3)) == existing
+    files.measure(6, 6.0, proposal='p2')
+    later = files.measure(5, 5.0)
+    assert next(watch) == later
     assert theirs.files.metadata(other)['run'] == 4
     with pytest.raises(KeyError, match='in proposal p1'):
         mine.files.metadata(other)
@@ -756,6 +760,7 @@ def test_a_reference_with_a_key_into_a_list_is_by_integer(client: Client) -> Non
 
 def test_cancel_drops_what_is_running(client: Client, gate: Gate) -> None:
     running = client.submit(load(1))
+    assert gate.started.wait(timeout=5)
     client.cancel(running)
     gate.open.set()
 
