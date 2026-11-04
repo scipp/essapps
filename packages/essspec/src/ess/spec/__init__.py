@@ -30,14 +30,26 @@ from .binding import (
     StageCall,
     function_binding,
 )
-from .parameters import File, MaskFile, Referenced, RunFile
+from .parameters import (
+    BackgroundRunFile,
+    EmptyBeamRunFile,
+    File,
+    MaskFile,
+    Referenced,
+    RunFile,
+    SampleRunFile,
+    TransmissionRunFile,
+    VanadiumRunFile,
+)
 from .refs import FileRef, OutputRef, Ref
 
 __all__ = [
     'AccumulatorBinding',
+    'BackgroundRunFile',
     'Binding',
     'Driver',
     'DriverBinding',
+    'EmptyBeamRunFile',
     'File',
     'FileRef',
     'MaskFile',
@@ -46,9 +58,12 @@ __all__ = [
     'Ref',
     'Referenced',
     'RunFile',
+    'SampleRunFile',
     'SerializedWorkflowSpec',
     'StageBinding',
     'StageCall',
+    'TransmissionRunFile',
+    'VanadiumRunFile',
     'WorkflowSpec',
     'function_binding',
 ]

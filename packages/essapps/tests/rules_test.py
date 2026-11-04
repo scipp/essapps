@@ -25,7 +25,14 @@ from ess.apps import (
 )
 from ess.apps.batch import try_apply
 from ess.apps.testing import FakeFiles, FakeStore, read_file
-from ess.spec import MaskFile, RunFile, WorkflowSpec, function_binding
+from ess.spec import (
+    BackgroundRunFile,
+    MaskFile,
+    RunFile,
+    SampleRunFile,
+    WorkflowSpec,
+    function_binding,
+)
 
 
 class LoadParams(BaseModel):
@@ -37,8 +44,8 @@ class LoadMaskParams(BaseModel):
 
 
 class SubtractParams(BaseModel):
-    sample: RunFile
-    can: RunFile
+    sample: SampleRunFile
+    can: BackgroundRunFile
 
 
 class NormalizeParams(BaseModel):
@@ -107,7 +114,7 @@ def scale(params: ScaleParams) -> ValueOutputs:
     return ValueOutputs(value=params.scale.factor * read_file(params.sample))
 
 
-LAST_CAN = LastBefore(Selector(role='can'))
+LAST_CAN = LastBefore(Selector(role='background'))
 
 
 @pytest.fixture
@@ -146,18 +153,18 @@ def test_a_file_whose_lookup_finds_nothing_is_skipped_until_it_does(
     )
     loop = TriggerLoop(client, rules=[subtract])
     files.measure(2, 5.0, role='sample')  # no can measured before it
-    files.measure(3, 1.0, role='can')
+    files.measure(3, 1.0, role='background')
     files.measure(4, 7.0, role='sample')
 
     (first,) = loop.step()
     skipped = loop.status(subtract).reason
-    files.measure(1, 2.0, role='can')  # an earlier can arrives late
+    files.measure(1, 2.0, role='background')  # an earlier can arrives late
     (second,) = loop.step()
 
     assert (first.member, client.output(first, 'value')) == ('4', 6.0)
     assert skipped == (
         "skipped uuid:run-2: no file matching "
-        "Selector({'kind': 'raw', 'role': 'can'}) before run 2"
+        "Selector({'kind': 'raw', 'role': 'background'}) before run 2"
     )
     assert (second.member, client.output(second, 'value')) == ('2', 3.0)
     assert loop.status(subtract).reason is None
@@ -166,7 +173,7 @@ def test_a_file_whose_lookup_finds_nothing_is_skipped_until_it_does(
 def test_apply_fills_the_blank_at_and_the_blank_the_lookup_fills(
     client: Client, files: FakeFiles
 ) -> None:
-    can = files.measure(1, 2.0, role='can')
+    can = files.measure(1, 2.0, role='background')
     sample = files.measure(2, 5.0, role='sample')
     template = Template(SUBTRACT, blanks=('sample', 'can'))
     cans = Lookup({'can': LAST_CAN})
@@ -192,7 +199,7 @@ def test_try_apply_leaves_out_a_file_whose_lookup_finds_nothing(
     client: Client, files: FakeFiles
 ) -> None:
     early = files.measure(1, 5.0, role='sample')
-    can = files.measure(2, 1.0, role='can')
+    can = files.measure(2, 1.0, role='background')
     later = files.measure(3, 7.0, role='sample')
     template = Template(SUBTRACT, blanks=('sample', 'can'))
     cans = Lookup({'can': LAST_CAN})
@@ -351,10 +358,13 @@ def _rule(template: Template, at: str, **kw: Any) -> Rule:
             _rule(
                 Template(SUBTRACT, blanks=('sample', 'can')),
                 'sample',
-                lookup=Lookup({'can': LastBefore(Selector(kind='mask', role='can'))}),
+                lookup=Lookup(
+                    {'can': LastBefore(Selector(kind='mask', role='background'))}
+                ),
             ),
-            "Selector({'kind': 'mask', 'role': 'can'}) lists files that do not "
-            "fit can; a selector names each of {'kind': 'raw'}",
+            "Selector({'kind': 'mask', 'role': 'background'}) lists files that do "
+            "not fit can; a selector names each of {'kind': 'raw', 'role': "
+            "'background'}",
         ),
         (
             _rule(Template(SUM_RUNS, blanks=('runs',)), 'runs'),

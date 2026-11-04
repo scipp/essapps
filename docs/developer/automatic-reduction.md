@@ -25,7 +25,7 @@ So each file that a rule or a lookup finds needs a parameter of its own in the s
 A batch whose parameters differ per file, such as the thickness of each sample, is a list of requests, each with its own params.
 
 ```python
-empty_beams = Lookup({'empty_beam': LastBefore(Selector(role='empty-beam'))})
+empty_beams = Lookup({'empty_beam': LastBefore(Selector(role='empty_beam'))})
 requests = apply(Template(TRANSMISSION, blanks=('run', 'empty_beam')), runs, client.files, at='run',
                  lookup=empty_beams)
 ```

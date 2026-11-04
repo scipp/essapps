@@ -200,12 +200,12 @@ This is a plain request over tables (README.md, "Combining runs: tables"): `NORM
 Actor: instrument scientist. Goal: every sample subtracts the can measured most recently before it, without naming the can.
 
 ```python
-can_1 = measure(1, [1.0, 1.0], role='can')
+can_1 = measure(1, [1.0, 1.0], role='background')
 first = measure(2, [5.0, 6.0], role='sample')
-can_3 = measure(3, [2.0, 2.0], role='can')
+can_3 = measure(3, [2.0, 2.0], role='background')
 second = measure(4, [6.0, 9.0], role='sample')
 template = Template(IOFQ_CAN, params={'normalization': None}, blanks=('sample', 'can'))
-cans = Lookup({'can': LastBefore(Selector(role='can'))})   # the latest can measured before the run
+cans = Lookup({'can': LastBefore(Selector(role='background'))})   # the latest can measured before the run
 
 requests = apply(template, [first, second], client.files, at='sample', member_field='run', lookup=cans)
 reduced = list(client.compute(requests, label='iofq').values())

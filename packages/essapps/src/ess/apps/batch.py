@@ -44,7 +44,7 @@ class Lookup:
     Rules that fill blanks per file, each keyed by its blank, a file
     parameter::
 
-        Lookup({'can': LastBefore(Selector(role='can'))})
+        Lookup({'can': LastBefore(Selector(role='background'))})
     """
 
     def __init__(self, rules: Mapping[str, LastBefore]) -> None:
