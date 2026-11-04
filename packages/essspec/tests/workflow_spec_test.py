@@ -529,6 +529,7 @@ class TestModelRules:
                     'P', mask=(Annotated[MaskFile, AfterValidator(lambda p: p)], ...)
                 )
             },
+            {'params': model('P', mask=(Annotated[MaskFile, 'a note'], ...))},
             {
                 'params': model(
                     'P', mask=(MaskFile | Referenced[BeamCentre] | None, None)

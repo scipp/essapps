@@ -418,15 +418,11 @@ from typing import (
     get_origin,
 )
 
-from annotated_types import MaxLen, MinLen
+from annotated_types import BaseMetadata, GroupedMetadata, MaxLen, MinLen
 from pydantic import (
-    AfterValidator,
     BaseModel,
-    BeforeValidator,
     ConfigDict,
     Field,
-    PlainValidator,
-    WrapValidator,
     model_validator,
 )
 from pydantic.fields import FieldInfo
@@ -747,7 +743,7 @@ def _type_problems(
     if problem := _marker_problem(inline, inline_metadata):
         return [*problems, problem]
     if field_types.file_marker(inline, *inline_metadata) is not None:
-        constraints = [m for m in inline_metadata if not isinstance(m, _FILE_METADATA)]
+        constraints = [m for m in inline_metadata if _is_constraint(m)]
         return [*problems, *map(_constraint_text, constraints)]
     if any(map(field_types.is_file, members)):
         return [*problems, _FILES_UNION]
@@ -800,14 +796,15 @@ _OPTIONAL_MARKED = (
     'typed Annotated[Path, File(...)] | None, as Referenced[X] | None is'
 )
 
-_FILE_METADATA = (
-    File,
-    AfterValidator,
-    BeforeValidator,
-    PlainValidator,
-    WrapValidator,
-)
-"""What a file field holds in its metadata besides its marker: validators."""
+
+def _is_constraint(metadata: Any) -> bool:
+    """
+    Whether ``metadata`` is a constraint that pydantic applies, such as
+    ``MinLen(2)`` or ``Field(gt=2)``, not a validator or a note.
+    """
+    if isinstance(metadata, FieldInfo):
+        return bool(metadata.metadata)
+    return isinstance(metadata, BaseMetadata | GroupedMetadata)
 
 
 def _constraint_text(constraint: Any) -> str:
