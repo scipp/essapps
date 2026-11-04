@@ -20,6 +20,7 @@ from ess.spec import (
     File,
     Referenced,
     RunFile,
+    SampleRunFile,
     WorkflowSpec,
 )
 
@@ -231,6 +232,13 @@ class LokiMaskParams(BaseModel):
 LOKI_MASKED = make_spec('loki-masked', params=LokiMaskParams)
 
 
+class SampleRunParams(BaseModel):
+    sample: SampleRunFile
+
+
+SAMPLE_RUN = make_spec('sample-run', params=SampleRunParams)
+
+
 class Term(BaseModel):
     """A row that holds a reference inside it."""
 
@@ -285,6 +293,10 @@ def split_total(params: Amounts) -> Pieces:
 
 def read_mask(params: LokiMaskParams) -> Value:
     return as_value(read_file(params.mask))
+
+
+def read_sample(params: SampleRunParams) -> Value:
+    return as_value(read_file(params.sample))
 
 
 def terms(params: TermsParams) -> Value:
