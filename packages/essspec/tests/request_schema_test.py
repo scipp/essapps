@@ -6,19 +6,18 @@ agree: a request that :func:`ess.spec.request_types.held` accepts is one that th
 params schema takes, and the other way round.
 """
 
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import pytest
 from annotated_types import Gt
 from pydantic import BaseModel, Field, TypeAdapter
 
-from ess.spec import FileModel, Referenced, WorkflowSpec
+from ess.spec import File, Referenced, WorkflowSpec
 from ess.spec.refs import ParamsError
 from ess.spec.request_types import held
 
-
-class RunFile(FileModel, kind='raw'):
-    pass
+RunFile = Annotated[Path, File()]
 
 
 class Reduction(BaseModel):
@@ -156,9 +155,13 @@ REQUESTS = [
 ]
 
 
-def _resolved(name: str, model: type[FileModel]) -> str:
+def _resolved(name: str, marker: File) -> str:
     """Each name is the identity of a known file: the schema checks no file."""
     return name
+
+
+def _path(identity: str) -> Path:
+    return Path(identity)
 
 
 @pytest.mark.parametrize(('name', 'value'), REQUESTS)
@@ -168,7 +171,7 @@ def test_the_params_schema_takes_what_a_request_may_write(
     jsonschema = pytest.importorskip('jsonschema')
     validator = jsonschema.Draft202012Validator(SPEC.serialize().params_schema)
     try:
-        held(Params, name, value, _resolved)
+        held(Params, name, value, _resolved, _path)
     except ParamsError:
         accepted = False
     else:

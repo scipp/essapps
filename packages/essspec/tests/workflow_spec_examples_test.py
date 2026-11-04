@@ -15,11 +15,11 @@ import scipp as sc
 from annotated_types import Gt
 from pydantic import BaseModel, Field, computed_field, field_validator
 
-from ess.spec import FileModel, Referenced, WorkflowSpec
+from ess.spec import File, Referenced, WorkflowSpec
 
 
 def allowed_spec() -> WorkflowSpec:
-    class RunFile(FileModel, kind='raw'): ...
+    RunFile = Annotated[Path, File()]
 
     class WavelengthRange(BaseModel):
         start: float
@@ -82,7 +82,7 @@ def allowed_spec() -> WorkflowSpec:
 
 
 def refused_spec() -> WorkflowSpec:
-    class RunFile(FileModel, kind='raw'): ...
+    RunFile = Annotated[Path, File()]
 
     class WavelengthRange(BaseModel):
         start: float
@@ -96,8 +96,11 @@ def refused_spec() -> WorkflowSpec:
     class Geometry(BaseModel):
         file: Path
 
-    class CalibrationFile(FileModel, kind='calibration'):
-        run: int
+    class Calibration(BaseModel):
+        run: Annotated[int, File(kind='calibration')]
+
+    class Flux(BaseModel):
+        run: RunFile
 
     class Reduction(BaseModel):
         bins: int = Field(10, alias='nbins')
@@ -135,9 +138,9 @@ def refused_spec() -> WorkflowSpec:
         sample: Sample
         specimen: Specimen
         geometry: Geometry
-        calibration: CalibrationFile
+        calibration: Calibration
         mask: Referenced[PixelMask | None] = None
-        flux: Referenced[RunFile]
+        flux: Referenced[Flux]
         centre: Annotated[
             GivenCentre | FindCentre | Referenced[FoundCentre],
             Field(discriminator='kind'),
@@ -187,8 +190,8 @@ def refusal() -> str:
         'Reduction.bins: a field of a group has no alias',
         "Reduction: no serializers or computed fields, {'computed_fields'",
         'Sample.run: RunNumber is a NewType',
-        'Geometry.file: a Path is outside a file model',
-        "CalibrationFile: a file model holds only the field file, not ['run']",
+        'Geometry.file: a Path without File(...)',
+        'Calibration.run: File(...) marks a Path, not int',
         'Params.transmissions: a list is not typed list[X] | None',
         'Params.masks: the element of a list is not typed X | None',
         'Params.range: the default',
@@ -198,9 +201,9 @@ def refusal() -> str:
         'Params.centre: the discriminator of a union with a member Referenced[...]',
         'Params.specimen: Specimen.inner: Specimen contains itself',
         'Params.mask: Referenced[PixelMask | None]: PixelMask | None is not a group',
-        'Params.flux: RunFile is a file model; no output holds one',
+        'Params.flux: Flux.run: a Path is in the data of an output',
         'Outputs.pixel_mask: Referenced[...] marks a field of the params',
-        'Outputs.raw: RunFile is a file model; no output holds one',
+        'Outputs.raw: a Path is in the data of an output; no output holds a file',
         'sample_runs: a table has no default',
         'iofq: a field of both Params and Outputs',
         "Params: no decorators but model validators, {'field_validators'",

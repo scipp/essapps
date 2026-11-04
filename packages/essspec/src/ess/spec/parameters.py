@@ -3,11 +3,11 @@
 """
 Shared vocabulary of workflow parameter models.
 
-Common building blocks for workflow params models: the file model, the
-marker of a field that a reference fills, constrained unit choices, and
-range/edges models with cross-field validation. Purely declarative — no scipp;
-converting validated values into scipp objects is the workflow implementation's
-concern (see :mod:`ess.spec.conversions`).
+Common building blocks for workflow params models: the markers of a field
+that a file fills and of a field that a reference fills, constrained unit
+choices, and range/edges models with cross-field validation. Purely
+declarative — no scipp; converting validated values into scipp objects is the
+workflow implementation's concern (see :mod:`ess.spec.conversions`).
 
 Value defaults (start, stop, number of bins) are deliberately not provided
 here: sensible values depend on the workflow and instrument, so workflow
@@ -24,183 +24,119 @@ authors set them at the use site, next to the field's title and description::
 from __future__ import annotations
 
 import functools
-import inspect
 from abc import ABC
 from collections.abc import Mapping
 from enum import StrEnum
-from pathlib import Path
-from typing import Annotated, Any, ClassVar, Final, Self, TypeVar
+from typing import Annotated, Any, Final, TypeVar
 
 from pydantic import (
     BaseModel,
     Field,
     GetCoreSchemaHandler,
-    PrivateAttr,
     ValidationError,
     ValidationInfo,
     ValidatorFunctionWrapHandler,
     field_validator,
-    model_serializer,
     model_validator,
 )
-from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
 from pydantic_core import CoreSchema, ErrorDetails, PydanticCustomError, core_schema
 
 from .refs import AccumulatorRef, FileRef, OutputRef, as_ref
 
 
-class FileModel(BaseModel, frozen=True, extra='forbid'):
+class File:
     """
-    A file that a workflow reads: its identity ``file``, and when the
-    request runs, its local path :attr:`path`.
+    The marker of a field that a file fills, a *file field*, typed
+    ``Annotated[Path, File(**metadata)]``; it holds the metadata that a file
+    must have to fill the field, each a string, a number, or a bool. A file
+    fits the field if its metadata have each key and value of the marker's
+    :attr:`metadata`; ``kind`` is ``'raw'`` unless given. A spec names each
+    kind of file once::
 
-    A subclass is a kind of file. Its class keywords are the metadata that a
-    file must have to fit the model, each a string, a number, or a bool::
+        RunFile = Annotated[Path, File()]
+        MaskFile = Annotated[Path, File(kind='mask')]
 
-        class MaskFile(FileModel, kind='mask'):
-            '''A pixel mask, as XML.'''
+        class IofQParams(BaseModel):
+            sample: RunFile
+            mask: MaskFile | None = None
 
-    A file fits the model if its metadata have each key and value of the
-    model's ``metadata``; a file without ``kind`` is raw. ``metadata`` is
-    ``{'kind': 'raw'}`` unless a subclass says otherwise: a subclass with
-    keywords merges them over its parent's metadata, one without inherits
-    them. A keyword that is a key of pydantic's ``ConfigDict``, such as
-    ``title``, ``frozen``, or ``extra``, configures the model instead, so it
-    cannot be a metadata key. A subclass adds no fields and no validators
-    (see the rules in :mod:`ess.spec._workflow_spec`).
+    pydantic, a type checker, and the binding see ``Path``: the params model
+    holds the local path of the file. A request writes a file as
+    ``file(...)``, whose JSON form is ``{'@ref': 'file', 'file': ...}``, so
+    the request type has a :class:`~ess.spec.refs.FileRef` in the field's
+    place (see :mod:`ess.spec.request_types`). The backend resolves the name
+    to the file's identity when the request is submitted, with a resolver of
+    files given the marker, and the file source checks that the file is
+    known, that the request's proposal may read it, and that its metadata
+    fit the marker's.
 
-    A request writes a file as ``file(...)``. Its JSON form, which the model
-    dumps to and is validated from, is ``{'@ref': 'file', 'file': ...}``, so
-    that code reading a record finds its files without the spec (see
-    :mod:`ess.spec.refs`). Two file models are equal if they are of one
-    class and name one file.
+    Validated with the context ``{'paths': {identity: local path}}``, as the
+    backend validates a request, the marker replaces the stored form of a
+    file by its local path, validated as ``Path``, and refuses any other
+    value. Validated without ``paths``, as in direct use, the field takes a
+    ``Path`` as it is, ``IofQParams(sample=Path('run-101.nxs'))``.
 
-    A request names a file by what a person knows, such as a run number. The
-    backend resolves the name to the file's identity when the request is
-    submitted, by validating the model with the context
-    ``{'files': resolve}``::
-
-        def resolve(name: str, model: type[FileModel]) -> str:
-            ...  # the identity of the file, or raise ValueError
-
-        MaskFile.model_validate(
-            {'@ref': 'file', 'file': 'run:101'}, context={'files': resolve}
-        )
-
-    ``resolve`` raises ``ValueError`` if the file is unknown, if the
-    request's proposal may not read it, or if it does not fit the model; its
-    message is that of the validation error. Validated from JSON, as a
-    request is, a file model takes only ``{'@ref': 'file', ...}``. Validated
-    in Python, it also takes ``{'file': ...}``, as ``MaskFile(file=...)``
-    gives it.
-
-    The local path of the file exists only when the request runs: the
-    backend validates the model with the context ``{'paths': {identity:
-    local path}}``, and :attr:`path` raises before. A program without a
-    backend makes a file model of a local file with :meth:`local`.
+    The marker carries no validators: one that reads the file would read it
+    from a network mount when the request is submitted. A check of the
+    content of a file belongs to the workflow. Two markers are equal if
+    their metadata are.
     """
 
-    metadata: ClassVar[dict[str, Any]] = {'kind': 'raw'}
-    file: str = Field(min_length=1)
-    _path: Path | None = PrivateAttr(None)
+    __slots__ = ('_metadata',)
 
-    def __init_subclass__(cls, **metadata: Any) -> None:
-        super().__init_subclass__()
+    def __init__(self, kind: str = 'raw', **metadata: Any) -> None:
+        metadata = {'kind': kind, **metadata}
         if bad := {k: v for k, v in metadata.items() if type(v) not in _SCALARS}:
             raise TypeError(
-                f'{cls.__name__}: the metadata of a file model are strings, '
-                f'numbers, or bools, as JSON holds them, not {bad}'
+                'the metadata of a file field are strings, numbers, or bools, '
+                f'as JSON holds them, not {bad}'
             )
-        cls.metadata = {**cls.metadata, **metadata}
-
-    @classmethod
-    def local(cls, path: Path | str) -> Self:
-        """
-        The model of the local file ``path``, named ``path:<path>``, as
-        ``file(path=...)`` names it, a name that a backend resolves to the
-        file's identity.
-        """
-        identity = f'path:{path}'
-        return cls.model_validate(
-            {'file': identity}, context={'paths': {identity: Path(path)}}
-        )
+        self._metadata = tuple(metadata.items())
 
     @property
-    def path(self) -> Path:
-        """
-        The local path of the file, when the request runs; raises
-        ``ValueError`` before, so that a validator that reads it refuses the
-        request when it arrives.
-        """
-        if self._path is None:
-            raise ValueError(
-                f'{self.file}: a file has a local path only when the request '
-                'runs, or if made of a local file with .local(path)'
-            )
-        return self._path
-
-    @model_validator(mode='before')
-    @classmethod
-    def _of_ref(cls, value: Any, info: ValidationInfo) -> Any:
-        if isinstance(value, FileRef):
-            value = {'file': value.file}
-        elif isinstance(value, Mapping) and value.get('@ref') == 'file':
-            value = {k: v for k, v in value.items() if k != '@ref'}
-        elif not (
-            info.mode == 'python'
-            and isinstance(value, Mapping)
-            and value.keys() == {'file'}
-        ):
-            raise PydanticCustomError(
-                'file_ref',
-                f'{value!r} is not a file; {cls.__name__} is a file model, '
-                'written as file(...)',
-            )
-        resolve = (info.context or {}).get('files')
-        if resolve is not None and isinstance(value.get('file'), str):
-            try:
-                value = {**value, 'file': resolve(value['file'], cls)}
-            except ValueError as error:
-                raise PydanticCustomError('file', str(error)) from None
-        return value
-
-    @model_validator(mode='after')
-    def _with_path(self, info: ValidationInfo) -> Self:
-        paths = (info.context or {}).get('paths', {})
-        if self.file in paths:
-            self._path = Path(paths[self.file])
-        return self
-
-    @model_serializer
-    def _as_ref(self) -> dict[str, str]:
-        return {'@ref': 'file', 'file': self.file}
-
-    @classmethod
-    def __get_pydantic_json_schema__(
-        cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler
-    ) -> JsonSchemaValue:
-        """
-        The JSON schema of a file as a request writes it, that of its
-        :class:`~ess.spec.refs.FileRef`, titled by the model, with its name
-        under ``dataType`` and its metadata under ``metadata``, which say
-        which files fit.
-        """
-        schema = {**handler(FileRef.__pydantic_core_schema__), 'title': cls.__name__}
-        schema.pop('description', None)
-        if doc := cls.__dict__.get('__doc__'):
-            schema['description'] = inspect.cleandoc(doc)
-        return {**schema, 'dataType': cls.__name__, 'metadata': cls.metadata}
+    def metadata(self) -> dict[str, Any]:
+        """The metadata that a file must have to fill the field."""
+        return dict(self._metadata)
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, FileModel):
+        if not isinstance(other, File):
             return NotImplemented
-        return type(self) is type(other) and self.file == other.file
+        return self.metadata == other.metadata
 
     def __hash__(self) -> int:
-        return hash((type(self), self.file))
+        return hash(frozenset(self._metadata))
+
+    def __repr__(self) -> str:
+        return f'File({", ".join(f"{k}={v!r}" for k, v in self._metadata)})'
+
+    def __get_pydantic_core_schema__(
+        self, source: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.with_info_wrap_validator_function(_local, handler(source))
 
 
 _SCALARS = (str, int, float, bool)
+
+
+def _local(
+    value: Any, validate: ValidatorFunctionWrapHandler, info: ValidationInfo
+) -> Any:
+    """
+    The local path of ``value``, the stored form of a file, given by the
+    context, validated as the field's type, ``Path``.
+    """
+    paths = (info.context or {}).get('paths')
+    if paths is None or value is None:  # None, of Annotated[Path | None, File()]
+        return validate(value)
+    ref = as_ref(value) if isinstance(value, Mapping) else None
+    if not isinstance(ref, FileRef):
+        raise PydanticCustomError(
+            'file_ref', 'is not a file, as the field is a file field'
+        )
+    if ref.file not in paths:
+        raise PydanticCustomError('file', f'file {ref} has no local path')
+    # A path validated from JSON is a string.
+    return validate(str(paths[ref.file]))
 
 
 class DataRefused(Exception):
