@@ -77,8 +77,16 @@ class FileSource(Protocol):
 
     def path(self, ref: FileRef) -> Path:
         """
-        A local path to the file, for a workflow to read; raises ``OSError``
-        if the file cannot be had.
+        A local path to the file, for a workflow to read: a lookup by
+        identity that never raises.
+
+        The files are on a network mount, and the backend calls ``path`` for
+        each file of a request when the request is submitted, so that the
+        validators of a group that holds a file see its path. So ``path``
+        neither stages nor downloads the file, and does not check that it can
+        be read: a file that cannot be read fails the workflow that reads it,
+        so that one unreadable file fails its own record, not a batch or a
+        rule's submission that holds it.
         """
         ...
 

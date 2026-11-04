@@ -265,6 +265,41 @@ def test_a_rule_whose_requests_are_refused_does_not_stop_the_others(
     assert loop.status(load).reason is None
 
 
+def test_a_batch_with_a_file_that_cannot_be_read_fails_only_its_record(
+    client: Client, files: FakeFiles
+) -> None:
+    runs = [files.measure(n, float(n)) for n in (1, 2, 3)]
+    files.corrupt(runs[1])
+
+    requests = apply(
+        Template(LOAD, blanks=('sample',)), runs, client.files, at='sample'
+    )
+    scan = client.compute(requests, label='scan')
+
+    assert client.wait(scan) == {'1': 'completed', '2': 'failed', '3': 'completed'}
+
+
+def test_a_rule_submits_each_new_file_though_one_cannot_be_read(
+    client: Client, files: FakeFiles
+) -> None:
+    rule = Rule(
+        'load',
+        Template(LOAD, blanks=('sample',)),
+        selector=Selector(),
+        label='loaded',
+        at='sample',
+    )
+    loop = TriggerLoop(client, rules=[rule])
+    runs = [files.measure(n, float(n)) for n in (1, 2, 3)]
+    files.corrupt(runs[0])
+
+    submitted = loop.step()
+
+    assert [r.request.params['sample'] for r in submitted] == runs
+    assert client.wait(submitted) == ['failed', 'completed', 'completed']
+    assert loop.status(rule).reason is None
+
+
 def test_a_rule_fills_a_file_field_with_the_files_that_fit_it(
     client: Client, files: FakeFiles
 ) -> None:

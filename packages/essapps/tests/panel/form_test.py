@@ -499,7 +499,7 @@ def test_the_file_picker_lists_a_file_measured_after_the_form_was_made(
     ]
 
 
-def test_a_file_picker_lists_the_files_that_fit_its_model(
+def test_a_file_picker_lists_the_files_that_fit_its_marker(
     files: FakeFiles, form: Form, run: FileRef
 ) -> None:
     files.measure(201, {'counts': 1.0}, kind='mask')

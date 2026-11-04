@@ -54,6 +54,10 @@ class Factor(BaseModel):
     factor: float = 1.0
 
 
+class RunParams(BaseModel):
+    run: SampleRun
+
+
 class SampleParams(BaseModel):
     sample: Sample
     scale: Factor = Factor()
@@ -87,6 +91,7 @@ def _spec(name: str, params: type[BaseModel], **kwargs: Any) -> Any:
     )
 
 
+RUN = _spec('run', RunParams)
 SAMPLE = _spec('sample', SampleParams)
 TABLE = _spec('table', TableParams, tables=('samples',))
 CHANNELS = _spec('channels', ChannelParams)
@@ -124,6 +129,7 @@ def files(tmp_path: Path) -> FakeFiles:
 @pytest.fixture
 def client(files: FakeFiles) -> Iterator[Client]:
     bindings = [
+        function_binding(RUN, lambda p: Outputs(total=Total(value=read_file(p.run)))),
         StagedFunction(SAMPLE, _sample),
         kept_rows(TABLE, _table),
         function_binding(CHANNELS, _channels),

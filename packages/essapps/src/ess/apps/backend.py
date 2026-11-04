@@ -1276,11 +1276,7 @@ class Backend:
         driver takes them by name.
         """
         spec = self._bindings[spec_id].spec
-        paths = {
-            ref.file: self._files.path(ref)
-            for _, ref in iter_refs(values)
-            if isinstance(ref, FileRef)
-        }
+        paths = request_types.local_paths(values, self._files.path)
         context = {'read': self._reader(values), 'paths': paths}
         return {
             n: request_types.validated(spec.params, n, v, n in spec.tables, context)

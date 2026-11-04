@@ -609,7 +609,9 @@ def test_a_group_whose_validator_changes_a_validated_value_is_refused(
 
 
 @pytest.mark.parametrize('inline', ['/data/run1.nxs', {'path': '/data/run1.nxs'}])
-def test_a_file_field_given_inline_is_refused(client: Client, inline: Any) -> None:
+def test_a_value_given_inline_at_a_file_field_is_refused(
+    client: Client, inline: Any
+) -> None:
     with pytest.raises(SubmitError) as raised:
         client.submit(LOAD, params={'sample': inline})
     (error,) = raised.value.errors

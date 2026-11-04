@@ -547,7 +547,7 @@ def test_a_table_takes_a_list_of_rows(client: Client) -> None:
         client.submit(SUM, params={'terms': {'value': 1.0}})
 
 
-def test_a_file_field_given_inline_is_refused(client: Client) -> None:
+def test_a_value_given_inline_at_a_file_field_is_refused(client: Client) -> None:
     refused = r'is not a file; a file field is written as file\(\.\.\.\)'
 
     with pytest.raises(SubmitError, match=rf"^sample: '/data/run-1.json' {refused}"):
@@ -834,23 +834,22 @@ def test_rows_are_distinct_as_a_whole(client: Client) -> None:
         client.submit(SUM, params={'terms': [scaled, dict(scaled)]})
 
 
-def test_rows_of_file_fields_are_distinct_by_identity_not_by_path(
+def test_rows_of_file_fields_are_distinct_by_identity(
     client: Client, files: FakeFiles
 ) -> None:
-    # Two files of one run, by PID, share the run's local path.
+    # Two files of one run, by PID.
     a = files.measure(7, 1.0, pid='x')
     b = files.measure(7, 2.0, pid='y')
-    assert files.path(a) == files.path(b)
 
     summed = client.compute(RUNS, params={'runs': [a, b]})
-    assert client.output(summed, 'value') == Amount(value=4.0)
+    assert client.output(summed, 'value') == Amount(value=3.0)
     with pytest.raises(SubmitError, match=r'^runs\[1\]: repeats runs\[0\]'):
         client.submit(RUNS, params={'runs': [a, file(pid='x')]})
 
     acc = client.accumulator(Template(RUNS, blanks=('runs',)))
     acc.push(runs=[a])
     acc.push(runs=[b])
-    assert client.output(acc, 'value') == Amount(value=4.0)
+    assert client.output(acc, 'value') == Amount(value=3.0)
     with pytest.raises(SubmitError, match=r'^runs\[2\]: repeats runs\[0\]'):
         acc.push(runs=[file(pid='x')])
 

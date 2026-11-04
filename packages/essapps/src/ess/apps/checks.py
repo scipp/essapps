@@ -190,7 +190,7 @@ class Checks:
                 name,
                 value,
                 lambda file, marker: self._file(file, marker, proposal),
-                lambda identity: self._files.path(FileRef(file=identity)),
+                self._files.path,
                 table=name in self.spec.tables,
             )
         except ParamsError as error:

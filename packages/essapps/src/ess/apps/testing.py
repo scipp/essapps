@@ -47,15 +47,17 @@ class FakeFiles:
     A file source over files in ``directory``.
 
     A file is identified by its run number, or by the PID of its SciCat
-    dataset if it has one. :meth:`measure` writes a file to ``directory``
-    with the given content, which must have a JSON form, and a workflow reads
-    it with :func:`read_file`. A run measured again keeps its identity and
-    its position in the order of measurement, and its file is written again. A
+    dataset if it has one. :meth:`measure` writes a file to ``directory``,
+    one per identity, ``run-1.json`` or the PID's, with the given content,
+    which must have a JSON form, and a workflow reads it with
+    :func:`read_file`. A run measured again keeps its identity and its
+    position in the order of measurement, and its file is written again. A
     file is named by its run, its PID, or its path. Its metadata are the
     proposal, the run, and the fields :meth:`measure` is given, such as
     ``kind='mask'``; a file without ``kind`` is raw (see
-    :class:`~.files.Selector`). A corrupt file has a path, as a file cut
-    short in transfer does, but :func:`read_file` cannot read it.
+    :class:`~.files.Selector`). :meth:`corrupt` makes the file of one
+    identity unreadable, as a file cut short in transfer is: it has a path,
+    but :func:`read_file` cannot read it.
     """
 
     def __init__(self, proposal: str, directory: Path) -> None:
@@ -70,7 +72,8 @@ class FakeFiles:
         """Make run ``run`` appear, or appear again, and return its identity."""
         pid = fields.get('pid')
         ref = FileRef(file=f'pid:{pid}' if pid else f'uuid:run-{run}')
-        path = self._directory / f'run-{run}.json'
+        name = ref.file.partition(':')[2].replace('/', '-')
+        path = self._directory / f'{name}.json'
         path.write_text(text := json.dumps(content))
         with self._arrived:
             self._paths[ref] = path

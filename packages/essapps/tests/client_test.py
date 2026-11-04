@@ -910,7 +910,9 @@ def test_a_file_reaches_the_workflow_as_its_local_path(
     'inline',
     ['/data/run-1.json', Path('/data/run-1.json'), {'path': '/data/run-1.json'}],
 )
-def test_a_file_field_given_inline_is_refused(client: Client, inline: Any) -> None:
+def test_a_value_given_inline_at_a_file_field_is_refused(
+    client: Client, inline: Any
+) -> None:
     with pytest.raises(SubmitError) as raised:
         client.submit(LOAD, params={'sample': inline})
     (error,) = raised.value.errors
