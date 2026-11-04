@@ -10,12 +10,12 @@ import pytest
 
 from ess.apps import Client, Request, Selector, SubmitError, Template, apply
 
-from .conftest import IOFQ, IOFQ_V2, VOLUME, Measure, Reduction, ReductionV2
+from . import toys
 
 
 def test_d1_temperature_scan(
     client: Client,
-    measure: Measure,
+    measure: toys.Measure,
     corrupt: Callable[..., None],
 ) -> None:
     temperatures = ['250K', '260K', '270K', '280K', '290K']
@@ -25,8 +25,8 @@ def test_d1_temperature_scan(
     ]
     corrupt(runs[1])
     template = Template(
-        IOFQ,
-        params={'reduction': Reduction(bins=1), 'normalization': None},
+        toys.IOFQ,
+        params={'reduction': toys.Reduction(bins=1), 'normalization': None},
         blanks=('sample',),
     )
     requests = apply(
@@ -54,7 +54,7 @@ def test_d1_temperature_scan(
 def test_d2_overnight_cluster_batch(
     client: Client,
     connect: Callable[..., Client],
-    measure: Measure,
+    measure: toys.Measure,
     corrupt: Callable[..., None],
     repair: Callable[..., None],
 ) -> None:
@@ -62,7 +62,7 @@ def test_d2_overnight_cluster_batch(
     corrupt(runs['7'])
     for member, run in runs.items():
         client.submit(
-            IOFQ,
+            toys.IOFQ,
             params={'sample': run, 'normalization': None},
             label='night',
             member=member,
@@ -97,11 +97,11 @@ def test_d2_overnight_cluster_batch(
     assert len(morning.records(label='night')) == 31
 
 
-def test_d3_cancel_and_resubmit(client: Client, measure: Measure) -> None:
+def test_d3_cancel_and_resubmit(client: Client, measure: toys.Measure) -> None:
     runs = [measure(n, [1.0, 1.0, 1.0, 1.0]) for n in range(1, 501)]
     wrong = Template(
-        IOFQ,
-        params={'reduction': Reduction(threshold=20.0), 'normalization': None},
+        toys.IOFQ,
+        params={'reduction': toys.Reduction(threshold=20.0), 'normalization': None},
         blanks=('sample',),
     )
     first = client.submit(
@@ -112,7 +112,7 @@ def test_d3_cancel_and_resubmit(client: Client, measure: Measure) -> None:
     client.cancel(first)
     fixed = replace(
         wrong,
-        params={'reduction': Reduction(threshold=0.5), 'normalization': None},
+        params={'reduction': toys.Reduction(threshold=0.5), 'normalization': None},
     )
     second = client.compute(
         apply(fixed, runs, client.files, at='sample', member_field='run'),
@@ -127,10 +127,12 @@ def test_d3_cancel_and_resubmit(client: Client, measure: Measure) -> None:
     assert len(client.records(label='scan')) == 1000
 
 
-def test_d4_typo_caught_before_500_failures(client: Client, measure: Measure) -> None:
+def test_d4_typo_caught_before_500_failures(
+    client: Client, measure: toys.Measure
+) -> None:
     runs = [measure(n, [1.0, 1.0]) for n in range(1, 501)]
     typo = Template(
-        IOFQ,
+        toys.IOFQ,
         params={'reduction': {'threshold': '2,5'}, 'normalization': None},
         blanks=('sample',),
     )
@@ -142,11 +144,11 @@ def test_d4_typo_caught_before_500_failures(client: Client, measure: Measure) ->
 
 
 def test_d6_rerun_a_batch_with_a_new_workflow_version(
-    client: Client, measure: Measure
+    client: Client, measure: toys.Measure
 ) -> None:
     template = Template(
-        IOFQ,
-        params={'reduction': Reduction(threshold=1.5), 'normalization': None},
+        toys.IOFQ,
+        params={'reduction': toys.Reduction(threshold=1.5), 'normalization': None},
         blanks=('sample',),
     )
     runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
@@ -159,7 +161,7 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
     before = client.records(label='scan')
     runs = [r.request.params['sample'] for r in before]
     renamed = apply(
-        replace(template, spec=IOFQ_V2),
+        replace(template, spec=toys.IOFQ_V2),
         runs,
         client.files,
         at='sample',
@@ -169,8 +171,8 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
         client.submit(renamed, label='scan')
     moved = replace(
         template,
-        spec=IOFQ_V2,
-        params={'reduction': ReductionV2(mask_below=1.5), 'normalization': None},
+        spec=toys.IOFQ_V2,
+        params={'reduction': toys.ReductionV2(mask_below=1.5), 'normalization': None},
     )
     requests = apply(moved, runs, client.files, at='sample', member_field='run')
     after = list(client.compute(requests, label='scan', persist=True).values())
@@ -189,7 +191,7 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
 
 
 def test_d7_rotation_scan_over_three_hundred_angles(
-    client: Client, measure: Measure
+    client: Client, measure: toys.Measure
 ) -> None:
     for n in range(1, 301):
         measure(n, [1.0, float(n)], scan='17')
@@ -197,7 +199,7 @@ def test_d7_rotation_scan_over_three_hundred_angles(
             measure(5, [1.0, 5.0], scan='17')
 
     cuts, pushed = [], []
-    scan = client.accumulator(Template(VOLUME, blanks=('runs',)))
+    scan = client.accumulator(Template(toys.VOLUME, blanks=('runs',)))
     for run in islice(client.files.watch(Selector(scan='17')), 300):
         scan.push(runs=[run])  # added once the previous cut is copied
         pushed.append(run)
@@ -206,7 +208,7 @@ def test_d7_rotation_scan_over_three_hundred_angles(
 
     assert [c.counts.value for c in cuts] == [float(k) for k in range(1, 301)]
     assert client.output(total, 'volume').counts.values.tolist() == [300.0, 45150.0]
-    assert total.request == Request(VOLUME, params={'runs': pushed})  # push order
+    assert total.request == Request(toys.VOLUME, params={'runs': pushed})  # push order
     assert client.records() == [total]  # the cuts made no record
     provenance = client.provenance(total)
     assert len(provenance.files()) == 300  # run 5, measured again, once

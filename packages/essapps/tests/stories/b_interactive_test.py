@@ -4,31 +4,22 @@
 
 from ess.apps import Client, Template, apply
 
-from .conftest import (
-    ANGLE,
-    CUT,
-    IOFQ,
-    NORMALIZE,
-    Measure,
-    Position,
-    Reduction,
-    Scaling,
-)
+from . import toys
 
 
 def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
-    client: Client, measure: Measure
+    client: Client, measure: toys.Measure
 ) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
     tune = client.stage(
         Template(
-            IOFQ,
+            toys.IOFQ,
             params={'sample': run, 'normalization': None},
             blanks=('reduction',),
         )
     )
     for bins, threshold in [(1, 0.0), (4, 0.0), (4, 1.5), (2, 1.5)]:
-        reduction = Reduction(bins=bins, threshold=threshold)
+        reduction = toys.Reduction(bins=bins, threshold=threshold)
         client.compute(tune, params={'reduction': reduction}, label='tuning')
 
     final = client.latest('tuning')
@@ -47,7 +38,7 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
 
 
 def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
-    client: Client, measure: Measure
+    client: Client, measure: toys.Measure
 ) -> None:
     r611, r612, r613 = (
         measure(611, [1.0, 3.0]),
@@ -55,7 +46,11 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
         measure(613, [3.0, 1.0]),
     )
     total = client.accumulator(
-        Template(NORMALIZE, params={'scaling': Scaling(scale=2.0)}, blanks=('runs',))
+        Template(
+            toys.NORMALIZE,
+            params={'scaling': toys.Scaling(scale=2.0)},
+            blanks=('runs',),
+        )
     )
     for run in (r611, r612):
         total.push(runs=[run])
@@ -65,9 +60,9 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
     added = client.output(total, 'normalized')  # all three
 
     again = client.compute(
-        NORMALIZE,
+        toys.NORMALIZE,
         params={
-            'scaling': Scaling(scale=2.0),
+            'scaling': toys.Scaling(scale=2.0),
             'runs': [r611, r613],
         },
     )
@@ -81,13 +76,13 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
     assert client.records() == [again]
 
 
-def test_b4_explore_a_4d_volume(client: Client, measure: Measure) -> None:
+def test_b4_explore_a_4d_volume(client: Client, measure: toys.Measure) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
-    angle = client.compute(ANGLE, params={'sample': run})
+    angle = client.compute(toys.ANGLE, params={'sample': run})
     cuts = [client.output(angle, 'volume', select={'q': i}) for i in range(4)]
     fit = client.compute(
-        CUT,
-        params={'position': Position(index=2), 'volume': angle.ref('volume')},
+        toys.CUT,
+        params={'position': toys.Position(index=2), 'volume': angle.ref('volume')},
     )
 
     assert [c.counts.value for c in cuts] == [1.0, 2.0, 3.0, 4.0]

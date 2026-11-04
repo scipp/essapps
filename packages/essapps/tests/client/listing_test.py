@@ -8,11 +8,11 @@ import pytest
 
 from ess.apps import Client, RecordFailed, Request, Status
 
-from .conftest import _load
+from . import toys
 
 
 def test_the_same_request_twice_makes_two_records(client: Client) -> None:
-    request = _load(1)
+    request = toys.load_request(1)
     first, second = client.compute([request, request])
 
     assert first.id != second.id
@@ -21,7 +21,9 @@ def test_the_same_request_twice_makes_two_records(client: Client) -> None:
 
 
 def test_the_keys_of_a_dict_become_members(client: Client) -> None:
-    records = client.compute({'250K': _load(1), '260K': _load(2)}, label='scan')
+    records = client.compute(
+        {'250K': toys.load_request(1), '260K': toys.load_request(2)}, label='scan'
+    )
 
     assert {r.member: r for r in client.records(label='scan')} == records
 
@@ -29,8 +31,8 @@ def test_the_keys_of_a_dict_become_members(client: Client) -> None:
 def test_latest_without_a_member_is_the_newest_record_of_any_member(
     client: Client,
 ) -> None:
-    cold = client.submit(_load(1), label='scan', member='250K')
-    warm = client.submit(_load(2), label='scan', member='260K')
+    cold = client.submit(toys.load_request(1), label='scan', member='250K')
+    warm = client.submit(toys.load_request(2), label='scan', member='260K')
 
     assert client.latest('scan') == warm
     assert client.latest('scan', member='250K') == cold

@@ -22,38 +22,22 @@ from ess.apps import (
 from ess.apps.testing import FakeFiles, StagedFunction
 from ess.spec import function_binding
 
-from .conftest import (
-    ARRAY,
-    COPY,
-    SCALE,
-    SHIFT,
-    TOTAL,
-    Amount,
-    CopyOutputs,
-    CopyParams,
-    Counts,
-    Factor,
-    Shift,
-    _load,
-    _shift,
-    _stage_shift,
-    array,
-)
+from . import toys
 
 
 def test_calls_through_a_stage_are_staged_once(
     client: Client, shifting: StagedFunction
 ) -> None:
-    load = client.submit(_load(1))
-    stage = _stage_shift(client, load)
-    shifted = [_shift(client, stage, x) for x in (0.5, 1.5)]
+    load = client.submit(toys.load_request(1))
+    stage = toys.stage_shift(client, load)
+    shifted = [toys.submit_shift(client, stage, x) for x in (0.5, 1.5)]
     plain = client.compute(
-        SHIFT,
-        params={'shift': Shift(offset=1.5), 'source': load.ref('value')},
+        toys.SHIFT,
+        params={'shift': toys.Shift(offset=1.5), 'source': load.ref('value')},
     )
 
     assert [client.output(r, 'value') for r in shifted] == [
-        Amount(value=v) for v in (1.5, 2.5)
+        toys.Amount(value=v) for v in (1.5, 2.5)
     ]
     assert shifted[1].request == plain.request
     assert shifting.staged == [('shift',)]  # the plain request makes no stage
@@ -63,13 +47,13 @@ def test_concurrent_calls_through_a_stage_stage_it_once(
     client: Client, shifting: StagedFunction, loading: threading.Event
 ) -> None:
     loading.clear()
-    stage = _stage_shift(client, client.submit(_load(1)))
-    pending = [_shift(client, stage, x) for x in (1.0, 2.0, 3.0, 4.0)]
+    stage = toys.stage_shift(client, client.submit(toys.load_request(1)))
+    pending = [toys.submit_shift(client, stage, x) for x in (1.0, 2.0, 3.0, 4.0)]
     loading.set()
     client.wait(pending)
 
     assert [client.output(r, 'value') for r in pending] == [
-        Amount(value=v) for v in (2.0, 3.0, 4.0, 5.0)
+        toys.Amount(value=v) for v in (2.0, 3.0, 4.0, 5.0)
     ]
     assert shifting.staged == [('shift',)]
 
@@ -78,15 +62,15 @@ def test_a_released_stage_takes_no_calls_and_runs_those_made_before(
     client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
-    stage = _stage_shift(client, client.submit(_load(2)))
-    pending = _shift(client, stage, 1.0)
+    stage = toys.stage_shift(client, client.submit(toys.load_request(2)))
+    pending = toys.submit_shift(client, stage, 1.0)
     client.release(stage)
     loading.set()
 
     with pytest.raises(SubmitError, match='the stage was released'):
-        _shift(client, stage, 2.0)
+        toys.submit_shift(client, stage, 2.0)
     assert client.wait(pending) is Status.COMPLETED
-    assert client.output(pending, 'value') == Amount(value=3.0)
+    assert client.output(pending, 'value') == toys.Amount(value=3.0)
 
 
 def test_a_stage_keeps_the_file_its_name_resolved_to_when_it_was_made(
@@ -94,9 +78,9 @@ def test_a_stage_keeps_the_file_its_name_resolved_to_when_it_was_made(
 ) -> None:
     run = files.resolve(file(run=1))
     stage = client.stage(
-        Template(SCALE, params={'sample': file(run=1)}, blanks=('scaling',))
+        Template(toys.SCALE, params={'sample': file(run=1)}, blanks=('scaling',))
     )
-    twice = {'scaling': Factor(factor=2.0)}
+    twice = {'scaling': toys.Factor(factor=2.0)}
     before = client.compute(stage, params=twice)
     files.correct(run, run=99)
     files.correct(files.measure(7, 5.0), run=1)
@@ -106,7 +90,7 @@ def test_a_stage_keeps_the_file_its_name_resolved_to_when_it_was_made(
     assert stage.template.params == {'sample': run}
     assert after.request == before.request
     assert [client.output(r, 'value') for r in (before, after)] == [
-        Amount(value=v) for v in (2.0, 2.0)
+        toys.Amount(value=v) for v in (2.0, 2.0)
     ]
 
 
@@ -116,22 +100,26 @@ def test_a_stage_lets_go_of_what_its_template_references_once_staged(
     class KeepsTheSum:
         """Stages COPY keeping only the sum of the source, not the source."""
 
-        spec = COPY
+        spec = toys.COPY
 
-        def compute(self, params: CopyParams) -> CopyOutputs:
+        def compute(self, params: toys.CopyParams) -> toys.CopyOutputs:
             return self.make_stage({'source': params.source}, ())({})
 
         def make_stage(
             self, fixed: Mapping[str, Any], blanks: Collection[str]
-        ) -> Callable[[Mapping[str, Any]], CopyOutputs]:
-            total = CopyOutputs(value=Counts(counts=fixed['source'].counts.sum()))
+        ) -> Callable[[Mapping[str, Any]], toys.CopyOutputs]:
+            total = toys.CopyOutputs(
+                value=toys.Counts(counts=fixed['source'].counts.sum())
+            )
             return lambda given: total
 
-    bind = [function_binding(ARRAY, array), KeepsTheSum()]
+    bind = [function_binding(toys.ARRAY, toys.array), KeepsTheSum()]
     with local(proposal='p1', files=files, bind=bind) as client:
-        loaded = client.compute(ARRAY, params={'sample': file(run=2)})
+        loaded = client.compute(toys.ARRAY, params={'sample': file(run=2)})
         value = weakref.ref(client.output(loaded, 'value'))
-        stage = client.stage(Template(COPY, params={'source': loaded.ref('value')}))
+        stage = client.stage(
+            Template(toys.COPY, params={'source': loaded.ref('value')})
+        )
         client.release(loaded)
         assert value() is not None
 
@@ -146,15 +134,15 @@ def test_a_stage_keeps_what_its_template_references_until_it_has_staged(
     client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
-    load = client.submit(_load(2))
-    stage = _stage_shift(client, load)
+    load = client.submit(toys.load_request(2))
+    stage = toys.stage_shift(client, load)
     client.release(load)
     loading.set()
 
-    shifted = [_shift(client, stage, x) for x in (1.0, 2.0)]
+    shifted = [toys.submit_shift(client, stage, x) for x in (1.0, 2.0)]
     client.wait(shifted)
     assert [client.output(r, 'value') for r in shifted] == [
-        Amount(value=v) for v in (3.0, 4.0)
+        toys.Amount(value=v) for v in (3.0, 4.0)
     ]
 
 
@@ -162,8 +150,8 @@ def test_releasing_a_stage_lets_go_of_what_its_template_references(
     client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
-    load = client.submit(_load(2))
-    stage = _stage_shift(client, load)
+    load = client.submit(toys.load_request(2))
+    stage = toys.stage_shift(client, load)
     client.release([load, stage])
     loading.set()
 
@@ -174,9 +162,9 @@ def test_a_stage_whose_staging_fails_fails_the_calls_waiting_for_it_and_stops(
     client: Client, shifting: StagedFunction, loading: threading.Event
 ) -> None:
     loading.clear()
-    stage = _stage_shift(client, client.submit(_load(1)))
+    stage = toys.stage_shift(client, client.submit(toys.load_request(1)))
     shifting.fail_next = True
-    pending = [_shift(client, stage, x) for x in (1.0, 2.0, 3.0)]
+    pending = [toys.submit_shift(client, stage, x) for x in (1.0, 2.0, 3.0)]
     loading.set()
     client.wait(pending)
 
@@ -186,19 +174,19 @@ def test_a_stage_whose_staging_fails_fails_the_calls_waiting_for_it_and_stops(
     ]
     assert client.status(pending) == [Status.FAILED] * 3
     with pytest.raises(SubmitError, match=r'^the stage stopped: staging failed'):
-        _shift(client, stage, 4.0)
+        toys.submit_shift(client, stage, 4.0)
     assert shifting.staged == []  # not staged again
 
 
 def test_a_stage_refuses_a_template_that_a_request_would_refuse(
     client: Client,
 ) -> None:
-    released = client.compute(_load(1))
+    released = client.compute(toys.load_request(1))
     client.release(released)
     refused = [
-        (SHIFT, {'source': file(run=1)}, 'shift'),  # request_types refuses it
-        (SHIFT, {'source': released.ref('value')}, 'shift'),  # a record not kept
-        (SCALE, {'sample': file(run=9)}, 'scaling'),  # an unknown file
+        (toys.SHIFT, {'source': file(run=1)}, 'shift'),  # request_types refuses it
+        (toys.SHIFT, {'source': released.ref('value')}, 'shift'),  # a record not kept
+        (toys.SCALE, {'sample': file(run=9)}, 'scaling'),  # an unknown file
     ]
     for spec, params, blank in refused:
         with pytest.raises(SubmitError) as requested:
@@ -209,19 +197,19 @@ def test_a_stage_refuses_a_template_that_a_request_would_refuse(
 
 
 def test_a_template_and_its_calls_take_models(client: Client) -> None:
-    load = client.submit(_load(1))
-    half = Shift(offset=0.5)
+    load = client.submit(toys.load_request(1))
+    half = toys.Shift(offset=0.5)
     stage = client.stage(
-        Template(SHIFT, params={'shift': half, 'source': load.ref('value')})
+        Template(toys.SHIFT, params={'shift': half, 'source': load.ref('value')})
     )
-    tuned = client.compute(_stage_shift(client, load), params={'shift': half})
+    tuned = client.compute(toys.stage_shift(client, load), params={'shift': half})
 
-    assert client.output(client.compute(stage), 'value') == Amount(value=1.5)
-    assert client.output(tuned, 'value') == Amount(value=1.5)
+    assert client.output(client.compute(stage), 'value') == toys.Amount(value=1.5)
+    assert client.output(tuned, 'value') == toys.Amount(value=1.5)
 
 
 def test_a_stage_needs_a_binding_that_makes_stages(client: Client) -> None:
     with pytest.raises(SubmitError, match=r'^total/v1: its binding makes no stages$'):
-        client.stage(Template(TOTAL, blanks=('parts',)))
+        client.stage(Template(toys.TOTAL, blanks=('parts',)))
     with pytest.raises(SubmitError, match=r'^total/v1: its binding makes no stages$'):
-        client.stage(Template(TOTAL, params={'speed': 1.0}, blanks=('parts',)))
+        client.stage(Template(toys.TOTAL, params={'speed': 1.0}, blanks=('parts',)))

@@ -15,16 +15,16 @@ from ess.apps import Accumulator, Client, Record, Template, file, local
 from ess.apps.testing import FakeFiles, read_file
 from ess.spec import Referenced, function_binding
 
-from .conftest import Data, Sample, _spec, folding
+from . import toys
 
 
-class Axis(Data):
+class Axis(toys.Data):
     """The bin edges of a grid along x: a group in a group."""
 
     edges: sc.Variable
 
 
-class Grid(Data):
+class Grid(toys.Data):
     """Counts on an x-y grid, their sum over y, its x axis, and a label."""
 
     counts: sc.Variable
@@ -37,28 +37,30 @@ class Label(BaseModel):
     text: str
 
 
-class GridOutputs(Data):
+class GridOutputs(toys.Data):
     grid: Grid
     background: sc.Variable  # an array output, which no request references
     label: Label
     peak: float
 
 
-class GridParts(Data):
+class GridParts(toys.Data):
     parts: list[Referenced[Grid]] = Field(min_length=1)
 
 
-class GridTotal(Data):
+class GridTotal(toys.Data):
     grid: Grid
 
 
-GRID = _spec('grid', params=Sample, outputs=GridOutputs)
+GRID = toys.make_spec('grid', params=toys.Sample, outputs=GridOutputs)
 
 
-GRID_TOTAL = _spec('grid-total', params=GridParts, outputs=GridTotal, tables=('parts',))
+GRID_TOTAL = toys.make_spec(
+    'grid-total', params=GridParts, outputs=GridTotal, tables=('parts',)
+)
 
 
-def grid(params: Sample) -> GridOutputs:
+def grid(params: toys.Sample) -> GridOutputs:
     values = np.arange(6.0).reshape(3, 2) * read_file(params.sample)
     counts = sc.array(dims=['x', 'y'], values=values)
     axis = Axis(edges=sc.array(dims=['x'], values=[0.0, 1.0, 2.0, 3.0]))
@@ -82,7 +84,7 @@ def _add_grids(total: Grid, part: Grid) -> Grid:
 @pytest.fixture
 def grids(files: FakeFiles) -> Iterator[Client]:
     """A client of a backend with GRID, a 3x2 grid per run, and GRID_TOTAL."""
-    bind = [function_binding(GRID, grid), folding(GRID_TOTAL, _add_grids)]
+    bind = [function_binding(GRID, grid), toys.folding(GRID_TOTAL, _add_grids)]
     with local(proposal='p1', files=files, bind=bind) as client:
         yield client
 

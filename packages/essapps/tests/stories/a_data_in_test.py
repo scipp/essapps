@@ -8,18 +8,19 @@ import pytest
 
 from ess.apps import Client, SubmitError, file
 
-from .conftest import IOFQ, Measure
+from . import toys
 
 
 @pytest.mark.xfail(reason='file(path=...) with a folder is not implemented')
 def test_a1_browse_a_local_folder_next_to_a_catalogue_reference(
-    client: Client, measure: Measure
+    client: Client, measure: toys.Measure
 ) -> None:
     files = sorted(folder.glob('*.h5'))
     vanadium = measure(9, [5.0, 6.0], pid='20.500.12269/vanadium')
     named = [file(path=f) for f in files] + [file(pid='20.500.12269/vanadium')]
     plots = [
-        client.compute(IOFQ, params={'sample': d, 'normalization': None}) for d in named
+        client.compute(toys.IOFQ, params={'sample': d, 'normalization': None})
+        for d in named
     ]
 
     assert [client.output(p, 'iofq').values.tolist() for p in plots] == [
@@ -30,13 +31,15 @@ def test_a1_browse_a_local_folder_next_to_a_catalogue_reference(
     assert plots[2].request.files() == [vanadium]
 
 
-def test_a2_run_number_instead_of_file(client: Client, measure: Measure) -> None:
+def test_a2_run_number_instead_of_file(client: Client, measure: toys.Measure) -> None:
     run = measure(4711, [1.0, 2.0])
     result = client.compute(
-        IOFQ, params={'sample': file(run=4711), 'normalization': None}
+        toys.IOFQ, params={'sample': file(run=4711), 'normalization': None}
     )
 
     assert result.request.files() == [run]
     with pytest.raises(SubmitError):
-        client.compute(IOFQ, params={'sample': file(run=4712), 'normalization': None})
+        client.compute(
+            toys.IOFQ, params={'sample': file(run=4712), 'normalization': None}
+        )
     assert client.records() == [result]

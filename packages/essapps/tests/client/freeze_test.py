@@ -12,16 +12,7 @@ import pytest
 
 from ess.apps import Client, NotReadable, Record, Status, SubmitError, Template
 
-from .conftest import (
-    BOTH,
-    COPY,
-    Copying,
-    Subtracting,
-    _array_total,
-    _copy,
-    _listed,
-    _sides_of,
-)
+from . import toys
 
 
 def _eventually(condition: Callable[[], bool]) -> bool:
@@ -35,10 +26,10 @@ def _eventually(condition: Callable[[], bool]) -> bool:
 
 
 def test_a_freeze_is_the_record_of_the_last_state_computed_once(
-    in_place: Client, loads: list[Record], subtracting: Subtracting
+    in_place: Client, loads: list[Record], subtracting: toys.Subtracting
 ) -> None:
     client = in_place
-    sides = _sides_of(client)
+    sides = toys.sides_accumulator(client)
     sides.push(samples=[loads[0].ref('value')])
     sides.push(backgrounds=[loads[1].ref('value')])
     looked = client.output(sides, 'difference')
@@ -46,17 +37,19 @@ def test_a_freeze_is_the_record_of_the_last_state_computed_once(
     total = client.freeze(sides)
 
     assert total.request == plain
-    assert _listed(client.output(total, 'difference')) == _listed(looked) == [-1.0]
+    assert (
+        toys.listed(client.output(total, 'difference')) == toys.listed(looked) == [-1.0]
+    )
     assert subtracting.computed == 1  # the look and the freeze read one state
     assert client.output(total, 'difference') is subtracting.returned[0]()  # no copy
     assert total in client.records()
 
 
 def test_a_push_after_a_freeze_is_refused_while_its_record_is_pending(
-    in_place: Client, loads: list[Record], subtracting: Subtracting
+    in_place: Client, loads: list[Record], subtracting: toys.Subtracting
 ) -> None:
     client = in_place
-    sides = _sides_of(client)
+    sides = toys.sides_accumulator(client)
     sides.push(samples=[loads[0].ref('value')])
     subtracting.compute.clear()
     total = client.freeze(sides)
@@ -72,7 +65,7 @@ def test_a_frozen_accumulator_is_read_through_its_record(
     in_place: Client, loads: list[Record]
 ) -> None:
     client = in_place
-    sides = _sides_of(client)
+    sides = toys.sides_accumulator(client)
     sides.push(samples=[loads[0].ref('value')])
     total = client.freeze(sides)
     client.wait(total)
@@ -80,53 +73,53 @@ def test_a_frozen_accumulator_is_read_through_its_record(
     with pytest.raises(NotReadable, match=f'read record {total.id} instead'):
         client.output(sides)
     with pytest.raises(SubmitError, match=f'read record {total.id} instead'):
-        _copy(client, sides, 'difference')
+        toys.submit_copy(client, sides, 'difference')
     with pytest.raises(NotReadable, match=f'read record {total.id} instead'):
         client.provenance(sides)
-    copied = client.compute(COPY, params={'source': total.ref('difference')})
-    assert _listed(client.output(copied, 'value')) == [1.0]
+    copied = client.compute(toys.COPY, params={'source': total.ref('difference')})
+    assert toys.listed(client.output(copied, 'value')) == [1.0]
 
 
 def test_templates_and_pushes_reference_a_frozen_record(
     in_place: Client, loads: list[Record]
 ) -> None:
     client = in_place
-    first = _array_total(client)
+    first = toys.array_total_accumulator(client)
     first.push(parts=[x.ref('value') for x in loads])
     frozen = client.freeze(first)
-    second = _array_total(client)
+    second = toys.array_total_accumulator(client)
     second.push(parts=[frozen.ref('value')])
     second.push(parts=[loads[0].ref('value')])
-    staged = client.stage(Template(COPY, params={'source': frozen.ref('value')}))
+    staged = client.stage(Template(toys.COPY, params={'source': frozen.ref('value')}))
 
-    assert _listed(client.output(second, 'value')) == [4.0]
-    assert _listed(client.output(client.compute(staged), 'value')) == [3.0]
+    assert toys.listed(client.output(second, 'value')) == [4.0]
+    assert toys.listed(client.output(client.compute(staged), 'value')) == [3.0]
 
 
 def test_a_freeze_whose_plain_request_would_be_refused_is_refused(
     in_place: Client, loads: list[Record]
 ) -> None:
     client = in_place
-    both = client.accumulator(Template(BOTH, blanks=('samples', 'backgrounds')))
+    both = client.accumulator(Template(toys.BOTH, blanks=('samples', 'backgrounds')))
     both.push(samples=[loads[0].ref('value')])
 
     with pytest.raises(SubmitError) as requested:
         client.submit(
-            BOTH, params={'samples': [loads[0].ref('value')], 'backgrounds': []}
+            toys.BOTH, params={'samples': [loads[0].ref('value')], 'backgrounds': []}
         )
     with pytest.raises(SubmitError) as frozen:
         client.freeze(both)
     assert str(frozen.value) == str(requested.value)
     both.push(backgrounds=[loads[1].ref('value')])  # takes pushes again
     total = client.freeze(both)
-    assert _listed(client.output(total, 'difference')) == [-1.0]
+    assert toys.listed(client.output(total, 'difference')) == [-1.0]
 
 
 def test_a_cancelled_freeze_leaves_the_accumulator_readable_and_shut(
-    in_place: Client, loads: list[Record], subtracting: Subtracting
+    in_place: Client, loads: list[Record], subtracting: toys.Subtracting
 ) -> None:
     client = in_place
-    sides = _sides_of(client)
+    sides = toys.sides_accumulator(client)
     sides.push(samples=[loads[0].ref('value')])
     subtracting.compute.clear()
     cancelled = client.freeze(sides)
@@ -141,16 +134,16 @@ def test_a_cancelled_freeze_leaves_the_accumulator_readable_and_shut(
     )
     with pytest.raises(SubmitError, match=f'frozen as record {cancelled.id}'):
         sides.push(backgrounds=[loads[1].ref('value')])
-    assert _listed(client.output(sides, 'total')) == [1.0]
+    assert toys.listed(client.output(sides, 'total')) == [1.0]
     again = client.freeze(sides)
-    assert _listed(client.output(again, 'total')) == [1.0]
+    assert toys.listed(client.output(again, 'total')) == [1.0]
 
 
 def test_a_failed_freeze_leaves_the_accumulator_readable_and_shut(
-    in_place: Client, loads: list[Record], subtracting: Subtracting
+    in_place: Client, loads: list[Record], subtracting: toys.Subtracting
 ) -> None:
     client = in_place
-    sides = _sides_of(client)
+    sides = toys.sides_accumulator(client)
     sides.push(samples=[loads[0].ref('value')])
     subtracting.failing = True
     failed = client.freeze(sides)
@@ -158,22 +151,22 @@ def test_a_failed_freeze_leaves_the_accumulator_readable_and_shut(
     assert client.wait(failed) == Status.FAILED
     with pytest.raises(SubmitError, match=f'frozen as record {failed.id}'):
         sides.push(backgrounds=[loads[1].ref('value')])
-    assert _listed(client.output(sides, 'total')) == [1.0]
+    assert toys.listed(client.output(sides, 'total')) == [1.0]
     again = client.freeze(sides)
-    assert _listed(client.output(again, 'total')) == [1.0]
+    assert toys.listed(client.output(again, 'total')) == [1.0]
 
 
 def test_a_frozen_driver_is_dropped_once_its_readers_are_done(
     in_place: Client,
     loads: list[Record],
-    copying: Copying,
-    subtracting: Subtracting,
+    copying: toys.Copying,
+    subtracting: toys.Subtracting,
 ) -> None:
     client = in_place
-    sides = _sides_of(client)
+    sides = toys.sides_accumulator(client)
     sides.push(samples=[loads[0].ref('value')])
     copying.go.clear()
-    copied = _copy(client, sides, 'difference')  # pins the same state
+    copied = toys.submit_copy(client, sides, 'difference')  # pins the same state
     copying.started.wait(timeout=5)
     total = client.freeze(sides)
     client.wait(total)
@@ -184,4 +177,4 @@ def test_a_frozen_driver_is_dropped_once_its_readers_are_done(
     client.release(copied)
     gc.collect()
     assert subtracting.held[0]() is None
-    assert _listed(client.output(total, 'difference')) == [1.0]
+    assert toys.listed(client.output(total, 'difference')) == [1.0]
