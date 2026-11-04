@@ -1,0 +1,483 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+
+
+"""Submitting requests: what is refused, what a record holds of its request."""
+
+from typing import Any
+
+import pytest
+from pydantic import BaseModel
+
+from ess.apps import (
+    Backend,
+    Client,
+    FieldError,
+    Request,
+    Status,
+    SubmitError,
+    Template,
+    file,
+)
+from ess.apps.testing import FakeFiles
+
+from .conftest import (
+    ADD,
+    BOXED,
+    LOAD,
+    LOKI_MASKED,
+    MASKED,
+    MODES,
+    PIECES,
+    RUNS,
+    SCALED,
+    SCALED_ROWS,
+    SCALED_STAGE,
+    SPLIT,
+    SUM,
+    Amount,
+    Gate,
+    Mode,
+    SampleRun,
+    Strict,
+    Term,
+    _spec,
+    load,
+    operands,
+)
+
+
+def _boxed(value: Any) -> Request:
+    return Request(
+        BOXED,
+        params={'box': {'value': value}, 'sample': file(run=1)},
+    )
+
+
+def test_a_spec_whose_output_holds_a_file_field_is_refused() -> None:
+    class RunOutputs(BaseModel):
+        run: SampleRun
+
+    with pytest.raises(ValueError, match='no output holds a file or a Path'):
+        _spec('echo', outputs=RunOutputs)
+
+
+def test_no_output_fits_a_file_field(client: Client) -> None:
+    loaded = client.submit(load(1))
+    refused = (
+        r'is a reference to an output; the field is not typed Referenced\[\.\.\.\]'
+    )
+    by_ref = loaded.ref('value')
+
+    with pytest.raises(SubmitError, match=rf'^sample: {loaded.id}.value {refused}$'):
+        client.submit(LOAD, params={'sample': by_ref})
+    with pytest.raises(SubmitError, match=rf'^runs\[0\]: .* {refused}$'):
+        client.submit(RUNS, params={'runs': [by_ref]})
+    with pytest.raises(SubmitError, match=rf'^sample: .* {refused}$'):
+        client.stage(Template(MODES, params={'sample': by_ref}, blanks=('values',)))
+
+
+def test_a_reference_of_an_unknown_kind_is_refused(client: Client) -> None:
+    unknown = {'@ref': 'record', 'record': 'r1', 'output': 'value'}
+
+    with pytest.raises(
+        SubmitError, match=r"^a: .*'record' is not a kind of reference"
+    ) as raised:
+        client.submit(ADD, params=operands(unknown, unknown))
+    assert [e.loc for e in raised.value.errors] == [('a',)]
+
+
+def test_a_malformed_reference_is_refused(client: Client) -> None:
+    for malformed, problem in [
+        ({'@ref': 'output', 'record': 'r1'}, 'output: Field required'),
+        ({'@ref': 'file', 'file': 'run:1', 'run': 1}, 'run: Extra inputs'),
+    ]:
+        with pytest.raises(
+            SubmitError, match=rf'^b: .*: not a reference to .*{problem}'
+        ):
+            client.submit(ADD, params=operands(file(run=1), malformed))
+
+
+def test_a_reference_to_an_unknown_record_is_refused(client: Client) -> None:
+    missing = {'@ref': 'output', 'record': 'missing', 'output': 'value'}
+
+    with pytest.raises(SubmitError, match='a: unknown record missing'):
+        client.submit(ADD, params=operands(missing, missing))
+
+
+def test_a_reference_to_a_missing_output_is_refused(client: Client, gate: Gate) -> None:
+    gate.open.set()
+    loaded = client.compute(load(1))
+    missing = {'@ref': 'output', 'record': loaded.id, 'output': 'total'}
+
+    with pytest.raises(SubmitError, match="b: load/v1 has no output 'total'"):
+        client.submit(ADD, params=operands(loaded.ref('value'), missing))
+
+
+def test_a_reference_to_another_proposal_is_refused(
+    backend: Backend, gate: Gate
+) -> None:
+    gate.open.set()
+    theirs = Client(backend, proposal='p2', submitter='eve')
+    mine = Client(backend, proposal='p1', submitter='anna')
+    loaded = mine.compute(load(1))
+
+    with pytest.raises(SubmitError, match='belongs to proposal p1'):
+        theirs.submit(ADD, params=operands(loaded.ref('value'), loaded.ref('value')))
+
+
+def test_a_reference_to_a_failed_record_is_refused(client: Client, gate: Gate) -> None:
+    gate.open.set()
+    failed = client.compute(load(3))
+
+    with pytest.raises(SubmitError, match=f'a: record {failed.id} failed'):
+        client.submit(ADD, params=operands(failed.ref('value'), failed.ref('value')))
+
+
+def test_a_reference_with_a_key_reads_an_element_of_an_output(client: Client) -> None:
+    split = client.submit(SPLIT, params={'sample': file(run=2)})
+    whole, half = (
+        split.ref('parts').model_copy(update={'key': k}) for k in ('whole', 'half')
+    )
+    total = client.compute(ADD, params=operands(whole, half))
+
+    assert client.output(total, 'value') == Amount(value=3.0)
+
+
+def test_a_reference_with_a_key_into_a_list_is_by_integer(client: Client) -> None:
+    split = client.submit(PIECES, params={'sample': file(run=2)})
+    whole, half = (split.ref('pieces', key=k) for k in ('0', '1'))
+
+    assert client.output(client.compute(ADD, params=operands(whole, half))) == {
+        'value': Amount(value=3.0)
+    }
+    for key in ('half', '01', '+1', '-1', ' 1'):
+        named = split.ref('pieces', key=key)
+        with pytest.raises(SubmitError, match=r'^a: .*: the key of an element of'):
+            client.submit(ADD, params=operands(named, half))
+
+
+def test_a_reference_to_an_element_of_an_output_without_elements_is_refused(
+    client: Client,
+) -> None:
+    a = client.submit(load(1))
+    with pytest.raises(SubmitError, match='element of an output without elements'):
+        client.submit(ADD, params=operands(a.ref('value', key='0'), a.ref('value')))
+
+
+def test_an_unknown_file_is_refused(client: Client) -> None:
+    with pytest.raises(SubmitError, match='unknown file run:9'):
+        client.submit(load(9))
+
+
+def test_a_file_of_another_proposal_is_refused(
+    client: Client, files: FakeFiles
+) -> None:
+    files.measure(4, 4.0, proposal='p2')
+
+    with pytest.raises(
+        SubmitError, match=r'^sample: file run:4 belongs to proposal p2$'
+    ):
+        client.submit(load(4))
+
+
+def test_a_file_fits_a_file_field_by_its_kind(
+    client: Client, files: FakeFiles, gate: Gate
+) -> None:
+    gate.open.set()
+    files.measure(5, 5.0, kind='mask')
+
+    with pytest.raises(
+        SubmitError,
+        match=r"^mask: file run:1 does not fit the field, which takes files "
+        r"with \{'kind': 'mask'\}$",
+    ):
+        client.submit(MASKED, params={'mask': file(run=1)})
+    with pytest.raises(
+        SubmitError,
+        match=r"^sample: file run:5 does not fit the field, which takes files "
+        r"with \{'kind': 'raw'\}$",
+    ):
+        client.submit(load(5))
+    masked = client.compute(MASKED, params={'mask': file(run=5)})
+    assert client.output(masked, 'value') == Amount(value=5.0)
+    assert client.output(client.compute(load(1)), 'value') == Amount(value=1.0)
+
+
+def test_a_file_fits_a_file_field_by_each_key_of_its_metadata(
+    client: Client, files: FakeFiles
+) -> None:
+    files.measure(5, 5.0, kind='mask', instrument='dream')
+    files.measure(6, 6.0, kind='mask', instrument='loki')
+
+    with pytest.raises(
+        SubmitError,
+        match=r"^mask: file run:5 does not fit the field, which takes files "
+        r"with \{'instrument': 'loki', 'kind': 'mask'\}$",
+    ):
+        client.submit(LOKI_MASKED, params={'mask': file(run=5)})
+    masked = client.compute(LOKI_MASKED, params={'mask': file(run=6)})
+    assert client.output(masked, 'value') == Amount(value=6.0)
+
+
+def test_a_path_names_the_file_at_that_path(
+    client: Client, files: FakeFiles, gate: Gate
+) -> None:
+    gate.open.set()
+    path = files.path(files.resolve(file(run=1)))
+    by_path = client.compute(LOAD, params={'sample': file(path=path)})
+
+    assert by_path.request == client.compute(load(1)).request
+    assert client.output(by_path, 'value') == Amount(value=1.0)
+
+
+def test_a_file_fits_a_file_field_only(client: Client) -> None:
+    with pytest.raises(
+        SubmitError,
+        match=r'^a: file run:1: the field is not a file field$',
+    ):
+        client.submit(ADD, params=operands(file(run=1), file(run=2)))
+
+
+def test_a_record_holds_its_request_with_defaults_filled_in(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+    a = client.compute(load(1))
+    total = client.compute(ADD, params=operands(a.ref('value'), a.ref('value')))
+
+    assert total.request.params == {
+        'shift': {'offset': 0.0},
+        **operands(a.ref('value'), a.ref('value')),
+    }
+    assert total.request.upstream() == [a.ref('value'), a.ref('value')]
+
+
+def test_a_row_is_a_group(client: Client) -> None:
+    summed = client.compute(
+        SUM, params={'terms': [{'value': 1.0, 'factor': 10.0}, Term(value=2.0)]}
+    )
+
+    assert client.output(summed, 'value') == Amount(value=12.0)
+
+
+def test_a_strict_group_is_validated_from_its_json_form(client: Client) -> None:
+    strict = {'strict': Strict(mode=Mode.slow)}
+    plain = client.compute(MODES, params={**strict, 'sample': file(run=1)})
+    stage = client.stage(Template(MODES, params=strict, blanks=('sample',)))
+    staged = client.compute(stage, params={'sample': file(run=1)})
+
+    assert plain.request.params['strict'] == {'mode': 'slow', 'factor': 1.0}
+    assert (
+        client.output(plain, 'value')
+        == client.output(staged, 'value')
+        == Amount(value=1.0)
+    )
+
+
+def test_one_refused_request_refuses_the_submission(client: Client) -> None:
+    a = client.submit(load(1))
+    typo = Request(
+        ADD,
+        params={'shift': {'offset': 'x'}, **operands(a.ref('value'), a.ref('value'))},
+    )
+
+    with pytest.raises(SubmitError, match='offset'):
+        client.submit([load(2), typo])
+    assert client.records() == [a]
+
+
+def test_a_value_that_cannot_be_stored_is_refused(client: Client) -> None:
+    with pytest.raises(
+        SubmitError, match=r'^second: box\.value: Input should be a valid number$'
+    ):
+        client.submit({'first': _boxed(1), 'second': _boxed(len)})
+    assert client.records() == []
+
+
+@pytest.mark.parametrize('value', [float('inf'), float('-inf'), float('nan')])
+def test_a_value_whose_json_form_reads_back_as_another_is_refused(
+    client: Client, value: float
+) -> None:
+    with pytest.raises(
+        SubmitError,
+        match=r'^box\.value: has no JSON form that reads back as the value$',
+    ):
+        client.submit(_boxed(value))
+
+
+def test_a_number_that_is_not_finite_is_refused_in_a_list(client: Client) -> None:
+    with pytest.raises(
+        SubmitError, match=r'^values\.values\[1\]: has no JSON form that reads'
+    ):
+        client.submit(
+            MODES,
+            params={
+                'values': {'values': [1.0, float('inf')]},
+                'sample': file(run=1),
+            },
+        )
+
+
+def test_a_field_a_group_lacks_is_refused(client: Client) -> None:
+    typo = Request(BOXED, params={'box': {'unknown': 1}, 'sample': file(run=1)})
+
+    with pytest.raises(
+        SubmitError, match=r"box\.unknown: Extra inputs are not permitted"
+    ):
+        client.submit(typo)
+
+
+def test_a_required_parameter_left_out_is_refused(client: Client) -> None:
+    with pytest.raises(
+        SubmitError, match=r'^sample: a required parameter, not given$'
+    ) as raised:
+        client.submit(LOAD)
+    assert raised.value.errors == (
+        FieldError(None, ('sample',), 'a required parameter, not given'),
+    )
+
+
+def test_an_unknown_parameter_is_refused(client: Client) -> None:
+    with pytest.raises(SubmitError, match='scale: not a parameter of'):
+        client.submit(LOAD, params={'scale': {}, 'sample': file(run=1)})
+
+
+def test_a_row_that_holds_a_reference_is_checked_when_it_runs(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+    a = client.submit(load(1))
+    rows = [{'amount': a.ref('value')}, {'scale': -1.0, 'amount': a.ref('value')}]
+    failed = client.submit(SCALED, params={'rows': rows})
+
+    assert client.wait(failed) is Status.FAILED
+    assert client.failure(failed) == 'rows[1]: Value error, the scale is negative'
+
+
+def test_a_refusal_lists_each_problem_of_a_value(client: Client) -> None:
+    typo = Request(
+        BOXED,
+        params={
+            'box': {'valeu': 1, 'other': 2},
+            'sample': file(run=1),
+        },
+    )
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit({'typo': typo})
+    assert [(e.entry, e.loc) for e in raised.value.errors] == [
+        ('typo', ('box', 'valeu')),
+        ('typo', ('box', 'other')),
+    ]
+    assert str(raised.value).count('typo: box.') == 2
+
+
+def test_a_refusal_names_the_request_and_the_field(client: Client) -> None:
+    with pytest.raises(SubmitError, match=r'^second: sample: unknown file run:9$'):
+        client.submit({'first': load(1), 'second': load(9)})
+    with pytest.raises(SubmitError) as raised:
+        client.submit([load(1), load(9)])
+    assert raised.value.errors == (FieldError(1, ('sample',), 'unknown file run:9'),)
+    assert str(raised.value) == '[1]: sample: unknown file run:9'
+
+
+def test_a_table_that_needs_a_row_is_refused_without_one(client: Client) -> None:
+    with pytest.raises(SubmitError, match='terms'):
+        client.submit(SUM, params={'terms': []})
+
+
+def test_a_table_takes_a_list_of_rows(client: Client) -> None:
+    with pytest.raises(SubmitError, match=r'^terms: Input should be a valid array$'):
+        client.submit(SUM, params={'terms': {'value': 1.0}})
+
+
+def test_rows_are_distinct_as_a_whole(client: Client) -> None:
+    scaled = {'value': 1.0, 'factor': 2.0}
+    summed = client.compute(SUM, params={'terms': [{'value': 1.0}, scaled]})
+
+    assert client.output(summed, 'value') == Amount(value=3.0)
+    with pytest.raises(SubmitError, match=r'terms\[1\]: repeats terms\[0\]'):
+        client.submit(SUM, params={'terms': [scaled, dict(scaled)]})
+
+
+def test_rows_of_file_fields_are_distinct_by_identity(
+    client: Client, files: FakeFiles
+) -> None:
+    # Two files of one run, by PID.
+    a = files.measure(7, 1.0, pid='x')
+    b = files.measure(7, 2.0, pid='y')
+
+    summed = client.compute(RUNS, params={'runs': [a, b]})
+    assert client.output(summed, 'value') == Amount(value=3.0)
+    with pytest.raises(SubmitError, match=r'^runs\[1\]: repeats runs\[0\]'):
+        client.submit(RUNS, params={'runs': [a, file(pid='x')]})
+
+    acc = client.accumulator(Template(RUNS, blanks=('runs',)))
+    acc.push(runs=[a])
+    acc.push(runs=[b])
+    assert client.output(acc, 'value') == Amount(value=3.0)
+    with pytest.raises(SubmitError, match=r'^runs\[2\]: repeats runs\[0\]'):
+        acc.push(runs=[file(pid='x')])
+
+
+def test_a_row_given_twice_is_refused(client: Client, files: FakeFiles) -> None:
+    path = files.path(files.resolve(file(run=1)))
+
+    with pytest.raises(SubmitError, match=r'runs\[1\]: repeats runs\[0\]'):
+        client.submit(RUNS, params={'runs': [file(run=1), file(path=path)]})
+
+
+def test_a_stage_reads_a_reference_inside_a_group_of_its_template(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+    a, b = client.submit([load(1), load(2)])
+    offset = {'offset': {'amount': a.ref('value')}}
+    stage = client.stage(Template(SCALED_STAGE, params=offset, blanks=('rows',)))
+    client.release(a)  # the stage keeps what its template references
+
+    first = client.compute(stage, params={'rows': [{'amount': b.ref('value')}]})
+    rows = [{'amount': b.ref('value')}, {'scale': 2.0, 'amount': b.ref('value')}]
+    second = client.compute(stage, params={'rows': rows})
+
+    assert client.output(first, 'value') == Amount(value=3.0)
+    assert client.output(second, 'value') == Amount(value=7.0)
+
+
+def test_an_accumulator_takes_rows_that_hold_references(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+    a, b = client.submit([load(1), load(2)])
+    acc = client.accumulator(Template(SCALED_ROWS, blanks=('rows',)))
+    acc.push(rows=[{'amount': a.ref('value')}])
+    acc.push(rows=[{'scale': 2.0, 'amount': b.ref('value')}])
+
+    assert client.output(acc, 'value') == Amount(value=5.0)
+    # A row that leaves its default out repeats one that gives it.
+    with pytest.raises(SubmitError, match=r'^rows\[2\]: repeats rows\[0\]'):
+        acc.push(rows=[{'scale': 1.0, 'amount': a.ref('value')}])
+
+
+def test_a_reference_to_an_accumulator_inside_a_row_reads_its_state(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+    a = client.submit(load(2))
+    acc = client.accumulator(Template(SCALED_ROWS, blanks=('rows',)))
+    acc.push(rows=[{'amount': a.ref('value')}])
+
+    rows = [{'scale': 3.0, 'amount': acc.ref('value')}]
+    summed = client.compute(SCALED, params={'rows': rows})
+
+    assert client.output(summed, 'value') == Amount(value=6.0)
+
+
+def test_a_value_given_inline_at_a_file_field_is_refused(client: Client) -> None:
+    refused = r'is not a file; a file field is written as file\(\.\.\.\)'
+
+    with pytest.raises(SubmitError, match=rf"^sample: '/data/run-1.json' {refused}"):
+        client.submit(LOAD, params={'sample': '/data/run-1.json'})
+    with pytest.raises(SubmitError, match=rf'^sample: .* {refused}'):
+        client.submit(LOAD, params={'sample': {'path': '/data/run-1.json'}})
