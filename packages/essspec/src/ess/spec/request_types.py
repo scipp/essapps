@@ -7,9 +7,9 @@ A params model is typed for the call phase: each field holds the value that
 the binding takes, a group, the local path of a file, or data. A request
 writes something else in the same field: a group inline, a file by name, or
 a reference to an output. This module derives, from the params model, the
-type of what a request writes, the *request type*, so that the rules of
-:mod:`ess.spec._workflow_spec` on what a request writes are stated once, as
-types, and so that one type both validates a request and is the JSON schema
+type of what a request writes, the *request type*, so that the rules on
+what a request writes (``packages/essspec/docs/params.md``) are stated once,
+as types, and so that one type both validates a request and is the JSON schema
 of the params. The request type is the params type with each
 ``Referenced[T]`` replaced by a reference to an output whose data fit
 ``T``, and each file field by a file, at any depth::
@@ -455,38 +455,49 @@ def held(
     table: bool = False,
 ) -> tuple[Any, Reads]:
     """
-    The value of the field ``name`` of ``model`` as the record stores it, in
-    the request phase, and the references to outputs in it.
+    Validate a parameter in the request phase.
 
-    ``value`` is what the request gives: plain data, or Python objects such
-    as an instance of a group or a :data:`~ess.spec.refs.Ref`, which are
-    dumped to plain data first. It is validated from its JSON form by its
-    request type, without the length constraints of a list if it is a
-    ``table`` (see :func:`model_of`), with each file
-    resolved by ``files``, and the JSON form of the validated value is
-    returned (see :func:`inline`): a group, a file, or
-    a reference to an output as given. The type that the data of each
-    reference must fit is read from the request type of the field that
-    holds it, in the validated value, so the backend checks the reference
-    against history without validating again.
+    ``value`` is validated from its JSON form by the request type of the
+    field, with each file resolved by ``files``. A field that holds a file
+    field and no ``Referenced[...]`` is then validated whole by the params
+    model, with the local path of each file (see :func:`validated`), so that
+    the validators of a group that holds a file, which its request type
+    lacks (see :func:`group_type`), see the path; the record still holds the
+    group as the request wrote it. A field that holds ``Referenced[...]`` is
+    validated so only in the call phase.
 
-    A field that holds a file field and no ``Referenced[...]`` is then
-    validated whole by the params model from the JSON form, with the local
-    path of each file (see :func:`local_paths` and :func:`validated`), so
-    that the validators of a group that holds a file, which its request type
-    lacks (see :func:`group_type`), run now and see the path. The record
-    still holds the group as the request wrote it; the workflow gets it as
-    its validators make it, when the request runs. A field that holds
-    ``Referenced[...]`` is validated so only when the request runs, with the
-    data read. Any other field is validated whole by its request type
-    already.
+    Parameters
+    ----------
+    model:
+        The params model.
+    name:
+        The parameter.
+    value:
+        What the request gives: plain data, or Python objects such as an
+        instance of a group or a :data:`~ess.spec.refs.Ref`.
+    files:
+        Resolves each file, given the marker of its field.
+    local_path:
+        The local path of a resolved file.
+    table:
+        Whether the parameter is a table, validated without the length
+        constraints of the list (see :func:`model_of`).
 
-    Refused, besides what the request type and the params model refuse: a
-    file or a reference to an output in the JSON form that the request did
-    not give at a file field, or at a field typed ``Referenced[...]``, such
-    as one that a serializer makes. Raises
-    :class:`~ess.spec.refs.ParamsError` at the position of each problem (see
-    :func:`_located`).
+    Returns
+    -------
+    :
+        The value as the record stores it, the JSON form of the validated
+        value (see :func:`inline`), and each reference to an output in it
+        with the type its data must fit, read from the request type, so that
+        the backend checks it against history without validating again.
+
+    Raises
+    ------
+    ess.spec.refs.ParamsError
+        At the position of each problem (see :func:`_located`). Besides what
+        the request type and the params model refuse, a file or a reference
+        to an output in the JSON form that the request did not give, such as
+        one that a serializer makes.
     """
     resolved: set[str] = set()
     context = {'files': files, 'resolved': resolved}
@@ -763,37 +774,45 @@ def validated(
     context: dict[str, Any] | None = None,
 ) -> Any:
     """
-    ``value`` of the field ``name`` of ``model`` as the binding takes it,
-    validated by its field alone (see
-    :func:`model_of`); without the length constraints
-    of a list if it is a ``table``. Raises
-    :class:`~ess.spec.refs.ParamsError` at the position of each problem in
-    ``value`` (see :func:`position`).
-
-    Without ``context``, ``value`` is data, as in direct use, so that each
-    field typed ``Referenced[T]`` takes ``T``, and each file field a
-    ``Path``. A spec checks a default with it, and
-    :func:`ess.spec.testing.instance` makes a params instance.
-
-    With ``context``, ``value`` is what the record stores, validated from
-    its JSON form. ``context`` holds ``paths``, the local path of each file
-    by its identity (see :func:`local_paths`), and, in the call phase,
-    ``read``, which gives the data of each reference to an output (see
-    :data:`~ess.spec.parameters.Referenced`). A field that a model lacks is
-    refused. :func:`held` says which parameters are validated so when the
-    request is submitted too.
+    Validate a parameter by the params model, as the binding takes it.
 
     pydantic tries the members of a union with a member ``Referenced[...]``
-    in order, each with the stored value. A member written inline is given a
-    reference too, and refuses it, since a field that a model lacks is
-    refused. So a validator of such a member, such as a
-    ``model_validator(mode='before')``, raises ``ValueError`` for a value it
-    does not take, as it must for a malformed request when it is submitted:
-    any other exception fails the call. When a member refuses a value of
-    another source, such as a member written inline a reference, the error
-    that another member adds, that the value is not a reference or not a
-    file, is dropped. When the data read for a reference fail a check of
-    ``T``, they are one error, at the reference.
+    in order, each with the stored value, so a member written inline is
+    given a reference too and refuses it. An error that a value is not a
+    reference or not a file is dropped where another error, at the same
+    position or inside, explains the value. Data read for a reference that
+    fail a check of ``T`` are one error, at the reference.
+
+    Parameters
+    ----------
+    model:
+        The params model.
+    name:
+        The parameter.
+    value:
+        Without ``context``, data as in direct use: each field typed
+        ``Referenced[T]`` takes ``T``, each file field a ``Path``. A spec
+        checks a default so, and :func:`ess.spec.testing.instance` makes a
+        params instance so. With ``context``, what the record stores,
+        validated from its JSON form; a field that a model lacks is refused.
+    table:
+        Whether the parameter is a table, validated without the length
+        constraints of the list (see :func:`model_of`).
+    context:
+        ``paths``, the local path of each file by its identity (see
+        :func:`local_paths`), and, in the call phase, ``read``, which gives
+        the data of each reference to an output (see
+        :data:`~ess.spec.parameters.Referenced`).
+
+    Returns
+    -------
+    :
+        The validated value of the field.
+
+    Raises
+    ------
+    ess.spec.refs.ParamsError
+        At the position of each problem (see :func:`position`).
     """
     one = model_of(model, name, table)
     try:

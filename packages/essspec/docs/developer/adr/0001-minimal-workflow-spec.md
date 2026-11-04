@@ -355,8 +355,7 @@ client.submit(IOFQ, params={**runs, 'beam_centre': finder.ref('centre')})       
 each field that a reference to an output fills, and `File(...)`, at each field
 that a file fills. The rest of what the framework needs, it reads from the
 field types (`ess.spec.field_types`). `WorkflowSpec` checks these rules when it
-is made, and the module docstring of `ess.spec._workflow_spec` states each
-with its reason:
+is made, and [params.md](../../params.md) states each with its reason:
 
 - The names of params and outputs are distinct.
 - Each field of the params, at any depth, is of a type of the closed list

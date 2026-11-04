@@ -48,54 +48,31 @@ from .refs import FileRef, OutputRef, Ref, as_ref
 
 class File:
     """
-    The marker of a field that a file fills, a *file field*, typed
-    ``Annotated[Path, File(**metadata)]``; it holds the metadata that a file
-    must have to fill the field, each a string, a number, or a bool. A file
-    fits the field if its metadata have each key and value of the marker's
-    :attr:`metadata`; ``kind`` is ``'raw'`` unless given. The file source
-    defines the metadata of a file; a marker names these keys:
+    The marker of a *file field*, ``Annotated[Path, File(**metadata)]``.
 
-    - ``kind``, what the file holds: ``'raw'``, the file of a run, or
-      another kind, such as ``'mask'`` or ``'calibration'``.
-    - ``role``, what a run was measured as: the run types of ``ess.reduce``
-      and of the technique packages in snake case, such as ``'sample'``,
-      ``'background'``, ``'transmission'``, ``'empty_beam'``,
-      ``'vanadium'``, or ``'reference'``. A SANS can is a background run.
-
-    This module types the file fields of common kinds and roles, such as
-    :data:`RunFile`, :data:`SampleRunFile`, and :data:`MaskFile`, so that
-    each value is spelled once; a file field of other metadata is typed
-    where it is used::
-
-        class IofQParams(BaseModel):
-            sample: SampleRunFile
-            can: BackgroundRunFile
-            mask: MaskFile | None = None
-
-    A field that takes a run of any role, or a run whose role the file
-    source does not know, is typed :data:`RunFile`.
-
-    pydantic, a type checker, and the binding see ``Path``: the params model
-    holds the local path of the file. A request writes a file as
-    ``file(...)``, whose JSON form is ``{'@ref': 'file', 'file': ...}``, so
-    the request type has a :class:`~ess.spec.refs.FileRef` in the field's
-    place (see :mod:`ess.spec.request_types`). The backend resolves the name
-    to the file's identity when the request is submitted, with a resolver of
-    files given the marker, and the file source checks that the file is
-    known, that the request's proposal may read it, and that its metadata
-    fit the marker's.
+    A file fits the field if its metadata have each key and value of the
+    marker's :attr:`metadata`. ``packages/essspec/docs/params.md`` (Files)
+    names the keys and the rules of a file field.
 
     Validated with the context ``{'paths': {identity: local path}}``, as the
     backend validates a request, the marker replaces the stored form of a
     file by its local path, validated as ``Path``, and refuses any other
     value. Validated without ``paths``, as in direct use, the field takes a
-    ``Path`` as it is, ``IofQParams(sample=Path('run-101.nxs'))``.
+    ``Path`` as it is. Two markers are equal if their metadata are, each
+    value of the same type, so that ``File(n=1)`` and ``File(n=True)`` are
+    two markers.
 
-    The marker carries no validators: one that reads the file would read it
-    from a network mount when the request is submitted. A check of the
-    content of a file belongs to the workflow. Two markers are equal if
-    their metadata are, each value of the same type, so that ``File(n=1)``
-    and ``File(n=True)`` are two markers.
+    Parameters
+    ----------
+    kind:
+        What the file holds, such as ``'raw'``, the file of a run.
+    **metadata:
+        Further metadata that a fitting file has, such as ``role='sample'``.
+
+    Raises
+    ------
+    TypeError
+        If a value of the metadata is not a string, a number, or a bool.
     """
 
     __slots__ = ('_metadata',)
@@ -256,21 +233,12 @@ _T = TypeVar('_T')
 Referenced = Annotated[_T, REFERENCED]
 """
 ``Referenced[T]`` types a field that a reference to an output fills, whose
-data fit ``T``, a group. A field that takes a value written inline too is a
-union::
-
-    class IofQParams(BaseModel):
-        mask: Referenced[PixelMask] | None = None
-        centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
-
-    class Sample(BaseModel):
-        run: RunFile
-        transmission: Referenced[Transmission]
-
+data fit ``T``, a group, such as ``mask: Referenced[PixelMask] | None``.
 It is ``Annotated[T, REFERENCED]``, so pydantic and a type checker see
 ``T``: the params model holds the data, as the binding takes them. The
 request type has a reference instead (see :mod:`ess.spec.request_types`).
-The rules are stated in :mod:`ess.spec._workflow_spec`.
+``packages/essspec/docs/params.md`` (References to outputs) states the
+rules.
 """
 
 RunFile = Annotated[Path, File()]
