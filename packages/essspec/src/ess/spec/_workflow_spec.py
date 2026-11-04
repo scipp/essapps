@@ -194,9 +194,13 @@ The type of a field says what a request writes there:
 - ``X | None``: what ``X`` takes, or ``None``.
 - ``list[X]``: a list of elements, each what ``X`` takes.
 
-In Python, a request gives a group that holds a reference to an output as a
-dict, such as each row of ``samples`` above: pydantic refuses a reference
-in an instance of the group.
+In Python, a request may give a value as an instance of its type, a group
+or the params model, if the value holds no reference to an output. pydantic
+refuses a reference in an instance of a group, so a value that holds one is
+given as a dict, such as each row of ``samples`` above. An instance holds a
+``Path`` at each file field, which names the file by its path, as
+``file(path=...)`` does. In JSON a file is written ``{'@ref': 'file',
+...}``, and a string at a file field is refused.
 
 The framework derives from the params model a *request type*, the type of
 what a request writes at each field: the params type with each
@@ -422,7 +426,6 @@ from pydantic import (
     ConfigDict,
     Field,
     PlainValidator,
-    TypeAdapter,
     WrapValidator,
     model_validator,
 )
@@ -998,13 +1001,12 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
     binding gets it as it is (see :func:`ess.spec.request_types.validated`). So a
     group's default is an instance, not the object of its fields, and a
     list's default keeps the length constraints of the list. A file field has
-    no default but ``None`` or ``[]``: each ``Path`` in the default is given
-    as a file, which the resolver of files refuses.
+    no default but ``None`` or ``[]``: each ``Path`` in the default names a
+    file, which the resolver of files refuses.
     """
     default = model.model_fields[name].get_default(call_default_factory=True)
-    given = _paths_as_files(_ANY.dump_python(default))
     try:
-        held, _ = request_types.held(model, name, given, _no_file, _no_path)
+        held, _ = request_types.held(model, name, default, _no_file, _no_path)
         if refs := [
             (loc, f'{ref} is a reference; a default is a value')
             for loc, ref in iter_refs({name: held})
@@ -1016,21 +1018,6 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
     if made != default:
         return f'the default {default!r} is not the value validating it gives, {made!r}'
     return None
-
-
-def _paths_as_files(value: Any) -> Any:
-    """``value``, plain data, with each ``Path`` in it a file of that name."""
-    if isinstance(value, PurePath):
-        return {'@ref': 'file', 'file': str(value)}
-    if isinstance(value, dict):
-        return {k: _paths_as_files(v) for k, v in value.items()}
-    if isinstance(value, list | tuple):
-        return [_paths_as_files(v) for v in value]
-    return value
-
-
-_ANY = TypeAdapter(Any)
-"""Dumps Python objects to plain data, keeping each ``Path``."""
 
 
 def _no_file(name: str, marker: File) -> str:

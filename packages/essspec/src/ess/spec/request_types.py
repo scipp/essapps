@@ -96,7 +96,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 from collections.abc import Callable, Iterable, Mapping
-from pathlib import Path
+from pathlib import Path, PurePath
 from types import UnionType
 from typing import Annotated, Any, Final, Union, get_args, get_origin
 
@@ -491,7 +491,7 @@ def held(
     """
     resolved: set[str] = set()
     context = {'files': files, 'resolved': resolved}
-    given = _ANY.dump_python(value)
+    given = _paths_as_files(_ANY.dump_python(value))
     written = {loc for loc, _ in iter_refs({name: given})}
     one = _one(model, name, table)
     made, stored = _inline(one, name, given, context)
@@ -513,6 +513,20 @@ def held(
         if isinstance(ref, OutputRef | AccumulatorRef)
     ]
     return stored, reads
+
+
+def _paths_as_files(value: Any) -> Any:
+    """
+    ``value``, plain data, with each ``Path`` in it the file named by that
+    path, ``file(path=...)`` (see :meth:`~ess.spec.refs.FileRef.at`).
+    """
+    if isinstance(value, PurePath):
+        return FileRef.at(value).model_dump(by_alias=True)
+    if isinstance(value, dict):
+        return {k: _paths_as_files(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_paths_as_files(v) for v in value]
+    return value
 
 
 def local_paths(values: Mapping[str, Any], local_path: LocalPath) -> dict[str, Path]:
@@ -571,7 +585,10 @@ def _fits_in(tp: Any) -> Any:
 
 
 _ANY = TypeAdapter(Any)
-"""Dumps Python objects to plain data, keeping a number that is not finite."""
+"""
+Dumps Python objects to plain data, keeping a number that is not finite, and
+each ``Path``.
+"""
 
 
 def _inline(

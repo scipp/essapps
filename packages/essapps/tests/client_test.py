@@ -908,7 +908,7 @@ def test_a_file_reaches_the_workflow_as_its_local_path(
 
 @pytest.mark.parametrize(
     'inline',
-    ['/data/run-1.json', Path('/data/run-1.json'), {'path': '/data/run-1.json'}],
+    ['/data/run-1.json', {'path': '/data/run-1.json'}],
 )
 def test_a_value_given_inline_at_a_file_field_is_refused(
     client: Client, inline: Any

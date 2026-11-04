@@ -26,6 +26,7 @@ workflow takes is the business of whatever runs the workflow.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from pathlib import PurePath
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -88,6 +89,11 @@ class FileRef(_Ref, frozen=True):
 
     def __str__(self) -> str:
         return self.file
+
+    @classmethod
+    def at(cls, path: PurePath | str) -> FileRef:
+        """The file named by its local path, ``path:...``."""
+        return cls(file=f'path:{path}')
 
 
 class AccumulatorRef(_Ref, frozen=True):

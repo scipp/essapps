@@ -1035,6 +1035,18 @@ def test_the_length_constraint_of_a_list_of_files_holds_when_written() -> None:
         _stored(NexusRuns, 'runs', [], _named)
 
 
+def test_a_path_given_in_python_at_a_file_field_names_the_file_by_its_path() -> None:
+    resolved = []
+
+    def files(name: str, marker: File) -> str:
+        resolved.append(name)
+        return FILE_ID
+
+    stored = _stored(MeasuredParams, 'measured', Measured(run=Path('/d/a.nxs')), files)
+    assert resolved == ['path:/d/a.nxs']
+    assert stored['run'] == FILE.model_dump()
+
+
 def test_a_file_that_no_file_field_resolved_is_refused() -> None:
     def as_file(name: str) -> dict[str, str]:
         return {'@ref': 'file', 'file': name}

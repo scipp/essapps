@@ -314,3 +314,44 @@ def test_a_validator_of_a_group_sees_the_local_path_at_submit(
     (error,) = raised.value.errors
     assert error.loc == ('checked',)
     assert 'the file of run 2 is refused' in error.msg
+
+
+def test_a_params_instance_names_each_file_by_its_path(
+    client: Client, files: FakeFiles
+) -> None:
+    one, two = (files.path(files.resolve(file(run=n))) for n in (1, 2))
+    mask = files.path(files.resolve(file(run=3)))
+    submitted = {
+        RUN: RunParams(run=one),
+        SAMPLE: SampleParams(sample=Sample(run=two, mask=mask)),
+        TABLE: TableParams(samples=[Sample(run=one), Sample(run=two)]),
+    }
+    records = {spec: client.submit(spec, params=p) for spec, p in submitted.items()}
+
+    assert [_total(client, records[spec]) for spec in (RUN, SAMPLE, TABLE)] == [
+        10.0,
+        19.0,
+        30.0,
+    ]
+    assert records[SAMPLE].request.params['sample']['run'] == files.resolve(file(run=2))
+
+
+@pytest.mark.parametrize(
+    ('spec', 'params', 'loc'),
+    [
+        (RUN, RunParams(run=Path('/nowhere.json')), ('run',)),
+        (
+            TABLE,
+            TableParams(samples=[Sample(run=Path('/nowhere.json'))]),
+            ('samples', 0, 'run'),
+        ),
+    ],
+)
+def test_a_path_that_names_no_file_is_refused_at_its_place(
+    client: Client, spec: Any, params: BaseModel, loc: tuple[Any, ...]
+) -> None:
+    with pytest.raises(SubmitError) as raised:
+        client.submit(spec, params=params)
+    (error,) = raised.value.errors
+    assert error.loc == loc
+    assert error.msg == 'unknown file path:/nowhere.json'

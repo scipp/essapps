@@ -30,7 +30,7 @@ def file(
     if len(named) != 1:
         raise ValueError(f'name a file by exactly one of {list(given)}')
     ((kind, value),) = named.items()
-    return FileRef(file=f'{kind}:{value}')
+    return FileRef.at(value) if kind == 'path' else FileRef(file=f'{kind}:{value}')
 
 
 class Selector:

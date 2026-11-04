@@ -214,7 +214,7 @@ A request writes each field inside its group, a file or a reference to an output
  'specimens': [{'run': file(run=611), 'thickness': 2.0, 'transmission': t611.ref('transmission')}]}
 ```
 
-In Python, a request gives a group that holds a reference to an output as a dict: pydantic refuses a reference in an instance of the group.
+In Python, a value that holds a reference to an output is given as a dict: pydantic refuses a reference in an instance of a group. Any other value may be an instance, whose `Path` at a file field names the file by its path (see `Client.submit`).
 
 A group is validated when the request is submitted, so that an error shows before anything runs.
 A group that holds a reference to an output, at any depth, is validated when the request runs: the output may not exist when the request is submitted, and the group's validators see the data read.
@@ -417,7 +417,7 @@ client.output(result, 'iofq', select={'Q': slice(0, 10)})
 
 `params` is a dict by name: each value written inline, a file, or a reference to an output, or a list of these for a list parameter (see Specs and bindings).
 A value written inline is the value, such as `Reduction(bins=100)`, or its JSON form, `{'bins': 100}`: both give the same request.
-`params` may also be an instance of the params model, which cannot hold a reference to an output.
+`params` may also be an instance of the params model, if it holds no reference to an output (see `Client.submit`).
 It may be left out when every parameter has a default.
 
 Submitting a request returns a *record*.
