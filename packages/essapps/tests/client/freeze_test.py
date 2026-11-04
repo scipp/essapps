@@ -111,8 +111,13 @@ def test_a_freeze_whose_plain_request_would_be_refused_is_refused(
     both = client.accumulator(Template(BOTH, blanks=('samples', 'backgrounds')))
     both.push(samples=[loads[0].ref('value')])
 
-    with pytest.raises(SubmitError, match='backgrounds: the table has no row'):
+    with pytest.raises(SubmitError) as requested:
+        client.submit(
+            BOTH, params={'samples': [loads[0].ref('value')], 'backgrounds': []}
+        )
+    with pytest.raises(SubmitError) as frozen:
         client.freeze(both)
+    assert str(frozen.value) == str(requested.value)
     both.push(backgrounds=[loads[1].ref('value')])  # takes pushes again
     total = client.freeze(both)
     assert _listed(client.output(total, 'difference')) == [-1.0]

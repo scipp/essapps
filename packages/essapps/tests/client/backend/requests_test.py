@@ -4,8 +4,6 @@
 
 """Submitting requests: what is refused, what a record holds of its request."""
 
-from typing import Any
-
 import pytest
 from pydantic import BaseModel
 
@@ -14,7 +12,6 @@ from ess.apps import (
     Client,
     FieldError,
     Request,
-    Status,
     SubmitError,
     Template,
     file,
@@ -27,7 +24,6 @@ from .conftest import (
     LOAD,
     LOKI_MASKED,
     MASKED,
-    MODES,
     PIECES,
     RUNS,
     SCALED,
@@ -37,21 +33,11 @@ from .conftest import (
     SUM,
     Amount,
     Gate,
-    Mode,
     SampleRun,
-    Strict,
-    Term,
     _spec,
     load,
     operands,
 )
-
-
-def _boxed(value: Any) -> Request:
-    return Request(
-        BOXED,
-        params={'box': {'value': value}, 'sample': file(run=1)},
-    )
 
 
 def test_a_spec_whose_output_holds_a_file_field_is_refused() -> None:
@@ -60,42 +46,6 @@ def test_a_spec_whose_output_holds_a_file_field_is_refused() -> None:
 
     with pytest.raises(ValueError, match='no output holds a file or a Path'):
         _spec('echo', outputs=RunOutputs)
-
-
-def test_no_output_fits_a_file_field(client: Client) -> None:
-    loaded = client.submit(load(1))
-    refused = (
-        r'is a reference to an output; the field is not typed Referenced\[\.\.\.\]'
-    )
-    by_ref = loaded.ref('value')
-
-    with pytest.raises(SubmitError, match=rf'^sample: {loaded.id}.value {refused}$'):
-        client.submit(LOAD, params={'sample': by_ref})
-    with pytest.raises(SubmitError, match=rf'^runs\[0\]: .* {refused}$'):
-        client.submit(RUNS, params={'runs': [by_ref]})
-    with pytest.raises(SubmitError, match=rf'^sample: .* {refused}$'):
-        client.stage(Template(MODES, params={'sample': by_ref}, blanks=('values',)))
-
-
-def test_a_reference_of_an_unknown_kind_is_refused(client: Client) -> None:
-    unknown = {'@ref': 'record', 'record': 'r1', 'output': 'value'}
-
-    with pytest.raises(
-        SubmitError, match=r"^a: .*'record' is not a kind of reference"
-    ) as raised:
-        client.submit(ADD, params=operands(unknown, unknown))
-    assert [e.loc for e in raised.value.errors] == [('a',)]
-
-
-def test_a_malformed_reference_is_refused(client: Client) -> None:
-    for malformed, problem in [
-        ({'@ref': 'output', 'record': 'r1'}, 'output: Field required'),
-        ({'@ref': 'file', 'file': 'run:1', 'run': 1}, 'run: Extra inputs'),
-    ]:
-        with pytest.raises(
-            SubmitError, match=rf'^b: .*: not a reference to .*{problem}'
-        ):
-            client.submit(ADD, params=operands(file(run=1), malformed))
 
 
 def test_a_reference_to_an_unknown_record_is_refused(client: Client) -> None:
@@ -231,14 +181,6 @@ def test_a_path_names_the_file_at_that_path(
     assert client.output(by_path, 'value') == Amount(value=1.0)
 
 
-def test_a_file_fits_a_file_field_only(client: Client) -> None:
-    with pytest.raises(
-        SubmitError,
-        match=r'^a: file run:1: the field is not a file field$',
-    ):
-        client.submit(ADD, params=operands(file(run=1), file(run=2)))
-
-
 def test_a_record_holds_its_request_with_defaults_filled_in(
     client: Client, gate: Gate
 ) -> None:
@@ -253,28 +195,6 @@ def test_a_record_holds_its_request_with_defaults_filled_in(
     assert total.request.upstream() == [a.ref('value'), a.ref('value')]
 
 
-def test_a_row_is_a_group(client: Client) -> None:
-    summed = client.compute(
-        SUM, params={'terms': [{'value': 1.0, 'factor': 10.0}, Term(value=2.0)]}
-    )
-
-    assert client.output(summed, 'value') == Amount(value=12.0)
-
-
-def test_a_strict_group_is_validated_from_its_json_form(client: Client) -> None:
-    strict = {'strict': Strict(mode=Mode.slow)}
-    plain = client.compute(MODES, params={**strict, 'sample': file(run=1)})
-    stage = client.stage(Template(MODES, params=strict, blanks=('sample',)))
-    staged = client.compute(stage, params={'sample': file(run=1)})
-
-    assert plain.request.params['strict'] == {'mode': 'slow', 'factor': 1.0}
-    assert (
-        client.output(plain, 'value')
-        == client.output(staged, 'value')
-        == Amount(value=1.0)
-    )
-
-
 def test_one_refused_request_refuses_the_submission(client: Client) -> None:
     a = client.submit(load(1))
     typo = Request(
@@ -287,47 +207,6 @@ def test_one_refused_request_refuses_the_submission(client: Client) -> None:
     assert client.records() == [a]
 
 
-def test_a_value_that_cannot_be_stored_is_refused(client: Client) -> None:
-    with pytest.raises(
-        SubmitError, match=r'^second: box\.value: Input should be a valid number$'
-    ):
-        client.submit({'first': _boxed(1), 'second': _boxed(len)})
-    assert client.records() == []
-
-
-@pytest.mark.parametrize('value', [float('inf'), float('-inf'), float('nan')])
-def test_a_value_whose_json_form_reads_back_as_another_is_refused(
-    client: Client, value: float
-) -> None:
-    with pytest.raises(
-        SubmitError,
-        match=r'^box\.value: has no JSON form that reads back as the value$',
-    ):
-        client.submit(_boxed(value))
-
-
-def test_a_number_that_is_not_finite_is_refused_in_a_list(client: Client) -> None:
-    with pytest.raises(
-        SubmitError, match=r'^values\.values\[1\]: has no JSON form that reads'
-    ):
-        client.submit(
-            MODES,
-            params={
-                'values': {'values': [1.0, float('inf')]},
-                'sample': file(run=1),
-            },
-        )
-
-
-def test_a_field_a_group_lacks_is_refused(client: Client) -> None:
-    typo = Request(BOXED, params={'box': {'unknown': 1}, 'sample': file(run=1)})
-
-    with pytest.raises(
-        SubmitError, match=r"box\.unknown: Extra inputs are not permitted"
-    ):
-        client.submit(typo)
-
-
 def test_a_required_parameter_left_out_is_refused(client: Client) -> None:
     with pytest.raises(
         SubmitError, match=r'^sample: a required parameter, not given$'
@@ -336,23 +215,6 @@ def test_a_required_parameter_left_out_is_refused(client: Client) -> None:
     assert raised.value.errors == (
         FieldError(None, ('sample',), 'a required parameter, not given'),
     )
-
-
-def test_an_unknown_parameter_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match='scale: not a parameter of'):
-        client.submit(LOAD, params={'scale': {}, 'sample': file(run=1)})
-
-
-def test_a_row_that_holds_a_reference_is_checked_when_it_runs(
-    client: Client, gate: Gate
-) -> None:
-    gate.open.set()
-    a = client.submit(load(1))
-    rows = [{'amount': a.ref('value')}, {'scale': -1.0, 'amount': a.ref('value')}]
-    failed = client.submit(SCALED, params={'rows': rows})
-
-    assert client.wait(failed) is Status.FAILED
-    assert client.failure(failed) == 'rows[1]: Value error, the scale is negative'
 
 
 def test_a_refusal_lists_each_problem_of_a_value(client: Client) -> None:
@@ -385,11 +247,6 @@ def test_a_refusal_names_the_request_and_the_field(client: Client) -> None:
 def test_a_table_that_needs_a_row_is_refused_without_one(client: Client) -> None:
     with pytest.raises(SubmitError, match='terms'):
         client.submit(SUM, params={'terms': []})
-
-
-def test_a_table_takes_a_list_of_rows(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r'^terms: Input should be a valid array$'):
-        client.submit(SUM, params={'terms': {'value': 1.0}})
 
 
 def test_rows_are_distinct_as_a_whole(client: Client) -> None:
@@ -472,12 +329,3 @@ def test_a_reference_to_an_accumulator_inside_a_row_reads_its_state(
     summed = client.compute(SCALED, params={'rows': rows})
 
     assert client.output(summed, 'value') == Amount(value=6.0)
-
-
-def test_a_value_given_inline_at_a_file_field_is_refused(client: Client) -> None:
-    refused = r'is not a file; a file field is written as file\(\.\.\.\)'
-
-    with pytest.raises(SubmitError, match=rf"^sample: '/data/run-1.json' {refused}"):
-        client.submit(LOAD, params={'sample': '/data/run-1.json'})
-    with pytest.raises(SubmitError, match=rf'^sample: .* {refused}'):
-        client.submit(LOAD, params={'sample': {'path': '/data/run-1.json'}})

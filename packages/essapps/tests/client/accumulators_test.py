@@ -361,29 +361,22 @@ def test_an_accumulator_needs_a_binding_that_makes_accumulators(
 
 
 def test_an_accumulator_refuses_a_template_that_a_request_would_refuse(
-    client: Client, loading: threading.Event
+    client: Client,
 ) -> None:
-    loading.clear()
-    cancelled = client.submit(_load(1))
-    client.cancel(cancelled)
-    loading.set()
     released = client.compute(_load(1))
     client.release(released)
-    refused = {
-        'speed: not a parameter': {'params': {'speed': {}}},
-        'scale.factor: Input should be a valid number': {
-            'params': {'scale': {'factor': 'x'}}
-        },
-        f'offset: record {cancelled.id} cancelled': {
-            'params': {'offset': cancelled.ref('value')}
-        },
-        f'offset: record {released.id} is not kept by this client': {
-            'params': {'offset': released.ref('value')}
-        },
-    }
-    for reason, values in refused.items():
-        with pytest.raises(SubmitError, match=reason):
-            client.accumulator(Template(SUM, blanks=('runs',), **values))
+    # No case of an unknown file: no accumulator here fixes a file field, and
+    # the template of an accumulator is checked as that of a stage is.
+    refused = [
+        {'scale': {'factor': 'x'}},  # request_types refuses it
+        {'offset': released.ref('value')},  # a record not kept
+    ]
+    for params in refused:
+        with pytest.raises(SubmitError) as requested:
+            client.submit(SUM, params={**params, 'runs': []})
+        with pytest.raises(SubmitError) as opened:
+            client.accumulator(Template(SUM, params=params, blanks=('runs',)))
+        assert str(opened.value) == str(requested.value)
 
 
 def test_a_field_validator_gives_the_driver_the_plain_request_s_values(

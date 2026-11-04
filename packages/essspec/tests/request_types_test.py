@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 from collections.abc import Callable
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args, get_origin
 
@@ -364,12 +365,17 @@ def test_a_union_with_a_referenced_member_takes_either(name: str, value: Any) ->
             ('measured', 'run'),
             NOT_REFERENCED,
         ),
+        ('runs', [OUTPUT], ('runs', 0), NOT_REFERENCED),
     ],
 )
 def test_a_reference_to_an_output_at_a_field_not_typed_referenced_is_refused(
     name: str, value: Any, loc: Loc, msg: str
 ) -> None:
-    model = {'sample': MaskParams, 'measured': MeasuredParams}.get(name, Params)
+    model = {
+        'sample': MaskParams,
+        'runs': MaskParams,
+        'measured': MeasuredParams,
+    }.get(name, Params)
     with pytest.raises(ParamsError) as raised:
         _stored(model, name, value, _named)
     assert raised.value.errors == ((loc, msg),)
@@ -417,6 +423,37 @@ def test_a_group_given_inline_is_validated_whole() -> None:
     ((at, msg),) = raised.value.errors
     assert at == ('range', 'stop')
     assert 'stop must be after start' in msg
+
+
+@pytest.mark.parametrize(
+    ('name', 'value', 'loc'),
+    [
+        ('reduction', {'bins': 3, 'speed': 2.0}, ('reduction', 'speed')),
+        ('samples', [{'thickness': 2.0}, {'speed': 1.0}], ('samples', 1, 'speed')),
+    ],
+)
+def test_a_field_that_a_group_lacks_is_refused(name: str, value: Any, loc: Loc) -> None:
+    with pytest.raises(ParamsError) as raised:
+        _stored(Params, name, value, _named)
+    assert raised.value.errors == ((loc, 'Extra inputs are not permitted'),)
+
+
+@pytest.mark.parametrize(
+    ('name', 'value', 'loc'),
+    [
+        ('beam_centre', {'kind': 'given', 'x': float('nan')}, ('beam_centre', 'x')),
+        ('beam_centre', {'kind': 'given', 'x': float('-inf')}, ('beam_centre', 'x')),
+        ('reduction', {'angles': [1.0, float('inf')]}, ('reduction', 'angles', 1)),
+    ],
+)
+def test_a_value_whose_json_form_reads_back_as_another_is_refused(
+    name: str, value: Any, loc: Loc
+) -> None:
+    with pytest.raises(ParamsError) as raised:
+        _stored(Params, name, value, _named)
+    assert raised.value.errors == (
+        (loc, 'has no JSON form that reads back as the value'),
+    )
 
 
 def test_an_error_inside_a_union_names_its_place_without_the_tag() -> None:
@@ -496,6 +533,26 @@ def test_a_value_written_inline_at_a_referenced_place_is_refused() -> None:
 def test_a_value_held_inline_is_made_of_its_json_form() -> None:
     stored = _stored(Params, 'reduction', {'bins': 3}, _named)
     assert value_of(Params, 'reduction', stored, _unread, PATHS) == Reduction(bins=3)
+
+
+def test_a_strict_group_is_validated_from_its_json_form() -> None:
+    class Mode(Enum):
+        fast = 'fast'
+        slow = 'slow'
+
+    class Strict(BaseModel, strict=True):
+        """Validated in Python, it refuses an enum by its value, ``'slow'``."""
+
+        mode: Mode = Mode.fast
+        factor: float = 1.0
+
+    class StrictParams(BaseModel):
+        strict: Strict
+
+    stored = _stored(StrictParams, 'strict', Strict(mode=Mode.slow), _named)
+    assert stored == {'mode': 'slow', 'factor': 1.0}
+    made = value_of(StrictParams, 'strict', stored, _unread, PATHS)
+    assert made == Strict(mode=Mode.slow)
 
 
 def test_a_file_in_a_group_is_its_local_path_from_paths() -> None:
@@ -1002,6 +1059,12 @@ def test_a_list_is_validated_whole_and_a_table_without_its_length() -> None:
     stored, _ = held(Params, 'samples', one_row, _named, _path, table=True)
     assert stored == one_row
     assert validated(Params, 'samples', one_row, table=True) == [Sample(thickness=2)]
+
+
+def test_a_table_takes_a_list_of_rows() -> None:
+    with pytest.raises(ParamsError) as raised:
+        held(Params, 'samples', {'thickness': 2.0}, _named, _path, table=True)
+    assert raised.value.errors == ((('samples',), 'Input should be a valid array'),)
 
 
 def test_in_direct_use_a_file_field_takes_a_path() -> None:

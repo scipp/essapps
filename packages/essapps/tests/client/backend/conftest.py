@@ -4,7 +4,6 @@
 
 import threading
 from collections.abc import Iterator
-from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -119,32 +118,6 @@ class BoxParams(BaseModel):
     sample: SampleRun
 
 
-class Values(BaseModel):
-    values: list[float] = []
-
-
-class Mode(Enum):
-    fast = 'fast'
-    slow = 'slow'
-
-
-class Strict(BaseModel, strict=True):
-    mode: Mode = Mode.fast
-    factor: float = 1.0
-
-
-class ModeParams(BaseModel):
-    values: Values = Field(default_factory=Values)
-    strict: Strict = Field(default_factory=Strict)
-    sample: SampleRun
-
-
-def slow(params: ModeParams) -> ValueOutputs:
-    strict = params.strict
-    value = float(strict.mode is Mode.slow) * strict.factor
-    return ValueOutputs(value=Amount(value=value))
-
-
 class Scaled(BaseModel):
     """A row that holds a reference: validated when the request runs."""
 
@@ -190,9 +163,6 @@ LOKI_MASKED = _spec('loki-masked', params=LokiMaskParams)
 
 
 RUNS = _spec('runs', params=RunsParams, tables=('runs',))
-
-
-MODES = _spec('modes', params=ModeParams)
 
 
 SUM = _spec('sum', params=SumParams, tables=('terms',))
@@ -279,7 +249,6 @@ def backend(files: FakeFiles, gate: Gate) -> Iterator[Backend]:
         function_binding(SPLIT, split),
         function_binding(PIECES, pieces),
         function_binding(BOXED, lambda p: ValueOutputs(value=Amount(value=0.0))),
-        StagedFunction(MODES, slow),
         function_binding(MASKED, lambda p: ValueOutputs(value=_read(p.mask))),
         function_binding(LOKI_MASKED, lambda p: ValueOutputs(value=_read(p.mask))),
         kept_rows(RUNS, runs),

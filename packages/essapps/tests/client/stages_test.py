@@ -12,16 +12,13 @@ from typing import Any
 import pytest
 
 from ess.apps import (
-    Backend,
     Client,
-    Request,
     Status,
     SubmitError,
     Template,
     file,
     local,
 )
-from ess.apps.backend import Entry
 from ess.apps.testing import FakeFiles, StagedFunction
 from ess.spec import function_binding
 
@@ -212,58 +209,22 @@ def test_the_calls_waiting_for_a_stage_whose_staging_fails_fail_with_it(
     assert shifting.staged == []
 
 
-def test_a_request_through_a_stage_must_have_the_stage_s_values(
-    backend: Backend,
-) -> None:
-    client = backend.open_client('p1', 'anna')
-    (load,) = backend.submit([Entry(_load(1))], client=client)
-    stage, template = backend.open_stage(
-        Template(SCALE, params={'sample': file(run=1)}, blanks=('scaling',)),
-        client=client,
-    )
-    twice = {'scaling': {'factor': 2.0}}
-    refused = {
-        'the stage holds scale': _read(load),
-        r"\['sample'\]: differ from the stage's values": Request(
-            SCALE, params={**twice, 'sample': file(run=2)}
-        ),
-    }
-    for reason, request in refused.items():
-        with pytest.raises(SubmitError, match=reason):
-            backend.submit([Entry(request, stage=stage)], client=client)
-
-    (record,) = backend.submit(
-        [Entry(template.fill(params=twice), stage=stage)], client=client
-    )
-    assert record.request.params['sample'] == template.params['sample']
-
-
 def test_a_stage_refuses_a_template_that_a_request_would_refuse(
-    client: Client, loading: threading.Event
+    client: Client,
 ) -> None:
-    loading.clear()
-    cancelled = client.submit(_load(1))
-    client.cancel(cancelled)
-    loading.set()
     released = client.compute(_load(1))
     client.release(released)
-    refused = {
-        r'sample: unknown file run:9': Template(
-            SCALE, params={'sample': file(run=9)}, blanks=('scaling',)
-        ),
-        r'source: file .*: the field is not a file field': Template(
-            SHIFT, params={'source': file(run=1)}, blanks=('shift',)
-        ),
-        f'source: record {cancelled.id} cancelled': Template(
-            SHIFT, params={'source': cancelled.ref('value')}, blanks=('shift',)
-        ),
-        f'source: record {released.id} is not kept by this client': Template(
-            SHIFT, params={'source': released.ref('value')}, blanks=('shift',)
-        ),
-    }
-    for reason, template in refused.items():
-        with pytest.raises(SubmitError, match=reason):
-            client.stage(template)
+    refused = [
+        (SHIFT, {'source': file(run=1)}, 'shift'),  # request_types refuses it
+        (SHIFT, {'source': released.ref('value')}, 'shift'),  # a record not kept
+        (SCALE, {'sample': file(run=9)}, 'scaling'),  # an unknown file
+    ]
+    for spec, params, blank in refused:
+        with pytest.raises(SubmitError) as requested:
+            client.submit(spec, params=params)
+        with pytest.raises(SubmitError) as staged:
+            client.stage(Template(spec, params=params, blanks=(blank,)))
+        assert str(staged.value) == str(requested.value)
 
 
 def test_a_template_and_its_calls_take_models(client: Client) -> None:

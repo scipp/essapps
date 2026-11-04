@@ -16,6 +16,7 @@ from .conftest import (
     DIGITS,
     LOAD,
     SIDES,
+    SUM,
     TOTAL,
     WEIGHTED,
     Amount,
@@ -64,22 +65,20 @@ def test_a_push_takes_rows_as_a_request_does(client: Client) -> None:
 
 
 def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
-    load = client.compute(_load(1))
-    rows = [
-        file(run=1),  # a file for a group that holds no file field
-        load.ref('value'),  # a reference, no fit
-        {'value': 1.0},  # a field without a default left out
-        {'value': 1.0, 'weight': 'x'},  # an invalid inline value
-        {'value': 1.0, 'weight': load.ref('value')},  # a reference inside a group
-        {'@ref': 'run'},  # no kind of reference
-        {'value': 1.0, 'weight': 1.0, 'speed': 1.0},  # a field the group lacks
+    released = client.compute(_load(1))
+    client.release(released)
+    total = _total(client)
+    summed = client.accumulator(Template(SUM, blanks=('runs',)))
+    pushes = [
+        (total, TOTAL, {'parts': [{'value': 'x'}]}),  # request_types refuses it
+        (total, TOTAL, {'parts': [released.ref('value')]}),  # a record not kept
+        (summed, SUM, {'runs': [file(run=9)]}),  # an unknown file
     ]
-    weighted = client.accumulator(Template(WEIGHTED, blanks=('parts',)))
-    for row in rows:
+    for accumulator, spec, rows in pushes:
         with pytest.raises(SubmitError) as refused:
-            client.submit(WEIGHTED, params={'parts': [row]})
+            client.submit(spec, params=rows)
         with pytest.raises(SubmitError) as pushed:
-            weighted.push(parts=[row])
+            accumulator.push(**rows)
         assert str(pushed.value) == str(refused.value)
 
 
