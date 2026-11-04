@@ -9,12 +9,13 @@ The details live one level down:
 |---|---|
 | the architecture, as a crash course | [tours/layers.html](tours/layers.html) |
 | how to write a workflow, a client, or the framework, on a running example | [roles/](roles/README.md) |
-| how to write a spec: field types, files, references, unions, defaults | [packages/essspec/docs/params.md](../../packages/essspec/docs/params.md), and the docstring of `WorkflowSpec` |
-| how a binding calls a sciline pipeline or a driver | the docstrings of `ess.spec.binding` and `ess.spec.pipeline` |
+| how to write a spec: field types, files, references, unions, defaults | [packages/essspec/docs/params.md](../../packages/essspec/docs/params.md) |
+| how to write a binding: a function, a sciline pipeline, or a driver | [packages/essspec/docs/bindings.md](../../packages/essspec/docs/bindings.md) |
 | stages, accumulators, and their symmetries | [accumulators.md](accumulators.md) |
 | how long records and values are kept, and persisting | [lifetimes.md](lifetimes.md) |
 | batch and automatic reduction | [automatic-reduction.md](automatic-reduction.md) |
 | each call of the client | the docstrings of `ess.apps.client` |
+| how the code is built | the module docstrings |
 | why it is so | the [ADRs](adr/index.md), and those of [essspec](../../packages/essspec/docs/developer/adr/) |
 | what it must do | [the requirements](../requirements/README.md), [user-stories.md](user-stories.md), [system-stories.md](system-stories.md) |
 | how other systems do it | [prior-art/](prior-art/README.md) |
@@ -86,6 +87,7 @@ The workflow author makes it from one of three things, and each serves some of t
 
 The binding gets an instance of the params model, with each file as a local path and each reference replaced by the data it names, and returns an instance of the outputs model.
 It promises not to modify what it gets, and not to return an output that shares memory with it.
+[bindings.md](../../packages/essspec/docs/bindings.md) shows how to write each.
 
 **Backend.** The *backend* runs requests and keeps records, for one or more proposals (an experiment at ESS).
 There are two deployments:

@@ -412,7 +412,7 @@ assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
 assert set(client.provenance(exported).files()) == {reference, *angles}
 ```
 
-The stitch fits scale factors over all angles at once, so it cannot add one angle at a time. An accumulator over `STITCH` still gives what the plain request gives at each read: its driver keeps the rows and stitches them again at each read (the docstring of `Driver` in `ess.spec.binding`).
+The stitch fits scale factors over all angles at once, so it cannot add one angle at a time. An accumulator over `STITCH` still gives what the plain request gives at each read: its driver keeps the rows and stitches them again at each read ([bindings.md, A driver](../../packages/essspec/docs/bindings.md#a-driver)).
 
 ### C5. Vanadium and sample tuned together
 

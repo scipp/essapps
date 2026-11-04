@@ -3,8 +3,24 @@
 """
 A sciline pipeline behind a spec: :class:`PipelineBinding`.
 
+``packages/essspec/docs/bindings.md`` is a guide for workflow authors.
+
 This is the only module of ``ess.spec`` that imports sciline (extra
 ``[sciline]``).
+
+:meth:`PipelineBinding.pipeline` copies what ``make_pipeline`` returns before
+it sets the fixed values at their keys, so that ``make_pipeline`` may hold one
+pipeline and return it for every request. A stage cuts that pipeline with two
+``sciline.Stage`` objects (:class:`_Cut`): the first, with no inputs, finds the
+keys that the outputs depend on, so that a blank whose keys no output uses is
+not fed; the second, with the used keys of the blanks as inputs, computes on
+its first call what does not depend on them, and holds it. An optional output
+is computed only if the pipeline has a value or a provider at its key, so that
+``sciline.Stage`` is never asked for a key that it cannot compute.
+
+A union of groups with several classes keeps the key of each member by class
+(``PipelineBinding._unions``), and a value sets the key of the first class in
+its MRO that is a member.
 """
 
 from __future__ import annotations
@@ -27,165 +43,32 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     """
     A sciline pipeline behind a spec: plain requests and stages.
 
-    ``make_pipeline`` makes the pipeline from the fixed values, by name, with
-    defaults filled in, so that the graph may depend on them; it gets no
-    blank. The binding copies what it returns before it sets values in it, so
-    ``make_pipeline`` may return a pipeline that it holds. Each parameter
-    sets the sciline key of its type, without ``Annotated`` metadata, such as
-    ``Reduction``; a list parameter, such as a table, sets the key of its type,
-    a list, to its list, ``list[Run]`` or ``list[GivenCentre | FindCentre]``.
-    A parameter whose type, or element type, is neither a group nor a union
-    of groups, such as ``bins: int``, needs ``keys=``: its class names no
-    role. So does a file field, which holds a ``Path``: it sets the
-    workflow's own key of the file's path, so that a provider takes a plain
-    path, as esssans' providers take ``Filename[SampleRun]``::
+    Each parameter sets the sciline key of its type, and each output is
+    computed at the key of its type. How parameters map to keys, ``keys=``,
+    unions, ``None``, and what ``make_pipeline`` may hold are in
+    ``packages/essspec/docs/bindings.md``.
 
-        class IofQParams(BaseModel):
-            sample: RunFile  # Annotated[Path, File()]
+    Parameters
+    ----------
+    spec:
+        The spec whose requests the binding computes.
+    make_pipeline:
+        Makes the pipeline from the fixed values, by name, with defaults
+        filled in.
+    keys:
+        A tuple of sciline keys for a parameter or an output, by name:
+        ``(K,)``, a key for each member of a union, or ``()`` for a parameter
+        that sets none. Fields not named take the keys of their types.
 
-        PipelineBinding(IOFQ, make_pipeline, keys={'sample': (Filename[SampleRun],)})
-
-    A group is one key, so a provider takes it apart. For a value in another
-    shape, ``make_pipeline`` inserts an adapter provider, such as one that
-    makes the group ``IofQ`` from the workflow's array::
-
-        def iofq(intensity: BackgroundSubtractedIofQ) -> IofQ:
-            return IofQ(intensity=intensity)
-
-        def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
-            pipeline = sans_workflow()
-            pipeline.insert(iofq)
-            return pipeline
-
-    Files that vary independently are separate parameters, not fields of one
-    group, and the spec names them by role, ``sample`` and ``can``, not after
-    the workflow's run types. A stage fixes or blanks whole parameters, and
-    ``sciline.Stage`` computes again on each call what depends on the key of a
-    blank. A blank group of sample, can, and direct beam would compute the
-    can's branch again on every call, though only the sample changes. A group
-    of files fits files that always change together; a provider in
-    ``make_pipeline`` may take it apart into the workflow's keys.
-
-    A union of groups sets the key of the member that the value is (see
-    below). Each output is computed as the key of its type without
-    ``| None``, since an optional output means that the graph may lack it,
-    not that a provider returns ``None``; an output that a provider returns
-    as ``X | None`` needs ``keys=``. An output typed ``sc.DataArray`` is
-    computed at the key ``sc.DataArray`` unless ``keys=`` names another, so
-    two such outputs need ``keys=``.
-
-    A parameter typed ``X | None`` sets no key. Each value of a union sets
-    one key, but ``None`` has no key to set: setting ``X`` to ``None`` would
-    replace a provider of ``X``, and setting nothing would leave the meaning
-    of ``None`` to whatever the pipeline holds or computes at ``X``. So
-    ``keys=`` must give such a parameter no key, ``()``, and
-    ``make_pipeline`` says what ``None`` means::
-
-        def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
-            pipeline = sciline.Pipeline(providers)
-            if fixed['direct_beam'] is None:
-                pipeline[sans.DirectBeam] = None  # esssans' providers take None
-            else:
-                pipeline[sans.DirectBeamFilename] = fixed['direct_beam']
-            return pipeline
-
-        PipelineBinding(SPEC, make_pipeline, keys={'direct_beam': ()})
-
-    A union of groups has a key for each member, the group as declared, in
-    the order of the union. A value sets the key of the member nearest to
-    its class, the first class of ``type(value).__mro__`` that is a member,
-    so an instance of a subclass of a member, such as an output of a
-    subclass of ``T`` at ``Referenced[T]``, sets that member's key. Here one
-    graph serves both alternatives, since ``find_centre`` leads from one
-    alternative's key to the other's::
-
-        class IofQParams(BaseModel):
-            sample: Sample
-            beam_centre: Annotated[
-                GivenCentre | FindCentre, Field(discriminator='kind')
-            ] = GivenCentre()
-
-        def find_centre(settings: FindCentre, data: SampleData) -> GivenCentre: ...
-
-        binding = PipelineBinding(
-            IOFQ, lambda fixed: sciline.Pipeline([find_centre, ..., iofq])
-        )
-        binding.keys['beam_centre']  # (GivenCentre, FindCentre)
-        # a GivenCentre: pipeline[GivenCentre] = value, which replaces
-        #                find_centre
-        # a FindCentre:  pipeline[FindCentre] = value, and find_centre
-        #                computes GivenCentre
-
-    A union whose members are of one class is that class to the binding,
-    with one key, and not a union, so it may be a blank::
-
-        beam_centre: (
-            Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
-            | Referenced[ComputedCentre]
-        )
-        # keys: (GivenCentre, FindCentre, ComputedCentre)
-        centre: BeamCentre | Referenced[BeamCentre]  # keys: (BeamCentre,)
-
-    Where the members need different providers for one key,
-    ``make_pipeline`` branches on the fixed value. That always works, since a
-    union is never a blank, even with one key for all members: its key may
-    depend on its value. A union typed ``U | None`` sets no key, as
-    ``X | None`` does. A union in a list, such as a table, sets no key of its
-    own: the list's key holds it, and a provider tells its rows apart.
-
-    ``keys`` gives a tuple of keys for a parameter or an output: ``(K,)``,
-    for a union a key for each member in the order of the union, or
-    ``()`` for a parameter that sets none. It names keys of a workflow's own,
-    such as the key at which the graph computes an output, or keys for two
-    parameters of one class, which may instead each have a class of their
-    own, ``class Can(Run): ...``::
-
-        PipelineBinding(
-            IOFQ, make_pipeline, keys={'iofq': (BackgroundSubtractedIofQ,)}
-        )
-
-    No two fields, parameters or outputs, share a key, over all members of
-    a union: an output computed at a parameter's key would be the value the
-    binding was given, which an output must not share memory with. An output
-    that reports the centre given or found has a key of its own, such as
-    ``UsedCentre``, which a provider computes from ``GivenCentre``. A union's
-    own ``keys=`` may give its members one key, ``(K, K)``: the value of
-    either member is then set at ``K``.
-
-    Defaults belong to the spec: ``make_pipeline`` holds no value at a key
-    that a parameter's key leads to, since the value replaces the provider
-    that would read the parameter, and the request's value has no effect.
-    The binding cannot check this: the provider is gone from the graph. A
-    value held at the key of a parameter is harmless, since the binding sets
-    the request's value over it, except at a key of a union whose members
-    have keys of their own, which one member sets and the others do not. If
-    the pipeline of the beam-centre example held a default ``GivenCentre``,
-    the tag 'find' would set ``FindCentre``, but ``iofq`` would read the
-    default, and ``find_centre`` would never run. The binding refuses a
-    value held at any key of such a union, since it cannot tell which key
-    leads to which: the held value has replaced the provider that would show
-    it. ``make_pipeline`` replaces such a value with a provider,
-    ``pipeline.insert(...)``, such as an adapter from the spec's group to the
-    workflow's key. ``make_pipeline`` sets no value in a pipeline it holds,
-    since the binding copies the pipeline only after ``make_pipeline``
-    returns it, and a value set for one request would stay for the next.
-
-    :attr:`keys` and :meth:`pipeline` give these keys and the graph, so that
-    the driver of a multi-run spec can reuse them.
-
-    A stage cuts :meth:`pipeline` of the fixed values at the keys of the
-    blanks with ``sciline.Stage``, which computes what does not depend on
-    them on the first call and caches it. A plain request is a stage with no
-    blanks, called once. ``make_pipeline`` gets no blank, so a field that
-    changes the graph cannot be a blank. A key that no output depends on is
-    not fed: its value cannot change the outputs. An optional output is
-    computed if the pipeline has a value or a provider for its key, and is
-    ``None`` otherwise. ``fixed`` and ``blanks`` are checked by
-    ``fixed_values`` of :mod:`ess.spec.binding`, and a field without a key,
-    or a union, cannot be a blank.
-
-    The author of the pipeline promises that it is pure: it modifies no value
-    it is given, and returns the same results for the same values.
+    Raises
+    ------
+    ValueError
+        If ``keys`` names no field of the spec or gives a wrong number of
+        keys, if a parameter whose class names no role lacks its ``keys``,
+        if one typed ``X | None`` has keys other than ``()``, or if two
+        fields share a key.
+    TypeError
+        If a value of ``keys`` is not a tuple.
     """
 
     def __init__(
@@ -270,11 +153,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
 
     @property
     def keys(self) -> Mapping[str, tuple[Key, ...]]:
-        """
-        The sciline keys of each parameter and output, by name: ``(K,)``, a
-        key for each member of a union, or ``()`` for a parameter that sets
-        none.
-        """
+        """The sciline keys of each parameter and output, by name, as in ``keys=``."""
         return self._keys
 
     def pipeline(self, fixed: Mapping[str, Any]) -> sciline.Pipeline:
@@ -282,13 +161,12 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         The pipeline ``make_pipeline`` makes from ``fixed``, by name, with each
         value of ``fixed`` set at its key: the graph that a stage cuts.
 
-        A stage passes its fixed values with defaults filled in. A driver
-        passes the fixed values it is made with: every value that is not a
-        table, defaults filled in. So a field that is a table of the
-        multi-run spec cannot shape the graph, as a blank cannot. A driver
-        cannot cut the graph at one key for the rows of a table whose
-        single-run parameter is a union of several classes either, since it
-        has a key per member; a table of ``X | Referenced[X]`` has one key.
+        Raises
+        ------
+        ValueError
+            If ``fixed`` names no parameter of the spec, or if
+            ``make_pipeline`` holds a value at a key of a union whose members
+            have keys of their own.
         """
         spec = self.spec
         if unknown := sorted(fixed.keys() - spec.params.model_fields.keys()):
