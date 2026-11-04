@@ -4,7 +4,9 @@
 The client: what a notebook, an application, or a controller calls.
 
 A client talks to one backend for one proposal. Calls that take records or
-requests accept one, a list, or a dict, and return the same shape.
+requests accept one, a list, or a dict, and return the same shape;
+:meth:`~Client.cancel`, :meth:`~Client.persist`, and :meth:`~Client.release`
+accept the same and return nothing.
 
 A record never changes; its status changes once, from pending to finished,
 and is asked with :meth:`Client.status` or :meth:`Client.wait`.
@@ -79,18 +81,21 @@ class Provenance(BaseModel, frozen=True):
     Where a record came from: what it ran, what it read, and their files.
 
     ``request`` is the record's request, or for the state of an accumulator,
-    the plain request over the rows pushed so far. ``records`` lists every
-    record read through all references, nearest first, the records of the states
-    of accumulators among them; it stops at files.
+    the plain request over the rows pushed so far. ``upstream`` holds every
+    record read through all references, directly or through other records,
+    nearest first; where a value is an output of an accumulator's state, the
+    record listed is the record of that state. It stops at files.
     """
 
     request: Request
     upstream: tuple[Record, ...]
 
     def records(self) -> list[Record]:
+        """Every record read through all references (``upstream``), nearest first."""
         return list(self.upstream)
 
     def files(self) -> list[FileRef]:
+        """The files that the request and the records read name, each once."""
         ran = (self.request, *(r.request for r in self.upstream))
         return list(dict.fromkeys(d for r in ran for d in r.files()))
 
@@ -100,7 +105,11 @@ class Files:
     The files of the backend's file source that the proposal may read.
 
     Forms and controllers find files here: they list them, wait for new ones,
-    and read their metadata. A request names a file with ``file(...)``.
+    and read their metadata, from the backend's file source (see
+    :class:`~ess.apps.files.FileSource`). A client sees only the files its
+    proposal may read. A selector picks files by metadata (see
+    :class:`~ess.apps.files.Selector`). A request names a file with
+    ``file(...)``.
     """
 
     def __init__(self, backend: Backend, client: str) -> None:
@@ -303,7 +312,12 @@ class Client:
         return self._backend.spec(spec_id, self._id)
 
     def specs(self) -> list[WorkflowSpec[Any, Any]]:
-        """The specs the backend runs, one for each binding, in the order bound."""
+        """
+        The specs the backend runs, one for each binding, in the order bound.
+
+        A form builds itself from these and :meth:`spec`, so it needs no specs
+        of its own.
+        """
         return self._backend.specs(self._id)
 
     # Submitting
@@ -342,9 +356,16 @@ class Client:
 
         A stage takes the values of its blanks the same way. Requests may be
         one, a list, or a dict. The records come back pending, in the shape
-        given. Under a label, the keys of a dict become the members of their
-        records. An accumulator is not submitted: a request reads it through
-        :meth:`Accumulator.ref`.
+        given. An accumulator is not submitted: a request reads it through
+        :meth:`Accumulator.ref`. A request never references a record of its
+        own call, which does not exist yet.
+
+        ``label`` names a sequence of records, such as all I(Q) reductions of
+        an experiment, and ``member`` one part of it, such as one sample. Both
+        are optional, belong to the record and not to the request, and
+        do not change the result. Under a label, the keys of a dict become the
+        members of their records, so ``member`` is refused with a dict. Find
+        records by them with :meth:`records` and :meth:`latest`.
 
         The backend checks the values against its own spec, so a ``SpecId``
         instead of the spec gets the same checks. A request that cannot run
@@ -399,13 +420,16 @@ class Client:
         return _reshape(what, records)
 
     def compute(self, *args: Any, **kwargs: Any) -> Any:
-        """Submit, wait, and return the records."""
+        """
+        :meth:`submit`, then :meth:`wait`, and return the records, which a
+        failure leaves failed, not raised.
+        """
         records = self.submit(*args, **kwargs)
         self.wait(records)
         return records
 
     def status(self, records: Any) -> Any:
-        """The status of each record now."""
+        """The status of each record now: pending, completed, failed, or cancelled."""
         ids = [r.id for r in _items(records)]
         return _reshape(records, self._backend.status(ids, self._id))
 
@@ -415,12 +439,30 @@ class Client:
         return _reshape(records, self._backend.wait(ids, self._id))
 
     def failure(self, records: Any) -> Any:
-        """Why each record failed; ``None`` for a record that has not failed."""
+        """
+        Why each record failed, or why the backend cancelled it; ``None`` for
+        a record pending, completed, or cancelled by a client.
+
+        The reason is the framework's own words as they stand: a value refused
+        when the record ran, such as ``specimens[0]: Value error, ...``, or
+        ``record r17 failed``, ``the workflow of sans-iofq/v1 returned None as
+        iofq``, ``the write failed: ...``. An error raised by a binding, its
+        driver, the file source, or the store is given with its type, such as
+        ``KeyError: 'counts'``.
+        """
         failures = [self._backend.failure(r.id, self._id) for r in _items(records)]
         return _reshape(records, failures)
 
     def cancel(self, records: Any) -> None:
-        """End the unfinished records as cancelled."""
+        """
+        End the unfinished records as cancelled.
+
+        A client may cancel any record of its proposal, also one that another
+        client made. A running workflow is not interrupted: its record is
+        cancelled at once, and its outputs are dropped when it returns. A
+        cancelled request keeps nothing it reads, so cancelling passes along
+        a chain of pending requests (see :meth:`release`).
+        """
         self._backend.cancel([r.id for r in _items(records)], self._id)
 
     # Stages, accumulators, and what the client keeps
@@ -512,6 +554,9 @@ class Client:
         released accumulator takes no more pushes or readers; the pushes up
         to the last state a pending read still holds are added, the later
         ones are dropped, and its state is dropped once its readers are done.
+        Releasing what the client does not keep does nothing. A client reads
+        the outputs of a released record only if they are persisted (see
+        :meth:`persist`); otherwise :meth:`output` raises ``NotReadable``.
         """
         self._backend.release([x.id for x in _items(what)], client=self._id)
 
@@ -527,6 +572,9 @@ class Client:
         """
         The value of an output, or every output returned, by name, if ``name``
         is None; an optional output that was not returned is left out.
+
+        A record's value is the one the workflow returned, not a copy: the
+        caller must not change it, and the framework never does.
 
         A record's, once it has completed, if the client keeps it, or once
         written, if persisted; raises ``NotReadable`` for a record it neither
@@ -581,11 +629,19 @@ class Client:
         return _reshape(records, self._backend.readable(ids, self._id))
 
     def records(self, *, label: str | None = None) -> list[Record]:
-        """The proposal's records, oldest first, under ``label`` if given."""
+        """
+        The proposal's records, oldest first, under ``label`` if given;
+        every record of the proposal without it. Each record has its
+        ``member``, so ``{r.member: r for r in client.records(label=...)}``
+        is the newest of each member.
+        """
         return self._backend.records(self._id, label=label)
 
     def latest(self, label: str, member: str | None = None) -> Record:
-        """The newest record under a label, of ``member`` if given, pending or not."""
+        """
+        The newest record under a label, of ``member`` if given, pending or
+        not; raises ``KeyError`` if there is none.
+        """
         matching = [
             r for r in self.records(label=label) if member is None or r.member == member
         ]
@@ -628,7 +684,9 @@ def local(
     A client of its own backend in this process, running the workflows bound here.
 
     ``bind`` lists a binding for each spec the backend runs, such as
-    ``[PipelineBinding(IOFQ, ...), DriverBinding(IOFQ_MULTI, ...)]``.
+    ``[PipelineBinding(IOFQ, ...), DriverBinding(IOFQ_MULTI, ...)]``. Since the
+    code runs in this process, a binding may also be of code defined in a
+    notebook, such as ``function_binding(IOFQ, iofq)``.
 
     Closing the client closes the backend, which waits until what is persisted
     is written. Without a ``store``, persisting is refused. The backend keeps

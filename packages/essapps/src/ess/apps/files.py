@@ -23,7 +23,15 @@ def file(
     """
     A file by its run number, its path, or the PID of the SciCat dataset
     that holds it, as a request writes it. The backend resolves it to the
-    file's identity when the request is submitted.
+    file's identity when the request is submitted, and the record holds that
+    identity in place of the name. Exactly one of the three is given::
+
+        file(run=60339)
+        file(path='/home/user/data/run1.h5')
+        file(pid='20.500.12269/vanadium')
+
+    A string where a file field is expected is refused: write ``file(path=...)``.
+    The record holds no metadata; read it with :meth:`ess.apps.Files.metadata`.
     """
     given = {'run': run, 'path': path, 'pid': pid}
     named = {kind: value for kind, value in given.items() if value is not None}
@@ -40,7 +48,13 @@ class Selector:
     A file has a kind, such as raw, derived, mask, or calibration; a
     selector matches raw files unless it names another kind. A run has a
     role, such as sample or background (see :class:`~ess.spec.File` for
-    the keys and their values).
+    the keys and their values). Each given value must equal the file's.
+
+    A file fits a file field when the selector of the marker's metadata
+    matches it, ``Selector(**File(kind='mask').metadata)``, so a form lists
+    for a field only the files the backend accepts there::
+
+        client.files.list(Selector(role='sample'))
     """
 
     def __init__(self, kind: str = 'raw', **fields: Any) -> None:
