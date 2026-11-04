@@ -21,11 +21,13 @@ and takes ``SECONDS_PER_RUN`` per run, so that an app shows its record pending.
 ``IofQ``, typed ``Referenced[IofQ]``: no request writes an ``IofQ``, so only
 a reference to an output fills it.
 
-By convention each parameter is a group. A parameter that takes a file is
-typed a file model, ``Sample``, ``Can``, or ``Run``, and a request writes it as
-``file(...)``. A
-``PipelineBinding`` keys each parameter by its class, so the sample and the can
-are classes of their own.
+By convention each parameter is a group, which a ``PipelineBinding`` keys by its
+class. A parameter that takes a file is a file field, ``RunFile``, which holds
+the file's local path, and a request writes it as ``file(...)``. The binding
+sets each file parameter at the workflow's own key, ``Filename[SampleRun]`` or
+``Filename[CanRun]``, as esssans does, so that a provider takes a plain path.
+The sample and the can are separate parameters, not fields of one group: a
+stage that leaves the sample blank computes the can's branch once.
 
 workflow-authors.ipynb writes the specs and bindings below step by step; the other
 notebooks import them from here.
@@ -35,7 +37,7 @@ import json
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, NewType, TypeVar
+from typing import Annotated, Any, NewType, TypeVar
 
 import numpy as np
 import sciline
@@ -44,7 +46,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ess.spec import (
     DriverBinding,
-    FileModel,
+    File,
     Referenced,
     WorkflowSpec,
     function_binding,
@@ -95,16 +97,8 @@ class IofQ(BaseModel):
     intensity: sc.Variable
 
 
-class Run(FileModel):
-    """A run's raw file."""
-
-
-class Sample(Run):
-    """A sample run's file."""
-
-
-class Can(Run):
-    """An empty-can run's file."""
+RunFile = Annotated[Path, File()]
+"""A run's raw file, as its local path."""
 
 
 class IofQSettings(BaseModel):
@@ -114,13 +108,13 @@ class IofQSettings(BaseModel):
 
 
 class IofQParams(IofQSettings):
-    sample: Sample
-    can: Can
+    sample: RunFile
+    can: RunFile
 
 
 class IofQMultiParams(IofQSettings):
-    sample: list[Sample] = Field(min_length=1)
-    can: list[Can] = Field(min_length=1)
+    sample: list[RunFile] = Field(min_length=1)
+    can: list[RunFile] = Field(min_length=1)
 
 
 class IofQOutputs(BaseModel):
@@ -167,7 +161,7 @@ FORWARD = WorkflowSpec(
 
 
 class FindCentreParams(BaseModel):
-    sample: Run
+    sample: RunFile
 
 
 class FindCentreOutputs(BaseModel):
@@ -185,7 +179,7 @@ FIND_CENTRE = WorkflowSpec(
 
 
 class TransmissionParams(BaseModel):
-    run: Run
+    run: RunFile
 
 
 class TransmissionOutputs(BaseModel):
@@ -203,7 +197,7 @@ TRANSMISSION = WorkflowSpec(
 
 
 class CountsParams(BaseModel):
-    runs: list[Run] = Field(min_length=1)
+    runs: list[RunFile] = Field(min_length=1)
 
 
 class RunCounts(BaseModel):
@@ -259,9 +253,11 @@ def write_runs(directory: Path) -> dict[int, Path]:
 
 
 # The workflow package: a sciline pipeline of one sample run and one can run.
-# The keys of the parameters and of I(Q) are the classes of the spec's fields.
-# ``SampleRun`` and ``CanRun`` are the pipeline's run types, keys of the
-# workflow that the spec never names.
+# The keys of the groups and of I(Q) are the classes of the spec's fields.
+# ``SampleRun`` and ``CanRun`` are the pipeline's run types, and
+# ``Filename[RunType]`` the key of a run's file, keys of the workflow that the
+# spec never names: the binding maps the parameters ``sample`` and ``can`` to
+# them with ``keys=``.
 # The reduction uses the beam centre as a scipp vector, which a provider makes
 # from the group.
 
@@ -271,6 +267,10 @@ RunType = TypeVar('RunType', SampleRun, CanRun)
 
 
 BeamCentrePosition = NewType('BeamCentrePosition', sc.Variable)
+
+
+class Filename(sciline.Scope[RunType, Path], Path):
+    """The local path of a run's file."""
 
 
 class RunData(sciline.Scope[RunType, dict], dict):
@@ -294,12 +294,8 @@ LOADED: list[dict] = []
 or an accumulator saves."""
 
 
-def read_sample(sample: Sample) -> RunData[SampleRun]:
-    return RunData[SampleRun](json.loads(sample.path.read_text()))
-
-
-def read_can(can: Can) -> RunData[CanRun]:
-    return RunData[CanRun](json.loads(can.path.read_text()))
+def read(path: Filename[RunType]) -> RunData[RunType]:
+    return RunData[RunType](json.loads(path.read_text()))
 
 
 def load(data: RunData[RunType]) -> Counts[RunType]:
@@ -345,8 +341,7 @@ def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
     """The pipeline; its graph is the same for any fixed values."""
     return sciline.Pipeline(
         [
-            read_sample,
-            read_can,
+            read,
             load,
             beam_centre_position,
             numerator,
@@ -359,7 +354,10 @@ def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
 
 # The bindings.
 
-single = PipelineBinding(IOFQ, make_pipeline)
+FILE_KEYS = {'sample': (Filename[SampleRun],), 'can': (Filename[CanRun],)}
+"""The workflow's key of each file parameter, by name."""
+
+single = PipelineBinding(IOFQ, make_pipeline, keys=FILE_KEYS)
 
 
 class IofQDriver:
@@ -414,14 +412,14 @@ def forward(params: ForwardParams) -> ForwardOutputs:
 
 
 def find_centre(params: FindCentreParams) -> FindCentreOutputs:
-    data = json.loads(params.sample.path.read_text())
+    data = json.loads(params.sample.read_text())
     counts = sc.array(dims=['pixel'], values=data['counts'])
     centre = (counts * PIXELS).sum() / counts.sum()
     return FindCentreOutputs(centre=BeamCentre(x=centre.fields.x.value, y=0.0))
 
 
 def transmission(params: TransmissionParams) -> TransmissionOutputs:
-    data = json.loads(params.run.path.read_text())
+    data = json.loads(params.run.read_text())
     return TransmissionOutputs(
         transmission=TransmissionFraction(value=data['transmitted'] / data['monitor'])
     )
@@ -431,7 +429,7 @@ def counts(params: CountsParams) -> CountsOutputs:
     rows = []
     for run in params.runs:
         time.sleep(SECONDS_PER_RUN)
-        rows.append(json.loads(run.path.read_text())['counts'])
+        rows.append(json.loads(run.read_text())['counts'])
     data = sc.array(dims=['run', 'pixel'], values=rows, unit='counts')
     counts = sc.DataArray(data, coords={'x': PIXELS.fields.x.copy()})
     return CountsOutputs(counts=RunCounts(counts=counts))
