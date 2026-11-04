@@ -76,24 +76,22 @@ A request lives in two phases. In the *request phase*, when it is submitted,
 the backend checks what it can without data (see ``checks.py``), and, under
 its lock, what depends on history and on what the client keeps: each reference
 to a record or an accumulator is one the client may read, and its data fit the
-type at its place. Each group given inline is validated whole then, so that
-its validators run. In the *call phase*, on a worker, the backend reads the
-output each reference names, and makes each value, a row of a list on its
-own, by the type of its source: a value written inline or a file of the JSON
-form the log holds, each file model given its file's local path, and the
-data read for a reference by the groups that ``Referenced[...]`` marks there
-(see :func:`ess.spec.request_types.value_of`). For a plain request it makes
-the params instance from these values without validating again, so the
-params model's model validators never run; a stage or an accumulator gets
-the values by name. The rows of a table whose row type has a member
-``Referenced[T]`` are distinct by the JSON forms of the rows read, as the
-element type dumps them, too: an inline value and a reference to equal data
-are one row. This holds unless such a ``T`` has a data value. A table that
-a request, a template, or a stage call gives whole is compared within itself
-when it is read. The binding returns an instance of the
-outputs model: an output that the spec declares optional and the binding
-returns as ``None`` is left out, and a record whose binding returns anything
-else fails.
+type of its field (see :data:`ess.spec.request_types.Reads`). Each group
+given inline that holds no reference is validated whole then, so that its
+validators run. In the *call phase*, on a worker, the backend reads the
+output each reference names, and validates each value, a row of a list on
+its own, by the params model from the JSON form the log holds, with each
+reference replaced by the data read and each file model given its file's
+local path (see :func:`ess.spec.request_types.validated`). A group that holds a
+reference is validated then, so its validators see the data read. For a
+plain request the backend makes the params instance from these values
+without validating again, so the params model's model validators never run;
+a stage or an accumulator gets the values by name. The rows of a table are
+distinct by what the record stores alone (see :func:`.checks.distinct`): an
+inline value and a reference to equal data are two rows. The binding returns
+an instance of the outputs model: an output that the spec declares optional
+and the binding returns as ``None`` is left out, and a record whose binding
+returns anything else fails.
 
 A stage checks its template's values when it is made, and resolves file
 names: each fixed value by its own field. It keeps the outputs they
@@ -126,13 +124,10 @@ Each accumulator then works through its steps one at a time, in the order they
 were logged, on the workers: opening has the binding make the driver from the
 template's values by name, each read and validated by its own field, and each
 push is one push into the driver per table it gives rows of, in the order
-given, which may add the rows in place; each row is first read and
-validated by its table's element type,
-and a row that fails its check fails the push, as does a row read whose JSON
-form repeats one of the table read before; the accumulator keeps these JSON
-forms, which a restart need not rebuild, since no accumulator survives it. A
-step starts once the records it references have completed, and a push once the
-readers of the state before it are done. If a step fails, or a record it
+given, which may add the rows to what it holds; each row is first read and
+validated by its table's element type, and a row that fails its check fails
+the push. A step starts once the records it references have completed, and a
+push once the readers of the state before it are done. If a step fails, or a record it
 references has not completed, the accumulator stops: it takes no more pushes
 or readers, the steps after it are dropped, and the requests that wait for a
 state it will not reach fail. Its driver is dropped once no reader holds its
@@ -160,7 +155,7 @@ the first time a record of the state or a read of its outputs reads it, and
 kept until the next push. The record of a state is computed from the
 driver, as a call through a stage is from what the stage holds: its outputs
 are what the driver returns, not a copy, and may share memory with the
-driver, which the next push may change in place. They are kept until the
+driver, which the next push may change. They are kept until the
 requests that read them have run, and the record holds the state as its
 reader until then. Reading the outputs of the accumulator copies them, or
 only the part that a selection names. So the next push waits until the
@@ -220,10 +215,10 @@ from ess.spec import (
     StageCall,
     WorkflowSpec,
     field_types,
-    places,
     request_types,
 )
 from ess.spec.refs import Loc, ParamsError, iter_refs, map_refs
+from ess.spec.request_types import Reads
 
 from .checks import Checks, check_fit, distinct
 from .errors import ClientEnded, NotReadable, RecordFailed, SubmitError
@@ -342,21 +337,6 @@ def _selected(value: Any, select: Selection) -> Any:
     return value.model_copy(update=copy.deepcopy(fields))
 
 
-def _compares_rows_read(spec: Spec, table: str) -> bool:
-    """
-    Whether the rows read of ``table`` of ``spec`` are compared: if its row
-    type has a member ``Referenced[T]``, and no such ``T`` has a data value
-    (see :func:`ess.spec.places.unwritten`). Rows of a table without one are
-    written inline or are files, whose JSON forms the request phase compared
-    already.
-    """
-    tp, _, metadata = places.root_type(spec.params, table)
-    referenced = places.split(tp, *metadata)[2]
-    return bool(referenced) and all(
-        places.unwritten(field_types.plain(t)) is None for t in referenced
-    )
-
-
 def _output_reads(params: Mapping[str, Any]) -> list[tuple[str, str]]:
     """The outputs of records that ``params`` reference, by record ID and name."""
     return [
@@ -448,10 +428,7 @@ class _Accumulator:
     outputs of records it reads, which it holds as a reader. ``busy`` says a
     worker makes the driver or pushes into it, outside the backend's lock.
     ``seen`` holds the rows of each blank table logged so far, by JSON form,
-    with their indexes (see :func:`.checks.distinct`). ``rows_read`` holds
-    those of the rows read in the steps done so far, for a table whose rows
-    read are compared (see :meth:`Backend._typed`); only the worker that
-    does a step changes it.
+    with their indexes (see :func:`.checks.distinct`).
 
     ``checked`` holds the number of pushes of the last state whose plain
     request was checked, and why it would be refused, or ``None``. Two
@@ -482,7 +459,6 @@ class _Accumulator:
         self.added: int | None = None
         self.steps: deque[_Step] = deque()
         self.seen: dict[str, dict[bytes, int]] = {i: {} for i in template.blanks}
-        self.rows_read: dict[str, dict[bytes, int]] = {}
         self.busy = False
         self.checked: tuple[int, str | None] | None = None
         self.stopped: str | None = None
@@ -823,7 +799,8 @@ class Backend:
         and fails if the write fails.
         """
         proposal = self._client(client).proposal
-        requests = [self._prepare(e, proposal) for e in entries]
+        prepared = [self._prepare(e, proposal) for e in entries]
+        requests = [request for request, _ in prepared]
         persisted = [self._persisted(r.spec, persist) for r in requests]
         referenced = {ref.accumulator for r in requests for ref in r.accumulators()}
         with self._changed:
@@ -835,8 +812,8 @@ class Backend:
             }
             with self._changed:
                 caller = self._client(client)
-                for entry, request in zip(entries, requests, strict=True):
-                    self._check_entry(entry, request, caller, states)
+                for entry, (request, reads) in zip(entries, prepared, strict=True):
+                    self._check_entry(entry, request, reads, caller, states)
                 state_ids = {i: uuid.uuid4().hex for i in states}
                 return self._create(
                     entries, requests, caller, states, state_ids, persisted
@@ -962,11 +939,11 @@ class Backend:
             raise SubmitError.at((), f'{spec_id} has no outputs {lacking} to persist')
         return names
 
-    def _prepare(self, entry: Entry, proposal: str) -> Request:
+    def _prepare(self, entry: Entry, proposal: str) -> tuple[Request, Reads]:
         """
         The request as the record holds it, checked as a plain request in the
-        request phase, but for the records it reads (see :meth:`_check_reads`);
-        needs no lock.
+        request phase, but for the records it reads, and the references to
+        outputs in it (see :meth:`_check_reads`); needs no lock.
         """
         try:
             self._spec(entry.request.spec)  # an unknown spec is refused as such
@@ -997,34 +974,36 @@ class Backend:
         self,
         entry: Entry,
         request: Request,
+        reads: Reads,
         caller: _Client,
         states: Mapping[str, _Pinned],
     ) -> None:
         """
         Check the stage a request of a submission goes through, if any, and
-        what the request reads (see :meth:`_check_stage` and
-        :meth:`_check_reads`); lock held.
+        the ``reads`` of the part of the request that the call reads (see
+        :meth:`_check_stage` and :meth:`_check_reads`); lock held.
         """
         try:
             stage = self._check_stage(entry, request, caller)
-            read, also = request, ()
+            also: Collection[tuple[str, str]] = ()
             if stage is not None:
-                read, also = stage.read_part(request), stage.reads
-            self._check_reads(read.spec, read.params, caller, states, also)
+                read, also = stage.read_part(request).params, stage.reads
+                reads = [r for r in reads if r[0][0] in read]
+            self._check_reads(reads, caller, states, also)
         except SubmitError as error:
             raise entry.refused(error) from None
 
     def _check_reads(
         self,
-        spec_id: SpecId,
-        params: Mapping[str, Any],
+        reads: Reads,
         caller: _Client,
         states: Mapping[str, _Pinned],
         also: Collection[tuple[str, str]] = (),
     ) -> None:
         """
-        Check the outputs of records and accumulators that ``params``, of the
-        spec, read; lock held. Each must be one the client may reference (see
+        Check the outputs of records and accumulators that a request reads,
+        ``reads``, each with its position and the type its data must fit;
+        lock held. Each must be one the client may reference (see
         :meth:`_source_spec`), declared by its spec, and fit its field (see
         :func:`.checks.check_fit`).
 
@@ -1038,9 +1017,7 @@ class Backend:
         ``also``, what the stage keeps, which :meth:`_check_stage` has checked
         it for; one through a stage that has staged reads only its blanks.
         """
-        for loc, ref, tp in places.ref_types(
-            self._bindings[spec_id].spec.params, params
-        ):
+        for loc, ref, tp in reads:
             source = self._source_spec(ref, loc, caller, states, also)
             check_fit(self._bindings[source].spec, ref, tp, loc)
 
@@ -1285,48 +1262,29 @@ class Backend:
             returned = call(self._typed(request.spec, given))
         return _outputs_of(request.spec, spec.outputs, returned)
 
-    def _typed(
-        self,
-        spec_id: SpecId,
-        values: Mapping[str, Any],
-        rows: dict[str, dict[bytes, int]] | None = None,
-    ) -> dict[str, Any]:
+    def _typed(self, spec_id: SpecId, values: Mapping[str, Any]) -> dict[str, Any]:
         """
         ``values`` of a request by name as the binding takes them; no lock.
-        The data each reference names is read, and each value is made by the
-        type of its source, a row of a list on its own (see
-        :func:`ess.spec.request_types.value_of`). A plain request makes the
-        params instance from them, and a stage or a driver takes them by name.
-
-        The rows of each table in ``values`` whose row type has a member
-        ``Referenced[T]``, unless such a ``T`` has a data value (see
-        :func:`ess.spec.places.unwritten`), are distinct by the JSON forms of
-        the rows read, as the element type dumps them, so an inline value and
-        a reference to equal data are one row, and a file model is its file's
-        identity. They are compared with
-        those in ``rows``, the rows read before by table, which they join
-        (see :func:`.checks.distinct`).
+        The data each reference names is read, and each value is validated by
+        the params model from what the log holds, a table without its length
+        constraints, with each reference replaced by its data and each file
+        given its local path (see
+        :func:`ess.spec.request_types.validated`). A group that holds a
+        reference is validated only here, so its validators run now.
+        A plain request makes the params instance from them, and a stage or a
+        driver takes them by name.
         """
         spec = self._bindings[spec_id].spec
-        read = self._reader(values)
         paths = {
             ref.file: self._files.path(ref)
             for _, ref in iter_refs(values)
             if isinstance(ref, FileRef)
         }
-        typed = {
-            n: request_types.value_of(spec.params, n, v, read, paths)
+        context = {'read': self._reader(values), 'paths': paths}
+        return {
+            n: request_types.validated(spec.params, n, v, n in spec.tables, context)
             for n, v in values.items()
         }
-        rows = {} if rows is None else rows
-        for table in spec.tables:
-            if table in typed and _compares_rows_read(spec, table):
-                seen = rows.setdefault(table, {})
-                forms = [
-                    field_types.json_form(spec.params, table, v) for v in typed[table]
-                ]
-                seen.update(distinct(table, forms, seen))
-        return typed
 
     def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
         """
@@ -1369,7 +1327,8 @@ class Backend:
         What reads the data each reference in ``params`` names: outputs held
         in memory, or one element of each, taken under the backend's lock
         now, and outside it, outputs written and no longer held from the
-        store. The caller reads only what something keeps for it, so an
+        store, each once, so that the references to one output give one
+        object. The caller reads only what something keeps for it, so an
         output is held or written.
         """
         held: dict[Ref, Any] = {}
@@ -1384,7 +1343,9 @@ class Backend:
                     held[ref] = _element(self._outputs[key], ref)
 
         def read(ref: OutputRef | AccumulatorRef) -> Any:
-            return held[ref] if ref in held else self._stored(ref)
+            if ref not in held:
+                held[ref] = self._stored(ref)
+            return held[ref]
 
         return read
 
@@ -1765,11 +1726,11 @@ class Backend:
         binding = self._bindings[spec_id]
         if not isinstance(binding, StageBinding):
             raise SubmitError.at((), f'{spec_id}: its binding makes no stages')
-        stored, _ = self._checks[spec_id].template(template, proposal)
+        stored, _, reads = self._checks[spec_id].template(template, proposal)
         stage_id = uuid.uuid4().hex
         with self._changed:
             caller = self._client(client)
-            self._check_reads(spec_id, stored.params, caller, {})
+            self._check_reads(reads, caller, {})
             given = frozenset(stored.blanks)
             stage = caller.stages[stage_id] = _Stage(binding, stored, given)
             self._readers.update(stage.reads)
@@ -1799,11 +1760,11 @@ class Backend:
                 f'{spec_id}: the blanks of an accumulator are tables, '
                 f'{list(tables)}, not {list(blanks)}',
             )
-        stored, fixed = self._checks[spec_id].template(template, caller.proposal)
+        stored, fixed, reads = self._checks[spec_id].template(template, caller.proposal)
         accumulator_id = uuid.uuid4().hex
         with self._changed:
             caller = self._client(client)
-            self._check_reads(spec_id, stored.params, caller, {})
+            self._check_reads(reads, caller, {})
             # The blank tables without rows, so that the pushes extend them
             # into the plain request of each state.
             empty: dict[str, list[Any]] = {b: [] for b in blanks}
@@ -1841,7 +1802,7 @@ class Backend:
             acc = self._pushed_into(caller, accumulator_id)
         spec_id = acc.template.spec
         checks = self._checks[spec_id]
-        values = checks.push(acc.template.blanks, rows, caller.proposal)
+        values, reads = checks.push(acc.template.blanks, rows, caller.proposal)
         with self._changed:
             caller, acc = self._settled(client, accumulator_id)
             if acc.frozen is not None:
@@ -1849,7 +1810,7 @@ class Backend:
                     (), f'the accumulator was frozen as record {acc.frozen}'
                 )
             seen = {t: distinct(t, v, acc.seen[t]) for t, v in values.items()}
-            self._check_reads(spec_id, values, caller, {})
+            self._check_reads(reads, caller, {})
             self._append(Pushed(accumulator=accumulator_id, params=values))
             for table, rows_seen in seen.items():
                 acc.seen[table].update(rows_seen)
@@ -1973,7 +1934,7 @@ class Backend:
         # busy, or on this worker.
         values, reads = acc.steps[0]
         try:
-            typed = self._typed(acc.template.spec, values, acc.rows_read)
+            typed = self._typed(acc.template.spec, values)
             if acc.added is None:  # the opening, which makes the driver
                 acc.driver = acc.binding.make_accumulator(typed, acc.template.blanks)
             else:

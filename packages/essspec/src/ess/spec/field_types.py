@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Type introspection of the fields of a spec's models.
+What a request may write at a field, read from the type of the field.
 
 A spec's models carry no annotations for the framework: what the framework
 needs, it reads from the field types. These functions take a field's type
@@ -17,10 +17,28 @@ apart::
 
 :func:`fits` says whether data of one type can be the value of a field of
 another, so that an output of one spec can fill a parameter of another.
-:func:`model_of` makes a model of one field, which validates a value, or a
-row of a list parameter, by that field alone. :func:`inline` uses it to
-validate a value from its JSON form in the request phase, and
-:func:`ess.spec.places.validated` to validate data, as a binding takes it.
+
+The request type, and so the params schema of a spec and the Panel form,
+decide what a request writes at a field from its type, with these
+functions (see :mod:`ess.spec.request_types`)::
+
+    # The type without | None, whether it is X | None, and its metadata.
+    tp, none, metadata = unwrapped(info.annotation, field_metadata(info))
+    # The part that a request writes, with its metadata, and the groups
+    # whose data a reference fills the field with, each T of Referenced[T].
+    inline, inline_metadata, referenced = split(tp, *metadata)
+    # A union of groups: show the fields of each alternative. None for any
+    # other type.
+    alternatives(inline, *inline_metadata)  # ('kind', {'given': ..., ...})
+    # A file model: offer a picker of files. Any other group: show its
+    # fields.
+    is_file_model(inline)
+    # Groups that a reference fills the field with: offer a picker of
+    # records.
+    referenced  # (ComputedBeamCentre,)
+
+:func:`field_metadata` gives the metadata of a field with its
+discriminator, and :func:`title` the label of a field.
 The rules these serve are stated in :mod:`ess.spec._workflow_spec`.
 """
 
@@ -29,8 +47,9 @@ from __future__ import annotations
 import dataclasses
 import functools
 import operator
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from datetime import datetime
+from enum import Enum
 from types import NoneType, UnionType
 from typing import (
     Annotated,
@@ -48,16 +67,15 @@ from typing import (
 from pydantic import (
     AwareDatetime,
     BaseModel,
+    Discriminator,
     Field,
     NaiveDatetime,
     RootModel,
-    ValidationError,
-    create_model,
+    Tag,
 )
-from pydantic_core import PydanticCustomError, from_json, to_json
+from pydantic.fields import FieldInfo
 
-from .parameters import FileModel
-from .refs import Loc, ParamsError
+from .parameters import REFERENCED, FileModel
 
 TIMES = (datetime, AwareDatetime, NaiveDatetime)
 """The types of a time, which a request writes as a string."""
@@ -90,20 +108,6 @@ def optional(tp: Any) -> tuple[Any, bool]:
             inner = args[0] if len(args) == 1 else Union[tuple(args)]  # noqa: UP007
             return inner, True
     return tp, False
-
-
-def taken_apart(annotation: Any) -> tuple[Any, bool, bool | None]:
-    """
-    The type of one value of ``annotation``, ``X`` of ``X``, ``X | None``,
-    ``list[X]``, ``list[X] | None``, or ``list[X | None]``; whether
-    ``annotation`` is typed ``X | None``; and for a list whether its element
-    is, else ``None``.
-    """
-    tp, is_optional = optional(annotation)
-    if get_origin(tp) is not list:
-        return tp, is_optional, None
-    tp, item_optional = optional(get_args(tp)[0])
-    return tp, is_optional, item_optional
 
 
 def element(tp: Any) -> Any | None:
@@ -196,13 +200,21 @@ def is_file_model(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, FileModel)
 
 
-def file_model(annotation: Any) -> Any:
+def is_scalar(tp: Any) -> bool:
     """
-    The file model of a field typed ``annotation``, ``X``, ``X | None``,
-    or ``list[X]`` of one, or ``None``.
+    Whether ``tp`` is a scalar, by the type alone: a type whose JSON form is
+    a number, a string, or a bool; a ``Literal`` of such values, not of enum
+    members; or an enum whose values are such.
     """
-    tp = value_type(annotation)
-    return tp if is_file_model(tp) else None
+    if tp in (int, float, str, bool, *TIMES):
+        return True
+    if get_origin(tp) is Literal:
+        values = get_args(tp)
+    elif isinstance(tp, type) and issubclass(tp, Enum):
+        values = tuple(member.value for member in tp)
+    else:
+        return False
+    return all(type(v) in (str, int, float, bool) for v in values)
 
 
 def is_group(tp: Any) -> bool:
@@ -215,6 +227,27 @@ def is_group(tp: Any) -> bool:
 
 def _is_model(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, BaseModel)
+
+
+def is_referenced(tp: Any) -> bool:
+    """Whether ``tp`` is ``Referenced[T]``, with the marker in its metadata."""
+    return get_origin(tp) is Annotated and REFERENCED in tp.__metadata__
+
+
+def holds_ref(annotation: Any, seen: frozenset[type] = frozenset()) -> bool:
+    """
+    Whether ``annotation`` holds ``Referenced[...]``, at any depth, in the
+    fields of each group too. ``seen`` holds the groups looked into already,
+    so that a group that contains itself ends.
+    """
+    if is_referenced(annotation):
+        return True
+    if is_group(annotation):
+        return annotation not in seen and any(
+            holds_ref(info.rebuild_annotation(), seen | {annotation})
+            for info in annotation.model_fields.values()
+        )
+    return any(holds_ref(arg, seen) for arg in get_args(annotation))
 
 
 def is_array(tp: Any) -> bool:
@@ -280,112 +313,225 @@ def fits(data: Any, field: Any) -> bool:
     )
 
 
-@functools.cache
-def model_of(model: type[BaseModel], name: str, whole: bool = False) -> type[BaseModel]:
-    """
-    A model of one value of the field ``name`` of ``model`` alone, with its
-    config and without the decorators of ``model``: it validates one value by
-    its own field. The params model has no decorators but model validators,
-    which the framework never calls; a check of one value belongs to the
-    value's type.
-
-    For a list field, the model validates one row: by its element type alone,
-    with that type's metadata, without the field's length constraints, which
-    hold for the whole list. A reference stands for one row. With ``whole``,
-    the model validates the whole field, a list too, as for a field of a
-    group, whose elements are not places.
-    """
-    info = model.model_fields[name]
-    field = (
-        (get_args(info.annotation)[0], Field())
-        if is_list(model, name) and not whole
-        else (info.annotation, info)
-    )
-    return create_model(model.__name__, __config__=model.model_config, **{name: field})
-
-
 def is_list(model: type[BaseModel], name: str) -> bool:
-    """Whether the field ``name`` of ``model`` is a list, given as a list of rows."""
+    """Whether the field ``name`` of ``model`` is typed ``list[X]``."""
     return get_origin(model.model_fields[name].annotation) is list
 
 
-def json_form(
-    model: type[BaseModel], name: str, value: Any, whole: bool = False
-) -> Any:
+def field_type(info: FieldInfo) -> Any:
+    """The type of a field with ``info``, with its :func:`field_metadata`."""
+    metadata = field_metadata(info)
+    return Annotated[info.annotation, *metadata] if metadata else info.annotation
+
+
+def field_metadata(info: FieldInfo) -> tuple[Any, ...]:
     """
-    The JSON form of ``value``, a valid value, or row, of the field ``name``
-    of ``model`` (see :func:`model_of`), as its declared type dumps it to
-    JSON and JSON reads back: an instance of a subclass of a model type
-    without the subclass's fields, and a number that is not finite as
-    ``None``.
+    The metadata of a field with ``info``, with its discriminator, which
+    pydantic keeps apart from the rest as ``Field(discriminator='kind')``.
     """
-    made = model_of(model, name, whole).model_construct(**{name: value})
-    return from_json(made.model_dump_json(by_alias=True))[name]
+    if info.discriminator is None:
+        return tuple(info.metadata)
+    return (*info.metadata, Field(discriminator=info.discriminator))
 
 
-def inline(
-    model: type[BaseModel],
-    name: str,
-    value: Any,
-    whole: bool = False,
-    context: dict[str, Any] | None = None,
-) -> Any:
+def title(name: str, info: FieldInfo) -> str:
     """
-    The JSON form of ``value`` validated, as the record stores it. ``value``
-    is a value of the field ``name`` of ``model``, or of a row of it unless
-    ``whole`` (see :func:`model_of`).
+    The title of a field with ``info``: its own, or ``name`` in words,
+    ``beam_centre`` as ``Beam Centre``. A form and the params schema of a
+    spec label each field so. An alternative of a union is labelled by its
+    tag field, titled by the tag's value rather than the field's name, which
+    is that of every alternative::
 
-    ``value`` is plain data, such as :func:`ess.spec.request_types.held` makes of
-    Python objects. It is validated from its JSON form, with ``context``. A
-    field that a model lacks is refused at any depth, since validating would
-    drop it silently. The JSON form of the validated value must read back as
-    the value, validated without ``context``. Raises:
-
-    - ``PydanticSerializationError`` if it has no JSON form;
-    - ``ValidationError`` if it is not valid, or if its JSON form is not,
-      such as of a number that is not finite, which JSON holds as ``null``;
-    - :class:`~ess.spec.refs.ParamsError` at the position inside the value,
-      without ``name``, whose JSON form reads back as another value, such as
-      a field of a group whose validator changes a value it has validated
-      already.
+        title('beam_centre', info)  # 'Beam Centre'
+        title('find', group.model_fields['kind'])  # 'Find', unless titled
     """
-    one = model_of(model, name, whole)
-    given = to_json({name: value}, inf_nan_mode='constants')
-    made = getattr(
-        one.model_validate_json(given, extra='forbid', context=context), name
-    )
-    stored = json_form(model, name, made, whole)
-    try:
-        again = getattr(one.model_validate_json(to_json({name: stored})), name)
-    except ValidationError as error:
-        (first, *_) = error.errors()
-        raise ValidationError.from_exception_data(
-            one.__name__,
-            [{'type': _NO_JSON_FORM_ERROR, 'loc': first['loc'], 'input': None}],
-        ) from None
-    if again != made:
-        raise ParamsError([(_differs((), made, again), _NO_JSON_FORM)])
-    return stored
+    return info.title or name.replace('_', ' ').title()
 
 
-_NO_JSON_FORM = 'has no JSON form that reads back as the value'
-_NO_JSON_FORM_ERROR = PydanticCustomError('no_json_form', _NO_JSON_FORM)
-
-
-def _differs(loc: Loc, a: Any, b: Any) -> Loc:
+def unwrapped(
+    annotation: Any, metadata: tuple[Any, ...] = ()
+) -> tuple[Any, bool, tuple[Any, ...]]:
     """
-    The first position at which ``a`` and ``b``, two values at ``loc``,
-    differ: a field of a group or an element of a list, at any depth.
+    ``annotation``, of a field with ``metadata`` (see
+    :func:`field_metadata`), without its outer ``Annotated`` and
+    ``| None``, at any depth, up to the marker of ``Referenced[T]``, which
+    leaves ``T``; whether it had ``| None``; and ``metadata``, then the
+    metadata of each ``Annotated``, the outer first. Unlike
+    :func:`~ess.spec.optional`, it keeps the metadata of the
+    members of a union and the elements of a list.
     """
-    if isinstance(a, BaseModel) and type(a) is type(b):
-        pairs: Iterable[tuple[str | int, Any, Any]] = (
-            (n, getattr(a, n), getattr(b, n)) for n in type(a).model_fields
+    tp, none = annotation, False
+    while REFERENCED not in metadata:
+        origin, args = get_origin(tp), get_args(tp)
+        if origin is Annotated:
+            metadata = (*metadata, *tp.__metadata__)
+            tp = args[0]
+        elif origin in (Union, UnionType) and NoneType in args:
+            rest = tuple(a for a in args if a is not NoneType)
+            tp = rest[0] if len(rest) == 1 else Union[rest]  # noqa: UP007
+            none = True
+        else:
+            break
+    return tp, none, metadata
+
+
+def split(tp: Any, *metadata: Any) -> tuple[Any, tuple[Any, ...], tuple[Any, ...]]:
+    """
+    The part of a field of type ``tp`` that a request writes, with its
+    metadata; and the types whose data a reference fills the field with,
+    the ``T`` of each ``Referenced[T]`` with its own metadata, such as an
+    ``AfterValidator``. ``tp`` and ``metadata`` are as :func:`unwrapped`
+    gives them. The part written is ``None`` if only a reference fills the
+    field. Its metadata are ``metadata``, then those of its ``Annotated``. A
+    discriminator in ``metadata`` tells alternatives written inline apart,
+    so a single group written inline does not get it::
+
+        split(Reduction)  # (Reduction, (), ())
+        split(PixelMask, REFERENCED)  # (None, (), (PixelMask,))
+        split(BeamCentre | Referenced[BeamCentre])
+        # (BeamCentre, (), (BeamCentre,))
+        split(
+            Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
+            | Referenced[ComputedBeamCentre]
         )
-    elif isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
-        pairs = ((i, x, y) for i, (x, y) in enumerate(zip(a, b, strict=True)))
-    else:
-        return loc
-    for at, x, y in pairs:
-        if x != y:
-            return _differs((*loc, at), x, y)
-    return loc
+        # (GivenCentre | FindCentre, (Field(discriminator='kind'),),
+        #  (ComputedBeamCentre,))
+        split(GivenCentre | Referenced[Centre], Field(discriminator='kind'))
+        # (GivenCentre, (), (Centre,))
+    """
+    if REFERENCED in metadata:
+        return None, (), (_data(tp, *metadata),)
+    members = get_args(tp) if get_origin(tp) in (Union, UnionType) else (tp,)
+    referenced = tuple(
+        _data(get_args(m)[0], *m.__metadata__) for m in members if is_referenced(m)
+    )
+    if not referenced:
+        return tp, metadata, ()
+    written = tuple(m for m in members if not is_referenced(m))
+    if not written:
+        return None, (), referenced
+    if len(written) == 1:
+        metadata = tuple(m for m in metadata if not discriminates(m))
+    inline: Any = written[0] if len(written) == 1 else Union[written]  # noqa: UP007
+    if get_origin(inline) is not Annotated:
+        return inline, metadata, referenced
+    return get_args(inline)[0], (*metadata, *inline.__metadata__), referenced
+
+
+def _data(tp: Any, *metadata: Any) -> Any:
+    """``tp`` with ``metadata`` but the marker of ``Referenced[T]``."""
+    kept = tuple(m for m in metadata if m is not REFERENCED)
+    return Annotated[tp, *kept] if kept else tp
+
+
+def discriminates(meta: Any) -> bool:
+    """Whether ``meta``, metadata of a type, is a discriminator."""
+    return isinstance(meta, Discriminator) or (
+        isinstance(meta, FieldInfo) and meta.discriminator is not None
+    )
+
+
+def _discriminator(metadata: tuple[Any, ...]) -> Any:
+    """
+    The discriminator in ``metadata``, the last if several: the name of a
+    field or a callable. ``None`` if there is none.
+    """
+    found = None
+    for meta in metadata:
+        by = meta.discriminator if isinstance(meta, FieldInfo | Discriminator) else None
+        if by is not None:
+            found = by.discriminator if isinstance(by, Discriminator) else by
+    return found
+
+
+def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] | None:
+    """
+    The tag field and the alternatives by tag value, if ``annotation``,
+    possibly typed ``X | None``, is a union of groups::
+
+        alternatives(GivenCentre | FindCentre, Field(discriminator='kind'))
+        # ('kind', {'given': GivenCentre, 'find': FindCentre})
+
+    ``None`` if ``annotation`` is not a union with a group in it, such as
+    ``int | str``, or is ``None``, as :func:`split` gives it for a field
+    that only a reference fills. ``metadata`` are those of the field (see
+    :func:`field_metadata`), which may give the discriminator. A
+    discriminator in ``annotation`` takes precedence. The alternatives are
+    in the order of the union, without their ``Annotated`` metadata.
+
+    ``annotation`` is the part of a field that a request writes (see
+    :func:`split`). Raises ``ValueError`` for a union that breaks a rule of
+    :mod:`ess.spec._workflow_spec`: a member that is not a group; no
+    discriminator, or one that is not the name of a field, such as a
+    callable ``Discriminator``; a tag field with an alias or not typed a
+    ``Literal`` of one string.
+    """
+    if annotation is None:
+        return None
+    tp, _, inner = unwrapped(annotation)
+    discriminator = _discriminator((*metadata, *inner))
+    if get_origin(tp) not in (Union, UnionType):
+        return None
+    members = [plain(arg) for arg in get_args(tp)]
+    if not any(is_group(m) for m in members):
+        return None
+    if not all(is_group(m) for m in members):
+        raise ValueError(
+            'a union holds groups only, or no group; a value of another type is a '
+            'field of a group, such as of an alternative of the union'
+        )
+    if not isinstance(discriminator, str):
+        raise ValueError(
+            'a union of groups has a discriminator, the name of its tag field, '
+            "such as Field(discriminator='kind')"
+        )
+    groups: dict[str, Any] = {}
+    for member in members:
+        where = f'{member.__name__}.{discriminator}'
+        info = member.model_fields.get(discriminator)
+        tags = () if info is None else _tags(info.annotation)
+        if len(tags) != 1 or type(tags[0]) is not str:
+            raise ValueError(
+                f"{where}: the tag of a union is a Literal of one string, such as "
+                "Literal['find']"
+            )
+        if any(
+            getattr(info, a) is not None
+            for a in ('alias', 'validation_alias', 'serialization_alias')
+        ):
+            raise ValueError(f'{where}: a tag has no alias')
+        groups[tags[0]] = member  # pydantic refuses two alternatives of one tag
+    return discriminator, groups
+
+
+def _tags(annotation: Any) -> tuple[Any, ...]:
+    """The values of ``annotation`` if it is a ``Literal``, else none."""
+    return get_args(annotation) if get_origin(annotation) is Literal else ()
+
+
+def tagged_members(tp: Any, metadata: tuple[Any, ...]) -> dict[Any, Any] | None:
+    """
+    The members of ``tp`` by tag, if it is a union with a discriminator in
+    ``metadata`` (see :func:`unwrapped`): by a callable discriminator, such
+    as :func:`~ess.spec.request_types.source_of`, each member with its
+    ``Tag``, or by a tag field. ``None`` for any other type.
+
+    Unlike :func:`alternatives`, which checks the union of a spec's model
+    against its rules, this reads the types the framework derives too: a
+    member that is not a group, and a tag with an alias, such as that of a
+    reference to an output.
+    """
+    if get_origin(tp) not in (Union, UnionType):
+        return None
+    by = _discriminator(metadata)
+    members = get_args(tp)
+    if callable(by):
+        return {_tag(m): m for m in members}
+    if isinstance(by, str):
+        return {_tags(plain(m).model_fields[by].annotation)[0]: m for m in members}
+    return None
+
+
+def _tag(member: Any) -> str:
+    """The tag of ``member``, a member of a union by a callable discriminator."""
+    return next(m.tag for m in member.__metadata__ if isinstance(m, Tag))

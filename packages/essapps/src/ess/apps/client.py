@@ -189,19 +189,14 @@ class Accumulator:
         row the table holds already or that the push repeats, and a push of
         no rows into a table. Rows are compared as the record holds them: a
         file by its identity, a reference to an output by record, output,
-        and key, and an inline value by its JSON form; for a table whose row
-        type has a member ``Referenced[T]``, unless such a ``T`` has a data
-        value, also by the rows read, before the driver gets them.
+        and key, and an inline value by its JSON form.
 
         A push is one push into the binding's driver per table, in the
         order given, and one state. A push references
         files or outputs of records, never an accumulator. Each row is
         checked by the table's element type; the number of rows of a table,
         such as a row in a table that needs one, is checked when a state is
-        pinned. When the push is added, its rows read are compared with those
-        read before by their JSON form, at a table where they are compared as
-        above, so an inline value and a reference to equal data are one row,
-        and a repeat fails the push. A record that has failed or was
+        pinned. A record that has failed or was
         cancelled is refused, and one that is pending is not waited for. The
         push returns once it is logged. The backend adds the pushes one at a
         time, in the order logged, each once the records it references have
@@ -351,14 +346,14 @@ class Client:
         :meth:`Accumulator.ref`.
 
         The backend checks the values against its own spec, so a ``SpecId``
-        in place of the spec gets the same checks. A request that cannot run
+        instead of the spec gets the same checks. A request that cannot run
         raises ``SubmitError``: an invalid value, an unknown spec or file,
-        a value written inline at a place that only a reference fills, a
+        a value written inline at a field that only a reference fills, a
         reference where none may stand, inside a group (except a file at a
-        field typed a file model), at a place the spec does not mark
+        field typed a file model), at a field the spec does not mark
         ``Referenced[...]``, or to a whole list, a reference the client may
         not read, or one whose data do not fit its field. Each of its
-        ``errors`` names the field at fault by its place, ``loc``, and the
+        ``errors`` names the field at fault by its position, ``loc``, and the
         request by its key or index, ``entry``, if several are given (see
         :class:`~ess.apps.errors.FieldError`)::
 

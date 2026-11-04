@@ -3,39 +3,46 @@
 """
 A form for a spec's params, generated from its pydantic models, on a client.
 
-The form gives the params as a request does: at each parameter, or each row
-of a list parameter, the JSON form of a group or a file, a reference to an
-output, or ``None``. It is filled from params as a record stores them, so
-that a record's request can be edited and submitted again.
+The form gives the params as a request does: at each field, at any depth,
+the JSON form of a value, a file, a reference to an output, or ``None``. It
+is filled from params as a record stores them, so that a record's request
+can be edited and submitted again.
 
 The form has a tab per parameter, with the tabs on the left, as
-esslivedata's dashboard has. The widget follows from what a request may write
-at each parameter or row, read with :func:`ess.spec.places.split` as the
-sources of its request type are (:func:`ess.spec.request_types.sources`),
-which also validate a request and are the params schema, and is labelled by
-:func:`ess.spec.places.title`, a parameter by the title of its tab:
+esslivedata's dashboard has. The widget of a field follows from its type,
+read with :func:`ess.spec.field_types.split` as the sources of its request
+type are (:func:`ess.spec.request_types.sources`), which also validate a
+request and are the params schema, and is labelled by
+:func:`ess.spec.field_types.title`, a parameter by the title of its tab. The
+same table holds at a parameter, at a field of a group at any depth, and for
+the element of a list:
 
-=========================  ================================================
-Where                      Widget
-=========================  ================================================
-a parameter                a choice of ways: of a file model, a file that
-                           fits it; of a union, the fields of each
-                           alternative; of a group, its fields (the source
-                           ``inline``); of ``Referenced[T]``, an output of
-                           a record that fits ``T`` (the source
-                           ``output``); and ``None`` if typed
-                           ``X | None``. A union of these offers the ways
-                           of each member in one choice.
-a list parameter           a table of the rows, and the editor of a row,
-                           the choice of ways of the element, as at a
-                           parameter of its type
-a field of a group         an input of its type, or a picker of its values;
-                           for a list of scalars, a list of these; for a
-                           file model, a picker of the files that fit
-                           it, with ``None`` if it is typed ``X | None``
-=========================  ================================================
+================================  =========================================
+Type                              Widget
+================================  =========================================
+a scalar                          an input of its type, or a picker of its
+                                  values
+a file model                      a picker of the files that fit it
+a group                           a choice of one way, ``Given``, whose
+                                  selector is hidden: the fields of the
+                                  group
+a union of groups                 a choice of the alternatives, each the
+                                  fields of its group
+``Referenced[T]``                 a choice of one way, ``From a record``: a
+                                  picker of the outputs that fit ``T``
+``X | None``                      a choice of the ways of ``X`` and
+                                  ``None``; a scalar is the way ``Given``,
+                                  a file model the way ``A file``
+``A | Referenced[B]``             a choice of the ways of each member
+``list[X]``, ``X`` a scalar       a list of inputs of ``X``
+``list[X]``, any other ``X``      a table of the rows, and the editor of a
+                                  row, the widget of ``X``
+================================  =========================================
 
-A record's output fits if its type, from the record's spec, fits the place,
+At a field of a group, a choice and a table show in a card titled by the
+field, so that a nested group is a card of its fields.
+
+A record's output fits if its type, from the record's spec, fits the field,
 and a request of the client may reference it now (``client.readable``), so a
 pending record is offered too. A file fits a file model if a
 :class:`~ess.apps.Selector` of the model's metadata matches it, as the
@@ -45,16 +52,16 @@ it.
 
 The widgets follow those of esslivedata's dashboard
 (scipp/esslivedata#1426), in Panel. A table is a ``Tabulator``, so a
-notebook loads Panel with ``pn.extension('tabulator')``. A place without a
+notebook loads Panel with ``pn.extension('tabulator')``. A field without a
 default starts unset, so that a value a correct reduction needs is never
 filled in for the user; so does a list, of rows or of scalars, until an
 element is added or removed, so that a table, which has no default, is never
-given without rows by mistake. A place is left out of the request only if it
+given without rows by mistake. A field is left out of the request only if it
 is a choice with no way chosen, which it is only without a default, so the
 backend refuses it as required. A way chosen, or an input, with nothing
 given is not left out, since the backend would fill in the default: the
 params name it as missing (see :attr:`Form.params`). An empty text is the
-value ``''`` where the place has a default, and nothing given where it has
+value ``''`` where the field has a default, and nothing given where it has
 none, since a text input cannot tell an empty text from none; an element of
 a list of texts is a text, ``''`` too, since it was added.
 
@@ -62,9 +69,6 @@ A time is picked to the second, in the zone of the value the picker was
 set to, or of the default, which its label names: ``Start (UTC)``. A time
 without a zone stays without one, and a time of ``AwareDatetime`` without a
 value is in UTC. The fraction of a second of the value is kept.
-
-Not covered: a list parameter of a union of groups, whose row would pick its
-alternative, and a list of file models at a field of a group.
 """
 
 from __future__ import annotations
@@ -72,13 +76,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, datetime, tzinfo
 from enum import Enum
-from typing import Any, Union, get_args
+from typing import Any, Union, get_args, get_origin
 
 import pandas as pd
 import panel as pn
 from pydantic import AwareDatetime, BaseModel
 from pydantic.fields import FieldInfo
-from pydantic_core import to_jsonable_python
+from pydantic_core import to_json, to_jsonable_python
 
 from ess.apps import Client, FieldError, SubmitError
 from ess.spec import (
@@ -87,7 +91,6 @@ from ess.spec import (
     OutputRef,
     WorkflowSpec,
     field_types,
-    places,
 )
 from ess.spec.refs import Loc, as_ref
 
@@ -101,83 +104,76 @@ class _Unset:
 
 UNSET: Any = _Unset()
 """
-The value of a place that the request leaves out; given to ``set``, the
-place as it starts, at its default or unset.
+The value of a field that the request leaves out; given to ``set``, the
+field as it starts, at its default or unset.
 """
 
 type _Missing = list[FieldError]
-"""The places with nothing given, each with what the user is to do."""
+"""The fields with nothing given, each with what the user is to do."""
+
+type _Widget = (
+    _Scalar | _Scalars | _File | _Group | _Record | _Nothing | _Choice | _Rows
+)
+"""
+The widget of a value: ``value(loc, missing)`` gives it as a request writes
+it, ``set`` shows a value, ``refresh`` lists the files and records anew.
+"""
 
 
-def _default(info: FieldInfo) -> Any:
-    return UNSET if info.is_required() else info.get_default(call_default_factory=True)
+def _field(name: str, info: FieldInfo, listing: Listing) -> _Widget:
+    """The widget of the field ``name`` with ``info``, of a group or of the params."""
+    return _widget(
+        field_types.title(name, info),
+        info.annotation,
+        field_types.field_metadata(info),
+        UNSET if info.is_required() else info.get_default(call_default_factory=True),
+        listing,
+        info.description,
+    )
 
 
-def _parameter(model: type[BaseModel], name: str, listing: Listing) -> _Choice | _Rows:
-    """The widget of the parameter ``name`` of ``model``, the params model."""
-    info = model.model_fields[name]
-    label = places.title(name, info)
-    tp, none, metadata = places.root_type(model, name)
-    if not field_types.is_list(model, name):
-        return _choice(label, tp, none, metadata, _default(info), listing)
-    inline, inline_metadata, _ = places.split(tp, *metadata)
-    if places.alternatives(inline, *inline_metadata) is not None:
-        raise NotImplementedError(f'{name}: a list of a union of groups')
-    return _Rows(label, tp, none, metadata, _default(info), listing)
-
-
-def _choice(
+def _widget(
     label: str,
-    tp: Any,
-    none: bool,
+    annotation: Any,
     metadata: tuple[Any, ...],
     default: Any,
     listing: Listing,
-) -> _Choice:
+    description: str | None = None,
+) -> _Widget:
     """
-    The choice of ways at a parameter or row of type ``tp``, as
-    :func:`ess.spec.places.root_type` gives it with ``none`` and ``metadata``.
+    The widget of a value of type ``annotation`` with ``metadata`` (see
+    :func:`ess.spec.field_types.field_metadata`), at any depth.
     """
-    tag = None
-    ways: dict[str, _Way] = {}
-    inline, inline_metadata, referenced = places.split(tp, *metadata)
-    union = places.alternatives(inline, *inline_metadata)
+    tp, none, metadata = field_types.unwrapped(annotation, metadata)
+    if get_origin(tp) is list:
+        (element,) = get_args(tp)
+        if field_types.is_scalar(item := field_types.plain(element)):
+            return _Scalars(label, item, default, description)
+        return _Rows(element, default, listing)
+    inline, inline_metadata, referenced = field_types.split(tp, *metadata)
+    union = field_types.alternatives(inline, *inline_metadata)
+    if not (none or referenced or union):
+        if field_types.is_file_model(inline):
+            return _File(inline, listing, label)
+        if not field_types.is_group(inline):
+            return _Scalar(label, inline, default, description)
+    ways: dict[str, _Widget] = {}
     if union is not None:
         tag, groups = union
         for value, group in groups.items():
-            way = places.title(value, group.model_fields[tag])
+            way = field_types.title(value, group.model_fields[tag])
             ways[way] = _Group(group, {tag: value}, listing)
     elif field_types.is_file_model(inline):
         ways[_Choice.FILE] = _File(inline, listing)
+    elif field_types.is_group(inline):
+        ways[_Choice.GIVEN] = _Group(inline, {}, listing)
     elif inline is not None:
-        ways['Given'] = _Group(inline, {}, listing)
+        ways[_Choice.GIVEN] = _Scalar(label, inline, UNSET, description)
     if referenced:
         ways[_Choice.RECORD] = _Record(Union[referenced], listing)  # noqa: UP007
     if none:
         ways[_Choice.NONE] = _Nothing()
-    return _Choice(label, ways, tag, default)
-
-
-def _field(
-    group: type[BaseModel], name: str, listing: Listing
-) -> _Scalar | _Scalars | _File:
-    """
-    The input of the field ``name`` of ``group``: of a scalar or a list of
-    scalars, or the picker of a file model.
-    """
-    info = group.model_fields[name]
-    if (model := field_types.file_model(info.annotation)) is not None:
-        if field_types.is_list(group, name):
-            raise NotImplementedError(f'{name}: a list of file models at a field')
-        optional = field_types.optional(info.annotation)[1]
-        return _File(model, listing, places.title(name, info), optional)
-    widget = _Scalars if field_types.is_list(group, name) else _Scalar
-    return widget(
-        places.title(name, info),
-        field_types.value_type(info.annotation),
-        _default(info),
-        info.description,
-    )
+    return _Choice(ways, None if union is None else union[0], default)
 
 
 def _picked(widget: Any, options: Mapping[str, Any]) -> None:
@@ -194,39 +190,31 @@ def _pick(widget: Any, value: Any) -> None:
 
 class _File:
     """
-    A file model: a picker of the files that fit it, labelled ``name``
-    at a field of a group, and with ``None`` if ``optional``. A file that
-    the form is set to and the listing lacks stays picked, labelled by its
-    reference as given, an identity or a name such as ``run:101``.
+    A file model: a picker of the files that fit it, labelled ``label``. A
+    file that the form is set to and the listing lacks stays picked,
+    labelled by its reference as given, an identity or a name such as
+    ``run:101``.
 
-    A picker's option of nothing, here ``None`` too, has the value ``UNSET``:
-    Panel does not send a value of ``None`` to the browser when it first
-    shows a picker, which then shows no option at all.
+    A picker's option of nothing has the value ``UNSET``: Panel does not
+    send a value of ``None`` to the browser when it first shows a picker,
+    which then shows no option at all.
     """
 
     def __init__(
-        self,
-        model: type[FileModel],
-        listing: Listing,
-        name: str | None = None,
-        optional: bool = False,
+        self, model: type[FileModel], listing: Listing, label: str = ''
     ) -> None:
         self._model = model
-        self._optional = optional
         self._listed: dict[str, Any] = {}
-        self.widget = pn.widgets.Select(label=name or '', sizing_mode='stretch_width')
+        self.widget = pn.widgets.Select(label=label, sizing_mode='stretch_width')
         self.refresh(listing)
 
     def refresh(self, listing: Listing) -> None:
-        nothing = '(none)' if self._optional else '(choose a file)'
-        self._listed = {nothing: UNSET, **listing.files(self._model)}
+        self._listed = {'(choose a file)': UNSET, **listing.files(self._model)}
         self.set(self.widget.value)
 
     def value(self, loc: Loc, missing: _Missing) -> Any:
         if self.widget.value is not UNSET:
             return self.widget.value
-        if self._optional:
-            return None
         missing.append(FieldError(None, loc, 'choose a file'))
         return UNSET
 
@@ -331,6 +319,9 @@ class _Scalar:
         self.widget.label = f'{self._label} ({zone})'
         return None if value is None else value.replace(tzinfo=None)
 
+    def refresh(self, listing: Listing) -> None:
+        pass
+
     def panel(self) -> Any:
         return self.widget
 
@@ -391,24 +382,42 @@ class _Scalars:
         for element, item in zip(self._elements or [], value, strict=True):
             element.set(item)
 
+    def refresh(self, listing: Listing) -> None:
+        pass
+
     def panel(self) -> Any:
         return self._panel
 
 
 class _Group:
-    """The fields of a group, each an input; the tag of an alternative has none."""
+    """
+    The fields of a group, each the widget of its type; the tag of an
+    alternative has none. A choice or a table shows in a card titled by its
+    field.
+    """
 
     def __init__(
         self, group: type[BaseModel], tag: dict[str, str], listing: Listing
     ) -> None:
         self.tag = tag
         self._fields = {
-            name: _field(group, name, listing)
-            for name in group.model_fields
+            name: _field(name, info, listing)
+            for name, info in group.model_fields.items()
             if name not in tag
         }
         self._panel = pn.Column(
-            *(w.panel() for w in self._fields.values()), sizing_mode='stretch_width'
+            *(
+                w.panel()
+                if isinstance(w, _Scalar | _Scalars | _File)
+                else pn.Card(
+                    w.panel(),
+                    title=field_types.title(name, group.model_fields[name]),
+                    collapsible=False,
+                    sizing_mode='stretch_width',
+                )
+                for name, w in self._fields.items()
+            ),
+            sizing_mode='stretch_width',
         )
 
     def value(self, loc: Loc, missing: _Missing) -> dict[str, Any]:
@@ -422,8 +431,7 @@ class _Group:
 
     def refresh(self, listing: Listing) -> None:
         for field in self._fields.values():
-            if isinstance(field, _File):
-                field.refresh(listing)
+            field.refresh(listing)
 
     def panel(self) -> Any:
         return self._panel
@@ -457,7 +465,7 @@ class _Record:
 
 
 class _Nothing:
-    """``None``: without the group."""
+    """``None``: no value."""
 
     def value(self, loc: Loc, missing: _Missing) -> None:
         return None
@@ -472,27 +480,25 @@ class _Nothing:
         return pn.Spacer(height=0)
 
 
-_Way = _Group | _Record | _File | _Nothing
-
-
 class _Choice:
     """
-    A group, or a union of groups, possibly typed ``X | None``: a radio
-    button per way that is offered, and the widget of the chosen way, in the
-    tab of a parameter titled ``label``, or in the editor of a row.
+    The ways of giving a value, each a widget: the alternatives of a union
+    of groups, whose tag field is ``tag``; a group, a file, or a scalar
+    given; an output of a record; ``None``. A radio button per way that is
+    offered, hidden if it offers one way only, and the widget of the chosen
+    way.
 
     It starts at its default's way. Without a default, it starts unset,
     unless it has one way only. Set, each way not chosen is as it starts, so
     that it shows no value set before, such as a row shown before.
     """
 
+    GIVEN = 'Given'
     RECORD = 'From a record'
     FILE = 'A file'
     NONE = 'None'
 
-    def __init__(
-        self, label: str, ways: dict[str, _Way], tag: str | None, default: Any
-    ) -> None:
+    def __init__(self, ways: dict[str, _Widget], tag: str | None, default: Any) -> None:
         self._ways = ways
         self._tag = tag
         self._default = default
@@ -501,7 +507,6 @@ class _Choice:
         self._panel = pn.Column(
             self._selector,
             *(w.panel() for w in ways.values()),
-            name=label,
             sizing_mode='stretch_width',
         )
         self.set(UNSET)
@@ -545,15 +550,18 @@ class _Choice:
             return next(iter(self._ways)) if len(self._ways) == 1 else None
         if value is None:
             return self.NONE
-        if isinstance(value, OutputRef):
+        ref = as_ref(value)
+        if isinstance(ref, OutputRef):
             return self.RECORD
-        if isinstance(value, FileRef):
+        if isinstance(ref, FileRef):
             return self.FILE
-        tag = {} if self._tag is None else {self._tag: dict(value)[self._tag]}
+        if self._tag is None:
+            return self.GIVEN
+        tag = {self._tag: dict(value)[self._tag]}
         for label, way in self._ways.items():
             if isinstance(way, _Group) and way.tag == tag:
                 return label
-        raise ValueError(f'{tag[str(self._tag)]}: not an alternative')
+        raise ValueError(f'{tag[self._tag]}: not an alternative')
 
     def panel(self) -> Any:
         return self._panel
@@ -561,13 +569,14 @@ class _Choice:
 
 class _Rows:
     """
-    A list parameter: a table with a row per element, and a column per field
-    of the element, of the file, and of the output that a row may be given
-    as, such as ``File`` and ``Record`` for ``list[Run | Referenced[X]]``;
-    and
-    below it the editor of a row, the choice of ways of the element as a
-    parameter of its type has it. The rows are held as a request writes
-    them, so the widgets do not grow with the rows.
+    A list of ``element``, not a scalar: a table with a row per element, and
+    a column per field of the element, of the tag and the fields of every
+    alternative of a union, and of the file and the output that a row may
+    be given as, such as ``File`` and ``Record`` for ``list[Run |
+    Referenced[X]]``; and below it the editor of a row, the widget of the
+    element's type. A cell is empty where an alternative lacks the field,
+    and shows a group or a list as its JSON text. The rows are held as a
+    request writes them, so the widgets do not grow with the rows.
 
     Selecting one row shows it in the editor. ``Update row`` writes the
     editor back to it, and ``Add as new row`` appends it, each only if
@@ -583,36 +592,43 @@ class _Rows:
     as given.
     """
 
-    def __init__(
-        self,
-        label: str,
-        tp: Any,
-        none: bool,
-        metadata: tuple[Any, ...],
-        default: Any,
-        listing: Listing,
-    ) -> None:
+    def __init__(self, element: Any, default: Any, listing: Listing) -> None:
         self._default = default
         self._listing = listing
         self._rows: list[Any] | None = None  # unset
         # The editor's value as it showed the row selected, which differs
         # from the row if the editor cannot show it whole.
         self._shown: Any = UNSET
-        # A union of groups written inline is not covered.
-        inline, _, referenced = places.split(tp, *metadata)
+        tp, _, metadata = field_types.unwrapped(element)
+        inline, inline_metadata, referenced = field_types.split(tp, *metadata)
         self._model = inline if field_types.is_file_model(inline) else None
-        group = inline if inline is not None and self._model is None else None
-        self._fields = {
-            name: (places.title(name, info), field_types.file_model(info.annotation))
-            for name, info in ({} if group is None else group.model_fields).items()
-        }
+        # The tag field of a union, and the title of each alternative by tag.
+        self._tag: str | None = None
+        self._titles: dict[str, str] = {}
+        groups = [] if inline is None or self._model is not None else [inline]
+        if (union := field_types.alternatives(inline, *inline_metadata)) is not None:
+            self._tag, alternatives = union
+            self._titles = {
+                value: field_types.title(value, group.model_fields[self._tag])
+                for value, group in alternatives.items()
+            }
+            groups = list(alternatives.values())
+        # The title and the type of each field, of every alternative.
+        self._fields: dict[str, tuple[str, Any]] = {}
+        for group in groups:
+            for name, info in group.model_fields.items():
+                if name != self._tag and name not in self._fields:
+                    self._fields[name] = (
+                        field_types.title(name, info),
+                        field_types.unwrapped(info.annotation)[0],
+                    )
         # The columns of the file and of the output that a row may be given as.
         self._refs: dict[str, type[FileRef | OutputRef]] = {}
         if self._model is not None:
             self._refs['File'] = FileRef
         if referenced:
             self._refs['Record'] = OutputRef
-        self._editor = _choice('', tp, none, metadata, UNSET, listing)
+        self._editor = _widget('', element, (), UNSET, listing)
         self._table = pn.widgets.Tabulator(
             disabled=True,
             selectable=True,
@@ -634,7 +650,6 @@ class _Rows:
             self._editor.panel(),
             pn.Row(add, self._update, remove),
             self._message,
-            name=label,
             sizing_mode='stretch_width',
         )
         self.set(UNSET)
@@ -657,6 +672,8 @@ class _Rows:
         """Write the editor to the row ``i``, or a new row, if nothing is missing."""
         missing: _Missing = []
         value = self._editor.value((), missing)
+        if value is UNSET and not missing:  # a choice with no way chosen
+            missing.append(FieldError(None, (), 'choose a way'))
         self._message.object = '\n'.join(f'- {e}' for e in missing)
         if missing:
             return
@@ -680,25 +697,31 @@ class _Rows:
         rows = self._rows or []
         listed: dict[Any, dict[FileRef, str]] = {}
 
-        def text(value: Any, model: type[FileModel] | None) -> str:
+        def text(value: Any, tp: Any) -> str:
             ref = as_ref(value)
             if isinstance(ref, OutputRef):
                 return self._listing.output_label(ref)
-            if isinstance(ref, FileRef) and model is not None:
-                if model not in listed:
-                    files = self._listing.files(model)
-                    listed[model] = {r: label for label, r in files.items()}
-                return listed[model].get(ref, str(ref))
+            if isinstance(ref, FileRef) and field_types.is_file_model(tp):
+                if tp not in listed:
+                    files = self._listing.files(tp)
+                    listed[tp] = {r: label for label, r in files.items()}
+                return listed[tp].get(ref, str(ref))
+            if isinstance(value, dict | list):
+                return to_json(value).decode()
             return '' if value is None else str(value)
 
         refs = [as_ref(r) for r in rows]
-        columns = {
-            title: [
-                text(r.get(name), model) if ref is None else ''
+        columns: dict[str, list[str]] = {}
+        if self._tag is not None:
+            columns[field_types.title(self._tag, FieldInfo())] = [
+                self._titles[r[self._tag]] if ref is None else ''
                 for r, ref in zip(rows, refs, strict=True)
             ]
-            for name, (title, model) in self._fields.items()
-        }
+        for name, (title, tp) in self._fields.items():
+            columns[title] = [
+                text(r.get(name), tp) if ref is None else ''
+                for r, ref in zip(rows, refs, strict=True)
+            ]
         for column, kind in self._refs.items():
             columns[column] = [
                 text(r, self._model) if isinstance(ref, kind) else ''
@@ -751,21 +774,28 @@ class _Rows:
 class Form:
     """
     The params of one spec: a widget per parameter, listing what ``client``
-    may give at each place.
+    may give at each field.
     """
 
     def __init__(self, spec: WorkflowSpec[Any, Any], client: Client) -> None:
         self.spec = spec
         self._client = client
         listing = Listing(client)
+        fields = spec.params.model_fields
         self._params = {
-            name: _parameter(spec.params, name, listing)
-            for name in spec.params.model_fields
+            name: _field(name, info, listing) for name, info in fields.items()
         }
         self._panel = pn.Column(
             pn.pane.Markdown(f'**{spec.title}**: {spec.description}'),
             pn.Tabs(
-                *(w.panel() for w in self._params.values()),
+                *(
+                    pn.Column(
+                        w.panel(),
+                        name=field_types.title(name, fields[name]),
+                        sizing_mode='stretch_width',
+                    )
+                    for name, w in self._params.items()
+                ),
                 tabs_location='left',
                 sizing_mode='stretch_width',
                 max_width=800,
@@ -776,8 +806,8 @@ class Form:
     @property
     def params(self) -> dict[str, Any]:
         """
-        The params as a request gives them; a place with no way chosen is
-        left out. Raises :class:`~ess.apps.SubmitError` at each place
+        The params as a request gives them; a field with no way chosen is
+        left out. Raises :class:`~ess.apps.SubmitError` at each field
         where a way is chosen, or an input or a list is, with nothing given::
 
             beam_centre: choose a record
@@ -794,7 +824,7 @@ class Form:
     def set(self, params: Mapping[str, Any]) -> None:
         """
         Show ``params``, as a record or a request holds them, such as
-        ``record.request.params``; a place left out is as it starts, at its
+        ``record.request.params``; a field left out is as it starts, at its
         default or unset. A reference that the client may not read now
         chooses the way of a record, with no record picked; a file that
         is not listed stays picked.
@@ -807,12 +837,12 @@ class Form:
 
     def ways(self, name: str) -> list[str]:
         """
-        The ways offered at the parameter ``name``, a group or a union, such
-        as ``['Given', 'From a record']``; not of a list parameter, whose
-        rows are edited one at a time.
+        The ways offered at the parameter ``name``, a choice, such as
+        ``['Given', 'From a record']``. Raises ``TypeError`` for a
+        parameter of another widget, such as a file or a list.
         """
         if not isinstance(widget := self._params[name], _Choice):
-            raise TypeError(f'{name}: a list parameter, edited a row at a time')
+            raise TypeError(f'{name}: not a choice of ways')
         return widget.offered
 
     def refresh(self, listing: Listing | None = None) -> None:

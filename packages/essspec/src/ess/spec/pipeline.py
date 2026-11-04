@@ -34,6 +34,9 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     sets the sciline key of its type, without ``Annotated`` metadata, such as
     ``Reduction``; a list parameter, such as a table, sets the key of its type,
     a list, to its list, ``list[Run]`` or ``list[GivenCentre | FindCentre]``.
+    A parameter whose type, or element type, is neither a group nor a union
+    of groups, such as ``bins: int``, needs ``keys=``: its class names no
+    role.
     A union of groups sets the key of the member that the value is (see
     below). Each output is computed as the key of its type without
     ``| None``, since an optional output means that the graph may lack it,
@@ -184,6 +187,15 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
                 f'{wrong}: a parameter sets one key, or none; a union one for '
                 'each member'
             )
+        if keyless := sorted(
+            n for n in declared if n not in keys and not _grouped(spec.params, n)
+        ):
+            raise ValueError(
+                f'{spec.name}: {keyless}: a parameter whose type, or whose element '
+                'type for a list, is not a group or a union of groups gives its '
+                'keys=: a key such as int names no role, so no provider would read '
+                'it, and the value would have no effect'
+            )
         if optional_params := sorted(
             n
             for n, f in declared.items()
@@ -328,6 +340,17 @@ def _members(model: type[BaseModel], name: str) -> tuple[Any, ...] | None:
         return None
     tp = field_types.optional(model.model_fields[name].annotation)[0]
     return get_args(tp) if get_origin(tp) in (Union, UnionType) else None
+
+
+def _grouped(model: type[BaseModel], name: str) -> bool:
+    """
+    Whether the parameter ``name`` of ``model``, or its element for a list,
+    is typed a group or a union of groups, ``Referenced[T]`` among them,
+    possibly ``X | None``.
+    """
+    tp = field_types.value_type(model.model_fields[name].annotation)
+    members = get_args(tp) if get_origin(tp) in (Union, UnionType) else (tp,)
+    return all(field_types.is_group(m) for m in members)
 
 
 def _key_text(key: Key) -> str:

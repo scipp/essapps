@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 class FieldError:
     """
     One reason a request is refused, as pydantic's ``ValidationError.errors()``
-    gives it: ``loc``, the place of the field at fault (see
+    gives it: ``loc``, the position of the field at fault (see
     :data:`ess.spec.refs.Loc`), and ``msg``, why.
 
     ``loc`` is empty for a reason that names no field, such as an unknown
@@ -53,8 +53,8 @@ class FieldError:
 
     def __str__(self) -> str:
         entry = f'[{self.entry}]' if isinstance(self.entry, int) else self.entry
-        place = loc_text(self.loc) if self.loc else None
-        return ': '.join(p for p in (entry, place, self.msg) if p is not None)
+        at = loc_text(self.loc) if self.loc else None
+        return ': '.join(p for p in (entry, at, self.msg) if p is not None)
 
 
 class SubmitError(ValueError):
@@ -69,7 +69,7 @@ class SubmitError(ValueError):
 
     @classmethod
     def at(cls, loc: Loc, msg: str) -> SubmitError:
-        """One reason, at the place ``loc``, with no entry."""
+        """One reason, at the position ``loc``, with no entry."""
         return cls([FieldError(None, loc, msg)])
 
     @classmethod

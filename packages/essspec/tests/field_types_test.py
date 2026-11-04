@@ -2,29 +2,36 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 from dataclasses import dataclass
 from pathlib import Path, PosixPath
-from typing import Annotated, Any, Literal, NewType
+from typing import Annotated, Any, Literal, NewType, get_args
 
 import pytest
 import scipp as sc
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, Strict
 
-from ess.spec import FileModel
+from ess.spec import FileModel, Referenced
 from ess.spec.field_types import (
+    alternatives,
     arguments,
     element,
+    field_metadata,
     fields_of,
     fits,
     has_array,
+    holds_ref,
     is_alias,
     is_array,
     is_file_model,
+    is_list,
     is_single,
     optional,
     plain,
     reachable,
+    split,
     type_name,
+    unwrapped,
     value_type,
 )
+from ess.spec.parameters import REFERENCED
 
 
 class RunFile(FileModel, kind='raw'):
@@ -182,6 +189,23 @@ def test_reachable_looks_through_arguments_and_fields_and_ends_on_recursion() ->
     assert sc.DataArray in list(reachable(dict[str, SampleParts]))
 
 
+class Tree(BaseModel):
+    children: list['Tree'] = []
+
+
+class Holder(BaseModel):
+    tree: Tree
+    leaves: list[Referenced[BeamCentre]] = []
+
+
+def test_holds_ref_looks_into_the_fields_of_groups_and_ends_on_recursion() -> None:
+    assert holds_ref(Holder | None)
+    assert holds_ref(Annotated[list[Holder], 'a validator'])
+    assert holds_ref(Referenced[Tree])
+    assert not holds_ref(Tree)
+    assert not holds_ref(list[BeamCentre])
+
+
 def test_type_name_is_the_name_of_the_class() -> None:
     assert type_name(sc.DataArray) == 'DataArray'
     assert type_name(BeamCentre | FindCentre) == 'BeamCentre | FindCentre'
@@ -222,3 +246,149 @@ def test_fits(data: Any, field: Any) -> None:
 )
 def test_does_not_fit(data: Any, field: Any) -> None:
     assert not fits(data, field)
+
+
+class MaskFile(FileModel, kind='mask'):
+    pass
+
+
+class Mask(BaseModel, arbitrary_types_allowed=True):
+    mask: sc.DataArray
+
+
+class Sample(BaseModel):
+    thickness: float = Field(1.0, gt=0)
+
+
+class Reduction(BaseModel):
+    bins: int = Field(50, ge=1)
+
+
+class Measured(BaseModel):
+    run: RunFile
+    thickness: float = Field(1.0, gt=0)
+
+
+class MeasuredParams(BaseModel):
+    measured: Measured
+
+
+Centre = Annotated[BeamCentre | FindCentre, Field(discriminator='kind')]
+CENTRES = ('kind', {'given': BeamCentre, 'find': FindCentre})
+
+
+class Params(BaseModel):
+    mask: Referenced[Mask]
+    reduction: Reduction | None = None
+    beam_centre: Centre
+    centres: list[Centre]
+    samples: list[Sample | Referenced[Sample]] = Field(min_length=2)
+    found: Centre | Referenced[Mask] = BeamCentre()
+    either: Referenced[Sample] | Referenced[Mask] | None = None
+
+
+class MaskParams(BaseModel):
+    mask: MaskFile | None = None
+    sample: Referenced[Sample] | None = None
+    runs: list[RunFile] = []
+
+
+def _unwrapped(model: type[BaseModel], name: str) -> tuple[Any, bool, tuple[Any, ...]]:
+    """The type of a parameter, as a form or the request type reads it."""
+    info = model.model_fields[name]
+    return unwrapped(info.annotation, field_metadata(info))
+
+
+def test_an_unmarked_field_is_written_by_the_request() -> None:
+    assert _unwrapped(MaskParams, 'mask') == (MaskFile, True, ())
+    assert split(MaskFile) == (MaskFile, (), ())
+    assert _unwrapped(MeasuredParams, 'measured') == (Measured, False, ())
+    assert split(Measured) == (Measured, (), ())
+
+
+def test_a_field_marked_referenced_is_filled_by_a_reference_only() -> None:
+    assert _unwrapped(Params, 'mask') == (Mask, False, (REFERENCED,))
+    assert split(Mask, REFERENCED) == (None, (), (Mask,))
+
+
+def test_the_marker_of_a_field_typed_x_or_none_is_in_its_metadata() -> None:
+    assert _unwrapped(MaskParams, 'sample') == (Sample, True, (REFERENCED,))
+
+
+def test_referenced_x_or_none_keeps_its_none_in_the_type_of_the_data() -> None:
+    class MaybeMask(BaseModel):
+        mask: Referenced[Mask | None] = None
+
+    assert _unwrapped(MaybeMask, 'mask') == (Mask | None, False, (REFERENCED,))
+
+
+def test_a_union_with_referenced_members_splits_into_both_parts() -> None:
+    tp, none, metadata = unwrapped(
+        get_args(Params.model_fields['samples'].annotation)[0]
+    )
+    assert not none
+    assert split(tp, *metadata) == (Sample, (), (Sample,))
+    tp, _, metadata = _unwrapped(Params, 'either')
+    assert split(tp, *metadata) == (None, (), (Sample, Mask))
+
+
+def test_the_alternatives_written_keep_their_discriminator() -> None:
+    tp, _, metadata = _unwrapped(Params, 'found')
+    inline, inline_metadata, referenced = split(tp, *metadata)
+    assert referenced == (Mask,)
+    assert alternatives(inline, *inline_metadata) == CENTRES
+
+
+def test_a_group_of_scalars_is_written_inline() -> None:
+    assert _unwrapped(Params, 'reduction') == (Reduction, True, ())
+    assert split(Reduction) == (Reduction, (), ())
+
+
+def test_the_metadata_of_the_field_comes_before_that_in_its_type() -> None:
+    class Strictly(BaseModel):
+        reduction: Annotated[Reduction, 'inner'] | None = Field(None, strict=True)
+
+    assert _unwrapped(Strictly, 'reduction') == (Reduction, True, (Strict(), 'inner'))
+
+
+def test_a_union_is_written_inline_with_the_tag_of_an_alternative() -> None:
+    tp, none, metadata = _unwrapped(Params, 'beam_centre')
+    assert not none
+    assert alternatives(tp, *metadata) == CENTRES
+    assert split(tp, *metadata) == (tp, metadata, ())
+
+
+def test_a_union_typed_x_or_none_takes_none() -> None:
+    class MaybeCentre(BaseModel):
+        beam_centre: Centre | None = None
+
+    tp, none, metadata = _unwrapped(MaybeCentre, 'beam_centre')
+    assert none
+    assert alternatives(tp, *metadata) == CENTRES
+
+
+def test_the_discriminator_of_a_field_is_in_its_metadata() -> None:
+    class ByField(BaseModel):
+        beam_centre: BeamCentre | FindCentre = Field(discriminator='kind')
+
+    tp, _, metadata = _unwrapped(ByField, 'beam_centre')
+    assert alternatives(tp, *metadata) == CENTRES
+
+
+def test_unwrapped_keeps_the_metadata_of_the_elements_of_a_list() -> None:
+    assert _unwrapped(MaskParams, 'runs') == (list[RunFile], False, ())
+    assert is_list(MaskParams, 'runs')
+    tp, none, metadata = unwrapped(
+        get_args(Params.model_fields['centres'].annotation)[0]
+    )
+    assert not none
+    assert alternatives(tp, *metadata) == CENTRES
+
+
+def test_a_union_without_a_discriminator_is_refused() -> None:
+    class Undiscriminated(BaseModel):
+        beam_centre: BeamCentre | FindCentre
+
+    tp, _, metadata = _unwrapped(Undiscriminated, 'beam_centre')
+    with pytest.raises(ValueError, match='discriminator'):
+        alternatives(tp, *metadata)

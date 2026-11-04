@@ -4,7 +4,7 @@
 Shared vocabulary of workflow parameter models.
 
 Common building blocks for workflow params models: the file model, the
-marker of a place that a reference fills, constrained unit choices, and
+marker of a field that a reference fills, constrained unit choices, and
 range/edges models with cross-field validation. Purely declarative — no scipp;
 converting validated values into scipp objects is the workflow implementation's
 concern (see :mod:`ess.spec.conversions`).
@@ -23,6 +23,7 @@ authors set them at the use site, next to the field's title and description::
 
 from __future__ import annotations
 
+import functools
 import inspect
 from abc import ABC
 from collections.abc import Mapping
@@ -33,16 +34,19 @@ from typing import Annotated, Any, ClassVar, Final, Self, TypeVar
 from pydantic import (
     BaseModel,
     Field,
+    GetCoreSchemaHandler,
     PrivateAttr,
+    ValidationError,
     ValidationInfo,
+    ValidatorFunctionWrapHandler,
     field_validator,
     model_serializer,
     model_validator,
 )
 from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
-from pydantic_core import CoreSchema, PydanticCustomError
+from pydantic_core import CoreSchema, ErrorDetails, PydanticCustomError, core_schema
 
-from .refs import FileRef
+from .refs import AccumulatorRef, FileRef, OutputRef, as_ref
 
 
 class FileModel(BaseModel, frozen=True, extra='forbid'):
@@ -199,9 +203,72 @@ class FileModel(BaseModel, frozen=True, extra='forbid'):
 _SCALARS = (str, int, float, bool)
 
 
+class DataRefused(Exception):
+    """
+    The data read for ``ref``, a reference to an output, fail a check of the
+    ``T`` of ``Referenced[T]``, with ``errors``. It is not a ``ValueError``, so
+    that pydantic does not try the next member of a union with the
+    reference: the request phase checked that the output is of ``T``, so the
+    data are refused (see :func:`ess.spec.request_types.validated`).
+    """
+
+    def __init__(
+        self, ref: OutputRef | AccumulatorRef, errors: list[ErrorDetails]
+    ) -> None:
+        super().__init__(ref, errors)
+        self.ref = ref
+        self.errors = errors
+
+
 class _Referenced:
+    """
+    The marker of :data:`Referenced`. Validated with the context
+    ``{'read': read}``, as the backend validates a request when it runs, it
+    replaces a reference to an output with its data, ``read(ref)``,
+    validated as ``T``, and refuses any other value. Data of ``T`` that fail
+    a check of ``T``, such as an ``AfterValidator``, raise
+    :class:`DataRefused`. Validated without ``read``, as in direct use, it
+    takes ``T`` as it is.
+    """
+
     def __repr__(self) -> str:
         return 'REFERENCED'
+
+    def __get_pydantic_core_schema__(
+        self, source: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.with_info_wrap_validator_function(
+            functools.partial(_read, source), handler(source)
+        )
+
+
+def _read(
+    data_type: Any,
+    value: Any,
+    validate: ValidatorFunctionWrapHandler,
+    info: ValidationInfo,
+) -> Any:
+    """
+    The data of ``value``, a reference to an output, read by the context and
+    validated as ``data_type``, the ``T`` of ``Referenced[T]``.
+    """
+    read = (info.context or {}).get('read')
+    if read is None:
+        return validate(value)
+    ref = as_ref(value) if isinstance(value, Mapping) else None
+    if not isinstance(ref, OutputRef | AccumulatorRef):
+        raise PydanticCustomError(
+            'output_ref',
+            'is not a reference to an output, as the field is typed Referenced[...]',
+        )
+    data = read(ref)
+    if not isinstance(data, data_type):
+        # Data of another member Referenced[...] of a union, which takes them.
+        return validate(data)
+    try:
+        return validate(data)
+    except ValidationError as error:
+        raise DataRefused(ref, error.errors()) from None
 
 
 REFERENCED: Final = _Referenced()
@@ -211,19 +278,22 @@ _T = TypeVar('_T')
 
 Referenced = Annotated[_T, REFERENCED]
 """
-``Referenced[T]`` marks a place, a parameter or a row, that a reference to
-an output fills, whose data fit ``T``, a group. A place that takes a value
-written inline too is a union::
+``Referenced[T]`` types a field that a reference to an output fills, whose
+data fit ``T``, a group. A field that takes a value written inline too is a
+union::
 
     class IofQParams(BaseModel):
         mask: Referenced[PixelMask] | None = None
         centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
 
+    class Sample(BaseModel):
+        run: RunFile
+        transmission: Referenced[Transmission]
+
 It is ``Annotated[T, REFERENCED]``, so pydantic and a type checker see
 ``T``: the params model holds the data, as the binding takes them. The
-request type has a reference in its place (see
-:mod:`ess.spec.request_types`). The rules are stated in
-:mod:`ess.spec._workflow_spec`.
+request type has a reference instead (see :mod:`ess.spec.request_types`).
+The rules are stated in :mod:`ess.spec._workflow_spec`.
 """
 
 
@@ -285,20 +355,6 @@ class EnergyUnit(StrEnum):
 
     MILLI_EV = 'meV'
     MICRO_EV = 'µeV'
-
-
-class Quantity(BaseModel, frozen=True):
-    """
-    A scalar or short vector with a unit, as plain data that a request can
-    give inline.
-
-    The small-value type for values that a user reads or types, such as a
-    scale factor. As a parameter it is a group like any other, or a field of
-    one.
-    """
-
-    value: float | tuple[float, ...] = Field(description="The value(s).")
-    unit: str | None = Field(default=None, description="Unit, if any.")
 
 
 class RangeModel(BaseModel, ABC):

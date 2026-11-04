@@ -40,7 +40,7 @@ class FakeFiles:
     dataset if it has one. :meth:`measure` writes a file to ``directory``
     with the given content, which must have a JSON form, and a workflow reads
     it with :func:`read_file`. A run measured again keeps its identity and
-    its place in the order of measurement, and its file is written again. A
+    its position in the order of measurement, and its file is written again. A
     file is named by its run, its PID, or its path. Its metadata are the
     proposal, the run, and the fields :meth:`measure` is given, such as
     ``kind='mask'``; a file without ``kind`` is raw (see

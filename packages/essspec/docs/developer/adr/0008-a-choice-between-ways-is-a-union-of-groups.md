@@ -15,17 +15,16 @@ The spec must state these choices so that:
 
 - a generic UI shows them, from the params schema alone ([ADR 0001](0001-minimal-workflow-spec.md));
 - a request holds only values that mean something for the choice it makes;
-- a workflow outputs a value without knowing which specs take it, and the output fits each place `Referenced[T]` of its class, such as a found centre at `beam_centre: BeamCentre | Referenced[BeamCentre]`;
+- a workflow outputs a value without knowing which specs take it, and the output fits each field `Referenced[T]` of its class, such as a found centre at `beam_centre: BeamCentre | Referenced[BeamCentre]`;
 - a `PipelineBinding` sets sciline keys from which sciline picks the providers, without a provider that takes the choice apart.
 
 Terms from [ADR 0001](0001-minimal-workflow-spec.md) and the developer README:
 
-- A *group* is a pydantic model, written as a JSON object of its fields.
-- A field of a group is *interpreted* if a form made from the params schema has an input for it: a *scalar*, such as a `float` or a `Literal`; a file model, possibly typed `X | None`; or a list of scalars or of file models. A scalar is never typed `X | None`.
-- Any other field of a group is a *data value*, such as an `sc.DataArray` or `start: float | None`. No request can write a data value.
-- A *row* is an element of a list parameter. A *place* is a parameter or a row.
+- A *group* is a pydantic model, written as a JSON object of its fields. The params model is a group, and a field of it is a *parameter*.
+- Each field, at any depth, is typed from a closed list, the *field types*: a *scalar*, such as a `float` or a `Literal`; a file model; a group; a union of groups; `Referenced[T]`; a union of members written inline and members `Referenced[...]`; `X | None`; or `list[X]`. Any other type, such as `sc.DataArray` or `tuple[float, float]`, is refused.
+- A *table* is a list parameter whose elements an accumulator takes a push at a time; an element of a table is a *row*.
 - A *reference to an output* names an output of a record, such as `finder.ref('centre')`.
-- `Referenced[T]` marks a place that a reference to an output fills, with data that fit the group `T`. A reference *fits* the place when the output's class is `T` or a subclass of it. A place of any other type is *unmarked*: a request writes it, inline or as a file. A group with a data value is at a place marked `Referenced[...]`.
+- `Referenced[T]` types a field that a reference to an output fills, with data that fit the group `T`. A reference *fits* the field when the output's class is `T` or a subclass of it. A request writes a field of any other type, inline or as a file. The framework does not look inside `T`, so a group that holds an `sc.DataArray` is a `T`.
 - A *file model* is a subclass of `FileModel`. Its value is a *file*, which a request writes as `file(...)`, and which the backend resolves when the request is submitted.
 - A *template* is a request with some parameters left open, its *blanks*; the values it gives are its *fixed values*. A *plain request* gives every value.
 - A *stage* is a template that the backend keeps: it computes what does not depend on the blanks once, and the rest at each call.
@@ -45,7 +44,7 @@ Terms of this ADR:
 ## Decision
 
 **A choice between ways is a discriminated union of groups.**
-A parameter may be a union whose alternatives are groups, each with a tag; a union is never a field of a group, so that a choice between ways is a parameter of its own (ADR 0001):
+A field, at any depth, may be a union whose alternatives are groups, each with a tag:
 
 ```python
 class GivenCentre(BaseModel):
@@ -89,10 +88,11 @@ A request tells a reference from a value written inline by the key `@ref`, then 
 {"@ref": "output", "record": "r17", "output": "centre"}
 ```
 
-An alternative written inline has no data value, since a request writes its fields.
-A group with a data value is a member `Referenced[...]`, which needs no tag.
+An alternative written inline is a group that a request writes.
+A group that holds data no request writes, such as an `sc.DataArray`, is a member `Referenced[...]`, which needs no tag.
+So the discriminator sits on the union of the members written inline, `Annotated[A | B, Field(discriminator='kind')] | Referenced[C]`, since a reference has no tag.
 
-At each parameter, the spec author picks the ways it takes:
+At each field, the spec author picks the ways it takes:
 
 ```python
 beam_centre: BeamCentre = BeamCentre()                            # typed in
@@ -122,11 +122,11 @@ class FromRun(BaseModel):                 # computed from a transmission run in 
 
 transmission: (
     Annotated[FromFile | TransmissionFraction | FromRun, Field(discriminator='kind')]
-    | Referenced[ComputedTransmission]    # a group with a data value: t611.ref('transmission')
+    | Referenced[ComputedTransmission]    # holds an sc.DataArray: t611.ref('transmission')
 ) = FromFile()
 ```
 
-A place may also take a file or a reference to an output, such as a normalization that some users read from the catalogue and others compute:
+A field may also take a file or a reference to an output, such as a normalization that some users read from the catalogue and others compute:
 `normalization: PublishedNormalization | Referenced[ComputedNormalization] | None`, with `PublishedNormalization` a file model.
 The binding gets the file model or the group, and reads the file itself.
 
@@ -139,29 +139,30 @@ transmission: Annotated[FromFile | TransmissionFraction, Field(discriminator='ki
 # not: transmission: TransmissionFraction | None = None   # None: the one in the run's file
 ```
 
-A UI shows a group as its fields; a place `Referenced[T]` as a picker of records; a union as one choice between its members, each alternative with its fields and a member `Referenced[...]` as "From a record"; and a type `X | None` as a toggle, which adds the option `None` to any of these:
+A UI shows a group as its fields; a field `Referenced[T]` as a picker of records; a union as one choice between its members, each alternative with its fields and a member `Referenced[...]` as "From a record"; and a type `X | None` as a choice that adds the way "None" to the ways of `X`, at any depth:
 
 ```
 Beam centre: (•) Given  ( ) From a record      x [0.012] y [-0.003]
 Transmission: (•) From the sample's file  ( ) Given  ( ) From a run  ( ) From a record
-[x] Direct beam  [run 60340 ▾]
-[ ] Mask
+Direct beam: (•) A file  ( ) None              [run 60340 ▾]
+Mask: ( ) From a record  (•) None
 ```
 
 The title of an alternative's tag labels it in the choice, and the tag's description explains it; the schema titles a tag without a title by its value, `'given'` as "Given".
-A choice offers "From a record" at each place that a reference fills, also while no output fits.
+A choice offers "From a record" at each field that a reference fills, also while no output fits.
 A choice without a default starts with no way chosen, as any field without a default starts empty; so does a required `BeamCentre | Referenced[BeamCentre]`.
-A type `U | None`, for a union `U`, is a toggle with a choice inside.
-A toggle that is off reads as "without X", so `None` must mean that.
+A type `U | None`, for a union `U`, is one choice of the ways of `U` and "None".
+The way "None" reads as "without X", so `None` must mean that.
 That `None` means *without X* is a guideline, not a rule the framework checks.
-It has no exception for data values: `None` in `transmission: Referenced[ComputedTransmission] | None` does not mean "the one in the run's file".
+It has no exception for a group that only a reference fills: `None` in `transmission: Referenced[ComputedTransmission] | None` does not mean "the one in the run's file".
 
-**Only a parameter is typed `X | None`.**
-A scalar field of a group is never typed `X | None`, so each toggle is over the widget of a whole parameter.
+**`X | None` at any depth.**
+A field of a group may be typed `X | None`, such as `q_max: float | None` or `range: WavelengthRange | None` in `Reduction`.
+The form shows it as a choice with the way "None", so a text input never has to tell an empty text from `None`.
 A choice between modes is a union of groups.
-An optional part with fields that need values is a parameter typed `X | None`: `direct_beam: DirectBeam | None` for an optional file, with `DirectBeam` a file model, and `mask: Referenced[PixelMask] | None` for an optional data value, with `PixelMask` a group that holds it.
+An optional part with fields that need values is typed `X | None`: `direct_beam: DirectBeam | None` for an optional file, with `DirectBeam` a file model, and `mask: Referenced[PixelMask] | None` for an optional mask, with `PixelMask` a group that holds the array.
 A `bool` field switches one optional part of a group whose fields all have defaults, such as `limit_range: bool` next to `start` and `stop`, both with defaults; the form shows those fields either way.
-A list that may be empty is `[]`, not `None`: a list parameter is not typed `list[X] | None`, and its element is not typed `X | None`.
+A list that may be empty is `[]`, not `None`: a list is not typed `list[X] | None`, and its element is not typed `X | None`.
 
 **A default never skips a correction that a correct reduction needs.**
 A request that forgets a parameter, or a field of a group, must not get a reduction with a step silently skipped.
@@ -186,7 +187,7 @@ PipelineBinding(IOFQ, lambda fixed: sciline.Pipeline([find_centre, ..., iofq]))
 With `| Referenced[ComputedCentre]`, the keys are `(GivenCentre, FindCentre, ComputedCentre)`.
 A union whose members are of one class, such as `BeamCentre | Referenced[BeamCentre]`, is that class to the binding, with one key, and not a union.
 `keys=` may give the members one key, `(K, K)`, which every value then sets.
-A union in a list parameter sets no key of its own: the list's key holds it, and a provider tells its rows apart.
+A union in a list parameter sets no key of its own: the list's key holds it, and a provider tells its elements apart.
 
 **`PipelineBinding` sets no key for a parameter typed `X | None`; `make_pipeline` says what `None` means.**
 Every value of a union sets the key of a member that the request chose; `None` names no key.
@@ -223,24 +224,25 @@ A value held at a key that a parameter's key leads to has the same effect, but t
 
 ## Consequences
 
-- A UI generator needs two components beyond a plain group and a picker of records: a choice between the members of a union, and a toggle for a parameter typed `X | None`, over the widget of `X`, never a single input. A toggle is the choice between two alternatives, one of them empty.
-- An output carries no tag. A workflow's output fits each place `Referenced[T]` of its class, in any spec, without a class per consumer.
+- A UI generator needs one component beyond a plain group and a picker of records: a choice between ways, for a union and for a type `X | None`, at any depth. "None" is one more way, without fields.
+- An output carries no tag. A workflow's output fits each field `Referenced[T]` of its class, in any spec, without a class per consumer.
 - One parameter states every way of obtaining its value, a record's output among them, so one spec serves a user who types the value in, one who computes it in this graph, and one who takes it from a record.
 - An author who wraps a workflow factory that holds a value at a key of a union replaces it with a provider, `pipeline.insert(adapter)`, such as an adapter from `GivenCentre` to esssans' `BeamCenter`. Mapping the alternatives to other keys with `keys=` does not help while the held value stays further down the graph.
 - An author tests that each alternative has its effect, and that a request with `None` after one with a value gives the result without X. The second fails if `make_pipeline` sets the value in a pipeline it keeps.
 - A spec that tunes a value in a stage, such as a scan of the beam centre, types that parameter as a group or as `X | Referenced[X]`, or its client submits plain requests.
 - A table whose single-run parameter is a union of several classes has a key per member, so the driver of the multi-run spec cannot cut the single-run graph at one key for its rows. A table of `X | Referenced[X]` has one key.
-- A choice for one field of a row of a table is not a union, since an interpreted field of a group is a scalar, a file model, or a list of one. A choice of way per row is a table whose rows are a union, `list[A | B]` or `list[A | B | Referenced[C]]`, each row written inline or a reference, and a choice of way for all rows is a parameter.
+- A choice for one field of a row of a table is a union at that field of the row's group, such as `transmission: TransmissionFraction | Referenced[ComputedTransmission]`. A choice of way for a whole row is a table whose rows are a union, `list[A | B]` or `list[A | B | Referenced[C]]`, and a choice of way for all rows is a parameter.
 
 ## Alternatives considered
 
 - **A selector field next to the fields of every mode**, `enabled: bool` or `mode: Literal[...]`, as esslivedata's detector and monitor views do. Used to choose between modes, it lets a request hold values that mean nothing, `{'enabled': False, 'tolerance': 0.05}`, and a required field must be given even for a mode that does not use it.
 - **A union held by a wrapper group.** The binding sets the wrapper's key, so a provider takes the union apart instead of sciline choosing providers by key.
-- **A reference that fits a union when the output fits a tagged alternative.** An output fits only if its class is an alternative, with its tag, so the workflow that computes it knows the specs that take it. A centre finder outputs a tagged `GivenCentre`, a second class next to the `BeamCentre` that other places take, and an alternative given only by reference, such as a computed transmission, carries a tag that no request writes. A member `Referenced[T]` gives the same choice with an untagged output.
+- **A reference that fits a union when the output fits a tagged alternative.** An output fits only if its class is an alternative, with its tag, so the workflow that computes it knows the specs that take it. A centre finder outputs a tagged `GivenCentre`, a second class next to the `BeamCentre` that other fields take, and an alternative given only by reference, such as a computed transmission, carries a tag that no request writes. A member `Referenced[T]` gives the same choice with an untagged output.
 - **A tag owned by the framework**, through a pydantic callable discriminator: `Annotated[BeamCentre | FindCentre, Choice()]`, where a request names the alternative by its class name under a reserved key, `{'@kind': 'FindCentre', 'tolerance': 0.05}`, and no group has a tag field. An untagged `BeamCentre` output then fits the union, and plain pydantic validates and dumps it. But it adds an annotation that the framework owns, makes class names part of a spec's interface, and differs from the pydantic-native `kind` fields that esslivedata uses. A reference fits through an untagged member `Referenced[T]`, so a tag field that the author writes serves.
-- **An exception for data values**, whose `None` could mean something else when the field's description says what, such as `transmission: ComputedTransmission | None` with `None` for the one in the run's file. A UI shows the description, but the toggle still reads "without X" when off, and a guideline with an exception is one more thing to teach.
+- **An exception for groups that only a reference fills**, whose `None` could mean something else when the field's description says what, such as `transmission: Referenced[ComputedTransmission] | None` with `None` for the one in the run's file. A UI shows the description, but the way "None" still reads "without X", and a guideline with an exception is one more thing to teach.
+- **The discriminator on the whole union**, `Annotated[A | B | Referenced[C], Field(discriminator='kind')]`. Pydantic would then need a tag on `C`, and a reference to an output carries none.
 - **No type `X | None` in the spec**, with an empty list, an `enabled` flag, or an empty alternative such as `NoMask` in its place. Every parameter that may go without a value would be a union, and a request that goes without it would write a tagged object. It puts a concern of sciline bindings into the spec, which `function_binding` and `DriverBinding` do not share: they get `None` as a plain value.
-- **`X | None` at a field of a group**, such as `range: WavelengthRange | None` or `offset: float | None`. A form would show a toggle inside a form, and a group at a field is a second level that the framework interprets (ADR 0001). Each such case is written as a parameter typed `X | None`, whose class also names the role, or as a `bool` field. A list that may be `None` has two empty values, `None` and `[]`.
+- **`X | None` only at a parameter**, since a text input at a field of a group cannot tell an empty text from `None`. A form that shows every `X | None` as a choice with the way "None" removes that reason, and `range: WavelengthRange | None` in `Reduction` then needs no parameter of its own. A list that may be `None` has two empty values, `None` and `[]`, so a list is still not typed `list[X] | None`.
 - **`X | None` keyed like a union**, with `None` setting nothing. `make_pipeline` would not set the key by hand. But `None` would then mean whatever the graph does without a value at `X`, typically "compute X", and nothing makes the author say otherwise.
 - **`X | None` setting `pipeline[X] = None`.** It replaces a provider of `X` with `None`, so every provider that takes `X` must accept `None`.
 - **A framework `NotSet` type as an alternative.** One type for many parameters would be one key for all of them, which `PipelineBinding` refuses; a generic `NotSet[Mask]` is an empty alternative such as `NoMask`, written by the author with no new type.

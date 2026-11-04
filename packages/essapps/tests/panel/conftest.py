@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Toy specs with each kind of place, bound on a client of ``local()``.
+Toy specs with each type of field, bound on a client of ``local()``.
 
 ``FIND`` outputs a ``BeamCentre``, a plain group, which ``REDUCE`` takes
 typed in or from a record. ``REDUCE`` also takes a group with defaults, a
@@ -14,6 +14,10 @@ without a default. ``SUBTRACT`` takes a group, and a ``BeamCentre`` typed
 ``X | None`` without a default, which an output of ``FIND`` fits. ``STACK``
 takes two tables, of a file model and of a group with a file, and a list
 of ``BeamCentre`` with a default, whose row an output of ``FIND`` fits.
+``NESTED`` takes a scalar, and a group with a field of each other type:
+groups with and without a default, a union, ``X | None`` of a scalar, a
+group, and a file model, ``Referenced[BeamCentre]``, and lists of groups
+and of a union.
 """
 
 from collections.abc import Iterator
@@ -128,6 +132,42 @@ class StackParams(BaseModel):
     centres: list[BeamCentre | Referenced[BeamCentre]] = [BeamCentre(x=1.0)]
 
 
+class Window(BaseModel):
+    start: float
+    stop: float = 1.0
+
+
+class Disc(BaseModel):
+    kind: Literal['disc'] = 'disc'
+    radius: float = 1.0
+
+
+class Slab(BaseModel):
+    kind: Literal['slab'] = 'slab'
+    width: float = 1.0
+
+
+Shape = Annotated[Disc | Slab, Field(discriminator='kind')]
+
+
+class Specimen(BaseModel):
+    run: Run
+    window: Window
+    frame: Window = Window(start=0.0)
+    shape: Shape = Disc()
+    scale: float | None = None
+    crop: Window | None = None
+    mask: Mask | None = None
+    centre: Referenced[BeamCentre]
+    shots: list[Shot] = []
+    shapes: list[Shape] = []
+
+
+class NestedParams(BaseModel):
+    bins: int
+    specimen: Specimen
+
+
 type Spec = WorkflowSpec[Any, Any]
 
 FIND: Spec = WorkflowSpec(
@@ -171,6 +211,14 @@ STACK: Spec = WorkflowSpec(
     outputs=ReduceOutputs,
     tables=('runs', 'shots'),
 )
+NESTED: Spec = WorkflowSpec(
+    name='nested',
+    version=1,
+    title='Nested',
+    description='The x of the centre of a specimen, times the bins.',
+    params=NestedParams,
+    outputs=ReduceOutputs,
+)
 
 
 def find(params: FindParams) -> FindOutputs:
@@ -199,6 +247,10 @@ def stack(params: StackParams) -> ReduceOutputs:
     return ReduceOutputs(total=Total(value=counts + sum(c.x for c in params.centres)))
 
 
+def nested(params: NestedParams) -> ReduceOutputs:
+    return ReduceOutputs(total=Total(value=params.bins * params.specimen.centre.x))
+
+
 @pytest.fixture
 def files(tmp_path: Path) -> FakeFiles:
     return FakeFiles('p1', tmp_path)
@@ -217,6 +269,7 @@ def client(files: FakeFiles) -> Iterator[Client]:
         function_binding(OPTIONS, options),
         function_binding(SUBTRACT, subtract),
         function_binding(STACK, stack),
+        function_binding(NESTED, nested),
     ]
     with local(proposal='p1', files=files, bind=bind) as client:
         yield client
@@ -245,3 +298,8 @@ def subtract_spec() -> Spec:
 @pytest.fixture
 def stack_spec() -> Spec:
     return STACK
+
+
+@pytest.fixture
+def nested_spec() -> Spec:
+    return NESTED

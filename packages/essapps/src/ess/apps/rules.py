@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from ess.spec import FileRef, field_types
 from ess.spec.refs import Loc, iter_refs
 
-from .batch import Lookup, file_place, run_number, try_apply
+from .batch import Lookup, check_at, run_number, try_apply
 from .client import Client
 from .errors import SubmitError
 from .files import Selector
@@ -56,7 +56,7 @@ class Rule:
     template references must be persisted for the same reason.
 
     Raises ``ValueError`` when made if no single blank is left for a file,
-    or if ``at`` is not that blank (see :func:`file_place`).
+    or if ``at`` is not that blank (see :func:`check_at`).
     """
 
     name: str
@@ -70,13 +70,8 @@ class Rule:
     persist: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
-        _ = self.place  # refuses an at that no file fills
-
-    @property
-    def place(self) -> str:
-        """The blank a file fills, a row of it for a series."""
         lookup = self.lookup if self.series is None else None
-        return file_place(self.template, lookup, self.at)
+        check_at(self.template, lookup, self.at)
 
 
 @dataclass
@@ -155,12 +150,11 @@ class TriggerLoop:
         self, rule: Rule
     ) -> tuple[dict[str, Request], dict[FileRef, LookupError]]:
         """The requests for the new files, and the files skipped, with why."""
-        place = rule.place
         handled = {
             ref
             for record in self._client.records(label=rule.label)
             for loc, ref in iter_refs(record.request.params)
-            if isinstance(ref, FileRef) and _fills(loc, place, rule.series)
+            if isinstance(ref, FileRef) and _fills(loc, rule.at, rule.series)
         }
         matching = self._source.list(rule.selector)
         new = [ref for ref in matching if ref not in handled]
@@ -169,16 +163,15 @@ class TriggerLoop:
                 rule.template,
                 new,
                 self._source,
-                at=place,
+                at=rule.at,
                 member_field=rule.member_field,
                 lookup=rule.lookup,
             )
-        return self._series_requests(rule, place, matching, new), {}
+        return self._series_requests(rule, matching, new), {}
 
     def _series_requests(
         self,
         rule: Rule,
-        place: str,
         matching: list[FileRef],
         new: list[FileRef],
     ) -> dict[str, Request]:
@@ -186,7 +179,7 @@ class TriggerLoop:
         for ref in sorted(matching, key=lambda r: run_number(r, self._source)):
             series[str(self._source.metadata(ref)[rule.series])].append(ref)
         return {
-            value: rule.template.fill(params={place: refs})
+            value: rule.template.fill(params={rule.at: refs})
             for value, refs in series.items()
             if any(ref in new for ref in refs)
         }
@@ -201,18 +194,18 @@ def _check(rule: Rule, params: type[BaseModel]) -> None:
     each key and value of the model's metadata, so that every file it
     lists fits the model (see :class:`~ess.spec.FileModel`).
     """
-    selectors = {rule.place: rule.selector}
+    selectors = {rule.at: rule.selector}
     if rule.lookup is not None and rule.series is None:
         selectors |= {b: r.selector for b, r in rule.lookup.rules.items()}
     for blank, selector in selectors.items():
-        series = blank == rule.place and rule.series is not None
+        series = blank == rule.at and rule.series is not None
         listed = field_types.is_list(params, blank)
         if series and not listed:
             raise ValueError(
                 f'{rule.name}: a series fills a list parameter, not {blank}'
             )
         if listed and not series:
-            fills = 'a series' if blank == rule.place else 'no lookup'
+            fills = 'a series' if blank == rule.at else 'no lookup'
             raise ValueError(
                 f'{rule.name}: {blank} is a list parameter; {fills} fills it'
             )
@@ -227,12 +220,12 @@ def _check(rule: Rule, params: type[BaseModel]) -> None:
             )
 
 
-def _fills(loc: Loc, place: str, series: str | None) -> bool:
+def _fills(loc: Loc, at: str, series: str | None) -> bool:
     """
     Whether a file at ``loc`` in a request of a rule fills the rule's
-    ``place``: is it, or for a series, a row of it, such as ``('runs', 2)``
-    for the place ``'runs'``.
+    ``at``: is it, or for a series, a row of it, such as ``('runs', 2)``
+    for ``at='runs'``.
     """
     if series is None:
-        return loc == (place,)
-    return len(loc) == 2 and loc[0] == place and isinstance(loc[1], int)
+        return loc == (at,)
+    return len(loc) == 2 and loc[0] == at and isinstance(loc[1], int)

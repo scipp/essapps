@@ -26,8 +26,8 @@ request, :class:`StageBinding` for a stage, and :class:`AccumulatorBinding`
 for an accumulator. A plain request passes an instance of the params model,
 ``compute(params) -> outputs``. A stage or an accumulator is made from some
 values only, so these pass by name, each as its type, whether given inline
-or by reference: a group as the model, with a data value in it as the object,
-a file model with the local path of its file, and a table as the list of
+or by reference: a group as the model, with the data of each reference in
+it, a file model with the local path of its file, and a table as the list of
 its rows::
 
     {'reduction': Reduction(bins=2), 'beam_centre': centre,
@@ -115,8 +115,8 @@ class Driver[O: BaseModel](Protocol):
       the rows were grouped into pushes, and whatever the order of pushes
       into different tables.
     - Within a table, the rows keep the order in which they were pushed.
-    - :meth:`push` does not modify a value it is given. A driver that adds in
-      place copies the first contribution, so that adding never changes a
+    - :meth:`push` does not modify a value it is given. A driver that adds
+      into the first contribution copies it first, so that adding never changes a
       value that another record returned.
     - :meth:`outputs` may share memory with what the driver holds; the
       caller reads them before the next push.

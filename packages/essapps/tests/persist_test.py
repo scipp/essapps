@@ -137,7 +137,8 @@ class GatedStore(FakeStore):
     """
     A fake store whose writes wait until ``gate`` is set; ``entered`` is set
     once one waits. ``forgotten`` holds the values it no longer holds, as if
-    dropped to free disk space, by record and output.
+    dropped to free disk space, by record and output. ``reads`` holds each
+    value read, by record and output.
     """
 
     def __init__(self) -> None:
@@ -146,6 +147,7 @@ class GatedStore(FakeStore):
         self.gate.set()
         self.entered = threading.Event()
         self.forgotten: set[tuple[str, str]] = set()
+        self.reads: list[tuple[str, str]] = []
 
     def write(self, record: str, output: str, value: Any) -> None:
         self.entered.set()
@@ -155,6 +157,7 @@ class GatedStore(FakeStore):
     def read(self, record: str, output: str) -> Any:
         if (record, output) in self.forgotten:
             raise KeyError((record, output))
+        self.reads.append((record, output))
         return super().read(record, output)
 
 
@@ -498,6 +501,22 @@ def test_another_client_reads_a_persisted_value_from_the_store(
     other.output(listed, 'value').append(99.0)
     assert client.output(listed, 'value') == [1.0]  # the client's own value
     assert other.output(listed, 'value') == [1.0]
+
+
+def test_references_to_one_persisted_output_read_it_from_the_store_once(
+    client: Client, store: GatedStore
+) -> None:
+    load = client.compute(LOAD, params=_sample(1))
+    client.persist(load, 'value')
+    client.release(load)
+    assert client.output(load, 'value') == Amount(value=1.0)  # from the store
+    store.reads.clear()
+
+    both = {'source': load.ref('value'), 'shift': load.ref('value')}
+    offset = client.compute(OFFSET, params=both)
+
+    assert client.output(offset, 'value') == Amount(value=2.0)
+    assert store.reads == [(load.id, 'value')]
 
 
 def test_reading_every_output_raises_if_a_write_failed(
