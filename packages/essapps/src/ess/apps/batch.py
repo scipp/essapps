@@ -5,7 +5,7 @@ A batch: one template filled for each of many files.
 
 A lookup fills further blanks per file, such as the can measured most
 recently before a sample. A file fills the one blank the lookup leaves, a
-parameter of a file model, such as ``'sample'``. Files are ordered by
+file parameter, such as ``'sample'``. Files are ordered by
 their run number.
 """
 
@@ -41,8 +41,8 @@ class LastBefore:
 
 class Lookup:
     """
-    Rules that fill blanks per file, each keyed by its blank, a parameter
-    of a file model::
+    Rules that fill blanks per file, each keyed by its blank, a file
+    parameter::
 
         Lookup({'can': LastBefore(Selector(role='can'))})
     """
@@ -82,8 +82,8 @@ def apply(
     Fill the template for each file.
 
     ``source`` answers metadata queries, such as ``client.files``. Each
-    file fills the blank ``at``, the one the lookup leaves, a parameter
-    of a file model::
+    file fills the blank ``at``, the one the lookup leaves, a file
+    parameter::
 
         template = Template(IOFQ, blanks=('sample',))
         apply(template, runs, client.files, at='sample')

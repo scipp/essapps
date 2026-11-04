@@ -9,7 +9,7 @@ import uuid
 import weakref
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
 from pydantic import BaseModel, Field
@@ -35,7 +35,7 @@ from ess.apps.testing import (
     kept_rows,
     read_file,
 )
-from ess.spec import Binding, FileModel, Referenced, WorkflowSpec, function_binding
+from ess.spec import Binding, File, Referenced, WorkflowSpec, function_binding
 
 
 class Amount(BaseModel):
@@ -47,7 +47,7 @@ class Amount(BaseModel):
     value: float
 
 
-class SampleRun(FileModel): ...
+SampleRun = Annotated[Path, File()]
 
 
 class Box:
@@ -192,12 +192,12 @@ def boxes() -> list[weakref.ref[Box]]:
 @pytest.fixture
 def bind(loading: threading.Event, boxes: list[weakref.ref[Box]]) -> list[Binding]:
     def load(params: RunParams) -> Loaded:
-        run = read_file(params.sample.path)
+        run = read_file(params.sample)
         loading.wait(timeout=5)
         return Loaded(value=Amount(value=run), extra=Amount(value=-run))
 
     def box(params: RunParams) -> BoxOutputs:
-        boxes.append(weakref.ref(value := Box(read_file(params.sample.path))))
+        boxes.append(weakref.ref(value := Box(read_file(params.sample))))
         return BoxOutputs(value=Boxed(box=value))
 
     def total(params: TotalParams) -> Value:
@@ -213,7 +213,7 @@ def bind(loading: threading.Event, boxes: list[weakref.ref[Box]]) -> list[Bindin
         function_binding(LOAD, load),
         function_binding(SHIFT, shift),
         kept_rows(TOTAL, total),
-        function_binding(LIST, lambda p: Listed(value=[read_file(p.sample.path)])),
+        function_binding(LIST, lambda p: Listed(value=[read_file(p.sample)])),
         function_binding(BOX, box),
         function_binding(
             UNBOX, lambda p: Value(value=Amount(value=p.source.box.value))

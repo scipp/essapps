@@ -493,7 +493,7 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
   <h2>A single-run and a multi-run spec over one per-run sciline graph</h2>
   <div class="cols">
     <div style="display:flex; flex-direction:column; gap:10px; min-width:0">
-<pre><code><span class="k-pkg">class</span> Run(FileModel): ...      <span class="c"># a file model, and a row of a table</span>
+<pre><code>Run = Annotated[Path, File()]        <span class="c"># a file field, and a row of a table</span>
 
 <span class="k-pkg">class</span> IofQParams(BaseModel):         <span class="c"># single-run: one run of each kind</span>
     sample: Run

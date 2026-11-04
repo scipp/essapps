@@ -26,7 +26,7 @@ from ess.apps import (
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
 from ess.spec import (
     DriverBinding,
-    FileModel,
+    File,
     NoParams,
     Referenced,
     StageCall,
@@ -43,7 +43,7 @@ class Factor(BaseModel):
     factor: float = 1.0
 
 
-class RunFile(FileModel): ...
+RunFile = Annotated[Path, File()]
 
 
 class ScaleParams(BaseModel):
@@ -120,11 +120,11 @@ UNSCALED = Template(TOTAL, params={'scaling': []}, blanks=('sample',))
 
 def scale(params: ScaleParams) -> Value:
     factor = 1.0 if params.scaling is None else params.scaling.factor
-    return Value(value=read_file(params.sample.path) * factor)
+    return Value(value=read_file(params.sample) * factor)
 
 
 def total(params: TotalParams) -> Value:
-    summed = sum(read_file(run.path) for run in params.sample)
+    summed = sum(read_file(run) for run in params.sample)
     return Value(value=summed * math.prod(f.factor for f in params.scaling))
 
 
@@ -141,12 +141,14 @@ def use_many(params: PositivesParams) -> Value:
 
 
 class Count:
-    """A driver of CHECKED that counts the rows pushed."""
+    """A driver of CHECKED that reads the file of each row pushed, and counts them."""
 
     def __init__(self, fixed: Mapping[str, Any]) -> None:
         self.rows = 0
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
+        for row in rows:
+            read_file(row)
         self.rows += len(rows)
 
     def outputs(self) -> Value:
@@ -372,7 +374,7 @@ def test_a_table_that_may_be_empty_is_given_without_rows(client: Client) -> None
 def test_a_push_whose_file_cannot_be_read_stops_the_accumulator(
     client: Client, files: FakeFiles
 ) -> None:
-    acc = client.accumulator(UNSCALED)
+    acc = client.accumulator(Template(CHECKED, blanks=('sample',)))
     files.corrupt(files.resolve(file(run=1)))
     acc.push(sample=[file(run=1)])
 

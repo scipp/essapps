@@ -13,7 +13,7 @@ request's params. The value of ``"@ref"`` names its kind::
 
 The first three are references to an output: of a record, of one element of
 a list or dict output of a record, and of an accumulator. The last is the
-JSON form of a file (see :class:`~ess.spec.parameters.FileModel`). Since the
+JSON form of a file (see :class:`~ess.spec.parameters.File`). Since the
 key marks a reference wherever it is, code that reads a record lists its
 references and files without the spec: :func:`iter_refs` finds each one, and
 :func:`map_refs` replaces each one.
@@ -26,6 +26,7 @@ workflow takes is the business of whatever runs the workflow.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from pathlib import PurePath
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -79,8 +80,8 @@ class FileRef(_Ref, frozen=True):
     catalogue PID, an instrument and run number, a path, makes the string
     self-describing, ``pid:...`` or ``run:...``, and normalizes it before it
     enters a record, because two references are equal only when their strings
-    are. It is the JSON form of a file model (see
-    :class:`ess.spec.parameters.FileModel`).
+    are. It is the JSON form of a file, which fills a file field (see
+    :class:`ess.spec.parameters.File`).
     """
 
     kind: Literal['file'] = Field(default='file', alias='@ref', repr=False)
@@ -88,6 +89,11 @@ class FileRef(_Ref, frozen=True):
 
     def __str__(self) -> str:
         return self.file
+
+    @classmethod
+    def at(cls, path: PurePath | str) -> FileRef:
+        """The file named by its local path, ``path:...``."""
+        return cls(file=f'path:{path}')
 
 
 class AccumulatorRef(_Ref, frozen=True):

@@ -30,9 +30,9 @@ functions (see :mod:`ess.spec.request_types`)::
     # A union of groups: show the fields of each alternative. None for any
     # other type.
     alternatives(inline, *inline_metadata)  # ('kind', {'given': ..., ...})
-    # A file model: offer a picker of files. Any other group: show its
-    # fields.
-    is_file_model(inline)
+    # The type of a file field, Annotated[Path, File(...)]: offer a picker
+    # of the files that fit the marker's metadata. None for any other type.
+    file_marker(inline, *inline_metadata)  # File(kind='mask')
     # Groups that a reference fills the field with: offer a picker of
     # records.
     referenced  # (ComputedBeamCentre,)
@@ -47,9 +47,10 @@ from __future__ import annotations
 import dataclasses
 import functools
 import operator
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from types import NoneType, UnionType
 from typing import (
     Annotated,
@@ -75,7 +76,7 @@ from pydantic import (
 )
 from pydantic.fields import FieldInfo
 
-from .parameters import REFERENCED, FileModel
+from .parameters import REFERENCED, File
 
 TIMES = (datetime, AwareDatetime, NaiveDatetime)
 """The types of a time, which a request writes as a string."""
@@ -195,9 +196,29 @@ def is_single(tp: Any) -> bool:
     )
 
 
-def is_file_model(tp: Any) -> bool:
-    """Whether ``tp`` is a file model, a subclass of :class:`FileModel`."""
-    return isinstance(tp, type) and issubclass(tp, FileModel)
+def file_marker(tp: Any, *metadata: Any) -> File | None:
+    """
+    The marker of a file field, if ``tp``, with ``metadata``, is ``Path``
+    marked :class:`~ess.spec.parameters.File`; ``None`` otherwise. ``tp`` and
+    ``metadata`` are as :func:`split` gives the part that a request writes::
+
+        file_marker(Path, File(kind='mask'))  # File(kind='mask')
+        file_marker(Path)  # None
+    """
+    if tp is not Path:
+        return None
+    return next((m for m in metadata if isinstance(m, File)), None)
+
+
+def file_of(info: FieldInfo) -> File | None:
+    """
+    The marker of the field with ``info``, if it is a file field, typed
+    ``X`` or ``X | None``, or a list of one; ``None`` otherwise.
+    """
+    tp, _, metadata = unwrapped(info.annotation, field_metadata(info))
+    if get_origin(tp) is list:
+        tp, _, metadata = unwrapped(get_args(tp)[0])
+    return file_marker(tp, *metadata)
 
 
 def is_scalar(tp: Any) -> bool:
@@ -234,20 +255,54 @@ def is_referenced(tp: Any) -> bool:
     return get_origin(tp) is Annotated and REFERENCED in tp.__metadata__
 
 
-def holds_ref(annotation: Any, seen: frozenset[type] = frozenset()) -> bool:
+def is_file(tp: Any) -> bool:
+    """Whether ``tp`` is ``Annotated`` with a :class:`File` marker in its metadata."""
+    return get_origin(tp) is Annotated and any(
+        isinstance(m, File) for m in tp.__metadata__
+    )
+
+
+def holds_ref(annotation: Any) -> bool:
     """
     Whether ``annotation`` holds ``Referenced[...]``, at any depth, in the
-    fields of each group too. ``seen`` holds the groups looked into already,
-    so that a group that contains itself ends.
+    fields of each group too.
     """
-    if is_referenced(annotation):
+    return _holds(annotation, is_referenced)
+
+
+def holds_file(annotation: Any) -> bool:
+    """
+    Whether ``annotation`` holds a file field, at any depth, in the fields
+    of each group too.
+    """
+    return _holds(annotation, is_file)
+
+
+def holds_marker(annotation: Any) -> bool:
+    """
+    Whether ``annotation`` holds ``Referenced[...]`` or a file field, at any
+    depth, in the fields of each group too: whether a request writes
+    something other than its type, a reference or a file, somewhere in it.
+    """
+    return holds_ref(annotation) or holds_file(annotation)
+
+
+def _holds(
+    annotation: Any, marked: Callable[[Any], bool], seen: frozenset[type] = frozenset()
+) -> bool:
+    """
+    Whether ``marked`` holds for ``annotation`` or a type in it, at any
+    depth, in the fields of each group too. ``seen`` holds the groups looked
+    into already, so that a group that contains itself ends.
+    """
+    if marked(annotation):
         return True
     if is_group(annotation):
         return annotation not in seen and any(
-            holds_ref(info.rebuild_annotation(), seen | {annotation})
+            _holds(info.rebuild_annotation(), marked, seen | {annotation})
             for info in annotation.model_fields.values()
         )
-    return any(holds_ref(arg, seen) for arg in get_args(annotation))
+    return any(_holds(arg, marked, seen) for arg in get_args(annotation))
 
 
 def is_array(tp: Any) -> bool:

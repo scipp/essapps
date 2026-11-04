@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from enum import Enum, IntEnum
 from pathlib import Path, PosixPath, PurePosixPath
-from typing import Annotated, Any, Literal, NewType, Self, TypedDict
+from typing import Annotated, Any, Literal, NewType, TypedDict
 
 import pydantic
 import pytest
@@ -26,7 +26,7 @@ from pydantic_core import to_jsonable_python
 
 from ess.spec import (
     AccumulatorRef,
-    FileModel,
+    File,
     FileRef,
     NoParams,
     OutputRef,
@@ -56,24 +56,12 @@ class TimeRange(BaseModel):
     stop: float
 
 
-class RunFile(FileModel, kind='raw'):
-    pass
-
-
-class MaskFile(FileModel, kind='mask'):
-    pass
-
-
-class GeometryFile(FileModel):
-    """A file model without keywords: it takes raw files."""
-
-
-class SampleRun(FileModel, kind='raw'):
-    """A sample run's file."""
-
-
-class CanRun(FileModel, kind='raw'):
-    """An empty can run's file."""
+RunFile = Annotated[Path, File(kind='raw')]
+MaskFile = Annotated[Path, File(kind='mask')]
+GeometryFile = Annotated[Path, File()]
+"""A file field without metadata: it takes raw files."""
+SampleRun = Annotated[Path, File(kind='raw')]
+CanRun = Annotated[Path, File(kind='raw')]
 
 
 class ByMonitor(BaseModel):
@@ -106,42 +94,6 @@ class RoleRun(BaseModel):
     """A group with a field typed as a NewType."""
 
     file: SampleFile
-
-
-class CalibrationFile(FileModel, kind='calibration'):
-    """A file model with a field other than ``file``: refused."""
-
-    run: int
-
-
-class CheckedMaskFile(MaskFile):
-    """A file model with a validator of its own: refused."""
-
-    @field_validator('file')
-    @classmethod
-    def _xml(cls, file: str) -> str:
-        if not file.endswith('.xml'):
-            raise ValueError('a mask is an XML file')
-        return file
-
-
-class AttachingMaskFile(MaskFile):
-    """A file model that declares a validator of FileModel anew: refused."""
-
-    @model_validator(mode='after')
-    def _with_path(self) -> Self:
-        return self
-
-
-class InitMaskFile(MaskFile):
-    """A file model with a model_post_init of its own: refused."""
-
-    def model_post_init(self, context: Any) -> None:
-        pass
-
-
-class BeamStopMaskFile(MaskFile):
-    """A subclass of a subclass of FileModel that keeps its field ``file``."""
 
 
 class LocalPath(Path):
@@ -276,7 +228,7 @@ class IofQParams(IofQSettings):
 
     @model_validator(mode='after')
     def _sample_is_not_the_can(self) -> 'IofQParams':
-        if self.sample.path == self.can.path:
+        if self.sample == self.can:
             raise ValueError('the sample run is not the can run')
         return self
 
@@ -292,7 +244,7 @@ class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
 
 
 class Measured(BaseModel):
-    """A group with a field typed a file model."""
+    """A group with a file field."""
 
     run: RunFile
 
@@ -471,7 +423,7 @@ def _has_inline_source(schema: dict[str, Any], defs: dict[str, Any]) -> bool:
 
 NOT_A_VALUE = 'the default is not a value a request may write'
 NO_FILE_DEFAULT = re.escape(
-    'a default names no file; a file model has no default but None or []'
+    'a default names no file; a file field has no default but None or []'
 )
 OPTIONAL_LIST = re.escape(
     'a list is not typed list[X] | None; a list without elements is []'
@@ -483,28 +435,25 @@ LIST_OF_LISTS = re.escape('a list is not of lists; ')
 NOT_AN_OUTPUT = re.escape(
     'an output is a type, possibly typed X | None, or a list or a dict of one'
 )
-OUTSIDE_A_FILE_MODEL = re.escape(
-    "a Path is outside a file model; a parameter or a field that takes a file is "
-    "typed a file model, such as mask: MaskFile with class MaskFile(FileModel, "
-    "kind='mask'), and written as file(...)"
+UNMARKED_PATH = re.escape(
+    "a Path without File(...); a parameter or a field that takes a file is a "
+    "file field, such as mask: MaskFile with MaskFile = Annotated[Path, File("
+    "kind='mask')], written as file(...)"
 )
 
 
 def not_a_field_type(where: str, name: str) -> str:
     """The regex of the refusal of ``name``, the type of the field ``where``."""
     return re.escape(
-        f'{where}: {name} is not a field type, which is a scalar, a file model, a '
+        f'{where}: {name} is not a field type, which is a scalar, a file field, a '
         'group, a union of groups, Referenced[T], X | None, or list[X]; give the '
         'field one of these types, '
     )
 
 
-KEEPS_THE_FILE = re.escape(
-    'a file model keeps the field file of FileModel, without a default or an alias'
-)
-FILE_MODEL_OUTPUT = re.escape(
-    'is a file model; no output holds one, so that every file comes from the '
-    'file source, which checks it'
+PATH_OUTPUT = re.escape(
+    'a Path is in the data of an output; no output holds a file or a Path, so '
+    'that every file comes from the file source, which checks it'
 )
 
 
@@ -575,7 +524,23 @@ class TestModelRules:
             {'params': model('P', by=(By | None, None), each=(list[By], []))},
             {'params': model('P', centre=(validated('Centre', x=(float, ...)), ...))},
             {'params': model('P', mask=(MaskFile, ...))},
-            {'params': model('P', mask=(BeamStopMaskFile | None, None))},
+            {
+                'params': model(
+                    'P', mask=(Annotated[MaskFile, AfterValidator(lambda p: p)], ...)
+                )
+            },
+            {'params': model('P', mask=(Annotated[MaskFile, 'a note'], ...))},
+            {
+                'params': model(
+                    'P', mask=(MaskFile | Referenced[BeamCentre] | None, None)
+                )
+            },
+            {
+                'params': model(
+                    'P',
+                    mask=(Annotated[Path, File(kind='mask'), Field(title='M')], ...),
+                )
+            },
             {
                 'params': model(
                     'P',
@@ -631,9 +596,7 @@ class TestModelRules:
         # The framework never calls it (see the backend's tests); a binding may.
         assert IofQParams.__pydantic_decorators__.model_validators
         with pytest.raises(pydantic.ValidationError, match='the sample run is not'):
-            IofQParams.model_validate(
-                {'sample': SampleRun.local('a.nxs'), 'can': CanRun.local('a.nxs')}
-            )
+            IofQParams.model_validate({'sample': Path('a.nxs'), 'can': Path('a.nxs')})
 
     @pytest.mark.parametrize(
         ('fields', 'reason'),
@@ -876,9 +839,9 @@ class TestModelRules:
             *(
                 (
                     {'params': model('P', run=(tp, ...))},
-                    f'P.run: RunFile {FILE_MODEL_OUTPUT}',
+                    f'P.run: Measured.run: {PATH_OUTPUT}',
                 )
-                for tp in (Referenced[RunFile], list[Referenced[RunFile]])
+                for tp in (Referenced[Measured], list[Referenced[Measured]])
             ),
             *(
                 (
@@ -1054,7 +1017,7 @@ class TestModelRules:
             *(
                 (
                     {'params': model('P', **fields)},
-                    f'{where}: {OUTSIDE_A_FILE_MODEL}',
+                    f'{where}: {UNMARKED_PATH}',
                 )
                 for fields, where in (
                     ({'path': (Path, ...)}, 'P.path'),
@@ -1125,86 +1088,111 @@ class TestModelRules:
                     ),
                 )
             ),
+            *(
+                (
+                    {'params': model('P', **fields)},
+                    rf'{where}: File\(\.\.\.\) marks a Path, not {re.escape(name)}',
+                )
+                for fields, where, name in (
+                    (
+                        {
+                            'calibration': (
+                                Annotated[int, File(kind='calibration')],
+                                ...,
+                            )
+                        },
+                        'P.calibration',
+                        'int',
+                    ),
+                    (
+                        {'masks': (Annotated[list[Path], File(kind='mask')], [])},
+                        'P.masks',
+                        'list[Path]',
+                    ),
+                    (
+                        {'g': (Annotated[Measured, File()], ...)},
+                        'P.g',
+                        'Measured',
+                    ),
+                    (
+                        {
+                            'by': (
+                                Annotated[
+                                    ByMonitor | ByTime,
+                                    Field(discriminator='mode'),
+                                    File(),
+                                ],
+                                ...,
+                            )
+                        },
+                        'P.by',
+                        'ByMonitor | ByTime',
+                    ),
+                    (
+                        {
+                            'run': (
+                                model('Run', n=(Annotated[int, File()], ...)),
+                                ...,
+                            )
+                        },
+                        'P.run: Run.n',
+                        'int',
+                    ),
+                )
+            ),
             (
-                {'params': model('P', calibration=(CalibrationFile, ...))},
-                r"P.calibration: CalibrationFile: a file model holds only the "
-                r"field file, not \['run'\]",
+                {'params': model('P', mask=(Annotated[MaskFile, File()], ...))},
+                re.escape(
+                    'P.mask: a file field has one File(...) marker, not '
+                    "[File(kind='mask'), File(kind='raw')]"
+                ),
+            ),
+            (
+                {
+                    'params': model(
+                        'P', n=(Annotated[int, File()] | Referenced[BeamCentre], ...)
+                    )
+                },
+                r'P.n: File\(\.\.\.\) marks a Path, not int',
             ),
             *(
                 (
-                    {'params': model('P', mask=(mask, ...))},
-                    rf'P.mask: {mask.__name__}.file: {KEEPS_THE_FILE}',
+                    {'params': model('P', mask=(annotation, None))},
+                    re.escape(
+                        'P.mask: File(...) marks a Path, not Path | None; a file '
+                        'field that may be None is typed Annotated[Path, '
+                        'File(...)] | None'
+                    ),
                 )
-                for mask in (
-                    pydantic.create_model(
-                        'IntMask', __base__=MaskFile, file=(int, ...)
-                    ),
-                    pydantic.create_model(
-                        'OptionalMask', __base__=MaskFile, file=(str | None, None)
-                    ),
-                    pydantic.create_model(
-                        'DefaultMask', __base__=MaskFile, file=(str, 'run:loki/1')
-                    ),
-                    pydantic.create_model(
-                        'AliasedMask',
-                        __base__=MaskFile,
-                        file=(str, Field(alias='path')),
-                    ),
-                    pydantic.create_model(
-                        'AnnotatedMask',
-                        __base__=MaskFile,
-                        file=(Annotated[str, AfterValidator(lambda p: p)], ...),
-                    ),
+                for annotation in (
+                    Annotated[Path | None, File()],
+                    Annotated[Path | None, File()] | Referenced[BeamCentre],
+                )
+            ),
+            *(
+                (
+                    {'params': model('P', mask=(MaskFile, constraint))},
+                    rf'P.mask: a file field takes no constraint, such as '
+                    rf'{re.escape(text)}; a check of its local path is a validator',
+                )
+                for constraint, text in (
+                    (Field(min_length=2), 'MinLen(min_length=2)'),
+                    (Field(gt=2), 'Gt(gt=2)'),
                 )
             ),
             (
-                {
-                    'params': model(
-                        'P',
-                        mask=(
-                            pydantic.create_model(
-                                'LabelledMask', __base__=MaskFile, label=(str, ...)
-                            ),
-                            ...,
-                        ),
-                    )
-                },
-                r"P.mask: LabelledMask: a file model holds only the field file, not "
-                r"\['label'\]",
-            ),
-            (
-                {'params': model('P', mask=(CheckedMaskFile, ...))},
-                r"P.mask: CheckedMaskFile: a file model has no validators or "
-                r"serializers of its own",
-            ),
-            (
-                {'params': model('P', mask=(AttachingMaskFile, ...))},
-                r"P.mask: AttachingMaskFile: a file model has no validators or "
-                r"serializers of its own, \{'model_validators': \['_with_path'\]\}",
-            ),
-            (
-                {'params': model('P', mask=(InitMaskFile, ...))},
-                r"P.mask: InitMaskFile: a file model keeps the model_post_init, "
-                r"__eq__, and __hash__ of FileModel, not its own "
-                r"\['model_post_init'\]",
-            ),
-            (
-                {
-                    'params': model(
-                        'P', mask=(type('Mutable', (MaskFile,), {}, frozen=False), ...)
-                    )
-                },
-                'P.mask: Mutable: a file model keeps the config of FileModel',
+                {'params': model('P', run=(SampleRun | MaskFile, ...))},
+                'P.run: a field takes one kind of file',
             ),
             *(
                 (
                     {'params': model('P', g=(Referenced[group], ...))},
-                    f'P.g: {where} {FILE_MODEL_OUTPUT}',
+                    f'P.g: {where}: {PATH_OUTPUT}',
                 )
                 for group, where in (
                     (
                         model('Held', data=(sc.Variable, ...), file=(RunFile, ...)),
-                        'Held.file: RunFile',
+                        'Held.file',
                     ),
                     (
                         model(
@@ -1212,7 +1200,7 @@ class TestModelRules:
                             data=(sc.Variable, ...),
                             files=(list[RunFile], []),
                         ),
-                        'Held.files: RunFile',
+                        'Held.files',
                     ),
                     (
                         model(
@@ -1220,21 +1208,21 @@ class TestModelRules:
                             data=(sc.Variable, ...),
                             inner=(model('Inner', file=(RunFile, ...)), ...),
                         ),
-                        'Inner.file: RunFile',
+                        'Inner.file',
                     ),
                 )
             ),
             *(
                 (
                     {'outputs': model('O', **fields)},
-                    f'{where} {FILE_MODEL_OUTPUT}',
+                    f'{where}: {PATH_OUTPUT}',
                 )
                 for fields, where in (
-                    ({'raw': (RunFile, ...)}, 'O.raw: RunFile'),
-                    ({'raws': (list[RunFile | None], [])}, 'O.raws: RunFile'),
+                    ({'raw': (RunFile, ...)}, 'O.raw'),
+                    ({'raws': (list[RunFile | None], [])}, 'O.raws'),
                     (
                         {'g': (model('G', file=(RunFile, ...)), ...)},
-                        'O.g: G.file: RunFile',
+                        'O.g: G.file',
                     ),
                     (
                         {
@@ -1243,14 +1231,14 @@ class TestModelRules:
                                 ...,
                             )
                         },
-                        'O.g: H.run: SampleRun',
+                        'O.g: H.run',
                     ),
                 )
             ),
             *(
                 (
                     {'outputs': model('O', **fields)},
-                    f'{where}: {OUTSIDE_A_FILE_MODEL}',
+                    f'{where}: {PATH_OUTPUT}',
                 )
                 for fields, where in (
                     ({'path': (Path, ...)}, 'O.path'),
@@ -1415,7 +1403,7 @@ class TestModelRules:
                         'P', loose=(Loose, Loose(**{'@ref': 'file', 'file': 'a'}))
                     )
                 },
-                f'P.loose: {NOT_A_VALUE}: loose: file a: the field is not a file model',
+                f'P.loose: {NOT_A_VALUE}: loose: file a: the field is not a file field',
             ),
             (
                 {
@@ -1459,27 +1447,24 @@ class TestModelRules:
                 not_a_field_type('P.runs', 'list'),
             ),
             (
-                {'params': model('P', sample=(SampleRun, SampleRun.local('run.nxs')))},
-                f'P.sample: {NOT_A_VALUE}: sample: file path:run.nxs: '
-                f'{NO_FILE_DEFAULT}',
+                {'params': model('P', sample=(SampleRun, Path('run.nxs')))},
+                f'P.sample: {NOT_A_VALUE}: sample: {NO_FILE_DEFAULT}',
+            ),
+            (
+                {'params': model('P', sample=(SampleRun, FileRef(file='run:1')))},
+                f'P.sample: {NOT_A_VALUE}: sample: {NO_FILE_DEFAULT}',
+            ),
+            (
+                {'params': model('P', runs=(list[SampleRun], [Path('run.nxs')]))},
+                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: {NO_FILE_DEFAULT}',
             ),
             (
                 {
                     'params': model(
-                        'P', runs=(list[SampleRun], [SampleRun.local('run.nxs')])
+                        'P', measured=(Measured, Measured(run=Path('run.nxs')))
                     )
                 },
-                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: file path:run.nxs: '
-                rf'{NO_FILE_DEFAULT}',
-            ),
-            (
-                {
-                    'params': model(
-                        'P', measured=(Measured, Measured(run=RunFile(file='run-1')))
-                    )
-                },
-                f'P.measured: {NOT_A_VALUE}: measured.run: file run-1: '
-                f'{NO_FILE_DEFAULT}',
+                f'P.measured: {NOT_A_VALUE}: measured.run: {NO_FILE_DEFAULT}',
             ),
             (
                 {
@@ -1534,7 +1519,7 @@ class TestModelRules:
         params = model(
             'P',
             centre=(sc.Variable, sc.scalar(1.0)),
-            sample=(SampleRun, SampleRun.local('a')),
+            sample=(SampleRun, Path('a')),
         )
         with pytest.raises(ValueError, match=r'P\.centre: .*; P\.sample: '):
             spec(params=params)
@@ -1630,8 +1615,9 @@ class TestFields:
                 {'bins': 3},
                 r"the default {'bins': 3} is not the value validating it gives",
             ),
-            (SampleRun | None, SampleRun.local('run.nxs'), NO_FILE_DEFAULT),
-            (list[SampleRun], [SampleRun.local('run.nxs')], NO_FILE_DEFAULT),
+            (SampleRun | None, Path('run.nxs'), NO_FILE_DEFAULT),
+            (SampleRun | None, FileRef(file='run:1'), NO_FILE_DEFAULT),
+            (list[SampleRun], [Path('run.nxs')], NO_FILE_DEFAULT),
             (
                 Referenced[Reduction],
                 Reduction(),
@@ -1777,7 +1763,7 @@ class TestTables:
         with pytest.raises(ValueError, match=reason):
             spec(params=model('P', **params), tables=tables)
 
-    def test_a_table_may_be_of_file_models(self) -> None:
+    def test_a_table_may_be_of_files(self) -> None:
         assert FILES.tables == ('runs',)
         assert not _takes_inline(FILES, 'runs')
 
@@ -1787,8 +1773,8 @@ class TestTables:
             GEOMETRIES.params(geometry=[{'thickness': -1.0}])
 
     def test_the_validators_of_the_element_type_check_each_row(self) -> None:
-        def known[R: SampleRun | CanRun](run: R) -> R:
-            if run.path.name != 'run.nxs':
+        def known(run: Path) -> Path:
+            if run.name != 'run.nxs':
                 raise ValueError('unknown run')
             return run
 
@@ -1798,40 +1784,22 @@ class TestTables:
             can=(list[Annotated[CanRun, AfterValidator(known)]], ...),
         )
         runs = spec(params=params, tables=('sample', 'can'))
-        known_rows = {
-            'sample': [SampleRun.local('run.nxs')],
-            'can': [CanRun.local('run.nxs')],
-        }
+        known_rows = {'sample': [Path('run.nxs')], 'can': [Path('run.nxs')]}
         runs.params(**known_rows)
-        for rows in (
-            {'sample': [SampleRun.local('other.nxs')]},
-            {'can': [CanRun.local('other.nxs')]},
-        ):
+        for rows in ({'sample': [Path('other.nxs')]}, {'can': [Path('other.nxs')]}):
             with pytest.raises(pydantic.ValidationError, match='unknown run'):
                 runs.params(**{**known_rows, **rows})
         assert runs.serialize().params_schema['properties']['sample']['items'] == (
-            file_ref('SampleRun')
+            file_ref()
         )
 
 
-def file_ref(name: str) -> dict[str, Any]:
+def file_ref(metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     """
-    The schema of a file, of the file model ``name``, whose definition holds
-    its metadata (see :func:`file_model_def`).
+    The schema of a file at a file field whose marker has ``metadata``, raw
+    files by default: a reference to a file, with the metadata.
     """
-    return {'$ref': f'#/$defs/{name}'}
-
-
-def file_model_def(name: str, metadata: dict[str, Any]) -> dict[str, Any]:
-    """The definition of the file model ``name``: a reference to a file."""
-    schema = FileRef.model_json_schema()
-    del schema['description']  # a file model's own docstring, if any, describes it
-    return {
-        **schema,
-        'title': name,
-        'dataType': name,
-        'metadata': metadata,
-    }
+    return {'$ref': '#/$defs/FileRef', 'metadata': metadata or {'kind': 'raw'}}
 
 
 def data_ref(data_type: str) -> dict[str, Any]:
@@ -1890,11 +1858,8 @@ class TestSerialization:
         for kind in (OutputRef, AccumulatorRef):
             assert defs[kind.__name__] == kind.model_json_schema()
             assert '@ref' in defs[kind.__name__]['required']
-        assert defs['SampleRun'] == {
-            **file_model_def('SampleRun', {'kind': 'raw'}),
-            'description': "A sample run's file.",
-        }
-        assert '@ref' in defs['SampleRun']['required']
+        assert defs['FileRef'] == FileRef.model_json_schema()
+        assert '@ref' in defs['FileRef']['required']
 
     def test_a_float_and_an_enum_are_their_json_schema_only(self) -> None:
         params = model('P', scaling=(Scaling, Scaling()))
@@ -1943,17 +1908,17 @@ class TestSerialization:
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate({'by': {}, 'window': {}}, schema)
 
-    def test_a_file_model_or_a_referenced_group_is_a_reference_to_its_type(
+    def test_a_file_field_or_a_referenced_group_is_a_reference(
         self,
     ) -> None:
         schema = IOFQ.serialize().params_schema
         properties = schema['properties']
         assert {n: properties[n] for n in ('sample', 'can', 'beam_centre')} == {
             'sample': {
-                **file_ref('SampleRun'),
+                **file_ref(),
                 'title': 'Sample run',
             },
-            'can': {**file_ref('CanRun'), 'title': 'Can'},
+            'can': {**file_ref(), 'title': 'Can'},
             'beam_centre': {
                 'anyOf': [data_ref('BeamCentre'), {'type': 'null'}],
                 'default': None,
@@ -1962,21 +1927,23 @@ class TestSerialization:
         }
         assert 'BeamCentre' not in schema['$defs']
 
-    def test_a_file_model_is_a_reference_to_a_file_with_its_metadata(
+    def test_a_file_field_is_a_reference_to_a_file_with_its_metadata(
         self,
     ) -> None:
         schema = FILES.serialize().params_schema
         properties = schema['properties']
-        assert properties['mask']['anyOf'] == [file_ref('MaskFile'), {'type': 'null'}]
-        mask = file_model_def('MaskFile', {'kind': 'mask'})
-        assert schema['$defs']['MaskFile'] == mask
+        assert properties['mask']['anyOf'] == [
+            file_ref({'kind': 'mask'}),
+            {'type': 'null'},
+        ]
+        assert schema['$defs']['FileRef'] == FileRef.model_json_schema()
         assert properties['geometry'] == {
-            **file_ref('GeometryFile'),
+            **file_ref(),
             'title': 'Geometry',
         }
-        assert properties['runs']['items'] == file_ref('RunFile')
+        assert properties['runs']['items'] == file_ref()
 
-    def test_a_file_model_at_a_field_is_a_reference_to_a_file(self) -> None:
+    def test_a_file_field_in_a_group_is_a_reference_to_a_file(self) -> None:
         group = model(
             'G',
             run=(SampleRun, ...),
@@ -1989,8 +1956,8 @@ class TestSerialization:
             'title': 'G',
         }
         properties = schema['$defs']['G']['properties']
-        assert properties['run'] == file_ref('SampleRun')
-        assert properties['masks']['items'] == file_ref('MaskFile')
+        assert properties['run'] == {**file_ref(), 'title': 'Run'}
+        assert properties['masks']['items'] == file_ref({'kind': 'mask'})
 
     def test_an_unmarked_union_is_its_alternatives_inline(self) -> None:
         params = model(
@@ -2061,13 +2028,13 @@ class TestSerialization:
         properties = serialized.params_schema['properties']
         assert properties['sample'] == {
             'type': 'array',
-            'items': file_ref('SampleRun'),
+            'items': file_ref(),
             'title': 'Sample run',
             'minItems': 1,
         }
         assert properties['can'] == {
             'type': 'array',
-            'items': file_ref('CanRun'),
+            'items': file_ref(),
             'title': 'Can',
             'minItems': 1,
         }
@@ -2206,7 +2173,7 @@ class TestSerialization:
             {'by': {'mode': 'time', 'seconds': ref}},
             {'by': {'mode': ref, 'seconds': 1.0}},  # at a tag
             {'gate': {'mode': 'window', 'start': ref}},
-            {'sample': ref},  # a file model takes a reference to a file only
+            {'sample': ref},  # a file field takes a reference to a file only
             {'ranges': ref},  # a list is not given by one reference
             {'ranges': [{'start': ref, 'stop': 1.0}]},
         ):

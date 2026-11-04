@@ -9,12 +9,13 @@ import pytest
 import sciline
 from pydantic import BaseModel, Discriminator, Field
 
-from ess.spec import DriverBinding, FileModel, Referenced, WorkflowSpec
+from ess.spec import DriverBinding, File, Referenced, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
 from ess.spec.testing import check_arrival_and_order, check_caching, check_one_row
 
-# A toy SANS reduction of a sample run and a can run, each a file of counts. The
-# pipeline sets each parameter at its class, such as ``CanRun``; the two outputs,
+# A toy SANS reduction of a sample run and a can run, each a group that holds a
+# file of counts. The pipeline sets each parameter at its class, such as
+# ``CanRun``, and a provider reads the file of the group; the two outputs,
 # both arrays, are computed at keys of the workflow's own, ``IofQ`` and
 # ``CanIofQ``. ``IofQDriver`` sums the numerator and the denominator of each
 # table's runs, and computes the outputs from the sums.
@@ -24,8 +25,12 @@ class Reduction(BaseModel):
     bins: int = 2
 
 
-class Run(FileModel):
-    """A text file of counts."""
+RunFile = Annotated[Path, File()]
+"""A text file of counts."""
+
+
+class Run(BaseModel):
+    file: RunFile
 
 
 class SampleRun(Run):
@@ -117,12 +122,12 @@ def loaded() -> list[Path]:
 @pytest.fixture
 def make_pipeline(loaded: list[Path]) -> MakePipeline:
     def load_sample(run: SampleRun) -> SampleCounts:
-        loaded.append(run.path)
-        return SampleCounts(np.loadtxt(run.path))
+        loaded.append(run.file)
+        return SampleCounts(np.loadtxt(run.file))
 
     def load_can(run: CanRun) -> CanCounts:
-        loaded.append(run.path)
-        return CanCounts(np.loadtxt(run.path))
+        loaded.append(run.file)
+        return CanCounts(np.loadtxt(run.file))
 
     def make(fixed: Mapping[str, Any]) -> sciline.Pipeline:
         sample = [load_sample, sample_numerator, sample_denominator, sample_iofq]
@@ -193,13 +198,13 @@ def write(tmp_path: Path, name: str, counts: list[float]) -> Path:
 @pytest.fixture
 def samples(tmp_path: Path) -> list[SampleRun]:
     return [
-        SampleRun.local(write(tmp_path, f'sample{i}', c)) for i, c in enumerate(SAMPLES)
+        SampleRun(file=write(tmp_path, f'sample{i}', c)) for i, c in enumerate(SAMPLES)
     ]
 
 
 @pytest.fixture
 def cans(tmp_path: Path) -> list[CanRun]:
-    return [CanRun.local(write(tmp_path, f'can{i}', c)) for i, c in enumerate(CANS)]
+    return [CanRun(file=write(tmp_path, f'can{i}', c)) for i, c in enumerate(CANS)]
 
 
 def reduction(bins: int) -> dict[str, Reduction]:
@@ -244,7 +249,7 @@ def test_a_stage_loads_each_run_once(
         np.testing.assert_allclose(
             tune(reduction(bins)).iofq, iofq(SAMPLES[0], bins) - iofq(CANS[0], bins)
         )
-    assert sorted(loaded) == sorted([samples[0].path, cans[0].path])
+    assert sorted(loaded) == sorted([samples[0].file, cans[0].file])
 
 
 def test_a_stage_call_takes_the_blanks_exactly(
@@ -284,8 +289,8 @@ def test_summing_the_rows_gives_the_reduction_of_the_summed_runs(
     tmp_path: Path,
 ) -> None:
     summed = IofQParams(
-        sample=SampleRun.local(write(tmp_path, 'samples', np.sum(SAMPLES, axis=0))),
-        can=CanRun.local(write(tmp_path, 'cans', np.sum(CANS, axis=0))),
+        sample=SampleRun(file=write(tmp_path, 'samples', np.sum(SAMPLES, axis=0))),
+        can=CanRun(file=write(tmp_path, 'cans', np.sum(CANS, axis=0))),
     )
     rows = IOFQ_MULTI.params(sample=samples, can=cans)
     np.testing.assert_allclose(multi.compute(rows).iofq, single.compute(summed).iofq)
@@ -301,7 +306,7 @@ def test_a_driver_with_fixed_rows_loads_each_run_once_across_reads(
     for sample in samples:
         driver.push('sample', [sample])
         driver.outputs()
-    assert loaded == [run.path for run in cans + samples]
+    assert loaded == [run.file for run in cans + samples]
 
 
 def test_keys_give_the_key_of_each_field(single: PipelineBinding) -> None:
@@ -350,7 +355,7 @@ TOTAL_MULTI = _spec(
 
 
 def load(run: Run) -> Counts:
-    return Counts(np.loadtxt(run.path))
+    return Counts(np.loadtxt(run.file))
 
 
 def total(counts: Counts, reduction: Reduction) -> Total:
@@ -367,6 +372,47 @@ def test_keys_name_keys_of_the_workflows_own(
     )
     outputs = binding.compute(IofQParams(sample=samples[0], can=cans[0]))
     assert outputs == TotalOutputs(total=2 * sum(SAMPLES[0]))
+
+
+class FileParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+    sample: RunFile
+    can: RunFile | None = None
+
+
+FILE_TOTAL = _spec('file-total', params=FileParams, outputs=TotalOutputs)
+SampleFilename = NewType('SampleFilename', Path)
+
+
+def load_path(path: SampleFilename) -> Counts:
+    return Counts(np.loadtxt(path))
+
+
+def test_a_file_parameter_sets_the_workflows_key_of_its_path(
+    samples: list[SampleRun],
+) -> None:
+    binding = PipelineBinding(
+        FILE_TOTAL,
+        lambda _: sciline.Pipeline([load_path, total]),
+        keys={'sample': (SampleFilename,), 'can': (), 'total': (Total,)},
+    )
+    outputs = binding.compute(FileParams(sample=samples[0].file))
+    assert outputs == TotalOutputs(total=2 * sum(SAMPLES[0]))
+    stage = binding.make_stage({}, ('sample',))
+    assert stage({'sample': samples[1].file}) == TotalOutputs(total=2 * sum(SAMPLES[1]))
+
+
+def test_a_file_parameter_without_keys_is_refused() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"file-total: \['sample'\]: a parameter whose type.* gives its keys=: "
+        'a key such as int, or the Path of a file field, names no role',
+    ):
+        PipelineBinding(
+            FILE_TOTAL,
+            lambda _: sciline.Pipeline([load_path, total]),
+            keys={'can': (), 'total': (Total,)},
+        )
 
 
 class TotalAndMeanOutputs(BaseModel):
@@ -404,7 +450,7 @@ def test_a_table_sets_the_key_of_its_type_to_its_list(
     samples: list[SampleRun],
 ) -> None:
     def load_all(runs: list[SampleRun]) -> Counts:
-        return Counts(sum(np.loadtxt(run.path) for run in runs))
+        return Counts(sum(np.loadtxt(run.file) for run in runs))
 
     binding = PipelineBinding(
         TOTAL_MULTI,
@@ -471,7 +517,7 @@ Difference = NewType('Difference', float)
 
 
 def difference(first: FirstRun, second: SecondRun) -> Difference:
-    return Difference(np.loadtxt(first.path).sum() - np.loadtxt(second.path).sum())
+    return Difference(np.loadtxt(first.file).sum() - np.loadtxt(second.file).sum())
 
 
 def test_two_parameters_of_one_class_need_a_key_each(
@@ -593,7 +639,7 @@ def test_a_scalar_parameter_without_keys_is_refused() -> None:
     with pytest.raises(
         ValueError,
         match=r"bins: \['bins'\]: a parameter whose type.* gives its keys=: a key "
-        'such as int names no role, so no provider would read it',
+        'such as int, or the Path of a file field, names no role',
     ):
         PipelineBinding(
             BINS, lambda _: sciline.Pipeline([double]), keys={'doubled': (Doubled,)}
@@ -658,7 +704,7 @@ CENTRED = _spec('centred', params=CentredParams, outputs=CentredOutputs)
 
 
 def load_counts(run: SampleRun) -> SampleCounts:
-    return SampleCounts(np.loadtxt(run.path))
+    return SampleCounts(np.loadtxt(run.file))
 
 
 def centred(counts: SampleCounts, centre: BeamCentre) -> Centred:

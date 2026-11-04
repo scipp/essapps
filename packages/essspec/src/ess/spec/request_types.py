@@ -4,15 +4,15 @@
 The request type of a spec: what a request may write in its params, as a type.
 
 A params model is typed for the call phase: each field holds the value that
-the binding takes, a group, a file model with its local path, or data. A
-request writes something else in the same field: a group inline, a file by
-name, or a reference to an output. This module derives, from the params
-model, the type of what a request writes, the *request type*, so that the
-rules of :mod:`ess.spec._workflow_spec` on what a request writes are stated
-once, as types, and so that one type both validates a request and is the
-JSON schema of the params. The request type is the params type with each
+the binding takes, a group, the local path of a file, or data. A request
+writes something else in the same field: a group inline, a file by name, or
+a reference to an output. This module derives, from the params model, the
+type of what a request writes, the *request type*, so that the rules of
+:mod:`ess.spec._workflow_spec` on what a request writes are stated once, as
+types, and so that one type both validates a request and is the JSON schema
+of the params. The request type is the params type with each
 ``Referenced[T]`` replaced by a reference to an output whose data fit
-``T``, at any depth::
+``T``, and each file field by a file, at any depth::
 
     params model (call phase)              request type (request phase)
     -------------------------              ----------------------------
@@ -21,31 +21,35 @@ JSON schema of the params. The request type is the params type with each
     centre: BeamCentre                     BeamCentre | OutputRef
             | Referenced[BeamCentre]                  | AccumulatorRef
     beam_centre: GivenCentre | Find...     GivenCentre | FindCentre  (by tag)
-    sample: SampleRun                      SampleRun                 (@ref file)
-    runs: list[RunFile]                    list[RunFile]
+    sample: RunFile                        FileRef
+    runs: list[RunFile]                    list[FileRef]
     samples: list[Sample]                  list[Sample'], with Sample' derived
+    # Sample.run: RunFile                    run: FileRef
     # Sample.transmission:                   transmission: OutputRef
     #     Referenced[Transmission]                         | AccumulatorRef
+
+with ``RunFile = Annotated[Path, File()]``, a file field (see
+:class:`~ess.spec.parameters.File`).
 
 The request type of a field is the union of the *sources* that the field
 takes (see :func:`sources`), tagged by :func:`source_of`: a group, a union
 of groups, or a scalar written ``inline``, a ``file``, or a reference to an
 ``output``. The source of a value is known from the value alone, by its key
-``"@ref"``. A group that holds no ``Referenced[...]``, at any depth, is the
-group's own class, with its validators, so validating a request validates
-it whole. A group that holds one is a model derived from it without its
-validators (see :func:`group_type`): they run when the request runs, on the
-data read (see :func:`validated`). A file is the file
-model's own class, which a backend validates with a resolver of files (see
-:class:`~ess.spec.parameters.FileModel`).
+``"@ref"``. A group that holds neither ``Referenced[...]`` nor a file field,
+at any depth, is the group's own class, with its validators. A group that
+holds one is a model derived from it without its validators (see
+:func:`group_type`): they run when the params model validates the group (see
+:func:`validated`). A file is a :class:`~ess.spec.refs.FileRef`, which a
+backend validates with a resolver of files, :data:`Files`, given the
+field's :class:`~ess.spec.parameters.File` marker.
 
 The backend validates each parameter of a request with :func:`held`, which
-it gives a resolver of files, :data:`Files`. It returns what the record
-holds, the JSON form of the request type: each group and file validated,
-each reference as given. It also returns each reference to an output with
-the type its data must fit, :data:`Reads`, which the backend checks against
-history. The call phase validates the params model itself from the record
-(see :func:`validated`).
+it gives a resolver of files, :data:`Files`, and the local path of a file,
+:data:`LocalPath`. It returns what the record holds, the JSON form of the
+request type, and each reference to an output with the type its data must
+fit, :data:`Reads`, which the backend checks against history. The call
+phase validates the params model itself from the record (see
+:func:`validated`).
 
 A request is validated one parameter at a time, in two phases, and a spec
 checks its defaults the same way:
@@ -62,7 +66,12 @@ request phase  :func:`held`                       validates a parameter by
                                                   stores: the JSON form of
                                                   each group and file, and
                                                   each reference to an
-                                                  output as it is
+                                                  output as it is; validates
+                                                  a parameter that holds a
+                                                  file field and no
+                                                  ``Referenced[...]`` by the
+                                                  params model too, with
+                                                  the context ``paths``
 call phase     :func:`validated`, with the        validates a parameter by
                context ``read`` and ``paths``     the params model from
                                                   what the record stores:
@@ -87,31 +96,38 @@ from __future__ import annotations
 import dataclasses
 import functools
 from collections.abc import Callable, Iterable, Mapping
+from pathlib import Path, PurePath
 from types import UnionType
 from typing import Annotated, Any, Final, Union, get_args, get_origin
 
+from annotated_types import MaxLen, MinLen
 from pydantic import (
     BaseModel,
     BeforeValidator,
     Discriminator,
     Field,
+    GetCoreSchemaHandler,
     Tag,
     TypeAdapter,
     ValidationError,
+    ValidationInfo,
     create_model,
 )
 from pydantic.config import JsonDict
 from pydantic.fields import FieldInfo
+from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
 from pydantic_core import (
+    CoreSchema,
     ErrorDetails,
     PydanticCustomError,
     PydanticSerializationError,
+    core_schema,
     from_json,
     to_json,
 )
 
 from . import field_types
-from .parameters import REFERENCED, DataRefused, FileModel
+from .parameters import REFERENCED, DataRefused, File, not_its_source
 from .refs import (
     AccumulatorRef,
     FileRef,
@@ -139,7 +155,7 @@ def source_of(value: Any) -> str | None:
     ``"@ref"`` of that kind, ``None`` for one of no kind, and :data:`INLINE`
     for any other value.
     """
-    if isinstance(value, FileModel | FileRef):
+    if isinstance(value, FileRef):
         return FILE
     if isinstance(value, OutputRef | AccumulatorRef):
         return OUTPUT
@@ -159,7 +175,11 @@ def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
 
     - :data:`INLINE`: the union of groups, with its discriminator, the
       group, or the scalar, each group as :func:`group_type` gives it;
-    - :data:`FILE`: the file model.
+    - :data:`FILE`: a :class:`~ess.spec.refs.FileRef`, resolved by the
+      resolver of files given the field's marker (see :data:`Files`), with
+      the marker's metadata under ``metadata`` in the JSON schema, which say
+      which files fit. The other metadata of the field are of its ``Path``,
+      so the file has none of them.
 
     Of the groups that ``Referenced[...]`` marks:
 
@@ -182,8 +202,8 @@ def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
         taken[INLINE] = Annotated[
             alternatives, *inline_metadata, Field(discriminator=tag)
         ]
-    elif field_types.is_file_model(inline):
-        taken[FILE] = Annotated[inline, *inline_metadata] if inline_metadata else inline
+    elif (marker := field_types.file_marker(inline, *inline_metadata)) is not None:
+        taken[FILE] = Annotated[FileRef, _Resolved(marker)]
     elif inline is not None:
         written = group_type(inline) if field_types.is_group(inline) else inline
         taken[INLINE] = (
@@ -195,18 +215,55 @@ def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
         taken[OUTPUT] = Annotated[
             OutputRef | AccumulatorRef,
             Field(discriminator='kind', json_schema_extra=data_type),
-            BeforeValidator(_output),
+            BeforeValidator(functools.partial(_only, OUTPUT)),
             _Fits(data),
         ]
     return taken
 
 
-def _output(value: Any) -> Any:
-    if source_of(value) != OUTPUT:
-        raise PydanticCustomError(
-            'output_ref',
-            'is not a reference to an output, as the field is typed Referenced[...]',
+@dataclasses.dataclass(frozen=True)
+class _Resolved:
+    """
+    The metadata of the request type of a file field with ``marker``: it
+    takes a file only, resolved to the file's identity by the context
+    ``files``, if given (see :data:`Files`), which it adds to the context's
+    set ``resolved``, and its JSON schema holds the marker's metadata under
+    ``metadata``.
+    """
+
+    marker: File
+
+    def __get_pydantic_core_schema__(
+        self, source: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_before_validator_function(
+            functools.partial(_only, FILE),
+            core_schema.with_info_after_validator_function(
+                self._resolved, handler(source)
+            ),
         )
+
+    def __get_pydantic_json_schema__(
+        self, schema: CoreSchema, handler: GetJsonSchemaHandler
+    ) -> JsonSchemaValue:
+        return {**handler(schema), 'metadata': self.marker.metadata}
+
+    def _resolved(self, ref: FileRef, info: ValidationInfo) -> FileRef:
+        context = info.context or {}
+        if (resolve := context.get('files')) is None:
+            return ref
+        try:
+            identity = resolve(ref.file, self.marker)
+        except ValueError as error:
+            raise PydanticCustomError('file', str(error)) from None
+        context['resolved'].add(identity)
+        return FileRef(file=identity)
+
+
+def _only(source: str, value: Any) -> Any:
+    """``value``, if of ``source``, :data:`FILE` or :data:`OUTPUT`."""
+    if source_of(value) != source:
+        raise not_its_source(value, file=source == FILE)
     return value
 
 
@@ -266,11 +323,17 @@ def type_of(annotation: Any, metadata: tuple[Any, ...] = ()) -> Any:
     The request type of a field typed ``annotation``, with ``metadata`` (see
     :func:`~ess.spec.field_types.field_metadata`): a list of the request type of
     its element, with the list's constraints, or the :func:`tagged` union of
-    its :func:`sources`.
+    its :func:`sources`. Of a list of elements that hold ``Referenced[...]``
+    or a file field, it keeps the length constraints only: the others, such
+    as a validator, check the data or the paths, and run when the params
+    model validates the list (see :func:`held`).
     """
     tp, none, metadata = field_types.unwrapped(annotation, metadata)
     if REFERENCED not in metadata and get_origin(tp) is list:
-        listed: Any = list[type_of(get_args(tp)[0])]  # type: ignore[misc]
+        (element,) = get_args(tp)
+        if field_types.holds_marker(element):
+            metadata = tuple(m for m in metadata if isinstance(m, MinLen | MaxLen))
+        listed: Any = list[type_of(element)]  # type: ignore[misc]
         made = Annotated[listed, *metadata] if metadata else listed
         return Union[made, None] if none else made  # noqa: UP007
     return tagged(sources(tp, metadata), none)
@@ -279,20 +342,21 @@ def type_of(annotation: Any, metadata: tuple[Any, ...] = ()) -> Any:
 @functools.cache
 def group_type(group: type[BaseModel]) -> type[BaseModel]:
     """
-    The request type of ``group``: the group itself, if it holds no
-    ``Referenced[...]``, so that validating a request validates it whole.
-    Otherwise a model derived from it, of the group's name, qualified name,
-    docstring, and config, with each field that holds one typed its request
-    type, and its metadata, default, title, and description kept. It has no
-    validators of the group, which run when the request runs, on the data
-    read (see :func:`~ess.spec.request_types.validated`).
+    The request type of ``group``: the group itself, if it holds neither
+    ``Referenced[...]`` nor a file field (see
+    :func:`~ess.spec.field_types.holds_marker`), so that validating a request
+    validates it whole. Otherwise a model derived from it, of the group's
+    name, qualified name, docstring, and config, with each field that holds
+    one typed its request type, and its metadata, default, title, and
+    description kept. It has no validators of the group, which run when the
+    params model validates the group (see :func:`held`).
     """
-    if not field_types.holds_ref(group):
+    if not field_types.holds_marker(group):
         return group
     fields: dict[str, Any] = {
         name: _request_field(name, info)
-        if field_types.holds_ref(info.rebuild_annotation())
-        # A field that holds no reference keeps its type and field info.
+        if field_types.holds_marker(info.rebuild_annotation())
+        # A field that holds no marker keeps its type and field info.
         else (info.annotation, info)
         for name, info in group.model_fields.items()
     }
@@ -355,12 +419,24 @@ def _one(model: type[BaseModel], name: str, table: bool) -> type[BaseModel]:
     return create_model(model.__name__, __config__=model.model_config, **{name: field})
 
 
-type Files = Callable[[str, type[FileModel]], str]
+type Files = Callable[[str, File], str]
 """
 Resolves a file in the request phase. It takes the file as the request names
-it, such as ``'run:101'``, and the file model of the field, and returns the
-file's identity, or raises ``ValueError`` (see
-:class:`~ess.spec.parameters.FileModel`).
+it, such as ``'run:101'``, and the marker of the file field, and returns the
+file's identity, or raises ``ValueError`` if the file is unknown, if the
+request's proposal may not read it, or if its metadata do not fit the
+marker's; the message is that of the error (see
+:class:`~ess.spec.parameters.File`)::
+
+    def resolve(name: str, marker: File) -> str:
+        ...  # the identity of the file, or raise ValueError
+"""
+
+type LocalPath = Callable[[FileRef], Path]
+"""
+The local path of a file, by its identity, as the file source gives it. It
+looks the path up and never raises: a file that cannot be read fails the
+workflow that reads it.
 """
 
 type Reads = list[tuple[Loc, OutputRef | AccumulatorRef, Any]]
@@ -372,7 +448,12 @@ union of these.
 
 
 def held(
-    model: type[BaseModel], name: str, value: Any, files: Files, table: bool = False
+    model: type[BaseModel],
+    name: str,
+    value: Any,
+    files: Files,
+    local_path: LocalPath,
+    table: bool = False,
 ) -> tuple[Any, Reads]:
     """
     The value of the field ``name`` of ``model`` as the record stores it, in
@@ -390,22 +471,27 @@ def held(
     holds it, in the validated value, so the backend checks the reference
     against history without validating again.
 
-    Refused, besides what the request type refuses: a file that ``files``
-    did not resolve, such as one that a validator of a group makes from a
-    name, since the file source has not checked it; and a reference to an
-    output in the JSON form that the request did not give, such as one that
-    a serializer makes. Raises :class:`~ess.spec.refs.ParamsError` at the
-    position of each problem (see :func:`_located`).
+    A field that holds a file field and no ``Referenced[...]`` is then
+    validated whole by the params model from the JSON form, with the local
+    path of each file (see :func:`local_paths` and :func:`validated`), so
+    that the validators of a group that holds a file, which its request type
+    lacks (see :func:`group_type`), run now and see the path. The record
+    still holds the group as the request wrote it; the workflow gets it as
+    its validators make it, when the request runs. A field that holds
+    ``Referenced[...]`` is validated so only when the request runs, with the
+    data read. Any other field is validated whole by its request type
+    already.
+
+    Refused, besides what the request type and the params model refuse: a
+    file or a reference to an output in the JSON form that the request did
+    not give at a file field, or at a field typed ``Referenced[...]``, such
+    as one that a serializer makes. Raises
+    :class:`~ess.spec.refs.ParamsError` at the position of each problem (see
+    :func:`_located`).
     """
     resolved: set[str] = set()
-
-    def resolve(file: str, model: type[FileModel]) -> str:
-        identity = files(file, model)
-        resolved.add(identity)
-        return identity
-
-    context = {'files': resolve}
-    given = _ANY.dump_python(value)
+    context = {'files': files, 'resolved': resolved}
+    given = _paths_as_files(_ANY.dump_python(value))
     written = {loc for loc, _ in iter_refs({name: given})}
     one = _one(model, name, table)
     made, stored = _inline(one, name, given, context)
@@ -416,6 +502,10 @@ def held(
         if (problem := _stored_ref_problem(ref, loc in written, resolved))
     ]:
         raise ParamsError(problems)
+    annotation = model.model_fields[name].rebuild_annotation()
+    if field_types.holds_file(annotation) and not field_types.holds_ref(annotation):
+        paths = local_paths({name: stored}, local_path)
+        validated(model, name, stored, table, {'paths': paths})
     info = one.model_fields[name]
     reads = [
         (loc, ref, _fits(info, made, loc[1:]))
@@ -425,18 +515,44 @@ def held(
     return stored, reads
 
 
+def _paths_as_files(value: Any) -> Any:
+    """
+    ``value``, plain data, with each ``Path`` in it the file named by that
+    path, ``file(path=...)`` (see :meth:`~ess.spec.refs.FileRef.at`).
+    """
+    if isinstance(value, PurePath):
+        return FileRef.at(value).model_dump(by_alias=True)
+    if isinstance(value, dict):
+        return {k: _paths_as_files(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_paths_as_files(v) for v in value]
+    return value
+
+
+def local_paths(values: Mapping[str, Any], local_path: LocalPath) -> dict[str, Path]:
+    """
+    The local path of each file in ``values``, values of parameters by name
+    as the record stores them, by its identity: the context ``paths`` of
+    :func:`validated`.
+    """
+    return {
+        ref.file: local_path(ref)
+        for _, ref in iter_refs(values)
+        if isinstance(ref, FileRef)
+    }
+
+
 def _stored_ref_problem(ref: Ref, written: bool, resolved: set[str]) -> str | None:
     """
     Why the record cannot store ``ref``, or ``None``. ``written`` says whether
-    the request gave a reference at its position. ``resolved`` holds the
-    identities of the files resolved.
+    the request gave a reference at its position, and ``resolved`` holds the
+    identity of each file that a file field resolved.
     """
     if isinstance(ref, FileRef):
         if ref.file in resolved:
             return None
         return (
-            f'file {ref} was not resolved: a validator made it, so the file '
-            'source has not checked it'
+            f'{ref}: the JSON form of a value holds a file that no file field resolved'
         )
     if written:
         return None
@@ -469,7 +585,10 @@ def _fits_in(tp: Any) -> Any:
 
 
 _ANY = TypeAdapter(Any)
-"""Dumps Python objects to plain data, keeping a number that is not finite."""
+"""
+Dumps Python objects to plain data, keeping a number that is not finite, and
+each ``Path``.
+"""
 
 
 def _inline(
@@ -528,7 +647,7 @@ _TAKEN: Final = frozenset({'file', 'value_error', 'assertion_error'})
 
 def _wrong_source(ref: Ref) -> str:
     if isinstance(ref, FileRef):
-        return f'file {ref}: the field is not a file model'
+        return f'file {ref}: the field is not a file field'
     return f'{ref} is a reference to an output; the field is not typed Referenced[...]'
 
 
@@ -653,19 +772,17 @@ def validated(
     ``value`` (see :func:`position`).
 
     Without ``context``, ``value`` is data, as in direct use, so that each
-    field typed ``Referenced[T]`` takes ``T``. A spec checks a default with
-    it, and :func:`ess.spec.testing.instance` makes a params instance.
+    field typed ``Referenced[T]`` takes ``T``, and each file field a
+    ``Path``. A spec checks a default with it, and
+    :func:`ess.spec.testing.instance` makes a params instance.
 
     With ``context``, ``value`` is what the record stores, validated from
-    its JSON form, in the call phase. ``context`` holds ``read``, which gives
-    the data of each reference to an output (see
-    :data:`~ess.spec.parameters.Referenced`), and ``paths``, the local path
-    of each file by its identity (see
-    :class:`~ess.spec.parameters.FileModel`). A field that a model lacks is
-    refused. A group that holds a reference to an output, at any depth, is
-    validated only here, so its validators run when the request runs and
-    see the data read. Every other group was validated whole when the
-    request was submitted too.
+    its JSON form. ``context`` holds ``paths``, the local path of each file
+    by its identity (see :func:`local_paths`), and, in the call phase,
+    ``read``, which gives the data of each reference to an output (see
+    :data:`~ess.spec.parameters.Referenced`). A field that a model lacks is
+    refused. :func:`held` says which parameters are validated so when the
+    request is submitted too.
 
     pydantic tries the members of a union with a member ``Referenced[...]``
     in order, each with the stored value. A member written inline is given a
@@ -673,11 +790,11 @@ def validated(
     refused. So a validator of such a member, such as a
     ``model_validator(mode='before')``, raises ``ValueError`` for a value it
     does not take, as it must for a malformed request when it is submitted:
-    any other exception fails the call. When a member written inline refuses
-    a value written inline, the error that the member ``Referenced[...]``
-    adds, that the value is not a reference, is dropped. When the data read
-    for a reference fail a check of ``T``, they are one error, at the
-    reference.
+    any other exception fails the call. When a member refuses a value of
+    another source, such as a member written inline a reference, the error
+    that another member adds, that the value is not a reference or not a
+    file, is dropped. When the data read for a reference fail a check of
+    ``T``, they are one error, at the reference.
     """
     one = model_of(model, name, table)
     try:
@@ -692,7 +809,7 @@ def validated(
         raise ParamsError(
             ((name, *at), e['msg'])
             for at, e in found
-            if e['type'] != 'output_ref' or not _inside(at, found)
+            if e['type'] not in _NOT_ITS_SOURCE or not _inside(at, found)
         ) from None
     except DataRefused as refused:
         at = next(loc for loc, ref in iter_refs({name: value}) if ref == refused.ref)
@@ -701,9 +818,18 @@ def validated(
     return getattr(made, name)
 
 
+_NOT_ITS_SOURCE: Final = frozenset({'output_ref', 'file_ref'})
+"""The errors of a member of a union that the value is not of its source."""
+
+
 def _inside(at: Loc, found: list[tuple[Loc, ErrorDetails]]) -> bool:
-    """Whether an error of ``found``, but ``output_ref``, is at ``at`` or inside."""
-    return any(p[: len(at)] == at and e['type'] != 'output_ref' for p, e in found)
+    """
+    Whether an error of ``found``, but one of :data:`_NOT_ITS_SOURCE`, is at
+    ``at`` or inside.
+    """
+    return any(
+        p[: len(at)] == at and e['type'] not in _NOT_ITS_SOURCE for p, e in found
+    )
 
 
 def position(tp: Any, loc: Loc) -> Loc:

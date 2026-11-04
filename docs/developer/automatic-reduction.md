@@ -8,7 +8,7 @@ Its stories are S7, C1, D1 to D6, and E1 to E4 in [user-stories.md](user-stories
 
 `apply` fills a template for each file and returns the requests keyed by member, the value of a metadata field (by default the run number).
 It reads metadata through `client.files` and builds plain data; it submits nothing.
-The examples of batches, lookups, and rules reduce transmission runs with `TRANSMISSION` ([README.md](README.md#specs-and-bindings)), whose parameters `run` and `empty_beam` are file models, each a run's file, written `file(...)`, and whose output is `transmission: ComputedTransmission`.
+The examples of batches, lookups, and rules reduce transmission runs with `TRANSMISSION` ([README.md](README.md#specs-and-bindings)), whose parameters `run` and `empty_beam` are file fields, each a run's file, written `file(...)`, and whose output is `transmission: ComputedTransmission`.
 
 ```python
 template = Template(TRANSMISSION, params={'empty_beam': file(run=60336)}, blanks=('run',))
@@ -19,7 +19,7 @@ records = client.submit(requests, label='batch', persist=True)
 A batch application submits with `persist=`, so its client keeps nothing, and the results are read later from the store ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 
 A lookup fills further blanks per file. `LastBefore(selector)` takes the matching file with the highest run number below the filled file's.
-Each file fills the one blank the lookup leaves, `at`, a parameter of a file model: the file is its value, and `apply` fills no other parameters.
+Each file fills the one blank the lookup leaves, `at`, a file parameter: the file is its value, and `apply` fills no other parameters.
 A lookup names the blank it fills the same way, such as `Lookup({'empty_beam': LastBefore(...)})`.
 So each file that a rule or a lookup finds needs a parameter of its own in the spec, such as `run` and `empty_beam`.
 A batch whose parameters differ per file, such as the thickness of each sample, is a list of requests, each with its own params.
@@ -41,7 +41,7 @@ rule = Rule('auto-transmission', Template(TRANSMISSION, blanks=('run', 'empty_be
 ```
 
 With `series='sample'`, a request takes every matching file with the same `sample` so far, in run order, and `sample` is its member.
-The template's blank `at='runs'` is a table of a file model, its rows the files, `[file, ...]`, and the lookup is not used.
+The template's blank `at='runs'` is a table of files, its rows the files, `[file, ...]`, and the lookup is not used.
 Each arrival of an angle submits one plain request that stitches all angles of that sample so far.
 
 ```python
@@ -51,7 +51,7 @@ rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, bl
 ```
 
 A rule whose template leaves no single blank for a file, or whose `at` is not that blank, is refused when it is made.
-`TriggerLoop` refuses a rule whose files could not fill their blanks: each blank it fills, `at` and the lookup's, is a parameter of a file model, a list one if and only if the rule has `series`, and each selector names the model's metadata, so that every file it lists fits the model.
+`TriggerLoop` refuses a rule whose files could not fill their blanks: each blank it fills, `at` and the lookup's, is a file parameter, a list of one if and only if the rule has `series`, and each selector names each key and value of the marker's metadata, so that every file it lists fits the field.
 `apply` has no spec at hand, so the backend refuses its requests instead.
 
 Templates and rules are frozen dataclasses; `dataclasses.replace` changes them.

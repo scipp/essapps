@@ -16,7 +16,7 @@ dividing.
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Any, NewType
+from typing import Annotated, Any, NewType
 
 import numpy as np
 import pytest
@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ess.apps import Client, SubmitError, Template, file, local
 from ess.apps.testing import FakeFiles, read_file
-from ess.spec import DriverBinding, FileModel, WorkflowSpec
+from ess.spec import DriverBinding, File, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
 
 SampleNumerator = NewType('SampleNumerator', np.ndarray)
@@ -37,10 +37,9 @@ CanDenominator = NewType('CanDenominator', float)
 IofQ = NewType('IofQ', sc.Variable)
 
 
-class SampleRun(FileModel): ...
-
-
-class CanRun(FileModel): ...
+RunFile = Annotated[Path, File()]
+SampleFilename = NewType('SampleFilename', Path)
+CanFilename = NewType('CanFilename', Path)
 
 
 class Reduction(BaseModel):
@@ -49,14 +48,14 @@ class Reduction(BaseModel):
 
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-    sample: SampleRun
-    can: CanRun
+    sample: RunFile
+    can: RunFile
 
 
 class IofQMultiParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-    sample: list[SampleRun] = Field(min_length=1)
-    can: list[CanRun] = Field(min_length=1)
+    sample: list[RunFile] = Field(min_length=1)
+    can: list[RunFile] = Field(min_length=1)
 
 
 class IofQOutputs(BaseModel):
@@ -84,24 +83,24 @@ IOFQ_MULTI = WorkflowSpec(
 )
 
 
-def _counts(run: SampleRun | CanRun) -> np.ndarray:
+def _counts(run: Path) -> np.ndarray:
     """A run's counts per pixel."""
-    return np.asarray(read_file(run.path), dtype=float)
+    return np.asarray(read_file(run), dtype=float)
 
 
-def sample_numerator(run: SampleRun, reduction: Reduction) -> SampleNumerator:
+def sample_numerator(run: SampleFilename, reduction: Reduction) -> SampleNumerator:
     return SampleNumerator(_counts(run).reshape(reduction.bins, -1).sum(axis=1))
 
 
-def sample_denominator(run: SampleRun) -> SampleDenominator:
+def sample_denominator(run: SampleFilename) -> SampleDenominator:
     return SampleDenominator(_counts(run).sum())
 
 
-def can_numerator(run: CanRun, reduction: Reduction) -> CanNumerator:
+def can_numerator(run: CanFilename, reduction: Reduction) -> CanNumerator:
     return CanNumerator(_counts(run).reshape(reduction.bins, -1).sum(axis=1))
 
 
-def can_denominator(run: CanRun) -> CanDenominator:
+def can_denominator(run: CanFilename) -> CanDenominator:
     return CanDenominator(_counts(run).sum())
 
 
@@ -118,7 +117,11 @@ def iofq(
 SANS = sciline.Pipeline(
     [sample_numerator, sample_denominator, can_numerator, can_denominator, iofq]
 )
-SINGLE = PipelineBinding(IOFQ, lambda fixed: SANS.copy(), keys={'iofq': (IofQ,)})
+SINGLE = PipelineBinding(
+    IOFQ,
+    lambda fixed: SANS.copy(),
+    keys={'sample': (SampleFilename,), 'can': (CanFilename,), 'iofq': (IofQ,)},
+)
 
 
 class IofQDriver:
@@ -131,8 +134,8 @@ class IofQDriver:
         wf = SANS.copy()
         wf[Reduction] = fixed['reduction']
         parts = {
-            'sample': (SampleRun, (SampleNumerator, SampleDenominator)),
-            'can': (CanRun, (CanNumerator, CanDenominator)),
+            'sample': (SampleFilename, (SampleNumerator, SampleDenominator)),
+            'can': (CanFilename, (CanNumerator, CanDenominator)),
         }
         self._contribute = {
             table: (key, sciline.Stage(wf, inputs=(key,), outputs=summed))

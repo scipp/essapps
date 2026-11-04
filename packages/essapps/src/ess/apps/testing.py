@@ -27,9 +27,19 @@ from .files import Selector
 type Spec = WorkflowSpec[Any, Any]
 
 
+_CORRUPT = b'\x00corrupt'
+"""What a corrupt file holds (see :meth:`FakeFiles.corrupt`)."""
+
+
 def read_file(path: Path) -> Any:
-    """The content of a file that :class:`FakeFiles` wrote."""
-    return json.loads(path.read_text())
+    """
+    The content of a file that :class:`FakeFiles` wrote; raises ``OSError``
+    for a corrupt file.
+    """
+    content = path.read_bytes()
+    if content == _CORRUPT:
+        raise OSError('file signature not found')
+    return json.loads(content)
 
 
 class FakeFiles:
@@ -37,41 +47,46 @@ class FakeFiles:
     A file source over files in ``directory``.
 
     A file is identified by its run number, or by the PID of its SciCat
-    dataset if it has one. :meth:`measure` writes a file to ``directory``
-    with the given content, which must have a JSON form, and a workflow reads
-    it with :func:`read_file`. A run measured again keeps its identity and
-    its position in the order of measurement, and its file is written again. A
+    dataset if it has one. :meth:`measure` writes a file to ``directory``,
+    one per identity, ``run-1.json`` or the PID's, with the given content,
+    which must have a JSON form, and a workflow reads it with
+    :func:`read_file`. A run measured again keeps its identity and its
+    position in the order of measurement, and its file is written again. A
     file is named by its run, its PID, or its path. Its metadata are the
     proposal, the run, and the fields :meth:`measure` is given, such as
     ``kind='mask'``; a file without ``kind`` is raw (see
-    :class:`~.files.Selector`).
+    :class:`~.files.Selector`). :meth:`corrupt` makes the file of one
+    identity unreadable, as a file cut short in transfer is: it has a path,
+    but :func:`read_file` cannot read it.
     """
 
     def __init__(self, proposal: str, directory: Path) -> None:
         self.proposal = proposal
         self._directory = directory
         self._paths: dict[FileRef, Path] = {}
+        self._content: dict[FileRef, str] = {}
         self._metadata: dict[FileRef, dict[str, Any]] = {}
-        self._corrupt: set[FileRef] = set()
         self._arrived = threading.Condition()
 
     def measure(self, run: int, content: Any, **fields: Any) -> FileRef:
         """Make run ``run`` appear, or appear again, and return its identity."""
         pid = fields.get('pid')
         ref = FileRef(file=f'pid:{pid}' if pid else f'uuid:run-{run}')
-        path = self._directory / f'run-{run}.json'
-        path.write_text(json.dumps(content))
+        name = ref.file.partition(':')[2].replace('/', '-')
+        path = self._directory / f'{name}.json'
+        path.write_text(text := json.dumps(content))
         with self._arrived:
             self._paths[ref] = path
+            self._content[ref] = text
             self._metadata[ref] = {'proposal': self.proposal, 'run': run, **fields}
             self._arrived.notify_all()
         return ref
 
     def corrupt(self, ref: FileRef) -> None:
-        self._corrupt.add(ref)
+        self._paths[ref].write_bytes(_CORRUPT)
 
     def repair(self, ref: FileRef) -> None:
-        self._corrupt.discard(ref)
+        self._paths[ref].write_text(self._content[ref])
 
     def correct(self, ref: FileRef, **fields: Any) -> None:
         self._metadata[ref] |= fields
@@ -87,8 +102,6 @@ class FakeFiles:
         raise KeyError(name)
 
     def path(self, ref: FileRef) -> Path:
-        if ref in self._corrupt:
-            raise OSError('file signature not found')
         return self._paths[ref]
 
     def metadata(self, ref: FileRef) -> dict[str, Any]:

@@ -8,19 +8,21 @@ import pytest
 import scipp as sc
 from pydantic import BaseModel, Field, Strict
 
-from ess.spec import FileModel, Referenced
+from ess.spec import File, Referenced
 from ess.spec.field_types import (
     alternatives,
     arguments,
     element,
     field_metadata,
     fields_of,
+    file_marker,
+    file_of,
     fits,
     has_array,
+    holds_marker,
     holds_ref,
     is_alias,
     is_array,
-    is_file_model,
     is_list,
     is_single,
     optional,
@@ -33,9 +35,7 @@ from ess.spec.field_types import (
 )
 from ess.spec.parameters import REFERENCED
 
-
-class RunFile(FileModel, kind='raw'):
-    pass
+RunFile = Annotated[Path, File()]
 
 
 class Parts(BaseModel, arbitrary_types_allowed=True):
@@ -141,13 +141,30 @@ def test_a_group_has_an_array_if_a_field_is_one() -> None:
     assert not has_array(list[sc.DataArray])
 
 
-def test_a_file_model_is_a_subclass_of_file_model() -> None:
-    assert is_file_model(RunFile)
-    assert is_file_model(FileModel)
-    assert not is_file_model(Path)
-    assert not is_file_model(Parts)
-    assert not is_file_model(RunFile | None)
-    assert not is_file_model(list[RunFile])
+def test_a_file_field_is_a_path_with_its_marker() -> None:
+    assert file_marker(Path, File(kind='mask')) == File(kind='mask')
+    assert file_marker(Path, 'a validator', File()) == File()
+    tp, _, metadata = unwrapped(MaskFile | None)
+    assert file_marker(tp, *metadata) == File(kind='mask')
+    assert file_marker(Path) is None
+    assert file_marker(Parts, File()) is None
+    assert file_marker(list[Path], File()) is None
+
+
+def test_a_file_parameter_is_a_file_field_or_none_or_a_list_of_one() -> None:
+    class P(BaseModel):
+        run: RunFile
+        mask: MaskFile | None = None
+        runs: list[RunFile] = []
+        masks: list[Annotated[Path, File(kind='mask')]] = Field([], min_length=0)
+        parts: Parts | None = None
+
+    fields = P.model_fields
+    assert file_of(fields['run']) == File()
+    assert file_of(fields['mask']) == File(kind='mask')
+    assert file_of(fields['runs']) == File()
+    assert file_of(fields['masks']) == File(kind='mask')
+    assert file_of(fields['parts']) is None
 
 
 def test_a_newtype_and_a_type_alias_are_aliases() -> None:
@@ -184,7 +201,7 @@ class Node(BaseModel):
 def test_reachable_looks_through_arguments_and_fields_and_ends_on_recursion() -> None:
     found = list(reachable(Annotated[list[Node] | None, 'a validator']))
     assert Node in found
-    assert RunFile in found
+    assert Path in found
     assert 'a validator' not in found  # not the metadata
     assert sc.DataArray in list(reachable(dict[str, SampleParts]))
 
@@ -204,6 +221,19 @@ def test_holds_ref_looks_into_the_fields_of_groups_and_ends_on_recursion() -> No
     assert holds_ref(Referenced[Tree])
     assert not holds_ref(Tree)
     assert not holds_ref(list[BeamCentre])
+
+
+class Measurement(BaseModel):
+    run: RunFile
+
+
+def test_holds_marker_finds_a_file_field_or_referenced_at_any_depth() -> None:
+    assert holds_marker(Holder)
+    assert holds_marker(list[Measurement] | None)
+    assert holds_marker(RunFile)
+    assert not holds_ref(Measurement)
+    assert not holds_marker(Tree)
+    assert not holds_marker(Path)
 
 
 def test_type_name_is_the_name_of_the_class() -> None:
@@ -248,8 +278,7 @@ def test_does_not_fit(data: Any, field: Any) -> None:
     assert not fits(data, field)
 
 
-class MaskFile(FileModel, kind='mask'):
-    pass
+MaskFile = Annotated[Path, File(kind='mask')]
 
 
 class Mask(BaseModel, arbitrary_types_allowed=True):
@@ -300,8 +329,8 @@ def _unwrapped(model: type[BaseModel], name: str) -> tuple[Any, bool, tuple[Any,
 
 
 def test_an_unmarked_field_is_written_by_the_request() -> None:
-    assert _unwrapped(MaskParams, 'mask') == (MaskFile, True, ())
-    assert split(MaskFile) == (MaskFile, (), ())
+    assert _unwrapped(MaskParams, 'mask') == (Path, True, (File(kind='mask'),))
+    assert split(Path, File(kind='mask')) == (Path, (File(kind='mask'),), ())
     assert _unwrapped(MeasuredParams, 'measured') == (Measured, False, ())
     assert split(Measured) == (Measured, (), ())
 

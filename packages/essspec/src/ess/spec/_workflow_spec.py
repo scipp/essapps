@@ -10,8 +10,7 @@ The other modules of ``ess.spec`` and ``ess.apps`` apply them and link here.
 
 A spec of an I(Q) reduction, with each kind of field once::
 
-    class RunFile(FileModel, kind='raw'):     # a file model: a raw data file
-        ...
+    RunFile = Annotated[Path, File()]         # types a file field: a raw file
 
     class WavelengthRange(BaseModel):         # a group
         start: float                          # a scalar
@@ -121,12 +120,16 @@ Terms
     An ``int``, ``float``, ``str``, ``bool``, or ``datetime`` (also
     pydantic's ``AwareDatetime`` and ``NaiveDatetime``), or an enum or a
     ``Literal`` whose values are of these types.
-*File model*, *file*
-    A file model is a subclass of :class:`~ess.spec.parameters.FileModel`,
-    such as ``RunFile``. Its value is a *file*. A request writes a file as
-    ``file(...)``, such as ``file(run=99)``. The backend resolves it to the
-    file's identity when the request is submitted. The binding gets the file
-    model with the file's local path, ``direct_beam.path``.
+*File field*, *file*
+    A file field is a field that a file fills, typed ``Annotated[Path,
+    File(**metadata)]``, such as ``direct_beam: RunFile``. The marker
+    :class:`~ess.spec.parameters.File` holds the metadata that a file must
+    have to fill the field, ``kind='raw'`` unless given. A request writes a
+    *file* there as ``file(...)``, such as ``file(run=99)``. The backend
+    resolves it to the file's identity when the request is submitted. The
+    params model, and so the binding, holds the file's local path, a
+    ``Path``. ``RunFile`` *types* a file field. A *file parameter* is a
+    parameter that is a file field, or a list of one.
 *Reference to an output*
     ``m.ref('pixel_mask')`` names the output ``pixel_mask`` of the record
     ``m``. ``acc.ref(...)`` names an output of an accumulator. The backend
@@ -141,11 +144,13 @@ Terms
     The type of a field, at any depth, is one of::
 
         int, float, str, bool, datetime, an enum, a Literal  # a scalar
-        RunFile                                        # a file model
+        Annotated[Path, File(...)]                     # of a file field
         Reduction                                      # a group
         Annotated[A | B, Field(discriminator='kind')]  # a union of groups
         Referenced[T]                                  # T a group
         Annotated[A | B, ...] | Referenced[C]          # members of both
+        RunFile | Referenced[C]                        # a file, or a
+                                                       # reference
         X | None, list[X]                   # X a field type, not a list,
                                             # and not X | None
 
@@ -153,7 +158,7 @@ Terms
     refused, such as ``tuple[float, float]``, ``dict[str, float]``,
     ``int | str``, or ``sc.DataArray``. The framework does not look inside
     the ``T`` of ``Referenced[T]``, so a field of ``T`` may be of any type,
-    such as ``PixelMask.mask``, but a file model or ``Referenced[...]``.
+    such as ``PixelMask.mask``, but a ``Path`` or ``Referenced[...]``.
 *JSON form*, *stored form*
     The JSON form of a value is what it dumps to as JSON,
     ``model_dump(mode='json')``. The record of a request stores what the
@@ -177,29 +182,35 @@ The type of a field says what a request writes there:
   type takes.
 - A union of groups, such as ``GivenCentre | FindCentre``: a JSON object of
   the fields of one alternative, with its tag.
-- A file model, such as ``RunFile``: a file.
+- A file field, such as ``direct_beam: RunFile``: a file.
 - ``Referenced[T]``, such as ``Referenced[PixelMask]``: a reference to an
   output whose data fit ``T``.
 - A union of members written inline and members ``Referenced[...]``, such as
-  the type of ``centre``, or ``BeamCentre | Referenced[BeamCentre]``: what
-  one of its members takes. The key ``@ref`` tells a reference from a value
-  written inline, then the tag tells the alternatives apart.
+  the type of ``centre``, or ``BeamCentre | Referenced[BeamCentre]``, or of
+  a file field and members ``Referenced[...]``, such as ``RunFile |
+  Referenced[C]``: what one of its members takes. The key ``@ref`` tells a
+  reference from a value written inline, and a file from a reference to an
+  output; then the tag tells the alternatives apart.
 - ``X | None``: what ``X`` takes, or ``None``.
 - ``list[X]``: a list of elements, each what ``X`` takes.
 
-In Python, a request gives a group that holds a reference to an output as a
-dict, such as each row of ``samples`` above: pydantic refuses a reference
-in an instance of the group.
+In Python, a request may give a value as an instance of its type, a group
+or the params model, if the value holds no reference to an output. pydantic
+refuses a reference in an instance of a group, so a value that holds one is
+given as a dict, such as each row of ``samples`` above. An instance holds a
+``Path`` at each file field, which names the file by its path, as
+``file(path=...)`` does. In JSON a file is written ``{'@ref': 'file',
+...}``, and a string at a file field is refused.
 
 The framework derives from the params model a *request type*, the type of
 what a request writes at each field: the params type with each
-``Referenced[T]`` replaced by a reference whose data fit ``T``, at any
-depth (see :mod:`ess.spec.request_types`). It validates a request, its JSON
-schema is the params schema of the spec (see :meth:`WorkflowSpec.serialize`),
-and a form made from the params model offers what each field takes. When
-the request runs, the params model itself validates the stored form, with
-each reference replaced by its data and each file given its local path.
-The rules behind it:
+``Referenced[T]`` replaced by a reference whose data fit ``T``, and each
+file field by a file, at any depth (see :mod:`ess.spec.request_types`). It
+validates a request, its JSON schema is the params schema of the spec (see
+:meth:`WorkflowSpec.serialize`), and a form made from the params model
+offers what each field takes. The params model itself validates the stored
+form, with each file replaced by its local path, and, when the request
+runs, each reference by its data. The rules behind it:
 
 - Each field is of a field type, at any depth, so that a form and the
   params schema know what a request writes at every field. A group does
@@ -208,22 +219,27 @@ The rules behind it:
 - ``Referenced[T]`` may type any field of the params, but no output, since
   the data of an output are not a reference.
 - A group is validated when the request is submitted, so that an error
-  shows before anything runs. A group that holds a reference to an output,
-  at any depth, is validated when the request runs: the output may not
-  exist when the request is submitted, and the group's validators see the
-  data read. A failure then fails the record, or stops the accumulator
-  for a push. A validator raises ``ValueError`` for a value it does not
-  take.
-- A file is a value, like a scalar. Its identity is known when the request
-  is submitted, so a group that holds a file is validated then.
+  shows before anything runs, with the local path of each file it holds. A
+  group that holds a reference to an output, at any depth, is validated
+  when the request runs: the output may not exist when the request is
+  submitted, and the group's validators see the data read. A failure then
+  fails the record, or stops the accumulator for a push. A validator raises
+  ``ValueError`` for a value it does not take. Which validation runs when
+  is stated in :func:`~ess.spec.request_types.held`.
+- A file is a value, like a scalar. The file source checks each file when
+  the request is submitted: it is known, the request's proposal may read
+  it, and its metadata fit the marker's. A file field carries no other
+  check of a file: one that reads the file would read it from a network
+  mount when the request is submitted. A check of a file's content belongs
+  to the workflow, and a workflow sees the path only, never the identity.
 - A reference to an output fits a field if the output's type is the ``T``
   of a ``Referenced[T]`` there, or a subclass of it (see
   :func:`~ess.spec.field_types.fits`). So ``T`` is a group: ``float`` or
   ``sc.DataArray`` would fit every output of that type, and a picker of
   records would list unrelated outputs. An array is a field of a group
   whose class says what it is, such as ``PixelMask``.
-- No output holds a file model, so that every file comes from the file
-  source, which checks it. So ``T`` has no file model, at any depth.
+- No output holds a ``Path``, so that every file comes from the file
+  source, which checks it. So ``T`` has no ``Path``, at any depth.
 - A union with members ``Referenced[...]`` carries its discriminator on the
   union of the members written inline, as in ``centre``, since a reference
   to an output has no tag. A referenced group needs no tag, so the workflow
@@ -241,13 +257,24 @@ The rules behind it:
   references to equal data are two rows.
 - A binding sets the sciline key of a parameter's class (see
   :class:`~ess.spec.pipeline.PipelineBinding`). By convention a parameter is
-  a group, which is then one tab of a form and one key of the binding. A
-  parameter of another type, such as ``bins: int``, needs ``keys=`` in the
-  binding.
+  a group, a union of groups, a file field, or a list of one. A group is
+  one tab of a form and one key of the binding. A parameter of another
+  type, such as ``bins: int`` or ``direct_beam: RunFile``, needs ``keys=``
+  in the binding, such as the workflow's own key of a file's path,
+  ``keys={'direct_beam': (DirectBeamFilename,)}``.
+- Files that vary independently are separate parameters, not fields of one
+  group. A stage fixes or blanks whole parameters, and ``sciline.Stage``
+  decides what it computes again on each call by the graph alone: all that
+  depends on the key of a blank. A group is one key, so a blank group of
+  sample, can, and direct beam computes the can's branch again on every
+  call, though only the sample changes. A group of files fits files that
+  always change together, such as the two channels of a polarized run; a
+  provider of ``make_pipeline`` may take the group apart into the
+  workflow's keys.
 - A default is a value that a request may write, as validating it gives: an
   instance of a group, not a dict, and never a reference or a file. So a
   field typed ``Referenced[T]`` has no default but ``None``, and a file
-  model has no default but ``None`` or ``[]``.
+  field has no default but ``None`` or ``[]``.
 
 What a spec refuses
 -------------------
@@ -257,14 +284,17 @@ from the field types (see :mod:`ess.spec.field_types`). Making a spec checks
 them. Each comment below names a rule that a spec breaks, with the fix::
 
     class Geometry(BaseModel):
-        # A field that takes a file is typed a file model: geometry:
-        # GeometryFile, with class GeometryFile(FileModel, ...).
+        # A field that takes a file is a file field: file: GeometryFile, with
+        # GeometryFile = Annotated[Path, File(kind='geometry')].
         file: Path
 
-    class CalibrationFile(FileModel, kind='calibration'):
-        # A file model has only the field file, the file's identity. The
+    class Calibration(BaseModel):
+        # File(...) marks a Path: a request names a file, not its run. The
         # metadata of the file say the rest.
-        run: int
+        run: Annotated[int, File(kind='calibration')]
+
+    class Flux(BaseModel):
+        run: RunFile
 
     class Reduction(BaseModel):
         # No aliases: a request writes a field by its name.
@@ -307,11 +337,11 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         sample: Sample
         specimen: Specimen
         geometry: Geometry
-        calibration: CalibrationFile
+        calibration: Calibration
         # T of Referenced[T] is a group: Referenced[PixelMask] | None.
         mask: Referenced[PixelMask | None] = None
-        # No output holds a file model: a file is given as file(...).
-        flux: Referenced[RunFile]
+        # No output holds a Path: a file is given as file(...).
+        flux: Referenced[Flux]
         # A reference has no tag: the discriminator is on the union written
         # inline, Annotated[GivenCentre | FindCentre, Field(...)]
         # | Referenced[FoundCentre].
@@ -341,8 +371,8 @@ them. Each comment below names a rule that a spec breaks, with the fix::
         iofq: sc.DataArray
         # An output is X, X | None, list[X], or dict[str, X], not a union.
         width: float | str
-        # No output holds a file model or a Path: every file comes from the
-        # file source.
+        # No output holds a Path, a file field among them: every file comes
+        # from the file source.
         raw: RunFile
         # Referenced[...] marks a field of the params.
         pixel_mask: Referenced[PixelMask]
@@ -376,11 +406,19 @@ Both examples are tests, in ``workflow_spec_examples_test.py``.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from pathlib import PurePath
-from types import UnionType
-from typing import Any, Self, TypeAliasType, Union, get_args, get_origin
+from pathlib import Path, PurePath
+from types import NoneType, UnionType
+from typing import (
+    Annotated,
+    Any,
+    Self,
+    TypeAliasType,
+    Union,
+    get_args,
+    get_origin,
+)
 
-from annotated_types import MaxLen, MinLen
+from annotated_types import BaseMetadata, GroupedMetadata, MaxLen, MinLen
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -390,8 +428,8 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 
 from . import field_types, request_types
-from .parameters import REFERENCED, FileModel
-from .refs import ParamsError, iter_refs
+from .parameters import REFERENCED, File
+from .refs import FileRef, ParamsError, iter_refs
 
 
 class NoParams(BaseModel):
@@ -537,7 +575,7 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     Schema at a field                   Widget
     ==================================  ===================================
     a scalar                            an input of its type
-    a file                              a picker of files (a file model)
+    a file                              a picker of files (a file field)
     the object of a group's fields      the group's fields
     ``oneOf``, with ``discriminator``   a choice of the alternatives of a
                                         union, each with its fields
@@ -555,21 +593,19 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     reference to an output is the ``@ref`` object of each kind it may be
     (see :mod:`ess.spec.refs`), with the name of the type it must fit under
     ``dataType``, as the outputs schema names the type of each output. A
-    file is the definition of its file model: the ``@ref`` object of a
-    file, with the model's name under ``dataType`` and its metadata under
-    ``metadata``, which say which files fit. The schemas of the
-    parameter ``reduction``, a parameter ``centre`` typed
-    ``BeamCentre | Referenced[BeamCentre]``, a parameter ``mask`` typed the
-    file model ``MaskFile``, its definition, and the field
-    ``Reduction.bins``::
+    file is the ``@ref`` object of a file, with the marker's metadata under
+    ``metadata``, which say which files fit. The schemas of the parameter
+    ``reduction``, a parameter ``centre`` typed ``BeamCentre |
+    Referenced[BeamCentre]``, a file field ``mask`` typed ``MaskFile =
+    Annotated[Path, File(kind='mask')]``, the definition of a
+    file, and the field ``Reduction.bins``::
 
         "reduction": {"$ref": "#/$defs/Reduction", ...}
         "centre":    {"oneOf": [{"$ref": "#/$defs/BeamCentre", ...},
                                 {"oneOf": [OutputRef, AccumulatorRef],
                                  "dataType": "BeamCentre", ...}]}
-        "mask":      {"$ref": "#/$defs/MaskFile"}
-        "MaskFile":  {"properties": {"@ref": {"const": "file"}, "file": ...},
-                      "dataType": "MaskFile", "metadata": {"kind": "mask"}}
+        "mask":      {"$ref": "#/$defs/FileRef", "metadata": {"kind": "mask"}}
+        "FileRef":   {"properties": {"@ref": {"const": "file"}, "file": ...}}
         "bins":      {"type": "integer", "default": 10}
     """
 
@@ -614,7 +650,6 @@ def _model_validators_only(model: type[BaseModel]) -> list[str]:
 
 
 _SERIALIZERS = ('field_serializers', 'model_serializers', 'computed_fields')
-_VALIDATORS = ('validators', 'field_validators', 'root_validators', 'model_validators')
 
 
 def _params_problems(model: type[BaseModel]) -> list[str]:
@@ -666,7 +701,7 @@ def _type_problems(
     the groups ``stack``, at any depth. The types of a field:
 
     - a scalar, with constraints;
-    - a file model;
+    - a file field, ``Annotated[Path, File(...)]``;
     - a group, whose fields are typed so in turn, and which does not
       contain itself;
     - a union of groups with a tag;
@@ -676,9 +711,13 @@ def _type_problems(
     - ``X | None``, and ``list[X]``, with ``X`` not a list and not
       ``X | None``.
     """
+    if _marks_optional(annotation, metadata):
+        return [_OPTIONAL_MARKED]
     tp, none, metadata = field_types.unwrapped(annotation, metadata)
     if field_types.is_alias(tp):
         return [_alias_text(tp)]
+    if problem := _marker_problem(tp, metadata):
+        return [problem]
     if REFERENCED not in metadata and get_origin(tp) is list:
         item, item_none, _ = field_types.unwrapped(get_args(tp)[0])
         if none:
@@ -701,6 +740,13 @@ def _type_problems(
         return [*problems, _TAGGED_REFERENCE]
     if aliases := [m for m in members if field_types.is_alias(field_types.plain(m))]:
         return [*problems, *map(_alias_text, aliases)]
+    if problem := _marker_problem(inline, inline_metadata):
+        return [*problems, problem]
+    if field_types.file_marker(inline, *inline_metadata) is not None:
+        constraints = [m for m in inline_metadata if _is_constraint(m)]
+        return [*problems, *map(_constraint_text, constraints)]
+    if any(map(field_types.is_file, members)):
+        return [*problems, _FILES_UNION]
     try:
         union = field_types.alternatives(inline, *inline_metadata)
     except ValueError as error:
@@ -723,11 +769,84 @@ _TAGGED_REFERENCE = (
 )
 
 
+def _marks_optional(annotation: Any, metadata: tuple[Any, ...]) -> bool:
+    """
+    Whether a :class:`~ess.spec.parameters.File` marker, in ``metadata`` or
+    in an ``Annotated`` of ``annotation``, marks a type ``X | None``.
+    """
+    tp = annotation
+    while True:
+        origin, args = get_origin(tp), get_args(tp)
+        if origin in (Union, UnionType) and NoneType in args:
+            if any(isinstance(m, File) for m in metadata):
+                return True
+            rest = tuple(a for a in args if a is not NoneType)
+            tp = rest[0] if len(rest) == 1 else Union[rest]  # noqa: UP007
+        elif origin in (Union, UnionType):
+            return any(_marks_optional(arg, metadata) for arg in args)
+        elif origin is Annotated:
+            metadata = (*metadata, *tp.__metadata__)
+            tp = args[0]
+        else:
+            return False
+
+
+_OPTIONAL_MARKED = (
+    'File(...) marks a Path, not Path | None; a file field that may be None is '
+    'typed Annotated[Path, File(...)] | None, as Referenced[X] | None is'
+)
+
+
+def _is_constraint(metadata: Any) -> bool:
+    """
+    Whether ``metadata`` is a constraint that pydantic applies, such as
+    ``MinLen(2)`` or ``Field(gt=2)``, not a validator or a note.
+    """
+    if isinstance(metadata, FieldInfo):
+        return bool(metadata.metadata)
+    return isinstance(metadata, BaseMetadata | GroupedMetadata)
+
+
+def _constraint_text(constraint: Any) -> str:
+    return (
+        f'a file field takes no constraint, such as {constraint!r}; a check of '
+        'its local path is a validator, such as AfterValidator(...), and the '
+        'file source checks the file'
+    )
+
+
+_FILES_UNION = (
+    'a field takes one kind of file, so a file field is in a union only with '
+    'members Referenced[...] and None; the marker of one file field names the '
+    'metadata that each file that fits has'
+)
+
+
+def _marker_problem(tp: Any, metadata: tuple[Any, ...]) -> str | None:
+    """
+    Why the :class:`~ess.spec.parameters.File` markers in ``metadata``, of a
+    field of type ``tp``, do not make it a file field, or ``None``: a marker
+    marks a ``Path``, once.
+    """
+    markers = [m for m in metadata if isinstance(m, File)]
+    if not markers:
+        return None
+    if tp is not Path:
+        return (
+            f'File(...) marks a Path, not {field_types.type_name(tp)}; a file field '
+            "is typed Annotated[Path, File(...)], such as Annotated[Path, File("
+            "kind='mask')]"
+        )
+    if len(markers) > 1:
+        return f'a file field has one File(...) marker, not {markers}'
+    return None
+
+
 def _not_a_field_type(tp: Any, stack: tuple[type[BaseModel], ...]) -> str:
     """Why ``tp`` is not the type of a field inside the groups ``stack``."""
     name = field_types.type_name(tp)
     if _is_path(tp):
-        return _OUTSIDE_FILE_MODEL
+        return _UNMARKED_PATH
     if len(stack) > 1:
         group = stack[-1].__name__
         fix = (
@@ -740,32 +859,27 @@ def _not_a_field_type(tp: Any, stack: tuple[type[BaseModel], ...]) -> str:
             'a group that holds them'
         )
     return (
-        f'{name} is not a field type, which is a scalar, a file model, a group, '
+        f'{name} is not a field type, which is a scalar, a file field, a group, '
         f'a union of groups, Referenced[T], X | None, or list[X]; give the field '
         f'one of these types, {fix}'
     )
 
 
-def _found(
-    annotation: Any,
-    test: Callable[[Any], bool],
-    skip: Callable[[Any], bool] = lambda cls: False,
-) -> list[tuple[str, Any]]:
+def _found(annotation: Any, test: Callable[[Any], bool]) -> list[tuple[str, Any]]:
     """
     Each type that ``annotation`` is made of (see
     :func:`~ess.spec.field_types.reachable`) for which ``test`` holds, with
     where it is: ``''`` in ``annotation`` itself, ``'Class.field: '`` in a
-    field of a class in it, unless ``skip`` holds for the class.
+    field of a class in it.
     """
     found = [('', t) for t in field_types.arguments(annotation) if test(t)]
     for cls in dict.fromkeys(field_types.reachable(annotation)):
-        if not skip(cls):
-            found.extend(
-                (f'{cls.__name__}.{name}: ', t)
-                for name, tp in field_types.fields_of(cls).items()
-                for t in field_types.arguments(tp)
-                if test(t)
-            )
+        found.extend(
+            (f'{cls.__name__}.{name}: ', t)
+            for name, tp in field_types.fields_of(cls).items()
+            for t in field_types.arguments(tp)
+            if test(t)
+        )
     return found
 
 
@@ -789,24 +903,25 @@ def _alias_text(alias: Any) -> str:
     )
 
 
-def _path_problems(annotation: Any) -> list[str]:
+def _output_path_problems(annotation: Any) -> list[str]:
     """
-    Refuse each ``Path`` that ``annotation`` is made of outside a file
-    model, named by the field of the class that holds it, if any: a
-    parameter or a field that takes a file is typed a file model, so that
-    the file source checks each file a workflow reads.
+    Refuse each ``Path`` that ``annotation``, of an output, is made of, a
+    file field among them, named by the field of the class that holds it, if
+    any: no output holds one, so that every file comes from the file source,
+    which checks it.
     """
-    found = _found(annotation, _is_path, skip=field_types.is_file_model)
+    found = _found(annotation, _is_path)
     return [
-        f'{where}{_OUTSIDE_FILE_MODEL}'
+        f'{where}a Path is in the data of an output; no output holds a file or a '
+        'Path, so that every file comes from the file source, which checks it'
         for where in dict.fromkeys(where for where, _ in found)
     ]
 
 
-_OUTSIDE_FILE_MODEL = (
-    'a Path is outside a file model; a parameter or a field that takes a file '
-    "is typed a file model, such as mask: MaskFile with class "
-    "MaskFile(FileModel, kind='mask'), and written as file(...)"
+_UNMARKED_PATH = (
+    'a Path without File(...); a parameter or a field that takes a file is a '
+    "file field, such as mask: MaskFile with MaskFile = Annotated[Path, File("
+    "kind='mask')], written as file(...)"
 )
 
 
@@ -833,11 +948,8 @@ def _group_problems(
     from the object of its fields; or for a problem of a field (see
     :func:`_fields_problems`). Field and model validators of any mode are
     allowed: they run whenever the group is validated (see
-    :func:`ess.spec.request_types.validated`). A file model is checked by
-    :func:`_file_model_problems` alone.
+    :func:`ess.spec.request_types.validated`).
     """
-    if field_types.is_file_model(group):
-        return _file_model_problems(group)
     if group in stack:
         return [
             f'{group.__name__} contains itself; a group holds no field of its own '
@@ -853,8 +965,8 @@ def _referenced_problems(data: Any) -> list[str]:
     """
     The problems of ``T`` of ``Referenced[T]``, typed as an output is: a
     group, so that a picker of records lists the outputs of a class that
-    names a role, without a type alias, a ``Path``, or a file model at any
-    depth (see :func:`_output_file_problems`), and without
+    names a role, without a type alias or a ``Path``, a file field among
+    them, at any depth (see :func:`_output_path_problems`), and without
     ``Referenced[...]`` inside it. The framework does not look inside ``T``
     otherwise.
     """
@@ -867,8 +979,7 @@ def _referenced_problems(data: Any) -> list[str]:
         ]
     problems = [
         *_alias_problems(group),
-        *_path_problems(group),
-        *_output_file_problems(group),
+        *_output_path_problems(group),
     ]
     if field_types.holds_ref(group):
         problems.append(
@@ -876,87 +987,6 @@ def _referenced_problems(data: Any) -> list[str]:
             'never inside the data of an output'
         )
     return problems
-
-
-def _file_model_problems(model: type[BaseModel]) -> list[str]:
-    """
-    Refuse a file model with a field other than ``file``, that
-    declares ``file`` anew, such as with another type, a default, or an
-    alias, with a validator, a serializer, ``model_post_init``, ``__eq__``,
-    or ``__hash__`` of its own, or with another config but its title: the
-    value of a file model is the identity of a file, and the backend
-    attaches its local path (see :class:`~ess.spec.parameters.FileModel`).
-    """
-    if other := [n for n in model.model_fields if n != 'file']:
-        return [
-            f'{model.__name__}: a file model holds only the field file, not {other}'
-        ]
-    # The repr of a FieldInfo shows each attribute that a declaration sets.
-    if repr(model.model_fields['file']) != repr(FileModel.model_fields['file']):
-        return [
-            f'{model.__name__}.file: a file model keeps the field file of '
-            'FileModel, without a default or an alias'
-        ]
-    own = {
-        kind: found
-        for kind in (*_VALIDATORS, *_SERIALIZERS)
-        if (found := _own_decorators(model, kind))
-    }
-    if methods := _own_methods(model):
-        return [
-            f'{model.__name__}: a file model keeps the model_post_init, __eq__, '
-            f'and __hash__ of FileModel, not its own {methods}'
-        ]
-    if own:
-        return [
-            f'{model.__name__}: a file model has no validators or serializers '
-            f'of its own, {own}; what it would check of a file is metadata of '
-            "the model, such as class MaskFile(FileModel, kind='mask'), or "
-            "the workflow's to read"
-        ]
-    if _config(model) != _config(FileModel):
-        return [
-            f'{model.__name__}: a file model keeps the config of FileModel, '
-            'but its title'
-        ]
-    return []
-
-
-def _own_decorators(model: type[BaseModel], kind: str) -> list[str]:
-    """
-    The decorators of ``kind`` of ``model`` that are not FileModel's, by
-    function, so that one declared anew under the same name is found.
-    """
-    inherited = getattr(FileModel.__pydantic_decorators__, kind)
-    return sorted(
-        name
-        for name, d in getattr(model.__pydantic_decorators__, kind).items()
-        if name not in inherited
-        or _unbound(d.func) is not _unbound(inherited[name].func)
-    )
-
-
-def _unbound(func: Any) -> Any:
-    """The function of ``func``, bound to each class for a classmethod."""
-    return getattr(func, '__func__', func)
-
-
-def _own_methods(model: type[BaseModel]) -> list[str]:
-    """``__eq__``, ``__hash__``, or ``model_post_init`` that ``model`` declares anew."""
-    found = [
-        m
-        for m in ('__eq__', '__hash__')
-        if getattr(model, m) is not getattr(FileModel, m)
-    ]
-    # pydantic puts a model_post_init of its own in each class with private
-    # attributes, which sets them.
-    if not model.model_post_init.__module__.startswith('pydantic.'):
-        found.append('model_post_init')
-    return found
-
-
-def _config(model: type[BaseModel]) -> dict[str, Any]:
-    return {k: v for k, v in model.model_config.items() if k != 'title'}
 
 
 def _default_problem(model: type[BaseModel], name: str) -> str | None:
@@ -967,11 +997,13 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
     validating it gives, since pydantic does not validate a default, and a
     binding gets it as it is (see :func:`ess.spec.request_types.validated`). So a
     group's default is an instance, not the object of its fields, and a
-    list's default keeps the length constraints of the list.
+    list's default keeps the length constraints of the list. A file field has
+    no default but ``None`` or ``[]``: each ``Path`` in the default names a
+    file, which the resolver of files refuses.
     """
     default = model.model_fields[name].get_default(call_default_factory=True)
     try:
-        held, _ = request_types.held(model, name, default, _no_file)
+        held, _ = request_types.held(model, name, default, _no_file, _no_path)
         if refs := [
             (loc, f'{ref} is a reference; a default is a value')
             for loc, ref in iter_refs({name: held})
@@ -985,11 +1017,15 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
     return None
 
 
-def _no_file(name: str, model: type[FileModel]) -> str:
-    raise ValueError(
-        f'file {name}: a default names no file; a file model has no default but '
-        'None or []'
-    )
+def _no_file(name: str, marker: File) -> str:
+    raise ValueError(_NO_FILE)
+
+
+def _no_path(ref: FileRef) -> Path:
+    raise AssertionError('no file of a default is resolved, so none has a path')
+
+
+_NO_FILE = 'a default names no file; a file field has no default but None or []'
 
 
 def _outputs_problems(model: type[BaseModel]) -> list[str]:
@@ -1009,25 +1045,10 @@ def _outputs_problems(model: type[BaseModel]) -> list[str]:
                 f'{where}: Referenced[...] marks a field of the params, not an output'
             )
         else:
-            problems.extend(f'{where}: {problem}' for problem in _path_problems(tp))
             problems.extend(
-                f'{where}: {problem}' for problem in _output_file_problems(tp)
+                f'{where}: {problem}' for problem in _output_path_problems(tp)
             )
     return problems
-
-
-def _output_file_problems(annotation: Any) -> list[str]:
-    """
-    Refuse each file model that ``annotation``, of an output, is made of,
-    named by the field of the class that holds it, if any: no output holds
-    one, so that every file comes from the file source, which checks it.
-    """
-    return [
-        f'{where}{field_types.type_name(model)} is a file model; no output '
-        'holds one, so that every file comes from the file source, which '
-        'checks it'
-        for where, model in _found(annotation, field_types.is_file_model)
-    ]
 
 
 def _tables_problems(spec: WorkflowSpec[Any, Any]) -> list[str]:

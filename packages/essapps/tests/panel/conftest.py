@@ -5,18 +5,18 @@ Toy specs with each type of field, bound on a client of ``local()``.
 
 ``FIND`` outputs a ``BeamCentre``, a plain group, which ``REDUCE`` takes
 typed in or from a record. ``REDUCE`` also takes a group with defaults, a
-file model and a group without a default, a union of groups, and a mask, a
-file model of mask files typed ``X | None`` with a default. It divides
+file field and a group without a default, a union of groups, and a mask, a
+file field of mask files typed ``X | None`` with a default. It divides
 the counts of its run, less those of the mask, by the sample's thickness, so
 a thickness of 0 fails the record. ``OPTIONS`` takes a value of each type
-that has an input, a list of numbers, and a file model typed ``X | None``
+that has an input, a list of numbers, and a file field typed ``X | None``
 without a default. ``SUBTRACT`` takes a group, and a ``BeamCentre`` typed
 ``X | None`` without a default, which an output of ``FIND`` fits. ``STACK``
-takes two tables, of a file model and of a group with a file, and a list
+takes two tables, of a file field and of a group with a file, and a list
 of ``BeamCentre`` with a default, whose row an output of ``FIND`` fits.
 ``NESTED`` takes a scalar, and a group with a field of each other type:
 groups with and without a default, a union, ``X | None`` of a scalar, a
-group, and a file model, ``Referenced[BeamCentre]``, and lists of groups
+group, and a file field, ``Referenced[BeamCentre]``, and lists of groups
 and of a union.
 """
 
@@ -31,15 +31,14 @@ from pydantic import BaseModel, Field
 
 from ess.apps import Client, local
 from ess.apps.testing import FakeFiles, read_file
-from ess.spec import FileModel, FileRef, Referenced, WorkflowSpec, function_binding
+from ess.spec import File, FileRef, Referenced, WorkflowSpec, function_binding
+
+Run = Annotated[Path, File()]
+"""A raw run."""
 
 
-class Run(FileModel):
-    """A raw run."""
-
-
-class Mask(FileModel, kind='mask'):
-    """Counts to leave out of a sample run."""
+Mask = Annotated[Path, File(kind='mask')]
+"""Counts to leave out of a sample run."""
 
 
 class BeamCentre(BaseModel):
@@ -222,13 +221,13 @@ NESTED: Spec = WorkflowSpec(
 
 
 def find(params: FindParams) -> FindOutputs:
-    return FindOutputs(centre=BeamCentre(x=read_file(params.run.path)['x']))
+    return FindOutputs(centre=BeamCentre(x=read_file(params.run)['x']))
 
 
 def reduce(params: ReduceParams) -> ReduceOutputs:
-    counts = read_file(params.run.path)['counts']
+    counts = read_file(params.run)['counts']
     if params.mask is not None:
-        counts -= read_file(params.mask.path)['counts']
+        counts -= read_file(params.mask)['counts']
     return ReduceOutputs(total=Total(value=counts / params.sample.thickness))
 
 
@@ -242,8 +241,8 @@ def subtract(params: SubtractParams) -> ReduceOutputs:
 
 
 def stack(params: StackParams) -> ReduceOutputs:
-    counts = sum(read_file(r.path)['counts'] for r in params.runs)
-    counts += sum(read_file(s.run.path)['counts'] / s.thickness for s in params.shots)
+    counts = sum(read_file(r)['counts'] for r in params.runs)
+    counts += sum(read_file(s.run)['counts'] / s.thickness for s in params.shots)
     return ReduceOutputs(total=Total(value=counts + sum(c.x for c in params.centres)))
 
 

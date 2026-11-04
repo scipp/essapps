@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
 from pydantic import BaseModel, Field
@@ -39,15 +39,14 @@ from ess.apps.log import (
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
 from ess.spec import (
     AccumulatorRef,
-    FileModel,
+    File,
     FileRef,
     OutputRef,
     Referenced,
     WorkflowSpec,
 )
 
-
-class SampleRun(FileModel): ...
+SampleRun = Annotated[Path, File()]
 
 
 class Window(BaseModel):
@@ -122,8 +121,8 @@ RUNS = WorkflowSpec(
 
 
 def runs(params: RunsParams) -> ValueOutputs:
-    value = sum(read_file(r.path) for r in params.runs) - sum(
-        read_file(c.path) for c in params.cans
+    value = sum(read_file(r) for r in params.runs) - sum(
+        read_file(c) for c in params.cans
     )
     return ValueOutputs(value=Amount(value=value))
 
@@ -162,7 +161,7 @@ def start(
         window = params.window
         windows.append(window)
         loading.wait(timeout=5)
-        value = read_file(params.sample.path) * (window.stop - window.start)
+        value = read_file(params.sample) * (window.stop - window.start)
         return ValueOutputs(value=Amount(value=value))
 
     def start(path: Path) -> Client:

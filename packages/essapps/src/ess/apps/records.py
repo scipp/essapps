@@ -127,11 +127,10 @@ class Request(BaseModel, frozen=True):
     """
     A spec and its params, by name.
 
-    ``params`` is an instance of the params model, which cannot hold a
-    reference to an output, or a dict by name: a group as a model or a dict, a
-    file, ``file(...)``, a reference to an output, or ``None``, as the
-    parameter's type allows; a list of these for a list parameter. The rules
-    are stated in :mod:`ess.spec._workflow_spec`. A JSON object with the key
+    ``params`` is a dict by name, or an instance of the params model if
+    they hold no reference to an output, each value as
+    :meth:`~ess.apps.Client.submit` takes it. The rules are stated in
+    :mod:`ess.spec._workflow_spec`. A JSON object with the key
     ``"@ref"`` is a reference at any depth, so the references and files of a
     request are found without its spec (see :func:`ess.spec.refs.iter_refs`).
     """

@@ -65,8 +65,8 @@ class TimeRange(BaseModel):
     stop: float
 
 class SlicesParams(IofQSettings):        # the settings that IofQParams has too
-    sample: Sample                       # Sample, Can: file models
-    can: Can
+    sample: RunFile                      # RunFile = Annotated[Path, File()]: a file field
+    can: RunFile
     time_range: list[TimeRange] = Field(min_length=1)
 
 SLICES = WorkflowSpec(name='sans-slices', version=1, title='I(Q) of time slices', description='...',
@@ -91,8 +91,8 @@ Masks per run type would fix this in esssans.
 
 ```python
 class IofQMultiParams(IofQSettings):     # IofQSettings holds the transmission, one for all sample runs
-    sample: list[Sample] = Field(min_length=1)
-    can: list[Can] = Field(min_length=1)
+    sample: list[RunFile] = Field(min_length=1)
+    can: list[RunFile] = Field(min_length=1)
 
 IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title='I(Q) of summed runs', description='...',
                           params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))

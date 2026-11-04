@@ -19,7 +19,7 @@ from pydantic import (
 from ess.apps import Backend, Client, Record, Status, SubmitError, Template
 from ess.apps import file as file_ref
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
-from ess.spec import FileModel, OutputRef, Referenced, WorkflowSpec, function_binding
+from ess.spec import File, OutputRef, Referenced, WorkflowSpec, function_binding
 
 
 class Blob:
@@ -48,13 +48,13 @@ class LabelledShift(Shift):
     label: str = ''
 
 
-class SampleRun(FileModel): ...
+SampleRun = Annotated[Path, File()]
 
 
-class RunFile(FileModel): ...
+RunFile = Annotated[Path, File()]
 
 
-class MaskFile(FileModel, kind='mask'): ...
+MaskFile = Annotated[Path, File(kind='mask')]
 
 
 class LoadParams(BaseModel):
@@ -246,7 +246,7 @@ class CentreOutputs(BaseModel):
 
 
 class MaskedParams(BaseModel):
-    """A run and its mask, two file models that take different files."""
+    """A run and its mask, two file fields that take different files."""
 
     run: RunFile
     mask: MaskFile
@@ -262,7 +262,7 @@ MASKED = _spec('masked', MaskedParams, Value)
 
 
 def load(params: LoadParams) -> LoadOutputs:
-    value = read_file(params.sample.path)
+    value = read_file(params.sample)
     return LoadOutputs(
         value=value,
         shift=Shift(offset=value),
@@ -299,7 +299,7 @@ def centred(params: CentredParams) -> Value:
 
 
 def masked(params: MaskedParams) -> Value:
-    return Value(value=read_file(params.run.path) + read_file(params.mask.path))
+    return Value(value=read_file(params.run) + read_file(params.mask))
 
 
 @pytest.fixture
@@ -329,7 +329,7 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(MARKED_CENTRED, centred),
             function_binding(
                 FIND,
-                lambda p: CentreOutputs(centre=BeamCentre(x=read_file(p.sample.path))),
+                lambda p: CentreOutputs(centre=BeamCentre(x=read_file(p.sample))),
             ),
             function_binding(MASKED, masked),
         ],
@@ -496,7 +496,7 @@ def test_a_file_for_a_whole_group_is_refused(
 ) -> None:
     with pytest.raises(
         SubmitError,
-        match=rf'^{place}: file run:\d: the field is not a file model$',
+        match=rf'^{place}: file run:\d: the field is not a file field$',
     ):
         client.submit(RUNS, params=params)
 
@@ -609,13 +609,15 @@ def test_a_group_whose_validator_changes_a_validated_value_is_refused(
 
 
 @pytest.mark.parametrize('inline', ['/data/run1.nxs', {'path': '/data/run1.nxs'}])
-def test_a_file_model_given_inline_is_refused(client: Client, inline: Any) -> None:
+def test_a_value_given_inline_at_a_file_field_is_refused(
+    client: Client, inline: Any
+) -> None:
     with pytest.raises(SubmitError) as raised:
         client.submit(LOAD, params={'sample': inline})
     (error,) = raised.value.errors
     assert error.loc == ('sample',)
     assert error.msg == (
-        f'{inline!r} is not a file; SampleRun is a file model, written as file(...)'
+        f'{inline!r} is not a file; a file field is written as file(...)'
     )
 
 
@@ -774,14 +776,14 @@ def test_a_reference_must_fit_its_parameter(
         client.submit(ADD, params={name: loaded.ref(output)})
 
 
-def test_a_file_fits_a_file_model_only(client: Client) -> None:
+def test_a_file_fits_a_file_field_only(client: Client) -> None:
     with pytest.raises(
-        SubmitError, match=r'^shift: file run:1: the field is not a file model$'
+        SubmitError, match=r'^shift: file run:1: the field is not a file field$'
     ):
         client.submit(ADD, params={'shift': file_ref(run=1)})
 
 
-def test_a_file_fits_a_file_model_by_its_metadata(client: Client) -> None:
+def test_a_file_fits_a_file_field_by_its_metadata(client: Client) -> None:
     computed = client.compute(
         MASKED, params={'run': file_ref(run=1), 'mask': file_ref(run=3)}
     )
@@ -794,17 +796,17 @@ def test_a_file_fits_a_file_model_by_its_metadata(client: Client) -> None:
     [
         (
             {'run': file_ref(run=3), 'mask': file_ref(run=3)},
-            "run: file run:3 does not fit RunFile, which takes files with "
+            "run: file run:3 does not fit the field, which takes files with "
             "{'kind': 'raw'}",
         ),
         (
             {'run': file_ref(run=1), 'mask': file_ref(run=2)},
-            "mask: file run:2 does not fit MaskFile, which takes files "
+            "mask: file run:2 does not fit the field, which takes files "
             "with {'kind': 'mask'}",
         ),
     ],
 )
-def test_a_file_that_does_not_fit_a_file_model_is_refused(
+def test_a_file_that_does_not_fit_a_file_field_is_refused(
     client: Client, params: dict[str, Any], refused: str
 ) -> None:
     with pytest.raises(SubmitError) as raised:
@@ -812,13 +814,15 @@ def test_a_file_that_does_not_fit_a_file_model_is_refused(
     assert str(raised.value) == refused
 
 
-def test_the_schema_of_a_file_model_holds_its_metadata() -> None:
+def test_the_schema_of_a_file_field_holds_its_metadata() -> None:
     schema = MASKED.serialize().params_schema
 
-    assert schema['properties']['mask'] == {'$ref': '#/$defs/MaskFile', 'title': 'Mask'}
-    mask = schema['$defs']['MaskFile']
-    assert (mask['dataType'], mask['metadata']) == ('MaskFile', {'kind': 'mask'})
-    assert mask['properties']['@ref']['const'] == 'file'
+    assert schema['properties']['mask'] == {
+        '$ref': '#/$defs/FileRef',
+        'metadata': {'kind': 'mask'},
+        'title': 'Mask',
+    }
+    assert schema['$defs']['FileRef']['properties']['@ref']['const'] == 'file'
 
 
 def _failed(client: Client, record: Record) -> str:

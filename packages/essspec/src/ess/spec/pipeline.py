@@ -36,7 +36,14 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     a list, to its list, ``list[Run]`` or ``list[GivenCentre | FindCentre]``.
     A parameter whose type, or element type, is neither a group nor a union
     of groups, such as ``bins: int``, needs ``keys=``: its class names no
-    role.
+    role. So does a file field, which holds a ``Path``: it sets the
+    workflow's own key of the file's path, so that a provider takes a plain
+    path, as esssans' providers take ``Filename[SampleRun]``::
+
+        class IofQParams(BaseModel):
+            sample: RunFile  # Annotated[Path, File()]
+
+        PipelineBinding(IOFQ, make_pipeline, keys={'sample': (Filename[SampleRun],)})
     A union of groups sets the key of the member that the value is (see
     below). Each output is computed as the key of its type without
     ``| None``, since an optional output means that the graph may lack it,
@@ -55,7 +62,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
             if fixed['direct_beam'] is None:
                 pipeline[sans.DirectBeam] = None  # esssans' providers take None
             else:
-                pipeline[sans.DirectBeamFilename] = fixed['direct_beam'].path
+                pipeline[sans.DirectBeamFilename] = fixed['direct_beam']
             return pipeline
 
         PipelineBinding(SPEC, make_pipeline, keys={'direct_beam': ()})
@@ -193,8 +200,9 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
             raise ValueError(
                 f'{spec.name}: {keyless}: a parameter whose type, or whose element '
                 'type for a list, is not a group or a union of groups gives its '
-                'keys=: a key such as int names no role, so no provider would read '
-                'it, and the value would have no effect'
+                'keys=: a key such as int, or the Path of a file field, names no '
+                'role, so no provider would read it, and the value would have no '
+                'effect'
             )
         if optional_params := sorted(
             n
