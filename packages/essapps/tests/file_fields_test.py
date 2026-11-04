@@ -1,23 +1,22 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""A file model at a field of a group: given, checked, and read."""
+"""A file field in a group: given, checked, and read."""
 
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, Self
+from typing import Annotated, Any, Self
 
 import pytest
 from pydantic import BaseModel, Field, model_validator
 
 from ess.apps import Backend, Client, SubmitError, Template, file
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
-from ess.spec import FileModel, WorkflowSpec, function_binding
+from ess.spec import File, WorkflowSpec, function_binding
+
+SampleRun = Annotated[Path, File()]
 
 
-class SampleRun(FileModel): ...
-
-
-class MaskFile(FileModel, kind='mask'): ...
+MaskFile = Annotated[Path, File(kind='mask')]
 
 
 class Sample(BaseModel):
@@ -41,9 +40,9 @@ class Checked(BaseModel):
     run: SampleRun
 
     @model_validator(mode='after')
-    def _suffix(self) -> Self:
-        if self.run.path.suffix != '.json':
-            raise ValueError('not JSON')
+    def _not_run_2(self) -> Self:
+        if self.run.name == 'run-2.json':
+            raise ValueError('the file of run 2 is refused')
         return self
 
 
@@ -95,8 +94,8 @@ CHECKED = _spec('checked', CheckedParams)
 
 
 def _weighed(sample: Sample) -> float:
-    masked = 0.0 if sample.mask is None else read_file(sample.mask.path)
-    return (read_file(sample.run.path) - masked) * sample.thickness
+    masked = 0.0 if sample.mask is None else read_file(sample.mask)
+    return (read_file(sample.run) - masked) * sample.thickness
 
 
 def _sample(params: SampleParams) -> Outputs:
@@ -108,7 +107,7 @@ def _table(params: TableParams) -> Outputs:
 
 
 def _channels(params: ChannelParams) -> Outputs:
-    up, down = (read_file(r.path) for r in (params.channels.up, params.channels.down))
+    up, down = (read_file(r) for r in (params.channels.up, params.channels.down))
     return Outputs(total=Total(value=up - down))
 
 
@@ -173,7 +172,7 @@ def test_a_value_next_to_a_file_is_checked_at_submit(client: Client) -> None:
         (
             {'run': file(run=1), 'mask': file(run=2)},
             ('sample', 'mask'),
-            "does not fit MaskFile, which takes files with {'kind': 'mask'}",
+            "does not fit the field, which takes files with {'kind': 'mask'}",
         ),
         (
             {'run': file(run=4)},
@@ -183,7 +182,7 @@ def test_a_value_next_to_a_file_is_checked_at_submit(client: Client) -> None:
         (
             {'run': '/data/run-1.json'},
             ('sample', 'run'),
-            "'/data/run-1.json' is not a file; SampleRun is a file model",
+            "'/data/run-1.json' is not a file; a file field is written as file(...)",
         ),
     ],
 )
@@ -247,7 +246,7 @@ def test_a_file_at_a_field_named_by_its_path_is_held_by_its_identity(
     assert record.request.params['sample']['run'] == identity
 
 
-def test_a_check_across_files_runs_at_submit_on_their_identities(
+def test_a_check_across_files_runs_at_submit_on_their_local_paths(
     client: Client, files: FakeFiles
 ) -> None:
     identity = files.resolve(file(run=1))
@@ -299,11 +298,13 @@ def test_an_accumulator_takes_rows_each_with_its_file(client: Client) -> None:
     assert client.output(accumulator, 'total') == Total(value=50.0)
 
 
-def test_a_validator_that_reads_a_local_path_refuses_the_request_at_submit(
+def test_a_validator_of_a_group_sees_the_local_path_at_submit(
     client: Client,
 ) -> None:
+    record = client.submit(CHECKED, params={'checked': {'run': file(run=1)}})
+    assert _total(client, record) == 0.0
     with pytest.raises(SubmitError) as raised:
-        client.submit(CHECKED, params={'checked': {'run': file(run=1)}})
+        client.submit(CHECKED, params={'checked': {'run': file(run=2)}})
     (error,) = raised.value.errors
     assert error.loc == ('checked',)
-    assert 'a file has a local path only when the request runs' in error.msg
+    assert 'the file of run 2 is refused' in error.msg

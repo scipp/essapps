@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from enum import Enum
 from itertools import islice
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
 from pydantic import BaseModel, Field, model_validator
@@ -26,10 +26,9 @@ from ess.apps import (
 )
 from ess.apps.log import Event, Log
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
-from ess.spec import FileModel, Referenced, WorkflowSpec, function_binding
+from ess.spec import File, Referenced, WorkflowSpec, function_binding
 
-
-class SampleRun(FileModel): ...
+SampleRun = Annotated[Path, File()]
 
 
 class Amount(BaseModel):
@@ -81,10 +80,10 @@ UNTYPED = _spec('untyped')  # its workflow returns a dict
 COUNTS = _spec('counts')  # its workflow looks up a key that is not there
 
 
-class MaskFile(FileModel, kind='mask'): ...
+MaskFile = Annotated[Path, File(kind='mask')]
 
 
-class LokiMask(FileModel, kind='mask', instrument='loki'): ...
+LokiMask = Annotated[Path, File(kind='mask', instrument='loki')]
 
 
 class MaskParams(BaseModel):
@@ -203,24 +202,24 @@ def total(params: SumParams) -> ValueOutputs:
     return ValueOutputs(value=Amount(value=value))
 
 
-def _read(model: FileModel) -> Amount:
-    return Amount(value=read_file(model.path))
+def _read(path: Path) -> Amount:
+    return Amount(value=read_file(path))
 
 
 def runs(params: RunsParams) -> ValueOutputs:
-    value = sum(read_file(run.path) for run in params.runs)
+    value = sum(read_file(run) for run in params.runs)
     return ValueOutputs(value=Amount(value=value))
 
 
 def split(params: LoadParams) -> PartsOutputs:
-    value = read_file(params.sample.path)
+    value = read_file(params.sample)
     return PartsOutputs(
         parts={'whole': Amount(value=value), 'half': Amount(value=value / 2)}
     )
 
 
 def pieces(params: LoadParams) -> PiecesOutputs:
-    value = read_file(params.sample.path)
+    value = read_file(params.sample)
     return PiecesOutputs(pieces=[Amount(value=value), Amount(value=value / 2)])
 
 
@@ -231,7 +230,7 @@ class Gate:
         self.open = threading.Event()
 
     def load(self, params: LoadParams) -> ValueOutputs:
-        run = read_file(params.sample.path)
+        run = read_file(params.sample)
         self.open.wait(timeout=5)
         if run < 0:
             raise ValueError('negative run')
@@ -504,7 +503,7 @@ def test_a_file_of_another_proposal_is_refused(
         client.submit(load(4))
 
 
-def test_a_file_fits_a_file_model_by_its_kind(
+def test_a_file_fits_a_file_field_by_its_kind(
     client: Client, files: FakeFiles, gate: Gate
 ) -> None:
     gate.open.set()
@@ -512,13 +511,13 @@ def test_a_file_fits_a_file_model_by_its_kind(
 
     with pytest.raises(
         SubmitError,
-        match=r"^mask: file run:1 does not fit MaskFile, which takes files "
+        match=r"^mask: file run:1 does not fit the field, which takes files "
         r"with \{'kind': 'mask'\}$",
     ):
         client.submit(MASKED, params={'mask': file(run=1)})
     with pytest.raises(
         SubmitError,
-        match=r"^sample: file run:5 does not fit SampleRun, which takes files "
+        match=r"^sample: file run:5 does not fit the field, which takes files "
         r"with \{'kind': 'raw'\}$",
     ):
         client.submit(load(5))
@@ -527,7 +526,7 @@ def test_a_file_fits_a_file_model_by_its_kind(
     assert client.output(client.compute(load(1)), 'value') == Amount(value=1.0)
 
 
-def test_a_file_fits_a_file_model_by_each_key_of_its_metadata(
+def test_a_file_fits_a_file_field_by_each_key_of_its_metadata(
     client: Client, files: FakeFiles
 ) -> None:
     files.measure(5, 5.0, kind='mask', instrument='dream')
@@ -535,7 +534,7 @@ def test_a_file_fits_a_file_model_by_each_key_of_its_metadata(
 
     with pytest.raises(
         SubmitError,
-        match=r"^mask: file run:5 does not fit LokiMask, which takes files "
+        match=r"^mask: file run:5 does not fit the field, which takes files "
         r"with \{'instrument': 'loki', 'kind': 'mask'\}$",
     ):
         client.submit(LOKI_MASKED, params={'mask': file(run=5)})
@@ -548,8 +547,8 @@ def test_a_table_takes_a_list_of_rows(client: Client) -> None:
         client.submit(SUM, params={'terms': {'value': 1.0}})
 
 
-def test_a_file_model_given_inline_is_refused(client: Client) -> None:
-    refused = r'is not a file; SampleRun is a file model, written as file\(\.\.\.\)'
+def test_a_file_field_given_inline_is_refused(client: Client) -> None:
+    refused = r'is not a file; a file field is written as file\(\.\.\.\)'
 
     with pytest.raises(SubmitError, match=rf"^sample: '/data/run-1.json' {refused}"):
         client.submit(LOAD, params={'sample': '/data/run-1.json'})
@@ -568,15 +567,15 @@ def test_a_path_names_the_file_at_that_path(
     assert client.output(by_path, 'value') == Amount(value=1.0)
 
 
-def test_a_file_fits_a_file_model_only(client: Client) -> None:
+def test_a_file_fits_a_file_field_only(client: Client) -> None:
     with pytest.raises(
         SubmitError,
-        match=r'^a: file run:1: the field is not a file model$',
+        match=r'^a: file run:1: the field is not a file field$',
     ):
         client.submit(ADD, params=operands(file(run=1), file(run=2)))
 
 
-def test_no_output_fits_a_file_model(client: Client) -> None:
+def test_no_output_fits_a_file_field(client: Client) -> None:
     loaded = client.submit(load(1))
     refused = (
         r'is a reference to an output; the field is not typed Referenced\[\.\.\.\]'
@@ -591,11 +590,11 @@ def test_no_output_fits_a_file_model(client: Client) -> None:
         client.stage(Template(MODES, params={'sample': by_ref}, blanks=('values',)))
 
 
-def test_a_spec_whose_output_holds_a_file_model_is_refused() -> None:
+def test_a_spec_whose_output_holds_a_file_field_is_refused() -> None:
     class RunOutputs(BaseModel):
         run: SampleRun
 
-    with pytest.raises(ValueError, match='SampleRun is a file model; no output'):
+    with pytest.raises(ValueError, match='no output holds a file or a Path'):
         _spec('echo', outputs=RunOutputs)
 
 
@@ -835,7 +834,7 @@ def test_rows_are_distinct_as_a_whole(client: Client) -> None:
         client.submit(SUM, params={'terms': [scaled, dict(scaled)]})
 
 
-def test_rows_of_file_models_are_distinct_by_identity_not_by_path(
+def test_rows_of_file_fields_are_distinct_by_identity_not_by_path(
     client: Client, files: FakeFiles
 ) -> None:
     # Two files of one run, by PID, share the run's local path.

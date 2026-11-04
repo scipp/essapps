@@ -46,7 +46,7 @@ from ess.spec import (
     AccumulatorRef,
     Binding,
     DriverBinding,
-    FileModel,
+    File,
     Referenced,
     WorkflowSpec,
     function_binding,
@@ -67,10 +67,10 @@ def _add(a: Amount, b: Amount) -> Amount:
     return Amount(value=a.value + b.value)
 
 
-class SampleRun(FileModel): ...
+SampleRun = Annotated[Path, File()]
 
 
-class RunFile(FileModel): ...
+RunFile = Annotated[Path, File()]
 
 
 class Shift(BaseModel):
@@ -266,7 +266,7 @@ def _value(value: float) -> Value:
 
 
 def load_run(params: Sample) -> LoadOutputs:
-    run = read_file(params.sample.path)
+    run = read_file(params.sample)
     return LoadOutputs(value=Amount(value=run), extra=Amount(value=-run))
 
 
@@ -275,7 +275,7 @@ def shift(params: ShiftParams) -> ShiftOutputs:
 
 
 def scale(params: ScaleParams) -> Value:
-    return _value(read_file(params.sample.path) * params.scaling.factor)
+    return _value(read_file(params.sample) * params.scaling.factor)
 
 
 def weighted(params: Any) -> Value:
@@ -359,7 +359,7 @@ class _ScaledTotal:
     def push(self, table: str, rows: Sequence[Any]) -> None:
         for run in rows:
             self.runs.append(run)
-            self.total += self._factor * read_file(run.path)
+            self.total += self._factor * read_file(run)
 
     def outputs(self) -> Value:
         return _value(self.total)
@@ -722,7 +722,7 @@ def test_a_stage_refuses_a_template_that_a_request_would_refuse(
         r'sample: unknown file run:9': Template(
             SCALE, params={'sample': file(run=9)}, blanks=('scaling',)
         ),
-        r'source: file .*: the field is not a file model': Template(
+        r'source: file .*: the field is not a file field': Template(
             SHIFT, params={'source': file(run=1)}, blanks=('shift',)
         ),
         f'source: record {cancelled.id} cancelled': Template(
@@ -889,7 +889,7 @@ def test_a_group_with_a_field_its_model_lacks_is_refused(client: Client) -> None
         walk.push(steps=[{'size': 1.0, 'speed': 2.0}])
 
 
-def test_a_file_reaches_the_workflow_as_its_file_model(
+def test_a_file_reaches_the_workflow_as_its_local_path(
     files: FakeFiles,
 ) -> None:
     received = []
@@ -903,32 +903,19 @@ def test_a_file_reaches_the_workflow_as_its_file_model(
         client.compute(_load(2))
 
     ref = files.resolve(file(run=2))
-    assert received == [SampleRun(file=ref.file)]
-    assert received[0].path == files.path(ref)
+    assert received == [files.path(ref)]
 
 
 @pytest.mark.parametrize(
     'inline',
-    ['/data/run-1.json', {'path': '/data/run-1.json'}],
+    ['/data/run-1.json', Path('/data/run-1.json'), {'path': '/data/run-1.json'}],
 )
-def test_a_file_model_given_inline_is_refused(client: Client, inline: Any) -> None:
+def test_a_file_field_given_inline_is_refused(client: Client, inline: Any) -> None:
     with pytest.raises(SubmitError) as raised:
         client.submit(LOAD, params={'sample': inline})
     (error,) = raised.value.errors
     assert error.loc == ('sample',)
-    assert error.msg.endswith(
-        ' is not a file; SampleRun is a file model, written as file(...)'
-    )
-
-
-def test_a_file_model_instance_is_given_as_the_reference_to_its_file(
-    client: Client,
-) -> None:
-    with pytest.raises(SubmitError) as raised:
-        client.submit(LOAD, params={'sample': SampleRun.local('/data/x')})
-    (error,) = raised.value.errors
-    assert error.loc == ('sample',)
-    assert error.msg == 'unknown file path:/data/x'
+    assert error.msg.endswith(' is not a file; a file field is written as file(...)')
 
 
 # What a client keeps
@@ -1138,7 +1125,7 @@ def test_closing_a_local_client_closes_its_backend_once_its_workflows_return(
     def load(params: Sample) -> LoadOutputs:
         started.set()
         loading.wait(timeout=5)
-        loaded.append(read_file(params.sample.path))
+        loaded.append(read_file(params.sample))
         return load_run(params)
 
     loading.clear()
@@ -1338,8 +1325,7 @@ def test_an_accumulator_s_values_reach_the_driver_as_the_log_holds_them(
     assert run == files.resolve(file(run=1))
     assert scaled_sum.opened[0]['labels'] == Labels(tags=['a', 'b'])
     (held,) = scaled_sum.held[0].runs
-    assert held == RunFile(file=run.file)
-    assert held.path == files.path(run)
+    assert held == files.path(run)
 
 
 def test_an_optional_output_left_out_is_not_read(client: Client) -> None:
@@ -1519,7 +1505,7 @@ def test_a_push_takes_rows_as_a_request_does(client: Client) -> None:
 def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
     load = client.compute(_load(1))
     rows = [
-        file(run=1),  # a file for a group that holds no file model
+        file(run=1),  # a file for a group that holds no file field
         load.ref('value'),  # a reference, no fit
         {'value': 1.0},  # a field without a default left out
         {'value': 1.0, 'weight': 'x'},  # an invalid inline value
@@ -2002,7 +1988,7 @@ BOTH = _spec(
 
 def array(params: Sample) -> ArrayValue:
     """A run as an array of one value."""
-    values = [read_file(params.sample.path)]
+    values = [read_file(params.sample)]
     return ArrayValue(value=Counts(counts=sc.array(dims=['x'], values=values)))
 
 
@@ -2872,7 +2858,7 @@ GRID_TOTAL = _spec('grid-total', params=GridParts, outputs=GridTotal, tables=('p
 
 
 def grid(params: Sample) -> GridOutputs:
-    values = np.arange(6.0).reshape(3, 2) * read_file(params.sample.path)
+    values = np.arange(6.0).reshape(3, 2) * read_file(params.sample)
     counts = sc.array(dims=['x', 'y'], values=values)
     axis = Axis(edges=sc.array(dims=['x'], values=[0.0, 1.0, 2.0, 3.0]))
     return GridOutputs(

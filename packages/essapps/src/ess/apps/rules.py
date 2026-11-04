@@ -38,15 +38,15 @@ class Rule:
     """
     Apply a template to each new file the selector matches.
 
-    A file fills the blank ``at`` that the lookup leaves, a parameter of
-    a file model, as :func:`apply` fills it, such as ``'sample'``. A
+    A file fills the blank ``at`` that the lookup leaves, a file
+    parameter, as :func:`apply` fills it, such as ``'sample'``. A
     file is new until a record under the label holds it there: a file
     that a request holds elsewhere, such as a can that the lookup fills, is
     not handled by it.
 
     With ``series``, a request instead takes every file with the same
     value of that metadata field so far, in run order, and that value is its
-    member. The blank ``at`` is then a table of a file model, with a row
+    member. The blank ``at`` is then a table of files, with a row
     for each file, and the lookup is not used: ``at='runs'`` makes the
     rows ``[file, ...]``. A file is new until a record under the label
     holds it in a row, ``runs[i]``.
@@ -189,10 +189,11 @@ def _check(rule: Rule, params: type[BaseModel]) -> None:
     """
     Refuse ``rule``, of a spec with the params model ``params``, if a file
     it lists could not fill its blank: the blank ``at``, and each blank of
-    its lookup, is a parameter of a file model, a list one if and only if
-    the rule has ``series``, and the rule's or the lookup's selector names
-    each key and value of the model's metadata, so that every file it
-    lists fits the model (see :class:`~ess.spec.FileModel`).
+    its lookup, is a file parameter, a parameter typed a file field (see
+    :class:`~ess.spec.File`), a list one if and only if the rule has
+    ``series``, and the rule's or the lookup's selector names each key and
+    value of the marker's metadata, so that every file it lists fits the
+    field.
     """
     selectors = {rule.at: rule.selector}
     if rule.lookup is not None and rule.series is None:
@@ -209,14 +210,13 @@ def _check(rule: Rule, params: type[BaseModel]) -> None:
             raise ValueError(
                 f'{rule.name}: {blank} is a list parameter; {fills} fills it'
             )
-        model = field_types.value_type(params.model_fields[blank].annotation)
-        if not field_types.is_file_model(model):
-            raise ValueError(f'{rule.name}: {blank} is not a parameter of a file model')
-        need = Selector(**model.metadata).fields
+        if (marker := field_types.file_of(params.model_fields[blank])) is None:
+            raise ValueError(f'{rule.name}: {blank} is not a file parameter')
+        need = Selector(**marker.metadata).fields
         if not need.items() <= selector.fields.items():
             raise ValueError(
-                f'{rule.name}: {selector} lists files that do not fit '
-                f'{model.__name__} at {blank}; a selector names each of {need}'
+                f'{rule.name}: {selector} lists files that do not fit {blank}; a '
+                f'selector names each of {need}'
             )
 
 

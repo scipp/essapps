@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ess.apps import Client, Record, Selector, Status
-from ess.spec import FileModel, FileRef, OutputRef, field_types
+from ess.spec import File, FileRef, OutputRef, field_types
 from ess.spec.refs import iter_refs
 
 
@@ -17,7 +17,7 @@ class Listing:
     """
     What a request of ``client`` may name now, and the state of the client's
     records, looked up once for a refresh of any number of views: the files
-    of each file model and the client's records, each by a label, and the
+    that fit each file field and the client's records, each by a label, and the
     outputs a request may reference. ``specs`` holds the spec of each record
     by its id, ``status`` its status, and ``readable`` the names of its
     outputs that a request may reference.
@@ -84,9 +84,12 @@ class Listing:
             for _, ref in iter_refs(record.request.params)
         ]
 
-    def files(self, model: type[FileModel]) -> dict[str, FileRef]:
-        """The files that fit ``model``, each by a label, in the order measured."""
-        selector = Selector(**model.metadata)
+    def files(self, marker: File) -> dict[str, FileRef]:
+        """
+        The files that fit a file field with ``marker``, each by a label, in
+        the order measured.
+        """
+        selector = Selector(**marker.metadata)
         if (key := repr(selector)) not in self._files:
             listed = self._client.files.list(selector)
             self._files[key] = {}

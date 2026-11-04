@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import panel as pn
@@ -10,17 +11,17 @@ from pydantic import AwareDatetime, BaseModel, Field, NaiveDatetime
 from ess.apps import Client, Record, SubmitError
 from ess.apps.panel import Form, Listing
 from ess.apps.testing import FakeFiles
-from ess.spec import FileModel, FileRef, OutputRef, Referenced, WorkflowSpec
+from ess.spec import File, FileRef, OutputRef, Referenced, WorkflowSpec
 
 type Spec = WorkflowSpec[Any, Any]
 
 
-class Raw(FileModel):
-    """Any raw file."""
+Raw = Annotated[Path, File()]
+"""Any raw file."""
 
 
-class LokiMask(FileModel, kind='mask', instrument='loki'):
-    """A mask of the LoKI instrument."""
+LokiMask = Annotated[Path, File(kind='mask', instrument='loki')]
+"""A mask of the LoKI instrument."""
 
 
 class LokiMaskParams(BaseModel):
@@ -287,7 +288,7 @@ def test_a_choice_without_a_default_starts_unset_and_the_backend_refuses_it(
     assert [e.loc for e in refused.value.errors] == [('direct_beam',)]
 
 
-def test_a_file_model_typed_x_or_none_offers_a_file_and_none(
+def test_a_file_field_typed_x_or_none_offers_a_file_and_none(
     options: Form,
 ) -> None:
     assert options.ways('direct_beam') == ['A file', 'None']
@@ -552,14 +553,14 @@ def test_a_listing_labels_each_record_and_the_outputs_that_fit(
     assert listing.labels == {found.id: f'Find centre ({at})'}
     centre = find_spec.outputs.model_fields['centre'].annotation
     assert listing.fitting(centre) == {f'BeamCentre ({at})': found.ref('centre')}
-    assert listing.files(Raw) == {'run 101 (sample)': run}
+    assert listing.files(File()) == {'run 101 (sample)': run}
 
 
 def test_a_file_without_a_run_is_labelled_by_its_identity(
     client: Client, files: FakeFiles, run: FileRef
 ) -> None:
     files.correct(run, run=None)
-    assert Listing(client).files(Raw) == {f'{run} (sample)': run}
+    assert Listing(client).files(File()) == {f'{run} (sample)': run}
 
 
 @pytest.fixture
@@ -702,7 +703,7 @@ def test_a_table_without_rows_is_refused_by_its_length(
     assert [e.loc for e in refused.value.errors] == [('runs',)]
 
 
-def test_a_row_of_a_file_model_is_a_file_picked_in_the_editor(
+def test_a_row_of_a_file_field_is_a_file_picked_in_the_editor(
     stack: Form, files: FakeFiles, run: FileRef
 ) -> None:
     other = files.measure(102, {'counts': 4.0, 'x': 0.0}, role='sample')

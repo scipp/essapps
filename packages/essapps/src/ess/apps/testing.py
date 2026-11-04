@@ -27,9 +27,19 @@ from .files import Selector
 type Spec = WorkflowSpec[Any, Any]
 
 
+_CORRUPT = b'\x00corrupt'
+"""What a corrupt file holds (see :meth:`FakeFiles.corrupt`)."""
+
+
 def read_file(path: Path) -> Any:
-    """The content of a file that :class:`FakeFiles` wrote."""
-    return json.loads(path.read_text())
+    """
+    The content of a file that :class:`FakeFiles` wrote; raises ``OSError``
+    for a corrupt file.
+    """
+    content = path.read_bytes()
+    if content == _CORRUPT:
+        raise OSError('file signature not found')
+    return json.loads(content)
 
 
 class FakeFiles:
@@ -44,15 +54,16 @@ class FakeFiles:
     file is named by its run, its PID, or its path. Its metadata are the
     proposal, the run, and the fields :meth:`measure` is given, such as
     ``kind='mask'``; a file without ``kind`` is raw (see
-    :class:`~.files.Selector`).
+    :class:`~.files.Selector`). A corrupt file has a path, as a file cut
+    short in transfer does, but :func:`read_file` cannot read it.
     """
 
     def __init__(self, proposal: str, directory: Path) -> None:
         self.proposal = proposal
         self._directory = directory
         self._paths: dict[FileRef, Path] = {}
+        self._content: dict[FileRef, str] = {}
         self._metadata: dict[FileRef, dict[str, Any]] = {}
-        self._corrupt: set[FileRef] = set()
         self._arrived = threading.Condition()
 
     def measure(self, run: int, content: Any, **fields: Any) -> FileRef:
@@ -60,18 +71,19 @@ class FakeFiles:
         pid = fields.get('pid')
         ref = FileRef(file=f'pid:{pid}' if pid else f'uuid:run-{run}')
         path = self._directory / f'run-{run}.json'
-        path.write_text(json.dumps(content))
+        path.write_text(text := json.dumps(content))
         with self._arrived:
             self._paths[ref] = path
+            self._content[ref] = text
             self._metadata[ref] = {'proposal': self.proposal, 'run': run, **fields}
             self._arrived.notify_all()
         return ref
 
     def corrupt(self, ref: FileRef) -> None:
-        self._corrupt.add(ref)
+        self._paths[ref].write_bytes(_CORRUPT)
 
     def repair(self, ref: FileRef) -> None:
-        self._corrupt.discard(ref)
+        self._paths[ref].write_text(self._content[ref])
 
     def correct(self, ref: FileRef, **fields: Any) -> None:
         self._metadata[ref] |= fields
@@ -87,8 +99,6 @@ class FakeFiles:
         raise KeyError(name)
 
     def path(self, ref: FileRef) -> Path:
-        if ref in self._corrupt:
-            raise OSError('file signature not found')
         return self._paths[ref]
 
     def metadata(self, ref: FileRef) -> dict[str, Any]:

@@ -25,18 +25,20 @@ request, of which a template, a push, and a state check a part:
   be given. One left out takes its default.
 - *Values.* Each parameter, or each row of a list parameter, is validated
   by its request type (see :func:`ess.spec.request_types.held`). It refuses
-  what a request may not write there, validates each file, and each group
-  that holds no reference to an output, whole from its JSON form, and
-  returns what the record stores. A field
-  that a model lacks is refused, since validating would drop it silently.
+  what a request may not write there, resolves each file, and returns what
+  the record stores. A parameter that holds no reference to an output is
+  then validated whole by the params model, with the local path of each
+  file, so that the validators of a group that holds a file run now. A
+  field that a model lacks is refused, since validating would drop it
+  silently.
   The JSON form of a value must read back as the value, since the call
   phase makes the value from it (see :func:`ess.spec.field_types.inline`).
   A list parameter that is not a table meets its length constraints.
 - *Files.* Validating a file resolves it with the file source (see
-  :class:`ess.spec.FileModel`): the file must be known, the proposal must
-  be allowed to read it, and its metadata must fit the file model, as a
-  :class:`~.files.Selector` of the model's metadata matches it. The record
-  stores the file's identity.
+  :class:`ess.spec.File`): the file must be known, the proposal must be
+  allowed to read it, and its metadata must fit the marker of the file
+  field, as a :class:`~.files.Selector` of the marker's metadata matches
+  it. The record stores the file's identity.
 - *References to outputs.* Each check returns the references to outputs
   in the values, each with its position and the type its data must fit
   (see :data:`ess.spec.request_types.Reads`). The backend checks each,
@@ -65,7 +67,7 @@ from pydantic_core import to_json
 
 from ess.spec import (
     AccumulatorRef,
-    FileModel,
+    File,
     FileRef,
     OutputRef,
     WorkflowSpec,
@@ -187,16 +189,17 @@ class Checks:
                 self.spec.params,
                 name,
                 value,
-                lambda file, model: self._file(file, model, proposal),
+                lambda file, marker: self._file(file, marker, proposal),
+                lambda identity: self._files.path(FileRef(file=identity)),
                 table=name in self.spec.tables,
             )
         except ParamsError as error:
             raise SubmitError.of(error) from None
 
-    def _file(self, name: str, model: type[FileModel], proposal: str) -> str:
+    def _file(self, name: str, marker: File, proposal: str) -> str:
         """
         The identity of the file ``name``, which must be known, readable by
-        ``proposal``, and fit ``model``; raises ``ValueError`` otherwise.
+        ``proposal``, and fit ``marker``; raises ``ValueError`` otherwise.
         """
         ref = FileRef(file=name)
         try:
@@ -206,9 +209,9 @@ class Checks:
         metadata = self._files.metadata(identity)
         if not readable(metadata, proposal):
             raise ValueError(f'file {ref} belongs to proposal {metadata["proposal"]}')
-        if not (selector := Selector(**model.metadata)).matches(metadata):
+        if not (selector := Selector(**marker.metadata)).matches(metadata):
             raise ValueError(
-                f'file {ref} does not fit {model.__name__}, which takes files with '
+                f'file {ref} does not fit the field, which takes files with '
                 f'{selector.fields}'
             )
         return identity.file

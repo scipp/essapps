@@ -7,7 +7,7 @@ makes no accumulators.
 
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
-from typing import Any, NewType
+from typing import Annotated, Any, NewType
 
 import pytest
 import sciline
@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from ess.apps import Backend, Client, Status, SubmitError, Template, file
 from ess.apps.testing import FakeFiles, read_file
-from ess.spec import FileModel, WorkflowSpec
+from ess.spec import File, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
 
 Loaded = NewType('Loaded', float)
@@ -24,7 +24,8 @@ Offsets = NewType('Offsets', list)
 Total = NewType('Total', float)
 
 
-class SampleRun(FileModel): ...
+SampleRun = Annotated[Path, File()]
+SampleFilename = NewType('SampleFilename', Path)
 
 
 class Shift(BaseModel):
@@ -87,6 +88,9 @@ TOTAL = WorkflowSpec(
 )
 
 
+FILE_KEYS = {'sample': (SampleFilename,)}
+
+
 @pytest.fixture
 def loaded() -> list[float]:
     """The runs the pipeline has loaded."""
@@ -97,9 +101,9 @@ def loaded() -> list[float]:
 def make_pipeline(
     loaded: list[float],
 ) -> Callable[[Mapping[str, Any]], sciline.Pipeline]:
-    def load(sample: SampleRun) -> Loaded:
-        loaded.append(read_file(sample.path))
-        return Loaded(10 * read_file(sample.path))
+    def load(sample: SampleFilename) -> Loaded:
+        loaded.append(read_file(sample))
+        return Loaded(10 * read_file(sample))
 
     return lambda fixed: sciline.Pipeline([load, shift, total])
 
@@ -117,9 +121,11 @@ def client(
     make_pipeline: Callable[[Mapping[str, Any]], sciline.Pipeline],
 ) -> Iterator[Client]:
     bind = [
-        PipelineBinding(SHIFT, make_pipeline, keys={'value': (Shifted,)}),
+        PipelineBinding(SHIFT, make_pipeline, keys={**FILE_KEYS, 'value': (Shifted,)}),
         PipelineBinding(
-            TOTAL, make_pipeline, keys={'offsets': (Offsets,), 'total': (Total,)}
+            TOTAL,
+            make_pipeline,
+            keys={**FILE_KEYS, 'offsets': (Offsets,), 'total': (Total,)},
         ),
     ]
     backend = Backend(files, bind)
@@ -175,7 +181,7 @@ def test_a_field_without_a_key_cannot_be_a_blank(
     make_pipeline: Callable[[Mapping[str, Any]], sciline.Pipeline],
 ) -> None:
     binding = PipelineBinding(
-        SHIFT, make_pipeline, keys={'annotation': (), 'value': (Shifted,)}
+        SHIFT, make_pipeline, keys={**FILE_KEYS, 'annotation': (), 'value': (Shifted,)}
     )
     backend = Backend(files, [binding])
     client = Client(backend, proposal='p1', submitter='anna')

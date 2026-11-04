@@ -5,7 +5,7 @@
 import re
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
 from pydantic import BaseModel, Field
@@ -25,23 +25,22 @@ from ess.apps import (
 )
 from ess.apps.batch import try_apply
 from ess.apps.testing import FakeFiles, FakeStore, read_file
-from ess.spec import FileModel, WorkflowSpec, function_binding
+from ess.spec import File, WorkflowSpec, function_binding
+
+SampleRun = Annotated[Path, File()]
+"""A run of a sample."""
 
 
-class SampleRun(FileModel):
-    """A run of a sample."""
+CanRun = Annotated[Path, File()]
+"""A run of the empty can, subtracted from a sample run."""
 
 
-class CanRun(FileModel):
-    """A run of the empty can, subtracted from a sample run."""
+ReferenceRun = Annotated[Path, File()]
+"""A run of a reference, which a sample run is divided by."""
 
 
-class ReferenceRun(FileModel):
-    """A run of a reference, which a sample run is divided by."""
-
-
-class MaskFile(FileModel, kind='mask'):
-    """A mask, which takes mask files only."""
+MaskFile = Annotated[Path, File(kind='mask')]
+"""A mask, which takes mask files only."""
 
 
 class LoadParams(BaseModel):
@@ -100,31 +99,27 @@ SCALE = _spec('scale', ScaleParams)
 
 
 def load(params: LoadParams) -> ValueOutputs:
-    return ValueOutputs(value=read_file(params.sample.path))
+    return ValueOutputs(value=read_file(params.sample))
 
 
 def load_mask(params: LoadMaskParams) -> ValueOutputs:
-    return ValueOutputs(value=read_file(params.mask.path))
+    return ValueOutputs(value=read_file(params.mask))
 
 
 def subtract(params: SubtractParams) -> ValueOutputs:
-    return ValueOutputs(
-        value=read_file(params.sample.path) - read_file(params.can.path)
-    )
+    return ValueOutputs(value=read_file(params.sample) - read_file(params.can))
 
 
 def sum_runs(params: SumRunsParams) -> ValueOutputs:
-    return ValueOutputs(value=sum(read_file(run.path) for run in params.runs))
+    return ValueOutputs(value=sum(read_file(run) for run in params.runs))
 
 
 def normalize(params: NormalizeParams) -> ValueOutputs:
-    return ValueOutputs(
-        value=read_file(params.sample.path) / read_file(params.reference.path)
-    )
+    return ValueOutputs(value=read_file(params.sample) / read_file(params.reference))
 
 
 def scale(params: ScaleParams) -> ValueOutputs:
-    return ValueOutputs(value=params.scale.factor * read_file(params.sample.path))
+    return ValueOutputs(value=params.scale.factor * read_file(params.sample))
 
 
 LAST_CAN = LastBefore(Selector(role='can'))
@@ -270,7 +265,7 @@ def test_a_rule_whose_requests_are_refused_does_not_stop_the_others(
     assert loop.status(load).reason is None
 
 
-def test_a_rule_fills_a_file_model_with_the_files_that_fit_it(
+def test_a_rule_fills_a_file_field_with_the_files_that_fit_it(
     client: Client, files: FakeFiles
 ) -> None:
     rule = Rule(
@@ -330,7 +325,7 @@ def _rule(template: Template, at: str, **kw: Any) -> Rule:
         (
             _rule(Template(LOAD_MASK, blanks=('mask',)), 'mask'),
             "Selector({'kind': 'raw', 'role': 'sample'}) lists files that do not "
-            "fit MaskFile at mask; a selector names each of {'kind': 'mask'}",
+            "fit mask; a selector names each of {'kind': 'mask'}",
         ),
         (
             _rule(
@@ -339,7 +334,7 @@ def _rule(template: Template, at: str, **kw: Any) -> Rule:
                 lookup=Lookup({'can': LastBefore(Selector(kind='mask', role='can'))}),
             ),
             "Selector({'kind': 'mask', 'role': 'can'}) lists files that do not "
-            "fit CanRun at can; a selector names each of {'kind': 'raw'}",
+            "fit can; a selector names each of {'kind': 'raw'}",
         ),
         (
             _rule(Template(SUM_RUNS, blanks=('runs',)), 'runs'),
@@ -351,10 +346,10 @@ def _rule(template: Template, at: str, **kw: Any) -> Rule:
         ),
         (
             _rule(Template(SCALE, blanks=('scale',)), 'scale'),
-            'scale is not a parameter of a file model',
+            'scale is not a file parameter',
         ),
     ],
-    ids=['selector', 'lookup-selector', 'list', 'series', 'not-a-file-model'],
+    ids=['selector', 'lookup-selector', 'list', 'series', 'not-a-file-parameter'],
 )
 def test_a_rule_that_could_not_submit_what_it_finds_is_refused_by_the_loop(
     client: Client, rule: Rule, reason: str
@@ -363,7 +358,7 @@ def test_a_rule_that_could_not_submit_what_it_finds_is_refused_by_the_loop(
         TriggerLoop(client, rules=[rule])
 
 
-def test_a_rule_may_select_by_more_than_the_metadata_of_its_file_model(
+def test_a_rule_may_select_by_more_than_the_metadata_of_its_file_field(
     client: Client, files: FakeFiles
 ) -> None:
     rule = _rule(

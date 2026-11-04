@@ -182,7 +182,7 @@ class Accumulator:
 
         Each row is given inline, such as a group as a model or a dict, or by
         reference, as its type allows; a field of a group is given inline,
-        except a file at a field typed a file model, which is given by
+        except a file at a file field, which is given by
         reference. A push gives rows of one or more tables, side by side as in a
         request, never paired: rows of different tables have nothing to do
         with each other. A table the template fixes is refused, and so are a
@@ -325,7 +325,7 @@ class Client:
         parameter, or each row of a list parameter, is given as its type
         allows (see :mod:`ess.spec._workflow_spec`):
 
-        - a file model, as a file, ``file(...)``;
+        - a file field, as a file, ``file(...)``;
         - any other group, as a model or a dict of its fields;
         - a union of groups, as a model or a dict of the fields of one
           alternative, with its tag;
@@ -350,7 +350,7 @@ class Client:
         raises ``SubmitError``: an invalid value, an unknown spec or file,
         a value written inline at a field that only a reference fills, a
         reference where none may stand, inside a group (except a file at a
-        field typed a file model), at a field the spec does not mark
+        file field), at a field the spec does not mark
         ``Referenced[...]``, or to a whole list, a reference the client may
         not read, or one whose data do not fit its field. Each of its
         ``errors`` names the field at fault by its position, ``loc``, and the

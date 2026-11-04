@@ -6,8 +6,8 @@ Toy specs and fixtures of the user stories (docs/developer/user-stories.md).
 A file made by ``measure`` holds a list of counts. The toy specs compute
 what the table in user-stories.md says, so that every number can be checked
 by hand. Each toy workflow takes an instance of its spec's params model,
-where each run is a file model with the file's local path, and reads the
-counts of each file.
+where each run is the local path of its file, and reads the counts of each
+file.
 
 After each story, every record whose outputs a client of the story still keeps
 is run again as its request by that client, and must give the same outputs
@@ -19,7 +19,7 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import numpy as np
 import pytest
@@ -46,7 +46,7 @@ from ess.apps.testing import (
 from ess.spec import (
     Binding,
     DriverBinding,
-    FileModel,
+    File,
     FileRef,
     NoParams,
     OutputRef,
@@ -91,32 +91,32 @@ def _array(values: Any) -> sc.Variable:
     return sc.array(dims=['q'], values=np.asarray(values, dtype=float))
 
 
-class Run(FileModel):
-    """A measured run, by its file; each role of a run is a subclass."""
+Run = Annotated[Path, File()]
+"""A measured run, by its file; each role of a run is an alias of it."""
 
 
-class Sample(Run):
-    """A run of the sample."""
+Sample = Run
+"""A run of the sample."""
 
 
-class Can(Run):
-    """A run of the empty can, subtracted from a sample run."""
+Can = Run
+"""A run of the empty can, subtracted from a sample run."""
 
 
-class DirectBeam(Run):
-    """A run of the direct beam, without a sample."""
+DirectBeam = Run
+"""A run of the direct beam, without a sample."""
 
 
-class Vanadium(Run):
-    """A run of vanadium, which a normalization is computed from."""
+Vanadium = Run
+"""A run of vanadium, which a normalization is computed from."""
 
 
-class Background(Run):
-    """A background run, subtracted from sample runs."""
+Background = Run
+"""A background run, subtracted from sample runs."""
 
 
-class Reference(Run):
-    """A run of a reference, such as a supermirror, that a reflectivity divides by."""
+Reference = Run
+"""A run of a reference, such as a supermirror, that a reflectivity divides by."""
 
 
 class Reduction(BaseModel):
@@ -144,12 +144,12 @@ class ComputedNormalization(Data):
     factor: sc.Variable
 
 
-class PublishedNormalization(FileModel):
-    """
-    A normalization published to the catalogue, read back as a file that holds
-    its factor (C2). A place takes it, or a computed normalization by
-    reference, ``PublishedNormalization | Referenced[ComputedNormalization]``.
-    """
+PublishedNormalization = Annotated[Path, File()]
+"""
+A normalization published to the catalogue, read back as a file that holds
+its factor (C2). A place takes it, or a computed normalization by
+reference, ``PublishedNormalization | Referenced[ComputedNormalization]``.
+"""
 
 
 class IofQParams(Data):
@@ -168,7 +168,7 @@ IOFQ = _spec('sans-iofq', IofQOutputs, params=IofQParams)
 
 
 def iofq(params: IofQParams) -> IofQOutputs:
-    return _reduce(params, _counts(params.sample.path))
+    return _reduce(params, _counts(params.sample))
 
 
 def _reduce(params: IofQParams, counts: np.ndarray) -> IofQOutputs:
@@ -189,8 +189,8 @@ def _factor(
     """The factor of a normalization, read from the file if it is published (C2)."""
     if normalization is None:
         return 1.0
-    if isinstance(normalization, PublishedNormalization):
-        return float(read_file(normalization.path))
+    if isinstance(normalization, Path):
+        return float(read_file(normalization))
     return normalization.factor.value
 
 
@@ -202,7 +202,7 @@ IOFQ_CAN = _spec('sans-iofq-can', IofQOutputs, params=IofQCanParams)
 
 
 def iofq_can(params: IofQCanParams) -> IofQOutputs:
-    return _reduce(params, _counts(params.sample.path) - _counts(params.can.path))
+    return _reduce(params, _counts(params.sample) - _counts(params.can))
 
 
 class ReductionV2(BaseModel):
@@ -245,9 +245,7 @@ BEAM_CENTRE = _spec('beam-centre', CentreOutputs, params=BeamCentreParams)
 
 
 def beam_centre(params: BeamCentreParams) -> CentreOutputs:
-    return CentreOutputs(
-        centre=BeamCentre(x=float(_counts(params.direct_beam.path).mean()))
-    )
+    return CentreOutputs(centre=BeamCentre(x=float(_counts(params.direct_beam).mean())))
 
 
 class Scaling(BaseModel):
@@ -269,7 +267,7 @@ VANADIUM = _spec('vanadium', VanadiumOutputs, params=VanadiumParams)
 
 
 def vanadium(params: VanadiumParams) -> VanadiumOutputs:
-    total = float(_counts(params.vanadium.path).sum())
+    total = float(_counts(params.vanadium).sum())
     return VanadiumOutputs(
         normalization=ComputedNormalization(
             factor=sc.scalar(total * params.scaling.scale)
@@ -344,7 +342,7 @@ CONTRIBUTE = _spec('sans-contribute', ContributeOutputs, params=ContributeParams
 
 
 def contribute(params: ContributeParams) -> ContributeOutputs:
-    counts = _counts(params.sample.path)
+    counts = _counts(params.sample)
     return ContributeOutputs(
         parts=Parts(
             numerator=_array(counts), denominator=sc.scalar(float(counts.sum()))
@@ -391,7 +389,7 @@ class Summing:
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
         for run in rows:
-            self._sums[table] += _counts(run.path)  # in place from the second row
+            self._sums[table] += _counts(run)  # in place from the second row
 
     def outputs(self) -> BaseModel:
         return self._finalize(**self._sums, **self._fixed)
@@ -427,7 +425,7 @@ VOLUME = _spec('volume', VolumeOutputs, params=RunsParams, tables=('runs',))
 
 
 def angle(params: AngleParams) -> VolumeOutputs:
-    return VolumeOutputs(volume=Volume(counts=_array(_counts(params.sample.path))))
+    return VolumeOutputs(volume=Volume(counts=_array(_counts(params.sample))))
 
 
 def volume(runs: np.ndarray) -> VolumeOutputs:
@@ -474,8 +472,8 @@ STITCH = _spec('stitch', StitchOutputs, params=StitchParams, tables=('runs',))
 
 
 def stitch(params: StitchParams) -> StitchOutputs:
-    reference = _counts(params.reference.path)
-    curves = [_counts(run.path) / reference for run in params.runs]
+    reference = _counts(params.reference)
+    curves = [_counts(run) / reference for run in params.runs]
     scaled = [curves[0]]
     for curve in curves[1:]:
         scaled.append(curve * scaled[-1][-1] / curve[0])
@@ -517,7 +515,7 @@ SLICER = _spec('slicer', SlicerOutputs, params=SlicerParams)
 
 def slicer(params: SlicerParams) -> SlicerOutputs:
     """A slice of every two bins of the log of the sample run."""
-    n = len(_counts(params.sample.path))
+    n = len(_counts(params.sample))
     return SlicerOutputs(
         slices=[TimeRange(start=i, stop=min(i + 2, n)) for i in range(0, n, 2)]
     )
@@ -537,7 +535,7 @@ SLICES = _spec('slices', SlicedOutputs, params=SlicesParams, tables=('time_range
 
 def sliced(params: SlicesParams) -> SlicedOutputs:
     """The counts of the sample in every time range, summed."""
-    counts = _counts(params.sample.path)
+    counts = _counts(params.sample)
     total = sum(float(counts[r.start : r.stop].sum()) for r in params.time_range)
     return SlicedOutputs(sliced=sc.scalar(total))
 
@@ -567,8 +565,8 @@ def centred(params: CentredParams) -> CentredOutputs:
     centre.
     """
     fraction = params.transmission.fraction.value
-    samples = sum(_counts(s.path) for s in params.sample) * fraction
-    cans = sum((_counts(c.path) for c in params.can), 0.0)
+    samples = sum(_counts(s) for s in params.sample) * fraction
+    cans = sum((_counts(c) for c in params.can), 0.0)
     return CentredOutputs(centred=_array(samples - cans - params.centre.x))
 
 

@@ -77,12 +77,13 @@ the backend checks what it can without data (see ``checks.py``), and, under
 its lock, what depends on history and on what the client keeps: each reference
 to a record or an accumulator is one the client may read, and its data fit the
 type of its field (see :data:`ess.spec.request_types.Reads`). Each group
-given inline that holds no reference is validated whole then, so that its
-validators run. In the *call phase*, on a worker, the backend reads the
-output each reference names, and validates each value, a row of a list on
-its own, by the params model from the JSON form the log holds, with each
-reference replaced by the data read and each file model given its file's
-local path (see :func:`ess.spec.request_types.validated`). A group that holds a
+given inline that holds no reference is validated whole then, by the
+params model with the local path of each file, so that its validators run.
+In the *call phase*, on a worker, the backend reads the output each
+reference names, and validates each value, a row of a list on its own, by
+the params model from the JSON form the log holds, with each reference
+replaced by the data read and each file by its local path (see
+:func:`ess.spec.request_types.validated`). A group that holds a
 reference is validated then, so its validators see the data read. For a
 plain request the backend makes the params instance from these values
 without validating again, so the params model's model validators never run;
@@ -1268,7 +1269,7 @@ class Backend:
         The data each reference names is read, and each value is validated by
         the params model from what the log holds, a table without its length
         constraints, with each reference replaced by its data and each file
-        given its local path (see
+        by its local path (see
         :func:`ess.spec.request_types.validated`). A group that holds a
         reference is validated only here, so its validators run now.
         A plain request makes the params instance from them, and a stage or a

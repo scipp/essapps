@@ -22,7 +22,7 @@ Type                              Widget
 ================================  =========================================
 a scalar                          an input of its type, or a picker of its
                                   values
-a file model                      a picker of the files that fit it
+a file field                      a picker of the files that fit it
 a group                           a choice of one way, ``Given``, whose
                                   selector is hidden: the fields of the
                                   group
@@ -32,7 +32,7 @@ a union of groups                 a choice of the alternatives, each the
                                   picker of the outputs that fit ``T``
 ``X | None``                      a choice of the ways of ``X`` and
                                   ``None``; a scalar is the way ``Given``,
-                                  a file model the way ``A file``
+                                  a file field the way ``A file``
 ``A | Referenced[B]``             a choice of the ways of each member
 ``list[X]``, ``X`` a scalar       a list of inputs of ``X``
 ``list[X]``, any other ``X``      a table of the rows, and the editor of a
@@ -44,8 +44,8 @@ field, so that a nested group is a card of its fields.
 
 A record's output fits if its type, from the record's spec, fits the field,
 and a request of the client may reference it now (``client.readable``), so a
-pending record is offered too. A file fits a file model if a
-:class:`~ess.apps.Selector` of the model's metadata matches it, as the
+pending record is offered too. A file fits a file field if a
+:class:`~ess.apps.Selector` of the marker's metadata matches it, as the
 backend checks when the request is submitted. A file that the form is set
 to, such as one a record names, stays picked when the listing no longer has
 it.
@@ -86,7 +86,7 @@ from pydantic_core import to_json, to_jsonable_python
 
 from ess.apps import Client, FieldError, SubmitError
 from ess.spec import (
-    FileModel,
+    File,
     FileRef,
     OutputRef,
     WorkflowSpec,
@@ -152,9 +152,10 @@ def _widget(
         return _Rows(element, default, listing)
     inline, inline_metadata, referenced = field_types.split(tp, *metadata)
     union = field_types.alternatives(inline, *inline_metadata)
+    marker = field_types.file_marker(inline, *inline_metadata)
     if not (none or referenced or union):
-        if field_types.is_file_model(inline):
-            return _File(inline, listing, label)
+        if marker is not None:
+            return _File(marker, listing, label)
         if not field_types.is_group(inline):
             return _Scalar(label, inline, default, description)
     ways: dict[str, _Widget] = {}
@@ -163,8 +164,8 @@ def _widget(
         for value, group in groups.items():
             way = field_types.title(value, group.model_fields[tag])
             ways[way] = _Group(group, {tag: value}, listing)
-    elif field_types.is_file_model(inline):
-        ways[_Choice.FILE] = _File(inline, listing)
+    elif marker is not None:
+        ways[_Choice.FILE] = _File(marker, listing)
     elif field_types.is_group(inline):
         ways[_Choice.GIVEN] = _Group(inline, {}, listing)
     elif inline is not None:
@@ -190,7 +191,8 @@ def _pick(widget: Any, value: Any) -> None:
 
 class _File:
     """
-    A file model: a picker of the files that fit it, labelled ``label``. A
+    A file field: a picker of the files that fit its marker, labelled
+    ``label``. A
     file that the form is set to and the listing lacks stays picked,
     labelled by its reference as given, an identity or a name such as
     ``run:101``.
@@ -200,16 +202,14 @@ class _File:
     which then shows no option at all.
     """
 
-    def __init__(
-        self, model: type[FileModel], listing: Listing, label: str = ''
-    ) -> None:
-        self._model = model
+    def __init__(self, marker: File, listing: Listing, label: str = '') -> None:
+        self._marker = marker
         self._listed: dict[str, Any] = {}
         self.widget = pn.widgets.Select(label=label, sizing_mode='stretch_width')
         self.refresh(listing)
 
     def refresh(self, listing: Listing) -> None:
-        self._listed = {'(choose a file)': UNSET, **listing.files(self._model)}
+        self._listed = {'(choose a file)': UNSET, **listing.files(self._marker)}
         self.set(self.widget.value)
 
     def value(self, loc: Loc, missing: _Missing) -> Any:
@@ -601,11 +601,11 @@ class _Rows:
         self._shown: Any = UNSET
         tp, _, metadata = field_types.unwrapped(element)
         inline, inline_metadata, referenced = field_types.split(tp, *metadata)
-        self._model = inline if field_types.is_file_model(inline) else None
+        self._marker = field_types.file_marker(inline, *inline_metadata)
         # The tag field of a union, and the title of each alternative by tag.
         self._tag: str | None = None
         self._titles: dict[str, str] = {}
-        groups = [] if inline is None or self._model is not None else [inline]
+        groups = [] if inline is None or self._marker is not None else [inline]
         if (union := field_types.alternatives(inline, *inline_metadata)) is not None:
             self._tag, alternatives = union
             self._titles = {
@@ -613,18 +613,19 @@ class _Rows:
                 for value, group in alternatives.items()
             }
             groups = list(alternatives.values())
-        # The title and the type of each field, of every alternative.
-        self._fields: dict[str, tuple[str, Any]] = {}
+        # The title of each field, of every alternative, and its marker if a
+        # file field.
+        self._fields: dict[str, tuple[str, File | None]] = {}
         for group in groups:
             for name, info in group.model_fields.items():
                 if name != self._tag and name not in self._fields:
                     self._fields[name] = (
                         field_types.title(name, info),
-                        field_types.unwrapped(info.annotation)[0],
+                        field_types.file_of(info),
                     )
         # The columns of the file and of the output that a row may be given as.
         self._refs: dict[str, type[FileRef | OutputRef]] = {}
-        if self._model is not None:
+        if self._marker is not None:
             self._refs['File'] = FileRef
         if referenced:
             self._refs['Record'] = OutputRef
@@ -695,17 +696,17 @@ class _Rows:
     def _render(self) -> None:
         """Show the rows in the table, a file or an output by its label."""
         rows = self._rows or []
-        listed: dict[Any, dict[FileRef, str]] = {}
+        listed: dict[File, dict[FileRef, str]] = {}
 
-        def text(value: Any, tp: Any) -> str:
+        def text(value: Any, marker: File | None) -> str:
             ref = as_ref(value)
             if isinstance(ref, OutputRef):
                 return self._listing.output_label(ref)
-            if isinstance(ref, FileRef) and field_types.is_file_model(tp):
-                if tp not in listed:
-                    files = self._listing.files(tp)
-                    listed[tp] = {r: label for label, r in files.items()}
-                return listed[tp].get(ref, str(ref))
+            if isinstance(ref, FileRef) and marker is not None:
+                if marker not in listed:
+                    files = self._listing.files(marker)
+                    listed[marker] = {r: label for label, r in files.items()}
+                return listed[marker].get(ref, str(ref))
             if isinstance(value, dict | list):
                 return to_json(value).decode()
             return '' if value is None else str(value)
@@ -717,14 +718,14 @@ class _Rows:
                 self._titles[r[self._tag]] if ref is None else ''
                 for r, ref in zip(rows, refs, strict=True)
             ]
-        for name, (title, tp) in self._fields.items():
+        for name, (title, marker) in self._fields.items():
             columns[title] = [
-                text(r.get(name), tp) if ref is None else ''
+                text(r.get(name), marker) if ref is None else ''
                 for r, ref in zip(rows, refs, strict=True)
             ]
         for column, kind in self._refs.items():
             columns[column] = [
-                text(r, self._model) if isinstance(ref, kind) else ''
+                text(r, self._marker) if isinstance(ref, kind) else ''
                 for r, ref in zip(rows, refs, strict=True)
             ]
         # Of text, since Tabulator formats a column by its type when first
