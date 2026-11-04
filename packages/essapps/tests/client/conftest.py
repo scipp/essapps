@@ -206,6 +206,61 @@ WALK = _spec('walk', params=WalkParams, tables=('steps',))
 UNTYPED = _spec('untyped', params=Parts, tables=('parts',))  # its driver returns a dict
 
 
+NOTHING = _spec('nothing', params=Sample)  # its workflow returns None as value
+
+
+class Pieces(BaseModel):
+    """Outputs with elements: a run whole and halved, by name and by position."""
+
+    parts: dict[str, Amount]
+    pieces: list[Amount]
+
+
+SPLIT = _spec('split', params=Sample, outputs=Pieces)
+
+
+MaskFile = Annotated[Path, File(kind='mask')]
+
+
+LokiMask = Annotated[Path, File(kind='mask', instrument='loki')]
+
+
+class MaskParams(BaseModel):
+    mask: MaskFile
+
+
+class LokiMaskParams(BaseModel):
+    mask: LokiMask
+
+
+MASKED = _spec('masked', params=MaskParams)
+
+
+LOKI_MASKED = _spec('loki-masked', params=LokiMaskParams)
+
+
+class Term(BaseModel):
+    """A row that holds a reference inside it."""
+
+    scale: float = 1.0
+    amount: Referenced[Amount]
+
+
+class Offset(BaseModel):
+    amount: Referenced[Amount]
+
+
+class TermsParams(BaseModel):
+    terms: list[Term] = Field(min_length=1)
+    offset: Offset | None = None
+
+
+TERMS = _spec('terms', params=TermsParams, tables=('terms',))
+
+
+TERMS_ROWS = _spec('terms-rows', params=TermsParams, tables=('terms',))
+
+
 def _value(value: float) -> Value:
     return Value(value=Amount(value=value))
 
@@ -221,6 +276,23 @@ def shift(params: ShiftParams) -> ShiftOutputs:
 
 def scale(params: ScaleParams) -> Value:
     return _value(read_file(params.sample) * params.scaling.factor)
+
+
+def split(params: Sample) -> Pieces:
+    whole, half = (Amount(value=read_file(params.sample) / n) for n in (1, 2))
+    return Pieces(parts={'whole': whole, 'half': half}, pieces=[whole, half])
+
+
+def read_mask(params: MaskParams | LokiMaskParams) -> Value:
+    return _value(read_file(params.mask))
+
+
+def terms(params: TermsParams) -> Value:
+    """``offset`` plus each term's amount times its scale."""
+    value = sum(term.scale * term.amount.value for term in params.terms)
+    if params.offset is not None:
+        value += params.offset.amount.value
+    return _value(value)
 
 
 def weighted(params: Any) -> Value:
@@ -413,6 +485,13 @@ def files(tmp_path: Path) -> FakeFiles:
 
 
 @pytest.fixture
+def unreadable(files: FakeFiles) -> Request:
+    """LOAD of run 3, whose file cannot be read, so that the record fails."""
+    files.corrupt(files.measure(3, 3.0))
+    return _load(3)
+
+
+@pytest.fixture
 def scaled_sum() -> ScaledSum:
     return ScaledSum()
 
@@ -440,6 +519,12 @@ def bindings(
         kept_rows(STITCH, stitch),
         DriverBinding(WALK, Walking),
         DriverBinding(UNTYPED, lambda fixed: Untyped()),
+        function_binding(NOTHING, lambda params: Value.model_construct(value=None)),
+        function_binding(SPLIT, split),
+        function_binding(MASKED, read_mask),
+        function_binding(LOKI_MASKED, read_mask),
+        StagedFunction(TERMS, terms),
+        kept_rows(TERMS_ROWS, terms),
     ]
 
 

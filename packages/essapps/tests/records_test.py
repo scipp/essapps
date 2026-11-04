@@ -10,7 +10,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from ess.apps import Request, SubmitError
-from ess.spec import WorkflowSpec
+from ess.spec import OutputRef, Referenced, WorkflowSpec
 
 
 class Amount(BaseModel):
@@ -73,6 +73,14 @@ class NormalizedParams(BaseModel):
 NORMALIZED = _spec('normalized', NormalizedParams)
 
 
+class AddParams(BaseModel):
+    a: Referenced[Amount]
+    b: Referenced[Amount]
+
+
+ADD = _spec('add', AddParams)
+
+
 def test_a_params_model_makes_the_request_of_its_dict() -> None:
     steps = [Step(size=1.0), Step(size=2.0)]
     by_model = Request(WALK, params=WalkParams(steps=steps))
@@ -119,6 +127,15 @@ def test_a_discriminator_is_kept_though_it_is_a_default(
     params: NormalizedParams | dict[str, Any], kept: dict[str, Any]
 ) -> None:
     assert Request(NORMALIZED, params=params).params == kept
+
+
+def test_upstream_lists_each_reference_in_the_order_of_the_params() -> None:
+    first, second = (OutputRef(record=r, output='value') for r in ('r1', 'r2'))
+    request = Request(ADD, params={'a': second, 'b': first})
+    twice = Request(ADD, params={'a': first, 'b': first})
+
+    assert request.upstream() == [second, first]
+    assert twice.upstream() == [first, first]
 
 
 def test_a_reference_of_an_unknown_kind_is_refused() -> None:
