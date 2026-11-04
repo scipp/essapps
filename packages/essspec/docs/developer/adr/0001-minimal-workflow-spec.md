@@ -222,12 +222,14 @@ A value of several parts is a group: `range: WavelengthRange`, not
 **A file fills a file field.** A field that takes a file, at any depth, is a
 *file field*, typed `Annotated[Path, File(**metadata)]`. The marker
 `ess.spec.File` holds the metadata that a fitting file has, each a string, a
-number, or a bool; `kind` is `'raw'` unless given. A spec names each kind of
-file once:
+number, or a bool; `kind` is `'raw'` unless given. `ess.spec` provides the
+types of the common kinds, so that each kind is spelled once; a spec writes
+another kind by hand:
 
 ```python
-RunFile = Annotated[Path, File()]                 # a raw file
-MaskFile = Annotated[Path, File(kind='mask')]     # a pixel mask, as XML
+from ess.spec import MaskFile, RunFile            # RunFile: a raw file; MaskFile: a pixel mask, as XML
+
+CalibrationFile = Annotated[Path, File(kind='calibration')]
 ```
 
 A request writes a file as `file(...)`, such as `file(run=60339)` or
@@ -306,11 +308,11 @@ refused before anything runs. `ess.spec.field_types.fits` states the rule.
 
 A value that some users read from a file and others compute is a union of a
 file field and a referenced group, such as
-`normalization: PublishedNormalization | Referenced[ComputedNormalization] | None`.
+`normalization: RunFile | Referenced[ComputedNormalization] | None`.
 The binding gets the file's local path or the group, and reads the file itself.
 
 ```python
-RunFile = Annotated[Path, File()]                 # types a file field: the file of a run
+from ess.spec import RunFile                      # types a file field: the file of a run
 
 class Reduction(BaseModel):                       # a group of scalars
     bins: int = 2
@@ -375,7 +377,7 @@ with its reason:
   of one. No output holds a `Path`, at any depth, a file field among them.
 - No type in the params or the outputs is a `NewType` or a type alias of a
   `type` statement, at any depth. A class says what a value is. A name
-  assigned a type, such as `RunFile = Annotated[Path, File()]`, is that type.
+  assigned a type, such as `CalibrationFile = Annotated[Path, File(kind='calibration')]`, is that type.
   A `NewType` of a shared type would say it only if the fit check looked
   through it. A `NewType` that a sciline graph needs as a key belongs to the
   binding (`keys=`, or a provider that takes the value out of the group).

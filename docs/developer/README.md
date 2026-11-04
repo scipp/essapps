@@ -67,7 +67,7 @@ The framework is essapps (`ess.apps`) and essspec (`ess.spec`), in this reposito
 | position | where a value sits in the params, by field names and list indices, such as `reduction.bins` or `sample[2]`. An error names the position of each problem. |
 | scalar | an `int`, `float`, `str`, `bool`, or `datetime`, or an enum or a `Literal` whose values are of these types, possibly with constraints, such as `Annotated[float, Gt(0)]` |
 | field type | the type of a field, at any depth: a scalar, a file field, a group, a union of groups, `Referenced[T]`, a union of members written inline and members `Referenced[...]`, `X \| None`, or `list[X]`. Any other type, such as a scipp array, is refused, but inside the `T` of `Referenced[T]`. |
-| file field, file | a *file field* is a field that a file fills, typed `Annotated[Path, File(**metadata)]`, such as `RunFile = Annotated[Path, File()]`. A request writes a *file* there as `file(...)`, such as `file(run=611)`. The backend resolves it when the request is submitted, and the params model holds the file's local path, a `Path` (see Files in Specs and bindings). A *file parameter* is a parameter that is a file field, or a list of one. |
+| file field, file | a *file field* is a field that a file fills, typed `Annotated[Path, File(**metadata)]`, such as `RunFile`, which `ess.spec` provides. A request writes a *file* there as `file(...)`, such as `file(run=611)`. The backend resolves it when the request is submitted, and the params model holds the file's local path, a `Path` (see Files in Specs and bindings). A *file parameter* is a parameter that is a file field, or a list of one. |
 | fits | a reference to an output fits a field `Referenced[T]` when the data it names are of the class `T` or a subclass of it (see References) |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
 | request | a spec and its params, each value written inline, a file, or a reference to an output |
@@ -118,7 +118,7 @@ A spec has two pydantic models:
 | outputs | results | (none) | the data the workflow returns |
 
 ```python
-RunFile = Annotated[Path, File()]                 # types a file field: the file of a run, raw
+from ess.spec import RunFile                      # types a file field: the file of a run, raw
 
 class Reduction(BaseModel):                       # a group of scalars
     bins: int = 100
@@ -235,11 +235,12 @@ transmission: sc.DataArray                        # refused by WorkflowSpec: not
 
 **Files.** A field, at any depth, takes a file when it is a *file field*, typed `Annotated[Path, File(**metadata)]`.
 The marker `ess.spec.File` holds the metadata that a fitting file has, so that a picker offers only files of its kind; `kind` is `'raw'` unless given.
-A spec names each kind of file once:
+`ess.spec` provides the types of the common kinds, so that each kind is spelled once; a spec writes another kind by hand:
 
 ```python
-RunFile = Annotated[Path, File()]                 # a raw file
-MaskFile = Annotated[Path, File(kind='mask')]     # a pixel mask, as XML
+from ess.spec import MaskFile, RunFile            # RunFile: a raw file; MaskFile: a pixel mask, as XML
+
+CalibrationFile = Annotated[Path, File(kind='calibration')]
 
 mask: MaskFile | None = None                      # a file of kind 'mask', or None
 ```
@@ -254,7 +255,7 @@ A `Path` without `File(...)` is refused in the params, and so is `File(...)` on 
 The marker carries no validators: one that reads the file would read it from a network mount when the request is submitted.
 A check of a file's content belongs to the workflow.
 
-A value that is read from a file by some users and computed by others is a union of a file field and a referenced group, such as `normalization: PublishedNormalization | Referenced[ComputedNormalization] | None` ([user-stories.md](user-stories.md), story C2).
+A value that is read from a file by some users and computed by others is a union of a file field and a referenced group, such as `normalization: RunFile | Referenced[ComputedNormalization] | None` ([user-stories.md](user-stories.md), story C2).
 The binding gets the file's local path or the group, and reads the file itself.
 
 **Parameters.** By convention a parameter is a group, a union of groups, a file field, or a list of one.
@@ -359,7 +360,7 @@ A value *round-trips* when its JSON form reads back as the value.
 - A file field has no default but `None`, or `[]` for a list.
 - `File(...)` marks a `Path` only, and a `Path` without `File(...)` is refused.
 - Each output is a type, possibly typed `X | None`, or a list or a dict of one. No output holds a `Path`, at any depth, a file field among them.
-- No type in the params or the outputs is a `NewType` or a type alias of a `type` statement, at any depth: a class says what a value is, and a binding maps it to a key of its own. A name assigned a type, such as `RunFile = Annotated[Path, File()]`, is that type.
+- No type in the params or the outputs is a `NewType` or a type alias of a `type` statement, at any depth: a class says what a value is, and a binding maps it to a key of its own. A name assigned a type, such as `CalibrationFile = Annotated[Path, File(kind='calibration')]`, is that type.
 - A union of groups is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag. A union may also hold members `Referenced[T]`, which need no tag.
 - A group has no serializers, computed fields, aliases, or excluded fields, which would make its JSON form differ from the object of its fields. It may have field and model validators of any mode, which run when the group is validated (see Requests and records, Validation). A validator raises `ValueError` for a value it does not take.
 - A default is a value, never a reference to an output or a file: what a request may write at the field, which round-trips and holds no `@ref` object at any depth. A field that only a reference fills has no default but `None`, or `[]` for a list. A default is the value that validating it gives, since pydantic does not validate a default: a group's default is an instance, not the object of its fields, and an enum's a member, not its value.

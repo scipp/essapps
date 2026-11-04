@@ -19,7 +19,14 @@ from pydantic import (
 from ess.apps import Backend, Client, Record, Status, SubmitError, Template
 from ess.apps import file as file_ref
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
-from ess.spec import File, OutputRef, Referenced, WorkflowSpec, function_binding
+from ess.spec import (
+    MaskFile,
+    OutputRef,
+    Referenced,
+    RunFile,
+    WorkflowSpec,
+    function_binding,
+)
 
 
 class Blob:
@@ -48,17 +55,8 @@ class LabelledShift(Shift):
     label: str = ''
 
 
-SampleRun = Annotated[Path, File()]
-
-
-RunFile = Annotated[Path, File()]
-
-
-MaskFile = Annotated[Path, File(kind='mask')]
-
-
 class LoadParams(BaseModel):
-    sample: SampleRun
+    sample: RunFile
 
 
 class LoadOutputs(BaseModel):
@@ -861,7 +859,7 @@ def test_references_to_two_records_with_equal_data_are_two_rows(
 class Sample(BaseModel):
     """A row of a table with a field that a reference fills."""
 
-    run: SampleRun
+    run: RunFile
     transmission: Referenced[MeasuredTransmission]
 
 

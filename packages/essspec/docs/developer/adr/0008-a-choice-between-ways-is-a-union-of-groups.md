@@ -25,7 +25,7 @@ Terms from [ADR 0001](0001-minimal-workflow-spec.md) and the developer README:
 - A *table* is a list parameter whose elements an accumulator takes a push at a time; an element of a table is a *row*.
 - A *reference to an output* names an output of a record, such as `finder.ref('centre')`.
 - `Referenced[T]` types a field that a reference to an output fills, with data that fit the group `T`. A reference *fits* the field when the output's class is `T` or a subclass of it. A request writes a field of any other type, inline or as a file. The framework does not look inside `T`, so a group that holds an `sc.DataArray` is a `T`.
-- A *file field* is a field that a file fills, typed `Annotated[Path, File(**metadata)]`, such as `RunFile = Annotated[Path, File()]`. A request writes a *file* there as `file(...)`, which the backend resolves when the request is submitted. The params model, and so the binding, holds the file's local path, a `Path`.
+- A *file field* is a field that a file fills, typed `Annotated[Path, File(**metadata)]`, such as `RunFile`, which `ess.spec` provides. A request writes a *file* there as `file(...)`, which the backend resolves when the request is submitted. The params model, and so the binding, holds the file's local path, a `Path`.
 - A *template* is a request with some parameters left open, its *blanks*; the values it gives are its *fixed values*. A *plain request* gives every value.
 - A *stage* is a template that the backend keeps: it computes what does not depend on the blanks once, and the rest at each call.
 
@@ -127,7 +127,7 @@ transmission: (
 ```
 
 A field may also take a file or a reference to an output, such as a normalization that some users read from the catalogue and others compute:
-`normalization: PublishedNormalization | Referenced[ComputedNormalization] | None`, with `PublishedNormalization` the type of a file field.
+`normalization: RunFile | Referenced[ComputedNormalization] | None`, with `RunFile` the type of a file field.
 The binding gets the file's local path or the group, and reads the file itself.
 
 **`X | None` means *without X*.**

@@ -38,7 +38,7 @@ import json
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Annotated, Any, NewType, TypeVar
+from typing import Any, NewType, TypeVar
 
 import numpy as np
 import sciline
@@ -47,8 +47,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ess.spec import (
     DriverBinding,
-    File,
     Referenced,
+    RunFile,
     WorkflowSpec,
     function_binding,
 )
@@ -96,10 +96,6 @@ class IofQ(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     intensity: sc.Variable
-
-
-RunFile = Annotated[Path, File()]
-"""A run's raw file, as its local path."""
 
 
 class IofQSettings(BaseModel):

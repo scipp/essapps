@@ -4,30 +4,25 @@
 
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Annotated, Any, Self
+from typing import Any, Self
 
 import pytest
 from pydantic import BaseModel, Field, model_validator
 
 from ess.apps import Backend, Client, SubmitError, Template, file
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
-from ess.spec import File, WorkflowSpec, function_binding
-
-SampleRun = Annotated[Path, File()]
-
-
-MaskFile = Annotated[Path, File(kind='mask')]
+from ess.spec import MaskFile, RunFile, WorkflowSpec, function_binding
 
 
 class Sample(BaseModel):
-    run: SampleRun
+    run: RunFile
     thickness: float = Field(1.0, gt=0)
     mask: MaskFile | None = None
 
 
 class Channels(BaseModel):
-    up: SampleRun
-    down: SampleRun
+    up: RunFile
+    down: RunFile
 
     @model_validator(mode='after')
     def _distinct(self) -> Self:
@@ -37,7 +32,7 @@ class Channels(BaseModel):
 
 
 class Checked(BaseModel):
-    run: SampleRun
+    run: RunFile
 
     @model_validator(mode='after')
     def _not_run_2(self) -> Self:
@@ -55,7 +50,7 @@ class Factor(BaseModel):
 
 
 class RunParams(BaseModel):
-    run: SampleRun
+    run: RunFile
 
 
 class SampleParams(BaseModel):

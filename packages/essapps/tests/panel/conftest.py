@@ -31,14 +31,14 @@ from pydantic import BaseModel, Field
 
 from ess.apps import Client, local
 from ess.apps.testing import FakeFiles, read_file
-from ess.spec import File, FileRef, Referenced, WorkflowSpec, function_binding
-
-Run = Annotated[Path, File()]
-"""A raw run."""
-
-
-Mask = Annotated[Path, File(kind='mask')]
-"""Counts to leave out of a sample run."""
+from ess.spec import (
+    FileRef,
+    MaskFile,
+    Referenced,
+    RunFile,
+    WorkflowSpec,
+    function_binding,
+)
 
 
 class BeamCentre(BaseModel):
@@ -47,7 +47,7 @@ class BeamCentre(BaseModel):
 
 
 class FindParams(BaseModel):
-    run: Run
+    run: RunFile
 
 
 class FindOutputs(BaseModel):
@@ -80,11 +80,11 @@ class Rear(BaseModel):
 
 class ReduceParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-    run: Run
+    run: RunFile
     sample: Sample
     beam_centre: BeamCentre | Referenced[BeamCentre] = Field(default_factory=BeamCentre)
     detector: Annotated[Front | Rear, Field(discriminator='kind')] = Front()
-    mask: Mask | None = None
+    mask: MaskFile | None = None
 
 
 class Total(BaseModel):
@@ -108,7 +108,7 @@ class Settings(BaseModel):
 
 class OptionsParams(BaseModel):
     settings: Settings
-    direct_beam: Run | None
+    direct_beam: RunFile | None
 
 
 class Background(BaseModel):
@@ -121,12 +121,12 @@ class SubtractParams(BaseModel):
 
 
 class Shot(BaseModel):
-    run: Run
+    run: RunFile
     thickness: float = 1.0
 
 
 class StackParams(BaseModel):
-    runs: list[Run] = Field(min_length=1)
+    runs: list[RunFile] = Field(min_length=1)
     shots: list[Shot]
     centres: list[BeamCentre | Referenced[BeamCentre]] = [BeamCentre(x=1.0)]
 
@@ -150,13 +150,13 @@ Shape = Annotated[Disc | Slab, Field(discriminator='kind')]
 
 
 class Specimen(BaseModel):
-    run: Run
+    run: RunFile
     window: Window
     frame: Window = Window(start=0.0)
     shape: Shape = Disc()
     scale: float | None = None
     crop: Window | None = None
-    mask: Mask | None = None
+    mask: MaskFile | None = None
     centre: Referenced[BeamCentre]
     shots: list[Shot] = []
     shapes: list[Shape] = []

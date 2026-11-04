@@ -65,7 +65,7 @@ class TimeRange(BaseModel):
     stop: float
 
 class SlicesParams(IofQSettings):        # the settings that IofQParams has too
-    sample: RunFile                      # RunFile = Annotated[Path, File()]: a file field
+    sample: RunFile                      # a file field, from ess.spec
     can: RunFile
     time_range: list[TimeRange] = Field(min_length=1)
 

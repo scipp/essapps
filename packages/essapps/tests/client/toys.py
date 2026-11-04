@@ -19,6 +19,7 @@ from ess.spec import (
     DriverBinding,
     File,
     Referenced,
+    RunFile,
     WorkflowSpec,
 )
 
@@ -36,12 +37,6 @@ def add_amounts(a: Amount, b: Amount) -> Amount:
     return Amount(value=a.value + b.value)
 
 
-SampleRun = Annotated[Path, File()]
-
-
-RunFile = Annotated[Path, File()]
-
-
 class Shift(BaseModel):
     offset: float = 0.0
 
@@ -51,7 +46,7 @@ class Factor(BaseModel):
 
 
 class Sample(BaseModel):
-    sample: SampleRun
+    sample: RunFile
 
 
 class Value(BaseModel):
@@ -74,7 +69,7 @@ class ShiftOutputs(BaseModel):
 
 class ScaleParams(BaseModel):
     scaling: Factor = Field(default_factory=Factor)
-    sample: SampleRun
+    sample: RunFile
 
 
 class Parts(BaseModel):

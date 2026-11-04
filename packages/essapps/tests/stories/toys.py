@@ -16,7 +16,7 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
 import numpy as np
 import scipp as sc
@@ -33,10 +33,10 @@ from ess.apps.testing import (
 from ess.spec import (
     Binding,
     DriverBinding,
-    File,
     FileRef,
     NoParams,
     Referenced,
+    RunFile,
     WorkflowSpec,
     function_binding,
 )
@@ -74,48 +74,6 @@ def _array(values: Any) -> sc.Variable:
     return sc.array(dims=['q'], values=np.asarray(values, dtype=float))
 
 
-Run = Annotated[Path, File()]
-
-
-"""A measured run, by its file; each role of a run is an alias of it."""
-
-
-Sample = Run
-
-
-"""A run of the sample."""
-
-
-Can = Run
-
-
-"""A run of the empty can, subtracted from a sample run."""
-
-
-DirectBeam = Run
-
-
-"""A run of the direct beam, without a sample."""
-
-
-Vanadium = Run
-
-
-"""A run of vanadium, which a normalization is computed from."""
-
-
-Background = Run
-
-
-"""A background run, subtracted from sample runs."""
-
-
-Reference = Run
-
-
-"""A run of a reference, such as a supermirror, that a reflectivity divides by."""
-
-
 class Reduction(BaseModel):
     bins: int = 2
     threshold: float = 0.0
@@ -141,21 +99,11 @@ class ComputedNormalization(Data):
     factor: sc.Variable
 
 
-PublishedNormalization = Annotated[Path, File()]
-
-
-"""
-A normalization published to the catalogue, read back as a file that holds
-its factor (C2). A place takes it, or a computed normalization by
-reference, ``PublishedNormalization | Referenced[ComputedNormalization]``.
-"""
-
-
 class IofQParams(Data):
     reduction: Reduction = Field(default_factory=Reduction)
-    sample: Sample
+    sample: RunFile
     beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
-    normalization: PublishedNormalization | Referenced[ComputedNormalization] | None
+    normalization: RunFile | Referenced[ComputedNormalization] | None
 
 
 class IofQOutputs(Data):
@@ -183,7 +131,7 @@ def _reduce(params: IofQParams, counts: np.ndarray) -> IofQOutputs:
 
 
 def _factor(
-    normalization: PublishedNormalization | ComputedNormalization | None,
+    normalization: RunFile | ComputedNormalization | None,
 ) -> float:
     """The factor of a normalization, read from the file if it is published (C2)."""
     if normalization is None:
@@ -194,7 +142,7 @@ def _factor(
 
 
 class IofQCanParams(IofQParams):
-    can: Can
+    can: RunFile
 
 
 IOFQ_CAN = _spec('sans-iofq-can', IofQOutputs, params=IofQCanParams)
@@ -211,9 +159,9 @@ class ReductionV2(BaseModel):
 
 class IofQV2Params(Data):
     reduction: ReductionV2 = Field(default_factory=ReductionV2)
-    sample: Sample
+    sample: RunFile
     beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
-    normalization: PublishedNormalization | Referenced[ComputedNormalization] | None
+    normalization: RunFile | Referenced[ComputedNormalization] | None
 
 
 IOFQ_V2 = WorkflowSpec(
@@ -233,7 +181,7 @@ def iofq_v2(params: IofQV2Params) -> IofQOutputs:
 
 
 class BeamCentreParams(Data):
-    direct_beam: DirectBeam
+    direct_beam: RunFile
 
 
 class CentreOutputs(Data):
@@ -255,7 +203,7 @@ class Scaling(BaseModel):
 
 class VanadiumParams(Data):
     scaling: Scaling = Field(default_factory=Scaling)
-    vanadium: Vanadium
+    vanadium: RunFile
 
 
 class VanadiumOutputs(Data):
@@ -276,7 +224,7 @@ def vanadium(params: VanadiumParams) -> VanadiumOutputs:
 
 class NormalizeParams(Data):
     scaling: Scaling = Field(default_factory=Scaling)
-    runs: list[Sample] = Field(min_length=1)
+    runs: list[RunFile] = Field(min_length=1)
 
 
 class NormalizedOutputs(Data):
@@ -293,8 +241,8 @@ def normalize(runs: np.ndarray, scaling: Scaling) -> NormalizedOutputs:
 
 
 class BackgroundParams(Data):
-    sample_runs: list[Sample] = Field(min_length=1)
-    background_runs: list[Background] = Field(min_length=1)
+    sample_runs: list[RunFile] = Field(min_length=1)
+    background_runs: list[RunFile] = Field(min_length=1)
 
 
 class BackgroundOutputs(Data):
@@ -329,7 +277,7 @@ class Parts(Data):
 
 
 class ContributeParams(Data):
-    sample: Sample
+    sample: RunFile
 
 
 class ContributeOutputs(Data):
@@ -412,11 +360,11 @@ class VolumeOutputs(Data):
 
 
 class AngleParams(Data):
-    sample: Sample
+    sample: RunFile
 
 
 class RunsParams(Data):
-    runs: list[Sample] = Field(min_length=1)
+    runs: list[RunFile] = Field(min_length=1)
 
 
 ANGLE = _spec('angle', VolumeOutputs, params=AngleParams)
@@ -455,8 +403,8 @@ def cut(params: CutParams) -> CutOutputs:
 
 
 class StitchParams(Data):
-    runs: list[Sample] = Field(min_length=1)
-    reference: Reference
+    runs: list[RunFile] = Field(min_length=1)
+    reference: RunFile
 
 
 class Reflectivity(Data):
@@ -504,7 +452,7 @@ class TimeRange(BaseModel):
 
 
 class SlicerParams(Data):
-    sample: Sample
+    sample: RunFile
 
 
 class SlicerOutputs(Data):
@@ -523,7 +471,7 @@ def slicer(params: SlicerParams) -> SlicerOutputs:
 
 
 class SlicesParams(Data):
-    sample: Sample
+    sample: RunFile
     time_range: list[TimeRange | Referenced[TimeRange]] = Field(min_length=1)
 
 
@@ -544,8 +492,8 @@ def sliced(params: SlicesParams) -> SlicedOutputs:
 class CentredParams(Data):
     centre: BeamCentre | Referenced[BeamCentre]
     transmission: Referenced[Transmission]  # of the summed sample runs
-    sample: list[Sample] = Field(min_length=1)
-    can: list[Can] = Field(min_length=1)
+    sample: list[RunFile] = Field(min_length=1)
+    can: list[RunFile] = Field(min_length=1)
 
 
 class CentredOutputs(Data):

@@ -7,7 +7,7 @@ makes no accumulators.
 
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
-from typing import Annotated, Any, NewType
+from typing import Any, NewType
 
 import pytest
 import sciline
@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from ess.apps import Backend, Client, Status, SubmitError, Template, file
 from ess.apps.testing import FakeFiles, read_file
-from ess.spec import File, WorkflowSpec
+from ess.spec import RunFile, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
 
 Loaded = NewType('Loaded', float)
@@ -24,7 +24,6 @@ Offsets = NewType('Offsets', list)
 Total = NewType('Total', float)
 
 
-SampleRun = Annotated[Path, File()]
 SampleFilename = NewType('SampleFilename', Path)
 
 
@@ -51,7 +50,7 @@ def total(loaded: Loaded, offsets: Offsets) -> Total:
 class ShiftParams(BaseModel):
     shift: Shift = Field(default_factory=Shift)
     annotation: Annotation = Field(default_factory=Annotation)
-    sample: SampleRun
+    sample: RunFile
 
 
 class ShiftOutputs(BaseModel):
@@ -70,7 +69,7 @@ SHIFT = WorkflowSpec(
 
 class TotalParams(BaseModel):
     offsets: list[Offset] = Field(min_length=1)
-    sample: SampleRun
+    sample: RunFile
 
 
 class TotalOutputs(BaseModel):

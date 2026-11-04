@@ -23,8 +23,10 @@ from pydantic import (
 from ess.spec import (
     File,
     FileRef,
+    MaskFile,
     OutputRef,
     Referenced,
+    RunFile,
     WorkflowSpec,
     request_types,
 )
@@ -39,10 +41,6 @@ def _stored(
     """What the record stores of ``value``, as :func:`held` gives it."""
     stored, _ = held(model, name, value, files, _path)
     return stored
-
-
-RunFile = Annotated[Path, File()]
-MaskFile = Annotated[Path, File(kind='mask')]
 
 
 class Mask(BaseModel, arbitrary_types_allowed=True):

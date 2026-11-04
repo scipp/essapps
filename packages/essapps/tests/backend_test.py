@@ -6,7 +6,7 @@
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field
@@ -14,9 +14,7 @@ from pydantic import BaseModel, Field
 from ess.apps import Backend, Request, SubmitError, Template, file
 from ess.apps.backend import Entry
 from ess.apps.testing import FakeFiles, StagedFunction, read_file
-from ess.spec import File, WorkflowSpec, function_binding
-
-SampleRun = Annotated[Path, File()]
+from ess.spec import RunFile, WorkflowSpec, function_binding
 
 
 class Amount(BaseModel):
@@ -28,7 +26,7 @@ class Value(BaseModel):
 
 
 class Sample(BaseModel):
-    sample: SampleRun
+    sample: RunFile
 
 
 class Factor(BaseModel):
@@ -37,7 +35,7 @@ class Factor(BaseModel):
 
 class ScaleParams(BaseModel):
     scaling: Factor = Field(default_factory=Factor)
-    sample: SampleRun
+    sample: RunFile
 
 
 def _spec(name: str, params: type[BaseModel]) -> WorkflowSpec[Any, Any]:

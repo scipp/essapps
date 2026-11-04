@@ -11,13 +11,9 @@ from pydantic import AwareDatetime, BaseModel, Field, NaiveDatetime
 from ess.apps import Client, Record, SubmitError
 from ess.apps.panel import Form, Listing
 from ess.apps.testing import FakeFiles
-from ess.spec import File, FileRef, OutputRef, Referenced, WorkflowSpec
+from ess.spec import File, FileRef, OutputRef, Referenced, RunFile, WorkflowSpec
 
 type Spec = WorkflowSpec[Any, Any]
-
-
-Raw = Annotated[Path, File()]
-"""Any raw file."""
 
 
 LokiMask = Annotated[Path, File(kind='mask', instrument='loki')]
@@ -43,7 +39,7 @@ LOKI_MASK: Spec = WorkflowSpec(
 
 
 class Measured(BaseModel):
-    run: Raw
+    run: RunFile
     thickness: float = 1.0
     mask: LokiMask | None = None
 
@@ -805,7 +801,7 @@ def test_a_row_is_shown_under_the_file_or_the_record_it_is_given_as(
     centre = find_spec.outputs.model_fields['centre'].annotation
 
     class RunsParams(BaseModel):
-        runs: list[Raw | Referenced[centre]]  # type: ignore[valid-type]
+        runs: list[RunFile | Referenced[centre]]  # type: ignore[valid-type]
 
     spec: Spec = WorkflowSpec(
         name='runs',

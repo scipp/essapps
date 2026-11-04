@@ -30,7 +30,7 @@ from .binding import (
     StageCall,
     function_binding,
 )
-from .parameters import File, Referenced
+from .parameters import File, MaskFile, Referenced, RunFile
 from .refs import AccumulatorRef, FileRef, OutputRef, Ref
 
 __all__ = [
@@ -41,10 +41,12 @@ __all__ = [
     'DriverBinding',
     'File',
     'FileRef',
+    'MaskFile',
     'NoParams',
     'OutputRef',
     'Ref',
     'Referenced',
+    'RunFile',
     'SerializedWorkflowSpec',
     'StageBinding',
     'StageCall',

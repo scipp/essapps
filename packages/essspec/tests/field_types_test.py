@@ -8,7 +8,7 @@ import pytest
 import scipp as sc
 from pydantic import BaseModel, Field, Strict
 
-from ess.spec import File, Referenced
+from ess.spec import File, MaskFile, Referenced, RunFile
 from ess.spec.field_types import (
     alternatives,
     arguments,
@@ -34,8 +34,6 @@ from ess.spec.field_types import (
     value_type,
 )
 from ess.spec.parameters import REFERENCED
-
-RunFile = Annotated[Path, File()]
 
 
 class Parts(BaseModel, arbitrary_types_allowed=True):
@@ -156,7 +154,7 @@ def test_a_file_parameter_is_a_file_field_or_none_or_a_list_of_one() -> None:
         run: RunFile
         mask: MaskFile | None = None
         runs: list[RunFile] = []
-        masks: list[Annotated[Path, File(kind='mask')]] = Field([], min_length=0)
+        masks: list[MaskFile] = Field([], min_length=0)
         parts: Parts | None = None
 
     fields = P.model_fields
@@ -276,9 +274,6 @@ def test_fits(data: Any, field: Any) -> None:
 )
 def test_does_not_fit(data: Any, field: Any) -> None:
     assert not fits(data, field)
-
-
-MaskFile = Annotated[Path, File(kind='mask')]
 
 
 class Mask(BaseModel, arbitrary_types_allowed=True):
