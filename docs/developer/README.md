@@ -118,7 +118,7 @@ A spec has two pydantic models:
 | outputs | results | (none) | the data the workflow returns |
 
 ```python
-from ess.spec import RunFile                      # types a file field: the file of a run, raw
+from ess.spec import BackgroundRunFile, SampleRunFile  # types of file fields: a run's raw file, by its role
 
 class Reduction(BaseModel):                       # a group of scalars
     bins: int = 100
@@ -136,8 +136,8 @@ class IofQSettings(BaseModel):                    # the parameters that all runs
     transmission: Referenced[ComputedTransmission]  # a reference to an output
 
 class IofQParams(IofQSettings):
-    sample: RunFile                               # the sample run
-    can: RunFile                                  # the empty-can run
+    sample: SampleRunFile                         # the sample run
+    can: BackgroundRunFile                        # the empty-can run
 
 class IofQ(BaseModel, arbitrary_types_allowed=True):  # a group, so another workflow takes it, Referenced[IofQ]
     intensity: sc.DataArray
@@ -234,16 +234,26 @@ transmission: sc.DataArray                        # refused by WorkflowSpec: not
 ```
 
 **Files.** A field, at any depth, takes a file when it is a *file field*, typed `Annotated[Path, File(**metadata)]`.
-The marker `ess.spec.File` holds the metadata that a fitting file has, so that a picker offers only files of its kind; `kind` is `'raw'` unless given.
-`ess.spec` provides the types of the common kinds, so that each kind is spelled once; a spec writes another kind by hand:
+The marker `ess.spec.File` holds the metadata that a fitting file has, so that a picker offers only files of its kind and role.
+A marker names two keys:
+
+- `kind`, what the file holds: `'raw'`, the file of a run, or another kind, such as `'mask'`. It is `'raw'` unless given.
+- `role`, what a run was measured as: the run types of `ess.reduce` and of the technique packages in snake case, such as `'sample'`, `'background'` (a SANS can), `'transmission'`, `'empty_beam'`, `'vanadium'`, or `'reference'`.
+
+`ess.spec` provides the types of the common kinds and roles, so that each value is spelled once; a spec writes others by hand:
 
 ```python
-from ess.spec import MaskFile, RunFile            # RunFile: a raw file; MaskFile: a pixel mask, as XML
-
-CalibrationFile = Annotated[Path, File(kind='calibration')]
+RunFile = Annotated[Path, File()]                         # a raw file, a run of any role
+SampleRunFile = Annotated[Path, File(role='sample')]      # also BackgroundRunFile, TransmissionRunFile, EmptyBeamRunFile, VanadiumRunFile
+MaskFile = Annotated[Path, File(kind='mask')]             # a pixel mask, as XML
+CalibrationFile = Annotated[Path, File(kind='calibration')]  # another kind, by hand
 
 mask: MaskFile | None = None                      # a file of kind 'mask', or None
 ```
+
+A file whose role differs from the marker's is refused, as one of another kind is.
+A field that takes a run of any role, or a run whose role the file source does not know, is typed `RunFile`.
+A run tagged with the wrong role is corrected in the file source (see File source).
 
 A request writes a file as `file(...)`, such as `file(run=611)` or `file(path=...)`.
 The backend resolves it to the file's identity when the request is submitted, given the marker.
@@ -284,7 +294,7 @@ A UI generated from the params schema shows one widget per type, at any depth ([
 | `X \| None` | a choice of the ways of `X` and "None" |
 
 No type in the params or the outputs is a `NewType`, at any depth: a class says what a value is.
-A sample run and a can run are both raw files, both typed `RunFile`, and the binding sets each at a key of its own, given by `keys=`.
+A sample run and a can run are raw files of two roles, typed `SampleRunFile` and `BackgroundRunFile`; the binding gets a `Path` for each, and sets each at a key of its own, given by `keys=`.
 `NewType`s, and other sciline keys such as esssans' `Filename[SampleRun]`, live in the workflow package and in the binding (see What a binding provides), never in the spec.
 
 **Unions.** A field, at any depth, may be a discriminated union of groups, `Annotated[A | B, Field(discriminator='kind')]`, in which each alternative has the *tag* field `kind`, typed as a `Literal` of one string, its own, such as `Literal['find']`.
@@ -538,6 +548,7 @@ A file and a reference to an output differ in where they may be and when they ar
 | an output `sc.DataArray` | `Referenced[ComputedTransmission]` | no: a reference stands for a group, so the workflow outputs `ComputedTransmission` |
 | a raw file | `RunFile`, the type of a file field of kind `'raw'` | yes |
 | a raw file | `MaskFile`, the type of a file field of kind `'mask'` | no |
+| a raw file of role `'background'` | `SampleRunFile`, the type of a file field of kind `'raw'` and role `'sample'` | no |
 
 ## Labels and members
 
@@ -673,6 +684,7 @@ A client sees only the files its proposal may read.
 A *selector* picks files by metadata.
 It matches raw files unless it names another kind, such as calibration.
 A file *fits* a file field when the selector of its marker's metadata, `Selector(**File(kind='mask').metadata)`, matches it, so a form lists for a file field only the files that the backend accepts there.
+The backend, its rules, and the forms know a file's metadata only from the file source, so a source that corrects them, such as the role of a run tagged wrongly, corrects them for all three.
 
 ```python
 samples = client.files.list(Selector(role='sample'))          # files, usable as values
@@ -693,8 +705,8 @@ Its params model shares the other parameters, `reduction`, `beam_centre`, and `t
 
 ```python
 class IofQMultiParams(IofQSettings):
-    sample: list[RunFile] = Field(min_length=1)
-    can: list[RunFile] = Field(min_length=1)
+    sample: list[SampleRunFile] = Field(min_length=1)
+    can: list[BackgroundRunFile] = Field(min_length=1)
 
 IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title='I(Q) of summed runs', description='...',
                           params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
@@ -1114,7 +1126,7 @@ The template's fixed values give the other parameters, the same for each file.
 `apply` returns the requests keyed by the value of a metadata field (`member_field`):
 
 ```python
-empty_beams = Lookup({'empty_beam': LastBefore(Selector(role='empty-beam'))})
+empty_beams = Lookup({'empty_beam': LastBefore(Selector(role='empty_beam'))})
 requests = apply(Template(TRANSMISSION, blanks=('run', 'empty_beam')), runs, client.files,
                  at='run', member_field='sample', lookup=empty_beams)
 client.submit(requests, label='transmission', persist=True)

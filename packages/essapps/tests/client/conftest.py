@@ -24,6 +24,7 @@ from .toys import (
     LOAD,
     LOKI_MASKED,
     NOTHING,
+    SAMPLE_RUN,
     SCALE,
     SHIFT,
     SIDES,
@@ -56,6 +57,7 @@ from .toys import (
     load_request,
     load_run,
     read_mask,
+    read_sample,
     scale,
     shift,
     split,
@@ -131,6 +133,7 @@ def bindings(
         function_binding(SPLIT, split),
         kept_rows(SPLIT_TOTAL, split_total),
         function_binding(LOKI_MASKED, read_mask),
+        function_binding(SAMPLE_RUN, read_sample),
         StagedFunction(TERMS, terms),
         kept_rows(TERMS_ROWS, terms),
     ]

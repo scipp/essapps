@@ -38,7 +38,9 @@ class Selector:
     Which files to take: those whose metadata has the given values.
 
     A file has a kind, such as raw, derived, mask, or calibration; a
-    selector matches raw files unless it names another kind.
+    selector matches raw files unless it names another kind. A run has a
+    role, such as sample or background (see :class:`~ess.spec.File` for
+    the keys and their values).
     """
 
     def __init__(self, kind: str = 'raw', **fields: Any) -> None:
@@ -69,6 +71,12 @@ class FileSource(Protocol):
     answers through it the queries of its clients: listing files, waiting
     for new ones, and reading their metadata. A client sees only the files
     its proposal may read. Tests use a fake (``testing.FakeFiles``).
+
+    The backend, its rules, and the forms tell which files fit a field or a
+    selector only by the metadata the source gives, in :meth:`metadata`,
+    :meth:`list`, and :meth:`watch`. A source that corrects the metadata of
+    a file, such as the role of a run tagged wrongly, corrects them in all
+    three, so that every one of them sees the file as corrected.
     """
 
     def resolve(self, name: FileRef) -> FileRef:

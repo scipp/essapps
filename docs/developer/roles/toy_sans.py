@@ -23,10 +23,11 @@ a reference to an output fills it.
 
 By convention a parameter is a group, a union of groups, a file field, or a list
 of one. A ``PipelineBinding`` keys a group by its class. A parameter that takes a
-file is a file field, typed ``RunFile``, which holds the file's local path, and a
-request writes it as ``file(...)``. The binding sets each file parameter at the
-workflow's own key, ``Filename[SampleRun]`` or ``Filename[BackgroundRun]``, with
-``keys=``, as esssans does, so that a provider takes a plain path.
+file is a file field, typed by the role of the run, such as ``SampleRunFile``,
+which holds the file's local path, and a request writes it as ``file(...)``. The
+binding sets each file parameter at the workflow's own key, ``Filename[SampleRun]``
+or ``Filename[BackgroundRun]``, with ``keys=``, as esssans does, so that a provider
+takes a plain path.
 The sample and the can are separate parameters, not fields of one group: a
 stage that leaves the sample blank computes the can's branch once.
 
@@ -46,9 +47,12 @@ import scipp as sc
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ess.spec import (
+    BackgroundRunFile,
     DriverBinding,
     Referenced,
     RunFile,
+    SampleRunFile,
+    TransmissionRunFile,
     WorkflowSpec,
     function_binding,
 )
@@ -105,13 +109,13 @@ class IofQSettings(BaseModel):
 
 
 class IofQParams(IofQSettings):
-    sample: RunFile
-    can: RunFile
+    sample: SampleRunFile
+    can: BackgroundRunFile
 
 
 class IofQMultiParams(IofQSettings):
-    sample: list[RunFile] = Field(min_length=1)
-    can: list[RunFile] = Field(min_length=1)
+    sample: list[SampleRunFile] = Field(min_length=1)
+    can: list[BackgroundRunFile] = Field(min_length=1)
 
 
 class IofQOutputs(BaseModel):
@@ -158,7 +162,7 @@ FORWARD = WorkflowSpec(
 
 
 class FindCentreParams(BaseModel):
-    sample: RunFile
+    sample: SampleRunFile
 
 
 class FindCentreOutputs(BaseModel):
@@ -176,7 +180,7 @@ FIND_CENTRE = WorkflowSpec(
 
 
 class TransmissionParams(BaseModel):
-    run: RunFile
+    run: TransmissionRunFile
 
 
 class TransmissionOutputs(BaseModel):

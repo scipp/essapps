@@ -5,10 +5,10 @@ Shared vocabulary of workflow parameter models.
 
 Common building blocks for workflow params models: the markers of a field
 that a file fills and of a field that a reference fills, the types of file
-fields of common kinds, constrained unit choices, and range/edges models with
-cross-field validation. Purely declarative — no scipp; converting validated
-values into scipp objects is the workflow implementation's concern (see
-:mod:`ess.spec.conversions`).
+fields of common kinds and roles, constrained unit choices, and range/edges
+models with cross-field validation. Purely declarative — no scipp; converting
+validated values into scipp objects is the workflow implementation's concern
+(see :mod:`ess.spec.conversions`).
 
 Value defaults (start, stop, number of bins) are deliberately not provided
 here: sensible values depend on the workflow and instrument, so workflow
@@ -52,14 +52,28 @@ class File:
     ``Annotated[Path, File(**metadata)]``; it holds the metadata that a file
     must have to fill the field, each a string, a number, or a bool. A file
     fits the field if its metadata have each key and value of the marker's
-    :attr:`metadata`; ``kind`` is ``'raw'`` unless given. This module types
-    the file fields of common kinds, :data:`RunFile` and :data:`MaskFile`,
-    so that each kind is spelled once; a file field of other metadata is
-    typed where it is used::
+    :attr:`metadata`; ``kind`` is ``'raw'`` unless given. The file source
+    defines the metadata of a file; a marker names these keys:
+
+    - ``kind``, what the file holds: ``'raw'``, the file of a run, or
+      another kind, such as ``'mask'`` or ``'calibration'``.
+    - ``role``, what a run was measured as: the run types of ``ess.reduce``
+      and of the technique packages in snake case, such as ``'sample'``,
+      ``'background'``, ``'transmission'``, ``'empty_beam'``,
+      ``'vanadium'``, or ``'reference'``. A SANS can is a background run.
+
+    This module types the file fields of common kinds and roles, such as
+    :data:`RunFile`, :data:`SampleRunFile`, and :data:`MaskFile`, so that
+    each value is spelled once; a file field of other metadata is typed
+    where it is used::
 
         class IofQParams(BaseModel):
-            sample: RunFile
+            sample: SampleRunFile
+            can: BackgroundRunFile
             mask: MaskFile | None = None
+
+    A field that takes a run of any role, or a run whose role the file
+    source does not know, is typed :data:`RunFile`.
 
     pydantic, a type checker, and the binding see ``Path``: the params model
     holds the local path of the file. A request writes a file as
@@ -260,7 +274,25 @@ The rules are stated in :mod:`ess.spec._workflow_spec`.
 """
 
 RunFile = Annotated[Path, File()]
-"""Types a file field that the raw file of a run fills."""
+"""Types a file field that the raw file of a run of any role fills."""
+
+SampleRunFile = Annotated[Path, File(role='sample')]
+"""Types a file field that the raw file of a sample run fills."""
+
+BackgroundRunFile = Annotated[Path, File(role='background')]
+"""
+Types a file field that the raw file of a background run, such as a SANS can,
+fills.
+"""
+
+TransmissionRunFile = Annotated[Path, File(role='transmission')]
+"""Types a file field that the raw file of a transmission run fills."""
+
+EmptyBeamRunFile = Annotated[Path, File(role='empty_beam')]
+"""Types a file field that the raw file of an empty-beam run fills."""
+
+VanadiumRunFile = Annotated[Path, File(role='vanadium')]
+"""Types a file field that the raw file of a vanadium run fills."""
 
 MaskFile = Annotated[Path, File(kind='mask')]
 """Types a file field that a mask fills."""

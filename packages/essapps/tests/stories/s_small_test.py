@@ -109,14 +109,14 @@ def test_s5_sum_runs(client: Client, measure: toys.Measure) -> None:
 def test_s7_reduce_each_sample_with_the_can_measured_before_it(
     client: Client, measure: toys.Measure
 ) -> None:
-    can_1 = measure(1, [1.0, 1.0], role='can')
+    can_1 = measure(1, [1.0, 1.0], role='background')
     first = measure(2, [5.0, 6.0], role='sample')
-    can_3 = measure(3, [2.0, 2.0], role='can')
+    can_3 = measure(3, [2.0, 2.0], role='background')
     second = measure(4, [6.0, 9.0], role='sample')
     template = Template(
         toys.IOFQ_CAN, params={'normalization': None}, blanks=('sample', 'can')
     )
-    cans = Lookup({'can': LastBefore(Selector(role='can'))})
+    cans = Lookup({'can': LastBefore(Selector(role='background'))})
 
     requests = apply(
         template,

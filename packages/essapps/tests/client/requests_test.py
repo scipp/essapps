@@ -17,6 +17,7 @@ from ess.apps import (
     Client,
     FieldError,
     Request,
+    Selector,
     SpecId,
     SubmitError,
     Template,
@@ -201,6 +202,23 @@ def test_a_file_fits_a_file_field_by_each_key_of_its_metadata(
         client.submit(toys.LOKI_MASKED, params={'mask': file(run=1)})  # a raw file
     masked = client.compute(toys.LOKI_MASKED, params={'mask': file(run=6)})
     assert client.output(masked, 'value') == toys.Amount(value=6.0)
+
+
+def test_a_run_whose_role_the_file_source_corrects_fits_as_corrected(
+    client: Client, files: FakeFiles
+) -> None:
+    run = files.measure(5, 5.0, role='background')  # tagged wrongly
+    samples = Selector(role='sample')  # as a picker of the field lists files
+
+    with pytest.raises(SubmitError, match=r'^sample: file run:5 does not fit'):
+        client.submit(toys.SAMPLE_RUN, params={'sample': file(run=5)})
+    assert client.files.list(samples) == []
+
+    files.correct(run, role='sample')
+
+    assert client.files.list(samples) == [run]
+    record = client.compute(toys.SAMPLE_RUN, params={'sample': file(run=5)})
+    assert client.output(record, 'value') == toys.Amount(value=5.0)
 
 
 def test_a_path_names_the_file_at_that_path(client: Client, files: FakeFiles) -> None:
