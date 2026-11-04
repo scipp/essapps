@@ -28,7 +28,7 @@ of the params. The request type is the params type with each
     # Sample.transmission:                   transmission: OutputRef
     #     Referenced[Transmission]                         | AccumulatorRef
 
-with ``RunFile = Annotated[Path, File()]``, a file field (see
+with ``RunFile`` from :mod:`ess.spec`, a file field (see
 :class:`~ess.spec.parameters.File`).
 
 The request type of a field is the union of the *sources* that the field

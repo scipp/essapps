@@ -5,7 +5,7 @@
 import re
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field
@@ -25,26 +25,11 @@ from ess.apps import (
 )
 from ess.apps.batch import try_apply
 from ess.apps.testing import FakeFiles, FakeStore, read_file
-from ess.spec import File, WorkflowSpec, function_binding
-
-SampleRun = Annotated[Path, File()]
-"""A run of a sample."""
-
-
-CanRun = Annotated[Path, File()]
-"""A run of the empty can, subtracted from a sample run."""
-
-
-ReferenceRun = Annotated[Path, File()]
-"""A run of a reference, which a sample run is divided by."""
-
-
-MaskFile = Annotated[Path, File(kind='mask')]
-"""A mask, which takes mask files only."""
+from ess.spec import MaskFile, RunFile, WorkflowSpec, function_binding
 
 
 class LoadParams(BaseModel):
-    sample: SampleRun
+    sample: RunFile
 
 
 class LoadMaskParams(BaseModel):
@@ -52,17 +37,17 @@ class LoadMaskParams(BaseModel):
 
 
 class SubtractParams(BaseModel):
-    sample: SampleRun
-    can: CanRun
+    sample: RunFile
+    can: RunFile
 
 
 class NormalizeParams(BaseModel):
-    sample: SampleRun
-    reference: ReferenceRun
+    sample: RunFile
+    reference: RunFile
 
 
 class SumRunsParams(BaseModel):
-    runs: list[SampleRun] = Field(min_length=1)
+    runs: list[RunFile] = Field(min_length=1)
 
 
 class Scale(BaseModel):
@@ -70,7 +55,7 @@ class Scale(BaseModel):
 
 
 class ScaleParams(BaseModel):
-    sample: SampleRun
+    sample: RunFile
     scale: Scale = Field(default_factory=Scale)
 
 

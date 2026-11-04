@@ -26,9 +26,9 @@ from ess.apps import (
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
 from ess.spec import (
     DriverBinding,
-    File,
     NoParams,
     Referenced,
+    RunFile,
     StageCall,
     WorkflowSpec,
     function_binding,
@@ -41,9 +41,6 @@ class Amount(BaseModel):
 
 class Factor(BaseModel):
     factor: float = 1.0
-
-
-RunFile = Annotated[Path, File()]
 
 
 class ScaleParams(BaseModel):

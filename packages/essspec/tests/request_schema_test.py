@@ -13,11 +13,9 @@ import pytest
 from annotated_types import Gt
 from pydantic import BaseModel, Field, TypeAdapter
 
-from ess.spec import File, FileRef, Referenced, WorkflowSpec
+from ess.spec import File, FileRef, Referenced, RunFile, WorkflowSpec
 from ess.spec.refs import ParamsError
 from ess.spec.request_types import held
-
-RunFile = Annotated[Path, File()]
 
 
 class Reduction(BaseModel):

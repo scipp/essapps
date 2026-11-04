@@ -28,9 +28,11 @@ from ess.spec import (
     AccumulatorRef,
     File,
     FileRef,
+    MaskFile,
     NoParams,
     OutputRef,
     Referenced,
+    RunFile,
     SerializedWorkflowSpec,
     WorkflowSpec,
 )
@@ -54,14 +56,6 @@ class SampleGeometry(BaseModel):
 class TimeRange(BaseModel):
     start: float
     stop: float
-
-
-RunFile = Annotated[Path, File(kind='raw')]
-MaskFile = Annotated[Path, File(kind='mask')]
-GeometryFile = Annotated[Path, File()]
-"""A file field without metadata: it takes raw files."""
-SampleRun = Annotated[Path, File(kind='raw')]
-CanRun = Annotated[Path, File(kind='raw')]
 
 
 class ByMonitor(BaseModel):
@@ -223,8 +217,8 @@ class IofQSettings(BaseModel):
 
 
 class IofQParams(IofQSettings):
-    sample: SampleRun = Field(title='Sample run')
-    can: CanRun
+    sample: RunFile = Field(title='Sample run')
+    can: RunFile
 
     @model_validator(mode='after')
     def _sample_is_not_the_can(self) -> 'IofQParams':
@@ -234,8 +228,8 @@ class IofQParams(IofQSettings):
 
 
 class IofQMultiParams(IofQSettings):
-    sample: list[SampleRun] = Field(min_length=1, title='Sample run')
-    can: list[CanRun] = Field(min_length=1)
+    sample: list[RunFile] = Field(min_length=1, title='Sample run')
+    can: list[RunFile] = Field(min_length=1)
 
 
 class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
@@ -319,7 +313,7 @@ FILES = spec(
     params=model(
         'P',
         mask=(MaskFile | None, None),
-        geometry=(GeometryFile, ...),
+        geometry=(RunFile, ...),
         runs=(list[RunFile], Field(min_length=1)),
     ),
     tables=('runs',),
@@ -476,10 +470,10 @@ class TestModelRules:
                 )
             },
             {'params': model('P', reduction=(Reduction, Reduction(bins=3)))},
-            {'params': model('P', runs=(list[SampleRun], []))},
+            {'params': model('P', runs=(list[RunFile], []))},
             {'params': model('P', mask=(MaskFile | None, None))},
             {'params': model('P', parts=(BaseModel, ...))},
-            {'params': model('P', a=(SampleRun, ...), b=(list[CanRun], []))},
+            {'params': model('P', a=(RunFile, ...), b=(list[RunFile], []))},
             {'params': model('P', steps=(list[TimeRange], Field(min_length=2)))},
             {
                 'params': model(
@@ -1181,7 +1175,7 @@ class TestModelRules:
                 )
             ),
             (
-                {'params': model('P', run=(SampleRun | MaskFile, ...))},
+                {'params': model('P', run=(RunFile | MaskFile, ...))},
                 'P.run: a field takes one kind of file',
             ),
             *(
@@ -1227,7 +1221,7 @@ class TestModelRules:
                     (
                         {
                             'g': (
-                                model('G', h=(model('H', run=(SampleRun, ...)), ...)),
+                                model('G', h=(model('H', run=(RunFile, ...)), ...)),
                                 ...,
                             )
                         },
@@ -1435,11 +1429,11 @@ class TestModelRules:
                 f'P.steps: {NOT_A_VALUE}: steps: Input should be a valid array',
             ),
             (
-                {'params': model('P', runs=(list[list[SampleRun]], []))},
+                {'params': model('P', runs=(list[list[RunFile]], []))},
                 f'P.runs: {LIST_OF_LISTS}',
             ),
             (
-                {'params': model('P', runs=(list[SampleRun] | None, None))},
+                {'params': model('P', runs=(list[RunFile] | None, None))},
                 f'P.runs: {OPTIONAL_LIST}',
             ),
             (
@@ -1447,15 +1441,15 @@ class TestModelRules:
                 not_a_field_type('P.runs', 'list'),
             ),
             (
-                {'params': model('P', sample=(SampleRun, Path('run.nxs')))},
+                {'params': model('P', sample=(RunFile, Path('run.nxs')))},
                 f'P.sample: {NOT_A_VALUE}: sample: {NO_FILE_DEFAULT}',
             ),
             (
-                {'params': model('P', sample=(SampleRun, FileRef(file='run:1')))},
+                {'params': model('P', sample=(RunFile, FileRef(file='run:1')))},
                 f'P.sample: {NOT_A_VALUE}: sample: {NO_FILE_DEFAULT}',
             ),
             (
-                {'params': model('P', runs=(list[SampleRun], [Path('run.nxs')]))},
+                {'params': model('P', runs=(list[RunFile], [Path('run.nxs')]))},
                 rf'P.runs: {NOT_A_VALUE}: runs\[0\]: {NO_FILE_DEFAULT}',
             ),
             (
@@ -1519,7 +1513,7 @@ class TestModelRules:
         params = model(
             'P',
             centre=(sc.Variable, sc.scalar(1.0)),
-            sample=(SampleRun, Path('a')),
+            sample=(RunFile, Path('a')),
         )
         with pytest.raises(ValueError, match=r'P\.centre: .*; P\.sample: '):
             spec(params=params)
@@ -1568,16 +1562,16 @@ class TestFields:
             float | None,
             Mode | None,
             Literal['a', 'b'] | None,
-            SampleRun,
-            SampleRun | None,
-            list[SampleRun],
+            RunFile,
+            RunFile | None,
+            list[RunFile],
             Reduction,
             Reduction | None,
             list[Reduction],
             By,
             By | None,
             list[By],
-            model('Inner', group=(Reduction, ...), runs=(list[SampleRun], [])),
+            model('Inner', group=(Reduction, ...), runs=(list[RunFile], [])),
             Referenced[Reduction],
             Referenced[Reduction] | None,
             list[Referenced[Reduction]],
@@ -1598,8 +1592,8 @@ class TestFields:
             (list[Reduction], []),
             (Mode, Mode.fast),
             (float | None, None),
-            (SampleRun | None, None),
-            (list[SampleRun], []),
+            (RunFile | None, None),
+            (list[RunFile], []),
             (Referenced[Reduction] | None, None),
         ],
     )
@@ -1615,9 +1609,9 @@ class TestFields:
                 {'bins': 3},
                 r"the default {'bins': 3} is not the value validating it gives",
             ),
-            (SampleRun | None, Path('run.nxs'), NO_FILE_DEFAULT),
-            (SampleRun | None, FileRef(file='run:1'), NO_FILE_DEFAULT),
-            (list[SampleRun], [Path('run.nxs')], NO_FILE_DEFAULT),
+            (RunFile | None, Path('run.nxs'), NO_FILE_DEFAULT),
+            (RunFile | None, FileRef(file='run:1'), NO_FILE_DEFAULT),
+            (list[RunFile], [Path('run.nxs')], NO_FILE_DEFAULT),
             (
                 Referenced[Reduction],
                 Reduction(),
@@ -1713,7 +1707,7 @@ class TestFields:
 class TestTables:
     def test_a_spec_may_declare_tables_of_its_list_fields(self) -> None:
         stitch = spec(
-            params=model('P', sample=(list[SampleRun], Field(min_length=1))),
+            params=model('P', sample=(list[RunFile], Field(min_length=1))),
             outputs=model(
                 'O', iofq=(sc.DataArray, ...), runs=(list[sc.DataArray], ...)
             ),
@@ -1722,12 +1716,12 @@ class TestTables:
         assert stitch.tables == ('sample',)
 
     def test_a_list_field_is_a_table_only_where_tables_names_it(self) -> None:
-        listing = spec(params=model('P', sample=(list[SampleRun], ...)))
+        listing = spec(params=model('P', sample=(list[RunFile], ...)))
         assert listing.tables == ()
 
     def test_a_table_is_any_list_parameter(self) -> None:
         params = model(
-            'P', sample=(list[SampleRun], ...), reduction=(list[Reduction], ...)
+            'P', sample=(list[RunFile], ...), reduction=(list[Reduction], ...)
         )
         assert spec(params=params, tables=['sample', 'reduction']).tables == (
             'sample',
@@ -1738,7 +1732,7 @@ class TestTables:
         ('params', 'tables', 'reason'),
         [
             (
-                {'sample': (SampleRun, ...)},
+                {'sample': (RunFile, ...)},
                 ['sample'],
                 'sample: a table is a list parameter',
             ),
@@ -1780,8 +1774,8 @@ class TestTables:
 
         params = model(
             'P',
-            sample=(list[Annotated[SampleRun, AfterValidator(known)]], ...),
-            can=(list[Annotated[CanRun, AfterValidator(known)]], ...),
+            sample=(list[Annotated[RunFile, AfterValidator(known)]], ...),
+            can=(list[Annotated[RunFile, AfterValidator(known)]], ...),
         )
         runs = spec(params=params, tables=('sample', 'can'))
         known_rows = {'sample': [Path('run.nxs')], 'can': [Path('run.nxs')]}
@@ -1946,7 +1940,7 @@ class TestSerialization:
     def test_a_file_field_in_a_group_is_a_reference_to_a_file(self) -> None:
         group = model(
             'G',
-            run=(SampleRun, ...),
+            run=(RunFile, ...),
             masks=(list[MaskFile], []),
             thickness=(float, 1.0),
         )
@@ -2151,7 +2145,7 @@ class TestSerialization:
             settings=(Reduction, Reduction()),
             by=(By, ...),
             gate=(Annotated[ByMonitor | ByWindow, Field(discriminator='mode')], ...),
-            sample=(SampleRun, ...),
+            sample=(RunFile, ...),
             ranges=(list[TimeRange | Referenced[TimeRange]], []),
         )
         schema = spec(params=params).serialize().params_schema

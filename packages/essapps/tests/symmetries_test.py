@@ -16,7 +16,7 @@ dividing.
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Annotated, Any, NewType
+from typing import Any, NewType
 
 import numpy as np
 import pytest
@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ess.apps import Client, SubmitError, Template, file, local
 from ess.apps.testing import FakeFiles, read_file
-from ess.spec import DriverBinding, File, WorkflowSpec
+from ess.spec import DriverBinding, RunFile, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
 
 SampleNumerator = NewType('SampleNumerator', np.ndarray)
@@ -37,7 +37,6 @@ CanDenominator = NewType('CanDenominator', float)
 IofQ = NewType('IofQ', sc.Variable)
 
 
-RunFile = Annotated[Path, File()]
 SampleFilename = NewType('SampleFilename', Path)
 CanFilename = NewType('CanFilename', Path)
 

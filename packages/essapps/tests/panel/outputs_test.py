@@ -10,7 +10,6 @@ scale of 0 fails it. ``SCALE`` reads the curve.
 import threading
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Annotated
 
 import panel as pn
 import pytest
@@ -21,10 +20,13 @@ from ess.apps import Client, Record, Status, local
 from ess.apps.panel import App, Listing, Outputs, Records
 from ess.apps.panel.records import describe
 from ess.apps.testing import FakeFiles, read_file
-from ess.spec import File, FileRef, Referenced, WorkflowSpec, function_binding
-
-Run = Annotated[Path, File()]
-"""A raw run."""
+from ess.spec import (
+    FileRef,
+    Referenced,
+    RunFile,
+    WorkflowSpec,
+    function_binding,
+)
 
 
 class Settings(BaseModel):
@@ -58,7 +60,7 @@ class Total(BaseModel):
 
 
 class CurveParams(BaseModel):
-    run: Run
+    run: RunFile
     settings: Settings = Field(default_factory=Settings)
 
 

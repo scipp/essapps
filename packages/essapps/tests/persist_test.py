@@ -9,7 +9,7 @@ import uuid
 import weakref
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field
@@ -35,7 +35,13 @@ from ess.apps.testing import (
     kept_rows,
     read_file,
 )
-from ess.spec import Binding, File, Referenced, WorkflowSpec, function_binding
+from ess.spec import (
+    Binding,
+    Referenced,
+    RunFile,
+    WorkflowSpec,
+    function_binding,
+)
 
 
 class Amount(BaseModel):
@@ -47,16 +53,13 @@ class Amount(BaseModel):
     value: float
 
 
-SampleRun = Annotated[Path, File()]
-
-
 class Box:
     def __init__(self, value: float) -> None:
         self.value = value
 
 
 class RunParams(BaseModel):
-    sample: SampleRun
+    sample: RunFile
 
 
 class Loaded(BaseModel):

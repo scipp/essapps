@@ -24,7 +24,7 @@ from ess.apps import (
     local,
 )
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows
-from ess.spec import Binding, function_binding
+from ess.spec import Binding, RunFile, function_binding
 
 from . import toys
 
@@ -99,7 +99,7 @@ def test_a_client_gives_the_specs_the_backend_runs(
 
 def test_a_spec_whose_output_holds_a_file_field_is_refused() -> None:
     class RunOutputs(BaseModel):
-        run: toys.SampleRun
+        run: RunFile
 
     with pytest.raises(ValueError, match='no output holds a file or a Path'):
         toys.make_spec('echo', params=toys.Sample, outputs=RunOutputs)

@@ -15,12 +15,10 @@ import scipp as sc
 from annotated_types import Gt
 from pydantic import BaseModel, Field, computed_field, field_validator
 
-from ess.spec import File, Referenced, WorkflowSpec
+from ess.spec import File, Referenced, RunFile, WorkflowSpec
 
 
 def allowed_spec() -> WorkflowSpec:
-    RunFile = Annotated[Path, File()]
-
     class WavelengthRange(BaseModel):
         start: float
         stop: float
@@ -82,8 +80,6 @@ def allowed_spec() -> WorkflowSpec:
 
 
 def refused_spec() -> WorkflowSpec:
-    RunFile = Annotated[Path, File()]
-
     class WavelengthRange(BaseModel):
         start: float
         stop: float

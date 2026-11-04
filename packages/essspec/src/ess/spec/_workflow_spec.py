@@ -10,7 +10,7 @@ The other modules of ``ess.spec`` and ``ess.apps`` apply them and link here.
 
 A spec of an I(Q) reduction, with each kind of field once::
 
-    RunFile = Annotated[Path, File()]         # types a file field: a raw file
+    from ess.spec import RunFile              # types a file field: a raw file
 
     class WavelengthRange(BaseModel):         # a group
         start: float                          # a scalar
@@ -596,8 +596,8 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     file is the ``@ref`` object of a file, with the marker's metadata under
     ``metadata``, which say which files fit. The schemas of the parameter
     ``reduction``, a parameter ``centre`` typed ``BeamCentre |
-    Referenced[BeamCentre]``, a file field ``mask`` typed ``MaskFile =
-    Annotated[Path, File(kind='mask')]``, the definition of a
+    Referenced[BeamCentre]``, a file field ``mask`` typed ``MaskFile``,
+    the definition of a
     file, and the field ``Reduction.bins``::
 
         "reduction": {"$ref": "#/$defs/Reduction", ...}
