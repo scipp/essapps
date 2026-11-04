@@ -32,7 +32,7 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `SLICES` | `sample: RunFile`, `time_range: list[TimeRange \| Referenced[TimeRange]]`, a table | `sliced` | the sample's counts in each time range, summed | a reduction of one run sliced in time |
 | `CENTRED_MULTI` | `centre: BeamCentre \| Referenced[BeamCentre]`; `transmission: Referenced[Transmission]`; `sample: list[RunFile]`, a table; `can: list[RunFile]`, a table | `centred` | the sample runs' counts summed, times `transmission.fraction`; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and the transmission of the summed runs |
 
-The type of a field says how a request gives the value there, at any depth; the spec types each field that a reference to an output fills `Referenced[T]` (README.md, Terms, and Specs and bindings, which also has the row for a union of groups):
+The type of a field says how a request gives the value there, at any depth; the spec types each field that a reference to an output fills `Referenced[T]` ([params.md](../../packages/essspec/docs/params.md#what-a-field-may-be)):
 
 | Type | In the toy specs | Given as |
 |---|---|---|
@@ -193,7 +193,7 @@ assert client.output(result, 'subtracted').values.tolist() == [1.0, 4.0]  # [2, 
 assert result.request.files() == runs + backgrounds
 ```
 
-This is a plain request over tables (README.md, "Combining runs: tables"): `NORMALIZE` takes one table of runs, and `BACKGROUND` two, as `IOFQ_MULTI` does. B2 sums with an accumulator.
+This is a plain request over tables ([params.md, Tables](../../packages/essspec/docs/params.md#tables-several-runs)): `NORMALIZE` takes one table of runs, and `BACKGROUND` two, as `IOFQ_MULTI` does. B2 sums with an accumulator.
 
 ### S7. Reduce each sample with the can measured before it
 
@@ -325,7 +325,7 @@ assert client.records() == [again]
 
 Reading the accumulator makes no record: `first` and `added` are copies, which the next push leaves unchanged.
 The provenance of `total` is that of the plain request over its three rows.
-An accumulator has no `remove` (README.md open question 2), so the user starts over with the plain request over the runs to keep (README.md, "Stages and accumulators").
+An accumulator has no `remove` (README.md open question 2), so the user starts over with the plain request over the runs to keep ([accumulators.md](accumulators.md)).
 That adding 613 costs about one run is system story B2.
 
 ### B4. Explore a 4D volume
@@ -394,7 +394,7 @@ assert client.records() == [result]              # the vanadium record is on the
 ```
 
 Provenance stops at the published file, since what lies behind a file belongs to its source. How the backend reads the published output is system story C2.
-The published normalization is a file of its factor. `IOFQ`'s `normalization` takes it as a file, `RunFile`, or the output of `VANADIUM` by reference, `Referenced[ComputedNormalization]`: one field takes either way (README.md, Specs and bindings). The binding reads the factor from the file.
+The published normalization is a file of its factor. `IOFQ`'s `normalization` takes it as a file, `RunFile`, or the output of `VANADIUM` by reference, `Referenced[ComputedNormalization]`: one field takes either way ([params.md, Files](../../packages/essspec/docs/params.md#files)). The binding reads the factor from the file.
 A result of another proposal, such as a direct-beam function an instrument scientist prepared for the users of later proposals, is read the same way, never through the other proposal's records (G5).
 
 ### C4. Reflectometry angle series
@@ -412,7 +412,7 @@ assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
 assert set(client.provenance(exported).files()) == {reference, *angles}
 ```
 
-The stitch fits scale factors over all angles at once, so it cannot add one angle at a time. An accumulator over `STITCH` still gives what the plain request gives at each read: its driver keeps the rows and stitches them again at each read (README.md, "What a binding provides").
+The stitch fits scale factors over all angles at once, so it cannot add one angle at a time. An accumulator over `STITCH` still gives what the plain request gives at each read: its driver keeps the rows and stitches them again at each read (the docstring of `Driver` in `ess.spec.binding`).
 
 ### C5. Vanadium and sample tuned together
 
@@ -562,7 +562,7 @@ assert len(client.records(label='scan')) == 6
 
 The first records keep the default of version 1, so the change of default shows in the records.
 
-`before[0]` was persisted at submission, so its output can be read weeks later, until the proposal's history is dropped (README.md, [How long records and values are kept](README.md#how-long-records-and-values-are-kept)).
+`before[0]` was persisted at submission, so its output can be read weeks later, until the proposal's history is dropped ([lifetimes.md](lifetimes.md)).
 
 ### D7. Rotation scan over three hundred angles
 
@@ -626,7 +626,7 @@ assert user.output(latest, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 
 
 Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether a rule pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
 
-The trigger loop persists what it submits, every output by default, so any client of the proposal reads each curve (README.md, [How long records and values are kept](README.md#how-long-records-and-values-are-kept)).
+The trigger loop persists what it submits, every output by default, so any client of the proposal reads each curve ([lifetimes.md](lifetimes.md)).
 
 ### E2. Automatic reduction goes quiet
 

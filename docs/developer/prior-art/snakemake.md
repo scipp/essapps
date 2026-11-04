@@ -8,7 +8,7 @@ One invocation works on one directory, keeps its metadata in a hidden folder the
 A batch is many values of a wildcard; automatic reduction is a cron job that invokes Snakemake again and relies on it to skip what exists.
 
 We looked at it because it has run scientific pipelines on clusters for over a decade, with a public issue tracker and changelog.
-Its graph inference from file names does not apply to us, since a request names its files and data by reference ([README](../README.md#references)); its lessons bear on batch and automatic reduction, failures, and the service (scipp/essapps#24, scipp/essapps#27, scipp/essapps#33).
+Its graph inference from file names does not apply to us, since a request names its files and data by reference ([README](../README.md#requests-and-records)); its lessons bear on batch and automatic reduction, failures, and the service (scipp/essapps#24, scipp/essapps#27, scipp/essapps#33).
 Facts were checked on 2026-10-13 against Snakemake 9.27 (commit [`4523356`](https://github.com/snakemake/snakemake/tree/4523356973a83aa237a121717ee81dd2e09175da)), the sdists of 5.4.0, 7.7.0 and 7.8.0, and the issue tracker.
 
 ## Findings
@@ -63,7 +63,7 @@ Snakemake's three layers (workflow author, site, default from input size) are on
 **Data-dependent fan-out in the scheduler.**
 A checkpoint makes the graph depend on a rule's output: an input function calls `checkpoints.<name>.get()`, which raises `IncompleteCheckpointException` until the checkpoint has run, and Snakemake then evaluates the graph again ([rules.rst](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/docs/snakefiles/rules.rst#L3034-L3068)).
 It works only in input functions, and checkpoint outputs read this way are never temporary.
-For us: a separate reduction for each value found only in the data is a non-goal ([requirements](../../requirements/README.md#non-goals)); a controller that reads a first reduction's outputs and then submits is ordinary code ([README, Controllers](../README.md#controllers)).
+For us: a separate reduction for each value found only in the data is a non-goal ([requirements](../../requirements/README.md#non-goals)); a controller that reads a first reduction's outputs and then submits is ordinary code ([README, Components](../README.md#components)).
 
 **A lock without liveness.**
 Snakemake locks by writing the paths of its inputs and outputs into the metadata folder, and deletes them on exit ([persistence](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/persistence/__init__.py#L478-L511)).

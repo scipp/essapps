@@ -23,14 +23,14 @@ A spike ran esssans through it on LoKI@Larmor data:
 ## Decision
 
 **Runs are combined by an accumulator.**
-A client opens it from a template whose blanks are tables, and each push adds one or more rows to one or more tables (README, [Stages and accumulators](../README.md#stages-and-accumulators)).
+A client opens it from a template whose blanks are tables, and each push adds one or more rows to one or more tables ([accumulators.md](../accumulators.md)).
 State n is the accumulator after n pushes.
 It gives the outputs of the plain request over the first n pushes.
 The `Accumulator` class of sciline and of `StreamProcessor` holds one key and is part of a driver, not an accumulator in this sense.
 
 **The caller chooses how rows arrive, and the workflow package's driver chooses how a state is computed.**
 A *driver* is an object with `push(table, rows)` and `outputs()`, in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245).
-An accumulator exists only over a binding that makes drivers, such as `DriverBinding`, which makes a driver from the template's fixed values and pushes each client push into it (README, [What a binding provides](../README.md#what-a-binding-provides)).
+An accumulator exists only over a binding that makes drivers, such as `DriverBinding`, which makes a driver from the template's fixed values and pushes each client push into it (the docstring of `DriverBinding`).
 The same binding computes a plain request with a driver of its own and one push per table, so both give the same outputs.
 A driver for SANS holds a numerator and a summed monitor per table.
 Its author promises the outputs of the plain request, however the rows were grouped into pushes, as `StreamProcessor` asks its users to promise that the workflow is linear in the inputs that change per chunk.
@@ -115,7 +115,7 @@ iofq.push(sample=[file(run=613), file(run=615)])   # one push, one state
 
 ## Consequences
 
-- A package may also offer a single-run spec, which agrees with the multi-run spec at one row per table (README, [Combining runs: tables](../README.md#combining-runs-tables)). It does not output partial sums, because that would split the reduction into per-run and summing specs again.
+- A package may also offer a single-run spec, which agrees with the multi-run spec at one row per table ([accumulators.md, Symmetries](../accumulators.md#symmetries)). It does not output partial sums, because that would split the reduction into per-run and summing specs again.
 - What a summing driver sums must add over runs, such as a numerator and a denominator, not a normalized curve.
 - A driver keeps each table's contributions apart, or it breaks the order symmetry; `check_arrival_and_order` tests this in the package.
 - A spec bound to a driver has no stage, so a workflow that needs every row at once, such as `STITCH`, chooses between accumulating and tuning over fixed rows.

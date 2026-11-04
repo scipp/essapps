@@ -24,7 +24,7 @@ Values are those the binding receives: data read. Outputs are compared up to
 :func:`assert_close`. :func:`check_one_row` and :func:`check_caching` also
 check that no output shares memory with a value the workflow was given. A
 failed check raises ``AssertionError`` naming the symmetry and the call. The
-symmetries are those of docs/developer/README.md (Symmetries).
+symmetries are those of docs/developer/accumulators.md (Symmetries).
 """
 
 from __future__ import annotations

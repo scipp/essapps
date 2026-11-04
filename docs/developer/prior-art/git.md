@@ -28,8 +28,8 @@ Git's lesson for those: keep one append order per label, or have each record nam
 **A reference names an object, never a name.**
 A submodule's gitlink holds the commit the superproject expects ([gitsubmodules L37-L38][sm]); the branch named in `.gitmodules` is a hint, which `submodule update --remote` follows.
 `main@{yesterday}` reads the local reflog, so it means different things on different machines ([revisions L90-L100][revdate]).
-Here, a name such as `file(run=60339)` is resolved to the file's identity at submission, and the record holds the identity ([Files](../README.md#files)).
-A reference points to an output of one record ([References](../README.md#references)); no reference means "the latest record under a label".
+Here, a name such as `file(run=60339)` is resolved to the file's identity at submission, and the record holds the identity ([Files](../../../packages/essspec/docs/params.md#files)).
+A reference points to an output of one record ([References](../README.md#requests-and-records)); no reference means "the latest record under a label".
 Keep it so.
 A name resolved at submission gives a backlog or a re-run a different input than the live reduction got.
 "The latest can before this sample" is a match against the sample run, which applications make ([#33][i33]).
@@ -37,7 +37,7 @@ A name resolved at submission gives a backlog or a re-run a different input than
 **Git keeps what is reachable, and pays for it under concurrent writers.**
 `git gc` keeps everything reachable from refs and reflogs and prunes unreachable objects after a grace period, two weeks by default ([config/gc L96-L105][gcexp]).
 The grace period protects a concurrent process that is about to reference an object that is unreachable now, and the docs admit that "users who run commands concurrently have to live with some risk of corruption" ([git-gc L157-L173][gcnotes]).
-Here, a reference keeps no value; only keepers do: the client that asked, a pending request until its workflow returns, a persist request, the store ([How long records and values are kept](../README.md#how-long-records-and-values-are-kept)).
+Here, a reference keeps no value; only keepers do: the client that asked, a pending request until its workflow returns, a persist request, the store ([How long records and values are kept](../lifetimes.md)).
 A submission may reference only values its client keeps, persisted values, and files, so whether it is refused never depends on how far other work has come ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)).
 That rule removes the race git mitigates with a grace period.
 Git's rule would also keep every intermediate of a chain for as long as its final output is kept.

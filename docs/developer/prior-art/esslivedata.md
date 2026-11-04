@@ -1,7 +1,7 @@
 # esslivedata as prior art for bindings
 
 esslivedata runs ESS workflows on live data, with params models that a dashboard shows and the backend validates.
-It solves the problem that a binding solves here: calling a sciline workflow with the values of a spec ([What a binding provides](../README.md#what-a-binding-provides)).
+It solves the problem that a binding solves here: calling a sciline workflow with the values of a spec (the docstrings of `ess.spec.binding` and `ess.spec.pipeline`).
 `ess.spec` is meant to hold its params models too ([ADR 0001](../../../packages/essspec/docs/developer/adr/0001-minimal-workflow-spec.md#convergence-with-esslivedata)).
 
 Source, read on 2026-10-23: `scipp/esslivedata` [a5b1828][src], under `src/ess/livedata/`.

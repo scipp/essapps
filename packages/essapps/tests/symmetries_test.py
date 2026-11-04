@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The symmetries of docs/developer/README.md on a toy package that offers a
+The symmetries of docs/developer/accumulators.md on a toy package that offers a
 single-run spec and a multi-run spec with tables of its sample and can runs,
 as docs/developer/three-ways-to-run-a-spec.html shows them: a sciline pipeline of
 one sample run and one can run behind the single-run spec, and a driver over

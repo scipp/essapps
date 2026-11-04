@@ -1,7 +1,7 @@
 # Architecture Decision Records
 
 Each ADR records one design decision and its reasons.
-The rules themselves are stated in [README.md](../README.md).
+The rules themselves are stated in [README.md](../README.md), the pages it links, and the docstrings.
 While the design is in flux, a changed decision is edited in place.
 Git history keeps the earlier versions.
 Reversing or replacing a decision gets a new ADR that links back.

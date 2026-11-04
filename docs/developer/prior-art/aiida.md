@@ -15,7 +15,7 @@ Facts were checked against aiida-core at commit 952b9c8 (2026-10-12), its change
 
 **Stored nodes never change; annotations sit beside them.** Attributes and files of a stored node are immutable, while *extras* are "added by the user and are not immutable, even when the node is stored" ([internals.rst L166-167][internals]).
 Extras, comments, and groups exist "for the user to tag/group/comment on data" and can be deleted at any time ([data.rst L976-985][data]).
-Our records never change except their status, and labels and members are fixed at submission ([README, Labels and members](../README.md#labels-and-members)).
+Our records never change except their status, and labels and members are fixed at submission ([README, Labels and members](../README.md#requests-and-records)).
 No requirement asks to mark a record later, such as "good" or "use this can", and a second catalogue is a non-goal ([requirements](../../requirements/README.md#non-goals)).
 If a story asks for it, AiiDA's answer fits [ADR 0004](../adr/0004-history-is-append-only-lists.md): one more list, of annotations, appended to and read by nothing in the framework.
 
@@ -36,7 +36,7 @@ The spec's `version` plays the role of `CACHE_VERSION`: its author says when the
 
 **Code from a notebook has its source recorded.** The unreleased aiida-core lets a process class defined in a notebook cell run on the daemon.
 No import path finds such a class later, so `ProcessNode.class_source` stores its source on the node ([CHANGELOG L47-55][cl-notebook]).
-Our `local()` binds a spec to draft code in the notebook ([README, Specs and bindings](../README.md#specs-and-bindings); [tensions](../../requirements/tensions.md), "Recording every reduction versus parameters given as Python functions").
+Our `local()` binds a spec to draft code in the notebook ([README, Components](../README.md#components); [tensions](../../requirements/tensions.md), "Recording every reduction versus parameters given as Python functions").
 The record then names a spec version that does not describe the code that ran.
 Provenance should at least say that the binding came from no installed package; AiiDA goes further and keeps the source.
 
