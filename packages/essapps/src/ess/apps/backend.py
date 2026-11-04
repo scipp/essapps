@@ -137,7 +137,7 @@ current state, without waiting for its client to release it.
 A read pins the accumulator's state after the pushes logged so far: a request
 that references the accumulator, when it is submitted; a read of its outputs;
 and its provenance. Pinning never waits for a push to be added. A request
-references an accumulator's output by a placeholder (``AccumulatorRef``). The
+references an accumulator's output by its ID in place of a record's. The
 submission makes one record of the plain request of the pinned state for each
 accumulator its requests reference, logs it before them, as the accumulator
 and its number of pushes, and the records of the requests reference that
@@ -206,7 +206,6 @@ from pydantic import BaseModel
 
 from ess.spec import (
     AccumulatorBinding,
-    AccumulatorRef,
     Binding,
     Driver,
     FileRef,
@@ -803,7 +802,7 @@ class Backend:
         prepared = [self._prepare(e, proposal) for e in entries]
         requests = [request for request, _ in prepared]
         persisted = [self._persisted(r.spec, persist) for r in requests]
-        referenced = {ref.accumulator for r in requests for ref in r.accumulators()}
+        referenced = {ref.record for r in requests for ref in r.upstream()}
         with self._changed:
             pinned = self._pin_states(self._client(client), referenced)
         try:
@@ -853,8 +852,8 @@ class Backend:
             return tuple(self._bindings[spec_id].spec.outputs.model_fields)
 
         def state_record(ref: Ref) -> Ref:
-            if isinstance(ref, AccumulatorRef):
-                return OutputRef(record=state_ids[ref.accumulator], output=ref.output)
+            if isinstance(ref, OutputRef) and ref.record in state_ids:
+                return ref.model_copy(update={'record': state_ids[ref.record]})
             return ref
 
         def from_store(entry: Entry, request: Request) -> set[tuple[str, str]]:
@@ -1056,7 +1055,7 @@ class Backend:
 
     def _source_spec(
         self,
-        ref: OutputRef | AccumulatorRef,
+        ref: OutputRef,
         loc: Loc,
         caller: _Client,
         states: Mapping[str, _Pinned],
@@ -1070,19 +1069,19 @@ class Backend:
         proposal, and its output one the client may reference (see
         :meth:`_refusal`).
         """
-        if isinstance(ref, AccumulatorRef):
+        if ref.record in self._views.accumulators:
             try:
-                acc = self._accumulator(caller, ref.accumulator)
-            except LookupError as error:  # unknown, or not readable
+                acc = self._accumulator(caller, ref.record)
+            except LookupError as error:  # of another proposal, or not readable
                 raise SubmitError.at(loc, error.args[0]) from None
-            if ref.accumulator not in states:
+            if ref.record not in states:
                 raise SubmitError.at(loc, 'only a request may reference an accumulator')
-            if (refused := states[ref.accumulator][2]) is not None:
+            if (refused := states[ref.record][2]) is not None:
                 raise SubmitError.at(loc, refused)
             return acc.template.spec
         record = self._views.records.get(ref.record)
         if record is None:
-            raise SubmitError.at(loc, f'unknown record {ref.record}')
+            raise SubmitError.at(loc, f'unknown record or accumulator {ref.record}')
         if record.proposal != caller.proposal:
             raise SubmitError.at(
                 loc, f'record {ref.record} belongs to proposal {record.proposal}'
@@ -1317,9 +1316,7 @@ class Backend:
         reads, stage.reads = stage.reads, []
         self._let_go(reads)
 
-    def _reader(
-        self, params: Mapping[str, Any]
-    ) -> Callable[[OutputRef | AccumulatorRef], Any]:
+    def _reader(self, params: Mapping[str, Any]) -> Callable[[OutputRef], Any]:
         """
         What reads the data each reference in ``params`` names: outputs held
         in memory, or one element of each, taken under the backend's lock
@@ -1339,20 +1336,18 @@ class Backend:
                 if key in self._outputs:
                     held[ref] = _element(self._outputs[key], ref)
 
-        def read(ref: OutputRef | AccumulatorRef) -> Any:
+        def read(ref: OutputRef) -> Any:
             if ref not in held:
                 held[ref] = self._stored(ref)
             return held[ref]
 
         return read
 
-    def _stored(self, ref: OutputRef | AccumulatorRef) -> Any:
+    def _stored(self, ref: OutputRef) -> Any:
         """
         The written value of an output, or its element if ``ref`` has a key.
         Needs no lock.
         """
-        if isinstance(ref, AccumulatorRef):
-            raise TypeError(f'{ref}: a record never reads an accumulator')
         if self._store is None:
             raise NotReadable(f'{ref}: the backend has no store')
         return _element(self._store.read(ref.record, ref.output), ref)

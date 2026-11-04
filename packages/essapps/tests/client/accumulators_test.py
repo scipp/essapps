@@ -25,7 +25,7 @@ from ess.apps import (
     local,
 )
 from ess.apps.testing import FakeFiles
-from ess.spec import AccumulatorRef, DriverBinding, function_binding
+from ess.spec import DriverBinding, OutputRef, function_binding
 
 from . import toys
 
@@ -549,7 +549,7 @@ def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(
     load = client.compute(toys.load_request(1))
     total.push(parts=[load.ref('value')])
     elsewhere = Client(backend, proposal='p2', submitter='carl')
-    extra = AccumulatorRef(accumulator=total.id, output='extra')
+    extra = OutputRef(record=total.id, output='extra')
 
     for read in (lambda: total.ref('extra'), lambda: client.output(total, 'extra')):
         with pytest.raises(KeyError, match="total/v1 has no output 'extra'"):
@@ -567,6 +567,37 @@ def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(
         elsewhere.submit(toys.read_request(total))
     with pytest.raises(KeyError, match='in proposal p2'):
         elsewhere.output(total)
+
+
+def test_a_reference_to_an_accumulator_in_json_form_reads_its_state(
+    client: Client,
+) -> None:
+    total = toys.total_accumulator(client)
+    total.push(parts=[toys.Amount(value=2.0)])
+    source = {'@ref': 'output', 'record': total.id, 'output': 'value'}
+    shifted = client.compute(toys.SHIFT, params={'source': source})
+
+    assert client.output(shifted, 'value') == toys.Amount(value=2.0)
+    (ref,) = shifted.request.upstream()
+    assert ref.record != total.id
+
+
+def test_a_reference_with_a_key_reads_an_element_of_an_accumulators_output(
+    client: Client,
+) -> None:
+    split = client.accumulator(Template(toys.SPLIT_TOTAL, blanks=('amounts',)))
+    split.push(amounts=[toys.Amount(value=3.0), toys.Amount(value=1.0)])
+    parts = [split.ref('parts', key='half'), split.ref('pieces', key='0')]
+    total = client.compute(toys.TOTAL, params={'parts': parts})
+
+    assert client.output(total, 'value') == toys.Amount(value=6.0)
+    (state,) = {ref.record for ref in total.request.upstream()}
+    assert total.request.upstream() == [
+        OutputRef(record=state, output='parts', key='half'),
+        OutputRef(record=state, output='pieces', key='0'),
+    ]
+    with pytest.raises(SubmitError, match=r'^parts\[0\]: .*: the key of an element'):
+        client.submit(toys.TOTAL, params={'parts': [split.ref('pieces', key='a')]})
 
 
 def test_an_optional_output_left_out_is_not_read(client: Client) -> None:

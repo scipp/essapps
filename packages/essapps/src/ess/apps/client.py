@@ -39,7 +39,7 @@ from typing import Any, Self
 
 from pydantic import BaseModel
 
-from ess.spec import AccumulatorRef, Binding, FileRef, WorkflowSpec
+from ess.spec import Binding, FileRef, OutputRef, WorkflowSpec
 
 from .backend import Backend, Entry, Selection
 from .files import FileSource, Selector
@@ -221,13 +221,14 @@ class Accumulator:
                 )
         self._push({name: as_values(list(r)) for name, r in rows.items()})
 
-    def ref(self, output: str) -> AccumulatorRef:
+    def ref(self, output: str, key: str | None = None) -> OutputRef:
         """
-        A reference to an output of the accumulator, for a request.
+        A reference to an output of the accumulator, or to its element ``key``
+        if it is a list or a dict, for a request.
 
         Submitting the request pins the state after the rows pushed so far,
         makes a record of that state's plain request, and replaces the
-        reference by the same output of that record. No client keeps that
+        accumulator in the reference by that record. No client keeps that
         record, so only the requests of that submission read it. The request
         waits until the accumulator has reached the state, as it waits for a
         record it references, and is refused if the state's plain request
@@ -235,9 +236,9 @@ class Accumulator:
         """
         if output not in self.outputs:
             raise KeyError(f'{self.template.spec} has no output {output!r}')
-        return AccumulatorRef(accumulator=self.id, output=output)
+        return OutputRef(record=self.id, output=output, key=key)
 
-    def refs(self, *outputs: str) -> dict[str, AccumulatorRef]:
+    def refs(self, *outputs: str) -> dict[str, OutputRef]:
         """A reference to each of ``outputs`` by name; to every output if none."""
         return {name: self.ref(name) for name in outputs or self.outputs}
 

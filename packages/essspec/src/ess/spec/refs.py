@@ -8,15 +8,14 @@ request's params. The value of ``"@ref"`` names its kind::
 
     {"@ref": "output", "record": "r17", "output": "centre"}
     {"@ref": "output", "record": "r18", "output": "slices", "key": "2"}
-    {"@ref": "accumulator", "accumulator": "a3", "output": "iofq"}
     {"@ref": "file", "file": "run:loki/60339"}
 
-The first three are references to an output: of a record, of one element of
-a list or dict output of a record, and of an accumulator. The last is the
-JSON form of a file (see :class:`~ess.spec.parameters.File`). Since the
-key marks a reference wherever it is, code that reads a record lists its
-references and files without the spec: :func:`iter_refs` finds each one, and
-:func:`map_refs` replaces each one.
+The first two are references to an output: of a record, and of one element
+of a list or dict output of a record. The last is the JSON form of a file
+(see :class:`~ess.spec.parameters.File`). Since the key marks a reference
+wherever it is, code that reads a record lists its references and files
+without the spec: :func:`iter_refs` finds each one, and :func:`map_refs`
+replaces each one.
 
 Where a request may write each kind is a rule of the params language, stated
 in :mod:`ess.spec._workflow_spec`. Turning a reference into the data a
@@ -59,6 +58,11 @@ class OutputRef(_Ref, frozen=True):
     """
     Output ``output`` of record ``record``, or one element ``key`` of it, if
     the output is a list or a dict.
+
+    The identity ``record`` is opaque to the spec. In a request, the framework
+    accepts the ID of an accumulator in ``record``: it replaces it, when it
+    accepts the request, by the record of the accumulator's state at that
+    moment, so a record never names an accumulator.
     """
 
     kind: Literal['output'] = Field(default='output', alias='@ref', repr=False)
@@ -96,39 +100,11 @@ class FileRef(_Ref, frozen=True):
         return cls(file=f'path:{path}')
 
 
-class AccumulatorRef(_Ref, frozen=True):
-    """
-    Output ``output`` of accumulator ``accumulator``, in a request.
-
-    The framework replaces it when it accepts the request, by the same output of
-    a record of the accumulator's state at that moment, so a record never holds
-    one.
-    """
-
-    kind: Literal['accumulator'] = Field(
-        default='accumulator', alias='@ref', repr=False
-    )
-    accumulator: str = Field(min_length=1)
-    output: str = Field(min_length=1)
-
-    def __str__(self) -> str:
-        return f'{self.accumulator}.{self.output}'
+Ref = OutputRef | FileRef
+"""A reference, the Python form of an object with the key ``"@ref"``."""
 
 
-Ref = OutputRef | FileRef | AccumulatorRef
-"""
-A reference, the Python form of an object with the key ``"@ref"``.
-
-An ``AccumulatorRef`` is only a placeholder in a request before it is
-submitted; no record holds one.
-"""
-
-
-_KINDS: dict[str, type[Ref]] = {
-    'output': OutputRef,
-    'file': FileRef,
-    'accumulator': AccumulatorRef,
-}
+_KINDS: dict[str, type[Ref]] = {'output': OutputRef, 'file': FileRef}
 
 
 def as_ref(value: Any) -> Ref | None:

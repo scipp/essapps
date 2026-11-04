@@ -31,11 +31,10 @@ from .binding import (
     function_binding,
 )
 from .parameters import File, MaskFile, Referenced, RunFile
-from .refs import AccumulatorRef, FileRef, OutputRef, Ref
+from .refs import FileRef, OutputRef, Ref
 
 __all__ = [
     'AccumulatorBinding',
-    'AccumulatorRef',
     'Binding',
     'Driver',
     'DriverBinding',

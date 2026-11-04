@@ -17,16 +17,16 @@ of the params. The request type is the params type with each
     params model (call phase)              request type (request phase)
     -------------------------              ----------------------------
     reduction: Reduction                   Reduction
-    mask: Referenced[PixelMask]            OutputRef | AccumulatorRef
+    mask: Referenced[PixelMask]            OutputRef
     centre: BeamCentre                     BeamCentre | OutputRef
-            | Referenced[BeamCentre]                  | AccumulatorRef
+            | Referenced[BeamCentre]
     beam_centre: GivenCentre | Find...     GivenCentre | FindCentre  (by tag)
     sample: RunFile                        FileRef
     runs: list[RunFile]                    list[FileRef]
     samples: list[Sample]                  list[Sample'], with Sample' derived
     # Sample.run: RunFile                    run: FileRef
     # Sample.transmission:                   transmission: OutputRef
-    #     Referenced[Transmission]                         | AccumulatorRef
+    #     Referenced[Transmission]
 
 with ``RunFile`` from :mod:`ess.spec`, a file field (see
 :class:`~ess.spec.parameters.File`).
@@ -129,7 +129,6 @@ from pydantic_core import (
 from . import field_types
 from .parameters import REFERENCED, DataRefused, File, not_its_source
 from .refs import (
-    AccumulatorRef,
     FileRef,
     Loc,
     OutputRef,
@@ -157,11 +156,11 @@ def source_of(value: Any) -> str | None:
     """
     if isinstance(value, FileRef):
         return FILE
-    if isinstance(value, OutputRef | AccumulatorRef):
+    if isinstance(value, OutputRef):
         return OUTPUT
     if not isinstance(value, Mapping) or '@ref' not in value:
         return INLINE
-    return {'file': FILE, 'output': OUTPUT, 'accumulator': OUTPUT}.get(
+    return {'file': FILE, 'output': OUTPUT}.get(
         value['@ref'] if isinstance(value['@ref'], str) else ''
     )
 
@@ -213,8 +212,8 @@ def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
         data: Any = Union[referenced]  # noqa: UP007
         data_type: JsonDict = {'dataType': field_types.type_name(data)}
         taken[OUTPUT] = Annotated[
-            OutputRef | AccumulatorRef,
-            Field(discriminator='kind', json_schema_extra=data_type),
+            OutputRef,
+            Field(json_schema_extra=data_type),
             BeforeValidator(functools.partial(_only, OUTPUT)),
             _Fits(data),
         ]
@@ -439,7 +438,7 @@ looks the path up and never raises: a file that cannot be read fails the
 workflow that reads it.
 """
 
-type Reads = list[tuple[Loc, OutputRef | AccumulatorRef, Any]]
+type Reads = list[tuple[Loc, OutputRef, Any]]
 """
 The references to outputs in a value, each with its position and the type
 that the output's data must fit: the ``T`` of ``Referenced[T]``, or the
@@ -510,7 +509,7 @@ def held(
     reads = [
         (loc, ref, _fits(info, made, loc[1:]))
         for loc, ref in refs
-        if isinstance(ref, OutputRef | AccumulatorRef)
+        if isinstance(ref, OutputRef)
     ]
     return stored, reads
 

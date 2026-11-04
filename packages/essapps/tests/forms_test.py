@@ -678,7 +678,7 @@ def test_the_schema_of_a_union_marked_referenced_has_a_reference_form() -> None:
 
     assert inline['discriminator']['propertyName'] == 'kind'
     assert reference['dataType'] == 'BeamCentre'
-    assert reference['discriminator']['propertyName'] == '@ref'
+    assert reference['$ref'] == '#/$defs/OutputRef'
 
 
 def test_a_reference_is_refused_at_a_group_that_the_spec_does_not_mark(
