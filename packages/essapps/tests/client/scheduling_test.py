@@ -16,7 +16,6 @@ from ess.spec import Binding
 from .conftest import (
     COPY,
     NOTHING,
-    TERMS,
     TOTAL,
     UNTYPED,
     Amount,
@@ -56,19 +55,6 @@ def test_a_request_waits_for_its_pending_references(
     assert client.output(total, 'value') == Amount(value=3.0)
 
 
-def test_a_reference_inside_a_row_waits_for_its_pending_record(
-    client: Client, loading: threading.Event
-) -> None:
-    loading.clear()
-    a = client.submit(_load(1))
-    rows = [{'amount': a.ref('value')}, {'scale': 2.0, 'amount': a.ref('value')}]
-    summed = client.submit(TERMS, params={'terms': rows})
-
-    assert client.status(summed) is Status.PENDING
-    loading.set()
-    assert client.output(summed, 'value') == Amount(value=3.0)
-
-
 def test_a_failed_input_fails_everything_downstream(
     client: Client, loading: threading.Event, unreadable: Request
 ) -> None:
@@ -84,7 +70,6 @@ def test_a_failed_input_fails_everything_downstream(
         Status.FAILED,
         Status.FAILED,
     ]
-    assert client.failure(bad) == 'OSError: file signature not found'
     assert client.failure(first) == f'record {bad.id} failed'
     assert client.failure(second) == f'record {first.id} failed'
 

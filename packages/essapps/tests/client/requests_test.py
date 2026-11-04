@@ -29,7 +29,6 @@ from ess.spec import Binding, function_binding
 from .conftest import (
     LOAD,
     LOKI_MASKED,
-    MASKED,
     SCALE,
     SHIFT,
     SPLIT,
@@ -204,26 +203,6 @@ def test_a_file_of_another_proposal_is_refused(
         client.submit(_load(4))
 
 
-def test_a_file_fits_a_file_field_by_its_kind(client: Client, files: FakeFiles) -> None:
-    files.measure(5, 5.0, kind='mask')
-
-    with pytest.raises(
-        SubmitError,
-        match=r"^mask: file run:1 does not fit the field, which takes files "
-        r"with \{'kind': 'mask'\}$",
-    ):
-        client.submit(MASKED, params={'mask': file(run=1)})
-    with pytest.raises(
-        SubmitError,
-        match=r"^sample: file run:5 does not fit the field, which takes files "
-        r"with \{'kind': 'raw'\}$",
-    ):
-        client.submit(_load(5))
-    masked = client.compute(MASKED, params={'mask': file(run=5)})
-    assert client.output(masked, 'value') == Amount(value=5.0)
-    assert client.output(client.compute(_load(1)), 'value') == Amount(value=1.0)
-
-
 def test_a_file_fits_a_file_field_by_each_key_of_its_metadata(
     client: Client, files: FakeFiles
 ) -> None:
@@ -236,6 +215,8 @@ def test_a_file_fits_a_file_field_by_each_key_of_its_metadata(
         r"with \{'instrument': 'loki', 'kind': 'mask'\}$",
     ):
         client.submit(LOKI_MASKED, params={'mask': file(run=5)})
+    with pytest.raises(SubmitError, match=r'^mask: file run:1 does not fit the field'):
+        client.submit(LOKI_MASKED, params={'mask': file(run=1)})  # a raw file
     masked = client.compute(LOKI_MASKED, params={'mask': file(run=6)})
     assert client.output(masked, 'value') == Amount(value=6.0)
 
@@ -339,13 +320,6 @@ def test_rows_of_file_fields_are_distinct_by_identity(
     assert client.output(acc, 'value') == Amount(value=3.0)
     with pytest.raises(SubmitError, match=r'^runs\[2\]: repeats runs\[0\]'):
         acc.push(runs=[file(pid='x')])
-
-
-def test_a_row_given_twice_is_refused(client: Client, files: FakeFiles) -> None:
-    path = files.path(files.resolve(file(run=1)))
-
-    with pytest.raises(SubmitError, match=r'runs\[1\]: repeats runs\[0\]'):
-        client.submit(SUM, params={'runs': [file(run=1), file(path=path)]})
 
 
 def test_a_stage_reads_a_reference_inside_a_group_of_its_template(

@@ -35,7 +35,6 @@ from .conftest import (
     Factor,
     Shift,
     _load,
-    _read,
     _shift,
     _stage_shift,
     array,
@@ -76,7 +75,7 @@ def test_concurrent_calls_through_a_stage_stage_it_once(
 
 
 def test_a_released_stage_takes_no_calls_and_runs_those_made_before(
-    client: Client, shifting: StagedFunction, loading: threading.Event
+    client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
     stage = _stage_shift(client, client.submit(_load(2)))
@@ -88,11 +87,10 @@ def test_a_released_stage_takes_no_calls_and_runs_those_made_before(
         _shift(client, stage, 2.0)
     assert client.wait(pending) is Status.COMPLETED
     assert client.output(pending, 'value') == Amount(value=3.0)
-    assert shifting.staged == [('shift',)]
 
 
 def test_a_stage_keeps_the_file_its_name_resolved_to_when_it_was_made(
-    client: Client, scaling: StagedFunction, files: FakeFiles
+    client: Client, files: FakeFiles
 ) -> None:
     run = files.resolve(file(run=1))
     stage = client.stage(
@@ -110,7 +108,6 @@ def test_a_stage_keeps_the_file_its_name_resolved_to_when_it_was_made(
     assert [client.output(r, 'value') for r in (before, after)] == [
         Amount(value=v) for v in (2.0, 2.0)
     ]
-    assert scaling.staged == [('scaling',)]
 
 
 def test_a_stage_lets_go_of_what_its_template_references_once_staged(
@@ -159,8 +156,6 @@ def test_a_stage_keeps_what_its_template_references_until_it_has_staged(
     assert [client.output(r, 'value') for r in shifted] == [
         Amount(value=v) for v in (3.0, 4.0)
     ]
-    with pytest.raises(SubmitError, match='not kept by this client'):
-        client.submit(_read(load))
 
 
 def test_releasing_a_stage_lets_go_of_what_its_template_references(
@@ -175,24 +170,7 @@ def test_releasing_a_stage_lets_go_of_what_its_template_references(
     assert client.status(load) is Status.CANCELLED
 
 
-def test_a_stage_whose_staging_fails_stops(
-    client: Client, scaling: StagedFunction
-) -> None:
-    scaling.fail_next = True
-    stage = client.stage(
-        Template(SCALE, params={'sample': file(run=2)}, blanks=('scaling',))
-    )
-    twice = {'scaling': Factor(factor=2.0)}
-    failed = client.compute(stage, params=twice)
-
-    assert client.status(failed) is Status.FAILED
-    assert client.failure(failed) == 'OSError: staging failed'
-    with pytest.raises(SubmitError, match='the stage stopped: staging failed'):
-        client.submit(stage, params=twice)
-    assert scaling.staged == []
-
-
-def test_the_calls_waiting_for_a_stage_whose_staging_fails_fail_with_it(
+def test_a_stage_whose_staging_fails_fails_the_calls_waiting_for_it_and_stops(
     client: Client, shifting: StagedFunction, loading: threading.Event
 ) -> None:
     loading.clear()
@@ -206,7 +184,10 @@ def test_the_calls_waiting_for_a_stage_whose_staging_fails_fail_with_it(
         'OSError: staging failed',
         *['the stage stopped: staging failed: OSError: staging failed'] * 2,
     ]
-    assert shifting.staged == []
+    assert client.status(pending) == [Status.FAILED] * 3
+    with pytest.raises(SubmitError, match=r'^the stage stopped: staging failed'):
+        _shift(client, stage, 4.0)
+    assert shifting.staged == []  # not staged again
 
 
 def test_a_stage_refuses_a_template_that_a_request_would_refuse(

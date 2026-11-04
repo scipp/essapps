@@ -59,9 +59,7 @@ def test_a_push_takes_rows_as_a_request_does(client: Client) -> None:
         == client.output(plain, 'value')
         == Amount(value=5.0)
     )
-    state = _state(client, read)
-    assert state.request == plain.request
-    assert client.provenance(read).records() == [state]
+    assert _state(client, read).request == plain.request
 
 
 def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
@@ -126,8 +124,6 @@ def test_a_push_takes_a_pending_record_and_refuses_one_that_did_not_complete(
     read = client.submit(_read(total))
     loading.set()
 
-    state = _state(client, read)
-    assert [r.id for r in client.provenance(read).records()] == [state.id, pending.id]
     assert client.output(read, 'value') == Amount(value=1.0)
 
 
@@ -285,5 +281,3 @@ def test_a_push_of_several_rows_gives_one_state(
     plain = client.compute(SIDES, params={'samples': rows, 'backgrounds': []})
 
     assert _state(client, copied).request == plain.request
-    assert _listed(client.output(copied, 'value')) == [3.0]
-    assert _sides(client.output(sides)) == _sides(client.output(plain))

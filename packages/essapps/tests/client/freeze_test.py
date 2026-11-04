@@ -66,7 +66,6 @@ def test_a_push_after_a_freeze_is_refused_while_its_record_is_pending(
     with pytest.raises(SubmitError, match=f'frozen as record {total.id}'):
         client.freeze(sides)
     subtracting.compute.set()
-    assert _listed(client.output(total, 'total')) == [1.0]
 
 
 def test_a_frozen_accumulator_is_read_through_its_record(

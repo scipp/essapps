@@ -116,25 +116,21 @@ def test_a_selection_of_a_group_slices_its_arrays_and_copies_its_other_fields(
     client = grids
     record = _grid(client, 1)
     row = client.output(record, 'grid', select={'x': 1})
-    selected = (row.counts.values.tolist(), row.profile.value, row.label)
+    column = client.output(record, 'grid', select={'y': 1})
+    selected = (
+        row.counts.values.tolist(),
+        row.profile.value,
+        row.axis.edges.values.tolist(),  # has x, yet not sliced: a group in it
+        row.label,
+    )
     row.counts.values[0] = 99.0
-    row.profile.value = 99.0
-
-    assert selected == ([2.0, 3.0], 5.0, 'a')
-    again = client.output(record, 'grid', select={'x': 1})
-    assert (again.counts.values.tolist(), again.profile.value) == ([2.0, 3.0], 5.0)
-    assert client.records() == [record]
-
-
-def test_a_selection_of_a_group_copies_a_group_in_it_whole(grids: Client) -> None:
-    client = grids
-    record = _grid(client, 1)
-    row = client.output(record, 'grid', select={'x': 1})
-    edges = row.axis.edges.values.tolist()
     row.axis.edges.values[0] = 99.0
 
-    assert edges == [0.0, 1.0, 2.0, 3.0]  # has x, yet not sliced
+    assert selected == ([2.0, 3.0], 5.0, [0.0, 1.0, 2.0, 3.0], 'a')
+    assert column.counts.values.tolist() == [1.0, 3.0, 5.0]
+    assert column.profile.values.tolist() == [1.0, 5.0, 9.0]  # has no y: whole
     again = client.output(record, 'grid', select={'x': 1})
+    assert again.counts.values.tolist() == [2.0, 3.0]
     assert again.axis.edges.values.tolist() == [0.0, 1.0, 2.0, 3.0]
 
 
@@ -153,21 +149,7 @@ def test_a_selection_of_an_accumulator_copies_part_of_its_current_state(
         [1.0, 3.0, 5.0],
         [3.0, 9.0, 15.0],
     ]
-    assert [c.profile.values.tolist() for c in cuts] == [  # has no y: whole
-        [1.0, 5.0, 9.0],
-        [3.0, 15.0, 27.0],
-    ]
     assert client.records() == runs
-
-
-def test_a_selection_of_a_group_copies_whole_an_array_without_the_dimension(
-    grids: Client,
-) -> None:
-    client = grids
-    column = client.output(_grid(client, 1), 'grid', select={'y': 1})
-
-    assert column.counts.values.tolist() == [1.0, 3.0, 5.0]
-    assert column.profile.values.tolist() == [1.0, 5.0, 9.0]
 
 
 def test_a_selection_of_a_group_by_a_dimension_no_array_has_is_refused(

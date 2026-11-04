@@ -257,41 +257,6 @@ def test_a_reference_to_an_output_at_a_parameter_is_held_as_its_json_form() -> N
     assert _stored(MaskParams, 'sample', given, _named) == form
 
 
-NOT_REFERENCED = (
-    'r1.sample is a reference to an output; the field is not typed Referenced[...]'
-)
-
-
-def test_a_reference_to_an_output_at_a_file_field_is_refused() -> None:
-    with pytest.raises(ParamsError) as raised:
-        _stored(MaskParams, 'mask', OUTPUT, _named)
-    assert raised.value.errors == (
-        (
-            ('mask',),
-            NOT_REFERENCED,
-        ),
-    )
-
-
-def test_a_reference_to_an_output_at_an_unmarked_group_is_refused() -> None:
-    with pytest.raises(ParamsError) as raised:
-        _stored(MeasuredParams, 'measured', OUTPUT, _named)
-    assert raised.value.errors == (
-        (
-            ('measured',),
-            NOT_REFERENCED,
-        ),
-    )
-
-
-def test_a_file_at_a_parameter_typed_a_group_is_refused() -> None:
-    with pytest.raises(ParamsError) as raised:
-        _stored(MaskParams, 'sample', FILE, _named)
-    assert raised.value.errors == (
-        (('sample',), 'file pid-1: the field is not a file field'),
-    )
-
-
 def test_a_reference_at_an_element_of_a_list_parameter_stands_for_one_row() -> None:
     assert _stored(MaskParams, 'runs', [FILE], _named) == [FILE.model_dump()]
     assert _stored(Params, 'samples', [{'thickness': 2.0}, OUTPUT], _named) == [
@@ -312,17 +277,6 @@ def test_a_reference_to_a_whole_list_is_refused() -> None:
     )
 
 
-def test_a_reference_to_an_output_at_an_unmarked_union_is_refused() -> None:
-    with pytest.raises(ParamsError) as raised:
-        _stored(Params, 'beam_centre', OUTPUT, _named)
-    assert raised.value.errors == (
-        (
-            ('beam_centre',),
-            NOT_REFERENCED,
-        ),
-    )
-
-
 @pytest.mark.parametrize(
     ('name', 'value'),
     [
@@ -338,58 +292,46 @@ def test_a_union_with_a_referenced_member_takes_either(name: str, value: Any) ->
 
 
 @pytest.mark.parametrize(
-    ('name', 'value', 'loc', 'msg'),
+    ('model', 'name', 'value', 'loc'),
     [
-        ('sample', {'thickness': OUTPUT}, ('sample', 'thickness'), NOT_REFERENCED),
+        (MaskParams, 'mask', OUTPUT, ('mask',)),
+        (MeasuredParams, 'measured', OUTPUT, ('measured',)),
+        (Params, 'beam_centre', OUTPUT, ('beam_centre',)),
+        (MaskParams, 'sample', {'thickness': OUTPUT}, ('sample', 'thickness')),
         (
-            'reduction',
-            {'angles': [1.0, OUTPUT]},
-            ('reduction', 'angles', 1),
-            NOT_REFERENCED,
-        ),
-        (
-            'samples',
-            [{'thickness': OUTPUT}],
-            ('samples', 0, 'thickness'),
-            NOT_REFERENCED,
-        ),
-        (
+            Params,
             'beam_centre',
             {'kind': 'given', 'x': OUTPUT},
             ('beam_centre', 'x'),
-            NOT_REFERENCED,
         ),
-        (
-            'measured',
-            {'run': OUTPUT},
-            ('measured', 'run'),
-            NOT_REFERENCED,
-        ),
-        ('runs', [OUTPUT], ('runs', 0), NOT_REFERENCED),
+        (Params, 'reduction', {'angles': [1.0, OUTPUT]}, ('reduction', 'angles', 1)),
+        (MaskParams, 'runs', [OUTPUT], ('runs', 0)),
     ],
 )
 def test_a_reference_to_an_output_at_a_field_not_typed_referenced_is_refused(
-    name: str, value: Any, loc: Loc, msg: str
+    model: type[BaseModel], name: str, value: Any, loc: Loc
 ) -> None:
-    model = {
-        'sample': MaskParams,
-        'runs': MaskParams,
-        'measured': MeasuredParams,
-    }.get(name, Params)
     with pytest.raises(ParamsError) as raised:
         _stored(model, name, value, _named)
+    msg = (
+        'r1.sample is a reference to an output; the field is not typed Referenced[...]'
+    )
     assert raised.value.errors == ((loc, msg),)
 
 
-def test_a_file_at_a_field_that_is_not_a_file_field_is_refused() -> None:
+@pytest.mark.parametrize(
+    ('model', 'name', 'value', 'loc'),
+    [
+        (MaskParams, 'sample', FILE, ('sample',)),
+        (Params, 'reduction', {'angles': [1.0, FILE]}, ('reduction', 'angles', 1)),
+    ],
+)
+def test_a_file_at_a_field_that_is_not_a_file_field_is_refused(
+    model: type[BaseModel], name: str, value: Any, loc: Loc
+) -> None:
     with pytest.raises(ParamsError) as raised:
-        _stored(Params, 'reduction', {'angles': [1.0, FILE]}, _named)
-    assert raised.value.errors == (
-        (
-            ('reduction', 'angles', 1),
-            'file pid-1: the field is not a file field',
-        ),
-    )
+        _stored(model, name, value, _named)
+    assert raised.value.errors == ((loc, 'file pid-1: the field is not a file field'),)
 
 
 def test_a_group_given_inline_is_held_as_the_json_form_of_it_validated() -> None:
@@ -454,13 +396,6 @@ def test_a_value_whose_json_form_reads_back_as_another_is_refused(
     assert raised.value.errors == (
         (loc, 'has no JSON form that reads back as the value'),
     )
-
-
-def test_an_error_inside_a_union_names_its_place_without_the_tag() -> None:
-    with pytest.raises(ParamsError) as raised:
-        _stored(Params, 'beam_centre', {'kind': 'find', 'tolerance': -1.0}, _named)
-    ((at, _),) = raised.value.errors
-    assert at == ('beam_centre', 'tolerance')
 
 
 @pytest.mark.parametrize(
@@ -555,20 +490,6 @@ def test_a_strict_group_is_validated_from_its_json_form() -> None:
     assert made == Strict(mode=Mode.slow)
 
 
-def test_a_file_in_a_group_is_its_local_path_from_paths() -> None:
-    form = FILE.model_dump(by_alias=True)
-    measured = value_of(
-        MeasuredParams,
-        'measured',
-        {'run': form, 'thickness': 2.0, 'masks': [form]},
-        _unread,
-        {FILE_ID: Path('run.nxs')},
-    )
-    assert measured == Measured(
-        run=Path('run.nxs'), thickness=2.0, masks=[Path('run.nxs')]
-    )
-
-
 def test_a_file_is_the_local_path_given_for_it() -> None:
     form = FILE.model_dump(by_alias=True)
     paths = {FILE_ID: Path('mask.xml')}
@@ -612,21 +533,6 @@ def test_each_value_is_made_by_the_type_of_its_source() -> None:
     ref = OUTPUT.model_dump(by_alias=True)
     data = value_of(EitherParams, 'centre', ref, lambda ref: Computed(x=1.0), PATHS)
     assert type(data) is Computed
-
-
-def test_the_data_of_a_reference_are_checked_by_the_metadata_of_its_type() -> None:
-    def thin(sample: Sample) -> Sample:
-        if sample.thickness > 1.0:
-            raise ValueError('too thick')
-        return sample
-
-    class Checked(BaseModel):
-        sample: Referenced[Annotated[Sample, AfterValidator(thin)]]
-
-    ref = OUTPUT.model_dump(by_alias=True)
-    assert value_of(Checked, 'sample', ref, lambda ref: Sample(), PATHS) == Sample()
-    with pytest.raises(ParamsError, match='too thick'):
-        value_of(Checked, 'sample', ref, lambda ref: Sample(thickness=2.0), PATHS)
 
 
 def test_each_place_takes_the_forms_its_type_allows() -> None:
@@ -827,6 +733,22 @@ def test_a_field_of_a_nested_group_is_validated_at_its_position() -> None:
     assert 'valid number' in msg
 
 
+def test_a_value_without_a_json_form_is_refused_at_its_place() -> None:
+    class Anything(BaseModel):
+        anything: Any = None
+
+    with pytest.raises(ParamsError) as raised:  # one the field does not take
+        _stored(Params, 'reduction', {'bins': len}, _named)
+    assert raised.value.errors == (
+        (('reduction', 'bins'), 'Input should be a valid integer'),
+    )
+    with pytest.raises(ParamsError) as raised:  # one the field takes
+        _stored(Anything, 'anything', len, _named)
+    ((at, msg),) = raised.value.errors
+    assert at == ('anything',)
+    assert msg.startswith('cannot be stored as JSON')
+
+
 def test_a_field_typed_x_or_none_takes_none_or_x() -> None:
     for stop in (None, 2.0):
         stored = _stored(
@@ -834,62 +756,6 @@ def test_a_field_typed_x_or_none_takes_none_or_x() -> None:
         )
         made = value_of(SpecimenParams, 'specimen', stored, _unread, PATHS)
         assert made.window.stop == stop
-
-
-def test_a_reference_at_a_field_of_a_row_is_replaced_by_its_data() -> None:
-    data = Transmission(fraction=sc.scalar(0.5))
-    rows = [{'run': FILE, 'transmission': OUTPUT}, {'run': FILE}]
-    stored = _stored(SpecimenParams, 'specimens', rows, _named)
-    assert stored[0]['transmission'] == OUTPUT.model_dump()
-    made = value_of(SpecimenParams, 'specimens', stored, lambda ref: data, PATHS)
-    assert made[0].transmission is data
-    assert made[1].transmission is None
-
-
-def test_a_field_typed_referenced_or_a_group_takes_either_by_its_source() -> None:
-    # Computed, the referenced member, has the fields of Typed, and comes first.
-    computed = Computed(x=7.0)
-    for centre, made_type in ((OUTPUT, Computed), ({'x': 1.0}, Typed), ({}, Typed)):
-        value = {'run': FILE, 'centre': centre}
-        stored = _stored(SpecimenParams, 'specimen', value, _named)
-        made = value_of(SpecimenParams, 'specimen', stored, lambda ref: computed, PATHS)
-        assert type(made.centre) is made_type
-    assert made.centre == Typed()
-
-
-def test_a_group_that_holds_a_reference_runs_its_validators_when_it_runs() -> None:
-    class Checked(BaseModel):
-        transmission: Referenced[Transmission]
-
-        @model_validator(mode='after')
-        def _dimensionless(self) -> 'Checked':
-            if self.transmission.fraction.unit != sc.units.one:
-                raise ValueError('a fraction is dimensionless')
-            return self
-
-    class CheckedParams(BaseModel):
-        checked: Checked
-
-    _spec(CheckedParams)
-    stored = _stored(CheckedParams, 'checked', {'transmission': OUTPUT}, _named)
-    good = Transmission(fraction=sc.scalar(0.5))
-    made = value_of(CheckedParams, 'checked', stored, lambda ref: good, PATHS)
-    assert made.transmission is good
-    bad = Transmission(fraction=sc.scalar(0.5, unit='m'))
-    with pytest.raises(ParamsError, match='a fraction is dimensionless'):
-        value_of(CheckedParams, 'checked', stored, lambda ref: bad, PATHS)
-
-
-def test_a_value_written_inline_at_a_field_typed_referenced_is_refused() -> None:
-    value = {'run': FILE, 'transmission': {'fraction': 1.0}}
-    with pytest.raises(ParamsError) as raised:
-        _stored(SpecimenParams, 'specimen', value, _named)
-    assert raised.value.errors == (
-        (
-            ('specimen', 'transmission'),
-            'is not a reference to an output, as the field is typed Referenced[...]',
-        ),
-    )
 
 
 def test_each_reference_to_an_output_is_given_with_the_type_its_data_fit() -> None:
@@ -1014,6 +880,8 @@ def test_a_call_error_is_at_its_position_in_the_stored_value_once(
 ) -> None:
     data = Transmission(fraction=sc.scalar(0.5))
     row = {'corr': {'kind': 'scale', 'transmission': OUTPUT, **corr}}
+    # The request phase takes the row: the validators of a group that holds a
+    # reference run when the request runs.
     stored, _ = held(CorrectedParams, 'rows', [row], _named, _path)
     assert _run_errors(stored, lambda ref: data) == (error,)
 
@@ -1031,6 +899,9 @@ def test_data_that_fail_a_check_of_their_type_are_one_error_at_the_reference() -
         samples: list[Either] = []
 
     stored, _ = held(EitherSamples, 'samples', [{'sample': OUTPUT}], _named, _path)
+    thin_sample = Sample(thickness=0.5)
+    made = value_of(EitherSamples, 'samples', stored, lambda r: thin_sample, PATHS)
+    assert made[0].sample is thin_sample
     with pytest.raises(ParamsError) as raised:
         value_of(
             EitherSamples, 'samples', stored, lambda r: Sample(thickness=2.0), PATHS

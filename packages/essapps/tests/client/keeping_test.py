@@ -91,19 +91,19 @@ def test_a_released_pending_record_is_refused_and_still_runs_for_its_readers(
     assert client.status(load) is Status.COMPLETED
 
 
-def test_cancelling_work_that_nothing_keeps_passes_along_a_chain(
+def test_cancelling_work_that_nothing_keeps_passes_along_a_chain_of_any_length(
     client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
-    load = client.submit(_load(1))
-    shifted = client.submit(_read(load))
-    again = client.submit(_read(shifted))
-    client.release([load, shifted])
-    assert client.status([load, shifted]) == [Status.PENDING] * 2  # again reads them
+    chain = [client.submit(_load(1))]
+    for _ in range(1000):
+        chain.append(client.submit(_read(chain[-1])))
+    client.release(chain[:-1])
+    assert set(client.status(chain)) == {Status.PENDING}  # the last reads them
 
-    client.release(again)
+    client.release(chain[-1])  # now nothing keeps any of them
     loading.set()
-    assert client.status([load, shifted, again]) == [Status.CANCELLED] * 3
+    assert set(client.status(chain)) == {Status.CANCELLED}
 
 
 def test_a_released_pending_record_that_nothing_reads_is_cancelled(
@@ -118,19 +118,6 @@ def test_a_released_pending_record_that_nothing_reads_is_cancelled(
     assert client.failure(load) == 'nothing keeps its outputs'
     with pytest.raises(SubmitError, match=rf'^source: record {load.id} cancelled$'):
         client.submit(_read(load))
-
-
-def test_cancelling_passes_along_a_chain_of_any_length(
-    client: Client, loading: threading.Event
-) -> None:
-    loading.clear()
-    chain = [client.submit(_load(1))]
-    for _ in range(1000):
-        chain.append(client.submit(_read(chain[-1])))
-    client.release(chain)  # the last one releases the whole chain
-    loading.set()
-
-    assert set(client.status(chain)) == {Status.CANCELLED}
 
 
 def test_closing_a_client_cancels_the_work_that_nothing_else_keeps(

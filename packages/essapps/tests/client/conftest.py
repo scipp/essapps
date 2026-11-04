@@ -219,21 +219,11 @@ class Pieces(BaseModel):
 SPLIT = _spec('split', params=Sample, outputs=Pieces)
 
 
-MaskFile = Annotated[Path, File(kind='mask')]
-
-
 LokiMask = Annotated[Path, File(kind='mask', instrument='loki')]
-
-
-class MaskParams(BaseModel):
-    mask: MaskFile
 
 
 class LokiMaskParams(BaseModel):
     mask: LokiMask
-
-
-MASKED = _spec('masked', params=MaskParams)
 
 
 LOKI_MASKED = _spec('loki-masked', params=LokiMaskParams)
@@ -283,7 +273,7 @@ def split(params: Sample) -> Pieces:
     return Pieces(parts={'whole': whole, 'half': half}, pieces=[whole, half])
 
 
-def read_mask(params: MaskParams | LokiMaskParams) -> Value:
+def read_mask(params: LokiMaskParams) -> Value:
     return _value(read_file(params.mask))
 
 
@@ -521,7 +511,6 @@ def bindings(
         DriverBinding(UNTYPED, lambda fixed: Untyped()),
         function_binding(NOTHING, lambda params: Value.model_construct(value=None)),
         function_binding(SPLIT, split),
-        function_binding(MASKED, read_mask),
         function_binding(LOKI_MASKED, read_mask),
         StagedFunction(TERMS, terms),
         kept_rows(TERMS_ROWS, terms),
