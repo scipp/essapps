@@ -44,11 +44,35 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
             sample: RunFile  # Annotated[Path, File()]
 
         PipelineBinding(IOFQ, make_pipeline, keys={'sample': (Filename[SampleRun],)})
+
+    A group is one key, so a provider takes it apart. For a value in another
+    shape, ``make_pipeline`` inserts an adapter provider, such as one that
+    makes the group ``IofQ`` from the workflow's array::
+
+        def iofq(intensity: BackgroundSubtractedIofQ) -> IofQ:
+            return IofQ(intensity=intensity)
+
+        def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
+            pipeline = sans_workflow()
+            pipeline.insert(iofq)
+            return pipeline
+
+    Files that vary independently are separate parameters, not fields of one
+    group, and the spec names them by role, ``sample`` and ``can``, not after
+    the workflow's run types. A stage fixes or blanks whole parameters, and
+    ``sciline.Stage`` computes again on each call what depends on the key of a
+    blank. A blank group of sample, can, and direct beam would compute the
+    can's branch again on every call, though only the sample changes. A group
+    of files fits files that always change together; a provider in
+    ``make_pipeline`` may take it apart into the workflow's keys.
+
     A union of groups sets the key of the member that the value is (see
     below). Each output is computed as the key of its type without
     ``| None``, since an optional output means that the graph may lack it,
     not that a provider returns ``None``; an output that a provider returns
-    as ``X | None`` needs ``keys=``.
+    as ``X | None`` needs ``keys=``. An output typed ``sc.DataArray`` is
+    computed at the key ``sc.DataArray`` unless ``keys=`` names another, so
+    two such outputs need ``keys=``.
 
     A parameter typed ``X | None`` sets no key. Each value of a union sets
     one key, but ``None`` has no key to set: setting ``X`` to ``None`` would
@@ -93,7 +117,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         #                computes GivenCentre
 
     A union whose members are of one class is that class to the binding,
-    with one key, and not a union::
+    with one key, and not a union, so it may be a blank::
 
         beam_centre: (
             Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
@@ -122,7 +146,9 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
 
     No two fields, parameters or outputs, share a key, over all members of
     a union: an output computed at a parameter's key would be the value the
-    binding was given, which an output must not share memory with. A union's
+    binding was given, which an output must not share memory with. An output
+    that reports the centre given or found has a key of its own, such as
+    ``UsedCentre``, which a provider computes from ``GivenCentre``. A union's
     own ``keys=`` may give its members one key, ``(K, K)``: the value of
     either member is then set at ``K``.
 
@@ -259,7 +285,10 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         A stage passes its fixed values with defaults filled in. A driver
         passes the fixed values it is made with: every value that is not a
         table, defaults filled in. So a field that is a table of the
-        multi-run spec cannot shape the graph, as a blank cannot.
+        multi-run spec cannot shape the graph, as a blank cannot. A driver
+        cannot cut the graph at one key for the rows of a table whose
+        single-run parameter is a union of several classes either, since it
+        has a key per member; a table of ``X | Referenced[X]`` has one key.
         """
         spec = self.spec
         if unknown := sorted(fixed.keys() - spec.params.model_fields.keys()):

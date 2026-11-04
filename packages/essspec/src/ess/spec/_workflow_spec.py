@@ -5,8 +5,10 @@ Workflow specifications: the interface of a workflow, without its code.
 
 A :class:`WorkflowSpec` names a workflow and holds two pydantic models: the
 *params*, everything a request gives the workflow, and the *outputs*, the
-results it returns. This docstring states the rules for both models, once.
+results it returns. This docstring defines the terms of both models and gives
+the reasons for their rules; :class:`WorkflowSpec` lists the rules it checks.
 The other modules of ``ess.spec`` and ``ess.apps`` apply them and link here.
+``packages/essspec/docs/params.md`` is a guide for workflow authors.
 
 A spec of an I(Q) reduction, with each kind of field once::
 
@@ -506,6 +508,155 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
     ``params=`` and ``outputs=``, so that a binding's
     ``compute(params: P) -> O`` is checked against them. Code that takes any
     spec annotates it ``WorkflowSpec[Any, Any]``.
+
+    Making a spec checks the rules below. ``packages/essspec/docs/params.md``
+    is a guide to writing a spec, and :mod:`ess.spec._workflow_spec` defines
+    the terms and gives the reasons for the rules.
+
+    Parameters
+    ----------
+    name:
+        Machine-readable identifier of the workflow, not empty. Unique within
+        the context that lists the specs.
+    version:
+        Version of the workflow interface, at least 1. Increase it on any
+        change that a consumer can observe: the params, the outputs, or what
+        the workflow computes.
+    title:
+        Display title of the workflow, not empty.
+    description:
+        What the workflow computes, not empty.
+    params:
+        Pydantic model class of everything a request gives the workflow. Each
+        field is of a field type (see Rules). Defaults to :class:`NoParams`,
+        a workflow that takes nothing.
+    outputs:
+        Pydantic model class of the results. The title and description of a
+        field are its display metadata. The order of the fields is the order
+        in which consumers present the outputs, and they may select the
+        first, so put the primary output first.
+    tables:
+        Names of the list parameters whose rows an accumulator takes a push
+        at a time, each a *table*. Defaults to none.
+    code_revision:
+        Git commit or package version of the workflow code, so that a record
+        made from a development branch says what ran. Provenance, not
+        identity: the interface version is ``version``.
+
+    Raises
+    ------
+    pydantic.ValidationError
+        If the spec breaks a rule. The message lists the problems found, each
+        with the model and field it concerns.
+
+    Rules
+    -----
+    In the rules, a *group* is a pydantic model that is not a ``RootModel``.
+    A *parameter* is a field of the params model, which is a group too, so
+    a rule for the fields of a group holds for the parameters.
+
+    Field types:
+
+    - Each field of the params model, and of each group in it at any depth,
+      is of one of these types, and no other:
+
+      - a scalar: ``int``, ``float``, ``str``, ``bool``, ``datetime`` (also
+        ``AwareDatetime`` and ``NaiveDatetime``), or an enum or a ``Literal``
+        whose values are ``str``, ``int``, ``float``, or ``bool``, possibly
+        with constraints such as ``Gt(0)``;
+      - a file field, ``Annotated[Path, File(...)]``;
+      - a group;
+      - a union of groups;
+      - ``Referenced[T]``;
+      - a union of members written inline and members ``Referenced[...]``;
+      - ``X | None`` or ``list[X]``, with ``X`` a field type.
+
+      So ``tuple``, ``set``, ``dict``, ``date``, ``bytes``, a ``RootModel``,
+      an array, and ``int | str`` are refused. Data that an output fills in
+      are a field of a group, ``Referenced[Group]``.
+    - A group does not contain itself, at any depth.
+    - A list is not typed ``list[X] | None`` (a list without elements is
+      ``[]``), its element is not typed ``X | None``, and it is not a list of
+      lists.
+    - No type is a ``NewType`` or a type alias (``type X = ...``), at any
+      depth, also inside the ``T`` of ``Referenced[T]`` and in the outputs:
+      a class says what a value is. A name assigned a type, such as
+      ``RunFile = Annotated[Path, File()]``, is that type.
+
+    Defaults (see :func:`~ess.spec.request_types.validated`):
+
+    - A default is the value that validating it gives. A group's default is
+      an instance, not a dict, and an enum's is a member, not its value. It
+      meets the constraints of the field.
+    - A default is not a reference to an output, and names no file.
+    - A file field has no default but ``None``, or ``[]`` for a list.
+    - A field typed ``Referenced[T]`` has no default but ``None`` (type it
+      ``Referenced[T] | None``), or ``[]`` for a list.
+    - A ``default_factory`` takes no other values of the model.
+
+    Files (see :class:`~ess.spec.parameters.File`):
+
+    - ``File(...)`` marks a ``Path``, once. ``Annotated[int, File()]`` and
+      ``Annotated[Path | None, File()]`` are refused; write
+      ``Annotated[Path, File()] | None``.
+    - A ``Path`` without ``File(...)`` is refused.
+    - A file field takes no constraint, such as ``MinLen(2)``. A validator
+      such as ``AfterValidator(...)`` is allowed: it sees the local path.
+    - A file field is in a union only with members ``Referenced[...]`` and
+      ``None``, since a field takes one kind of file.
+
+    ``Referenced[T]``:
+
+    - It types a field of the params, at any depth, but no output.
+    - ``T`` is a group. ``Referenced[float]``, ``Referenced[sc.DataArray]``,
+      and ``Referenced[A | B]`` are refused; write ``Referenced[A] |
+      Referenced[B]``. The fields of ``T`` are of any type otherwise.
+    - ``T`` holds no ``Path`` (so no file field) and no ``Referenced[...]``,
+      at any depth, since no output holds either.
+
+    Unions of groups (see :func:`~ess.spec.field_types.alternatives`):
+
+    - The discriminator is the name of the tag field,
+      ``Annotated[A | B, Field(discriminator='kind')]``, not a callable.
+    - The tag field of each alternative is a ``Literal`` of one string, its
+      own, without an alias.
+    - A union that holds a group holds groups only, besides ``None`` and
+      members ``Referenced[...]``: ``A | float`` is refused.
+    - In a union with members ``Referenced[...]``, the discriminator is on
+      the union of the members written inline,
+      ``Annotated[A | B, Field(discriminator='kind')] | Referenced[C]``,
+      since a reference to an output has no tag.
+
+    Tables:
+
+    - ``tables`` names a parameter of the params model, once.
+    - A table is typed ``list[X]``, and has no default.
+    - A table carries only length constraints, such as
+      ``Field(min_length=1)``, and no other constraint or validator. The
+      type of its element checks a row.
+
+    Outputs:
+
+    - A name is of a parameter or of an output, not both.
+    - An output is typed ``X``, ``X | None``, ``list[X]``, or ``dict[str, X]``
+      (also ``| None``), not a union of types. ``X`` is any type, arrays
+      among them.
+    - No output holds a ``Path`` at any depth, a file field among them, since
+      every file comes from the file source.
+    - No output holds ``Referenced[...]`` at any depth, which marks a field
+      of the params.
+
+    Params model and groups:
+
+    - A field has no alias (``alias``, ``validation_alias``,
+      ``serialization_alias``) and no ``exclude``, so that the JSON form of a
+      group, which a record stores, is the object of its fields.
+    - A group has no serializers and no computed fields, for the same reason.
+      It may have field validators and model validators of any mode.
+    - The params model has no field validators, serializers, or computed
+      fields: each parameter is validated alone. It may have model
+      validators, which the framework never calls; a binding may,
+      ``IofQParams.model_validate(dict(params))``.
     """
 
     # A type checker cannot check a default against P, which only params=

@@ -11,7 +11,8 @@ each for one spec::
     export = function_binding(EXPORT, export_csv)
 
 ``PipelineBinding`` is in :mod:`ess.spec.pipeline`, which needs sciline. Each
-binding serves some of a client's actions:
+binding serves some of a client's actions. A stage or an accumulator that its
+binding does not serve is refused when it is made:
 
 =====================  =============  ==============  ==================
 binding                plain request  stage           accumulator
@@ -35,6 +36,13 @@ it, a file as its local path, and a table as the list of its rows::
 Blanks name parameters, a table among them. An output that the spec declares
 optional is left out by being ``None``.
 
+A binding never sees a reference: the backend reads the data of each reference
+before it calls the binding. The backend passes every parameter, with the
+defaults of the model filled in, so defaults belong in the model only. A
+binding does not modify the values it gets, and returns no output that shares
+memory with one of them; :mod:`ess.spec.testing` checks this for values backed
+by numpy.
+
 A *driver* (:class:`Driver`) is the object behind an accumulator: tables are
 pushed into it, and it gives the outputs over the rows so far. The workflow
 package writes it; only a driver accumulates.
@@ -57,6 +65,12 @@ type StageCall[O] = Callable[[Mapping[str, Any]], O]
 
 @runtime_checkable
 class Binding[P: BaseModel, O: BaseModel](Protocol):
+    """
+    What the backend calls to compute a plain request, once per request.
+
+    Every binding is one, whatever else it serves (see :mod:`ess.spec.binding`).
+    """
+
     @property
     def spec(self) -> WorkflowSpec[P, O]:
         """The spec whose requests the binding computes."""
@@ -76,6 +90,14 @@ class Binding[P: BaseModel, O: BaseModel](Protocol):
 
 @runtime_checkable
 class StageBinding[P: BaseModel, O: BaseModel](Binding[P, O], Protocol):
+    """
+    A binding that serves stages.
+
+    The backend calls :meth:`make_stage` at a stage's first call, and the
+    callable it returns once per call through the stage. A plain request is a
+    stage with no blanks, called once.
+    """
+
     def make_stage(
         self, fixed: Mapping[str, Any], blanks: Collection[str]
     ) -> StageCall[O]:
@@ -126,6 +148,34 @@ class Driver[O: BaseModel](Protocol):
 
     A push that raises stops the accumulator, since the driver may hold part
     of its rows.
+
+    The workflow package writes the driver, for one spec, and it holds
+    everything an accumulator keeps. The framework never decides how rows
+    combine, not even by keeping them. A driver for the toy SANS reduction
+    sums each run's numerator and denominator per table, and divides once::
+
+        class IofQDriver:
+            def __init__(self, fixed):  # the fixed values that are not tables
+                self._bins = fixed['reduction'].bins
+                self._sums = {}  # per table: numerator and denominator
+
+            def push(self, table, rows):
+                for row in rows:  # the local path of a sample or a can run
+                    parts = numerator_and_denominator(row, self._bins)
+                    old = self._sums.get(table)
+                    self._sums[table] = (
+                        parts if old is None else [a + b for a, b in zip(old, parts)]
+                    )
+
+            def outputs(self):  # a state read has a sample row and a can row
+                sample_num, sample_den = self._sums['sample']
+                can_num, can_den = self._sums['can']
+                return IofQOutputs(
+                    iofq=IofQ(intensity=sample_num / sample_den - can_num / can_den)
+                )
+
+    A workflow that needs every row at once, such as a stitch of runs, writes a
+    driver that keeps its rows and computes over all of them at each read.
     """
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
@@ -144,6 +194,24 @@ class Driver[O: BaseModel](Protocol):
 
 @runtime_checkable
 class AccumulatorBinding[P: BaseModel, O: BaseModel](Binding[P, O], Protocol):
+    """
+    A binding that serves accumulators.
+
+    The backend calls :meth:`make_accumulator` when an accumulator opens, then
+    :meth:`Driver.push` once per table of a push, with its rows, and
+    :meth:`Driver.outputs` once per state that is read. A plain request is an
+    accumulator with no blanks, read once.
+
+    Code that calls a driver itself keeps the order of the backend, and is done
+    with the outputs of a state before it pushes::
+
+        driver = binding.make_accumulator(fixed, blanks=('runs',))
+        for run in runs:  # each the local path of a run
+            driver.push('runs', [run])
+            counts = driver.outputs().volume.counts  # may be the next push's array
+            show(counts['q', 0])  # done with it before the next push
+    """
+
     def make_accumulator(
         self, fixed: Mapping[str, Any], blanks: Collection[str]
     ) -> Driver[O]:
@@ -244,8 +312,18 @@ def function_binding[P: BaseModel, O: BaseModel](
     """
     A function behind a spec: plain requests only.
 
+    It serves drafts in notebooks, and workflows that hold nothing worth
+    keeping between calls. It has no stage, since a stage over a function
+    would hold nothing.
+
     ``function`` takes an instance of the spec's params model and returns an
     instance of its outputs model. It must be pure: the backend may call it
-    from several threads at once, and it does not modify its argument.
+    from several threads at once, and it does not modify its argument::
+
+        def iofq(params: IofQParams) -> IofQOutputs:
+            ...  # params.reduction.bins; params.sample is a local path
+            return IofQOutputs(iofq=result)
+
+        draft = function_binding(IOFQ, iofq)
     """
     return _FunctionBinding(spec, function)
