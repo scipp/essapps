@@ -95,6 +95,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import math
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path, PurePath
 from types import UnionType
@@ -716,8 +717,9 @@ def inline(
     ``value`` is plain data, such as :func:`held` makes of
     Python objects. It is validated from its JSON form, with ``context``. A
     field that a model lacks is refused at any depth, since validating would
-    drop it silently. The JSON form of the validated value must read back as
-    a value with the same JSON form, validated without ``context``. Raises:
+    drop it silently. The value reconstructed from its JSON form, validated
+    without ``context``, must be the same plain Python data, and its JSON form
+    must be stable. Raises:
 
     - ``PydanticSerializationError`` if it has no JSON form;
     - ``ValidationError`` if it is not valid, or if its JSON form is not,
@@ -740,6 +742,10 @@ def inline(
             one.__name__,
             [{'type': _NO_JSON_FORM_ERROR, 'loc': first['loc'], 'input': None}],
         ) from None
+    made_plain = _ANY.dump_python(made)
+    again_plain = _ANY.dump_python(again)
+    if not _same(made_plain, again_plain):
+        raise ParamsError([(_differs((), made_plain, again_plain), _NO_JSON_FORM)])
     if (read := _json_form(one, name, again)) != stored:
         raise ParamsError([(_differs((), stored, read), _NO_JSON_FORM)])
     return made, stored
@@ -749,19 +755,41 @@ _NO_JSON_FORM = 'has no JSON form that reads back as the value'
 _NO_JSON_FORM_ERROR = PydanticCustomError('no_json_form', _NO_JSON_FORM)
 
 
+def _same(a: Any, b: Any) -> bool:
+    """Whether two plain values are equal, including a number that is not finite."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
+    if isinstance(a, list | tuple) and isinstance(b, list | tuple):
+        return len(a) == len(b) and all(
+            _same(x, y) for x, y in zip(a, b, strict=True)
+        )
+    if (
+        isinstance(a, float)
+        and isinstance(b, float)
+        and math.isnan(a)
+        and math.isnan(b)
+    ):
+        return True
+    return a == b
+
+
 def _differs(loc: Loc, a: Any, b: Any) -> Loc:
     """
-    The first position at which ``a`` and ``b``, two JSON forms at ``loc``,
-    differ: a field of an object or an element of a list, at any depth.
+    The first position at which two plain values at ``loc`` differ: a field
+    of an object or an element of a sequence, at any depth.
     """
     if isinstance(a, dict) and isinstance(b, dict) and a.keys() == b.keys():
         pairs: Iterable[tuple[str | int, Any, Any]] = ((k, a[k], b[k]) for k in a)
-    elif isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+    elif (
+        isinstance(a, list | tuple)
+        and isinstance(b, list | tuple)
+        and len(a) == len(b)
+    ):
         pairs = ((i, x, y) for i, (x, y) in enumerate(zip(a, b, strict=True)))
     else:
         return loc
     for at, x, y in pairs:
-        if x != y:
+        if not _same(x, y):
             return _differs((*loc, at), x, y)
     return loc
 

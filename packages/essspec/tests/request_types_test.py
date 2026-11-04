@@ -756,6 +756,19 @@ def test_a_field_typed_x_or_none_takes_none_or_x() -> None:
         assert made.window.stop == stop
 
 
+@pytest.mark.parametrize('stop', [float('nan'), float('inf'), float('-inf')])
+def test_a_field_typed_x_or_none_refuses_a_number_that_is_not_finite(
+    stop: float,
+) -> None:
+    with pytest.raises(ParamsError):
+        _stored(
+            SpecimenParams,
+            'specimen',
+            {'run': FILE, 'window': {'stop': stop}},
+            _named,
+        )
+
+
 def test_each_reference_to_an_output_is_given_with_the_type_its_data_fit() -> None:
     other = OutputRef(record='r2', output='transmission')
     rows = [
