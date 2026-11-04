@@ -270,13 +270,21 @@ def holds_ref(annotation: Any) -> bool:
     return _holds(annotation, is_referenced)
 
 
+def holds_file(annotation: Any) -> bool:
+    """
+    Whether ``annotation`` holds a file field, at any depth, in the fields
+    of each group too.
+    """
+    return _holds(annotation, is_file)
+
+
 def holds_marker(annotation: Any) -> bool:
     """
     Whether ``annotation`` holds ``Referenced[...]`` or a file field, at any
     depth, in the fields of each group too: whether a request writes
     something other than its type, a reference or a file, somewhere in it.
     """
-    return _holds(annotation, lambda tp: is_referenced(tp) or is_file(tp))
+    return holds_ref(annotation) or holds_file(annotation)
 
 
 def _holds(

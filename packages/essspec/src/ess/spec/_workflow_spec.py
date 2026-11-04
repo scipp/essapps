@@ -398,21 +398,34 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from pathlib import Path, PurePath
-from types import UnionType
-from typing import Any, Self, TypeAliasType, Union, get_args, get_origin
+from types import NoneType, UnionType
+from typing import (
+    Annotated,
+    Any,
+    Self,
+    TypeAliasType,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from annotated_types import MaxLen, MinLen
 from pydantic import (
+    AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
+    PlainValidator,
+    TypeAdapter,
+    WrapValidator,
     model_validator,
 )
 from pydantic.fields import FieldInfo
 
 from . import field_types, request_types
 from .parameters import REFERENCED, File
-from .refs import ParamsError, iter_refs
+from .refs import FileRef, ParamsError, iter_refs
 
 
 class NoParams(BaseModel):
@@ -694,6 +707,8 @@ def _type_problems(
     - ``X | None``, and ``list[X]``, with ``X`` not a list and not
       ``X | None``.
     """
+    if _marks_optional(annotation, metadata):
+        return [_OPTIONAL_MARKED]
     tp, none, metadata = field_types.unwrapped(annotation, metadata)
     if field_types.is_alias(tp):
         return [_alias_text(tp)]
@@ -724,7 +739,10 @@ def _type_problems(
     if problem := _marker_problem(inline, inline_metadata):
         return [*problems, problem]
     if field_types.file_marker(inline, *inline_metadata) is not None:
-        return problems
+        constraints = [m for m in inline_metadata if not isinstance(m, _FILE_METADATA)]
+        return [*problems, *map(_constraint_text, constraints)]
+    if any(map(field_types.is_file, members)):
+        return [*problems, _FILES_UNION]
     try:
         union = field_types.alternatives(inline, *inline_metadata)
     except ValueError as error:
@@ -744,6 +762,58 @@ _TAGGED_REFERENCE = (
     'the discriminator of a union with a member Referenced[...] is on the union '
     "written inline, Annotated[A | B, Field(discriminator='kind')] | "
     'Referenced[C], since a reference to an output has no tag'
+)
+
+
+def _marks_optional(annotation: Any, metadata: tuple[Any, ...]) -> bool:
+    """
+    Whether a :class:`~ess.spec.parameters.File` marker, in ``metadata`` or
+    in an ``Annotated`` of ``annotation``, marks a type ``X | None``.
+    """
+    tp = annotation
+    while True:
+        origin, args = get_origin(tp), get_args(tp)
+        if origin in (Union, UnionType) and NoneType in args:
+            if any(isinstance(m, File) for m in metadata):
+                return True
+            rest = tuple(a for a in args if a is not NoneType)
+            tp = rest[0] if len(rest) == 1 else Union[rest]  # noqa: UP007
+        elif origin in (Union, UnionType):
+            return any(_marks_optional(arg, metadata) for arg in args)
+        elif origin is Annotated:
+            metadata = (*metadata, *tp.__metadata__)
+            tp = args[0]
+        else:
+            return False
+
+
+_OPTIONAL_MARKED = (
+    'File(...) marks a Path, not Path | None; a file field that may be None is '
+    'typed Annotated[Path, File(...)] | None, as Referenced[X] | None is'
+)
+
+_FILE_METADATA = (
+    File,
+    AfterValidator,
+    BeforeValidator,
+    PlainValidator,
+    WrapValidator,
+)
+"""What a file field holds in its metadata besides its marker: validators."""
+
+
+def _constraint_text(constraint: Any) -> str:
+    return (
+        f'a file field takes no constraint, such as {constraint!r}; a check of '
+        'its local path is a validator, such as AfterValidator(...), and the '
+        'file source checks the file'
+    )
+
+
+_FILES_UNION = (
+    'a field takes one kind of file, so a file field is in a union only with '
+    'members Referenced[...] and None; the marker of one file field names the '
+    'metadata that each file that fits has'
 )
 
 
@@ -922,11 +992,14 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
     validating it gives, since pydantic does not validate a default, and a
     binding gets it as it is (see :func:`ess.spec.request_types.validated`). So a
     group's default is an instance, not the object of its fields, and a
-    list's default keeps the length constraints of the list.
+    list's default keeps the length constraints of the list. A file field has
+    no default but ``None`` or ``[]``: each ``Path`` in the default is given
+    as a file, which the resolver of files refuses.
     """
     default = model.model_fields[name].get_default(call_default_factory=True)
+    given = _paths_as_files(_ANY.dump_python(default))
     try:
-        held, _ = request_types.held(model, name, default, _no_file, _no_path)
+        held, _ = request_types.held(model, name, given, _no_file, _no_path)
         if refs := [
             (loc, f'{ref} is a reference; a default is a value')
             for loc, ref in iter_refs({name: held})
@@ -940,12 +1013,27 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
     return None
 
 
+def _paths_as_files(value: Any) -> Any:
+    """``value``, plain data, with each ``Path`` in it a file of that name."""
+    if isinstance(value, PurePath):
+        return {'@ref': 'file', 'file': str(value)}
+    if isinstance(value, dict):
+        return {k: _paths_as_files(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_paths_as_files(v) for v in value]
+    return value
+
+
+_ANY = TypeAdapter(Any)
+"""Dumps Python objects to plain data, keeping each ``Path``."""
+
+
 def _no_file(name: str, marker: File) -> str:
     raise ValueError(_NO_FILE)
 
 
-def _no_path(identity: str) -> Path:
-    raise OSError(_NO_FILE)
+def _no_path(ref: FileRef) -> Path:
+    raise AssertionError('no file of a default is resolved, so none has a path')
 
 
 _NO_FILE = 'a default names no file; a file field has no default but None or []'

@@ -200,8 +200,9 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
             raise ValueError(
                 f'{spec.name}: {keyless}: a parameter whose type, or whose element '
                 'type for a list, is not a group or a union of groups gives its '
-                'keys=: a key such as int names no role, so no provider would read '
-                f'it, and the value would have no effect{_file_keys(spec, keyless)}'
+                'keys=: a key such as int, or the Path of a file field, names no '
+                'role, so no provider would read it, and the value would have no '
+                'effect'
             )
         if optional_params := sorted(
             n
@@ -358,28 +359,6 @@ def _grouped(model: type[BaseModel], name: str) -> bool:
     tp = field_types.value_type(model.model_fields[name].annotation)
     members = get_args(tp) if get_origin(tp) in (Union, UnionType) else (tp,)
     return all(field_types.is_group(m) for m in members)
-
-
-def _file_keys(spec: WorkflowSpec[Any, Any], names: Sequence[str]) -> str:
-    """
-    How the file fields among the parameters ``names`` of ``spec`` give
-    their keys, for a message; ``''`` if there are none. One typed ``X |
-    None`` sets no key (see below).
-    """
-    fields = spec.params.model_fields
-    files = [
-        n
-        for n in names
-        if field_types.file_of(fields[n]) is not None
-        and not field_types.optional(fields[n].annotation)[1]
-    ]
-    if not files:
-        return ''
-    return (
-        f'. A file field, {files}, holds a Path: give it the key of the path '
-        "that the workflow's providers take, such as "
-        f"keys={{{files[0]!r}: (Filename[SampleRun],)}}"
-    )
 
 
 def _key_text(key: Key) -> str:

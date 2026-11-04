@@ -425,7 +425,6 @@ NOT_A_VALUE = 'the default is not a value a request may write'
 NO_FILE_DEFAULT = re.escape(
     'a default names no file; a file field has no default but None or []'
 )
-NOT_A_FILE = re.escape("'run.nxs' is not a file; a file field is written as file(...)")
 OPTIONAL_LIST = re.escape(
     'a list is not typed list[X] | None; a list without elements is []'
 )
@@ -525,7 +524,11 @@ class TestModelRules:
             {'params': model('P', by=(By | None, None), each=(list[By], []))},
             {'params': model('P', centre=(validated('Centre', x=(float, ...)), ...))},
             {'params': model('P', mask=(MaskFile, ...))},
-            {'params': model('P', mask=(Annotated[Path | None, File()], None))},
+            {
+                'params': model(
+                    'P', mask=(Annotated[MaskFile, AfterValidator(lambda p: p)], ...)
+                )
+            },
             {
                 'params': model(
                     'P', mask=(MaskFile | Referenced[BeamCentre] | None, None)
@@ -1143,6 +1146,43 @@ class TestModelRules:
                     "[File(kind='mask'), File(kind='raw')]"
                 ),
             ),
+            (
+                {
+                    'params': model(
+                        'P', n=(Annotated[int, File()] | Referenced[BeamCentre], ...)
+                    )
+                },
+                r'P.n: File\(\.\.\.\) marks a Path, not int',
+            ),
+            *(
+                (
+                    {'params': model('P', mask=(annotation, None))},
+                    re.escape(
+                        'P.mask: File(...) marks a Path, not Path | None; a file '
+                        'field that may be None is typed Annotated[Path, '
+                        'File(...)] | None'
+                    ),
+                )
+                for annotation in (
+                    Annotated[Path | None, File()],
+                    Annotated[Path | None, File()] | Referenced[BeamCentre],
+                )
+            ),
+            *(
+                (
+                    {'params': model('P', mask=(MaskFile, constraint))},
+                    rf'P.mask: a file field takes no constraint, such as '
+                    rf'{re.escape(text)}; a check of its local path is a validator',
+                )
+                for constraint, text in (
+                    (Field(min_length=2), 'MinLen(min_length=2)'),
+                    (Field(gt=2), 'Gt(gt=2)'),
+                )
+            ),
+            (
+                {'params': model('P', run=(SampleRun | MaskFile, ...))},
+                'P.run: a field takes one kind of file',
+            ),
             *(
                 (
                     {'params': model('P', g=(Referenced[group], ...))},
@@ -1407,7 +1447,7 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', sample=(SampleRun, Path('run.nxs')))},
-                f'P.sample: {NOT_A_VALUE}: sample: {NOT_A_FILE}',
+                f'P.sample: {NOT_A_VALUE}: sample: {NO_FILE_DEFAULT}',
             ),
             (
                 {'params': model('P', sample=(SampleRun, FileRef(file='run:1')))},
@@ -1415,7 +1455,7 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', runs=(list[SampleRun], [Path('run.nxs')]))},
-                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: {NOT_A_FILE}',
+                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: {NO_FILE_DEFAULT}',
             ),
             (
                 {
@@ -1423,7 +1463,7 @@ class TestModelRules:
                         'P', measured=(Measured, Measured(run=Path('run.nxs')))
                     )
                 },
-                f'P.measured: {NOT_A_VALUE}: measured.run: {NOT_A_FILE}',
+                f'P.measured: {NOT_A_VALUE}: measured.run: {NO_FILE_DEFAULT}',
             ),
             (
                 {
@@ -1574,9 +1614,9 @@ class TestFields:
                 {'bins': 3},
                 r"the default {'bins': 3} is not the value validating it gives",
             ),
-            (SampleRun | None, Path('run.nxs'), NOT_A_FILE),
+            (SampleRun | None, Path('run.nxs'), NO_FILE_DEFAULT),
             (SampleRun | None, FileRef(file='run:1'), NO_FILE_DEFAULT),
-            (list[SampleRun], [Path('run.nxs')], NOT_A_FILE),
+            (list[SampleRun], [Path('run.nxs')], NO_FILE_DEFAULT),
             (
                 Referenced[Reduction],
                 Reduction(),

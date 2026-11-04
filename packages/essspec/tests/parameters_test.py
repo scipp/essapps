@@ -46,6 +46,13 @@ class TestFile:
         assert File() == File(kind='raw')
         assert File(kind='mask') != File()
 
+    @pytest.mark.parametrize(('a', 'b'), [(1, True), (1, 1.0), (0, False)])
+    def test_two_markers_whose_values_are_of_two_types_differ(
+        self, a: Any, b: Any
+    ) -> None:
+        assert File(key=a) != File(key=b)
+        assert Annotated[Path, File(key=a)] != Annotated[Path, File(key=b)]
+
     def test_the_metadata_cannot_be_changed_through_the_marker(self) -> None:
         marker = File(kind='mask')
         marker.metadata['kind'] = 'raw'
@@ -78,7 +85,10 @@ class TestFile:
     @pytest.mark.parametrize(
         ('given', 'msg'),
         [
-            ('/data/1.xml', 'is not a file, as the field is a file field'),
+            (
+                '/data/1.xml',
+                "'/data/1.xml' is not a file; a file field is written as file(...)",
+            ),
             ({'@ref': 'file', 'file': 'run:loki/2'}, 'run:loki/2 has no local path'),
         ],
     )

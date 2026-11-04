@@ -108,12 +108,12 @@ def _named(name: str, marker: File) -> str:
     return name
 
 
-def _path(identity: str) -> Path:
+def _path(ref: FileRef) -> Path:
     """The local path of each file."""
-    return Path(f'/data/{identity}.nxs')
+    return Path(f'/data/{ref.file}.nxs')
 
 
-PATHS = {FILE_ID: _path(FILE_ID)}
+PATHS = {FILE_ID: _path(FileRef(file=FILE_ID))}
 
 
 def _unread(ref: Ref) -> Any:
@@ -261,7 +261,7 @@ NOT_REFERENCED = (
 )
 
 
-def test_a_reference_to_an_output_at_a_file_model_is_refused() -> None:
+def test_a_reference_to_an_output_at_a_file_field_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
         _stored(MaskParams, 'mask', OUTPUT, _named)
     assert raised.value.errors == (
@@ -375,7 +375,7 @@ def test_a_reference_to_an_output_at_a_field_not_typed_referenced_is_refused(
     assert raised.value.errors == ((loc, msg),)
 
 
-def test_a_file_at_a_field_that_is_not_a_file_model_is_refused() -> None:
+def test_a_file_at_a_field_that_is_not_a_file_field_is_refused() -> None:
     with pytest.raises(ParamsError) as raised:
         _stored(Params, 'reduction', {'angles': [1.0, FILE]}, _named)
     assert raised.value.errors == (
@@ -430,7 +430,6 @@ def test_an_error_inside_a_union_names_its_place_without_the_tag() -> None:
     ('model', 'name', 'value', 'loc'),
     [
         (MaskParams, 'mask', 'mask.xml', ('mask',)),
-        (MaskParams, 'mask', Path('mask.xml'), ('mask',)),
         (MaskParams, 'mask', {'path': 'mask.xml'}, ('mask',)),
         (MaskParams, 'mask', {'file': 'mask.xml'}, ('mask',)),
         (MaskParams, 'runs', ['run.nxs'], ('runs', 0)),
@@ -636,17 +635,6 @@ def test_the_validators_of_a_group_that_holds_a_file_run_when_it_is_written() ->
     assert 'not a NeXus file' in msg
 
 
-def test_a_file_whose_local_path_cannot_be_had_is_refused_at_its_place() -> None:
-    def unreadable(identity: str) -> Path:
-        raise OSError('offline')
-
-    with pytest.raises(ParamsError) as raised:
-        held(MeasuredParams, 'measured', {'run': FILE}, _named, unreadable)
-    assert raised.value.errors == (
-        (('measured', 'run'), 'file pid-1 cannot be had: offline'),
-    )
-
-
 def test_a_parameter_that_holds_a_reference_gets_no_local_paths_when_written() -> None:
     class Specimen(BaseModel):
         run: RunFile
@@ -655,12 +643,16 @@ def test_a_parameter_that_holds_a_reference_gets_no_local_paths_when_written() -
     class SpecimenParams(BaseModel):
         specimen: Specimen
 
-    def unreadable(identity: str) -> Path:
-        raise OSError('offline')
+    looked_up = []
+
+    def local_path(ref: FileRef) -> Path:
+        looked_up.append(ref)
+        return _path(ref)
 
     value = {'run': FILE, 'sample': OUTPUT}
-    stored, _ = held(SpecimenParams, 'specimen', value, _named, unreadable)
+    stored, _ = held(SpecimenParams, 'specimen', value, _named, local_path)
     assert stored == {'run': FILE.model_dump(), 'sample': OUTPUT.model_dump()}
+    assert looked_up == []
 
 
 class TaggedCentre(BaseModel):
@@ -1015,3 +1007,64 @@ def test_a_list_is_validated_whole_and_a_table_without_its_length() -> None:
 def test_in_direct_use_a_file_field_takes_a_path() -> None:
     assert validated(MaskParams, 'mask', 'mask.xml') == Path('mask.xml')
     assert validated(MaskParams, 'runs', [Path('run.nxs')]) == [Path('run.nxs')]
+
+
+def _nexus_runs(runs: list[Path]) -> list[Path]:
+    if any(run.suffix != '.nxs' for run in runs):
+        raise ValueError('only NeXus files')
+    return runs
+
+
+class NexusRuns(BaseModel):
+    runs: Annotated[list[RunFile], AfterValidator(_nexus_runs), Field(min_length=1)]
+
+
+def test_a_validator_of_a_list_of_files_runs_on_their_local_paths_when_written() -> (
+    None
+):
+    assert _stored(NexusRuns, 'runs', [FILE], _named) == [FILE.model_dump()]
+    with pytest.raises(ParamsError) as raised:
+        held(NexusRuns, 'runs', [FILE], _named, lambda ref: Path('run.json'))
+    ((at, msg),) = raised.value.errors
+    assert at == ('runs',)
+    assert 'only NeXus files' in msg
+
+
+def test_the_length_constraint_of_a_list_of_files_holds_when_written() -> None:
+    with pytest.raises(ParamsError, match='at least 1 item'):
+        _stored(NexusRuns, 'runs', [], _named)
+
+
+def test_a_file_that_no_file_field_resolved_is_refused() -> None:
+    def as_file(name: str) -> dict[str, str]:
+        return {'@ref': 'file', 'file': name}
+
+    def name_of(value: Any) -> Any:
+        return value['file'] if isinstance(value, dict) else value
+
+    Named = Annotated[str, BeforeValidator(name_of), PlainSerializer(as_file)]
+
+    class Labelled(BaseModel):
+        label: Named
+
+    class LabelledParams(BaseModel):
+        labelled: Labelled
+
+    with pytest.raises(ParamsError) as raised:
+        _stored(LabelledParams, 'labelled', {'label': '/etc/passwd'}, _named)
+    assert raised.value.errors == (
+        (
+            ('labelled', 'label'),
+            '/etc/passwd: the JSON form of a value holds a file that no file '
+            'field resolved',
+        ),
+    )
+
+
+def test_the_local_paths_of_values_are_by_the_identity_of_each_file() -> None:
+    other = FileRef(file='pid-2')
+    values = {'measured': {'run': FILE.model_dump()}, 'runs': [FILE, other]}
+    assert request_types.local_paths(values, _path) == {
+        FILE_ID: _path(FILE),
+        'pid-2': _path(other),
+    }

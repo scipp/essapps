@@ -13,7 +13,7 @@ import pytest
 from annotated_types import Gt
 from pydantic import BaseModel, Field, TypeAdapter
 
-from ess.spec import File, Referenced, WorkflowSpec
+from ess.spec import File, FileRef, Referenced, WorkflowSpec
 from ess.spec.refs import ParamsError
 from ess.spec.request_types import held
 
@@ -160,8 +160,8 @@ def _resolved(name: str, marker: File) -> str:
     return name
 
 
-def _path(identity: str) -> Path:
-    return Path(identity)
+def _path(ref: FileRef) -> Path:
+    return Path(ref.file)
 
 
 @pytest.mark.parametrize(('name', 'value'), REQUESTS)

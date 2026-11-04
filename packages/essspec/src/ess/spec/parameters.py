@@ -41,7 +41,7 @@ from pydantic import (
 )
 from pydantic_core import CoreSchema, ErrorDetails, PydanticCustomError, core_schema
 
-from .refs import AccumulatorRef, FileRef, OutputRef, as_ref
+from .refs import AccumulatorRef, FileRef, OutputRef, Ref, as_ref
 
 
 class File:
@@ -79,7 +79,8 @@ class File:
     The marker carries no validators: one that reads the file would read it
     from a network mount when the request is submitted. A check of the
     content of a file belongs to the workflow. Two markers are equal if
-    their metadata are.
+    their metadata are, each value of the same type, so that ``File(n=1)``
+    and ``File(n=True)`` are two markers.
     """
 
     __slots__ = ('_metadata',)
@@ -101,10 +102,14 @@ class File:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, File):
             return NotImplemented
-        return self.metadata == other.metadata
+        return self._typed == other._typed
 
     def __hash__(self) -> int:
-        return hash(frozenset(self._metadata))
+        return hash(self._typed)
+
+    @property
+    def _typed(self) -> frozenset[tuple[str, type, Any]]:
+        return frozenset((k, type(v), v) for k, v in self._metadata)
 
     def __repr__(self) -> str:
         return f'File({", ".join(f"{k}={v!r}" for k, v in self._metadata)})'
@@ -125,18 +130,46 @@ def _local(
     The local path of ``value``, the stored form of a file, given by the
     context, validated as the field's type, ``Path``.
     """
-    paths = (info.context or {}).get('paths')
-    if paths is None or value is None:  # None, of Annotated[Path | None, File()]
+    given = _given(value, info, 'paths', FileRef)
+    if given is None:
         return validate(value)
-    ref = as_ref(value) if isinstance(value, Mapping) else None
-    if not isinstance(ref, FileRef):
-        raise PydanticCustomError(
-            'file_ref', 'is not a file, as the field is a file field'
-        )
+    paths, ref = given
     if ref.file not in paths:
         raise PydanticCustomError('file', f'file {ref} has no local path')
     # A path validated from JSON is a string.
     return validate(str(paths[ref.file]))
+
+
+def _given(
+    value: Any, info: ValidationInfo, key: str, kind: Any
+) -> tuple[Any, Ref] | None:
+    """
+    What the context holds under ``key``, and ``value`` as the reference of
+    ``kind`` that the stored form holds; ``None`` without ``key``, as in
+    direct use. Refuses a value of another source (see :func:`not_its_source`).
+    """
+    held = (info.context or {}).get(key)
+    if held is None:
+        return None
+    ref = as_ref(value) if isinstance(value, Mapping) else None
+    if not isinstance(ref, kind):
+        raise not_its_source(value, file=kind is FileRef)
+    return held, ref
+
+
+def not_its_source(value: Any, file: bool) -> PydanticCustomError:
+    """
+    The error that ``value`` is not a file, at a file field if ``file``, or
+    not a reference to an output, at a field typed ``Referenced[...]``.
+    """
+    if file:
+        return PydanticCustomError(
+            'file_ref', f'{value!r} is not a file; a file field is written as file(...)'
+        )
+    return PydanticCustomError(
+        'output_ref',
+        'is not a reference to an output, as the field is typed Referenced[...]',
+    )
 
 
 class DataRefused(Exception):
@@ -188,15 +221,10 @@ def _read(
     The data of ``value``, a reference to an output, read by the context and
     validated as ``data_type``, the ``T`` of ``Referenced[T]``.
     """
-    read = (info.context or {}).get('read')
-    if read is None:
+    given = _given(value, info, 'read', OutputRef | AccumulatorRef)
+    if given is None:
         return validate(value)
-    ref = as_ref(value) if isinstance(value, Mapping) else None
-    if not isinstance(ref, OutputRef | AccumulatorRef):
-        raise PydanticCustomError(
-            'output_ref',
-            'is not a reference to an output, as the field is typed Referenced[...]',
-        )
+    read, ref = given
     data = read(ref)
     if not isinstance(data, data_type):
         # Data of another member Referenced[...] of a union, which takes them.

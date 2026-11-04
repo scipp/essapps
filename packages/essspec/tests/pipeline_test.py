@@ -402,18 +402,17 @@ def test_a_file_parameter_sets_the_workflows_key_of_its_path(
     assert stage({'sample': samples[1].file}) == TotalOutputs(total=2 * sum(SAMPLES[1]))
 
 
-def test_a_file_parameter_without_keys_is_refused_with_the_key_to_give() -> None:
-    with pytest.raises(ValueError, match='A file field') as raised:
+def test_a_file_parameter_without_keys_is_refused() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"file-total: \['sample'\]: a parameter whose type.* gives its keys=: "
+        'a key such as int, or the Path of a file field, names no role',
+    ):
         PipelineBinding(
             FILE_TOTAL,
             lambda _: sciline.Pipeline([load_path, total]),
             keys={'can': (), 'total': (Total,)},
         )
-    assert "file-total: ['sample']: a parameter whose type" in str(raised.value)
-    assert (
-        "A file field, ['sample'], holds a Path: give it the key of the path that "
-        "the workflow's providers take, such as keys={'sample': (Filename[SampleRun],)}"
-    ) in str(raised.value)
 
 
 class TotalAndMeanOutputs(BaseModel):
@@ -640,7 +639,7 @@ def test_a_scalar_parameter_without_keys_is_refused() -> None:
     with pytest.raises(
         ValueError,
         match=r"bins: \['bins'\]: a parameter whose type.* gives its keys=: a key "
-        'such as int names no role, so no provider would read it',
+        'such as int, or the Path of a file field, names no role',
     ):
         PipelineBinding(
             BINS, lambda _: sciline.Pipeline([double]), keys={'doubled': (Doubled,)}
