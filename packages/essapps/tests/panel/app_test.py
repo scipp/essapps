@@ -150,3 +150,14 @@ def test_a_released_output_is_no_longer_offered(
     app.outputs.remove()
 
     assert found.ref('centre') not in offered()
+
+
+def test_the_forms_come_first_then_the_outputs_then_the_records(app: App) -> None:
+    tabs = app.panel()
+
+    assert tabs.active == 0
+    assert [p.title for p in tabs.get_root().tabs] == [
+        'Workflows',
+        'Outputs',
+        'Records',
+    ]

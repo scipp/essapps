@@ -15,7 +15,7 @@ from pydantic_core import to_jsonable_python
 
 from ess.apps import Client, Listing, Record, Status
 
-from .table import Table
+from .table import Table, with_sidebar
 
 
 def describe(client: Client, listing: Listing, record: Record) -> str:
@@ -45,12 +45,16 @@ def describe(client: Client, listing: Listing, record: Record) -> str:
 class Records:
     """
     A table with a row per record of the proposal, newest first, each with
-    what its request names, and below it the record selected.
+    what its request names, and beside it the record selected.
     """
 
     def __init__(self, client: Client, listing: Listing) -> None:
         self._client = client
-        self.table = Table[str](['Record', 'Reads', 'Status'], self._show)  # by id
+        self.table = Table[str](  # by id
+            ['Record', 'Reads', 'Status'],
+            self._show,
+            widths={'Record': 160, 'Status': 90},
+        )
         self.detail = pn.pane.Markdown('', sizing_mode='stretch_width')
         self.refresh(listing)
 
@@ -86,4 +90,4 @@ class Records:
         )
 
     def panel(self) -> Any:
-        return pn.Column(self.table.widget, self.detail, sizing_mode='stretch_width')
+        return with_sidebar([self.table.widget], [self.detail])

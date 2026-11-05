@@ -48,7 +48,7 @@ from ess.apps.plotting import slider_dims
 from ess.spec import field_types
 
 from .graph import Graph
-from .table import Table
+from .table import Table, with_sidebar
 
 _PLOT = 'Plot'
 _PROVENANCE = 'Provenance'
@@ -60,10 +60,10 @@ record's outputs, as an instance of ``spec.outputs``."""
 
 class Outputs:
     """
-    A table of the outputs of the client's records, grouped by type, newest
-    first, and below it the output selected, with a button that removes it,
-    and its plot, the plots configured for its spec, or its provenance graph,
-    as ``views`` picks.
+    A sidebar with a table of the outputs of the client's records, grouped by
+    type, newest first, and below it the output selected, with a button that
+    removes it. Beside the sidebar are its plot, the plots configured for its
+    spec, or its provenance graph, as ``views`` picks.
 
     An output is listed while a request of the client may reference it, so
     while its record is pending or completed, and when its record has failed,
@@ -93,6 +93,7 @@ class Outputs:
             self._show,
             groupby=['Type'],
             hidden_columns=['Type'],
+            widths={'Status': 90},
         )
         self.detail = pn.pane.Markdown('', sizing_mode='stretch_width')
         self.views = pn.widgets.RadioButtonGroup(options=[_PLOT, _PROVENANCE])
@@ -263,12 +264,9 @@ class Outputs:
         self._refresh()
 
     def panel(self) -> Any:
-        return pn.Column(
-            self.table.widget,
-            self.detail,
-            pn.Row(self.views, self.remove_button),
-            self.view,
-            sizing_mode='stretch_width',
+        return with_sidebar(
+            [self.table.widget, self.remove_button, self.detail],
+            [self.views, self.view],
         )
 
 
@@ -356,8 +354,10 @@ def _brief(value: Any) -> str:
 
 
 def _figure_pane(figure: Figure) -> Any:
-    """A Panel pane of a plopp figure."""
-    return pn.pane.Matplotlib(figure.fig, tight=True)
+    """A Panel pane of a plopp figure, scaled to the width it has, up to a limit."""
+    return pn.pane.Matplotlib(
+        figure.fig, tight=True, sizing_mode='stretch_width', max_width=900
+    )
 
 
 def _figure(title: str, array: Any) -> Any:

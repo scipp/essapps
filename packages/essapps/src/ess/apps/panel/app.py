@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A minimal app on a client: a form for each spec the backend runs, a button
-that submits, and the outputs of the client's records, with the records
-themselves in a tab of their own.
+A minimal app on a client, in three tabs that fill the window and scroll by
+themselves: a form for each spec the backend runs with a button that submits, the
+outputs of the client's records, and the records themselves.
 
 The app needs a client only. It submits the shown form's request through the
 client and shows what the backend says: each reason a request is refused, by
@@ -21,8 +21,6 @@ so after a release the outputs are listed from scratch.
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 import panel as pn
 
@@ -51,13 +49,13 @@ class App:
         self.picker = pn.widgets.RadioButtonGroup(options=list(self.forms))
         self.button = pn.widgets.Button(label='Submit', color='primary')
         self.button.on_click(lambda _: self.submit())
-        self.message = pn.pane.Markdown('')
+        self.message = pn.pane.Markdown('', width=320)
         self._listing = Listing(client)
         self.outputs = Outputs(
             client, self._listing, refresh=self._refresh_all, plots=plots
         )
         self.records = Records(client, self._listing)
-        self._form = pn.Column(sizing_mode='stretch_width')
+        self._form = pn.Column(scroll=True, sizing_mode='stretch_both')
         self._submitted: Record | None = None  # until it has finished
         self.picker.param.watch(lambda _: self._show(), 'value')
         self._show()
@@ -127,15 +125,17 @@ class App:
         self.records.refresh(listing)
         return listing
 
-    def panel(self) -> Any:
-        return pn.Column(
-            self.picker,
-            self._form,
-            self.button,
-            self.message,
-            pn.Tabs(
-                ('Outputs', self.outputs.panel()),
-                ('Records', self.records.panel()),
+    def panel(self) -> pn.Tabs:
+        return pn.Tabs(
+            (
+                'Workflows',
+                pn.Column(
+                    pn.Row(self.picker, self.button),
+                    pn.Row(self._form, self.message, sizing_mode='stretch_both'),
+                    sizing_mode='stretch_both',
+                ),
             ),
-            sizing_mode='stretch_width',
+            ('Outputs', self.outputs.panel()),
+            ('Records', self.records.panel()),
+            sizing_mode='stretch_both',
         )
