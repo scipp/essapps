@@ -8,8 +8,8 @@ import panel as pn
 import pytest
 from pydantic import AwareDatetime, BaseModel, Field, NaiveDatetime
 
-from ess.apps import Client, Record, SubmitError
-from ess.apps.panel import Form, Listing
+from ess.apps import Client, Listing, Record, SubmitError
+from ess.apps.panel import Form
 from ess.apps.testing import FakeFiles
 from ess.spec import File, FileRef, OutputRef, Referenced, RunFile, WorkflowSpec
 

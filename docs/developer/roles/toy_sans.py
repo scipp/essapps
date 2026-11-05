@@ -19,7 +19,10 @@ output. ``COUNTS`` puts the counts of several runs side by side, a 2-D output,
 and takes ``SECONDS_PER_RUN`` per run, so that an app shows its record pending.
 ``FORWARD`` takes the I(Q) that ``IOFQ`` or ``IOFQ_MULTI`` outputs, as the group
 ``IofQ``, typed ``Referenced[IofQ]``: no request writes an ``IofQ``, so only
-a reference to an output fills it.
+a reference to an output fills it. ``CUBE`` outputs one 4-D array, the group
+``Cube``, which is about 320 MB at its default sizes: reading it whole is
+noticeably wrong, so an app shows a cut of it (``select=``) with a slider for
+each dimension but the last two.
 
 By convention a parameter is a group, a union of groups, a file field, or a list
 of one. A ``PipelineBinding`` keys a group by its class. A parameter that takes a
@@ -220,6 +223,39 @@ COUNTS = WorkflowSpec(
     description='The counts per pixel of each run, side by side.',
     params=CountsParams,
     outputs=CountsOutputs,
+)
+
+
+class CubeSizes(BaseModel):
+    time: int = Field(default=50, gt=0)
+    layer: int = Field(default=20, gt=0)
+    y: int = Field(default=200, gt=0)
+    x: int = Field(default=200, gt=0)
+
+
+class CubeParams(BaseModel):
+    sizes: CubeSizes = Field(default_factory=CubeSizes)
+
+
+class Cube(BaseModel):
+    """Counts by time, layer, y, and x: a ring on the detector, which moves."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    counts: sc.DataArray
+
+
+class CubeOutputs(BaseModel):
+    cube: Cube
+
+
+CUBE = WorkflowSpec(
+    name='toy-sans-cube',
+    version=1,
+    title='Counts cube',
+    description='Counts by time, layer, y, and x: a stand-in for a large 4-D output.',
+    params=CubeParams,
+    outputs=CubeOutputs,
 )
 
 # The toy runs, as their files hold them.
@@ -438,10 +474,35 @@ def counts(params: CountsParams) -> CountsOutputs:
     return CountsOutputs(counts=RunCounts(counts=counts))
 
 
+def cube(params: CubeParams) -> CubeOutputs:
+    """
+    A ring around the centre of the detector. Its radius grows with the time,
+    and its intensity falls with the layer, so every cut differs.
+    """
+    sizes = params.sizes.model_dump()
+    t, layer, y, x = (np.linspace(0, 1, n) for n in sizes.values())
+    radius = np.hypot(y[:, None] - 0.5, x[None, :] - 0.5)  # (y, x)
+    ring = np.exp(
+        -(((radius[None, :, :] - (0.1 + 0.4 * t)[:, None, None]) / 0.05) ** 2)
+    )
+    values = ring[:, None, :, :] * (1 - 0.8 * layer)[None, :, None, None]
+    counts = sc.DataArray(
+        sc.array(dims=list(sizes), values=values, unit='counts'),
+        coords={
+            'time': sc.linspace('time', 0.0, 10.0, sizes['time'], unit='s'),
+            'layer': sc.arange('layer', sizes['layer']),
+            'y': sc.linspace('y', -50.0, 50.0, sizes['y'], unit='mm'),
+            'x': sc.linspace('x', -50.0, 50.0, sizes['x'], unit='mm'),
+        },
+    )
+    return CubeOutputs(cube=Cube(counts=counts))
+
+
 forward_binding = function_binding(FORWARD, forward)
 find_centre_binding = function_binding(FIND_CENTRE, find_centre)
 transmission_binding = function_binding(TRANSMISSION, transmission)
 counts_binding = function_binding(COUNTS, counts)
+cube_binding = function_binding(CUBE, cube)
 
 BINDINGS = [
     single,
@@ -450,4 +511,5 @@ BINDINGS = [
     find_centre_binding,
     transmission_binding,
     counts_binding,
+    cube_binding,
 ]

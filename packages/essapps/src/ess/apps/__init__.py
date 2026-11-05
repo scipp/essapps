@@ -7,12 +7,14 @@ from .batch import LastBefore, Lookup, apply
 from .client import Accumulator, Client, Files, Provenance, Stage, local
 from .errors import ClientEnded, FieldError, NotReadable, RecordFailed, SubmitError
 from .files import FileSource, FolderFiles, Selector, file
-from .records import Changes, Record, Request, SpecId, Status, Template
+from .listing import Listing
+from .records import ArrayInfo, Changes, Record, Request, SpecId, Status, Template
 from .rules import Rule, RuleStatus, TriggerLoop
 from .store import Store
 
 __all__ = [
     'Accumulator',
+    'ArrayInfo',
     'Backend',
     'Changes',
     'Client',
@@ -22,6 +24,7 @@ __all__ = [
     'Files',
     'FolderFiles',
     'LastBefore',
+    'Listing',
     'Lookup',
     'NotReadable',
     'Provenance',

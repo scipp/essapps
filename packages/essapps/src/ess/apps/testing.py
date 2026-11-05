@@ -2,8 +2,8 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 Fakes for tests: a file source whose files a test makes appear, a store
-held in memory, a client that counts the records it reads, and bindings over
-plain functions.
+held in memory, clients that count the records they read or log the values they
+read, and bindings over plain functions.
 """
 
 from __future__ import annotations
@@ -151,6 +151,36 @@ class CountingClient:
     def readable(self, records: list[Record]) -> Any:
         self.reads['readable'] += len(records)
         return self._client.readable(records)
+
+
+class RecordingClient:
+    """
+    Delegates to a client and logs the reads of values: ``outputs`` holds the
+    record ID, output name, and ``select`` of each :meth:`output`, and
+    ``described`` the record ID and output name of each :meth:`describe`.
+    """
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+        self.outputs: list[tuple[str, str | None, Mapping[str, Any] | None]] = []
+        self.described: list[tuple[str, str]] = []
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    def output(
+        self,
+        what: Any,
+        name: str | None = None,
+        *,
+        select: Mapping[str, Any] | None = None,
+    ) -> Any:
+        self.outputs.append((what.id, name, select))
+        return self._client.output(what, name, select=select)
+
+    def describe(self, record: Record, name: str) -> dict[str, Any]:
+        self.described.append((record.id, name))
+        return self._client.describe(record, name)
 
 
 class FakeStore:

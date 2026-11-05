@@ -59,7 +59,7 @@ from pydantic import AwareDatetime, BaseModel
 from pydantic.fields import FieldInfo
 from pydantic_core import to_json, to_jsonable_python
 
-from ess.apps import Client, FieldError, SubmitError
+from ess.apps import Client, FieldError, Listing, SubmitError
 from ess.spec import (
     File,
     FileRef,
@@ -68,8 +68,6 @@ from ess.spec import (
     field_types,
 )
 from ess.spec.refs import Loc, as_ref
-
-from .listing import Listing
 
 
 class _Unset:

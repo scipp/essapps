@@ -3,8 +3,8 @@
 import panel as pn
 import pytest
 
-from ess.apps import Client, Record
-from ess.apps.panel import App, Listing
+from ess.apps import Client, Listing, Record
+from ess.apps.panel import App
 from ess.apps.testing import CountingClient
 from ess.spec import FileRef
 

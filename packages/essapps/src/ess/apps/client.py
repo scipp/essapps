@@ -531,6 +531,24 @@ class Client:
             values = self._backend.outputs(what.id, names, self._id, select=select)
         return values if name is None else values[name]
 
+    def describe(self, record: Record, name: str) -> dict[str, Any]:
+        """
+        What an output is, without its data, by field name: an
+        :class:`~ess.apps.ArrayInfo` for each array of at least one dimension,
+        also one inside a dict, a list, or a nested group, which is itself given
+        as a dict of its fields, and for any other field a copy of its value,
+        such as a float or a 0-D array. An output that is itself an array gives
+        ``{name: ArrayInfo}``::
+
+            client.describe(record, 'image')['counts'].sizes  # {'y': 200, 'x': 200}
+
+        It copies no array, and raises what :meth:`output` raises, such as
+        ``NotReadable`` and ``RecordFailed``. A value that was persisted and is
+        no longer in memory is read from the store to be described. It takes a
+        record only, not an accumulator.
+        """
+        return self._backend.describe(record.id, name, self._id)
+
     def readable(self, records: Any) -> Any:
         """
         The outputs of each record, by name, that a plain submission of this client

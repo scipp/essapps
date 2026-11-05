@@ -287,6 +287,28 @@ class Record(BaseModel, frozen=True):
 
 
 @dataclass(frozen=True)
+class ArrayInfo:
+    """
+    What an array is, without its data: ``sizes`` by dimension name, its
+    ``unit`` as text, if it has one, and the names of its ``coords``.
+    """
+
+    sizes: Mapping[str, int]
+    unit: str | None
+    coords: tuple[str, ...]
+
+    @classmethod
+    def of(cls, array: Any) -> ArrayInfo:
+        """The info of a scipp variable or data array, or a value like one."""
+        unit = getattr(array, 'unit', None)
+        return cls(
+            sizes=dict(zip(array.dims, array.shape, strict=True)),
+            unit=None if unit is None else str(unit),
+            coords=tuple(getattr(array, 'coords', ())),
+        )
+
+
+@dataclass(frozen=True)
 class Changes:
     """
     The records of a proposal that changed since a position in its feed (see
