@@ -19,11 +19,15 @@ callback of Panel calls it while the app is served. Each time the records are
 listed again, the forms are too, so a field that takes a reference offers each
 new record, pending or not. The changes do not tell that an output was released,
 so after a release the outputs are listed from scratch.
+
+An application adds tabs of its own, shown before these (:class:`Tab`). They are
+listed again wherever the outputs are.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Protocol
 
 import panel as pn
 
@@ -35,11 +39,23 @@ from .overlay import Overlay
 from .records import Records
 
 
+class Tab(Protocol):
+    """
+    A tab that an application adds. It is made up to date with the client; the
+    app calls :meth:`refresh` with each new listing.
+    """
+
+    def refresh(self, listing: Listing) -> None: ...
+
+    def panel(self) -> Any: ...
+
+
 class App:
     """
     A form per spec, a button that submits, and the outputs of the client's
     records. ``plots`` are the plots configured for a spec, as :class:`Outputs`
-    takes them.
+    takes them. ``tabs`` are tabs of the application by title, shown before the
+    app's own.
 
     ``forms`` holds the forms by spec title, and ``picker`` picks the one
     shown. ``message`` shows the outcome of the last submission, once its
@@ -48,8 +64,14 @@ class App:
     records.
     """
 
-    def __init__(self, client: Client, plots: Plots | None = None) -> None:
+    def __init__(
+        self,
+        client: Client,
+        plots: Plots | None = None,
+        tabs: Mapping[str, Tab] | None = None,
+    ) -> None:
         self.client = client
+        self._tabs = dict(tabs or {})
         self.forms = {s.title: Form(s, client) for s in client.specs()}
         self.picker = pn.widgets.RadioButtonGroup(options=list(self.forms))
         self.button = pn.widgets.Button(label='Submit', color='primary')
@@ -127,6 +149,8 @@ class App:
         self._listing = listing
         for form in self.forms.values():
             form.refresh(listing)
+        for tab in self._tabs.values():
+            tab.refresh(listing)
         self.outputs.refresh(listing)
         self.overlay.refresh(listing)
         self.records.refresh(listing)
@@ -139,6 +163,7 @@ class App:
             self.button,
             self.message,
             pn.Tabs(
+                *((title, tab.panel()) for title, tab in self._tabs.items()),
                 ('Outputs', self.outputs.panel()),
                 ('Compare', self.overlay.panel()),
                 ('Records', self.records.panel()),

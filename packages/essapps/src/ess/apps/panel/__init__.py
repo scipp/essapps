@@ -10,11 +10,22 @@ except ImportError as error:
         "ess.apps.panel needs Panel and plopp: pip install 'essapps[panel]'"
     ) from error
 
-from .app import App
+from .app import App, Tab
 from .form import Form
 from .graph import Graph
-from .outputs import Outputs
+from .outputs import Outputs, figure_pane
 from .overlay import Overlay
 from .records import Records
+from .table import Table
 
-__all__ = ['App', 'Form', 'Graph', 'Outputs', 'Overlay', 'Records']
+__all__ = [
+    'App',
+    'Form',
+    'Graph',
+    'Outputs',
+    'Overlay',
+    'Records',
+    'Tab',
+    'Table',
+    'figure_pane',
+]

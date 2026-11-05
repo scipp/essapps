@@ -19,6 +19,20 @@ class CountingApp(App):
         return super().refresh()
 
 
+class RecordingTab:
+    """A tab that keeps the listings it is refreshed with."""
+
+    def __init__(self) -> None:
+        self.listings: list[Listing] = []
+        self.pane = pn.pane.Markdown('the tab')
+
+    def refresh(self, listing: Listing) -> None:
+        self.listings.append(listing)
+
+    def panel(self) -> pn.pane.Markdown:
+        return self.pane
+
+
 @pytest.fixture
 def app(client: Client) -> App:
     return App(client)
@@ -150,3 +164,58 @@ def test_a_released_output_is_no_longer_offered(
     app.outputs.remove()
 
     assert found.ref('centre') not in offered()
+
+
+def test_the_tabs_of_the_application_are_shown_before_the_apps_own(
+    client: Client,
+) -> None:
+    tab = RecordingTab()
+    app = App(client, tabs={'Batch': tab})
+
+    tabs = app.panel().objects[-1]
+
+    titles = [panel.title for panel in tabs.get_root().tabs]
+    assert titles == ['Batch', 'Outputs', 'Compare', 'Records']
+    assert tabs.objects[0] is tab.pane
+
+
+def test_a_tab_is_refreshed_with_the_listing_of_a_change_of_another_client(
+    client: Client, other: Client, run: FileRef
+) -> None:
+    tab = RecordingTab()
+    app = App(client, tabs={'Batch': tab})
+    record = other.submit(app.form.spec, params={'run': run})
+
+    app.poll()
+
+    (listing,) = tab.listings
+    assert [r.id for r in listing.records] == [record.id]
+
+
+def test_a_tab_is_refreshed_when_the_app_lists_every_record_again(
+    client: Client, run: FileRef
+) -> None:
+    tab = RecordingTab()
+    app = App(client, tabs={'Batch': tab})
+    found = client.compute(app.form.spec, params={'run': run})
+    app.refresh()
+    tab.listings.clear()
+
+    app.outputs.select(found, 'centre')
+    app.outputs.remove()
+
+    assert len(tab.listings) == 1
+
+
+def test_a_tab_is_not_refreshed_by_a_poll_without_a_change(
+    client: Client, run: FileRef
+) -> None:
+    tab = RecordingTab()
+    app = App(client, tabs={'Batch': tab})
+    app.form.set({'run': run})
+    finish(app, app.submit())
+    tab.listings.clear()
+
+    app.poll()
+
+    assert tab.listings == []

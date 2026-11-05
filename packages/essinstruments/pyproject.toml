@@ -36,9 +36,12 @@ loki = [
     "esssans>=26.10.0",
     "essspec[sciline]",
 ]
-test = [
-    "essapps",
+loki-app = [
     "essinstruments[loki]",
+    "essapps[panel]",
+]
+test = [
+    "essinstruments[loki-app]",
     "pytest>=9.0",
     "pytest-xdist>=3.6",
 ]

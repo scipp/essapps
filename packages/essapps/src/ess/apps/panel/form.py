@@ -48,7 +48,7 @@ value is in UTC. The fraction of a second of the value is kept.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import UTC, datetime, tzinfo
 from enum import Enum
 from typing import Any, Union, get_args, get_origin
@@ -758,13 +758,27 @@ class Form:
     """
     The params of one spec: a widget per parameter, listing what ``client``
     may give at each field.
+
+    The parameters named in ``blanks`` get no widget, as the blanks of a
+    :class:`~ess.apps.Template` do: a request made from :attr:`params` leaves
+    them out, and :meth:`set` ignores them, so that a record's whole params can
+    be shown. Raises ``KeyError`` for a name that is not a parameter of the spec.
     """
 
-    def __init__(self, spec: WorkflowSpec[Any, Any], client: Client) -> None:
+    def __init__(
+        self,
+        spec: WorkflowSpec[Any, Any],
+        client: Client,
+        blanks: Collection[str] = (),
+    ) -> None:
         self.spec = spec
         self._client = client
         listing = Listing(client)
         fields = spec.params.model_fields
+        if unknown := sorted(set(blanks) - fields.keys()):
+            raise KeyError(f'{spec.title} has no parameters {unknown}')
+        self._blanks = frozenset(blanks)
+        fields = {n: i for n, i in fields.items() if n not in self._blanks}
         self._params = {
             name: _field(name, info, listing) for name, info in fields.items()
         }
@@ -810,9 +824,9 @@ class Form:
         ``record.request.params``; a field left out is as it starts, at its
         default or unset. A reference that the client may not read now
         chooses the way of a record, with no record picked; a file that
-        is not listed stays picked.
+        is not listed stays picked. The blanks are ignored.
         """
-        if unknown := set(params) - set(self._params):
+        if unknown := set(params) - set(self._params) - self._blanks:
             raise KeyError(f'{self.spec.title} has no parameters {sorted(unknown)}')
         self.refresh()
         for name, widget in self._params.items():

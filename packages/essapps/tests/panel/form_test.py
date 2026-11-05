@@ -477,6 +477,45 @@ def test_set_shows_params_as_a_record_holds_them(
     assert form.ways('beam_centre') == ['Given', 'From a record']
 
 
+def test_a_blank_has_no_widget_and_is_left_out_of_the_params(
+    client: Client, reduce_spec: Spec, run: FileRef
+) -> None:
+    blanked = Form(reduce_spec, client, blanks=('run', 'sample'))
+
+    assert [t.name for t in blanked.panel().select(pn.Tabs)[0].objects] == [
+        'Reduction',
+        'Beam Centre',
+        'Detector',
+        'Mask',
+    ]
+    assert set(blanked.params) == {
+        'reduction',
+        'beam_centre',
+        'detector',
+        'mask',
+    }
+
+
+def test_set_ignores_the_blanks_so_that_the_params_of_a_record_can_be_shown(
+    client: Client, reduce_spec: Spec, run: FileRef
+) -> None:
+    blanked = Form(reduce_spec, client, blanks=('run', 'sample'))
+
+    blanked.set({'run': run, 'sample': {'thickness': 2.0}, 'reduction': {'bins': 7}})
+
+    assert blanked.params['reduction'] == {'bins': 7, 'norm': 'monitor'}
+    assert 'run' not in blanked.params
+    with pytest.raises(KeyError, match='speed'):
+        blanked.set({'speed': 1})
+
+
+def test_a_blank_that_is_not_a_parameter_of_the_spec_is_refused(
+    client: Client, reduce_spec: Spec
+) -> None:
+    with pytest.raises(KeyError, match='speed'):
+        Form(reduce_spec, client, blanks=('run', 'speed'))
+
+
 def test_the_file_picker_lists_a_file_measured_after_the_form_was_made(
     files: FakeFiles, form: Form, run: FileRef
 ) -> None:
