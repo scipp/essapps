@@ -29,11 +29,10 @@ from bokeh.models import Arrow, ColumnDataSource, LabelSet, VeeHead
 from bokeh.plotting import figure
 from pydantic_core import to_jsonable_python
 
-from ess.apps import Client, Record, Status
+from ess.apps import Client, Listing, Record, Status
 from ess.spec import FileRef
 from ess.spec.refs import iter_refs, loc_text
 
-from .listing import Listing
 from .records import describe
 
 type Node = Record | FileRef

@@ -188,7 +188,7 @@ from .log import (
     Submitted,
     Written,
 )
-from .records import Changes, Record, Request, SpecId, Status, Template
+from .records import ArrayInfo, Changes, Record, Request, SpecId, Status, Template
 from .store import Store
 from .views import PENDING, Views, WriteFailed
 
@@ -288,6 +288,23 @@ def _selected(value: Any, select: Selection) -> Any:
         fields |= sliced
     # A deep copy of a slice copies the slice only.
     return value.model_copy(update=copy.deepcopy(fields))
+
+
+def _info(value: Any) -> Any:
+    """
+    What a value is, with no copy of an array: an :class:`ArrayInfo` for an array
+    of at least one dimension, wherever it is held, a dict of its fields for a
+    group, and a copy of any other value; needs no lock.
+    """
+    if isinstance(value, BaseModel):
+        return {n: _info(v) for n, v in value}
+    if isinstance(value, Mapping):
+        return {k: _info(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_info(v) for v in value]
+    if getattr(value, 'dims', ()):
+        return ArrayInfo.of(value)
+    return copy.deepcopy(value)
 
 
 def _output_reads(params: Mapping[str, Any]) -> list[tuple[str, str]]:
@@ -2155,6 +2172,33 @@ class Backend:
         the client does not keep is every output persisted, and raises if one
         of their writes failed.
         """
+        values = self._read(record_id, names, client, select=select)
+        if select is None:
+            return values
+        return {n: _selected(v, select) for n, v in values.items()}
+
+    def describe(self, record_id: str, name: str, client: str) -> dict[str, Any]:
+        """
+        What the output ``name`` of a record is, by field, with no copy of an
+        array: reads and raises as :meth:`outputs` does. A value persisted and
+        no longer in memory is read from the store to be described.
+        """
+        value = self._read(record_id, [name], client, select=None)[name]
+        info = _info(value)
+        return info if isinstance(value, BaseModel) else {name: info}
+
+    def _read(
+        self,
+        record_id: str,
+        names: Sequence[str] | None,
+        client: str,
+        *,
+        select: Selection | None,
+    ) -> dict[str, Any]:
+        """
+        The values of :meth:`outputs`, not copied, in memory or read from the
+        store; ``select`` is checked here and applied by the caller.
+        """
         views = self._views
         with self._changed:
             caller = self._client(client)
@@ -2197,9 +2241,7 @@ class Backend:
                 raise NotReadable(
                     f'record {record_id}: the store no longer holds an output'
                 ) from error
-        if select is None:
-            return values
-        return {n: _selected(v, select) for n, v in values.items()}
+        return values
 
     def _check_select(self, spec_id: SpecId, names: Sequence[str] | None) -> None:
         """

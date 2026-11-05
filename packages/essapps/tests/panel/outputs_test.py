@@ -4,22 +4,27 @@
 ``CURVE`` outputs a group with a 1-D and a 0-D array, a 2-D array in a group
 with a description, the settings it used, and an optional group it never
 returns. It waits for ``gate``, so a test holds its record pending, and a
-scale of 0 fails it. ``SCALE`` reads the curve.
+scale of 0 fails it. ``SCALE`` reads the curve. ``CUBE`` outputs a group with
+a 4-D array, whose value tells its position, and a 1-D array, and a 3-D array.
 """
 
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 import panel as pn
+import param
+import plopp as pp
 import pytest
 import scipp as sc
 from pydantic import BaseModel, ConfigDict, Field
 
-from ess.apps import Client, Record, Status, local
-from ess.apps.panel import App, Listing, Outputs, Records
+from ess.apps import Client, Listing, Record, SpecId, Status, local
+from ess.apps.panel import App, Outputs, Records
 from ess.apps.panel.records import describe
-from ess.apps.testing import FakeFiles, read_file
+from ess.apps.testing import FakeFiles, RecordingClient, read_file
 from ess.spec import (
     FileRef,
     Referenced,
@@ -71,6 +76,26 @@ class CurveOutputs(BaseModel):
     extra: Image | None = None
 
 
+class Cube(BaseModel):
+    """Counts by time, layer, y, and x, and by x only."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    counts: sc.DataArray
+    profile: sc.DataArray
+
+
+class CubeParams(BaseModel):
+    settings: Settings = Field(default_factory=Settings)
+
+
+class CubeOutputs(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    cube: Cube
+    volume: sc.DataArray
+
+
 class ScaleParams(BaseModel):
     curve: Referenced[Curve]
 
@@ -95,6 +120,37 @@ SCALE = WorkflowSpec(
     params=ScaleParams,
     outputs=ScaleOutputs,
 )
+
+
+CUBE = WorkflowSpec(
+    name='cube',
+    version=1,
+    title='Cube',
+    description='A cube of counts that tells its position.',
+    params=CubeParams,
+    outputs=CubeOutputs,
+)
+
+CUBE_SIZES = {'time': 4, 'layer': 3, 'y': 5, 'x': 6}
+
+
+def position(**steps: int) -> float:
+    """The value of the cube at the given indices, 0 for a dimension left out."""
+    place = {'time': 1000, 'layer': 100, 'y': 10, 'x': 1}
+    return float(sum(place[dim] * i for dim, i in steps.items()))
+
+
+def cube(params: CubeParams) -> CubeOutputs:
+    grid = np.indices(list(CUBE_SIZES.values()))
+    values = sum(g * position(**{d: 1}) for g, d in zip(grid, CUBE_SIZES, strict=True))
+    counts = sc.DataArray(
+        sc.array(dims=list(CUBE_SIZES), values=values, unit='counts'),
+        coords={d: sc.arange(d, float(n)) for d, n in CUBE_SIZES.items()},
+    )
+    return CubeOutputs(
+        cube=Cube(counts=counts, profile=counts['time', 0]['layer', 0]['y', 0].copy()),
+        volume=counts['time', 0].copy(),
+    )
 
 
 @pytest.fixture
@@ -129,7 +185,11 @@ def client(run: tuple[FakeFiles, FileRef], gate: threading.Event) -> Iterator[Cl
     def scale(params: ScaleParams) -> ScaleOutputs:
         return ScaleOutputs(total=Total(value=params.curve.total))
 
-    bind = [function_binding(CURVE, curve), function_binding(SCALE, scale)]
+    bind = [
+        function_binding(CURVE, curve),
+        function_binding(SCALE, scale),
+        function_binding(CUBE, cube),
+    ]
     with local(proposal='p1', files=run[0], bind=bind) as client:
         yield client
 
@@ -215,8 +275,8 @@ def test_the_plot_has_a_figure_per_array_of_one_or_two_dimensions(
 
     outputs.select(curve, 'curve')
     figures = outputs.view.objects
+    assert len(figures) == 1  # not the 0-D total
     assert isinstance(figures[0], pn.pane.Matplotlib)
-    assert figures[1].object == f'Curve ({at(curve)}) total: 0-D, not plotted'
 
     outputs.select(curve, 'image')
     assert isinstance(outputs.view.objects[0], pn.pane.Matplotlib)
@@ -382,3 +442,243 @@ def test_the_records_list_each_record_with_what_its_request_names(
     assert '**Reads** run 101' in detail
     assert '"scale": 1.0' in detail
     records.panel()  # builds, with the warnings of Panel as errors
+
+
+def test_the_summary_of_an_output_reads_no_value(client: Client, file: FileRef) -> None:
+    curve = client.submit(CURVE, params={'run': file})
+    client.wait(curve)
+    recording = RecordingClient(client)
+    outputs = Outputs(recording, Listing(client))  # type: ignore[arg-type]
+
+    outputs.select(curve, 'used')  # nothing to plot
+    assert recording.outputs == []
+    outputs.select(curve, 'curve')
+
+    assert recording.described == [(curve.id, 'used'), (curve.id, 'curve')]
+    assert '- counts: array (x: 3)' in outputs.detail.object
+    assert recording.outputs == [(curve.id, 'curve', None)]  # the plot only
+
+
+def test_an_output_released_since_it_was_listed_is_shown_as_not_readable(
+    client: Client, file: FileRef
+) -> None:
+    curve = client.submit(CURVE, params={'run': file})
+    outputs = outputs_of(client, curve)
+    client.release(curve)
+
+    outputs.select(curve, 'curve')
+
+    assert '**Value** not readable' in outputs.detail.object
+    assert outputs.view.objects == []
+    outputs.views.value = 'Provenance'
+    assert outputs.view.objects  # the graph still shows
+
+
+def sliders(outputs: Outputs) -> list[pn.widgets.IntSlider]:
+    columns = [v for v in outputs.view.objects if isinstance(v, pn.Column)]
+    return [
+        o for c in columns for o in c.objects if isinstance(o, pn.widgets.IntSlider)
+    ]
+
+
+def cut(outputs: Outputs, n: int = 0) -> Any:
+    """The figure drawn in the nth view with sliders: its title and colour range."""
+    column = [v for v in outputs.view.objects if isinstance(v, pn.Column)][n]
+    fig = column.objects[-1].object
+    return fig.axes[0].get_title(), fig.axes[1].get_ylim()
+
+
+def move(slider: pn.widgets.IntSlider, index: int) -> None:
+    """Drag a slider to ``index`` and release it."""
+    slider.value = index
+    with param.edit_constant(slider):  # as the browser sets it on release
+        slider.value_throttled = index
+
+
+def test_an_array_of_more_than_two_dimensions_has_a_slider_per_other_dimension(
+    client: Client,
+) -> None:
+    record = client.compute(CUBE)
+    recording = RecordingClient(client)
+    outputs = Outputs(recording, Listing(client))  # type: ignore[arg-type]
+
+    outputs.select(record, 'cube')
+
+    assert [s.name for s in sliders(outputs)] == ['time', 'layer']
+    assert [s.end for s in sliders(outputs)] == [3, 2]
+    assert 'array (time: 4, layer: 3, y: 5, x: 6) [counts]' in outputs.detail.object
+    title, (low, high) = cut(outputs, 0)
+    assert title.endswith('counts (time=0, layer=0)')
+    assert (low, high) == (position(), position(y=4, x=5))
+
+
+def test_the_slider_reads_only_the_cut_it_draws(client: Client) -> None:
+    record = client.compute(CUBE)
+    recording = RecordingClient(client)
+    outputs = Outputs(recording, Listing(client))  # type: ignore[arg-type]
+    outputs.select(record, 'cube')
+    time, layer = sliders(outputs)
+
+    time.value = 3
+    assert len(recording.outputs) == 1  # not until released
+    move(time, 3)
+    move(layer, 2)
+
+    assert recording.outputs[1:] == [
+        (record.id, 'cube', {'time': 3, 'layer': 0}),
+        (record.id, 'cube', {'time': 3, 'layer': 2}),
+    ]
+    assert all(select for _, _, select in recording.outputs)
+    title, (low, high) = cut(outputs, 0)
+    assert title.endswith('counts (time=3, layer=2)')
+    assert (low, high) == (
+        position(time=3, layer=2),
+        position(time=3, layer=2, y=4, x=5),
+    )
+
+
+def test_a_field_of_one_or_two_dimensions_is_drawn_from_the_first_cut(
+    client: Client,
+) -> None:
+    record = client.compute(CUBE)
+    recording = RecordingClient(client)
+    outputs = Outputs(recording, Listing(client))  # type: ignore[arg-type]
+
+    outputs.select(record, 'cube')
+
+    plain, with_sliders = outputs.view.objects
+    assert isinstance(plain, pn.pane.Matplotlib)
+    assert isinstance(with_sliders, pn.Column)
+    assert len(recording.outputs) == 1
+    assert recording.outputs[0][2] is not None
+
+
+def test_an_array_output_has_a_slider_for_each_dimension_but_the_last_two(
+    client: Client,
+) -> None:
+    record = client.compute(CUBE)
+    recording = RecordingClient(client)
+    outputs = Outputs(recording, Listing(client))  # type: ignore[arg-type]
+
+    outputs.select(record, 'volume')
+
+    assert [s.name for s in sliders(outputs)] == ['layer']
+    move(sliders(outputs)[0], 2)
+    assert recording.outputs == [
+        (record.id, 'volume', {'layer': 0}),
+        (record.id, 'volume', {'layer': 2}),
+    ]
+    _, (low, _) = cut(outputs, 0)
+    assert low == position(layer=2)
+
+
+def test_a_slider_over_a_released_value_shows_why_it_cannot_draw(
+    client: Client,
+) -> None:
+    record = client.compute(CUBE)
+    outputs = outputs_of(client, record)
+    outputs.select(record, 'volume')
+    client.release(record)
+
+    move(sliders(outputs)[0], 1)
+
+    assert 'not readable' in outputs.view.objects[0].objects[-1].object
+
+
+class Seen:
+    """The outputs a configured plot was called with, and what it draws."""
+
+    def __init__(self) -> None:
+        self.outputs: list[CurveOutputs] = []
+
+    def counts(self, out: CurveOutputs) -> Any:
+        self.outputs.append(out)
+        return pp.plot(out.curve.counts, title='counts')
+
+
+def explode(out: CurveOutputs) -> Any:
+    raise RuntimeError('no plot today')
+
+
+def test_plots_configured_for_a_spec_are_views_of_the_outputs_of_its_records(
+    client: Client, file: FileRef
+) -> None:
+    curve = client.submit(CURVE, params={'run': file})
+    scale = client.submit(SCALE, params={'curve': curve.ref('curve')})
+    client.wait([curve, scale])
+    seen = Seen()
+    plots = {SpecId.of(CURVE): {'Counts': seen.counts}}
+    outputs = Outputs(client, Listing(client), plots=plots)
+    assert outputs.views.options == ['Plot', 'Provenance']
+
+    outputs.select(curve, 'image')
+    assert outputs.views.options == ['Plot', 'Counts', 'Provenance']
+    outputs.select(scale, 'total')
+    assert outputs.views.options == ['Plot', 'Provenance']
+    outputs.select(curve, 'used')
+    outputs.views.value = 'Counts'
+
+    (out,) = seen.outputs
+    assert isinstance(out, CurveOutputs)
+    assert out.curve.counts.sizes == {'x': 3}
+    assert out.used == Settings()
+    assert out.extra is None  # an optional output that was not returned
+    (pane,) = outputs.view.objects
+    assert isinstance(pane, pn.pane.Matplotlib)
+    assert pane.object.axes[0].get_title() == 'counts'
+
+
+def test_a_view_the_record_does_not_offer_falls_back_to_the_plot(
+    client: Client, file: FileRef
+) -> None:
+    curve = client.submit(CURVE, params={'run': file})
+    scale = client.submit(SCALE, params={'curve': curve.ref('curve')})
+    client.wait([curve, scale])
+    plots = {SpecId.of(CURVE): {'Counts': Seen().counts}}
+    outputs = Outputs(client, Listing(client), plots=plots)
+    outputs.select(curve, 'curve')
+    outputs.views.value = 'Counts'
+
+    outputs.select(scale, 'total')
+
+    assert outputs.views.value == 'Plot'
+    outputs.select(curve, 'curve')  # the pick stays where it is offered
+    outputs.views.value = 'Provenance'
+    outputs.select(curve, 'image')
+    assert outputs.views.value == 'Provenance'
+
+
+def test_a_configured_plot_that_fails_shows_why_as_text(
+    client: Client, file: FileRef
+) -> None:
+    curve = client.submit(CURVE, params={'run': file})
+    client.wait(curve)
+    outputs = Outputs(
+        client, Listing(client), plots={SpecId.of(CURVE): {'Bad': explode}}
+    )
+    outputs.select(curve, 'curve')
+
+    outputs.views.value = 'Bad'
+
+    (text,) = outputs.view.objects
+    assert 'Bad failed' in text.object
+    assert 'RuntimeError: no plot today' in text.object
+
+
+def test_a_configured_plot_cannot_take_the_name_of_a_view_of_every_record() -> None:
+    plots = {SpecId.of(CURVE): {'Plot': explode}}
+    with pytest.raises(ValueError, match="curve/v1: \\['Plot'\\]"):
+        Outputs(None, None, plots=plots)  # type: ignore[arg-type]
+
+
+def test_the_app_passes_its_plots_to_the_outputs(client: Client, file: FileRef) -> None:
+    curve = client.submit(CURVE, params={'run': file})
+    client.wait(curve)
+    seen = Seen()
+    app = App(client, plots={SpecId.of(CURVE): {'Counts': seen.counts}})
+    app.poll()
+
+    app.outputs.select(curve, 'curve')
+    app.outputs.views.value = 'Counts'
+
+    assert len(seen.outputs) == 1

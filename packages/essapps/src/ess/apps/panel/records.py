@@ -13,9 +13,8 @@ from typing import Any
 import panel as pn
 from pydantic_core import to_jsonable_python
 
-from ess.apps import Client, Record, Status
+from ess.apps import Client, Listing, Record, Status
 
-from .listing import Listing
 from .table import Table
 
 

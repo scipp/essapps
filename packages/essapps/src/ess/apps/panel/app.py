@@ -26,26 +26,26 @@ from typing import Any
 
 import panel as pn
 
-from ess.apps import Client, Record, SubmitError
+from ess.apps import Client, Listing, Record, SubmitError
 
 from .form import Form
-from .listing import Listing
-from .outputs import Outputs
+from .outputs import Outputs, Plots
 from .records import Records
 
 
 class App:
     """
     A form per spec, a button that submits, and the outputs of the client's
-    records.
+    records. ``plots`` are the plots configured for a spec, as :class:`Outputs`
+    takes them.
 
     ``forms`` holds the forms by spec title, and ``picker`` picks the one
     shown. ``message`` shows the outcome of the last submission, once its
     record has finished. ``outputs`` lists the outputs of the records, and
-    ``records`` the records.
+    ``records`` lists the records.
     """
 
-    def __init__(self, client: Client) -> None:
+    def __init__(self, client: Client, plots: Plots | None = None) -> None:
         self.client = client
         self.forms = {s.title: Form(s, client) for s in client.specs()}
         self.picker = pn.widgets.RadioButtonGroup(options=list(self.forms))
@@ -53,7 +53,9 @@ class App:
         self.button.on_click(lambda _: self.submit())
         self.message = pn.pane.Markdown('')
         self._listing = Listing(client)
-        self.outputs = Outputs(client, self._listing, refresh=self._refresh_all)
+        self.outputs = Outputs(
+            client, self._listing, refresh=self._refresh_all, plots=plots
+        )
         self.records = Records(client, self._listing)
         self._form = pn.Column(sizing_mode='stretch_width')
         self._submitted: Record | None = None  # until it has finished

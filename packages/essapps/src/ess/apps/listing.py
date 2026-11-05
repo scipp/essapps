@@ -8,9 +8,12 @@ from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 
-from ess.apps import Client, Record, Selector, Status
 from ess.spec import File, FileRef, OutputRef, field_types
 from ess.spec.refs import iter_refs
+
+from .client import Client
+from .files import Selector
+from .records import Record, Status
 
 
 class Listing:
@@ -89,6 +92,11 @@ class Listing:
         """The name of the type of an output, without ``| None``."""
         info = self.specs[record.id].outputs.model_fields[name]
         return field_types.type_name(field_types.value_type(info.annotation))
+
+    def is_group(self, record: Record, name: str) -> bool:
+        """Whether an output is a group, which ``describe`` gives by field."""
+        info = self.specs[record.id].outputs.model_fields[name]
+        return field_types.is_group(field_types.value_type(info.annotation))
 
     def reads(self, record: Record) -> list[str]:
         """The label of each file and output that the record's request names."""
