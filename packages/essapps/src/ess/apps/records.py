@@ -284,3 +284,18 @@ class Record(BaseModel, frozen=True):
     def refs(self, *outputs: str) -> dict[str, OutputRef]:
         """A reference to each of ``outputs`` by name; to every output if none."""
         return {name: self.ref(name) for name in outputs or self.outputs}
+
+
+@dataclass(frozen=True)
+class Changes:
+    """
+    The records of a proposal that changed since a position in its feed (see
+    :meth:`Client.changes`).
+
+    ``records`` holds their IDs, each once, in the order of their first change
+    in the range; it holds no values. ``cursor`` is the position to pass next
+    time.
+    """
+
+    records: tuple[str, ...]
+    cursor: int

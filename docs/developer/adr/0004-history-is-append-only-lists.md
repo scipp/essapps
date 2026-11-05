@@ -45,10 +45,11 @@ History is six lists, each only appended to:
 - Output values are not history ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)). History names no file.
 - Once a proposal has been idle ([lifetimes.md](../lifetimes.md)) for the retention period, days to weeks as the deployment sets it, its history is dropped as a whole. An output needed for longer is published (README, [Provenance and publication](../README.md#provenance-and-publication)).
 - How a backend stores the lists is its choice. The in-process backend appends them to one event log, in memory or in a file of JSON lines.
+- The changes to a proposal's records have one order: the *change feed*, the ID of a record at each of its items in the records, finishes, persist requests, and writes. A client reads it from a position (`client.changes`), so that it reads only the records that changed. It holds no events, and neither accumulators nor pushes, so a backend keeps this order however it stores the lists.
 
 ## Alternatives considered
 
-- **History defined as one event log, with records and labels as views**, indexes rebuilt from the log. The lists hold the same history. The log adds one order across all lists, and nothing outside storage reads that order. It would tie a hosted backend to a log.
+- **History defined as one event log, with records and labels as views**, indexes rebuilt from the log. The lists hold the same history. The log adds one order across all lists of a whole backend, and outside storage only the change feed needs an order, of one proposal's records. It would tie a hosted backend to a log.
 - **History kept as long as the proposal.** That may be forever, a second record of what ran next to SciCat.
 - **Each record dropped by age, keeping the older records that a kept record reads.** The trigger loop would reduce again every file whose records were dropped. It would need a memory of its own, such as a set of handled files per rule.
 - **A proposal's history dropped a fixed time after its last record.** A trigger loop that sees no new file for that long loses its rule's records and then reduces every file again. An open client would lose the records it still uses.

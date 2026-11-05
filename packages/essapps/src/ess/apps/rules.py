@@ -5,8 +5,10 @@ Rules and the trigger loop: automatic reduction of new files, as described in
 ``docs/developer/automatic-reduction.md``.
 
 A rule is plain data. The trigger loop is a controller of a client and never
-runs in the backend. It keeps no memory of its own: :meth:`TriggerLoop._requests`
-reads which files a rule has handled from the records under the rule's label.
+runs in the backend. Which files a rule has handled comes from the records under
+the rule's label. The loop reads them from the proposal's changes
+(:meth:`~ess.apps.Client.changes`), from the start when it starts, so it holds
+no more than a position in them and the files it has seen.
 """
 
 from __future__ import annotations
@@ -90,6 +92,8 @@ class TriggerLoop:
         self._client = client
         self._source = client.files
         self._rules = rules
+        self._cursor = 0
+        self._handled: dict[str, set[FileRef]] = {rule.name: set() for rule in rules}
         self._status = {rule.name: RuleStatus() for rule in rules}
 
     def step(self) -> list[Record]:
@@ -135,12 +139,8 @@ class TriggerLoop:
         self, rule: Rule
     ) -> tuple[dict[str, Request], dict[FileRef, LookupError]]:
         """The requests for the new files, and the files skipped, with why."""
-        handled = {
-            ref
-            for record in self._client.records(label=rule.label)
-            for loc, ref in iter_refs(record.request.params)
-            if isinstance(ref, FileRef) and _fills(loc, rule.at, rule.series)
-        }
+        self._read()
+        handled = self._handled[rule.name]
         matching = self._source.list(rule.selector)
         new = [ref for ref in matching if ref not in handled]
         if rule.series is None:
@@ -153,6 +153,20 @@ class TriggerLoop:
                 lookup=rule.lookup,
             )
         return self._series_requests(rule, matching, new), {}
+
+    def _read(self) -> None:
+        """Take the files of the records that changed into each rule's handled."""
+        changes = self._client.changes(after=self._cursor)
+        self._cursor = changes.cursor
+        for record in self._client.records(ids=changes.records):
+            for rule in self._rules:
+                if record.label == rule.label:
+                    self._handled[rule.name] |= {
+                        ref
+                        for loc, ref in iter_refs(record.request.params)
+                        if isinstance(ref, FileRef)
+                        and _fills(loc, rule.at, rule.series)
+                    }
 
     def _series_requests(
         self,

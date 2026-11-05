@@ -185,6 +185,26 @@ client.release(centre)              # this client no longer keeps the centre
 client.persist(result, 'iofq')      # the store keeps iofq, for every client of the proposal
 ```
 
+## What changed
+
+A client that shows records, or reacts to them, asks which records changed since a position in the proposal's history, and reads only those.
+A record changes when it is submitted, by any client of the proposal, finishes, or has outputs persisted or written.
+The reply holds record IDs and no values, each ID once:
+
+```python
+cursor = 0                                  # 0 gives every record of the proposal
+while True:
+    changes = client.changes(after=cursor)
+    cursor = changes.cursor                 # pass it next time
+    for record in client.records(ids=changes.records):
+        show(record, client.status(record), client.readable(record))
+```
+
+A backend that starts from its history log gives the same changes at the same cursors.
+Accumulators and pushes are not in the feed.
+Neither is `client.release`, nor any other way for a value to go away: the history does not hold lifetimes, and what a client may read is per client.
+So a client that shows outputs asks `client.readable` for the records it shows, and a read can still raise `NotReadable`.
+
 ## Stages and accumulators
 
 A *stage* keeps the part of a computation that depends only on its fixed values, so that tuning a parameter does not load the runs again.
@@ -209,6 +229,8 @@ rule = Rule('transmission', Template(TRANSMISSION, blanks=('run', 'empty_beam'))
             lookup=Lookup({'empty_beam': LastBefore(Selector(role='empty_beam'))}))
 TriggerLoop(client, rules=[rule]).run()
 ```
+
+The loop reads which files a rule has handled from the changes, so a step reads only the records that changed since the last one.
 
 ## Provenance and publication
 

@@ -18,9 +18,15 @@ class Listing:
     What a request of ``client`` may name now, and the state of the client's
     records, looked up once for a refresh of any number of views: the files
     that fit each file field and the client's records, each by a label, and the
-    outputs a request may reference. ``specs`` holds the spec of each record
-    by its id, ``status`` its status, and ``readable`` the names of its
-    outputs that a request may reference.
+    outputs a request may reference. ``cursor`` is the position in the client's
+    changes (:meth:`~ess.apps.Client.changes`) that the listing is up to date
+    with. Given the ``previous`` listing, it reads only the records that changed
+    since, in the records, their status, and what is readable, and takes the
+    rest from ``previous``, which stays as it is. The records are oldest
+    first. Labels and the outputs offered are worked out from all the records
+    in memory, so a label that depends on the other records needs no read.
+    ``specs`` holds the spec of each record by its id, ``status`` its status,
+    and ``readable`` the names of its outputs that a request may reference.
 
     It stands in for two queries the client lacks (scipp/essapps#95). The
     client lists no records by the type of their outputs (gap 1), so
@@ -34,19 +40,26 @@ class Listing:
     2f9c01)``.
     """
 
-    def __init__(self, client: Client) -> None:
+    def __init__(self, client: Client, previous: Listing | None = None) -> None:
         self._client = client
         self._metadata: dict[FileRef, dict[str, Any]] = {}
         self._files: dict[str, dict[str, FileRef]] = {}
-        self.records = client.records()
-        specs = {s: client.spec(s) for s in {r.spec for r in self.records}}
+        changes = client.changes(after=0 if previous is None else previous.cursor)
+        self.cursor = changes.cursor
+        changed = client.records(ids=changes.records)
+        old = [] if previous is None else previous.records
+        known = {r.id for r in old}
+        self.records = old + [r for r in changed if r.id not in known]
+        specs = {} if previous is None else {r.spec: previous.specs[r.id] for r in old}
+        for spec in {r.spec for r in changed} - specs.keys():
+            specs[spec] = client.spec(spec)
         self.specs = {r.id: specs[r.spec] for r in self.records}
-        statuses = client.status(self.records)
-        self.status = {r.id: s for r, s in zip(self.records, statuses, strict=True)}
-        readable = client.readable(self.records)
-        self.readable = {
-            r.id: names for r, names in zip(self.records, readable, strict=True)
-        }
+        self.status = {} if previous is None else dict(previous.status)
+        self.readable = {} if previous is None else dict(previous.readable)
+        statuses = client.status(changed)
+        readable = client.readable(changed)
+        self.status |= {r.id: s for r, s in zip(changed, statuses, strict=True)}
+        self.readable |= {r.id: n for r, n in zip(changed, readable, strict=True)}
         self.labels = _labels(
             {r.id: (self.specs[r.id].title, r, (r.id[:6],)) for r in self.records}
         )

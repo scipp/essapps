@@ -2,7 +2,8 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 Fakes for tests: a file source whose files a test makes appear, a store
-held in memory, and bindings over plain functions.
+held in memory, a client that counts the records it reads, and bindings over
+plain functions.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import copy
 import functools
 import json
 import threading
+from collections import Counter
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,7 +24,9 @@ from ess.spec import DriverBinding, FileRef, StageCall, WorkflowSpec
 from ess.spec.binding import fixed_values
 from ess.spec.testing import instance
 
+from .client import Client
 from .files import Selector
+from .records import Record
 
 type Spec = WorkflowSpec[Any, Any]
 
@@ -119,6 +123,34 @@ class FakeFiles:
                 fresh = [r for r in self.list(selector) if r not in seen]
             seen.update(fresh)
             yield from fresh
+
+
+class CountingClient:
+    """
+    Delegates to a client and counts the records its calls read: ``reads``
+    holds the number of records that :meth:`records` returned and that
+    :meth:`status` and :meth:`readable` were asked for.
+    """
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+        self.reads: Counter[str] = Counter()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    def records(self, **kwargs: Any) -> list[Record]:
+        records = self._client.records(**kwargs)
+        self.reads['records'] += len(records)
+        return records
+
+    def status(self, records: list[Record]) -> Any:
+        self.reads['status'] += len(records)
+        return self._client.status(records)
+
+    def readable(self, records: list[Record]) -> Any:
+        self.reads['readable'] += len(records)
+        return self._client.readable(records)
 
 
 class FakeStore:

@@ -1,10 +1,22 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+import panel as pn
 import pytest
 
 from ess.apps import Client, Record
 from ess.apps.panel import App, Listing
+from ess.apps.testing import CountingClient
 from ess.spec import FileRef
+
+
+class CountingApp(App):
+    """An app that counts how often it lists the changed records again."""
+
+    refreshes = 0
+
+    def refresh(self) -> Listing:
+        self.refreshes += 1
+        return super().refresh()
 
 
 @pytest.fixture
@@ -76,3 +88,65 @@ def test_a_computed_record_is_listed_and_offered_by_the_forms(
     assert app.message.object == f'Computed {label}.'
     assert app.records.table.widget.value['Record'].tolist() == [label]
     assert app.forms['Reduce'].ways('beam_centre') == ['Given', 'From a record']
+
+
+def test_a_record_of_another_client_appears_on_a_poll(
+    app: App, client: Client, other: Client, run: FileRef
+) -> None:
+    record = other.submit(app.form.spec, params={'run': run})
+
+    app.poll()
+
+    label = Listing(client).labels[record.id]
+    assert app.records.table.widget.value['Record'].tolist() == [label]
+
+
+def test_a_poll_without_a_change_reads_no_records_and_lists_nothing_again(
+    client: Client, run: FileRef
+) -> None:
+    counting = CountingClient(client)
+    app = CountingApp(counting)  # type: ignore[arg-type]
+    app.form.set({'run': run})
+    finish(app, app.submit())
+    counting.reads.clear()
+    refreshes = app.refreshes
+
+    app.poll()
+
+    assert dict(counting.reads) == {}
+    assert app.refreshes == refreshes
+
+
+def test_a_refresh_after_one_change_reads_only_that_record(
+    client: Client, other: Client, run: FileRef
+) -> None:
+    counting = CountingClient(client)
+    app = App(counting)  # type: ignore[arg-type]
+    other.compute(app.form.spec, params={'run': run})
+    other.compute(app.form.spec, params={'run': run})
+    app.refresh()
+    counting.reads.clear()
+    other.submit(app.form.spec, params={'run': run})
+
+    app.refresh()
+
+    assert dict(counting.reads) == {'records': 1, 'status': 1, 'readable': 1}
+
+
+def test_a_released_output_is_no_longer_offered(
+    app: App, client: Client, run: FileRef
+) -> None:
+    app.form.set({'run': run})
+    found = client.compute(app.form.spec, params={'run': run})
+    app.refresh()
+
+    def offered() -> list[object]:
+        pickers = app.forms['Reduce'].panel().select(pn.widgets.Select)
+        return [v for p in pickers for v in p.options.values()]
+
+    assert found.ref('centre') in offered()
+
+    app.outputs.select(found, 'centre')
+    app.outputs.remove()
+
+    assert found.ref('centre') not in offered()

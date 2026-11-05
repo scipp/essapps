@@ -188,7 +188,7 @@ from .log import (
     Submitted,
     Written,
 )
-from .records import Record, Request, SpecId, Status, Template
+from .records import Changes, Record, Request, SpecId, Status, Template
 from .store import Store
 from .views import PENDING, Views, WriteFailed
 
@@ -2097,16 +2097,38 @@ class Backend:
         with self._changed:
             return self._views.plain(acc.id, upto)
 
-    def records(self, client: str, label: str | None = None) -> list[Record]:
-        """The records of the proposal, oldest first, under ``label`` if given."""
+    def records(
+        self,
+        client: str,
+        label: str | None = None,
+        ids: Sequence[str] | None = None,
+    ) -> list[Record]:
+        """
+        The records of the proposal, oldest first, under ``label`` if given;
+        the records with the IDs ``ids`` in that order if given. Raises
+        ``ValueError`` if both are, and ``KeyError`` for an ID that is not
+        of the proposal.
+        """
+        if label is not None and ids is not None:
+            raise ValueError('give a label or ids, not both')
         with self._changed:
             proposal = self._client(client).proposal
             records = self._views.records
+            if ids is not None:
+                return [self._mine(i, proposal) for i in ids]
             if label is not None:
                 return [
                     records[i] for i in self._views.labels.get((proposal, label), [])
                 ]
             return [r for r in records.values() if r.proposal == proposal]
+
+    def changes(self, after: int, client: str) -> Changes:
+        """
+        The records of the client's proposal that changed since position
+        ``after`` of its feed (see :meth:`Views.changes`).
+        """
+        with self._changed:
+            return self._views.changes(self._client(client).proposal, after)
 
     def outputs(
         self,

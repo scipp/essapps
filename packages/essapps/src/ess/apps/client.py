@@ -36,7 +36,7 @@ from ess.spec import Binding, FileRef, OutputRef, WorkflowSpec
 
 from .backend import Backend, Entry, Selection
 from .files import FileSource, Selector
-from .records import Record, Request, SpecId, Template, as_values
+from .records import Changes, Record, Request, SpecId, Template, as_values
 from .store import Store
 
 
@@ -548,14 +548,52 @@ class Client:
         ids = [r.id for r in _items(records)]
         return _reshape(records, self._backend.readable(ids, self._id))
 
-    def records(self, *, label: str | None = None) -> list[Record]:
+    def records(
+        self, *, label: str | None = None, ids: Sequence[str] | None = None
+    ) -> list[Record]:
         """
         The proposal's records, oldest first, under ``label`` if given;
         every record of the proposal without it. Each record has its
         ``member``, so ``{r.member: r for r in client.records(label=...)}``
         is the newest of each member.
+
+        With ``ids``, the records with those IDs, in that order, such as the
+        ``records`` of :meth:`changes`. Raises ``KeyError`` for an ID that is
+        not of the proposal, and ``ValueError`` if both ``label`` and ``ids``
+        are given.
         """
-        return self._backend.records(self._id, label=label)
+        return self._backend.records(self._id, label=label, ids=ids)
+
+    def changes(self, *, after: int = 0) -> Changes:
+        """
+        The IDs of the proposal's records that changed since the position
+        ``after``, and the position to pass next time. A record changes when
+        it is submitted, by this client or another of the proposal, finishes,
+        has outputs persisted, or has outputs written. The IDs hold no values;
+        read what is shown with :meth:`records`, :meth:`status`, and
+        :meth:`readable`::
+
+            cursor = 0
+            while True:
+                changes = client.changes(after=cursor)
+                cursor = changes.cursor
+                for record in client.records(ids=changes.records):
+                    ...
+
+        ``after=0`` gives every record of the proposal, so a client that
+        starts late learns what the others did. Each ID is in the reply once,
+        in the order of its first change in the range. The position counts the
+        changes of this proposal only, so another proposal's records do not
+        move it.
+
+        Accumulators, pushes, and :meth:`release` are not in the feed: a
+        value that has gone is found by asking :meth:`readable`, and a read of
+        it may raise ``NotReadable``.
+
+        Raises ``ValueError`` if ``after`` is negative or past the position
+        of the last change.
+        """
+        return self._backend.changes(after, self._id)
 
     def latest(self, label: str, member: str | None = None) -> Record:
         """

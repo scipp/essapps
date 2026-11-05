@@ -24,7 +24,7 @@ from ess.apps import (
     file,
 )
 from ess.apps.batch import try_apply
-from ess.apps.testing import FakeFiles, FakeStore, read_file
+from ess.apps.testing import CountingClient, FakeFiles, FakeStore, read_file
 from ess.spec import (
     BackgroundRunFile,
     MaskFile,
@@ -489,3 +489,80 @@ def test_a_series_has_handled_a_file_that_a_record_holds_in_a_row(
     )
 
     assert TriggerLoop(client, rules=[summed]).step() == []
+
+
+@pytest.fixture
+def loading() -> Rule:
+    return Rule(
+        'load',
+        Template(LOAD, blanks=('sample',)),
+        selector=Selector(role='sample'),
+        label='loaded',
+        at='sample',
+    )
+
+
+def test_an_idle_step_reads_no_records(
+    client: Client, files: FakeFiles, loading: Rule
+) -> None:
+    counting = CountingClient(client)
+    loop = TriggerLoop(counting, rules=[loading])  # type: ignore[arg-type]
+    files.measure(1, 2.0, role='sample')
+    client.wait(loop.step())
+    loop.step()  # reads the record the first step submitted
+    counting.reads.clear()
+
+    assert loop.step() == []
+    assert counting.reads['records'] == 0
+
+
+def test_a_step_after_a_new_record_reads_only_that_record(
+    client: Client, files: FakeFiles, loading: Rule
+) -> None:
+    counting = CountingClient(client)
+    loop = TriggerLoop(counting, rules=[loading])  # type: ignore[arg-type]
+    files.measure(1, 2.0, role='sample')
+    client.wait(loop.step())
+    loop.step()
+    measured = files.measure(2, 3.0)
+    template = Template(LOAD, blanks=('sample',))
+    other = client.compute(template.fill(params={'sample': measured}), label='other')
+    counting.reads.clear()
+
+    assert loop.step() == []
+    assert counting.reads['records'] == 1
+    assert client.output(other, 'value') == 3.0
+
+
+def test_a_loop_started_on_a_history_does_not_submit_the_handled_files_again(
+    client: Client, files: FakeFiles, loading: Rule
+) -> None:
+    files.measure(1, 2.0, role='sample')
+    files.measure(2, 3.0, role='sample')
+    client.wait(TriggerLoop(client, rules=[loading]).step())
+    counting = CountingClient(client)
+
+    late = TriggerLoop(counting, rules=[loading])  # type: ignore[arg-type]
+
+    assert late.step() == []
+    assert counting.reads['records'] == 2
+    assert len(client.records(label='loaded')) == 2
+
+
+def test_two_rules_with_one_label_in_one_step_submit_each_file_once(
+    client: Client, files: FakeFiles, loading: Rule
+) -> None:
+    again = Rule(
+        'again',
+        loading.template,
+        selector=loading.selector,
+        label=loading.label,
+        at=loading.at,
+    )
+    loop = TriggerLoop(client, rules=[loading, again])
+    files.measure(1, 2.0, role='sample')
+
+    assert len(loop.step()) == 1
+    assert loop.status(again).reason == 'no new file'
+    assert loop.step() == []
+    assert len(client.records(label='loaded')) == 1

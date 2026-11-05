@@ -11,11 +11,13 @@ its position, or why a record failed. Each field of the form with nothing given
 is shown as such a reason, and nothing is submitted. A submission returns
 once the backend has logged it, so the app lists the new record pending.
 
-The client tells no one that a record has finished, so the app asks:
-:meth:`App.poll` lists the records again once one listed pending has
-finished, and a periodic callback of Panel calls it while the app is served.
-Each time the records are listed again, the forms are too, so a field that
-takes a reference offers each new record, pending or not.
+The client tells no one what changed, so the app asks: :meth:`App.poll` asks
+for the changes since the last listing, a record of another client of the
+proposal among them, and lists only the records that changed again. A periodic
+callback of Panel calls it while the app is served. Each time the records are
+listed again, the forms are too, so a field that takes a reference offers each
+new record, pending or not. The changes do not tell that an output was released,
+so after a release the outputs are listed from scratch.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from typing import Any
 
 import panel as pn
 
-from ess.apps import Client, Record, Status, SubmitError
+from ess.apps import Client, Record, SubmitError
 
 from .form import Form
 from .listing import Listing
@@ -51,7 +53,7 @@ class App:
         self.button.on_click(lambda _: self.submit())
         self.message = pn.pane.Markdown('')
         self._listing = Listing(client)
-        self.outputs = Outputs(client, self._listing, refresh=self.refresh)
+        self.outputs = Outputs(client, self._listing, refresh=self._refresh_all)
         self.records = Records(client, self._listing)
         self._form = pn.Column(sizing_mode='stretch_width')
         self._submitted: Record | None = None  # until it has finished
@@ -88,12 +90,10 @@ class App:
 
     def poll(self) -> None:
         """
-        List the records again if one that was listed pending has finished,
-        and show the outcome of the last submission once it is listed
-        finished.
+        List the records again if any changed, and show the outcome of the
+        last submission once it is listed finished.
         """
-        pending = self._listing.pending
-        if any(s is not Status.PENDING for s in self.client.status(pending)):
+        if self.client.changes(after=self._listing.cursor).records:
             self.refresh()
         record = self._submitted
         if record is None or record in self._listing.pending:
@@ -108,15 +108,22 @@ class App:
 
     def refresh(self) -> Listing:
         """
-        List the records again, in the pickers, the outputs, and the records;
-        what is listed.
+        List the records that changed again, in the pickers, the outputs, and
+        the records; what is listed.
         """
-        self._listing = Listing(self.client)
+        return self._show_listing(Listing(self.client, previous=self._listing))
+
+    def _refresh_all(self) -> Listing:
+        """List every record again, as after a release, which is not a change."""
+        return self._show_listing(Listing(self.client))
+
+    def _show_listing(self, listing: Listing) -> Listing:
+        self._listing = listing
         for form in self.forms.values():
-            form.refresh(self._listing)
-        self.outputs.refresh(self._listing)
-        self.records.refresh(self._listing)
-        return self._listing
+            form.refresh(listing)
+        self.outputs.refresh(listing)
+        self.records.refresh(listing)
+        return listing
 
     def panel(self) -> Any:
         return pn.Column(
