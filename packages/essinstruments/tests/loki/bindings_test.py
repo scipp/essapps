@@ -64,6 +64,8 @@ def test_beam_centre_is_that_of_the_tutorial(
     )
     assert outputs.centre.x == pytest.approx(tutorial_centre.x)
     assert outputs.centre.y == pytest.approx(tutorial_centre.y)
+    # esssans gives the tutorial's distance to five decimals.
+    assert outputs.centre.z == pytest.approx(tutorial_centre.z, abs=1e-5)
 
 
 def test_beam_centre_image_shares_no_memory_with_the_masks_given(

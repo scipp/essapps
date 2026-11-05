@@ -33,7 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 loki = [
-    "esssans",
+    "esssans>=26.10.0",
     "essspec[sciline]",
 ]
 test = [

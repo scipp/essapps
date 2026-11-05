@@ -50,7 +50,8 @@ class DetectorImage(BaseModel, arbitrary_types_allowed=True):
     """
     The counts per pixel of one run, with each pixel's position and the masks.
 
-    The positions are those of the file, not shifted by a beam centre, so a beam
+    The positions are those of the file, not corrected by a beam centre. With the
+    sample at the origin, as in the files of the detector test at Larmor, a beam
     centre found from this run marks its place on the image as it is.
     """
 
@@ -58,10 +59,17 @@ class DetectorImage(BaseModel, arbitrary_types_allowed=True):
 
 
 class BeamCentre(BaseModel):
-    """Where the beam hits the detector plane, in the frame of the file's positions."""
+    """
+    A point on the beam, relative to the sample, which gives the direction of the beam.
 
-    x: float = Field(description='Horizontal position, in m.')
-    y: float = Field(description='Vertical position, in m.')
+    ``z`` is the distance from the sample of the plane in which ``x`` and ``y`` were
+    determined, since the same direction is a smaller offset on a bank closer to the
+    sample. Only the direction counts, so ``x=0, y=0, z=1`` applies no correction.
+    """
+
+    x: float = Field(description='Horizontal offset from the sample, in m.')
+    y: float = Field(description='Vertical offset from the sample, in m.')
+    z: float = Field(gt=0, description='Distance from the sample along the beam, in m.')
 
 
 class Corrections(BaseModel):

@@ -60,15 +60,15 @@ from .specs import (
     TransmissionCurves,
 )
 
-_NO_SHIFT = sc.vector([0.0, 0.0, 0.0], unit='m')
-"""A beam centre that leaves the positions of the file as they are."""
+_NO_CORRECTION = sc.vector([0.0, 0.0, 0.0], unit='m')
+"""The value of esssans' key that applies no beam-centre correction."""
 
 
 def _run_workflow(run: Path) -> sciline.Pipeline:
-    """The workflow of the detector of one run, with its positions as in the file."""
+    """The workflow of the detector of one run, with no beam-centre correction."""
     workflow = LokiAtLarmorWorkflow()
     workflow[Filename[SampleRun]] = str(run)
-    workflow[BeamCenter] = _NO_SHIFT
+    workflow[BeamCenter] = _NO_CORRECTION
     return workflow
 
 
@@ -98,7 +98,9 @@ def find_beam_centre(params: BeamCentreParams) -> BeamCentreOutputs:
     workflow[key] = detector  # so that the finder does not load the run again
     centre = sans.beam_center_from_center_of_mass(workflow).to(unit='m')
     return BeamCentreOutputs(
-        centre=BeamCentre(x=centre.fields.x.value, y=centre.fields.y.value),
+        centre=BeamCentre(
+            x=centre.fields.x.value, y=centre.fields.y.value, z=centre.fields.z.value
+        ),
         image=_image(detector),
     )
 
@@ -108,7 +110,7 @@ def _detector_masks(masks: PixelMasks) -> DetectorMasks:
 
 
 def _beam_center(centre: BeamCentre) -> BeamCenter:
-    return BeamCenter(sc.vector([centre.x, centre.y, 0.0], unit='m'))
+    return BeamCenter(sc.vector([centre.x, centre.y, centre.z], unit='m'))
 
 
 def _wavelength_bins(edges: WavelengthEdges) -> WavelengthBins:

@@ -73,13 +73,13 @@ def test_masks_then_centre_then_iofq(
     found = client.output(centre, 'centre')
     assert found.x == pytest.approx(tutorial_centre.x)
     assert found.y == pytest.approx(tutorial_centre.y)
-    # The centre is found, not typed, so compare it up to the digits typed.
-    assert sc.allclose(
-        client.output(iofq, 'iofq').intensity.data,
-        plain_esssans_iofq.data,
-        rtol=sc.scalar(1e-3),
-        equal_nan=True,
-    )
+    # esssans gives the tutorial's distance to five decimals.
+    assert found.z == pytest.approx(tutorial_centre.z, abs=1e-5)
+    # The centre is found, not typed. That moves I(Q) far less than its noise, but
+    # by more than a relative tolerance can tell: a subtracted intensity can be small.
+    computed = client.output(iofq, 'iofq').intensity.data
+    difference = sc.abs(sc.values(computed) - sc.values(plain_esssans_iofq.data))
+    assert sc.all(difference < 0.1 * sc.stddevs(plain_esssans_iofq.data)).value
 
 
 def test_batch_through_a_stage_with_one_can(
@@ -97,7 +97,7 @@ def test_batch_through_a_stage_with_one_can(
         params={
             **iofq_settings,
             'masks': masks.ref('masks'),
-            'beam_centre': {'x': tutorial_centre.x, 'y': tutorial_centre.y},
+            'beam_centre': tutorial_centre.model_dump(),
         },
         blanks=('sample', 'sample_transmission'),
     )
@@ -142,6 +142,26 @@ def test_a_run_of_another_role_is_refused(
                 'sample': file(run=60393),
                 'sample_transmission': file(run=60394),
                 'masks': masks.ref('masks'),
-                'beam_centre': {'x': 0.0, 'y': 0.0},
+                'beam_centre': {'x': 0.0, 'y': 0.0, 'z': 1.0},
+            },
+        )
+
+
+def test_a_typed_beam_centre_without_a_distance_is_refused_at_submit(
+    client: Client, mask_file: Path, iofq_settings: dict[str, object]
+) -> None:
+    masks = client.submit(
+        MASKS,
+        params={'run': file(run=60339), 'mask_files': [file(path=mask_file)]},
+    )
+    with pytest.raises(SubmitError, match='beam_centre'):
+        client.submit(
+            IOFQ,
+            params={
+                **iofq_settings,
+                'sample': file(run=60339),
+                'sample_transmission': file(run=60394),
+                'masks': masks.ref('masks'),
+                'beam_centre': {'x': 0.01, 'y': 0.01, 'z': 0.0},
             },
         )

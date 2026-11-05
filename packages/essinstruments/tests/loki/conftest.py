@@ -30,7 +30,7 @@ from ess.spec.parameters import QEdges, WavelengthEdges
 @pytest.fixture(scope='session')
 def tutorial_centre() -> BeamCentre:
     """The beam centre that esssans' tutorial workflow holds for run 60339."""
-    return BeamCentre(x=-0.02914868, y=-0.01816138)
+    return BeamCentre(x=-0.02914868, y=-0.01816138, z=4.11610)
 
 
 @pytest.fixture(scope='session')
@@ -84,7 +84,7 @@ def plain_esssans_iofq(
     workflow[ReturnEvents] = False
     workflow[DirectBeamFilename] = str(direct_beam)
     workflow[BeamCenter] = sc.vector(
-        [tutorial_centre.x, tutorial_centre.y, 0.0], unit='m'
+        [tutorial_centre.x, tutorial_centre.y, tutorial_centre.z], unit='m'
     )
     workflow[Filename[SampleRun]] = str(data.loki_tutorial_sample_run_60339())
     workflow[Filename[BackgroundRun]] = str(data.loki_tutorial_background_run_60393())
