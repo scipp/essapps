@@ -86,8 +86,8 @@ Rows of different tables have nothing to do with each other: a push that gives r
 This needs a driver whose sample sums depend only on sample rows, and whose can sums depend only on can rows.
 Then the order of pushes changes no state.
 esssans builds its pixel masks from the sample run, so its can sums depend on the sample too.
-So a driver over esssans cannot sum the can runs on their own.
-Masks per run type would fix this in esssans.
+So a driver over esssans that reads masks from files cannot sum the can runs on their own.
+A spec that takes the masks as an input, such as `IOFQ` of `ess.instruments.loki`, removes the dependency without a change to esssans.
 
 ```python
 class IofQMultiParams(IofQSettings):     # IofQSettings holds the transmission, one for all sample runs
