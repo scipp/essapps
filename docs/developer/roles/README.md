@@ -1,6 +1,6 @@
 # The framework from three sides
 
-Three notebooks, one per kind of author, on one running example: `toy_sans.py`, a toy SANS reduction with a single-run spec, a multi-run spec of tables of its sample and can runs, a spec that reads the curve of the first, and two specs that compute a beam centre and a transmission, which the reduction takes typed in or by reference.
+Three notebooks, one per kind of author, on one running example: `toy_sans.py`, a toy SANS reduction with a single-run spec, a multi-run spec of tables of its sample and can runs, a spec that reads the curve of the first, a spec of a 4-D output too large to read whole, and two specs that compute a beam centre and a transmission, which the reduction takes typed in or by reference.
 
 | Notebook | For | Shows |
 |---|---|---|

@@ -11,6 +11,18 @@ import pandas as pd
 import panel as pn
 
 
+def with_sidebar(sidebar: list[Any], main: list[Any]) -> pn.Row:
+    """
+    A column of fixed width beside one that takes the rest, each scrolling by
+    itself, so that a table to select from stays in view of what is selected.
+    """
+    return pn.Row(
+        pn.Column(*sidebar, width=440, scroll=True, sizing_mode='stretch_height'),
+        pn.Column(*main, scroll=True, sizing_mode='stretch_both'),
+        sizing_mode='stretch_both',
+    )
+
+
 class Table[K]:
     """
     A table with a row per key, of which one may be selected.

@@ -34,7 +34,7 @@ from .log import (
     Submitted,
     Written,
 )
-from .records import Record, Request, Status
+from .records import Changes, Record, Request, Status
 
 
 class _Records(Mapping[str, Record]):
@@ -59,6 +59,11 @@ class _Records(Mapping[str, Record]):
         """The names of a record's outputs, without listing its request."""
         held = self._held[record_id]
         return held.outputs if isinstance(held, Record) else held[0].outputs
+
+    def proposal(self, record_id: str) -> str:
+        """The proposal of a record, without listing its request."""
+        held = self._held[record_id]
+        return held.proposal if isinstance(held, Record) else held[1].proposal
 
     def __getitem__(self, record_id: str) -> Record:
         held = self._held[record_id]
@@ -115,6 +120,11 @@ class Views:
     write is the record's: pending while it is, written once it completes.
     ``writes`` holds the write of each output that a persist request names
     later. :meth:`write` gives either.
+
+    ``feed`` holds, for each proposal, the ID of a record each time an event
+    submits, finishes, or persists it, or writes its outputs, in the order of
+    the events. A position in it is a cursor of :meth:`changes`. Opening an
+    accumulator and pushing to it are not in the feed.
     """
 
     def __init__(self) -> None:
@@ -126,13 +136,16 @@ class Views:
         self.pushes: dict[str, list[Pushed]] = {}  # by accumulator ID
         self.persisted: dict[str, tuple[str, ...]] = {}
         self.writes: dict[tuple[str, str], Write] = {}  # by (record ID, output)
+        self.feed: dict[str, list[str]] = {}  # by proposal
 
     def apply(self, event: Event) -> None:
         match event:
             case Submitted():
                 for new in event.records:
                     self._add(new, event)
+                    self.feed.setdefault(event.proposal, []).append(new.id)
             case Finished():
+                self._note(event.record)
                 self.finished[event.record] = event
                 for key in self._pending(event.record):
                     if event.status is not Status.COMPLETED:
@@ -144,14 +157,20 @@ class Views:
             case Pushed():
                 self.pushes.setdefault(event.accumulator, []).append(event)
             case Persist():
+                self._note(event.record)
                 for name in event.outputs:
                     omitted = self.omitted((event.record, name))
                     self.writes[(event.record, name)] = WRITTEN if omitted else PENDING
             case Written():
+                self._note(event.record)
                 for name in event.outputs:
                     self.writes[(event.record, name)] = (
                         WRITTEN if event.failure is None else WriteFailed(event.failure)
                     )
+
+    def _note(self, record_id: str) -> None:
+        proposal = self.records.proposal(record_id)
+        self.feed.setdefault(proposal, []).append(record_id)
 
     def _pending(self, record_id: str) -> list[tuple[str, str]]:
         return [
@@ -228,3 +247,17 @@ class Views:
     def persists(self, key: tuple[str, str]) -> bool:
         """Whether the output is persisted: written, or its write pending."""
         return self.write(key) in (PENDING, WRITTEN)
+
+    def changes(self, proposal: str, after: int) -> Changes:
+        """
+        The records of the proposal that events changed since position ``after``
+        of its feed, each once, in the order of their first change.
+
+        Raises ``ValueError`` if ``after`` is negative or past the end.
+        """
+        feed = self.feed.get(proposal, [])
+        if not 0 <= after <= len(feed):
+            raise ValueError(
+                f'after is a position in 0..{len(feed)} of the feed, not {after}'
+            )
+        return Changes(tuple(dict.fromkeys(feed[after:])), len(feed))

@@ -135,8 +135,14 @@ Running the same request again makes a new record.
 result = client.compute(IOFQ, params={...})          # submit, then wait
 client.output(result, 'iofq')                        # raises RecordFailed if the record failed
 client.output(result, 'iofq', select={'Q': slice(0, 10)})   # copies a part; on the service only that part leaves
+client.describe(result, 'iofq')                      # {'intensity': ArrayInfo(sizes, unit, coords)}, no data
 client.failure(result)                               # why it failed, or None
 ```
+
+An application learns what an output is from `client.describe`, which gives the sizes, unit, and coordinate names of each array field and reads no array, and then reads the part it shows with `select=`.
+A value that was persisted and is no longer in memory is read from the store to be described.
+The plot of an array of more than two dimensions has a slider for each dimension but the last two, and moving it reads one cut (`ess.apps.panel.Outputs`; which dimensions get a slider is decided in `ess.apps.plotting`, which needs no widget library).
+A workflow package can configure plots for its spec: `App(client, plots={spec_id: {'Centre on image': function}})`, where a function takes an instance of the spec's outputs model and returns a plopp figure.
 
 A request is checked in two phases:
 
@@ -185,6 +191,26 @@ client.release(centre)              # this client no longer keeps the centre
 client.persist(result, 'iofq')      # the store keeps iofq, for every client of the proposal
 ```
 
+## What changed
+
+A client that shows records, or reacts to them, asks which records changed since a position in the proposal's history, and reads only those.
+A record changes when it is submitted, by any client of the proposal, finishes, or has outputs persisted or written.
+The reply holds record IDs and no values, each ID once:
+
+```python
+cursor = 0                                  # 0 gives every record of the proposal
+while True:
+    changes = client.changes(after=cursor)
+    cursor = changes.cursor                 # pass it next time
+    for record in client.records(ids=changes.records):
+        show(record, client.status(record), client.readable(record))
+```
+
+A backend that starts from its history log gives the same changes at the same cursors.
+Accumulators and pushes are not in the feed.
+Neither is `client.release`, nor any other way for a value to go away: the history does not hold lifetimes, and what a client may read is per client.
+So a client that shows outputs asks `client.readable` for the records it shows, and a read can still raise `NotReadable`.
+
 ## Stages and accumulators
 
 A *stage* keeps the part of a computation that depends only on its fixed values, so that tuning a parameter does not load the runs again.
@@ -209,6 +235,8 @@ rule = Rule('transmission', Template(TRANSMISSION, blanks=('run', 'empty_beam'))
             lookup=Lookup({'empty_beam': LastBefore(Selector(role='empty_beam'))}))
 TriggerLoop(client, rules=[rule]).run()
 ```
+
+The loop reads which files a rule has handled from the changes, so a step reads only the records that changed since the last one.
 
 ## Provenance and publication
 
@@ -239,7 +267,7 @@ Not visible in the code of notebooks, apps, or workflow packages:
 1. **Grouping.** Spreading one accumulator over several nodes needs a merge of two drivers. No requirement asks for it ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
 2. **Removing a row.** Whether an accumulator offers `remove` depends on whether it keeps each row.
 3. **Labels and members** on records, and `member_field`, are tentative.
-4. **Looks that compute.** `select=` only indexes an output. A projection, or a thick slice summed, would run a spec next to the value without making a record. The design of such looks waits for the plotting work. So does reading the latest state already added, without a pin.
+4. **Looks that compute.** `client.describe` and `select=` give an application the sizes of an output and a cut of it. `select=` only indexes. A projection, or a thick slice summed, would run a spec next to the value without making a record; it is still open whether that is a second call or part of `select=`. So is reading the latest state already added, without a pin, and describing an accumulator's state, which `describe` does not take. A configured plot function takes every output of its record, read whole; whether it may take cuts is open.
 5. **Accumulators on the service.** How the service holds a driver, bounds its memory, and drops it ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), scipp/essapps#27).
 6. **Persist at submission.** Should `persist=` at submission also keep the values for the client? To be decided when a story needs it.
 7. **Values modified in place.** In the user's process, a notebook that modifies a value `client.output` returned changes what later requests read and what `persist` writes. A shallow copy protects the dicts of coordinates and masks, not arithmetic in place.

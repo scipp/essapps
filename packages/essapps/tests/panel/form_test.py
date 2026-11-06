@@ -8,8 +8,8 @@ import panel as pn
 import pytest
 from pydantic import AwareDatetime, BaseModel, Field, NaiveDatetime
 
-from ess.apps import Client, Record, SubmitError
-from ess.apps.panel import Form, Listing
+from ess.apps import Client, Listing, Record, SubmitError
+from ess.apps.panel import Form
 from ess.apps.testing import FakeFiles
 from ess.spec import File, FileRef, OutputRef, Referenced, RunFile, WorkflowSpec
 
@@ -185,6 +185,9 @@ def shown(widget: Any) -> Any:
 def sent(widget: Any, value: Any) -> None:
     """Set ``widget`` as Panel does when the browser sends ``value``."""
     widget.param.update(**widget._process_property_change({'value': value}))
+
+
+HOLDS_CHANGES = 'the editor holds changes: add or update a row, or discard them'
 
 
 def missing(form: Form) -> set[tuple[tuple[str | int, ...], str]]:
@@ -743,11 +746,148 @@ def test_a_row_selected_is_edited_and_updated(stack: Form, run: FileRef) -> None
     table(stack, 'Shots').selection = [0]
     assert widget_in(stack, 'Shots', 'Thickness').value == 2.0
     widget_in(stack, 'Shots', 'Thickness').value = 4.0
-    assert missing(stack) == {
-        (('shots', 0), 'the editor holds changes: update the row, or deselect it')
-    }
+    assert missing(stack) == {(('shots', 0), HOLDS_CHANGES)}
     click(stack, 'Shots', 'Update row')
     assert [s['thickness'] for s in stack.params['shots']] == [4.0, 3.0]
+
+
+def test_the_selection_stays_while_the_editor_holds_changes(
+    stack: Form, run: FileRef
+) -> None:
+    stack.set(
+        {
+            'runs': [run],
+            'shots': [{'run': run, 'thickness': 2.0}, {'run': run, 'thickness': 3.0}],
+        }
+    )
+    selection = table(stack, 'Shots')
+    thickness = widget_in(stack, 'Shots', 'Thickness')
+    selection.selection = [0]
+    thickness.value = 4.0
+    for refused in ([1], [], [0, 1]):
+        selection.selection = refused
+        assert selection.selection == [0]
+        assert thickness.value == 4.0
+    click(stack, 'Shots', 'Discard')
+    assert thickness.value == 2.0
+    selection.selection = [1]
+    assert thickness.value == 3.0
+    assert [s['thickness'] for s in stack.params['shots']] == [2.0, 3.0]
+
+
+def test_an_editor_changed_with_no_row_selected_is_refused_until_discarded(
+    stack: Form, run: FileRef
+) -> None:
+    stack.set({'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]})
+    thickness = widget_in(stack, 'Shots', 'Thickness')
+    empty = thickness.value
+    thickness.value = 4.0
+    assert missing(stack) == {(('shots',), HOLDS_CHANGES)}
+    table(stack, 'Shots').selection = [0]
+    assert table(stack, 'Shots').selection == []
+    click(stack, 'Shots', 'Discard')
+    assert thickness.value == empty
+    assert [s['thickness'] for s in stack.params['shots']] == [2.0]
+
+
+def test_deselecting_a_row_empties_the_editor(stack: Form, run: FileRef) -> None:
+    stack.set({'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]})
+    thickness = widget_in(stack, 'Shots', 'Thickness')
+    empty = thickness.value
+    table(stack, 'Shots').selection = [0]
+    table(stack, 'Shots').selection = []
+    assert thickness.value == empty
+    assert [s['thickness'] for s in stack.params['shots']] == [2.0]
+
+
+def test_a_row_edited_may_be_added_as_a_new_row_instead(
+    stack: Form, run: FileRef
+) -> None:
+    stack.set({'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]})
+    table(stack, 'Shots').selection = [0]
+    widget_in(stack, 'Shots', 'Thickness').value = 4.0
+    click(stack, 'Shots', 'Add as new row')
+    assert table(stack, 'Shots').selection == [1]
+    assert [s['thickness'] for s in stack.params['shots']] == [2.0, 4.0]
+
+
+def test_removing_the_row_selected_removes_the_changes_to_it(
+    stack: Form, run: FileRef
+) -> None:
+    shots = [{'run': run, 'thickness': 2.0}, {'run': run, 'thickness': 3.0}]
+    stack.set({'runs': [run], 'shots': shots})
+    table(stack, 'Shots').selection = [0]
+    widget_in(stack, 'Shots', 'Thickness').value = 4.0
+    click(stack, 'Shots', 'Remove')
+    assert [s['thickness'] for s in stack.params['shots']] == [3.0]
+
+
+def test_setting_the_form_drops_changes_in_the_editor(
+    stack: Form, run: FileRef
+) -> None:
+    params = {'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]}
+    stack.set(params)
+    widget_in(stack, 'Shots', 'Thickness').value = 4.0
+    stack.set(params)
+    assert [s['thickness'] for s in stack.params['shots']] == [2.0]
+
+
+def test_a_refresh_keeps_changes_in_the_editor(stack: Form, run: FileRef) -> None:
+    stack.set({'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]})
+    table(stack, 'Shots').selection = [0]
+    widget_in(stack, 'Shots', 'Thickness').value = 4.0
+    stack.refresh()
+    assert widget_in(stack, 'Shots', 'Thickness').value == 4.0
+    assert missing(stack) == {(('shots', 0), HOLDS_CHANGES)}
+
+
+def test_a_record_released_while_its_row_is_selected_is_no_change_in_the_editor(
+    client: Client, stack: Form, find_spec: Spec, run: FileRef
+) -> None:
+    found = client.compute(find_spec, params={'run': run})
+    centre = found.ref('centre')
+    stack.set({'runs': [run], 'shots': [], 'centres': [centre, {'x': 2.0, 'y': 0.0}]})
+    table(stack, 'Centres').selection = [0]
+    client.release(found)
+    stack.refresh()
+    assert stack.params['centres'][0] == centre
+    table(stack, 'Centres').selection = [1]
+    assert table(stack, 'Centres').selection == [1]
+
+
+def test_changes_in_the_editor_of_a_table_in_a_row_are_changes_of_the_row(
+    client: Client,
+) -> None:
+    class Inner(BaseModel):
+        x: float
+
+    class Outer(BaseModel):
+        inners: list[Inner]
+
+    class OuterParams(BaseModel):
+        outers: list[Outer]
+
+    spec: Spec = WorkflowSpec(
+        name='outer',
+        version=1,
+        title='Outer',
+        description='Rows that hold rows.',
+        params=OuterParams,
+        outputs=Value,
+    )
+    form = Form(spec, client)
+    form.set({'outers': [{'inners': [{'x': 1.0}]}, {'inners': []}]})
+    outer, inner = section(form, 'Outers').select(pn.widgets.Tabulator)
+    outer.selection = [0]
+    inner.selection = [0]
+    widget_in(form, 'Outers', 'X').value = 2.0
+    outer.selection = [1]
+    assert outer.selection == [0]
+    assert missing(form) == {(('outers', 0), HOLDS_CHANGES)}
+    click(form, 'Inners', 'Discard')
+    outer.selection = [1]
+    assert outer.selection == [1]
+    assert form.params == {'outers': [{'inners': [{'x': 1.0}]}, {'inners': []}]}
 
 
 def test_a_row_the_editor_cannot_show_is_kept_when_selected(
@@ -829,6 +969,7 @@ def test_the_editor_offers_no_record_of_a_row_shown_before(
     stack.set({'runs': [run], 'shots': [], 'centres': centres})
     way(stack, 'Centres').value = 'From a record'
     click(stack, 'Centres', 'Add as new row')
+    click(stack, 'Centres', 'Discard')
     assert stack.params['centres'] == centres
 
 

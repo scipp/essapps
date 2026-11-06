@@ -6,20 +6,25 @@ from .backend import Backend
 from .batch import LastBefore, Lookup, apply
 from .client import Accumulator, Client, Files, Provenance, Stage, local
 from .errors import ClientEnded, FieldError, NotReadable, RecordFailed, SubmitError
-from .files import FileSource, Selector, file
-from .records import Record, Request, SpecId, Status, Template
+from .files import FileSource, FolderFiles, Selector, file
+from .listing import Listing
+from .records import ArrayInfo, Changes, Record, Request, SpecId, Status, Template
 from .rules import Rule, RuleStatus, TriggerLoop
 from .store import Store
 
 __all__ = [
     'Accumulator',
+    'ArrayInfo',
     'Backend',
+    'Changes',
     'Client',
     'ClientEnded',
     'FieldError',
     'FileSource',
     'Files',
+    'FolderFiles',
     'LastBefore',
+    'Listing',
     'Lookup',
     'NotReadable',
     'Provenance',

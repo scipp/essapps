@@ -10,7 +10,7 @@ identity when a request is submitted, so a record names the file itself.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -128,3 +128,67 @@ class FileSource(Protocol):
     def watch(self, selector: Selector) -> Iterator[FileRef]:
         """Matching files: the existing ones first, then new ones, each once."""
         ...
+
+
+class FolderFiles:
+    """
+    A file source over the files of a folder, with a table a person fills.
+
+    The table has a row per file: ``file``, its name in the folder, and its
+    metadata, such as ``run``, ``kind``, and ``role``. A row without ``kind`` is
+    a raw file (see :class:`Selector`), and without ``proposal`` is open to all.
+    The order of the rows is the order of measurement::
+
+        FolderFiles('/data/test', [
+            {'file': 'run-1.nxs', 'run': 1, 'role': 'sample'},
+            {'file': 'mask.xml', 'kind': 'mask'},
+        ])
+
+    A file is identified by its path, and named by its path, its ``run``, or its
+    ``pid``. The table is fixed, so :meth:`watch` ends after the existing files.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the folder lacks a file of the table.
+    ValueError
+        If two rows name one file, or give one run or one PID.
+    """
+
+    def __init__(
+        self, directory: Path | str, table: Iterable[Mapping[str, Any]]
+    ) -> None:
+        self._metadata: dict[FileRef, dict[str, Any]] = {}
+        self._names: dict[FileRef, FileRef] = {}
+        for row in table:
+            metadata = dict(row)
+            path = Path(directory).absolute() / metadata.pop('file')
+            if not path.is_file():
+                raise FileNotFoundError(path)
+            ref = FileRef.at(path)
+            if ref in self._metadata:
+                raise ValueError(f'two rows name the file {path}')
+            self._metadata[ref] = metadata
+            for kind in ('run', 'pid'):
+                if kind in metadata:
+                    name = FileRef(file=f'{kind}:{metadata[kind]}')
+                    if name in self._names:
+                        raise ValueError(f'two rows give {name}')
+                    self._names[name] = ref
+
+    def resolve(self, name: FileRef) -> FileRef:
+        if name in self._metadata:
+            return name
+        return self._names[name]
+
+    def path(self, ref: FileRef) -> Path:
+        return Path(ref.file.removeprefix('path:'))
+
+    def metadata(self, ref: FileRef) -> dict[str, Any]:
+        return dict(self._metadata[ref])
+
+    def list(self, selector: Selector) -> list[FileRef]:
+        return [r for r, m in self._metadata.items() if selector.matches(m)]
+
+    def watch(self, selector: Selector) -> Iterator[FileRef]:
+        return iter(self.list(selector))

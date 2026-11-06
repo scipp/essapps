@@ -284,3 +284,40 @@ class Record(BaseModel, frozen=True):
     def refs(self, *outputs: str) -> dict[str, OutputRef]:
         """A reference to each of ``outputs`` by name; to every output if none."""
         return {name: self.ref(name) for name in outputs or self.outputs}
+
+
+@dataclass(frozen=True)
+class ArrayInfo:
+    """
+    What an array is, without its data: ``sizes`` by dimension name, its
+    ``unit`` as text, if it has one, and the names of its ``coords``.
+    """
+
+    sizes: Mapping[str, int]
+    unit: str | None
+    coords: tuple[str, ...]
+
+    @classmethod
+    def of(cls, array: Any) -> ArrayInfo:
+        """The info of a scipp variable or data array, or a value like one."""
+        unit = getattr(array, 'unit', None)
+        return cls(
+            sizes=dict(zip(array.dims, array.shape, strict=True)),
+            unit=None if unit is None else str(unit),
+            coords=tuple(getattr(array, 'coords', ())),
+        )
+
+
+@dataclass(frozen=True)
+class Changes:
+    """
+    The records of a proposal that changed since a position in its feed (see
+    :meth:`Client.changes`).
+
+    ``records`` holds their IDs, each once, in the order of their first change
+    in the range; it holds no values. ``cursor`` is the position to pass next
+    time.
+    """
+
+    records: tuple[str, ...]
+    cursor: int

@@ -59,7 +59,7 @@ from pydantic import AwareDatetime, BaseModel
 from pydantic.fields import FieldInfo
 from pydantic_core import to_json, to_jsonable_python
 
-from ess.apps import Client, FieldError, SubmitError
+from ess.apps import Client, FieldError, Listing, SubmitError
 from ess.spec import (
     File,
     FileRef,
@@ -68,8 +68,6 @@ from ess.spec import (
     field_types,
 )
 from ess.spec.refs import Loc, as_ref
-
-from .listing import Listing
 
 
 class _Unset:
@@ -85,6 +83,9 @@ field as it starts, at its default or unset.
 
 type _Missing = list[FieldError]
 """The fields with nothing given, each with what the user is to do."""
+
+_HOLDS_CHANGES = 'the editor holds changes: add or update a row, or discard them'
+"""What a user who changed the editor of a table is to do before going on."""
 
 type _Widget = (
     _Scalar | _Scalars | _File | _Group | _Record | _Nothing | _Choice | _Rows
@@ -562,13 +563,16 @@ class _Rows:
     and shows a group or a list as its JSON text. The rows are held as a
     request writes them, so the widgets do not grow with the rows.
 
-    Selecting one row shows it in the editor. ``Update row`` writes the
-    editor back to it, and ``Add as new row`` appends it, each only if
-    nothing is missing in it, so that every row is complete. ``Remove``
-    removes the rows selected. The params refuse an editor that the user
-    changed since it showed the row selected, so that an edit of a row is
-    not lost unseen; an editor filled in while no row is selected is not
-    added, and one changed is shown another row when it is selected.
+    The editor shows the row selected, and is empty if none or several are.
+    ``Update row`` writes the editor back to the row selected, and ``Add as
+    new row`` appends it, each only if nothing is missing in it, so that every
+    row is complete. ``Remove`` removes the rows selected, with any changes to
+    them in the editor. ``Discard`` shows the selection in the editor again.
+
+    So that a change in the editor is not lost unseen, the selection stays
+    while the editor differs from what it showed, and the params refuse it. A
+    refresh is no change: a record gone from the listing leaves its row as it
+    is, as a row the editor cannot show whole.
 
     Unset, it has no row until one is added or ``Remove`` is clicked, which
     gives the empty list. A row set that the editor cannot show whole, such
@@ -580,9 +584,12 @@ class _Rows:
         self._default = default
         self._listing = listing
         self._rows: list[Any] | None = None  # unset
-        # The editor's value as it showed the row selected, which differs
-        # from the row if the editor cannot show it whole.
-        self._shown: Any = UNSET
+        # The selection that the editor shows, which the table's differs from
+        # only while it is being restored.
+        self._selection: list[int] = []
+        # What the editor held as it showed the selection, which differs from
+        # the row if the editor cannot show it whole.
+        self._shown: tuple[Any, _Missing] = (UNSET, [])
         tp, _, metadata = field_types.unwrapped(element)
         inline, inline_metadata, referenced = field_types.split(tp, *metadata)
         self._marker = field_types.file_marker(inline, *inline_metadata)
@@ -622,7 +629,7 @@ class _Rows:
             layout='fit_columns',
             sizing_mode='stretch_width',
         )
-        self._table.param.watch(lambda _: self._load(), 'selection')
+        self._table.param.watch(lambda _: self._select(), 'selection')
         self._message = pn.pane.Markdown()
         add = pn.widgets.Button(label='Add as new row')
         add.on_click(lambda _: self._write(None))
@@ -630,10 +637,12 @@ class _Rows:
         self._update.on_click(lambda _: self._write(self._selected()))
         remove = pn.widgets.Button(label='Remove')
         remove.on_click(lambda _: self._remove())
+        discard = pn.widgets.Button(label='Discard')
+        discard.on_click(lambda _: self._load())
         self._panel = pn.Column(
             self._table,
             self._editor.panel(),
-            pn.Row(add, self._update, remove),
+            pn.Row(add, self._update, remove, discard),
             self._message,
             sizing_mode='stretch_width',
         )
@@ -641,40 +650,60 @@ class _Rows:
 
     def _selected(self) -> int | None:
         """The row selected, if one is."""
-        selection = self._table.selection
-        return selection[0] if len(selection) == 1 else None
+        return self._selection[0] if len(self._selection) == 1 else None
+
+    def _held(self) -> tuple[Any, _Missing]:
+        """
+        The editor's value and what is missing in it, which names any changes
+        in the editor of a table within this editor.
+        """
+        missing: _Missing = []
+        return self._editor.value((), missing), missing
+
+    def _select(self) -> None:
+        """Show the selection in the editor, or restore it if the editor changed."""
+        if self._table.selection == self._selection:
+            return
+        if self._held() != self._shown:
+            self._table.selection = self._selection
+            self._message.object = _HOLDS_CHANGES
+            return
+        self._selection = self._table.selection
+        self._load()
 
     def _load(self) -> None:
-        """Show the row selected in the editor, if one is."""
+        """Show the row selected in the editor, or nothing if none is."""
         i = self._selected()
-        if i is not None:
-            self._editor.set((self._rows or [])[i])
-            self._shown = self._editor.value((), [])
+        self._editor.set(UNSET if i is None else (self._rows or [])[i])
+        self._shown = self._held()
         self._update.disabled = i is None
         self._message.object = ''
 
     def _write(self, i: int | None) -> None:
         """Write the editor to the row ``i``, or a new row, if nothing is missing."""
-        missing: _Missing = []
-        value = self._editor.value((), missing)
+        value, missing = self._held()
         if value is UNSET and not missing:  # a choice with no way chosen
             missing.append(FieldError(None, (), 'choose a way'))
         self._message.object = '\n'.join(f'- {e}' for e in missing)
         if missing:
             return
+        self._shown = (value, missing)
         rows = self._rows or []
         if i is None:
             self._rows = [*rows, value]
             self._render()
             self._table.selection = [len(self._rows) - 1]
         else:
-            rows[i] = self._shown = value
+            rows[i] = value
             self._render()
 
     def _remove(self) -> None:
-        selected = set(self._table.selection)
+        selected = set(self._selection)
         self._rows = [r for i, r in enumerate(self._rows or []) if i not in selected]
-        self._table.selection = []
+        if selected:
+            self._selection = []
+            self._table.selection = []
+            self._load()
         self._render()
 
     def _render(self) -> None:
@@ -720,36 +749,34 @@ class _Rows:
         if self._rows is None:
             missing.append(FieldError(None, loc, 'add a row, or remove for none'))
             return UNSET
-        i = self._selected()
-        if i is not None and self._editor.value((), []) != self._shown:
-            missing.append(
-                FieldError(
-                    None,
-                    (*loc, i),
-                    'the editor holds changes: update the row, or deselect it',
-                )
-            )
+        if self._held() != self._shown:
+            i = self._selected()
+            at = loc if i is None else (*loc, i)
+            missing.append(FieldError(None, at, _HOLDS_CHANGES))
         return list(self._rows)
 
     def set(self, value: Any) -> None:
         if value is UNSET:
             value = self._default
-        self._table.selection = []
         if value is UNSET:
             self._rows = None
         else:
             self._rows = []
             for item in value:
                 self._editor.set(item)
-                missing: _Missing = []
-                given = self._editor.value((), missing)
+                given, missing = self._held()
                 self._rows.append(item if missing else given)
-            self._editor.set(UNSET)
+        self._selection = []
+        self._table.selection = []
+        self._load()
         self._render()
 
     def refresh(self, listing: Listing) -> None:
         self._listing = listing
+        changed = self._held() != self._shown
         self._editor.refresh(listing)
+        if not changed:
+            self._shown = self._held()
         self._render()
 
     def panel(self) -> Any:
@@ -798,7 +825,7 @@ class Form:
             beam_centre: choose a record
             reduction.bins: give a value
             sample: add a row, or remove for none
-            sample[1]: the editor holds changes: update the row, or deselect it
+            sample[1]: the editor holds changes: add or update a row, or discard them
         """
         missing: _Missing = []
         given = {n: w.value((n,), missing) for n, w in self._params.items()}

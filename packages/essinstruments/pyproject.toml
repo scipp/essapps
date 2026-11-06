@@ -1,0 +1,83 @@
+[build-system]
+requires = [
+  "setuptools>=77",
+  "setuptools_scm[toml]>=8.0",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "essinstruments"
+description = "Specs and bindings of the reductions of ESS instruments"
+authors = [{ name = "Scipp contributors" }]
+license = "BSD-3-Clause"
+readme = "README.md"
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
+]
+requires-python = ">=3.12"
+
+dynamic = ["version"]
+
+dependencies = [
+    "essspec[scipp]",
+    "pydantic>=2.10",
+]
+
+[project.optional-dependencies]
+loki = [
+    "esssans>=26.10.0",
+    "essspec[sciline]",
+]
+loki-app = [
+    "essinstruments[loki]",
+    "essapps[panel]",
+]
+test = [
+    "essinstruments[loki-app]",
+    "pytest>=9.0",
+    "pytest-xdist>=3.6",
+]
+
+[project.urls]
+"Bug Tracker" = "https://github.com/scipp/essapps/issues"
+"Source" = "https://github.com/scipp/essapps/tree/main/packages/essinstruments"
+
+[tool.setuptools_scm]
+root = "../.."
+tag_regex = "^essinstruments/(?P<version>.*)$"
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "essinstruments/*[0-9]*"]
+fallback_version = "0.0.0"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = """
+--strict-config
+-p no:benchmark
+--strict-markers
+--import-mode=importlib
+-ra
+"""
+testpaths = "tests"
+faulthandler_timeout = 120
+xfail_strict = true
+filterwarnings = [
+  "error",
+]
+
+[tool.mypy]
+strict = true
+ignore_missing_imports = true
+enable_error_code = [
+    "ignore-without-code",
+    "redundant-expr",
+    "truthy-bool",
+]
+warn_unreachable = true
