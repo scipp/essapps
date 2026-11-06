@@ -241,18 +241,16 @@ def test_a_value_released_by_the_client_is_not_readable(client: Client) -> None:
         client.describe(record, 'image')
 
 
-def test_a_value_another_client_keeps_is_not_readable_until_it_is_persisted(
+def test_a_value_another_client_keeps_is_not_readable_unless_persisted(
     backend: Backend, client: Client
 ) -> None:
     other = Client(backend, proposal='p1', submitter='bob')
-    record = other.compute(IMAGE)
+    kept = other.compute(IMAGE)
+    persisted = other.compute(IMAGE, persist=('image',))
 
     with pytest.raises(NotReadable):
-        client.describe(record, 'image')
-
-    other.persist(record, 'image')
-    other.release(record)
-    assert client.describe(record, 'image')['counts'].sizes == {'y': 2, 'x': 3}
+        client.describe(kept, 'image')
+    assert client.describe(persisted, 'image')['counts'].sizes == {'y': 2, 'x': 3}
 
 
 def test_an_array_inside_a_field_is_described_and_not_copied(client: Client) -> None:

@@ -3,41 +3,46 @@
 """
 The client: what a notebook, an application, or a controller calls.
 
-A client talks to one backend for one proposal. Calls that take records or
-requests accept one, a list, or a dict, and return the same shape;
-:meth:`~Client.cancel`, :meth:`~Client.persist`, and :meth:`~Client.release`
-accept the same and return nothing.
+A client talks to one backend for one proposal, through
+:class:`~ess.apps.protocol.BackendProtocol`, which holds the rules behind the calls.
+The client only adapts: calls that take records or requests accept one, a list, or
+a dict, and return the same shape, it wraps IDs in objects, and it adds shortcuts.
+:meth:`~Client.cancel` and :meth:`~Client.release` accept the same and return nothing.
 
-A call that starts work returns once the backend has checked and logged it:
-:meth:`Client.submit`, :meth:`Client.accumulator`, :meth:`Accumulator.push`,
-and :meth:`Client.freeze`. It leaves reading data and computing to the
-backend's workers. Only the calls that read results wait for that work:
-:meth:`Client.wait`, :meth:`Client.compute`, and :meth:`Client.output`; and
-:meth:`Files.watch` waits for new files. So a GUI application can make
-every other call from its UI thread.
-
-The rules behind the calls are in ``docs/developer/``: ``lifetimes.md`` for
-what a client keeps and may read, ``accumulators.md`` for stages and
-accumulators. ``packages/essspec/docs/params.md`` defines the terms of a
-request's params.
+See :class:`~ess.apps.protocol.BackendProtocol` for which calls wait.
+:meth:`Client.wait`, :meth:`Client.compute`, and :meth:`Files.watch` also wait, and so
+does :meth:`Client.close` if ``on_close`` does. A GUI application makes the others
+from its UI thread.
 """
 
 from __future__ import annotations
 
 import functools
-from collections import deque
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Self
 
 from pydantic import BaseModel
 
-from ess.spec import Binding, FileRef, OutputRef, WorkflowSpec
+from ess.spec import FileRef, OutputRef, WorkflowSpec
 
-from .backend import Backend, Entry, Selection
-from .files import FileSource, Selector
-from .records import Changes, Record, Request, SpecId, Template, as_values
-from .store import Store
+from .errors import FieldError, SubmitError
+from .files import Selector
+from .protocol import BackendProtocol, Entry, Selection
+from .records import (
+    Changes,
+    Record,
+    RecordStatus,
+    Request,
+    SpecId,
+    Status,
+    Template,
+    as_values,
+)
+
+_WAIT = 10.0
+"""How long :meth:`Client.wait` waits in one call for a change, in seconds."""
 
 
 def _items(what: Any) -> list[Any]:
@@ -65,6 +70,13 @@ def _names(what: Any) -> list[str | int | None]:
     if isinstance(what, list | tuple):
         return list(range(len(what)))
     return [None]
+
+
+def _named(error: FieldError, names: list[str | int | None]) -> FieldError:
+    """The reason with the index of its request replaced by what the caller named."""
+    if isinstance(error.entry, int):
+        return replace(error, entry=names[error.entry])
+    return error
 
 
 class Provenance(BaseModel, frozen=True):
@@ -96,28 +108,37 @@ class Files:
     The files of the backend's file source that the proposal may read.
 
     Forms and controllers find files here: they list them, wait for new ones,
-    and read their metadata, from the backend's file source (see
-    :class:`~ess.apps.files.FileSource`). A client sees only the files its
-    proposal may read. A selector picks files by metadata (see
-    :class:`~ess.apps.files.Selector`). A request names a file with
-    ``file(...)``.
+    and read their metadata. A selector picks files by metadata (see
+    :class:`~ess.apps.files.Selector`). A request names a file with ``file(...)``.
     """
 
-    def __init__(self, backend: Backend, client: str) -> None:
+    def __init__(self, backend: BackendProtocol, client: str) -> None:
         self._backend = backend
         self._client = client
 
     def list(self, selector: Selector) -> list[FileRef]:
-        """The files the selector matches, in the order they were measured."""
+        """See :meth:`~ess.apps.protocol.BackendProtocol.files`."""
         return self._backend.files(selector, self._client)
 
-    def watch(self, selector: Selector) -> Iterator[FileRef]:
-        """Matching files: the existing ones first, then new ones, each once."""
-        return self._backend.watch_files(selector, self._client)
+    def watch(self, selector: Selector, *, interval: float = 1.0) -> Iterator[FileRef]:
+        """
+        Matching files: the existing ones first, then new ones, each once. It never
+        ends, and lists the files again every ``interval`` seconds while none is new.
+        """
+        seen: set[FileRef] = set()
+        while True:
+            fresh = [ref for ref in self.list(selector) if ref not in seen]
+            seen.update(fresh)
+            yield from fresh
+            if not fresh:
+                time.sleep(interval)
 
-    def metadata(self, ref: FileRef) -> dict[str, Any]:
-        """The file's current metadata; raises ``KeyError`` if not readable."""
-        return self._backend.file_metadata(ref, self._client)
+    def metadata(self, refs: Any) -> Any:
+        """
+        The metadata of each file, in the shape of ``refs``; see
+        :meth:`~ess.apps.protocol.BackendProtocol.file_metadata`.
+        """
+        return _reshape(refs, self._backend.file_metadata(_items(refs), self._client))
 
 
 @dataclass(frozen=True)
@@ -139,8 +160,8 @@ class Accumulator:
 
     Its outputs are those of the plain request over the rows pushed so far. The
     client that opened it reads them with :meth:`Client.output`, or references
-    them in a request through :meth:`ref` and :meth:`refs`. The rules are in
-    ``docs/developer/accumulators.md``.
+    them in a request through :meth:`ref` and :meth:`refs`. See
+    :meth:`~ess.apps.protocol.BackendProtocol.open_accumulator`.
 
     ``template`` holds the other values as the backend accepted them,
     ``outputs`` the output names the spec declares, and ``id`` names the
@@ -166,8 +187,6 @@ class Accumulator:
             acc.push(sample=[file(run=611), file(run=612)])
             acc.push(sample=[file(run=615)], can=[file(run=614)])
 
-        Returns once the push is logged. The backend adds it later.
-
         Parameters
         ----------
         **rows:
@@ -179,10 +198,7 @@ class Accumulator:
         TypeError
             If the rows of a table are not a list.
         SubmitError
-            If a table is not a blank of the template, a table gets no rows, a row
-            is invalid, repeats, or is in its table already, a row references a
-            record that failed or was cancelled, or the accumulator has stopped.
-            The reason of a stopped accumulator names the step, such as ``push 0``.
+            See :meth:`~ess.apps.protocol.BackendProtocol.push`.
         """
         for name, given in rows.items():
             if isinstance(given, str | BaseModel | Mapping) or not isinstance(
@@ -199,10 +215,10 @@ class Accumulator:
         A reference to an output of the accumulator, or to its element ``key`` if the
         output is a list or a dict, for a request.
 
-        Submitting the request pins the state after the rows pushed so far (see
-        ``docs/developer/accumulators.md``). The request waits until the accumulator
-        has reached the state, and is refused if the state's plain request would be
-        refused. Raises ``KeyError`` for an output the spec lacks.
+        Submitting the request pins the state after the rows pushed so far, so the
+        request waits until the accumulator has reached it, and is refused if the
+        state's plain request would be refused. Raises ``KeyError`` for an output the
+        spec lacks.
         """
         if output not in self.outputs:
             raise KeyError(f'{self.template.spec} has no output {output!r}')
@@ -217,23 +233,34 @@ class Client:
     """
     A connection to a backend, for one proposal.
 
-    ``with client:`` closes the client at the end of the block. A client that
-    owns its backend, as :func:`local` makes one, also closes the backend.
-    Any call of a client that has ended raises ``ClientEnded``, except
-    :meth:`close`, which then does nothing.
+    ``with client:`` closes the client at the end of the block. Any call of a client
+    that has ended raises ``ClientEnded``, except :meth:`close`, which then ends
+    nothing further.
+
+    Parameters
+    ----------
+    backend:
+        The backend.
+    proposal:
+        The proposal of the client.
+    submitter:
+        Who submits, as records name them.
+    on_close:
+        Called by each :meth:`close`, also if ending the client raised.
     """
 
     def __init__(
         self,
-        backend: Backend,
+        backend: BackendProtocol,
         *,
         proposal: str,
         submitter: str,
-        owns_backend: bool = False,
+        on_close: Callable[[], None] | None = None,
     ) -> None:
         self._backend = backend
-        self._owns_backend = owns_backend
+        self._on_close = on_close
         self._id = backend.open_client(proposal, submitter)
+        self._position = 0  # in the proposal's feed, for wait
         self.proposal = proposal
         self.submitter = submitter
         self.files = Files(backend, self._id)
@@ -248,18 +275,12 @@ class Client:
         """
         End the client: release everything it keeps, which cancels the work that
         nothing else keeps.
-
-        It first waits until the outputs it asked to persist with :meth:`persist`
-        are written, and raises ``RuntimeError`` naming each whose write failed,
-        once it has ended. A client that owns its backend then closes it, which waits
-        for the work that still runs. A client that is never closed ends with its
-        process.
         """
         try:
             self._backend.close_client(self._id)
         finally:
-            if self._owns_backend:
-                self._backend.close()
+            if self._on_close is not None:
+                self._on_close()
 
     # Specs
 
@@ -268,7 +289,10 @@ class Client:
         The spec the backend runs as ``spec_id``, such as ``record.spec``;
         raises ``KeyError`` for one it does not run.
         """
-        return self._backend.spec(spec_id, self._id)
+        for spec in self.specs():
+            if SpecId.of(spec) == spec_id:
+                return spec
+        raise KeyError(f'unknown spec {spec_id}')
 
     def specs(self) -> list[WorkflowSpec[Any, Any]]:
         """
@@ -320,9 +344,8 @@ class Client:
             dict. Records are found by label and member with :meth:`records` and
             :meth:`latest`. Neither changes the request or its result.
         persist:
-            ``True``, or the names of outputs: the client does not keep these
-            records, the store keeps the outputs named, and each record completes
-            once they are written (see ``docs/developer/lifetimes.md``).
+            ``True``, or the names of outputs: the store keeps these outputs instead
+            of the client (see :meth:`~ess.apps.protocol.BackendProtocol.submit`).
 
         Raises
         ------
@@ -353,12 +376,14 @@ class Client:
         else:
             members = [member] * len(_items(what))
         entries = [
-            Entry(request, label=label, member=m, name=name, stage=stage)
-            for request, m, name in zip(
-                _items(what), members, _names(what), strict=True
-            )
+            Entry(request, label=label, member=m, stage=stage)
+            for request, m in zip(_items(what), members, strict=True)
         ]
-        records = self._backend.submit(entries, client=self._id, persist=persist)
+        names = _names(what)
+        try:
+            records = self._backend.submit(entries, self._id, persist=persist)
+        except SubmitError as error:
+            raise SubmitError(_named(e, names) for e in error.errors) from None
         return _reshape(what, records)
 
     def compute(self, *args: Any, **kwargs: Any) -> Any:
@@ -372,59 +397,50 @@ class Client:
 
     def status(self, records: Any) -> Any:
         """The status of each record now: pending, completed, failed, or cancelled."""
-        ids = [r.id for r in _items(records)]
-        return _reshape(records, self._backend.status(ids, self._id))
+        return _reshape(records, [s.status for s in self._statuses(records)])
 
     def wait(self, records: Any) -> Any:
-        """The status of each record once all have finished; a failure is not raised."""
-        ids = [r.id for r in _items(records)]
-        return _reshape(records, self._backend.wait(ids, self._id))
+        """
+        The status of each record once all have finished; a failure is not raised. If
+        the client ends meanwhile, raises ``ClientEnded``.
+        """
+        while True:
+            # The position comes first, so that no finish after it is missed.
+            position = self._position
+            statuses = [s.status for s in self._statuses(records)]
+            if Status.PENDING not in statuses:
+                return _reshape(records, statuses)
+            changes = self._backend.changes(position, self._id, timeout=_WAIT)
+            self._position = changes.cursor
 
     def failure(self, records: Any) -> Any:
         """
-        Why each record failed, or why the backend cancelled it; ``None`` for a
-        record pending, completed, or cancelled by a client.
-
-        The reason is the framework's own words, such as ``specimens[0]: Value error,
-        ...``, ``the workflow of sans-iofq/v1 returned None as iofq``, or ``the write
-        failed: ...``. An error raised by a binding, its driver, the file source, or
-        the store is given with its type, such as ``KeyError: 'counts'``.
+        Why each record failed, or why the backend cancelled it; see
+        :class:`~ess.apps.RecordStatus`.
         """
-        failures = [self._backend.failure(r.id, self._id) for r in _items(records)]
-        return _reshape(records, failures)
+        return _reshape(records, [s.failure for s in self._statuses(records)])
+
+    def _statuses(self, records: Any) -> list[RecordStatus]:
+        return self._backend.status([r.id for r in _items(records)], self._id)
 
     def cancel(self, records: Any) -> None:
-        """
-        End the unfinished records as cancelled.
-
-        A client may cancel any record of its proposal. See
-        ``docs/developer/lifetimes.md`` for what cancelling passes along.
-        """
+        """See :meth:`~ess.apps.protocol.BackendProtocol.cancel`."""
         self._backend.cancel([r.id for r in _items(records)], self._id)
 
     # Stages, accumulators, and what the client keeps
 
     def stage(self, template: Template) -> Stage:
         """
-        A stage of the template; the client keeps it until it releases it.
-
-        The spec's binding must make stages, as a ``PipelineBinding`` does. A template
-        that a request would refuse is refused. The stage's template holds the values
-        as the backend resolved them. The rules are in
-        ``docs/developer/accumulators.md``.
+        A stage of the template; see
+        :meth:`~ess.apps.protocol.BackendProtocol.open_stage`.
         """
         stage_id, resolved = self._backend.open_stage(template, client=self._id)
         return Stage(resolved, stage_id)
 
     def accumulator(self, template: Template) -> Accumulator:
         """
-        An accumulator of the template; the client keeps it until it releases it.
-
-        The template's blanks are one or more of the spec's tables. The spec's binding
-        must make accumulators, as a ``DriverBinding`` does. A template that a request
-        would refuse is refused, with the blanks left out, and so is one that
-        references an accumulator. Returns once the template is checked; the backend
-        makes the driver later. The rules are in ``docs/developer/accumulators.md``.
+        An accumulator of the template; see
+        :meth:`~ess.apps.protocol.BackendProtocol.open_accumulator`.
         """
         accumulator_id, resolved = self._backend.open_accumulator(
             template, client=self._id
@@ -437,42 +453,15 @@ class Client:
         self, accumulator: Accumulator, *, persist: bool | Sequence[str] = False
     ) -> Record:
         """
-        The record of the accumulator's last state; the client keeps it, and the
-        accumulator takes no more pushes.
-
-        Parameters
-        ----------
-        accumulator:
-            The accumulator to freeze.
-        persist:
-            As in :meth:`submit`: the store keeps the outputs instead of the client.
-
-        Raises
-        ------
-        SubmitError
-            If the plain request of the state would be refused.
+        The record of the accumulator's last state; see
+        :meth:`~ess.apps.protocol.BackendProtocol.freeze`.
         """
-        return self._backend.freeze(accumulator.id, client=self._id, persist=persist)
-
-    def persist(self, records: Any, *outputs: str) -> None:
-        """
-        Write the named outputs, or every output, of records the client keeps to the
-        store, each once its record has completed. Returns at once.
-
-        Raises ``SubmitError``, and persists nothing, for a record the client does
-        not keep, a failed or cancelled one, or an output a record lacks. See
-        ``docs/developer/lifetimes.md`` for what happens if a write fails.
-        """
-        ids = [r.id for r in _items(records)]
-        self._backend.persist(ids, outputs, client=self._id)
+        return self._backend.freeze(accumulator.id, self._id, persist=persist)
 
     def release(self, what: Any) -> None:
         """
-        Release records, stages, or accumulators: one, a list, or a dict.
-
-        Releasing what the client does not keep does nothing. See
-        ``docs/developer/lifetimes.md`` for what a release drops and cancels, and
-        ``docs/developer/accumulators.md`` for a released accumulator.
+        Release records, stages, or accumulators: one, a list, or a dict. See
+        :meth:`~ess.apps.protocol.BackendProtocol.release`.
         """
         self._backend.release([x.id for x in _items(what)], client=self._id)
 
@@ -487,12 +476,9 @@ class Client:
     ) -> Any:
         """
         The value of an output, or every output returned, by name, if ``name`` is
-        None; an optional output that was not returned is left out.
-
-        A record's value is the one the workflow returned, not a copy: the caller
-        must not change it, and the framework never does. An accumulator's are
-        those of its state after the pushes so far, once they are added, copied. The
-        read makes no record.
+        None. See :meth:`~ess.apps.protocol.BackendProtocol.outputs` for a record and
+        :meth:`~ess.apps.protocol.BackendProtocol.accumulator_outputs` for an
+        accumulator, for what is read and what is raised.
 
         Parameters
         ----------
@@ -502,25 +488,7 @@ class Client:
             The output to read.
         select:
             Picks part of the named array output by dimension name, an index or a
-            slice for each dimension it names, such as ``{'q': slice(0, 10)}``, and
-            copies only that part. Of a group output, it picks that part of each
-            array field that has the dimension, as ``sc.DataGroup`` slices its items,
-            and copies the other fields whole. It needs ``name``.
-
-        Raises
-        ------
-        NotReadable
-            For a record the client neither keeps nor has persisted, or whose write
-            failed or whose value the store no longer holds; for an accumulator
-            released or stopped, with nothing pushed, or whose state's plain request
-            would be refused.
-        RecordFailed
-            For a record that failed or was cancelled.
-        ValueError
-            If ``select`` is given without ``name``, for an output that is neither
-            an array nor a group with an array field, or if no array field of a group
-            has a dimension of ``select``. A dimension that an array lacks, or an
-            index out of range, raises what the slice raises.
+            slice for each dimension it names, such as ``{'q': slice(0, 10)}``.
         """
         names = None if name is None else [name]
         if isinstance(what, Accumulator):
@@ -533,35 +501,23 @@ class Client:
 
     def describe(self, record: Record, name: str) -> dict[str, Any]:
         """
-        What an output is, without its data, by field name: an
-        :class:`~ess.apps.ArrayInfo` for each array of at least one dimension,
-        also one inside a dict, a list, or a nested group, which is itself given
-        as a dict of its fields, and for any other field a copy of its value,
-        such as a float or a 0-D array. An output that is itself an array gives
-        ``{name: ArrayInfo}``::
+        What an output is, without its data; takes a record, not an accumulator::
 
             client.describe(record, 'image')['counts'].sizes  # {'y': 200, 'x': 200}
 
-        It copies no array, and raises what :meth:`output` raises, such as
-        ``NotReadable`` and ``RecordFailed``. A value that was persisted and is
-        no longer in memory is read from the store to be described. It takes a
-        record only, not an accumulator.
+        See :meth:`~ess.apps.protocol.BackendProtocol.describe`.
         """
         return self._backend.describe(record.id, name, self._id)
 
     def readable(self, records: Any) -> Any:
         """
         The outputs of each record, by name, that a plain submission of this client
-        may reference now (see ``docs/developer/lifetimes.md``).
-
-        It waits for nothing and reads no value, so a picker of records calls it at
-        each refresh::
+        may reference now. A picker of records calls it at each refresh::
 
             for record, names in zip(records, client.readable(records)):
                 ...  # offer record.ref(name) for each name
 
-        A record that failed or was cancelled has no outputs, and one that has
-        completed only those its workflow returned.
+        See :meth:`~ess.apps.protocol.BackendProtocol.readable`.
         """
         ids = [r.id for r in _items(records)]
         return _reshape(records, self._backend.readable(ids, self._id))
@@ -570,48 +526,30 @@ class Client:
         self, *, label: str | None = None, ids: Sequence[str] | None = None
     ) -> list[Record]:
         """
-        The proposal's records, oldest first, under ``label`` if given;
-        every record of the proposal without it. Each record has its
-        ``member``, so ``{r.member: r for r in client.records(label=...)}``
-        is the newest of each member.
+        The proposal's records; see :meth:`~ess.apps.protocol.BackendProtocol.records`.
 
-        With ``ids``, the records with those IDs, in that order, such as the
-        ``records`` of :meth:`changes`. Raises ``KeyError`` for an ID that is
-        not of the proposal, and ``ValueError`` if both ``label`` and ``ids``
-        are given.
+        Each record has its ``member``, so
+        ``{r.member: r for r in client.records(label=...)}`` is the newest of each
+        member.
         """
         return self._backend.records(self._id, label=label, ids=ids)
 
-    def changes(self, *, after: int = 0) -> Changes:
+    def changes(self, *, after: int = 0, timeout: float = 0.0) -> Changes:
         """
-        The IDs of the proposal's records that changed since the position
-        ``after``, and the position to pass next time. A record changes when
-        it is submitted, by this client or another of the proposal, finishes,
-        has outputs persisted, or has outputs written. The IDs hold no values;
-        read what is shown with :meth:`records`, :meth:`status`, and
-        :meth:`readable`::
+        The IDs of the proposal's records that changed since the position ``after``,
+        and the position to pass next. An application stays up to date by reading
+        what it shows of them::
 
             cursor = 0
             while True:
-                changes = client.changes(after=cursor)
+                changes = client.changes(after=cursor, timeout=30)
                 cursor = changes.cursor
                 for record in client.records(ids=changes.records):
                     ...
 
-        ``after=0`` gives every record of the proposal, so a client that
-        starts late learns what the others did. Each ID is in the reply once,
-        in the order of its first change in the range. The position counts the
-        changes of this proposal only, so another proposal's records do not
-        move it.
-
-        Accumulators, pushes, and :meth:`release` are not in the feed: a
-        value that has gone is found by asking :meth:`readable`, and a read of
-        it may raise ``NotReadable``.
-
-        Raises ``ValueError`` if ``after`` is negative or past the position
-        of the last change.
+        See :meth:`~ess.apps.protocol.BackendProtocol.changes`.
         """
-        return self._backend.changes(after, self._id)
+        return self._backend.changes(after, self._id, timeout=timeout)
 
     def latest(self, label: str, member: str | None = None) -> Record:
         """
@@ -639,38 +577,15 @@ class Client:
         else:
             request = what.request
         upstream: dict[str, Record] = {}
-        todo = deque([request])
-        while todo:
-            for ref in todo.popleft().upstream():
-                if ref.record not in upstream:
-                    upstream[ref.record] = self._backend.record(ref.record, self._id)
-                    todo.append(upstream[ref.record].request)
+        layer = [request]
+        while layer:
+            ids = {
+                ref.record: None
+                for r in layer
+                for ref in r.upstream()
+                if ref.record not in upstream
+            }
+            found = self._backend.records(self._id, ids=list(ids))
+            upstream |= {r.id: r for r in found}
+            layer = [r.request for r in found]
         return Provenance(request=request, upstream=tuple(upstream.values()))
-
-
-def local(
-    *,
-    proposal: str,
-    files: FileSource,
-    bind: Sequence[Binding],
-    submitter: str = 'user',
-    store: Store | None = None,
-) -> Client:
-    """
-    A client of its own backend in this process, running the workflows bound here.
-
-    ``bind`` lists a binding for each spec the backend runs, such as
-    ``[PipelineBinding(IOFQ, ...), DriverBinding(IOFQ_MULTI, ...)]``. Since the
-    code runs in this process, a binding may also be of code defined in a
-    notebook, such as ``function_binding(IOFQ, iofq)``.
-
-    Closing the client closes the backend, which waits until what is persisted
-    is written. Without a ``store``, persisting is refused. The backend keeps
-    history in memory, so its records end with the process.
-    """
-    return Client(
-        Backend(files, bind, store=store),
-        proposal=proposal,
-        submitter=submitter,
-        owns_backend=True,
-    )

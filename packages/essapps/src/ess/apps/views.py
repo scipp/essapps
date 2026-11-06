@@ -20,8 +20,6 @@ dropped, per proposal.
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
-from typing import Literal
 
 from .log import (
     Event,
@@ -29,10 +27,8 @@ from .log import (
     NewRecord,
     NewStateRecord,
     Opened,
-    Persist,
     Pushed,
     Submitted,
-    Written,
 )
 from .records import Changes, Record, Request, Status
 
@@ -86,45 +82,22 @@ class _Records(Mapping[str, Record]):
         return len(self._held)
 
 
-PENDING: Literal['pending'] = 'pending'
-"""The write of an output that a persist request names has not ended."""
-
-WRITTEN: Literal['written'] = 'written'
-"""
-An output that a persist request names is in the store, or has no value to
-write, since the workflow did not return it.
-"""
-
-
-@dataclass(frozen=True)
-class WriteFailed:
-    """The write of an output that a persist request names failed, and why."""
-
-    reason: str
-
-
-Write = Literal['pending', 'written'] | WriteFailed
-
-
 class Views:
     """
-    The records, labels, accumulators, pushes, and writes that the events
-    describe.
+    The records, labels, accumulators, and pushes that the events describe.
 
     ``finished`` holds the event that finished a record; a record without one
     is pending. ``states`` holds the accumulator and number of pushes of each
     record of a state. ``accumulators`` holds the event that opened each
     accumulator, and ``pushes`` its pushes in order, each rows of its tables.
 
-    ``persisted`` names the outputs each record persists at submission; their
-    write is the record's: pending while it is, written once it completes.
-    ``writes`` holds the write of each output that a persist request names
-    later. :meth:`write` gives either.
+    ``persisted`` names the outputs each record persists; their write is the
+    record's: pending while it is, done once it completes.
 
     ``feed`` holds, for each proposal, the ID of a record each time an event
-    submits, finishes, or persists it, or writes its outputs, in the order of
-    the events. A position in it is a cursor of :meth:`changes`. Opening an
-    accumulator and pushing to it are not in the feed.
+    submits or finishes it, in the order of the events. A position in it is a
+    cursor of :meth:`changes`. Opening an accumulator and pushing to it are not in
+    the feed.
     """
 
     def __init__(self) -> None:
@@ -135,7 +108,6 @@ class Views:
         self.accumulators: dict[str, Opened] = {}
         self.pushes: dict[str, list[Pushed]] = {}  # by accumulator ID
         self.persisted: dict[str, tuple[str, ...]] = {}
-        self.writes: dict[tuple[str, str], Write] = {}  # by (record ID, output)
         self.feed: dict[str, list[str]] = {}  # by proposal
 
     def apply(self, event: Event) -> None:
@@ -145,39 +117,13 @@ class Views:
                     self._add(new, event)
                     self.feed.setdefault(event.proposal, []).append(new.id)
             case Finished():
-                self._note(event.record)
+                proposal = self.records.proposal(event.record)
+                self.feed.setdefault(proposal, []).append(event.record)
                 self.finished[event.record] = event
-                for key in self._pending(event.record):
-                    if event.status is not Status.COMPLETED:
-                        self.writes[key] = WriteFailed(f'the record {event.status}')
-                    elif key[1] in event.omitted:
-                        self.writes[key] = WRITTEN
             case Opened():
                 self.accumulators[event.accumulator] = event
             case Pushed():
                 self.pushes.setdefault(event.accumulator, []).append(event)
-            case Persist():
-                self._note(event.record)
-                for name in event.outputs:
-                    omitted = self.omitted((event.record, name))
-                    self.writes[(event.record, name)] = WRITTEN if omitted else PENDING
-            case Written():
-                self._note(event.record)
-                for name in event.outputs:
-                    self.writes[(event.record, name)] = (
-                        WRITTEN if event.failure is None else WriteFailed(event.failure)
-                    )
-
-    def _note(self, record_id: str) -> None:
-        proposal = self.records.proposal(record_id)
-        self.feed.setdefault(proposal, []).append(record_id)
-
-    def _pending(self, record_id: str) -> list[tuple[str, str]]:
-        return [
-            (record_id, n)
-            for n in self.records.outputs(record_id)
-            if self.writes.get((record_id, n)) == PENDING
-        ]
 
     def _add(self, new: NewRecord | NewStateRecord, event: Submitted) -> None:
         if isinstance(new, NewStateRecord):
@@ -228,25 +174,9 @@ class Views:
         finished = self.finished.get(key[0])
         return finished is not None and key[1] in finished.omitted
 
-    def write(self, key: tuple[str, str]) -> Write | None:
-        """
-        The write of an output, or ``None`` if no persist request names it.
-
-        One persisted at submission is pending while its record is, written
-        once it completes, and failed with the record's failure otherwise.
-        """
-        if key[1] in self.persisted.get(key[0], ()):
-            finished = self.finished.get(key[0])
-            if finished is None:
-                return PENDING
-            if finished.status is Status.COMPLETED:
-                return WRITTEN
-            return WriteFailed(finished.failure or f'the record {finished.status}')
-        return self.writes.get(key)
-
     def persists(self, key: tuple[str, str]) -> bool:
-        """Whether the output is persisted: written, or its write pending."""
-        return self.write(key) in (PENDING, WRITTEN)
+        """Whether the record persists the output."""
+        return key[1] in self.persisted.get(key[0], ())
 
     def changes(self, proposal: str, after: int) -> Changes:
         """

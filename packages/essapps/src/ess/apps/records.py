@@ -240,6 +240,23 @@ class Status(StrEnum):
     CANCELLED = 'cancelled'
 
 
+@dataclass(frozen=True)
+class RecordStatus:
+    """
+    The status of a record, and ``failure``: why it failed, or why the backend
+    cancelled it; ``None`` for a record pending, completed, or cancelled by a
+    client.
+
+    The reason is the framework's own words, such as ``specimens[0]: Value error,
+    ...``, ``the workflow of sans-iofq/v1 returned None as iofq``, or ``the write
+    failed: ...``. An error raised by a binding, its driver, the file source, or
+    the store is given with its type, such as ``KeyError: 'counts'``.
+    """
+
+    status: Status
+    failure: str | None = None
+
+
 class Record(BaseModel, frozen=True):
     """
     A request as the backend accepted it, with the names of its outputs but
@@ -312,7 +329,7 @@ class ArrayInfo:
 class Changes:
     """
     The records of a proposal that changed since a position in its feed (see
-    :meth:`Client.changes`).
+    :meth:`~ess.apps.protocol.BackendProtocol.changes`).
 
     ``records`` holds their IDs, each once, in the order of their first change
     in the range; it holds no values. ``cursor`` is the position to pass next

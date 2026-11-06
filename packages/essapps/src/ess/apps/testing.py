@@ -13,7 +13,7 @@ import functools
 import json
 import threading
 from collections import Counter
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -70,7 +70,7 @@ class FakeFiles:
         self._paths: dict[FileRef, Path] = {}
         self._content: dict[FileRef, str] = {}
         self._metadata: dict[FileRef, dict[str, Any]] = {}
-        self._arrived = threading.Condition()
+        self._lock = threading.Lock()
 
     def measure(self, run: int, content: Any, **fields: Any) -> FileRef:
         """Make run ``run`` appear, or appear again, and return its identity."""
@@ -79,11 +79,10 @@ class FakeFiles:
         name = ref.file.partition(':')[2].replace('/', '-')
         path = self._directory / f'{name}.json'
         path.write_text(text := json.dumps(content))
-        with self._arrived:
+        with self._lock:
             self._paths[ref] = path
             self._content[ref] = text
             self._metadata[ref] = {'proposal': self.proposal, 'run': run, **fields}
-            self._arrived.notify_all()
         return ref
 
     def corrupt(self, ref: FileRef) -> None:
@@ -112,17 +111,8 @@ class FakeFiles:
         return dict(self._metadata[ref])
 
     def list(self, selector: Selector) -> list[FileRef]:
-        with self._arrived:
+        with self._lock:
             return [r for r, m in self._metadata.items() if selector.matches(m)]
-
-    def watch(self, selector: Selector) -> Iterator[FileRef]:
-        seen: set[FileRef] = set()
-        while True:
-            with self._arrived:
-                self._arrived.wait_for(lambda: set(self.list(selector)) - seen)
-                fresh = [r for r in self.list(selector) if r not in seen]
-            seen.update(fresh)
-            yield from fresh
 
 
 class CountingClient:

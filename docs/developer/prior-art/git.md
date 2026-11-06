@@ -37,7 +37,7 @@ A name resolved at submission gives a backlog or a re-run a different input than
 **Git keeps what is reachable, and pays for it under concurrent writers.**
 `git gc` keeps everything reachable from refs and reflogs and prunes unreachable objects after a grace period, two weeks by default ([config/gc L96-L105][gcexp]).
 The grace period protects a concurrent process that is about to reference an object that is unreachable now, and the docs admit that "users who run commands concurrently have to live with some risk of corruption" ([git-gc L157-L173][gcnotes]).
-Here, a reference keeps no value; only keepers do: the client that asked, a pending request until its workflow returns, a persist request, the store ([How long records and values are kept](../lifetimes.md)).
+Here, a reference keeps no value; only keepers do: the client that asked, a pending request until its workflow returns, the store ([`ess.apps.protocol`](../../../packages/essapps/src/ess/apps/protocol.py)).
 A submission may reference only values its client keeps, persisted values, and files, so whether it is refused never depends on how far other work has come ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)).
 That rule removes the race git mitigates with a grace period.
 Git's rule would also keep every intermediate of a chain for as long as its final output is kept.

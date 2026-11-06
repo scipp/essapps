@@ -5,6 +5,8 @@
 """Waiting for pending references, failure and its propagation, cancelling."""
 
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -161,5 +163,52 @@ def test_a_failed_append_stops_the_backend(
         client.wait(record)  # its Finished event was not appended
     with pytest.raises(RuntimeError, match='no space left on device'):
         client.submit(toys.load_request(2))
+    with pytest.raises(RuntimeError, match='no space left on device'):
+        Client(backend, proposal='p1', submitter='bob')
+    with pytest.raises(RuntimeError, match='no space left on device'):
+        backend.close()
+
+
+def test_a_failed_append_wakes_what_waits(
+    files: FakeFiles, bindings: list[Binding], loading: threading.Event
+) -> None:
+    log = FullDisk()
+    backend = Backend(files, bindings, log=log)
+    client = Client(backend, proposal='p1', submitter='anna')
+    loading.clear()
+    record = client.submit(toys.load_request(1))
+    cursor = client.changes().cursor
+
+    with ThreadPoolExecutor() as pool:
+        waiting = pool.submit(client.changes, after=cursor, timeout=60)
+        time.sleep(0.05)  # so that it is waiting
+        log.full = True
+        with pytest.raises(OSError, match='no space left on device'):
+            client.cancel(record)  # nothing else wakes the wait
+        # Well within the 5 s after which ``load`` gives up and wakes it anyway.
+        with pytest.raises(RuntimeError, match='no space left on device'):
+            waiting.result(timeout=2)
+    loading.set()
+    with pytest.raises(RuntimeError, match='no space left on device'):
+        backend.close()
+
+
+def test_on_close_is_called_if_ending_the_client_raises(
+    files: FakeFiles, bindings: list[Binding]
+) -> None:
+    log = FullDisk()
+    backend = Backend(files, bindings, log=log)
+    closed: list[bool] = []
+    client = Client(
+        backend, proposal='p1', submitter='anna', on_close=lambda: closed.append(True)
+    )
+    log.full = True
+    with pytest.raises(OSError, match='no space left on device'):
+        client.submit(toys.load_request(1))
+
+    with pytest.raises(RuntimeError, match='no space left on device'):
+        client.close()
+
+    assert closed == [True]
     with pytest.raises(RuntimeError, match='no space left on device'):
         backend.close()

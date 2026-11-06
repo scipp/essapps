@@ -3,7 +3,7 @@
 """A listing made from an earlier one equals a listing read in full."""
 
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from ess.apps import Backend, Client, Listing, local
 from ess.apps.testing import CountingClient, FakeFiles, read_file
-from ess.spec import FileRef, RunFile, WorkflowSpec, function_binding
+from ess.spec import File, FileRef, RunFile, WorkflowSpec, function_binding
 
 type Spec = WorkflowSpec[Any, Any]
 
@@ -177,3 +177,35 @@ def test_a_known_record_that_finished_is_read_again(
 
         assert same(listing, Listing(client))
         assert dict(counting.reads) == {'records': 1, 'status': 1, 'readable': 1}
+
+
+class CountingMetadata:
+    """Delegates to a backend and logs the files of each ``file_metadata`` call."""
+
+    def __init__(self, backend: Backend) -> None:
+        self._backend = backend
+        self.calls: list[list[FileRef]] = []
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._backend, name)
+
+    def file_metadata(
+        self, refs: Sequence[FileRef], client: str
+    ) -> list[dict[str, Any]]:
+        self.calls.append(list(refs))
+        return self._backend.file_metadata(refs, client)
+
+
+def test_a_listing_reads_the_metadata_of_its_files_in_one_call(
+    files: FakeFiles,
+) -> None:
+    runs = [files.measure(n, {'counts': 1.0}) for n in (101, 102, 103)]
+    backend = Backend(files, [function_binding(FIND, find)])
+    counting = CountingMetadata(backend)
+    client = Client(counting, proposal='p1', submitter='anna')
+
+    listed = Listing(client).files(File())
+
+    assert list(listed.values()) == runs
+    assert counting.calls == [runs]
+    backend.close()

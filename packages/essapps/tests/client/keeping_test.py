@@ -193,6 +193,8 @@ def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
     ):
         with pytest.raises(KeyError, match=r"'no .* unknown in proposal p1'"):
             unknown()
+    with pytest.raises(KeyError, match="load/v1 has no output 'nope'"):
+        client.output(load, 'nope')
 
 
 def test_a_client_releases_only_what_it_keeps(backend: Backend, client: Client) -> None:
@@ -277,3 +279,43 @@ def test_every_output_of_a_record_or_an_accumulator_is_read_without_a_name(
     assert client.output(total) == {'value': one}
     assert load.refs() == {name: load.ref(name) for name in ('value', 'extra')}
     assert total.refs() == {'value': total.ref('value')}
+
+
+def test_on_close_is_called_once_the_client_has_ended(backend: Backend) -> None:
+    def on_close() -> None:
+        with pytest.raises(ClientEnded):
+            client.records()
+        closed.append(True)
+
+    closed: list[bool] = []
+    client = Client(backend, proposal='p1', submitter='anna', on_close=on_close)
+
+    client.close()
+
+    assert closed == [True]
+
+
+def test_closing_a_local_client_cancels_what_has_not_started_before_it_waits(
+    files: FakeFiles, loading: threading.Event
+) -> None:
+    started = threading.Event()
+    shifted = []
+
+    def load(params: toys.Sample) -> toys.LoadOutputs:
+        started.set()
+        loading.wait(timeout=5)
+        return toys.load_run(params)
+
+    def shift(params: toys.ShiftParams) -> toys.ShiftOutputs:
+        shifted.append(params)
+        return toys.shift(params)
+
+    loading.clear()
+    bind = [function_binding(toys.LOAD, load), function_binding(toys.SHIFT, shift)]
+    with local(proposal='p1', files=files, bind=bind) as client:
+        first = client.submit(toys.load_request(1))
+        client.submit(toys.SHIFT, params={'source': first.ref('value')})
+        started.wait(timeout=5)
+        threading.Timer(0.05, loading.set).start()
+
+    assert shifted == []

@@ -8,7 +8,16 @@ import threading
 
 import pytest
 
-from ess.apps import Client, Record, Request, Status, SubmitError, Template, file
+from ess.apps import (
+    Client,
+    NotReadable,
+    Record,
+    Request,
+    Status,
+    SubmitError,
+    Template,
+    file,
+)
 from ess.apps.testing import FakeFiles
 
 from . import toys
@@ -247,7 +256,7 @@ def test_a_push_proceeds_after_readers_whose_outputs_failed(
     copied = toys.submit_copy(client, sides, 'difference')
     client.wait(copied)
     subtracting.failing = True
-    with pytest.raises(ValueError, match=r'^cannot compute$'):
+    with pytest.raises(NotReadable, match=r'^ValueError: cannot compute$'):
         client.output(sides, 'difference')
 
     toys.start_in_thread(

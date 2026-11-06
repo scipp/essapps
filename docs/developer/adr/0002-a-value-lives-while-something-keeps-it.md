@@ -15,10 +15,10 @@ Values take memory, so something must decide when they go, and which are written
 
 ## Decision
 
-[lifetimes.md](../lifetimes.md) states the rules in full.
+[`ess.apps.protocol`](../../../packages/essapps/src/ess/apps/protocol.py) states the rules in full.
 
 **A value lives while something keeps it.**
-lifetimes.md lists the keepers.
+The module docstring lists the keepers.
 A record object, a reference, or a label is not one, since many objects name one record (Alternatives).
 Releasing drops a value, never a record.
 
@@ -36,10 +36,9 @@ A running workflow is not interrupted, so cancelling frees memory, not CPU.
 So whether it is refused depends only on what its client keeps, not on how far other work has come.
 
 **Nothing is written unless persisted**, since the framework cannot tell which outputs are worth writing (Context).
-A client chooses per output.
-`client.persist` keeps a value in memory and in the store.
-`persist=` at submission or at `client.freeze` keeps it only in the store, as batch reduction and the trigger loop need.
-A failed write fails a record that was persisted at submission, so a controller sees it like any other failed record.
+A client chooses per output, with `persist=` at submission or at `client.freeze`.
+The store is then the only keeper, as batch reduction and the trigger loop need.
+A failed write fails the record, so a controller sees it like any other failed record.
 The store keys a value by record ID and output name, so a record holds no file name and a write changes no record.
 A persisted output stays readable after an upgrade removes its record's spec version, since the record stays in history.
 
@@ -48,7 +47,7 @@ A persisted output stays readable after an upgrade removes its record's spec ver
 | | user's process (`local()`) | service |
 |---|---|---|
 | values not persisted | in the process's memory | in the service's memory, under a *cap*, a memory limit per client |
-| a client ends | at `close()`, which waits for pending writes, or with its process | at `close()`, or when its *lease*, a time limit that every call renews, runs out |
+| a client ends | at `close()`, or with its process | at `close()`, or when its *lease*, a time limit that every call renews, runs out |
 | the store | given to `local(store=...)` | the proposal's area |
 
 The service's cap counts the values a client keeps, those its pending requests keep, and the drivers of its accumulators.
@@ -67,6 +66,7 @@ Each pending record is
 ## Alternatives considered
 
 - **Record objects keep values, as dask futures do.** `client.records()`, `client.latest()`, and provenance each return a new object for the same record, so no single object could own the value. A dict of records (D2, kept for the morning check) would keep every value, and so would Jupyter's `Out[n]`.
+- **Persisting a kept record later (`client.persist`).** A person could keep a result after seeing it without computing it again. No story or application needs it. A write that ends after its record has finished has no record to fail, so its failure would need a channel of its own, such as closing the client, which would then wait for writes and raise. It needs two more kinds of event in history. It can be added when a story needs it.
 - **Keep only on request (`keep=True`).** The flag must be given at submission, since a value dropped when its request finishes cannot be kept later without a race. Forgetting it shows only when a later `client.output` or reference is refused.
 - **Views first, and a record made only at persist.** A read returns a view, a handle without a record. It needs a second handle type, records of upstream views that have no values, which a later `persist` cannot complete, and pinned states kept inside views. A record is one entry in history, so making it lazily saves nothing worth that.
 - **Sessions or nested scopes.** A session reopened by name is lost at a backend restart, and needs names and an expiry. A scope is a `with` block, which a notebook cannot hold across cells.
