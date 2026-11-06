@@ -91,6 +91,8 @@ def test_iofq_is_that_of_plain_esssans(
         IofQParams(**iofq_values, masks=computed_masks.masks, direct_beam=direct_beam)
     )
     assert sc.identical(outputs.iofq.intensity, plain_esssans_iofq)
+    assert outputs.iofq.title == 'My experiment'
+    assert outputs.iofq.run is None  # the files of this test name no run
     assert outputs.transmission.sample.sizes == {'wavelength': 200}
     assert outputs.transmission.can.sizes == {'wavelength': 200}
 
