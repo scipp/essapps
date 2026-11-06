@@ -2,7 +2,7 @@
 
 LoKI and SKADI at ESS; LoKI has 3.2 M pixels, and SKADI has no reduction code yet.
 One I(Q) needs runs in up to five roles (sample, can, a transmission run for each, empty beam) plus a direct-beam function, a beam centre and masks; today a person names every run by hand.
-The runs of one sample are summed; the 9 LoKI detector banks give 9 separate curves today, and instrument scientists want them combined into one as well.
+The runs of one sample are summed; the 9 LoKI detector banks give 9 separate curves today, and instrument scientists want them combined into one before normalisation as well, which esssans does not do yet.
 Samples are independent of each other, and a batch may hold hundreds of them.
 Automatic reduction is assumed to give one I(Q) per run, with merging of runs a later, manual step.
 
@@ -19,6 +19,7 @@ Automatic reduction is assumed to give one I(Q) per run, with merging of runs a 
 - One run can fill several roles: the LoKI tutorial uses run 60392 as can transmission and as empty beam. *[loki/data.py](https://github.com/scipp/ess/blob/main/packages/esssans/src/ess/loki/data.py#L95-L100)*
 - The direct-beam function is itself a result: 6 iterations of reducing a standard sample of known I(Q), with its own sample, can, transmission and empty-beam runs. *[loki-direct-beam.ipynb cells 0, 11, 19](https://github.com/scipp/ess/blob/main/packages/esssans/docs/user-guide/loki/loki-direct-beam.ipynb)*
 - The tutorial computes the beam centre from the sample runs, by their centre of mass, before it reduces them. *[loki-iofq.ipynb cells 9, 23](https://github.com/scipp/ess/blob/main/packages/esssans/docs/user-guide/loki/loki-iofq.ipynb)*
+- On four tutorial samples the centre of mass differs by up to 5.5 mm, and I(Q) with another sample's centre differs by up to 10 standard deviations (deut-SDS, with the centre of the ISIS polymer). Which centre is right is not known. *Measured 2026-11-06, esssans 26.10.*
 - Polarised SANS (a SKADI option) corrects four spin channels together, with an analyser transmission fitted from runs spread over the experiment (8 runs at 4 times in the essreduce example with ISIS data).
   The precise cell opacity needs a run on the depolarised cell at the end of its life, and users may redo their results with it. *[polarisation methodology cells 1, 5, 6](https://github.com/scipp/ess/blob/main/packages/essreduce/docs/user-guide/polarization/sans-polarization-analysis-methodology.ipynb), [zoom polarisation cells 2, 13](https://github.com/scipp/ess/blob/main/packages/essreduce/docs/user-guide/polarization/zoom.ipynb)*
 
@@ -28,7 +29,7 @@ Automatic reduction is assumed to give one I(Q) per run, with merging of runs a 
   N copies of a run give the same I(Q) as one. *[workflow.py](https://github.com/scipp/ess/blob/main/packages/esssans/src/ess/sans/workflow.py#L41-L45), [L97-L141](https://github.com/scipp/ess/blob/main/packages/esssans/src/ess/sans/workflow.py#L97-L141), [iofq_test.py](https://github.com/scipp/ess/blob/main/packages/esssans/tests/loki/iofq_test.py#L244-L273)*
 - SANS run merging may happen as a pre-processing step that writes merged "raw" files, as ISIS does with its "add files". *Simon, 2026-10-02; [Mantid Sum Runs](https://github.com/mantidproject/mantid/blob/main/docs/source/interfaces/isis_sans/Sum%20Runs.rst)*
 - Instrument scientists want the LoKI banks combined into one I(Q), before normalisation, and per-bank results too, as a batch of independent reductions with one result each.
-  Some runs may need merging and others not. *Simon, 2026-09-28 and 2026-10-05*
+  esssans does not combine banks yet. Some runs may need merging and others not. *Simon, 2026-09-28, 2026-10-05, and 2026-11-06*
 
 ### Batch and automatic
 
@@ -39,7 +40,7 @@ Automatic reduction is assumed to give one I(Q) per run, with merging of runs a 
 ## Assumed
 
 - Automatic reduction gives one I(Q) per run. Merging runs is a later, manual step: a person judges which runs to merge and enters them in a batch-reduction table, so all runs of a merged sample exist before its reduction starts. *Simon, 2026-10-05; ask the LoKI instrument scientist.*
-- One beam centre serves a series of samples, for example from a sample changer, and is found again when the sample environment changes. *Simon, 2026-10-05; ask the LoKI instrument scientist.*
+- One beam centre may serve the samples of a sample changer, and a more invasive change of sample, without a dedicated changer, can need a centre per sample. *Simon, 2026-11-06; ask the LoKI instrument scientist.*
 - One LoKI reduction takes seconds and needs little memory; time grows with the number and length of the runs combined. *Simon, 2026-10-05; measure on real LoKI files once they exist.*
 - Each sample needs its own thickness for absolute scale; esssans has none today. It is one value per sample, the same for every run summed for that sample, and comes with the runs' data or from a table a person fills before the reduction. *ISIS batch rows carry `sample_thickness`; Simon, 2026-10-15; ask the LoKI instrument scientist.*
 - Results are histograms; events are not kept to bin again in Q. *LoKI notebooks set `ReturnEvents = False`, ISIS notebooks keep events; ask the LoKI instrument scientist.*

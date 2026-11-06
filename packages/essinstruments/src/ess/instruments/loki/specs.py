@@ -12,8 +12,9 @@ A reduction is three records, each of which a person may look at before the next
     iofq = client.submit(IOFQ, params={'masks': masks.ref('masks'),
                                        'beam_centre': centre.ref('centre'), ...})
 
-The specs are separate where a value outlives one sample: the masks hold for an
-experiment, and one beam centre serves a series of samples. I(Q) takes the masks
+The specs are separate where a value can outlive one sample: the masks hold for an
+experiment, and one beam centre can serve the samples of a sample changer, though a
+more invasive change of sample needs its own. I(Q) takes the masks
 as computed, not their files, so that the can's branch of its graph does not
 depend on the sample, and a stage with the sample blank reduces the can once.
 """
@@ -87,9 +88,15 @@ class Corrections(BaseModel):
 
 
 class IofQ(BaseModel, arbitrary_types_allowed=True):
-    """I(Q) of a sample, minus that of its can."""
+    """
+    I(Q) of a sample, minus that of its can, with the title and the run number of the
+    sample's file, or ``None`` where the file has none. An NXcanSAS file holds both,
+    and a record's outputs are all that writing one has.
+    """
 
     intensity: sc.DataArray
+    title: str | None
+    run: str | None
 
 
 class TransmissionCurves(BaseModel, arbitrary_types_allowed=True):

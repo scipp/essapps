@@ -29,6 +29,7 @@ from ess.sans.types import (
     DirectBeamFilename,
     EmptyBeamRun,
     Filename,
+    Measurement,
     Numerator,
     QBins,
     ReturnEvents,
@@ -129,8 +130,12 @@ def _uncertainties(corrections: Corrections) -> UncertaintyBroadcastMode:
     return UncertaintyBroadcastMode[corrections.uncertainties]
 
 
-def _iofq(intensity: BackgroundSubtractedIofQ) -> IofQ:
-    return IofQ(intensity=intensity)
+def _iofq(
+    intensity: BackgroundSubtractedIofQ, measurement: Measurement[SampleRun]
+) -> IofQ:
+    return IofQ(
+        intensity=intensity, title=measurement.title, run=measurement.run_number
+    )
 
 
 def _transmission(
