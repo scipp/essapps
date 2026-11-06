@@ -363,8 +363,7 @@ def _rule(template: Template, at: str, **kw: Any) -> Rule:
                 ),
             ),
             "Selector({'kind': 'mask', 'role': 'background'}) lists files that do "
-            "not fit can; a selector names each of {'kind': 'raw', 'role': "
-            "'background'}",
+            "not fit can; a selector names each of {'kind': 'raw'}",
         ),
         (
             _rule(Template(SUM_RUNS, blanks=('runs',)), 'runs'),

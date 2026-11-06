@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from ess.spec import (
     BackgroundRunFile,
+    EmptyBeamRunFile,
     File,
     MaskFile,
     Referenced,
@@ -149,9 +150,7 @@ class IofQParams(BaseModel):
     can_transmission: TransmissionRunFile = Field(
         description='The transmission run of the can.'
     )
-    # Not EmptyBeamRunFile, since one run may serve as the can's transmission run
-    # and as the empty beam, and a file has one role (scipp/essapps#153).
-    empty_beam: RunFile = Field(description='The empty-beam run.')
+    empty_beam: EmptyBeamRunFile = Field(description='The empty-beam run.')
     direct_beam: DirectBeamFile | None = Field(
         description='The direct-beam function. None assumes a detector efficiency '
         'that does not depend on wavelength.'

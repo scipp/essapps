@@ -19,11 +19,10 @@ titled by the field, so that a nested group is a card of its fields.
 
 A record's output fits a field if its type, from the record's spec, fits the
 field, and a request of the client may reference it now
-(``client.readable``), so a pending record is offered too. A file fits a file
-field if a :class:`~ess.apps.Selector` of the marker's metadata matches it, as
-the backend checks when the request is submitted. A file that the form is set
-to, such as one a record names, stays picked when the listing no longer has
-it.
+(``client.readable``), so a pending record is offered too. A file is offered for
+a file field as :meth:`ess.apps.Listing.files` says, among those the backend
+accepts there. A file that the form is set to, such as one a record names, stays
+picked when the listing no longer has it.
 
 A table is a ``Tabulator``, so a notebook loads Panel with
 ``pn.extension('tabulator')``.

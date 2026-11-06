@@ -441,6 +441,7 @@ class FileSource(Protocol):
     only by the metadata the source gives, in :meth:`metadata` and :meth:`list`. A
     source that corrects the metadata of a file, such as the role of a run tagged
     wrongly, corrects them in both, so that each sees the file as corrected.
+    A role is optional, and what the backend does not check (:meth:`Selector.of`).
     """
 
     def resolve(self, name: FileRef) -> FileRef:

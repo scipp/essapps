@@ -209,3 +209,19 @@ def test_a_listing_reads_the_metadata_of_its_files_in_one_call(
     assert list(listed.values()) == runs
     assert counting.calls == [runs]
     backend.close()
+
+
+def test_files_of_a_marker_with_a_role_are_those_of_the_role_and_those_without_one(
+    client: Client, files: FakeFiles
+) -> None:
+    files.measure(301, {'counts': 1.0}, role='sample')
+    files.measure(302, {'counts': 1.0}, role='transmission')
+    files.measure(303, {'counts': 1.0})
+    listing = Listing(client)
+
+    assert list(listing.files(File(role='sample'))) == ['run 301 (sample)', 'run 303']
+    assert list(listing.files(File())) == [
+        'run 301 (sample)',
+        'run 302 (transmission)',
+        'run 303',
+    ]

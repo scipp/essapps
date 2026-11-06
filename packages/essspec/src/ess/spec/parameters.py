@@ -51,8 +51,9 @@ class File:
     The marker of a *file field*, ``Annotated[Path, File(**metadata)]``.
 
     A file fits the field if its metadata have each key and value of the
-    marker's :attr:`metadata`. ``packages/essspec/docs/params.md`` (Files)
-    names the keys and the rules of a file field.
+    marker's :attr:`metadata`, but ``role``, which only narrows what a picker
+    offers. ``packages/essspec/docs/params.md`` (Files) names the keys and the
+    rules of a file field.
 
     Validated with the context ``{'paths': {identity: local path}}``, as the
     backend validates a request, the marker replaces the stored form of a
@@ -67,7 +68,8 @@ class File:
     kind:
         What the file holds, such as ``'raw'``, the file of a run.
     **metadata:
-        Further metadata that a fitting file has, such as ``role='sample'``.
+        Further metadata that a fitting file has, or the ``role``, such as
+        ``'sample'``, of the runs a picker offers.
 
     Raises
     ------
@@ -242,25 +244,25 @@ rules.
 """
 
 RunFile = Annotated[Path, File()]
-"""Types a file field that the raw file of a run of any role fills."""
+"""Types a file field for the raw file of a run, whose picker offers any run."""
 
 SampleRunFile = Annotated[Path, File(role='sample')]
-"""Types a file field that the raw file of a sample run fills."""
+"""Types a file field for the raw file of a run used as the sample."""
 
 BackgroundRunFile = Annotated[Path, File(role='background')]
 """
-Types a file field that the raw file of a background run, such as a SANS can,
-fills.
+Types a file field for the raw file of a run used as the background, such as a
+SANS can.
 """
 
 TransmissionRunFile = Annotated[Path, File(role='transmission')]
-"""Types a file field that the raw file of a transmission run fills."""
+"""Types a file field for the raw file of a run used for a transmission."""
 
 EmptyBeamRunFile = Annotated[Path, File(role='empty_beam')]
-"""Types a file field that the raw file of an empty-beam run fills."""
+"""Types a file field for the raw file of a run used as the empty beam."""
 
 VanadiumRunFile = Annotated[Path, File(role='vanadium')]
-"""Types a file field that the raw file of a vanadium run fills."""
+"""Types a file field for the raw file of a run used as the vanadium."""
 
 MaskFile = Annotated[Path, File(kind='mask')]
 """Types a file field that a mask fills."""

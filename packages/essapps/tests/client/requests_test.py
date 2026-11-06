@@ -204,21 +204,36 @@ def test_a_file_fits_a_file_field_by_each_key_of_its_metadata(
     assert client.output(masked, 'value') == toys.Amount(value=6.0)
 
 
-def test_a_run_whose_role_the_file_source_corrects_fits_as_corrected(
+def test_a_run_of_any_role_fills_a_field_of_a_role(
     client: Client, files: FakeFiles
 ) -> None:
-    run = files.measure(5, 5.0, role='background')  # tagged wrongly
-    samples = Selector(role='sample')  # as a picker of the field lists files
+    files.measure(5, 5.0, role='background')
+    files.measure(7, 7.0)
+
+    for run, value in ((5, 5.0), (7, 7.0)):
+        record = client.compute(toys.SAMPLE_RUN, params={'sample': file(run=run)})
+        assert client.output(record, 'value') == toys.Amount(value=value)
+
+
+def test_a_file_of_another_kind_does_not_fill_a_field_of_a_role(
+    client: Client, files: FakeFiles
+) -> None:
+    files.measure(5, 5.0, kind='mask', role='sample')
 
     with pytest.raises(SubmitError, match=r'^sample: file run:5 does not fit'):
         client.submit(toys.SAMPLE_RUN, params={'sample': file(run=5)})
+
+
+def test_a_corrected_role_shows_in_what_a_selector_lists(
+    client: Client, files: FakeFiles
+) -> None:
+    run = files.measure(5, 5.0, role='background')  # tagged wrongly
+    samples = Selector(role='sample')
     assert client.files.list(samples) == []
 
     files.correct(run, role='sample')
 
     assert client.files.list(samples) == [run]
-    record = client.compute(toys.SAMPLE_RUN, params={'sample': file(run=5)})
-    assert client.output(record, 'value') == toys.Amount(value=5.0)
 
 
 def test_a_path_names_the_file_at_that_path(client: Client, files: FakeFiles) -> None:

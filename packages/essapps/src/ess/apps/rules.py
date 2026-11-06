@@ -211,7 +211,7 @@ def _check(rule: Rule, params: type[BaseModel]) -> None:
             )
         if (marker := field_types.file_of(params.model_fields[blank])) is None:
             raise ValueError(f'{rule.name}: {blank} is not a file parameter')
-        need = Selector(**marker.metadata).fields
+        need = Selector.of(marker).fields
         if not need.items() <= selector.fields.items():
             raise ValueError(
                 f'{rule.name}: {selector} lists files that do not fit {blank}; a '

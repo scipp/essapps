@@ -85,7 +85,7 @@ The type decides what a request writes there and which widget a form generated f
 | scalar | `float`, `Annotated[int, Gt(0)]`, an enum, a `Literal` | its JSON value | an input of its type |
 | group | `Reduction` | an object of its fields | its fields: a tab for a parameter, a card for a field |
 | union of groups | `GivenCentre \| FindCentre` | one alternative's fields, with its tag | a choice of alternatives |
-| file field | `SampleRunFile` | `file(...)` | a picker of files of its kind and role |
+| file field | `SampleRunFile` | `file(...)` | a picker of files of its kind, narrowed by its role |
 | `Referenced[T]` | `Referenced[ComputedTransmission]` | `record.ref(name)` | a picker of records whose output fits `T` |
 | union with `Referenced[...]` members | `BeamCentre \| Referenced[BeamCentre]` | what one member takes | the other members, plus "From a record" |
 | `X \| None` | `MaskFile \| None` | what `X` takes, or `None` | the ways of `X`, plus "None" |
@@ -181,16 +181,15 @@ The record holds each file by the identity that the backend resolved, as in the 
 ## Files
 
 A *file field* is typed `Annotated[Path, File(**metadata)]`.
-The marker `File` holds the metadata that a fitting file has, so that a picker offers only files of the right kind and role.
-A file fits when its metadata have each key and value of the marker's; each value is a string, a number, or a bool.
+The marker `File` holds the metadata that a fitting file has; each value is a string, a number, or a bool.
 
-- `kind`, what the file holds: `'raw'` (the file of a run, the default), `'mask'`, or another kind.
-- `role`, what a run was measured as: the run types of `ess.reduce` and the technique packages in snake case, such as `'sample'`, `'background'` (a SANS can), `'transmission'`, `'empty_beam'`, `'vanadium'`, `'reference'`.
+- `kind`, what the file holds: `'raw'` (the file of a run, the default), `'mask'`, or another kind. A file of another kind is refused, and so is a file that lacks any other key of the marker, such as `instrument='loki'`.
+- `role`, what the field uses a run for: the run types of `ess.reduce` and the technique packages in snake case, such as `'sample'`, `'background'` (a SANS can), `'transmission'`, `'empty_beam'`, `'vanadium'`, `'reference'`. A role is never refused, since the request states the use by the field it fills, and one run can have several uses: the transmission run of a can can also be the empty beam. A picker offers the runs of the field's role and the runs without a role.
 
 `ess.spec` provides the common types, so that each value is spelled once:
 
 ```python
-RunFile = Annotated[Path, File()]                         # a raw file of any role
+RunFile = Annotated[Path, File()]                         # a raw file; a picker offers every run
 SampleRunFile = Annotated[Path, File(role='sample')]      # also BackgroundRunFile, TransmissionRunFile, ...
 MaskFile = Annotated[Path, File(kind='mask')]
 CalibrationFile = Annotated[Path, File(kind='calibration')]  # another kind, by hand
@@ -198,12 +197,11 @@ CalibrationFile = Annotated[Path, File(kind='calibration')]  # another kind, by 
 mask: MaskFile | None = None                              # not Annotated[Path | None, File(...)]
 ```
 
-A field that takes a run of any role, or of a role the file source does not know, is typed `RunFile`.
-A file of another kind or role is refused; a run tagged with the wrong role is corrected in the file source.
+A run tagged with the wrong role still fills any field of its kind, by `file(run=...)`; to change what a picker offers, correct it in the file source.
 A field takes one kind of file, so a file field is in a union only with `Referenced[...]` members and `None`.
 
 A request writes `file(run=611)` or `file(path=...)`.
-The backend resolves it when the request is submitted, checks that the proposal may read the file and that its metadata fit the marker, and records the file's identity.
+The backend resolves it when the request is submitted, checks that the proposal may read the file and that it fits the marker, and records the file's identity.
 The workflow gets the file's local path, never the identity.
 A program without a backend gives the path directly, `IofQParams(sample=Path('run-611.nxs'), ...)`.
 
