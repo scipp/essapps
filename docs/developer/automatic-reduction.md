@@ -39,9 +39,10 @@ def reduce_sample(client: Client, sample: FileRef) -> Record:
     if not found:
         raise LookupError('no transmission run yet')          # try again at the next step
     member = str(fields['run'])
-    try:
-        centre = client.latest('centre', member=member)        # from a call that stopped half-way
-    except KeyError:
+    centre = next((r for r in reversed(client.records(label='centre'))
+                   if r.member == member and client.status(r) not in (Status.FAILED, Status.CANCELLED)),
+                  None)                                        # from a call that stopped half-way
+    if centre is None:
         centre = client.submit(BEAM_CENTRE, params={'sample': sample, ...},
                                label='centre', member=member, persist=True)
     return client.submit(IOFQ, params={'sample': sample, 'transmission': found[-1],
@@ -58,7 +59,10 @@ The loop checks this and raises `TypeError` otherwise, since it would call the f
 
 The function persists what it submits. The loop's client should keep nothing, and a reference must stay readable once the loop's process has restarted.
 
-A function may run again for a file: when a step stopped before the settling record, or when that record was refused. So it submits the settling record last, and reuses what an earlier call submitted, as with `client.latest` above.
+A function may run again for a file: when a step stopped before the settling record, or when that record was refused. So it submits the settling record last, and reuses what an earlier call submitted, as with the centre above.
+It does not reuse a failed or cancelled record, since a reference to one is refused, and the file would never settle. With a new centre, the reduction is accepted while the centre is pending, then fails with it, and that failed record settles the file.
+
+The function does not wait for a record or read an output. The loop calls one function at a time, so a wait holds up every rule, and a request can reference a pending record instead.
 
 Rules are frozen dataclasses. The core keeps no store of them, and records do not name them: a record's request says everything that determines its result.
 
@@ -95,7 +99,7 @@ A failed record counts so that the loop does not retry a failed file, which coul
 
 A file whose function raises `LookupError` or `ValueError`, or whose request is refused with `SubmitError`, is skipped: the rule goes on with its other new files, and its status names each skipped file and why.
 No record names the skipped file, so the next step tries it again, for example once its transmission run has arrived.
-Any other exception stops the loop.
+Any other exception stops the loop, as does `RecordFailed` from a function that reads an output.
 
 ## Open
 

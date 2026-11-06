@@ -27,7 +27,7 @@ The maintainer kept the new default and pointed users to `--rerun-triggers mtime
 He reported as many requests for the new behaviour as complaints about it.
 Every planned job prints the reason it runs ([FAQ](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/docs/project_info/faq.rst#L526-L531)).
 For us: the trigger loop counts a file as handled once a record under the rule's label names it, and no record names the rule ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
-So changing a rule's template reduces no handled file again, and whether a stored result is out of date stays the user's decision.
+So changing what a rule's function submits reduces no handled file again, and whether a stored result is out of date stays the user's decision.
 If a story asks for it, borrow `--list-changes params` ([cli.py](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/cli.py#L1230-L1236)): a query listing the records under a label whose request differs from what the rule would submit now, for the user to resubmit.
 
 **What a record of a run holds, and at what grain.**
@@ -74,7 +74,7 @@ The in-process backend holds its log file with `flock`, which the kernel release
 **Temporary and protected outputs.**
 `temp()` deletes an output once every consumer has run, and `protected()` write-protects an expensive one ([rules.rst](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/docs/snakefiles/rules.rst#L2132-L2160)).
 The workflow author marks them, since the author knows which outputs are throwaway.
-For us: nothing is written unless persisted, and a rule persists all outputs unless it names some ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md), [automatic-reduction.md](../automatic-reduction.md#rules)).
+For us: nothing is written unless persisted, and a rule's function says what it persists ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md), [automatic-reduction.md](../automatic-reduction.md#rules)).
 If a story asks, an author's mark on outputs meant only for inspection could set that default.
 
 **Between-workflow caching is opt-in and narrow.**

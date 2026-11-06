@@ -23,7 +23,6 @@ from ess.spec import FileRef
 from ess.spec.refs import iter_refs
 
 from .client import Client
-from .errors import SubmitError
 from .files import Selector
 from .records import Record
 
@@ -39,14 +38,16 @@ class Rule:
     then on the rule has handled the file, whatever becomes of the record.
 
     To leave a file for the next step, such as a sample whose transmission run has
-    not arrived, ``submit`` raises ``LookupError`` or ``ValueError``; a refused
-    request raises ``SubmitError``. The rule's status names the file and the reason.
-    A step that stops between two requests of a file calls ``submit`` again, so it
-    submits the settling record last, and reuses what an earlier call submitted,
-    such as with :meth:`~ess.apps.Client.latest`.
+    not arrived, ``submit`` raises ``LookupError`` or ``ValueError``, as a refused
+    request does with ``SubmitError``. The rule's status names the file and the
+    reason. A step that stops between two requests of a file calls ``submit`` again,
+    so it submits the settling record last, and reuses what an earlier call submitted
+    and did not fail, as ``docs/developer/automatic-reduction.md`` shows.
 
-    ``submit`` persists what it submits: the loop's client should keep nothing, and
-    a reference must stay readable when the loop's process has restarted.
+    ``submit`` does not wait for a record or read an output: the loop calls one
+    function at a time, and a request can reference a pending record. It persists what
+    it submits: the loop's client should keep nothing, and a reference must stay
+    readable when the loop's process has restarted.
     """
 
     name: str
@@ -69,9 +70,12 @@ class RuleStatus:
 
 
 class TriggerLoop:
-    """Steps the ``rules`` on ``client``."""
+    """Steps the ``rules`` on ``client``. Raises ``ValueError`` if two share a name."""
 
     def __init__(self, client: Client, rules: list[Rule]) -> None:
+        names = [rule.name for rule in rules]
+        if duplicates := {name for name in names if names.count(name) > 1}:
+            raise ValueError(f'two rules are named {sorted(duplicates)}')
         self._client = client
         self._rules = rules
         self._cursor = 0
@@ -106,7 +110,7 @@ class TriggerLoop:
                     continue
                 try:
                     record = rule.submit(self._client, ref)
-                except (SubmitError, LookupError, ValueError) as error:
+                except (LookupError, ValueError) as error:  # a SubmitError too
                     reasons.append(f'skipped {ref.file}: {error}')
                     continue
                 _check_settles(record, rule, ref)

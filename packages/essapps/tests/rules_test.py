@@ -16,6 +16,7 @@ from ess.apps import (
     Record,
     Rule,
     Selector,
+    Status,
     SubmitError,
     Template,
     TriggerLoop,
@@ -50,6 +51,14 @@ class SumRunsParams(BaseModel):
     runs: list[RunFile] = Field(min_length=1)
 
 
+class Group(BaseModel):
+    run: RunFile
+
+
+class LoadGroupParams(BaseModel):
+    group: Group
+
+
 class Centre(BaseModel):
     x: float
 
@@ -76,6 +85,7 @@ def _spec(name: str, params: type[BaseModel], **kw: Any) -> WorkflowSpec:
 
 
 LOAD = _spec('load', LoadParams)
+LOAD_GROUP = _spec('load-group', LoadGroupParams)
 LOAD_MASK = _spec('load-mask', LoadMaskParams)
 NORMALIZE = _spec('normalize', NormalizeParams)
 SUM_RUNS = _spec('sum-runs', SumRunsParams, tables=('runs',))
@@ -85,6 +95,10 @@ REDUCE = _spec('reduce', ReduceParams)
 
 def load(params: LoadParams) -> ValueOutputs:
     return ValueOutputs(value=read_file(params.sample))
+
+
+def load_group(params: LoadGroupParams) -> ValueOutputs:
+    return ValueOutputs(value=read_file(params.group.run))
 
 
 def load_mask(params: LoadMaskParams) -> ValueOutputs:
@@ -119,6 +133,7 @@ def client(files: FakeFiles) -> Iterator[Client]:
         files,
         [
             function_binding(LOAD, load),
+            function_binding(LOAD_GROUP, load_group),
             function_binding(LOAD_MASK, load_mask),
             function_binding(NORMALIZE, normalize),
             function_binding(SUM_RUNS, sum_runs),
@@ -163,16 +178,19 @@ def _transmission_of(client: Client, sample: FileRef) -> FileRef:
 def _centre_of(client: Client, sample: FileRef) -> Record:
     """The sample's centre: one that an earlier call submitted, or a new one."""
     member = str(client.files.metadata(sample)['run'])
-    try:
-        return client.latest('centres', member=member)
-    except KeyError:
-        return client.submit(
-            FIND_CENTRE,
-            params={'sample': sample},
-            label='centres',
-            member=member,
-            persist=True,
-        )
+    for record in reversed(client.records(label='centres')):
+        if record.member == member and client.status(record) not in (
+            Status.FAILED,
+            Status.CANCELLED,
+        ):
+            return record
+    return client.submit(
+        FIND_CENTRE,
+        params={'sample': sample},
+        label='centres',
+        member=member,
+        persist=True,
+    )
 
 
 def _reduce(client: Client, sample: FileRef, transmission: Any) -> Record:
@@ -279,10 +297,95 @@ def test_a_call_after_a_refusal_reuses_what_it_submitted(
     assert loop.step() == []
 
     files.measure(2, 2.0)
-    (reduced,) = loop.step()
+    (reduced,) = TriggerLoop(client, rules=[rule]).step()  # as after a restart
 
     assert client.output(reduced, 'value') == 8.0 / 2.0 + 0.8
     assert len(client.records(label='centres')) == 1
+
+
+def test_a_file_whose_centre_failed_settles_with_a_failed_record(
+    client: Client, files: FakeFiles, reducing: Rule
+) -> None:
+    sample = files.measure(1, 8.0, run_type='sans', run_label='water')
+    files.measure(2, 2.0, run_type='trans', run_label='water')
+    files.corrupt(sample)
+    loop = TriggerLoop(client, rules=[reducing])
+    failed_centre = client.submit(
+        FIND_CENTRE, params={'sample': sample}, label='centres', member='1'
+    )
+    assert client.wait(failed_centre) == 'failed'
+
+    # A new centre may fail before the reduction references it: then the next step
+    # tries again.
+    settled: list[Record] = []
+    for _ in range(100):
+        if settled := loop.step():
+            break
+        client.wait(client.records(label='centres'))
+
+    (reduced,) = settled
+    assert client.wait(reduced) == 'failed'
+    assert loop.step() == []
+
+
+def test_a_function_that_raises_value_error_skips_the_file(
+    client: Client, files: FakeFiles
+) -> None:
+    def submit(client: Client, ref: FileRef) -> Record:
+        raise ValueError('not this one')
+
+    rule = Rule('rule', submit, selector=Selector(), label='rule', at='sample')
+    run = files.measure(1, 2.0)
+    loop = TriggerLoop(client, rules=[rule])
+
+    assert loop.step() == []
+    assert loop.status(rule).reason == f'skipped {run.file}: not this one'
+
+
+def test_any_other_exception_of_a_function_stops_the_loop(
+    client: Client, files: FakeFiles
+) -> None:
+    def submit(client: Client, ref: FileRef) -> Record:
+        raise RuntimeError('a bug')
+
+    rule = Rule('rule', submit, selector=Selector(), label='rule', at='sample')
+    files.measure(1, 2.0)
+
+    with pytest.raises(RuntimeError, match='a bug'):
+        TriggerLoop(client, rules=[rule]).step()
+
+
+def test_rules_of_two_labels_each_handle_a_file(
+    client: Client, files: FakeFiles
+) -> None:
+    template = Template(LOAD, blanks=('sample',))
+    rules = [_rule(template, 'sample', name=name) for name in ('first', 'second')]
+    files.measure(1, 2.0, role='sample')
+
+    settled = TriggerLoop(client, rules=rules).step()
+
+    assert [r.label for r in settled] == ['first', 'second']
+
+
+def test_a_file_in_a_group_at_the_parameter_does_not_count_as_handled(
+    client: Client, files: FakeFiles
+) -> None:
+    def submit(client: Client, ref: FileRef) -> Record:
+        raise ValueError('called')
+
+    rule = Rule('rule', submit, selector=Selector(), label='x', at='group')
+    run = files.measure(1, 2.0)
+    client.submit(LOAD_GROUP, params={'group': {'run': run}}, label='x')
+    loop = TriggerLoop(client, rules=[rule])
+
+    loop.step()
+
+    assert loop.status(rule).reason == f'skipped {run.file}: called'
+
+
+def test_two_rules_of_one_name_are_refused(client: Client, loading: Rule) -> None:
+    with pytest.raises(ValueError, match=r"two rules are named \['rule'\]"):
+        TriggerLoop(client, rules=[loading, loading])
 
 
 @pytest.mark.parametrize(
