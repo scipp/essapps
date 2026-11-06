@@ -227,12 +227,15 @@ total = client.freeze(volume)                               # the final sum, as 
 
 ## Batch and automatic reduction
 
-`apply` fills a template once per file, and a *rule* does so for each new file as it arrives, under a label, persisted ([automatic-reduction.md](automatic-reduction.md)):
+`apply` fills a template once per file. A *rule* calls an application's function for each new file as it arrives; the function pairs runs as the technique needs and submits what the file needs ([automatic-reduction.md](automatic-reduction.md)):
 
 ```python
-rule = Rule('transmission', Template(TRANSMISSION, blanks=('run', 'empty_beam')),
-            selector=Selector(role='transmission'), at='run', label='transmission',
-            lookup=Lookup({'empty_beam': LastBefore(Selector(role='empty_beam'))}))
+def reduce_transmission(client: Client, run: FileRef) -> Record:
+    return client.submit(TRANSMISSION, params={'run': run, 'empty_beam': file(run=60336)},
+                         label='transmission', persist=True)
+
+rule = Rule('transmission', reduce_transmission, selector=Selector(role='transmission'),
+            label='transmission', at='run')
 TriggerLoop(client, rules=[rule]).run()
 ```
 

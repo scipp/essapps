@@ -172,13 +172,18 @@ client.output(records[60339], 'iofq', select={'Q': slice(0, 10)})` },
     code: `client = connect('https://reduce.example', proposal='p1')
 app = App(client)` },
   { level: 11, caller: 'trigger', placement: 'service', planned: SERVICE, title: 'A trigger loop instead of a person',
-    body: `<p>Automatic reduction is one more controller. For each new file that a rule's selector matches, it fills the rule's template and submits under the rule's label, persisted.</p>
+    body: `<p>Automatic reduction is one more controller. For each new file that a rule's selector matches, it calls the application's function, which submits what the file needs, persisted.</p>
            <p>It runs on a server at DMSC, outside the backend. The backend never decides what to run.</p>`,
-    code: `rule = Rule('reflectivity',
-            Template(STITCH,
-                     params={'reference': file(run=500)},
-                     blanks=('runs',)),
-            selector=Selector(role='sample'), series='sample',
+    code: `def stitch(client, run):
+    sample = client.files.metadata(run)['sample']
+    angles = client.files.list(
+        Selector(role='sample', sample=sample))
+    return client.submit(
+        STITCH, params={'runs': angles, 'reference': file(run=500)},
+        label='reflectivity', member=sample, persist=True)
+
+rule = Rule('reflectivity', stitch,
+            selector=Selector(role='sample'),
             at='runs', label='reflectivity')
 TriggerLoop(client, rules=[rule]).run()` },
   { level: 11, caller: 'all', placement: 'service', planned: SERVICE, title: 'Many controllers, one history',

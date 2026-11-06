@@ -6,13 +6,11 @@ import scipp as sc
 
 from ess.apps import (
     Client,
-    LastBefore,
-    Lookup,
     Request,
     Selector,
     Template,
-    apply,
 )
+from ess.spec import FileRef
 
 from . import toys
 
@@ -116,16 +114,18 @@ def test_s7_reduce_each_sample_with_the_can_measured_before_it(
     template = Template(
         toys.IOFQ_CAN, params={'normalization': None}, blanks=('sample', 'can')
     )
-    cans = Lookup({'can': LastBefore(Selector(role='background'))})
+    cans = client.files.list(Selector(role='background'))  # in the order measured
 
-    requests = apply(
-        template,
-        [first, second],
-        client.files,
-        at='sample',
-        member_field='run',
-        lookup=cans,
-    )
+    def can_before(sample: FileRef) -> FileRef:
+        run = client.files.metadata(sample)['run']
+        return [c for c in cans if client.files.metadata(c)['run'] < run][-1]
+
+    requests = {
+        str(client.files.metadata(sample)['run']): template.fill(
+            params={'sample': sample, 'can': can_before(sample)}
+        )
+        for sample in (first, second)
+    }
     reduced = list(client.compute(requests, label='iofq').values())
 
     assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [
