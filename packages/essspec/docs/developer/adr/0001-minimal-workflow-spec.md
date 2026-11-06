@@ -221,8 +221,10 @@ A value of several parts is a group: `range: WavelengthRange`, not
 
 **A file fills a file field.** A field that takes a file, at any depth, is a
 *file field*, typed `Annotated[Path, File(**metadata)]`. The marker
-`ess.spec.File` holds the metadata that a fitting file has, each a string, a
-number, or a bool; `kind` is `'raw'` unless given. `ess.spec` provides the
+`ess.spec.File` holds the metadata of the files for the field, each a string, a
+number, or a bool; `kind` is `'raw'` unless given. A `role` at a raw file field is
+not checked: it says what the field uses a run for, which the request states by
+filling the field, and one run can have several uses. `ess.spec` provides the
 types of the common kinds, so that each kind is spelled once; a spec writes
 another kind by hand:
 
@@ -236,7 +238,7 @@ A request writes a file as `file(...)`, such as `file(run=60339)` or
 `file(path=...)`. The backend resolves it to the file's identity in the
 request phase, given the marker, so that the file source checks that the file
 is known, that the request's proposal may read it, and that its metadata fit
-the marker's. The record holds the identity. A file's identity and local path
+the marker's, but for the role of a raw file. The record holds the identity. A file's identity and local path
 are therefore known when the request arrives, as a value typed in is, so a
 group that holds a file is validated then, and its validators see the path.
 The params model holds the local path, a `Path`: a workflow sees paths only,
@@ -246,8 +248,8 @@ validators: one that reads the file would read it from a network mount in the
 request phase, and a check of a file's content belongs to the workflow. A
 `Path` without `File(...)` is refused in the params, and so is `File(...)` on
 anything but a `Path`. No output holds a `Path`, so every path a workflow gets
-has passed the access check. The metadata let a picker offer only the files
-that fit.
+has passed the access check. The metadata, with the role, let a picker offer the files
+that suit the field.
 
 **References to outputs fill groups.** The `T` of `Referenced[T]` is a group,
 and a reference to an output fits the field by the class of `T`. A field typed
@@ -292,7 +294,7 @@ are resolved:
 |---|---|---|
 | Where | a field typed `Referenced[T]`, at any depth, or a member of a union there | a file field, at any depth, or a member of a union there |
 | Fills | a whole group, `T`, which holds no `Path` | a file field |
-| Fits if | the output's class is `T` or a subclass of it | the file's metadata have the marker's metadata |
+| Fits if | the output's class is `T` or a subclass of it | the file's metadata have the marker's metadata, but for the role |
 | Resolved | in the call phase, to the stored output | in the request phase, to the file's identity; the params model holds its local path |
 | Found in a record | by its `@ref` key, without the spec | the same |
 | Access check at submission | records the client may read | files the proposal may read |
@@ -563,7 +565,8 @@ params schema is the JSON schema of the request type, so it gives each
 field the sources it takes, and a UI renders the widget of each field, as the
 table above has it. The schema of a file field holds the marker's metadata,
 `{'$ref': '#/$defs/FileRef', 'metadata': {...}}`, so that a remote picker
-offers only the files that fit. `SerializedWorkflowSpec` states the sources
+offers those files, and at a raw file field with a role also the runs without a
+role. `SerializedWorkflowSpec` states the sources
 and the widget of each.
 
 There is deliberately no inverse. Validators do not survive JSON Schema, so a

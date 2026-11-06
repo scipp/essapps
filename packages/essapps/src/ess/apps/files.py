@@ -14,7 +14,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from ess.spec import FileRef
+from ess.spec import File, FileRef
 
 
 def file(
@@ -48,17 +48,31 @@ class Selector:
     A file has a kind, such as raw, derived, mask, or calibration; a
     selector matches raw files unless it names another kind. A run has a
     role, such as sample or background (see :class:`~ess.spec.File` for
-    the keys and their values). Each given value must equal the file's.
-
-    A file fits a file field when the selector of the marker's metadata
-    matches it, ``Selector(**File(kind='mask').metadata)``, so a form lists
-    for a field only the files the backend accepts there::
+    the keys and their values). Each given value must equal the file's::
 
         client.files.list(Selector(role='sample'))
     """
 
     def __init__(self, kind: str = 'raw', **fields: Any) -> None:
         self._fields = tuple(sorted({'kind': kind, **fields}.items()))
+
+    @classmethod
+    def of(cls, marker: File) -> Selector:
+        """
+        The files that may fill a field with ``marker``: those with each key and
+        value of its metadata, but for raw files not ``role``. The backend refuses
+        any other file.
+
+        The role of a run says what the run is used for, which a request states by
+        the field it fills: one run can be the transmission run of a can and the
+        empty beam. So at a raw file field the role only narrows what a form offers
+        (see :meth:`ess.apps.Listing.files`). At a file of another kind, such as a
+        calibration, a role says what the file holds, as a kind does.
+        """
+        metadata = marker.metadata
+        if metadata['kind'] == 'raw':
+            metadata.pop('role', None)
+        return cls(**metadata)
 
     @property
     def fields(self) -> dict[str, Any]:
