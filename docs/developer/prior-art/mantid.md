@@ -65,7 +65,7 @@ Either change resets the group, so it is stitched again ([Group.cpp L195-L205](h
 FIA's INTER rule attaches every file in the run's directory with the same title prefix to the new run's job ([inter_rules.py L32-L44](https://github.com/fiaisis/run-detection/blob/881dacdc3c07d5ee1cbf12d49843d5a8fe7fe397/rundetection/rules/inter_rules.py#L32-L44)), but FIA's INTER script only raises "script not implemented" ([INTER/reduce.py](https://github.com/fiaisis/autoreduction-scripts/blob/de9e1bfd96e67a6b216d7ecd8e8e3f0b868a7b5b/INTER/reduce.py)).
 For TOSCA, OSIRIS and IRIS, a rule walks back over consecutive run numbers with similar titles and adds a summed job per arrival ([common_rules.py L69-L127](https://github.com/fiaisis/run-detection/blob/881dacdc3c07d5ee1cbf12d49843d5a8fe7fe397/rundetection/rules/common_rules.py#L69-L127)).
 For SANS, a scatter run looks for its transmission run by title and a transmission run for its scatter run, so whichever arrives last starts the job ([sans_rules.py L275-L315](https://github.com/fiaisis/run-detection/blob/881dacdc3c07d5ee1cbf12d49843d5a8fe7fe397/rundetection/rules/sans_rules.py#L275-L315)).
-For us: `Rule(series=)` reduces every run of the series at each arrival, as FIA's INTER rule would (scipp/essapps#24).
+For us: a rule's function can reduce every run of the series at each arrival, as FIA's INTER rule would ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
 Mantid's cost per arrival is one row reduction plus one stitch; with our core that is one record per angle and a stitch request that references the persisted per-angle outputs.
 Whether ESS automatic reduction should stitch as angles arrive is Open ([reflectometry](../../requirements/reflectometry.md#open)).
 

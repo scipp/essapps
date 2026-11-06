@@ -205,16 +205,21 @@ first = measure(2, [5.0, 6.0], role='sample')
 can_3 = measure(3, [2.0, 2.0], role='background')
 second = measure(4, [6.0, 9.0], role='sample')
 template = Template(IOFQ_CAN, params={'normalization': None}, blanks=('sample', 'can'))
-cans = Lookup({'can': LastBefore(Selector(role='background'))})   # the latest can measured before the run
+cans = client.files.list(Selector(role='background'))             # in the order measured
 
-requests = apply(template, [first, second], client.files, at='sample', member_field='run', lookup=cans)
+def can_before(sample):                                           # the latest can measured before the run
+    run = client.files.metadata(sample)['run']
+    return [c for c in cans if client.files.metadata(c)['run'] < run][-1]
+
+requests = {str(client.files.metadata(sample)['run']): template.fill(params={'sample': sample, 'can': can_before(sample)})
+            for sample in (first, second)}
 reduced = list(client.compute(requests, label='iofq').values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [[4.0, 5.0], [4.0, 7.0]]
 assert [r.request.files() for r in reduced] == [[first, can_1], [second, can_3]]
 ```
 
-Each file fills `sample`, the one blank the lookup leaves.
+The application pairs each sample with its can; here, by run number.
 
 ### S8. Trace a result to raw data
 
@@ -606,8 +611,14 @@ Actor: reflectometry user during a beamtime. Goal: after each angle, the stitche
 ```python
 reference = measure(1, [1.0, 1.0], role='reference')
 template = Template(STITCH, params={'reference': reference}, blanks=('runs',))
-rule = Rule('reflectivity', template, selector=Selector(role='sample'), series='sample',
-            at='runs', label='reflectivity')
+
+def stitch(client, run):                                       # all angles of the sample so far, in run order
+    sample = client.files.metadata(run)['sample']
+    angles = client.files.list(Selector(role='sample', sample=sample))
+    angles.sort(key=lambda ref: client.files.metadata(ref)['run'])
+    return client.submit(template.fill(params={'runs': angles}), label='reflectivity', member=sample, persist=True)
+
+rule = Rule('reflectivity', stitch, selector=Selector(role='sample'), at='runs', label='reflectivity')
 loop = TriggerLoop(client, rules=[rule])
 
 r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
@@ -626,21 +637,26 @@ assert user.output(latest, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 
 
 Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether a rule pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
 
-The trigger loop persists what it submits, every output by default, so any client of the proposal reads each curve ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
+The function persists what it submits, so any client of the proposal reads each curve ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
 
 ### E2. Automatic reduction goes quiet
 
 Actor: instrument scientist. Goal: after an upgrade removed the template's spec version, see why nothing is reduced.
 
 ```python
-rule = Rule('auto-iofq', Template(IOFQ, params={'normalization': None}, blanks=('sample',)), selector=Selector(role='sample'),
-            at='sample', label='iofq')
+def iofq_rule(template, selector):
+    def submit(client, run):
+        member = str(client.files.metadata(run)['run'])
+        return client.submit(template.fill(params={'sample': run}), label='iofq', member=member, persist=True)
+    return Rule('auto-iofq', submit, selector=selector, at='sample', label='iofq')
+
+rule = iofq_rule(Template(IOFQ, params={'normalization': None}, blanks=('sample',)), Selector(role='sample'))
 upgraded = upgrade(specs=[IOFQ_V2])                            # version 1 is gone
 loop = TriggerLoop(upgraded, rules=[rule])
-measure(1, [1.0, 1.0], role='sample')
+run = measure(1, [1.0, 1.0], role='sample')
 
 assert loop.step() == []
-assert loop.status(rule).reason == '1: unknown spec sans-iofq/v1'   # member 1
+assert loop.status(rule).reason == f'skipped {run.file}: unknown spec sans-iofq/v1'
 ```
 
 ### E3. Reduction of our own output
@@ -648,8 +664,7 @@ assert loop.status(rule).reason == '1: unknown spec sans-iofq/v1'   # member 1
 Actor: none; a failure mode. Goal: a published result that SciCat lists as a dataset does not trigger the rule.
 
 ```python
-rule = Rule('auto-iofq', Template(IOFQ, params={'normalization': None}, blanks=('sample',)), selector=Selector(),   # every raw file
-            at='sample', label='iofq')
+rule = iofq_rule(Template(IOFQ, params={'normalization': None}, blanks=('sample',)), Selector())   # every raw file
 loop = TriggerLoop(client, rules=[rule])
 measure(1, [1.0, 2.0, 3.0, 4.0])
 (reduced,) = loop.step()
@@ -666,15 +681,14 @@ A published entry is a file of kind `'derived'`, and a selector matches only raw
 Actor: instrument scientist. Goal: new runs use the improved template; earlier results stay; the results made before the improvement can be found.
 
 ```python
-rule = Rule('auto-iofq', Template(IOFQ, params={'normalization': None}, blanks=('sample',)), selector=Selector(role='sample'),
-            at='sample', label='iofq')
+samples = Selector(role='sample')
+template = Template(IOFQ, params={'normalization': None}, blanks=('sample',))
 first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
-(before,) = TriggerLoop(client, rules=[rule]).step()
+(before,) = TriggerLoop(client, rules=[iofq_rule(template, samples)]).step()
 
-improved = replace(rule, template=replace(rule.template,
-                                 params={'reduction': Reduction(threshold=1.5), 'normalization': None}))
+improved = Template(IOFQ, params={'reduction': Reduction(threshold=1.5), 'normalization': None}, blanks=('sample',))
 second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
-(after,) = TriggerLoop(client, rules=[improved]).step()
+(after,) = TriggerLoop(client, rules=[iofq_rule(improved, samples)]).step()
 
 user = connect()                                                # any client of the proposal
 assert after.request.files() == [second]                        # run 1 is not reduced again

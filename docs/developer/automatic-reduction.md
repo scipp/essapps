@@ -8,82 +8,100 @@ Its stories are S7, C1, D1 to D6, and E1 to E4 in [user-stories.md](user-stories
 
 `apply` fills a template for each file and returns the requests keyed by member, the value of a metadata field (by default the run number).
 It reads metadata through `client.files` and builds plain data; it submits nothing.
-The examples of batches, lookups, and rules reduce transmission runs with `TRANSMISSION`, whose parameters `run` and `empty_beam` are file fields, each a run's file, written `file(...)`, and whose output is `transmission: ComputedTransmission`.
+The examples reduce samples with `IOFQ`, whose parameters `sample` and `transmission` are file fields, and find each sample's beam centre with `BEAM_CENTRE`.
 
 ```python
-template = Template(TRANSMISSION, params={'empty_beam': file(run=60336)}, blanks=('run',))
-requests = apply(template, runs, client.files, at='run', member_field='sample')
+template = Template(IOFQ, params={'can': file(run=60393), ...}, blanks=('sample',))
+requests = apply(template, samples, client.files, at='sample', member_field='sample_name')
 records = client.submit(requests, label='batch', persist=True)
+```
+
+Each file fills the template's one blank, `at`. `apply` refuses two files with one member, since one would replace the other.
+A batch whose parameters differ per file, such as the transmission run of each sample, is a dict of requests, each with its own params:
+
+```python
+requests = {row['name']: template.fill(params={'sample': file(run=row['sample']),
+                                               'transmission': file(run=row['transmission'])})
+            for row in table}
 ```
 
 A batch application submits with `persist=`, so its client keeps nothing, and the results are read later from the store ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 
-A lookup fills further blanks per file. `LastBefore(selector)` takes the matching file with the highest run number below the filled file's.
-Each file fills the one blank the lookup leaves, `at`, a file parameter: the file is its value, and `apply` fills no other parameters.
-A lookup names the blank it fills the same way, such as `Lookup({'empty_beam': LastBefore(...)})`.
-So each file that a rule or a lookup finds needs a parameter of its own in the spec, such as `run` and `empty_beam`.
-A batch whose parameters differ per file, such as the thickness of each sample, is a list of requests, each with its own params.
-
-```python
-empty_beams = Lookup({'empty_beam': LastBefore(Selector(role='empty_beam'))})
-requests = apply(Template(TRANSMISSION, blanks=('run', 'empty_beam')), runs, client.files, at='run',
-                 lookup=empty_beams)
-```
-
 ## Rules
 
-A rule is plain data: a name, a template, a selector, a label, the blank `at`, and optionally a `member_field`, a `lookup`, a `series`, and `persist`, the outputs it persists, every output by default.
-A record that the template references, such as a beam centre, must be persisted, since the trigger loop's client reads it.
+The framework knows no technique: which runs belong together, and which requests one new file needs, is for the application to say.
+A rule says it with a function:
 
 ```python
-rule = Rule('auto-transmission', Template(TRANSMISSION, blanks=('run', 'empty_beam')),
-            selector=Selector(role='transmission'), label='transmission', at='run', lookup=empty_beams)
+def reduce_sample(client: Client, sample: FileRef) -> Record:
+    fields = client.files.metadata(sample)
+    found = client.files.list(Selector(run_type='trans', run_label=fields['run_label']))
+    if not found:
+        raise LookupError('no transmission run yet')          # try again at the next step
+    member = str(fields['run'])
+    centre = next((r for r in reversed(client.records(label='centre'))
+                   if r.member == member and client.status(r) not in (Status.FAILED, Status.CANCELLED)),
+                  None)                                        # from a call that stopped half-way
+    if centre is None:
+        centre = client.submit(BEAM_CENTRE, params={'sample': sample, ...},
+                               label='centre', member=member, persist=True)
+    return client.submit(IOFQ, params={'sample': sample, 'transmission': found[-1],
+                                       'beam_centre': centre.ref('centre'), ...},
+                         label='iofq', member=member, persist=True)
+
+rule = Rule('iofq', reduce_sample, selector=Selector(run_type='sans'), label='iofq', at='sample')
 ```
 
-With `series='sample'`, a request takes every matching file with the same `sample` so far, in run order, and `sample` is its member.
-The template's blank `at='runs'` is a table of files, its rows the files, `[file, ...]`, and the lookup is not used.
-Each arrival of an angle submits one plain request that stitches all angles of that sample so far.
+`run_type` and `run_label` stand in for what ESS files will say about a run, which is not settled ([data](../requirements/data.md)). A selector takes any metadata field, so only the rule's code and the file source name them.
 
-```python
-reference = file(run=500)                # the reference run, which divides each angle
-rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
-            selector=Selector(role='sample'), series='sample', at='runs', label='reflectivity')
-```
+The function returns the record that *settles* the file: one under the rule's label that holds the file at the parameter `at`, or in a row of it if `at` is a list.
+The loop checks this and raises `TypeError` otherwise, since it would call the function for that file again at every step.
 
-A rule whose template leaves no single blank for a file, or whose `at` is not that blank, is refused when it is made.
-`TriggerLoop` refuses a rule whose files could not fill their blanks: each blank it fills, `at` and the lookup's, is a file parameter, a list of one if and only if the rule has `series`, and each selector names each key and value of the marker's metadata but a raw file's role, so that every file it lists may fill the field.
-`apply` has no spec at hand, so the backend refuses its requests instead.
+The function persists what it submits. The loop's client should keep nothing, and a reference must stay readable once the loop's process has restarted.
 
-Templates and rules are frozen dataclasses; `dataclasses.replace` changes them.
-The core keeps no store of them, and records do not name them: a record's request says everything that determines its result.
+A function may run again for a file: when a step stopped before the settling record, or when that record was refused. So it submits the settling record last, and reuses what an earlier call submitted, as with the centre above.
+It does not reuse a failed or cancelled record, since a reference to one is refused, and the file would never settle. With a new centre, the reduction is accepted while the centre is pending, then fails with it, and that failed record settles the file.
+
+The function does not wait for a record or read an output. The loop calls one function at a time, so a wait holds up every rule, and a request can reference a pending record instead.
+
+Rules are frozen dataclasses. The core keeps no store of them, and records do not name them: a record's request says everything that determines its result.
 
 ## The trigger loop
 
 The trigger loop is the controller for rules. It runs in a server of its own or in a notebook, never in the backend.
-It finds new files through `client.files`, and submits with `persist=` the outputs each rule names, so its client keeps nothing.
+It finds new files through `client.files`, and calls each rule's function for each of them.
 
 ```python
 loop = TriggerLoop(client, rules=[rule])
-loop.step()                  # submits what arrived since the last step, returns the records
+loop.step()                  # calls the rules for what arrived since the last step, returns the settling records
 loop.status(rule).reason     # why the rule submitted nothing or skipped a file
 loop.run()                   # steps forever
 ```
 
-The loop keeps nothing that the records do not hold: it reads them from `client.changes`, from the start when it starts, and keeps the files it has seen. A rule has handled a file when a record under the rule's label holds it at the blank `at`, or for a series in a row of that blank table, `runs[i]`, so a restarted or replaced loop does not reduce a file again, and a file that arrives again keeps its identity and is not reduced twice.
-A file that the record stores at another field, such as an empty-beam run that a lookup fills, does not count.
+The loop keeps nothing that the records do not hold: it reads them from `client.changes`, from the start when it starts, and keeps the files it has seen. A rule has handled a file when a record under the rule's label holds it at the parameter `at`, or in a row of it, so a restarted or replaced loop does not reduce a file again, and a file that arrives again keeps its identity and is not reduced twice.
+A file that the record stores at another field, such as an empty-beam run, does not count.
 This holds while the proposal's history is kept. A running loop keeps it, since a proposal with an open client is not idle ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
+
+A record can settle more files than the one it was submitted for. A function that stitches all angles of a sample so far settles every new angle of that sample in one call:
+
+```python
+def stitch(client: Client, run: FileRef) -> Record:
+    sample = client.files.metadata(run)['sample']
+    angles = client.files.list(Selector(role='sample', sample=sample))
+    angles.sort(key=lambda ref: client.files.metadata(ref)['run'])
+    return client.submit(template.fill(params={'runs': angles}),
+                         label='reflectivity', member=sample, persist=True)
+```
 
 The label belongs to the rule: any record under it counts, whoever submitted it and whether or not it failed.
 A record that a notebook submits under a rule's label stops the rule from reducing the files it names, so manual work uses labels of its own.
 A failed record counts so that the loop does not retry a failed file, which could fail again at every step; running it again is the user's decision (D2).
 
-A file whose request cannot be made, such as a transmission run with no empty-beam run measured before it, is skipped: the rule submits the other new files, and its status names the skipped one and why.
-No record names the skipped file, so the next step tries it again, for example once an empty-beam run whose file arrived late is listed.
-A rule whose requests are refused, such as for an unknown spec version, submits nothing.
-`apply` raises instead of skipping, since a user who builds a batch wants to see the error.
+A file whose function raises `LookupError` or `ValueError`, or whose request is refused with `SubmitError`, is skipped: the rule goes on with its other new files, and its status names each skipped file and why.
+No record names the skipped file, so the next step tries it again, for example once its transmission run has arrived.
+Any other exception stops the loop, as does `RecordFailed` from a function that reads an output.
 
 ## Open
 
 - Adding, replacing, and listing rules in a running trigger loop.
-- A file that a lookup finds measured after the filled one, such as an empty-beam run measured after the transmission run, and other lookups than `LastBefore`.
 - A rule that pushes into an accumulator, for a sum that grows with each file (D7 as a rule). The loop's client would keep the accumulator, the only thing it keeps, and freeze it with `persist=` once the sum is complete.
