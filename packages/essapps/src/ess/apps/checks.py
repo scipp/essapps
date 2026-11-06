@@ -204,7 +204,7 @@ class Checks:
         metadata = self._files.metadata(identity)
         if not readable(metadata, proposal):
             raise ValueError(f'file {ref} belongs to proposal {metadata["proposal"]}')
-        if not (selector := Selector(**marker.metadata)).matches(metadata):
+        if not (selector := Selector.of(marker)).matches(metadata):
             raise ValueError(
                 f'file {ref} does not fit the field, which takes files with '
                 f'{selector.fields}'

@@ -31,15 +31,16 @@ class Session:
 
 @pytest.fixture
 def tutorial(sample: Path, mask_file: Path, direct_beam: Path) -> FolderFiles:
-    def run(number: int, role: str) -> dict[str, object]:
-        return {'file': f'{number}-2022-02-28_2215.nxs', 'run': number, 'role': role}
+    def run(number: int, role: str | None = None) -> dict[str, object]:
+        row = {'file': f'{number}-2022-02-28_2215.nxs', 'run': number}
+        return row if role is None else row | {'role': role}
 
     table = [
         run(60339, 'sample'),
         run(60387, 'sample'),
         run(60386, 'transmission'),
         run(60393, 'background'),
-        run(60392, 'transmission'),
+        run(60392),  # the can's transmission run and the empty beam
         {'file': mask_file.name, 'kind': 'mask'},
         {'file': direct_beam.name, 'kind': 'calibration', 'role': 'direct_beam'},
     ]

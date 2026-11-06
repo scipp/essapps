@@ -177,7 +177,7 @@ def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
     - :data:`FILE`: a :class:`~ess.spec.refs.FileRef`, resolved by the
       resolver of files given the field's marker (see :data:`Files`), with
       the marker's metadata under ``metadata`` in the JSON schema, which say
-      which files fit. The other metadata of the field are of its ``Path``,
+      which files to offer. The other metadata of the field are of its ``Path``,
       so the file has none of them.
 
     Of the groups that ``Referenced[...]`` marks:

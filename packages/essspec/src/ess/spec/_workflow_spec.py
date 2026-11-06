@@ -254,7 +254,9 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     output (see :mod:`ess.spec.refs`), with the name of the type it must fit
     under ``dataType``, as the outputs schema names the type of each output.
     A file is the ``@ref`` object of a file, with the marker's metadata under
-    ``metadata``, which say which files fit. The schemas of the parameter
+    ``metadata``, which say which files to offer: those with each key and value,
+    and a run without a role at a raw file field with a role, which the backend
+    accepts with any role. The schemas of the parameter
     ``reduction``, a parameter ``centre`` typed ``BeamCentre |
     Referenced[BeamCentre]``, a file field ``mask`` typed ``MaskFile``, the
     definition of a file, and the field ``Reduction.bins``::
@@ -477,7 +479,7 @@ def _constraint_text(constraint: Any) -> str:
 _FILES_UNION = (
     'a field takes one kind of file, so a file field is in a union only with '
     'members Referenced[...] and None; the marker of one file field names the '
-    'metadata that each file that fits has'
+    'metadata of the files for the field'
 )
 
 

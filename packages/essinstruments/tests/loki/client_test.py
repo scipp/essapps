@@ -23,7 +23,8 @@ def client(sample: Path, mask_file: Path, direct_beam: Path) -> Iterator[Client]
         {'file': '60250-2022-02-28_2215.nxs', 'run': 60250, 'role': 'sample'},
         {'file': '60393-2022-02-28_2215.nxs', 'run': 60393, 'role': 'background'},
         {'file': '60394-2022-02-28_2215.nxs', 'run': 60394, 'role': 'transmission'},
-        {'file': '60392-2022-02-28_2215.nxs', 'run': 60392, 'role': 'transmission'},
+        # The can's transmission run and the empty beam, so a picker offers it for both.
+        {'file': '60392-2022-02-28_2215.nxs', 'run': 60392},
         {'file': mask_file.name, 'kind': 'mask'},
         {'file': direct_beam.name, 'kind': 'calibration', 'role': 'direct_beam'},
     ]
@@ -127,7 +128,7 @@ def test_batch_through_a_stage_with_one_can(
     )
 
 
-def test_a_run_of_another_role_is_refused(
+def test_a_file_of_another_kind_is_refused(
     client: Client, mask_file: Path, iofq_settings: dict[str, object]
 ) -> None:
     masks = client.submit(
@@ -139,7 +140,7 @@ def test_a_run_of_another_role_is_refused(
             IOFQ,
             params={
                 **iofq_settings,
-                'sample': file(run=60393),
+                'sample': file(path=mask_file),
                 'sample_transmission': file(run=60394),
                 'masks': masks.ref('masks'),
                 'beam_centre': {'x': 0.0, 'y': 0.0, 'z': 1.0},

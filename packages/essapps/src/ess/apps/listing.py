@@ -20,7 +20,7 @@ class Listing:
     """
     What a request of ``client`` may name now, and the state of the client's
     records, looked up once for a refresh of any number of views: the files
-    that fit each file field and the client's records, each by a label, and the
+    to offer for each file field and the client's records, each by a label, and the
     outputs a request may reference. ``cursor`` is the position in the client's
     changes (:meth:`~ess.apps.Client.changes`) that the listing is up to date
     with. Given the ``previous`` listing, it reads only the records that changed
@@ -46,7 +46,8 @@ class Listing:
     def __init__(self, client: Client, previous: Listing | None = None) -> None:
         self._client = client
         self._metadata: dict[FileRef, dict[str, Any]] = {}
-        self._files: dict[str, dict[str, FileRef]] = {}
+        self._listed: dict[str, list[FileRef]] = {}
+        self._files: dict[File, dict[str, FileRef]] = {}
         changes = client.changes(after=0 if previous is None else previous.cursor)
         self.cursor = changes.cursor
         changed = client.records(ids=changes.records)
@@ -107,21 +108,30 @@ class Listing:
 
     def files(self, marker: File) -> dict[str, FileRef]:
         """
-        The files that fit a file field with ``marker``, each by a label, in
-        the order measured.
+        The files to offer for a file field with ``marker``, each by a label, in
+        the order measured: those that may fill it (:meth:`Selector.of`), but not
+        a run with another role than the field's. A run without a role is offered
+        for every role.
         """
-        selector = Selector(**marker.metadata)
-        if (key := repr(selector)) not in self._files:
+        if marker not in self._files:
+            wanted = marker.metadata.get('role')
+            self._files[marker] = {}
+            for ref in self._list(Selector.of(marker)):
+                fields = self._known(ref)
+                if wanted is None or fields.get('role', wanted) == wanted:
+                    role = f' ({fields["role"]})' if 'role' in fields else ''
+                    self._files[marker][_file_label(ref, fields) + role] = ref
+        return self._files[marker]
+
+    def _list(self, selector: Selector) -> list[FileRef]:
+        """The files of ``selector``, looked up once, and their metadata in one call."""
+        if (key := repr(selector)) not in self._listed:
             listed = self._client.files.list(selector)
             unknown = [ref for ref in listed if ref not in self._metadata]
             found = self._client.files.metadata(unknown)
             self._metadata |= dict(zip(unknown, found, strict=True))
-            self._files[key] = {}
-            for ref in listed:
-                fields = self._known(ref)
-                role = f' ({fields["role"]})' if 'role' in fields else ''
-                self._files[key][_file_label(ref, fields) + role] = ref
-        return self._files[key]
+            self._listed[key] = listed
+        return self._listed[key]
 
     def _known(self, ref: FileRef) -> dict[str, Any]:
         """The metadata of a file, looked up once."""
