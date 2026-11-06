@@ -181,10 +181,10 @@ The record holds each file by the identity that the backend resolved, as in the 
 ## Files
 
 A *file field* is typed `Annotated[Path, File(**metadata)]`.
-The marker `File` holds the metadata that a fitting file has; each value is a string, a number, or a bool.
+The marker `File` holds the metadata of the files for the field; each value is a string, a number, or a bool.
 
 - `kind`, what the file holds: `'raw'` (the file of a run, the default), `'mask'`, or another kind. A file of another kind is refused, and so is a file that lacks any other key of the marker, such as `instrument='loki'`.
-- `role`, what the field uses a run for: the run types of `ess.reduce` and the technique packages in snake case, such as `'sample'`, `'background'` (a SANS can), `'transmission'`, `'empty_beam'`, `'vanadium'`, `'reference'`. A role is never refused, since the request states the use by the field it fills, and one run can have several uses: the transmission run of a can can also be the empty beam. A picker offers the runs of the field's role and the runs without a role.
+- `role`, what the field uses a run for: the run types of `ess.reduce` and the technique packages in snake case, such as `'sample'`, `'background'` (a SANS can), `'transmission'`, `'empty_beam'`, `'vanadium'`, `'reference'`. A role is never refused, since the request states the use by the field it fills, and one run can have several uses: the transmission run of a can can also be the empty beam. A picker offers the runs of the field's role and the runs without a role. At a file of another kind, a role says what the file holds, such as `'direct_beam'` of a calibration, and is checked like any other key.
 
 `ess.spec` provides the common types, so that each value is spelled once:
 

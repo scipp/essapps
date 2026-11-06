@@ -60,14 +60,19 @@ class Selector:
     def of(cls, marker: File) -> Selector:
         """
         The files that may fill a field with ``marker``: those with each key and
-        value of its metadata but ``role``. The backend refuses any other file.
+        value of its metadata, but for raw files not ``role``. The backend refuses
+        any other file.
 
-        A role says what a run is used for, which a request states by the field it
-        fills: one run can be the transmission run of a can and the empty beam. So
-        the role of a field only narrows what a form offers (see
-        :meth:`ess.apps.Listing.files`).
+        The role of a run says what the run is used for, which a request states by
+        the field it fills: one run can be the transmission run of a can and the
+        empty beam. So at a raw file field the role only narrows what a form offers
+        (see :meth:`ess.apps.Listing.files`). At a file of another kind, such as a
+        calibration, a role says what the file holds, as a kind does.
         """
-        return cls(**{k: v for k, v in marker.metadata.items() if k != 'role'})
+        metadata = marker.metadata
+        if metadata['kind'] == 'raw':
+            metadata.pop('role', None)
+        return cls(**metadata)
 
     @property
     def fields(self) -> dict[str, Any]:

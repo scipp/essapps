@@ -211,6 +211,32 @@ def test_a_listing_reads_the_metadata_of_its_files_in_one_call(
     backend.close()
 
 
+def test_a_listing_lists_the_runs_of_several_roles_once(files: FakeFiles) -> None:
+    runs = [files.measure(n, {'counts': 1.0}) for n in (101, 102)]
+    backend = Backend(files, [function_binding(FIND, find)])
+    counting = CountingMetadata(backend)
+    client = Client(counting, proposal='p1', submitter='anna')
+    listing = Listing(client)
+
+    for role in ('sample', 'background'):
+        listing.files(File(role=role))
+
+    assert counting.calls == [runs]
+    backend.close()
+
+
+def test_a_role_of_another_kind_selects_what_the_file_holds(files: FakeFiles) -> None:
+    beam = files.measure(1, {'counts': 1.0}, kind='calibration', role='direct_beam')
+    files.measure(2, {'counts': 1.0}, kind='calibration', role='geometry')
+    backend = Backend(files, [function_binding(FIND, find)])
+    client = Client(backend, proposal='p1', submitter='anna')
+
+    listed = Listing(client).files(File(kind='calibration', role='direct_beam'))
+
+    assert list(listed.values()) == [beam]
+    backend.close()
+
+
 def test_files_of_a_marker_with_a_role_are_those_of_the_role_and_those_without_one(
     client: Client, files: FakeFiles
 ) -> None:

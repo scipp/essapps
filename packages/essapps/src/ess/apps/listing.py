@@ -46,6 +46,7 @@ class Listing:
     def __init__(self, client: Client, previous: Listing | None = None) -> None:
         self._client = client
         self._metadata: dict[FileRef, dict[str, Any]] = {}
+        self._listed: dict[str, list[FileRef]] = {}
         self._files: dict[File, dict[str, FileRef]] = {}
         changes = client.changes(after=0 if previous is None else previous.cursor)
         self.cursor = changes.cursor
@@ -113,18 +114,24 @@ class Listing:
         for every role.
         """
         if marker not in self._files:
-            listed = self._client.files.list(Selector.of(marker))
-            unknown = [ref for ref in listed if ref not in self._metadata]
-            found = self._client.files.metadata(unknown)
-            self._metadata |= dict(zip(unknown, found, strict=True))
             wanted = marker.metadata.get('role')
             self._files[marker] = {}
-            for ref in listed:
+            for ref in self._list(Selector.of(marker)):
                 fields = self._known(ref)
                 if wanted is None or fields.get('role', wanted) == wanted:
                     role = f' ({fields["role"]})' if 'role' in fields else ''
                     self._files[marker][_file_label(ref, fields) + role] = ref
         return self._files[marker]
+
+    def _list(self, selector: Selector) -> list[FileRef]:
+        """The files of ``selector``, looked up once, and their metadata in one call."""
+        if (key := repr(selector)) not in self._listed:
+            listed = self._client.files.list(selector)
+            unknown = [ref for ref in listed if ref not in self._metadata]
+            found = self._client.files.metadata(unknown)
+            self._metadata |= dict(zip(unknown, found, strict=True))
+            self._listed[key] = listed
+        return self._listed[key]
 
     def _known(self, ref: FileRef) -> dict[str, Any]:
         """The metadata of a file, looked up once."""

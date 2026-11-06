@@ -191,8 +191,8 @@ def _check(rule: Rule, params: type[BaseModel]) -> None:
     its lookup, is a file parameter, a file field or a list of one (see
     :class:`~ess.spec.File`), a list one if and only if the rule has
     ``series``, and the rule's or the lookup's selector names each key and
-    value of the marker's metadata, so that every file it lists fits the
-    field.
+    value of :meth:`Selector.of` the marker, so that every file it lists may
+    fill the field.
     """
     selectors = {rule.at: rule.selector}
     if rule.lookup is not None and rule.series is None:

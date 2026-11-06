@@ -51,9 +51,9 @@ class File:
     The marker of a *file field*, ``Annotated[Path, File(**metadata)]``.
 
     A file fits the field if its metadata have each key and value of the
-    marker's :attr:`metadata`, but ``role``, which only narrows what a picker
-    offers. ``packages/essspec/docs/params.md`` (Files) names the keys and the
-    rules of a file field.
+    marker's :attr:`metadata`, but for a raw file not ``role``, which only narrows
+    what a picker offers. ``packages/essspec/docs/params.md`` (Files) names the
+    keys and the rules of a file field.
 
     Validated with the context ``{'paths': {identity: local path}}``, as the
     backend validates a request, the marker replaces the stored form of a
@@ -68,8 +68,8 @@ class File:
     kind:
         What the file holds, such as ``'raw'``, the file of a run.
     **metadata:
-        Further metadata that a fitting file has, or the ``role``, such as
-        ``'sample'``, of the runs a picker offers.
+        Further metadata that a fitting file has, or the ``role``: of the runs a
+        picker offers, such as ``'sample'``, or what a file of another kind holds.
 
     Raises
     ------
@@ -90,7 +90,7 @@ class File:
 
     @property
     def metadata(self) -> dict[str, Any]:
-        """The metadata that a file must have to fill the field."""
+        """The metadata of the files for the field; see the class for the rules."""
         return dict(self._metadata)
 
     def __eq__(self, other: object) -> bool:

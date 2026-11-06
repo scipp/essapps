@@ -221,10 +221,10 @@ A value of several parts is a group: `range: WavelengthRange`, not
 
 **A file fills a file field.** A field that takes a file, at any depth, is a
 *file field*, typed `Annotated[Path, File(**metadata)]`. The marker
-`ess.spec.File` holds the metadata that a fitting file has, each a string, a
-number, or a bool; `kind` is `'raw'` unless given. A `role` is not checked: it
-says what the field uses a run for, which the request states by filling the field,
-and one run can have several uses. `ess.spec` provides the
+`ess.spec.File` holds the metadata of the files for the field, each a string, a
+number, or a bool; `kind` is `'raw'` unless given. A `role` at a raw file field is
+not checked: it says what the field uses a run for, which the request states by
+filling the field, and one run can have several uses. `ess.spec` provides the
 types of the common kinds, so that each kind is spelled once; a spec writes
 another kind by hand:
 
@@ -238,7 +238,7 @@ A request writes a file as `file(...)`, such as `file(run=60339)` or
 `file(path=...)`. The backend resolves it to the file's identity in the
 request phase, given the marker, so that the file source checks that the file
 is known, that the request's proposal may read it, and that its metadata fit
-the marker's, but for the role. The record holds the identity. A file's identity and local path
+the marker's, but for the role of a raw file. The record holds the identity. A file's identity and local path
 are therefore known when the request arrives, as a value typed in is, so a
 group that holds a file is validated then, and its validators see the path.
 The params model holds the local path, a `Path`: a workflow sees paths only,
@@ -565,7 +565,8 @@ params schema is the JSON schema of the request type, so it gives each
 field the sources it takes, and a UI renders the widget of each field, as the
 table above has it. The schema of a file field holds the marker's metadata,
 `{'$ref': '#/$defs/FileRef', 'metadata': {...}}`, so that a remote picker
-offers only the files that fit. `SerializedWorkflowSpec` states the sources
+offers those files, and at a raw file field with a role also the runs without a
+role. `SerializedWorkflowSpec` states the sources
 and the widget of each.
 
 There is deliberately no inverse. Validators do not survive JSON Schema, so a

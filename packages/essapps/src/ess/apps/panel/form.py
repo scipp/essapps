@@ -121,7 +121,7 @@ def _widget(
 
     The type is read with :func:`ess.spec.field_types.split`, as the sources of its
     request type are (:func:`ess.spec.request_types.sources`). A scalar is an input
-    of its type, and a file field a picker of the files that fit it. Anything with
+    of its type, and a file field a picker of the files to offer. Anything with
     more than one way to give the value is a :class:`_Choice`: the alternatives of
     a union of groups, a group (one way, ``Given``, whose selector is hidden), a
     scalar or a file field with ``None`` or a ``Referenced[...]`` member
@@ -175,8 +175,8 @@ def _pick(widget: Any, value: Any) -> None:
 
 class _File:
     """
-    A file field: a picker of the files that fit its marker, labelled
-    ``label``. A
+    A file field: a picker of the files to offer for its marker
+    (:meth:`~ess.apps.Listing.files`), labelled ``label``. A
     file that the form is set to and the listing lacks stays picked,
     labelled by its reference as given, an identity or a name such as
     ``run:101``.

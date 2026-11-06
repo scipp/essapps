@@ -25,7 +25,7 @@ from ess.apps import (
     local,
 )
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows
-from ess.spec import Binding, RunFile, function_binding
+from ess.spec import Binding, File, RunFile, function_binding
 
 from . import toys
 
@@ -222,6 +222,14 @@ def test_a_file_of_another_kind_does_not_fill_a_field_of_a_role(
 
     with pytest.raises(SubmitError, match=r'^sample: file run:5 does not fit'):
         client.submit(toys.SAMPLE_RUN, params={'sample': file(run=5)})
+
+
+def test_only_the_role_of_a_raw_file_field_is_not_checked() -> None:
+    assert Selector.of(File(role='sample')).matches({'role': 'background'})
+    marker = File(kind='calibration', role='direct_beam')
+    assert Selector.of(marker).matches({'kind': 'calibration', 'role': 'direct_beam'})
+    assert not Selector.of(marker).matches({'kind': 'calibration', 'role': 'geometry'})
+    assert not Selector.of(marker).matches({'kind': 'calibration'})
 
 
 def test_a_corrected_role_shows_in_what_a_selector_lists(
