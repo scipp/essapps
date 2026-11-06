@@ -71,7 +71,7 @@ loop.run()                   # steps forever
 
 The loop keeps nothing that the records do not hold: it reads them from `client.changes`, from the start when it starts, and keeps the files it has seen. A rule has handled a file when a record under the rule's label holds it at the blank `at`, or for a series in a row of that blank table, `runs[i]`, so a restarted or replaced loop does not reduce a file again, and a file that arrives again keeps its identity and is not reduced twice.
 A file that the record stores at another field, such as an empty-beam run that a lookup fills, does not count.
-This holds while the proposal's history is kept. A running loop keeps it, since a proposal with an open client is not idle ([lifetimes.md](lifetimes.md)).
+This holds while the proposal's history is kept. A running loop keeps it, since a proposal with an open client is not idle ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
 
 The label belongs to the rule: any record under it counts, whoever submitted it and whether or not it failed.
 A record that a notebook submits under a rule's label stops the rule from reducing the files it names, so manual work uses labels of its own.

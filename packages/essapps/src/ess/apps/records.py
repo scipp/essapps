@@ -240,6 +240,18 @@ class Status(StrEnum):
     CANCELLED = 'cancelled'
 
 
+@dataclass(frozen=True)
+class RecordStatus:
+    """
+    The status of a record, and ``failure``: why it failed, or why the backend
+    cancelled it; ``None`` for a record pending, completed, or cancelled by a
+    client.
+    """
+
+    status: Status
+    failure: str | None = None
+
+
 class Record(BaseModel, frozen=True):
     """
     A request as the backend accepted it, with the names of its outputs but

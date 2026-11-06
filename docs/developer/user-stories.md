@@ -562,7 +562,7 @@ assert len(client.records(label='scan')) == 6
 
 The first records keep the default of version 1, so the change of default shows in the records.
 
-`before[0]` was persisted at submission, so its output can be read weeks later, until the proposal's history is dropped ([lifetimes.md](lifetimes.md)).
+`before[0]` was persisted at submission, so its output can be read weeks later, until the proposal's history is dropped ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
 
 ### D7. Rotation scan over three hundred angles
 
@@ -626,7 +626,7 @@ assert user.output(latest, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 
 
 Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether a rule pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
 
-The trigger loop persists what it submits, every output by default, so any client of the proposal reads each curve ([lifetimes.md](lifetimes.md)).
+The trigger loop persists what it submits, every output by default, so any client of the proposal reads each curve ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
 
 ### E2. Automatic reduction goes quiet
 

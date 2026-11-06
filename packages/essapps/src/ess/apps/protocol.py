@@ -1,0 +1,473 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""
+The seams of a backend: :class:`BackendProtocol` is what a client calls,
+:class:`FileSource` and :class:`Store` are what a backend calls.
+
+The protocol holds the rules that a client relies on. Anything that changes
+what happens belongs here, and the client only adapts: it reshapes, wraps IDs
+in objects, and adds shortcuts.
+
+Records and values
+------------------
+Records and output values have different lifetimes. A record is small and is
+kept with the proposal's history. History is dropped as a whole once the
+proposal has been idle for days to weeks: it has no open client and no pending
+record. An output value may be large and lives only while a *keeper* keeps it:
+
+- the client that asked for the record, until it releases the record or ends;
+- a pending request that reads it, until the request's workflow has returned;
+- a push, a stage, or an accumulator's template that references it, until the
+  binding has taken it, or the push, stage, or accumulator is released, stopped,
+  or dropped;
+- the store, for an output persisted at submission, until the proposal's
+  history is dropped.
+
+A record object or a reference keeps nothing. A value that is gone does not come
+back. Nothing is written to the store unless a submission or a freeze persists
+it, since the framework cannot tell which outputs are worth writing.
+
+A request may reference, and a client may read, only the output values it keeps,
+persisted outputs, files, and the current states of its own accumulators. So
+another client, even one in the same process, reads a value only once it is
+persisted. A pending record passes this rule, so whether a call is accepted does
+not depend on how far other work has run.
+
+Work that nothing would keep is cancelled: a pending record whose outputs have
+no keeper finishes as cancelled. Since a cancelled request keeps nothing it
+reads, this passes along a chain. A running workflow is not interrupted: its
+record is cancelled at once, and its outputs are dropped when it returns.
+
+In the user's process, values live in its memory. A hosted service limits the
+memory of each client, ends a client that makes no call within its lease, and
+gives each proposal a store. ``docs/developer/accumulators.md`` explains stages
+and accumulators, and ``packages/essspec/docs/params.md`` the terms of params.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Protocol
+
+from ess.spec import FileRef, WorkflowSpec
+
+from .files import Selector
+from .records import Changes, Record, RecordStatus, Request, Template
+
+Selection = Mapping[str, int | slice]
+"""Part of an array: an index or a slice for each dimension it names."""
+
+
+@dataclass(frozen=True)
+class Entry:
+    """
+    A request of a submission, and its label and member.
+
+    ``stage`` names the stage the request goes through, if any.
+    """
+
+    request: Request
+    label: str | None = None
+    member: str | None = None
+    stage: str | None = None
+
+
+class BackendProtocol(Protocol):
+    """
+    What a client calls on a backend, for many clients and proposals, named by ID.
+
+    Every call but :meth:`open_client` names its client, and the client's
+    proposal bounds every check and query: an ID that is not of the proposal
+    raises ``KeyError``. A call of a client that has ended raises
+    ``ClientEnded``. A call of a backend that has stopped, because it could not
+    log, raises ``RuntimeError``.
+
+    A call returns once it is checked and logged, and leaves reading data and
+    computing to the workers. Only :meth:`changes`, up to its timeout, and the
+    reads of values, :meth:`outputs`, :meth:`describe`, and
+    :meth:`accumulator_outputs`, wait for work to finish.
+    """
+
+    # Sessions
+
+    def open_client(self, proposal: str, submitter: str) -> str:
+        """A new client of the proposal, by ID; it keeps nothing yet."""
+        ...
+
+    def close_client(self, client: str) -> None:
+        """
+        End the client and release all it keeps (see :meth:`release`).
+
+        Ending it again does nothing.
+        """
+        ...
+
+    # Specs
+
+    def specs(self, client: str) -> list[WorkflowSpec[Any, Any]]:
+        """The specs the backend runs, in the order bound."""
+        ...
+
+    # Requests
+
+    def submit(
+        self,
+        entries: list[Entry],
+        *,
+        client: str,
+        persist: bool | Sequence[str] = False,
+    ) -> list[Record]:
+        """
+        Check every request, then log a pending record for each, in order.
+
+        If one request is refused, none is submitted. A request that references an
+        accumulator pins its state (see :meth:`accumulator_outputs`) and also logs
+        the record of that state, which only the requests of this call read.
+
+        Parameters
+        ----------
+        entries:
+            The requests.
+        client:
+            The client, which keeps the records unless they persist outputs.
+        persist:
+            ``True``, or the names of outputs: the store keeps these outputs
+            instead of the client, and the other outputs are dropped. Each record
+            completes once they are written, and fails if a write fails.
+
+        Returns
+        -------
+        :
+            The records, in the order of ``entries``.
+
+        Raises
+        ------
+        SubmitError
+            If a request cannot run. A reason's ``entry`` is the request's index in
+            ``entries``, or ``None`` if the reason is not about one request.
+        """
+        ...
+
+    def cancel(self, ids: Sequence[str], client: str) -> None:
+        """
+        End the unfinished records as cancelled, and pass this along to what only
+        they keep. A client may cancel any record of its proposal.
+        """
+        ...
+
+    def status(self, ids: Sequence[str], client: str) -> list[RecordStatus]:
+        """The status of each record now, and why it failed, if it did."""
+        ...
+
+    # History
+
+    def records(
+        self,
+        client: str,
+        label: str | None = None,
+        ids: Sequence[str] | None = None,
+    ) -> list[Record]:
+        """
+        The proposal's records, oldest first, under ``label`` if given; those with
+        the IDs ``ids``, in that order, if given. Raises ``ValueError`` if both are.
+        """
+        ...
+
+    def changes(self, after: int, client: str, *, timeout: float = 0.0) -> Changes:
+        """
+        The IDs of the proposal's records that changed since position ``after`` of
+        its feed, and the position to pass next.
+
+        This is how a client stays up to date. The feed is one order per proposal, a
+        record is in it when it is submitted and when it finishes, and the client
+        holds its own position, so ``after=0`` replays the proposal from its start. A
+        reply holds each ID once, in the order of its first change in the range. It
+        holds no values, since a record's state only moves forward, a client reads
+        the current state of what changed.
+
+        Accumulators, pushes, and releases are not in the feed. A value that has gone
+        is found by asking :meth:`readable`, and reading it raises ``NotReadable``.
+
+        Parameters
+        ----------
+        after:
+            The position to read from.
+        client:
+            The client.
+        timeout:
+            How long to wait, in seconds, if nothing has changed since ``after``.
+            The reply then holds no IDs.
+
+        Raises
+        ------
+        ValueError
+            If ``after`` is negative or past the position of the last change.
+        """
+        ...
+
+    def plain_request(self, accumulator_id: str, client: str) -> Request:
+        """
+        The plain request of the accumulator's state after the pushes logged so far.
+        Returns at once. Raises ``NotReadable`` if the state may not be read.
+        """
+        ...
+
+    # Values
+
+    def outputs(
+        self,
+        record_id: str,
+        names: Sequence[str] | None,
+        client: str,
+        *,
+        select: Selection | None = None,
+    ) -> dict[str, Any]:
+        """
+        Values of a record's outputs by name, once it has completed; a record persisted
+        at submission is read from the store.
+
+        A value is the one the workflow returned, not a copy, unless ``select`` is
+        given: the caller must not change it.
+
+        Parameters
+        ----------
+        record_id:
+            The record.
+        names:
+            The outputs to read, or ``None`` for every output the workflow returned.
+        client:
+            The client.
+        select:
+            Copies only this part of each output. It needs ``names``, and each output
+            must be declared as an array or a group with an array field. Of a group, it
+            picks that part of each array field with the dimension, as ``sc.DataGroup``
+            slices its items, and copies the other fields whole.
+
+        Raises
+        ------
+        NotReadable
+            If the client may not read an output, also once it releases a record this
+            waits for, or if the store no longer holds it.
+        RecordFailed
+            If the record failed or was cancelled.
+        ValueError
+            If ``select`` is given without ``names``, for an output that takes no
+            selection, or if no array field of a group has a dimension of ``select``.
+            A dimension that an array lacks, or an index out of range, raises what the
+            slice raises.
+        """
+        ...
+
+    def describe(self, record_id: str, name: str, client: str) -> dict[str, Any]:
+        """
+        What an output is, without its data, by field name: an
+        :class:`~ess.apps.ArrayInfo` for each array of at least one dimension, a dict
+        for a nested group, and a copy of any other field. An output that is itself an
+        array gives ``{name: ArrayInfo}``. Reads and raises as :meth:`outputs` does.
+        """
+        ...
+
+    def readable(self, ids: Sequence[str], client: str) -> list[tuple[str, ...]]:
+        """
+        The outputs of each record that a request of the client may reference now,
+        in declared order. Waits for nothing and reads no value.
+        """
+        ...
+
+    def release(self, ids: Sequence[str], client: str) -> None:
+        """
+        Let go of records, stages, and accumulators the client keeps; others are
+        left alone.
+
+        A released record stays in history, and its outputs are dropped once nothing
+        else keeps them. Requests already made through a released stage still run, and
+        it lets go of what its template references if it has not staged. A released
+        accumulator takes no more pushes or readers: the pushes up to the last state
+        pinned are still added, and later ones never are.
+        """
+        ...
+
+    # Stages and accumulators
+
+    def open_stage(self, template: Template, client: str) -> tuple[str, Template]:
+        """
+        A stage of the client, by ID, and the template with its values as the stage
+        holds them, file names resolved.
+
+        A request through it (see :class:`Entry`) must have these values, and its
+        record is the record of the plain request. If making the binding's stage
+        fails, the stage stops: its calls fail with the reason.
+
+        Raises ``SubmitError`` if the spec's binding makes no stages, or a request
+        would refuse the template.
+        """
+        ...
+
+    def open_accumulator(self, template: Template, client: str) -> tuple[str, Template]:
+        """
+        An accumulator of the client, by ID, and the template as history holds it.
+
+        Its *state n* is the plain request over the rows of its first n pushes.
+        Reading a state pins it, as the state after the pushes logged so far, without
+        waiting for them to be added. Push n+1 waits until the readers of state n are
+        done, so no reader sees a value change.
+
+        The accumulator stops if the binding fails to make the driver, adding a push
+        fails, or a record a push references does not complete. Pushes are then
+        refused, reads raise ``NotReadable``, each with the reason naming the step, and
+        the records of states it did not reach fail.
+
+        Raises ``SubmitError`` if the spec's binding makes no accumulators, the blanks
+        are not tables of the spec, or a request would refuse the template.
+        """
+        ...
+
+    def push(
+        self, accumulator_id: str, rows: Mapping[str, list[Any]], client: str
+    ) -> None:
+        """
+        Log rows of one or more blank tables by name; they enter one state.
+
+        It waits while a freeze is being checked, and otherwise does not wait for a
+        record that is pending or for the push to be added. Pushes are added in the
+        order logged.
+
+        Raises ``SubmitError`` if a table is not a blank of the template or gets no
+        rows, a row is invalid, repeats, or is in its table already, a row references a
+        record that failed or was cancelled, or the accumulator has stopped.
+        """
+        ...
+
+    def freeze(
+        self,
+        accumulator_id: str,
+        *,
+        client: str,
+        persist: bool | Sequence[str] = False,
+    ) -> Record:
+        """
+        The record of the accumulator's state after the pushes logged so far, without
+        a copy; the client keeps it, or with ``persist``, the store (see
+        :meth:`submit`).
+
+        The accumulator takes no more pushes. Once the record has completed, the
+        accumulator is read through it. If it fails or is cancelled, the accumulator
+        may be read and frozen again. Raises ``SubmitError`` if the state's plain
+        request would be refused; the accumulator then takes pushes again.
+        """
+        ...
+
+    def accumulator_outputs(
+        self,
+        accumulator_id: str,
+        names: Sequence[str] | None,
+        client: str,
+        *,
+        select: Selection | None = None,
+    ) -> dict[str, Any]:
+        """
+        Copies of outputs of the accumulator's state after the pushes logged so far, or
+        of the part ``select`` names (see :meth:`outputs`), once it has reached the
+        state. It makes no record, and takes part in no history.
+
+        Raises ``NotReadable`` for an accumulator released or stopped, with nothing
+        pushed, or whose state's plain request would be refused, and ``KeyError`` for
+        an output the spec lacks.
+        """
+        ...
+
+    # Files
+
+    def files(self, selector: Selector, client: str) -> list[FileRef]:
+        """The matching files the proposal may read, in the order measured."""
+        ...
+
+    def file_metadata(
+        self, refs: Sequence[FileRef], client: str
+    ) -> list[dict[str, Any]]:
+        """
+        The current metadata of each file; raises ``KeyError`` for one the proposal
+        may not read.
+        """
+        ...
+
+
+class FileSource(Protocol):
+    """
+    Which files exist, and what they hold.
+
+    A backend has one. It resolves names and finds files through it, and answers
+    through it the queries of its clients: listing files and reading their metadata.
+    A client sees only the files its proposal may read. Tests use a fake
+    (``testing.FakeFiles``).
+
+    The backend, its rules, and the forms tell which files fit a field or a selector
+    only by the metadata the source gives, in :meth:`metadata` and :meth:`list`. A
+    source that corrects the metadata of a file, such as the role of a run tagged
+    wrongly, corrects them in both, so that each sees the file as corrected.
+    """
+
+    def resolve(self, name: FileRef) -> FileRef:
+        """The identity of the named file; raises ``KeyError`` if unknown."""
+        ...
+
+    def path(self, ref: FileRef) -> Path:
+        """
+        A local path to the file, for a workflow to read: a lookup by
+        identity that never raises.
+
+        The files are on a network mount, and the backend calls ``path`` for
+        each file of a request when the request is submitted, so that the
+        validators of a group that holds a file see its path. So ``path``
+        neither stages nor downloads the file, and does not check that it can
+        be read: a file that cannot be read fails the workflow that reads it,
+        so that one unreadable file fails its own record, not a batch or a
+        rule's submission that holds it.
+        """
+        ...
+
+    def metadata(self, ref: FileRef) -> dict[str, Any]:
+        """
+        The file's current metadata.
+
+        The field ``proposal`` names the proposal whose requests may read the
+        file; a file without it, such as published data, is open to all.
+        """
+        ...
+
+    def list(self, selector: Selector) -> list[FileRef]:
+        """The files the selector matches, in the order they were measured."""
+        ...
+
+
+class Store(Protocol):
+    """
+    Where persisted outputs are written, and read back.
+
+    The backend is given a store; each deployment configures its own, and tests
+    use a fake (``testing.FakeStore``). A value is found by the record's ID and
+    the output's name, so history names no file. A store reads a value back as
+    the workflow returned it. The format of each output type and the layout of
+    the store are its own. A store may hold values that no history names, such
+    as those of a record cancelled while it was written; nothing reads them, and
+    they go with the proposal's area.
+    """
+
+    def write(self, record: str, output: str, value: Any) -> None:
+        """
+        Write the value of an output; raises if it cannot. A write replaces
+        a value written before under the same names, as a record run again
+        after a restart writes its outputs again.
+        """
+        ...
+
+    def read(self, record: str, output: str) -> Any:
+        """
+        The value of an output that was written. Raises ``LookupError`` if the
+        store no longer holds it, for example once dropped to free disk space:
+        a client's read of it then raises ``NotReadable``, as for a value that
+        nothing keeps, and a request that reads it fails.
+        """
+        ...

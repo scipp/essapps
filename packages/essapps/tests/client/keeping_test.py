@@ -277,3 +277,19 @@ def test_every_output_of_a_record_or_an_accumulator_is_read_without_a_name(
     assert client.output(total) == {'value': one}
     assert load.refs() == {name: load.ref(name) for name in ('value', 'extra')}
     assert total.refs() == {'value': total.ref('value')}
+
+
+def test_closing_a_client_calls_on_close_after_it_has_ended(backend: Backend) -> None:
+    ended = []
+    client = Client(
+        backend,
+        proposal='p1',
+        submitter='anna',
+        on_close=lambda: ended.append(client.proposal),
+    )
+
+    client.close()
+
+    assert ended == ['p1']
+    with pytest.raises(ClientEnded):
+        client.records()

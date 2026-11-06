@@ -73,7 +73,8 @@ from ess.spec.refs import Loc, ParamsError
 from ess.spec.request_types import Reads
 
 from .errors import SubmitError
-from .files import FileSource, Selector, readable
+from .files import Selector, readable
+from .protocol import FileSource
 from .records import Request, SpecId, Template, read_refs
 
 type Spec = WorkflowSpec[Any, Any]

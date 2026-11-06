@@ -38,7 +38,6 @@ Later calls compute only the rest.
 Each call gives values for the blanks only, fills them, and makes the record of the plain request.
 A blank is a whole parameter, never a field of a group.
 A file name in the template is resolved when the stage is made, so the stage keeps the file that the name meant then.
-If making the stage fails, the stage *stops*: the first call and those waiting fail, and later calls are refused, each with the reason.
 
 ## Accumulator
 
@@ -113,19 +112,9 @@ client.output(total, 'iofq')
 client.freeze(volume, persist=True)         # the store keeps the outputs, not the client
 ```
 
-At the end of a scan, freezing makes the final volume an ordinary record, which the client can keep, persist, or reference from another template or push, where the accumulator itself may not be referenced.
-A freeze is refused, and the accumulator takes pushes again, if the plain request of the state would be refused; a push made meanwhile waits for that answer.
-Once the record has completed, the accumulator is read through it: a read of the accumulator is refused and names the record.
-If the record fails or is cancelled, the accumulator stays readable and may be frozen again.
-
-`client.release(acc)`, or the end of its client, returns at once.
-The pushes up to the last pinned state are still added, later pushes never are, and the driver is dropped once the readers of its states are done.
-
-The accumulator *stops* if adding a push fails, a record that a push references does not complete, or the binding fails to make the driver.
-Later pushes and pins are refused with the reason: a push raises `SubmitError`, and a read raises `NotReadable`.
-The reason names the step, such as `push 0` for the first push.
-The records of states it did not reach fail, and so do the requests that read them.
-A controller that should skip a run whose reduction failed waits for that record before it pushes.
+At the end of a scan, freezing makes the final volume an ordinary record, which the client can keep or reference from another template or push, where the accumulator itself may not be referenced.
+A controller that should skip a run whose reduction failed waits for that record before it pushes, since a failed push stops the accumulator.
+[`BackendProtocol`](../../packages/essapps/src/ess/apps/protocol.py) states the rules of `freeze`, `release`, and a stopped accumulator.
 
 ## Validation
 

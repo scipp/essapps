@@ -6,11 +6,12 @@ import shutil
 import threading
 import time
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
-from ess.apps import Backend, Changes, Client
+from ess.apps import Backend, Changes, Client, ClientEnded
 from ess.apps.log import Log
 from ess.apps.testing import FakeFiles, FakeStore
 from ess.spec import Binding
@@ -88,22 +89,17 @@ def test_a_record_is_reported_in_the_order_of_its_first_change(
     second = stored.submit(toys.load_request(2))
     loading.set()
     stored.wait([first, second])
-    stored.persist(first, 'value')  # a later change of the first
 
     assert stored.changes().records == (first.id, second.id)
 
 
-def test_a_persist_request_reports_the_record_and_so_does_its_write(
+def test_a_record_changes_when_it_is_submitted_and_when_it_finishes(
     stored: Client,
 ) -> None:
-    load = stored.compute(toys.load_request(1))
-    done = stored.changes()
+    load = stored.compute(toys.load_request(1), persist=True)
 
-    stored.persist(load, 'value')
-    requested = stored.changes(after=done.cursor)
-    assert requested.records == (load.id,)
-
-    until(lambda: stored.changes(after=requested.cursor).records == (load.id,))
+    assert stored.changes(after=0) == Changes((load.id,), 2)
+    assert stored.changes(after=1) == Changes((load.id,), 2)
 
 
 def test_opening_an_accumulator_and_a_push_report_nothing_of_their_own(
@@ -161,9 +157,8 @@ def test_a_backend_restarted_from_its_log_gives_the_same_feed(
     files: FakeFiles, bindings: list[Binding], stored: Client, tmp_path: Path
 ) -> None:
     load = stored.compute(toys.load_request(1))
-    stored.persist(load, 'value')
     other = stored.compute(toys.load_request(2))
-    until(lambda: stored.changes().cursor == 6)
+    assert stored.changes().cursor == 4
     copy = tmp_path / 'copy'
     shutil.copy(tmp_path / 'log', copy)
 
@@ -211,3 +206,58 @@ def test_records_with_an_id_of_another_proposal_raise(
 def test_records_with_a_label_and_ids_raise(client: Client) -> None:
     with pytest.raises(ValueError, match='label or ids'):
         client.records(label='scan', ids=[])
+
+
+def test_changes_waits_for_a_change_up_to_its_timeout(
+    client: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    load = client.submit(toys.load_request(1))
+    cursor = client.changes().cursor
+
+    with ThreadPoolExecutor() as pool:
+        reply = pool.submit(client.changes, after=cursor, timeout=60)
+        loading.set()
+        assert reply.result(timeout=5) == Changes((load.id,), cursor + 1)
+
+
+def test_changes_is_woken_by_a_submission_of_another_client(
+    backend: Backend, client: Client
+) -> None:
+    other = Client(backend, proposal='p1', submitter='bob')
+    cursor = client.changes().cursor
+
+    with ThreadPoolExecutor() as pool:
+        reply = pool.submit(client.changes, after=cursor, timeout=60)
+        load = other.submit(toys.load_request(1))
+        assert load.id in reply.result(timeout=5).records
+
+
+def test_changes_gives_no_ids_once_its_timeout_has_passed(client: Client) -> None:
+    client.compute(toys.load_request(1))
+    cursor = client.changes().cursor
+
+    assert client.changes(after=cursor, timeout=0.01) == Changes((), cursor)
+
+
+def test_a_position_outside_the_feed_raises_without_waiting(client: Client) -> None:
+    with pytest.raises(ValueError, match='position'):
+        client.changes(after=1, timeout=60)
+
+
+def test_a_client_that_ends_raises_in_changes_and_in_wait(
+    client: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    load = client.submit(toys.load_request(1))
+    cursor = client.changes().cursor
+
+    with ThreadPoolExecutor() as pool:
+        changes = pool.submit(client.changes, after=cursor, timeout=60)
+        wait = pool.submit(client.wait, load)
+        client.close()
+        with pytest.raises(ClientEnded):
+            changes.result(timeout=5)
+        with pytest.raises(ClientEnded):
+            wait.result(timeout=5)
+    loading.set()

@@ -4,6 +4,7 @@
 
 """Files as a client sees them."""
 
+import threading
 from itertools import islice
 
 import pytest
@@ -30,3 +31,28 @@ def test_a_client_sees_only_the_files_of_its_proposal(
     assert theirs.files.metadata(other)['run'] == 4
     with pytest.raises(KeyError, match='in proposal p1'):
         mine.files.metadata(other)
+
+
+def test_watch_lists_again_until_a_file_is_new(
+    backend: Backend, files: FakeFiles
+) -> None:
+    client = Client(backend, proposal='p1', submitter='anna')
+    watch = client.files.watch(Selector(), interval=0.01)
+    list(islice(watch, 2))
+    arrives = threading.Timer(0.05, files.measure, args=(5, 5.0))
+
+    arrives.start()
+    found = next(watch)
+    arrives.join()
+
+    assert found == files.resolve(file(run=5))
+
+
+def test_metadata_takes_one_or_a_list_of_files(
+    backend: Backend, files: FakeFiles
+) -> None:
+    client = Client(backend, proposal='p1', submitter='anna')
+    refs = [files.resolve(file(run=n)) for n in (1, 2)]
+
+    assert client.files.metadata(refs[0])['run'] == 1
+    assert [m['run'] for m in client.files.metadata(refs)] == [1, 2]

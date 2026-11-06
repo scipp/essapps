@@ -12,7 +12,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from ess.apps import Backend, Request, SubmitError, Template, file
-from ess.apps.backend import Entry
+from ess.apps.protocol import BackendProtocol, Entry
 from ess.apps.testing import FakeFiles, StagedFunction, read_file
 from ess.spec import RunFile, WorkflowSpec, function_binding
 
@@ -98,3 +98,20 @@ def test_a_request_through_a_stage_must_have_the_stage_s_values(
         [Entry(template.fill(params=twice), stage=stage)], client=client
     )
     assert record.request.params['sample'] == template.params['sample']
+
+
+def test_the_backend_offers_only_the_protocol_and_its_own_close() -> None:
+    def public(cls: type) -> set[str]:
+        return {name for name in vars(cls) if not name.startswith('_')}
+
+    assert public(Backend) == public(BackendProtocol) | {'close'}
+
+
+def test_a_refused_request_is_named_by_its_index(backend: Backend) -> None:
+    client = backend.open_client('p1', 'anna')
+    accepted = Request(LOAD, params={'sample': file(run=1)})
+
+    with pytest.raises(SubmitError) as raised:
+        backend.submit([Entry(accepted), Entry(Request(LOAD))], client=client)
+
+    assert {error.entry for error in raised.value.errors} == {1}

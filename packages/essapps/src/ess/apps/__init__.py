@@ -2,20 +2,30 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """Framework for ESS data-reduction applications."""
 
-from .backend import Backend
+from .backend import Backend, local
 from .batch import LastBefore, Lookup, apply
-from .client import Accumulator, Client, Files, Provenance, Stage, local
+from .client import Accumulator, Client, Files, Provenance, Stage
 from .errors import ClientEnded, FieldError, NotReadable, RecordFailed, SubmitError
-from .files import FileSource, FolderFiles, Selector, file
+from .files import FolderFiles, Selector, file
 from .listing import Listing
-from .records import ArrayInfo, Changes, Record, Request, SpecId, Status, Template
+from .protocol import BackendProtocol, FileSource, Store
+from .records import (
+    ArrayInfo,
+    Changes,
+    Record,
+    RecordStatus,
+    Request,
+    SpecId,
+    Status,
+    Template,
+)
 from .rules import Rule, RuleStatus, TriggerLoop
-from .store import Store
 
 __all__ = [
     'Accumulator',
     'ArrayInfo',
     'Backend',
+    'BackendProtocol',
     'Changes',
     'Client',
     'ClientEnded',
@@ -30,6 +40,7 @@ __all__ = [
     'Provenance',
     'Record',
     'RecordFailed',
+    'RecordStatus',
     'Request',
     'Rule',
     'RuleStatus',

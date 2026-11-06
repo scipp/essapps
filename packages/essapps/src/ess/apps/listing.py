@@ -113,6 +113,9 @@ class Listing:
         selector = Selector(**marker.metadata)
         if (key := repr(selector)) not in self._files:
             listed = self._client.files.list(selector)
+            unknown = [ref for ref in listed if ref not in self._metadata]
+            found = self._client.files.metadata(unknown)
+            self._metadata |= dict(zip(unknown, found, strict=True))
             self._files[key] = {}
             for ref in listed:
                 fields = self._known(ref)

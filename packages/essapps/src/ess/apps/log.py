@@ -4,22 +4,20 @@
 The backend's history: an append-only log of what ran, with which params,
 and what came of it.
 
-There are six events: a submission, a record that finished, an accumulator
-that opened, a push into one, a request to persist outputs of a record, and a
-write that ended. A persist request made with a submission or a freeze is
-part of that event, and its write is the record's: the record finishes once
-the outputs are written, so no write event follows. A submission that read an
-accumulator, and a freeze, hold a record of the plain request of the state
-read, as the accumulator and its number of pushes, before the records that
-read it; the views list its request when it is read. The backend's views, such
-as the records by ID, are built by applying the events in order, when they are
-appended and again when a backend starts from an existing log.
+There are four events: a submission, a record that finished, an accumulator
+that opened, and a push into one. A persist request is part of a submission or
+a freeze, and its write is the record's: the record finishes once the outputs
+are written. A submission that read an accumulator, and a freeze, hold a record of
+the plain request of the state read, as the accumulator and its number of pushes,
+before the records that read it; the views list its request when it is read. The
+backend's views, such as the records by ID, are built by applying the events in
+order, when they are appended and again when a backend starts from an existing log.
 
 An event names only records and accumulators appended before it, or earlier
-in the same submission: a finish, a persist request, or a write names its
-record, a push its accumulator, a record the records it reads, and a record
-of a state its accumulator. Applying the events in order relies on this, and
-so does a restart, which walks the pending records backwards.
+in the same submission: a finish names its record, a push its accumulator, a
+record the records it reads, and a record of a state its accumulator. Applying the
+events in order relies on this, and so does a restart, which walks the pending
+records backwards.
 
 Clients and their stages and accumulators are not history, and neither are
 output values or anything a binding computed; those have their own lifetime.
@@ -125,31 +123,8 @@ class Pushed(BaseModel, frozen=True, extra='forbid'):
     params: Annotated[dict[str, list[Any]], BeforeValidator(read_refs)]
 
 
-class Persist(BaseModel, frozen=True, extra='forbid'):
-    """
-    A request to persist outputs of a completed or pending record, made after
-    its submission.
-    """
-
-    kind: Literal['persist'] = 'persist'
-    record: str
-    outputs: tuple[str, ...]
-
-
-class Written(BaseModel, frozen=True, extra='forbid'):
-    """
-    A write that ended, of outputs that a persist request named: ``failure``
-    says why it failed, or is ``None``.
-    """
-
-    kind: Literal['written'] = 'written'
-    record: str
-    outputs: tuple[str, ...]
-    failure: str | None = None
-
-
 Event = Annotated[
-    Submitted | Finished | Opened | Pushed | Persist | Written,
+    Submitted | Finished | Opened | Pushed,
     Field(discriminator='kind'),
 ]
 _event: TypeAdapter[Event] = TypeAdapter(Event)

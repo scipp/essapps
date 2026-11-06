@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 from ess.apps import (
     Backend,
     Client,
-    ClientEnded,
     NotReadable,
     Record,
     RecordFailed,
@@ -27,7 +26,7 @@ from ess.apps import (
     file,
     local,
 )
-from ess.apps.log import Finished, Log, Persist
+from ess.apps.log import Finished, Log
 from ess.apps.testing import (
     FakeFiles,
     FakeStore,
@@ -325,78 +324,11 @@ def test_a_reader_of_a_record_persisted_at_submission_fails_with_its_write(
     ]
 
 
-def test_persist_keeps_the_client_s_hold_and_lets_other_clients_read(
-    client: Client, connect: Callable[[], Client], store: GatedStore
+def test_persisting_is_refused_for_what_cannot_be_persisted(
+    client: Client, files: FakeFiles
 ) -> None:
-    load = client.compute(LOAD, params=_sample(1))
-    other = connect()
-    with pytest.raises(SubmitError, match='not kept by this client'):
-        other.submit(SHIFT, params={'source': load.ref('value')})
-
-    store.gate.clear()
-    client.persist(load, 'value')
-    # The request waits for the write.
-    shift = other.submit(SHIFT, params={'source': load.ref('value')})
-    assert client.output(load, 'value') == Amount(value=1.0)  # from memory meanwhile
-    assert other.status(shift) is Status.PENDING
-    store.gate.set()
-
-    assert other.output(shift, 'value') == Amount(value=11.0)
-    assert other.output(load, 'value') == Amount(value=1.0)
-    client.release(load)
-    assert client.output(load, 'value') == Amount(value=1.0)  # from the store
-    with pytest.raises(NotReadable, match='not kept by this client'):
-        client.output(load, 'extra')
-
-
-def test_a_failed_write_of_persist_fails_only_the_persist_request(
-    client: Client, connect: Callable[[], Client], store: GatedStore
-) -> None:
-    load = client.compute(LOAD, params=_sample(1))
-    store.gate.clear()
-    client.persist(load)
-    other = connect()
-    shift = other.submit(SHIFT, params={'source': load.ref('value')})
-    store.fill()
-    store.gate.set()
-
-    assert other.wait(shift) is Status.FAILED
-    assert 'the write failed: OSError: no space left' in other.failure(shift)
-    assert client.status(load) is Status.COMPLETED
-    assert client.output(load, 'value') == Amount(
-        value=1.0
-    )  # the client still keeps it
-    with pytest.raises(NotReadable, match='the write failed: OSError: no space left'):
-        other.output(load, 'value')
-    with pytest.raises(SubmitError, match='the write failed: OSError: no space left'):
-        other.submit(SHIFT, params={'source': load.ref('value')})
-
-    store.free()
-    client.persist(load)  # ask again
-    assert other.output(load, 'value') == Amount(value=1.0)
-
-
-def test_persisting_what_is_persisted_logs_nothing(client: Client, log: Log) -> None:
-    load = client.compute(LOAD, params=_sample(1))
-    client.persist(load, 'value')
-    client.persist([load, load], 'value', 'extra')
-    client.release(load)
-    assert client.output(load, 'extra') == Amount(value=-1.0)
-
-    persisted = [e for e in log if isinstance(e, Persist)]
-    assert [e.outputs for e in persisted] == [('value',), ('extra',)]
-
-
-def test_persist_is_refused_for_what_the_client_cannot_persist(
-    client: Client, connect: Callable[[], Client], files: FakeFiles
-) -> None:
-    load = client.compute(LOAD, params=_sample(1))
     zero = Amount(value=0.0)
 
-    with pytest.raises(SubmitError, match='not kept by this client'):
-        connect().persist(load)
-    with pytest.raises(SubmitError, match=r"no outputs \['other'\]"):
-        client.persist(load, 'other')
     with pytest.raises(SubmitError, match=r"no outputs \['other'\] to persist"):
         client.submit(LOAD, params=_sample(1), persist=('other',))
     with local(
@@ -421,18 +353,6 @@ def test_an_output_the_workflow_did_not_return_is_persisted_as_not_returned(
     }
 
 
-def test_releasing_a_pending_record_persisted_by_the_client_still_writes_it(
-    client: Client, connect: Callable[[], Client], loading: threading.Event
-) -> None:
-    loading.clear()
-    load = client.submit(LOAD, params=_sample(1))
-    client.persist(load, 'value')
-    client.release(load)  # the persist request keeps it
-    loading.set()
-
-    assert connect().output(load, 'value') == Amount(value=1.0)
-
-
 def test_a_frozen_accumulator_persisted_is_kept_by_the_store(
     client: Client, connect: Callable[[], Client]
 ) -> None:
@@ -451,9 +371,8 @@ def test_closing_a_local_client_waits_until_what_is_persisted_is_written(
     files: FakeFiles, bind: list[Binding], store: GatedStore
 ) -> None:
     client = local(proposal='p1', files=files, bind=bind, store=store)
-    load = client.compute(LOAD, params=_sample(1))
     store.gate.clear()
-    client.persist(load)
+    load = client.submit(LOAD, params=_sample(1), persist=True)
     closing = threading.Thread(target=client.close)
     closing.start()
     closing.join(timeout=0.1)
@@ -462,20 +381,6 @@ def test_closing_a_local_client_waits_until_what_is_persisted_is_written(
     store.gate.set()
     closing.join(timeout=5)
     assert (load.id, 'value') in store
-
-
-def test_persisting_a_pending_record_does_not_delay_its_completion(
-    client: Client, store: GatedStore, loading: threading.Event
-) -> None:
-    loading.clear()
-    load = client.submit(LOAD, params=_sample(1))
-    client.persist(load, 'value')
-    store.gate.clear()
-    loading.set()
-
-    assert client.wait(load) is Status.COMPLETED  # while its write waits
-    assert client.output(load, 'value') == Amount(value=1.0)
-    store.gate.set()
 
 
 def test_a_record_lets_go_of_its_references_before_its_write(
@@ -497,21 +402,18 @@ def test_a_record_lets_go_of_its_references_before_its_write(
 def test_another_client_reads_a_persisted_value_from_the_store(
     client: Client, connect: Callable[[], Client]
 ) -> None:
-    listed = client.compute(LIST, params=_sample(1))
-    client.persist(listed)
+    listed = client.compute(LIST, params=_sample(1), persist=True)
     other = connect()
 
     other.output(listed, 'value').append(99.0)
-    assert client.output(listed, 'value') == [1.0]  # the client's own value
+    assert client.output(listed, 'value') == [1.0]
     assert other.output(listed, 'value') == [1.0]
 
 
 def test_references_to_one_persisted_output_read_it_from_the_store_once(
     client: Client, store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, params=_sample(1))
-    client.persist(load, 'value')
-    client.release(load)
+    load = client.compute(LOAD, params=_sample(1), persist=('value',))
     assert client.output(load, 'value') == Amount(value=1.0)  # from the store
     store.reads.clear()
 
@@ -520,64 +422,6 @@ def test_references_to_one_persisted_output_read_it_from_the_store_once(
 
     assert client.output(offset, 'value') == Amount(value=2.0)
     assert store.reads == [(load.id, 'value')]
-
-
-def test_reading_every_output_raises_if_a_write_failed(
-    client: Client, connect: Callable[[], Client], store: GatedStore
-) -> None:
-    load = client.compute(LOAD, params=_sample(1))
-    store.fill()
-    client.persist(load, 'value')
-
-    with pytest.raises(NotReadable, match='the write failed: OSError: no space left'):
-        connect().output(load)
-    store.free()
-    client.persist(load, 'value')
-    assert connect().output(load) == {'value': Amount(value=1.0)}
-
-
-def test_closing_a_client_raises_if_a_write_it_asked_for_failed(
-    client: Client, store: GatedStore
-) -> None:
-    load = client.compute(LOAD, params=_sample(1))
-    shift = client.compute(SHIFT, params={'source': load.ref('value')})
-    store.fill()
-    client.persist(load, 'value')
-    client.persist(shift)
-
-    with pytest.raises(RuntimeError, match='writes failed') as raised:
-        client.close()
-    for record in (load, shift):
-        failed = f'record {record.id} output value: OSError: no space left'
-        assert failed in str(raised.value)
-    with pytest.raises(ClientEnded):
-        client.output(load, 'value')
-
-
-def test_closing_a_client_whose_failed_write_succeeded_again_raises_nothing(
-    client: Client, connect: Callable[[], Client], store: GatedStore
-) -> None:
-    load = client.compute(LOAD, params=_sample(1))
-    store.fill()
-    client.persist(load, 'value')
-    with pytest.raises(NotReadable, match='the write failed'):
-        connect().output(load, 'value')  # waits for the write
-    store.free()
-    client.persist(load, 'value')
-
-    client.close()
-
-
-def test_a_frozen_record_kept_by_the_client_is_persisted_later(
-    client: Client, connect: Callable[[], Client]
-) -> None:
-    load = client.compute(LOAD, params=_sample(1))
-    total = client.accumulator(Template(TOTAL, blanks=('part',)))
-    total.push(part=[load.ref('value')])
-    frozen = client.freeze(total)
-    client.persist(frozen)
-
-    assert connect().output(frozen, 'value') == Amount(value=1.0)
 
 
 # A restart over the same log and store
@@ -680,15 +524,12 @@ def test_readable_gives_the_outputs_persisted_to_every_client(
 def test_readable_gives_nothing_whose_write_failed(
     client: Client, connect: Callable[[], Client], store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, params=_sample(1))
     store.fill()
-    client.persist(load, 'value')
+    load = client.compute(LOAD, params=_sample(1), persist=('value',))
     other = connect()
-    with pytest.raises(NotReadable, match='the write failed'):
-        other.output(load, 'value')  # waits for the write
 
     assert other.readable(load) == () == _referenced(other, load)
-    assert client.readable(load) == ('value', 'extra')  # still kept
+    assert client.readable(load) == ()
 
 
 def test_readable_gives_nothing_of_a_record_that_failed_or_was_cancelled(
@@ -805,25 +646,6 @@ def test_a_restart_runs_a_call_through_a_stage_as_its_plain_request(
     assert again.output(calls[1], 'value') == Amount(value=4.0)
 
 
-def test_a_write_that_had_not_ended_at_a_restart_has_failed(
-    tmp_path: Path,
-    start: Callable[[Path], Client],
-    restart: Callable[[Path], Client],
-    store: GatedStore,
-) -> None:
-    first = start(tmp_path / 'log')
-    load = first.compute(LOAD, params=_sample(1))
-    store.gate.clear()
-    first.persist(load, 'value')
-
-    again = restart(tmp_path / 'log')
-
-    with pytest.raises(NotReadable, match='the write failed: the backend restarted'):
-        again.output(load, 'value')
-    with pytest.raises(SubmitError, match='the write failed: the backend restarted'):
-        again.submit(SHIFT, params={'source': load.ref('value')})
-
-
 def test_a_restart_runs_again_a_record_written_but_not_finished(
     tmp_path: Path, start: Callable[[Path], Client], store: GatedStore
 ) -> None:
@@ -837,42 +659,3 @@ def test_a_restart_runs_again_a_record_written_but_not_finished(
 
     assert again.wait(load) is Status.COMPLETED
     assert again.output(load, 'value') == Amount(value=1.0)  # written again
-
-
-def test_a_restart_runs_a_pending_record_that_the_client_persisted(
-    tmp_path: Path,
-    start: Callable[[Path], Client],
-    restart: Callable[[Path], Client],
-    loading: threading.Event,
-) -> None:
-    first = start(tmp_path / 'log')
-    loading.clear()
-    load = first.submit(LOAD, params=_sample(1))
-    first.persist(load, 'value')
-
-    again = restart(tmp_path / 'log')
-    loading.set()
-
-    assert again.wait(load) is Status.COMPLETED
-    assert again.output(load, 'value') == Amount(value=1.0)
-
-
-def test_a_restart_fails_a_reader_of_a_write_that_was_lost(
-    tmp_path: Path,
-    start: Callable[[Path], Client],
-    restart: Callable[[Path], Client],
-    store: GatedStore,
-) -> None:
-    first = start(tmp_path / 'log')
-    load = first.compute(LOAD, params=_sample(1))
-    store.gate.clear()
-    first.persist(load, 'value')
-    shift = first.submit(SHIFT, params={'source': load.ref('value')}, persist=True)
-
-    again = restart(tmp_path / 'log')
-
-    assert again.wait(shift) is Status.FAILED
-    assert again.failure(shift) == (
-        f'the backend restarted: record {load.id} output value: '
-        'the write failed: the backend restarted'
-    )

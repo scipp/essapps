@@ -8,7 +8,7 @@
 
 A record names a spec, every parameter value, each written inline, a file, or a reference to an output, and its outputs.
 A record never changes, only its status, which is set once.
-Pushes, persist requests, and writes are only added.
+Pushes are only added.
 So history only grows until it is dropped.
 
 The stories need four things from history:
@@ -28,7 +28,7 @@ In the in-process backend, D7 with 1000 pushes took 5.6 s with every row listed 
 
 ## Decision
 
-History is six lists, each only appended to:
+History is four lists, each only appended to:
 
 | List | One item per | Holds |
 |---|---|---|
@@ -36,16 +36,14 @@ History is six lists, each only appended to:
 | accumulators | opened accumulator | ID, proposal, template, and the template's values typed with defaults filled in |
 | finishes | finished record | record ID, status, failure message, the names of optional outputs that the workflow did not return |
 | pushes | push into an accumulator | accumulator ID, one row per table |
-| persist requests | request to persist outputs of a record, made after its submission | record ID, output names |
-| writes | write of a persist request that ended | record ID, the outputs written, or why the write failed |
 
 - A record never changes. Its status is its finish, and a record without one is pending.
 - The record of a state ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)) is stored as the accumulator and its number of pushes. Its rows are those of the first n pushes, taken from the pushes list when needed. So history grows by a constant amount per push and per pin. The record that `freeze` returns is stored the same way.
-- A persist request made at submission is part of the record. The outcome of that write is the record's finish, so the writes list holds no entry for it ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)).
+- A persist request is part of the record. The outcome of the write is the record's finish ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)).
 - Output values are not history ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)). History names no file.
-- Once a proposal has been idle ([lifetimes.md](../lifetimes.md)) for the retention period, days to weeks as the deployment sets it, its history is dropped as a whole. An output needed for longer is published (README, [Provenance and publication](../README.md#provenance-and-publication)).
+- Once a proposal has been idle ([`ess.apps.protocol`](../../../packages/essapps/src/ess/apps/protocol.py)) for the retention period, days to weeks as the deployment sets it, its history is dropped as a whole. An output needed for longer is published (README, [Provenance and publication](../README.md#provenance-and-publication)).
 - How a backend stores the lists is its choice. The in-process backend appends them to one event log, in memory or in a file of JSON lines.
-- The changes to a proposal's records have one order: the *change feed*, the ID of a record at each of its items in the records, finishes, persist requests, and writes. A client reads it from a position (`client.changes`), so that it reads only the records that changed. It holds no events, and neither accumulators nor pushes, so a backend keeps this order however it stores the lists.
+- The changes to a proposal's records have one order: the *change feed*, the ID of a record at each of its items in the records and finishes. A client reads it from a position (`client.changes`), so that it reads only the records that changed. It holds no events, and neither accumulators nor pushes, so a backend keeps this order however it stores the lists.
 
 ## Alternatives considered
 

@@ -12,9 +12,9 @@ The details live one level down:
 | how to write a spec: field types, files, references, unions, defaults | [packages/essspec/docs/params.md](../../packages/essspec/docs/params.md) |
 | how to write a binding: a function, a sciline pipeline, or a driver | [packages/essspec/docs/bindings.md](../../packages/essspec/docs/bindings.md) |
 | stages, accumulators, and their symmetries | [accumulators.md](accumulators.md) |
-| how long records and values are kept, and persisting | [lifetimes.md](lifetimes.md) |
 | batch and automatic reduction | [automatic-reduction.md](automatic-reduction.md) |
-| each call of the client | the docstrings of `ess.apps.client` |
+| the rules behind each call: what is kept and readable, when a call returns, what it raises | [`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py) |
+| the shapes and shortcuts of the client | the docstrings of `ess.apps.client` |
 | how the code is built | the module docstrings |
 | why it is so | the [ADRs](adr/index.md), and those of [essspec](../../packages/essspec/docs/developer/adr/) |
 | what it must do | [the requirements](../requirements/README.md), [user-stories.md](user-stories.md), [system-stories.md](system-stories.md) |
@@ -112,7 +112,7 @@ samples = client.files.list(Selector(role='sample'))
 for run in client.files.watch(Selector(scan='17')): ...   # existing ones first, then new ones
 ```
 
-**Store.** The *store* keeps persisted outputs outside the backend's memory, for every client of the proposal ([lifetimes.md](lifetimes.md)).
+**Store.** The *store* keeps persisted outputs outside the backend's memory, for every client of the proposal ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
 
 **Controller.** The backend does not decide what to run.
 A *controller* is client code that decides over time what to submit, push, and release, such as a notebook, an app's UI, or the trigger loop of automatic reduction.
@@ -184,23 +184,23 @@ beamtime = Template(final.request.spec, params=final.request.params, blanks=('sa
 A record is kept with the proposal's history.
 An output value lives only while something keeps it: the client that asked for it, a pending request that reads it, or the store once persisted.
 A client releases what it no longer needs, and work whose outputs nothing would keep is cancelled.
-Another client reads a value only once it is persisted ([lifetimes.md](lifetimes.md)):
+Another client reads a value only once it is persisted ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)):
 
 ```python
 client.release(centre)              # this client no longer keeps the centre
-client.persist(result, 'iofq')      # the store keeps iofq, for every client of the proposal
+client.submit(IOFQ, params={...}, persist=('iofq',))  # the store keeps iofq, for every client of the proposal
 ```
 
 ## What changed
 
 A client that shows records, or reacts to them, asks which records changed since a position in the proposal's history, and reads only those.
-A record changes when it is submitted, by any client of the proposal, finishes, or has outputs persisted or written.
+A record changes when it is submitted, by any client of the proposal, and when it finishes.
 The reply holds record IDs and no values, each ID once:
 
 ```python
 cursor = 0                                  # 0 gives every record of the proposal
 while True:
-    changes = client.changes(after=cursor)
+    changes = client.changes(after=cursor, timeout=30)  # waits up to 30 s for a change
     cursor = changes.cursor                 # pass it next time
     for record in client.records(ids=changes.records):
         show(record, client.status(record), client.readable(record))

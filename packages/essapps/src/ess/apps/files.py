@@ -10,9 +10,9 @@ identity when a request is submitted, so a record names the file itself.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from ess.spec import FileRef
 
@@ -77,59 +77,6 @@ def readable(metadata: dict[str, Any], proposal: str) -> bool:
     return metadata.get('proposal', proposal) == proposal
 
 
-class FileSource(Protocol):
-    """
-    Which files exist, and what they hold.
-
-    A backend has one. It resolves names and finds files through it, and
-    answers through it the queries of its clients: listing files, waiting
-    for new ones, and reading their metadata. A client sees only the files
-    its proposal may read. Tests use a fake (``testing.FakeFiles``).
-
-    The backend, its rules, and the forms tell which files fit a field or a
-    selector only by the metadata the source gives, in :meth:`metadata`,
-    :meth:`list`, and :meth:`watch`. A source that corrects the metadata of
-    a file, such as the role of a run tagged wrongly, corrects them in all
-    three, so that every one of them sees the file as corrected.
-    """
-
-    def resolve(self, name: FileRef) -> FileRef:
-        """The identity of the named file; raises ``KeyError`` if unknown."""
-        ...
-
-    def path(self, ref: FileRef) -> Path:
-        """
-        A local path to the file, for a workflow to read: a lookup by
-        identity that never raises.
-
-        The files are on a network mount, and the backend calls ``path`` for
-        each file of a request when the request is submitted, so that the
-        validators of a group that holds a file see its path. So ``path``
-        neither stages nor downloads the file, and does not check that it can
-        be read: a file that cannot be read fails the workflow that reads it,
-        so that one unreadable file fails its own record, not a batch or a
-        rule's submission that holds it.
-        """
-        ...
-
-    def metadata(self, ref: FileRef) -> dict[str, Any]:
-        """
-        The file's current metadata.
-
-        The field ``proposal`` names the proposal whose requests may read the
-        file; a file without it, such as published data, is open to all.
-        """
-        ...
-
-    def list(self, selector: Selector) -> list[FileRef]:
-        """The files the selector matches, in the order they were measured."""
-        ...
-
-    def watch(self, selector: Selector) -> Iterator[FileRef]:
-        """Matching files: the existing ones first, then new ones, each once."""
-        ...
-
-
 class FolderFiles:
     """
     A file source over the files of a folder, with a table a person fills.
@@ -145,7 +92,7 @@ class FolderFiles:
         ])
 
     A file is identified by its path, and named by its path, its ``run``, or its
-    ``pid``. The table is fixed, so :meth:`watch` ends after the existing files.
+    ``pid``.
 
     Raises
     ------
@@ -189,6 +136,3 @@ class FolderFiles:
 
     def list(self, selector: Selector) -> list[FileRef]:
         return [r for r, m in self._metadata.items() if selector.matches(m)]
-
-    def watch(self, selector: Selector) -> Iterator[FileRef]:
-        return iter(self.list(selector))

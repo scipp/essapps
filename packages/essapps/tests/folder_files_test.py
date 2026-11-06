@@ -68,10 +68,6 @@ def test_list_selects_by_metadata_in_table_order(files: FolderFiles) -> None:
     assert files.list(Selector(role='sample')) == [files.resolve(file(run=1))]
 
 
-def test_watch_ends_after_the_existing_files(files: FolderFiles) -> None:
-    assert list(files.watch(Selector())) == files.list(Selector())
-
-
 def test_a_row_of_a_missing_file_is_refused(folder: Path) -> None:
     with pytest.raises(FileNotFoundError, match='gone'):
         FolderFiles(folder, [{'file': 'gone.nxs'}])
