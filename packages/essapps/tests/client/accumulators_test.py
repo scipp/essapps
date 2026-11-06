@@ -888,3 +888,21 @@ def test_a_released_accumulator_takes_no_pushes_or_references_and_is_still_read(
     assert toys.listed(client.output(copied, 'value')) == [
         1.0
     ]  # read after the release
+
+
+def test_a_driver_that_fails_to_give_outputs_makes_its_state_not_readable(
+    files: FakeFiles,
+) -> None:
+    class Failing:
+        def push(self, table: str, rows: Any) -> None:
+            pass
+
+        def outputs(self) -> Any:
+            raise RuntimeError('out of memory')
+
+    bind = [DriverBinding(toys.TOTAL, lambda params: Failing())]
+    with local(proposal='p1', files=files, bind=bind) as client:
+        total = toys.total_accumulator(client)
+        total.push(parts=[toys.Amount(value=1.0)])
+        with pytest.raises(NotReadable, match='RuntimeError: out of memory'):
+            client.output(total)

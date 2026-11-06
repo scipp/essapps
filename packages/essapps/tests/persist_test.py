@@ -8,6 +8,7 @@ import threading
 import uuid
 import weakref
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -659,3 +660,83 @@ def test_a_restart_runs_again_a_record_written_but_not_finished(
 
     assert again.wait(load) is Status.COMPLETED
     assert again.output(load, 'value') == Amount(value=1.0)  # written again
+
+
+def test_a_read_of_a_persisted_output_waits_for_its_write_and_no_other_does(
+    client: Client, connect: Callable[[], Client], store: GatedStore
+) -> None:
+    store.gate.clear()
+    load = client.submit(LOAD, params=_sample(1), persist=('value',))
+    other = connect()
+
+    with ThreadPoolExecutor() as pool:
+        value = pool.submit(other.output, load, 'value')
+        assert store.entered.wait(timeout=5)
+        with pytest.raises(NotReadable, match='not kept by this client'):
+            other.output(load, 'extra')  # never written, so nothing to wait for
+        store.gate.set()
+        assert value.result(timeout=5) == Amount(value=1.0)
+
+
+def test_a_pending_record_that_persists_outlives_its_release_and_its_last_reader(
+    client: Client, store: GatedStore
+) -> None:
+    store.gate.clear()
+    load = client.submit(LOAD, params=_sample(1), persist=True)
+    shift = client.submit(SHIFT, params={'source': load.ref('value')})
+
+    client.release(load)  # the store keeps it, not the client
+    client.release(shift)  # cancels the reader, which lets go of ``load``
+
+    assert client.status(load) is Status.PENDING
+    store.gate.set()
+    assert client.wait(load) is Status.COMPLETED
+    assert client.output(load, 'value') == Amount(value=1.0)
+
+
+def test_reading_every_output_gives_those_persisted(
+    client: Client, connect: Callable[[], Client]
+) -> None:
+    load = client.compute(LOAD, params=_sample(1), persist=('value',))
+
+    expected = {'value': Amount(value=1.0)}
+    assert client.output(load) == expected
+    assert connect().output(load) == expected
+
+
+def test_a_persisted_value_is_read_from_the_store_while_a_reader_holds_it(
+    client: Client,
+    connect: Callable[[], Client],
+    store: GatedStore,
+    loading: threading.Event,
+) -> None:
+    kept = client.compute(LOAD, params=_sample(1))
+    loading.clear()
+    pending = client.submit(LOAD, params=_sample(2))
+    store.gate.clear()
+    shifted = client.submit(SHIFT, params={'source': kept.ref('value')}, persist=True)
+    reader = client.submit(
+        OFFSET,
+        params={'source': shifted.ref('value'), 'shift': pending.ref('value')},
+    )
+    store.gate.set()
+    client.wait(shifted)
+
+    assert connect().output(shifted, 'value') == Amount(value=11.0)
+    assert store.reads == [(shifted.id, 'value')]  # not the value ``reader`` holds
+    loading.set()
+    assert client.output(reader, 'value') == Amount(value=13.0)
+
+
+def test_a_client_that_persists_a_freeze_does_not_keep_it(
+    client: Client, store: GatedStore
+) -> None:
+    load = client.compute(LOAD, params=_sample(1))
+    total = client.accumulator(Template(TOTAL, blanks=('part',)))
+    total.push(part=[load.ref('value')])
+    frozen = client.freeze(total, persist=True)
+    client.wait(frozen)
+    store.forgotten.add((frozen.id, 'value'))
+
+    with pytest.raises(NotReadable, match='the store no longer holds'):
+        client.output(frozen, 'value')

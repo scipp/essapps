@@ -91,8 +91,8 @@ class Views:
     record of a state. ``accumulators`` holds the event that opened each
     accumulator, and ``pushes`` its pushes in order, each rows of its tables.
 
-    ``persisted`` names the outputs each record persists at submission; their
-    write is the record's: pending while it is, done once it completes.
+    ``persisted`` names the outputs each record persists; their write is the
+    record's: pending while it is, done once it completes.
 
     ``feed`` holds, for each proposal, the ID of a record each time an event
     submits or finishes it, in the order of the events. A position in it is a
@@ -175,7 +175,7 @@ class Views:
         return finished is not None and key[1] in finished.omitted
 
     def persists(self, key: tuple[str, str]) -> bool:
-        """Whether the record persists the output at submission."""
+        """Whether the record persists the output."""
         return key[1] in self.persisted.get(key[0], ())
 
     def changes(self, proposal: str, after: int) -> Changes:

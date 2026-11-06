@@ -9,10 +9,10 @@ The client only adapts: calls that take records or requests accept one, a list, 
 a dict, and return the same shape, it wraps IDs in objects, and it adds shortcuts.
 :meth:`~Client.cancel` and :meth:`~Client.release` accept the same and return nothing.
 
-Only the calls that read results wait for work: :meth:`Client.wait`,
-:meth:`Client.compute`, :meth:`Client.output`, and :meth:`Client.describe`; and
-:meth:`Files.watch` waits for new files. So a GUI application can make every other
-call from its UI thread.
+See :class:`~ess.apps.protocol.BackendProtocol` for which calls wait.
+:meth:`Client.wait`, :meth:`Client.compute`, and :meth:`Files.watch` also wait, and so
+does :meth:`Client.close` if ``on_close`` does. A GUI application makes the others
+from its UI thread.
 """
 
 from __future__ import annotations
@@ -246,7 +246,7 @@ class Client:
     submitter:
         Who submits, as records name them.
     on_close:
-        Called by :meth:`close` after the client has ended.
+        Called by each :meth:`close`, also if ending the client raised.
     """
 
     def __init__(
@@ -260,6 +260,7 @@ class Client:
         self._backend = backend
         self._on_close = on_close
         self._id = backend.open_client(proposal, submitter)
+        self._position = 0  # in the proposal's feed, for wait
         self.proposal = proposal
         self.submitter = submitter
         self.files = Files(backend, self._id)
@@ -273,7 +274,7 @@ class Client:
     def close(self) -> None:
         """
         End the client: release everything it keeps, which cancels the work that
-        nothing else keeps. A client that is never closed ends with its process.
+        nothing else keeps.
         """
         try:
             self._backend.close_client(self._id)
@@ -380,7 +381,7 @@ class Client:
         ]
         names = _names(what)
         try:
-            records = self._backend.submit(entries, client=self._id, persist=persist)
+            records = self._backend.submit(entries, self._id, persist=persist)
         except SubmitError as error:
             raise SubmitError(_named(e, names) for e in error.errors) from None
         return _reshape(what, records)
@@ -399,24 +400,23 @@ class Client:
         return _reshape(records, [s.status for s in self._statuses(records)])
 
     def wait(self, records: Any) -> Any:
-        """The status of each record once all have finished; a failure is not raised."""
-        # The position comes first, so that no finish after it is missed.
-        cursor = self._backend.changes(0, self._id).cursor
+        """
+        The status of each record once all have finished; a failure is not raised. If
+        the client ends meanwhile, raises ``ClientEnded``.
+        """
         while True:
+            # The position comes first, so that no finish after it is missed.
+            position = self._position
             statuses = [s.status for s in self._statuses(records)]
             if Status.PENDING not in statuses:
                 return _reshape(records, statuses)
-            cursor = self._backend.changes(cursor, self._id, timeout=_WAIT).cursor
+            changes = self._backend.changes(position, self._id, timeout=_WAIT)
+            self._position = changes.cursor
 
     def failure(self, records: Any) -> Any:
         """
-        Why each record failed, or why the backend cancelled it; ``None`` for a
-        record pending, completed, or cancelled by a client.
-
-        The reason is the framework's own words, such as ``specimens[0]: Value error,
-        ...``, ``the workflow of sans-iofq/v1 returned None as iofq``, or ``the write
-        failed: ...``. An error raised by a binding, its driver, the file source, or
-        the store is given with its type, such as ``KeyError: 'counts'``.
+        Why each record failed, or why the backend cancelled it; see
+        :class:`~ess.apps.RecordStatus`.
         """
         return _reshape(records, [s.failure for s in self._statuses(records)])
 
@@ -456,7 +456,7 @@ class Client:
         The record of the accumulator's last state; see
         :meth:`~ess.apps.protocol.BackendProtocol.freeze`.
         """
-        return self._backend.freeze(accumulator.id, client=self._id, persist=persist)
+        return self._backend.freeze(accumulator.id, self._id, persist=persist)
 
     def release(self, what: Any) -> None:
         """

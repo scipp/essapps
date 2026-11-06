@@ -137,7 +137,8 @@ requests of their submissions, all logged before the push. So no wait goes round
 in a circle.
 
 Releasing an accumulator, freezing it, and the end of its client are described
-at :meth:`Backend.release` and :meth:`Backend.freeze`.
+at :meth:`~ess.apps.protocol.BackendProtocol.release` and
+:meth:`~ess.apps.protocol.BackendProtocol.freeze`.
 """
 
 from __future__ import annotations
@@ -612,7 +613,7 @@ class Backend(BackendProtocol):
            A call through a stage runs as its plain request, since the stage
            is gone, so it reads the values of the stage's template too.
 
-        A record persisted at submission that had written its outputs, but
+        A record that had written its persisted outputs, but
         not finished, runs again, and its writes replace what the store holds.
         """
         views = self._views
@@ -701,8 +702,8 @@ class Backend(BackendProtocol):
     def submit(
         self,
         entries: list[Entry],
-        *,
         client: str,
+        *,
         persist: bool | Sequence[str] = False,
     ) -> list[Record]:
         """
@@ -1048,8 +1049,8 @@ class Backend(BackendProtocol):
         A record of a state reads only the state, which it waits for; the
         pushes have read the outputs its rows reference. A record through a
         stage that has staged reads only the outputs its blanks reference. An
-        output persisted at submission is written once its record finishes, so
-        waiting for the record also waits for the write.
+        output is written before its record finishes, so waiting for the record also
+        waits for the write.
         """
         state = self._state_of.get(record_id)
         if state is None:
@@ -1323,7 +1324,7 @@ class Backend(BackendProtocol):
         persisted at its submission were written, or fail it with ``failure``
         if their write failed; lock held. Then drop from memory the outputs
         that nothing keeps (see :meth:`_drop`): no client keeps a record
-        persisted at submission, or one released while it was pending.
+        persisting outputs, or one released while it was pending.
 
         Nothing is logged for a record cancelled meanwhile, also if its
         outputs were written.
@@ -1417,6 +1418,7 @@ class Backend(BackendProtocol):
     def open_client(self, proposal: str, submitter: str) -> str:
         client = uuid.uuid4().hex
         with self._changed:
+            self._check_running()
             self._clients[client] = _Client(proposal, submitter)
         return client
 
@@ -1588,8 +1590,8 @@ class Backend(BackendProtocol):
     def freeze(
         self,
         accumulator_id: str,
-        *,
         client: str,
+        *,
         persist: bool | Sequence[str] = False,
     ) -> Record:
         """
@@ -1882,6 +1884,7 @@ class Backend(BackendProtocol):
     def records(
         self,
         client: str,
+        *,
         label: str | None = None,
         ids: Sequence[str] | None = None,
     ) -> list[Record]:
@@ -1951,6 +1954,9 @@ class Backend(BackendProtocol):
                 self._check_select(record.spec, names)
 
             wanted = record.outputs if names is None else names
+            for name in wanted:
+                if name not in record.outputs:
+                    raise KeyError(f'{record.spec} has no output {name!r}')
 
             def ready() -> bool:
                 if record_id in views.finished:
@@ -1959,7 +1965,8 @@ class Backend(BackendProtocol):
                     return False
                 return not any(views.persists((record_id, n)) for n in wanted)
 
-            self._wait_for(ready)
+            self._wait_for(lambda: client not in self._clients or ready())
+            self._client(client)
             kept = record_id in caller.kept
             every = names is None
             if names is None:
@@ -2021,7 +2028,14 @@ class Backend(BackendProtocol):
             if select is not None:
                 self._check_select(acc.template.spec, names)
             with self._changed:
-                self._wait_for(lambda: acc.added == upto or acc.stopped is not None)
+                self._wait_for(
+                    lambda: (
+                        client not in self._clients
+                        or acc.added == upto
+                        or acc.stopped is not None
+                    )
+                )
+                self._client(client)
                 if acc.added != upto:
                     raise NotReadable(acc.stopped)
             declared = list(self._bindings[acc.template.spec].spec.outputs.model_fields)
@@ -2030,8 +2044,8 @@ class Backend(BackendProtocol):
                     raise KeyError(f'{acc.template.spec} has no output {name!r}')
             try:
                 outputs = acc.outputs()
-            except _Failure as error:  # the driver returned no outputs instance
-                raise NotReadable(str(error)) from None
+            except Exception as error:  # the driver raised or returned no outputs
+                raise NotReadable(_reason(error)) from error
             for name in names or ():
                 if name not in outputs:
                     raise _not_returned(f'{accumulator_id}[:{upto}].{name}')
@@ -2081,8 +2095,9 @@ def local(
     notebook, such as ``function_binding(IOFQ, iofq)``.
 
     Closing the client closes the backend, which waits until what is persisted
-    is written. Without a ``store``, persisting is refused. The backend keeps
-    history in memory, so its records end with the process.
+    is written. A client that is never closed ends with its process. Without a
+    ``store``, persisting is refused. The backend keeps history in memory, so its
+    records end with the process.
     """
     backend = Backend(files, bind, store=store)
     return Client(

@@ -20,8 +20,8 @@ record. An output value may be large and lives only while a *keeper* keeps it:
 - a push, a stage, or an accumulator's template that references it, until the
   binding has taken it, or the push, stage, or accumulator is released, stopped,
   or dropped;
-- the store, for an output persisted at submission, until the proposal's
-  history is dropped.
+- the store, for an output a submission or a freeze persists, until the
+  proposal's history is dropped.
 
 A record object or a reference keeps nothing. A value that is gone does not come
 back. Nothing is written to the store unless a submission or a freeze persists
@@ -30,8 +30,9 @@ it, since the framework cannot tell which outputs are worth writing.
 A request may reference, and a client may read, only the output values it keeps,
 persisted outputs, files, and the current states of its own accumulators. So
 another client, even one in the same process, reads a value only once it is
-persisted. A pending record passes this rule, so whether a call is accepted does
-not depend on how far other work has run.
+persisted. A pending record passes this rule, so a request is not refused because
+what it reads is still running. It is refused once that record has failed or been
+cancelled.
 
 Work that nothing would keep is cancelled: a pending record whose outputs have
 no keeper finishes as cancelled. Since a cancelled request keeps nothing it
@@ -65,7 +66,8 @@ class Entry:
     """
     A request of a submission, and its label and member.
 
-    ``stage`` names the stage the request goes through, if any.
+    ``label`` names a sequence of records, and ``member`` one part of it; neither
+    changes the result. ``stage`` names the stage the request goes through, if any.
     """
 
     request: Request
@@ -78,29 +80,34 @@ class BackendProtocol(Protocol):
     """
     What a client calls on a backend, for many clients and proposals, named by ID.
 
-    Every call but :meth:`open_client` names its client, and the client's
-    proposal bounds every check and query: an ID that is not of the proposal
-    raises ``KeyError``. A call of a client that has ended raises
-    ``ClientEnded``. A call of a backend that has stopped, because it could not
-    log, raises ``RuntimeError``.
+    Every call but :meth:`open_client` names its client, and the client's proposal
+    bounds every check and query. A record or accumulator ID that is not of the
+    proposal raises ``KeyError``; inside a request, template, or push it raises
+    ``SubmitError``, and :meth:`release` leaves it alone. A call of a client that has
+    ended, also one waiting when it ends, raises ``ClientEnded``. If the backend
+    cannot log, the call that found this raises that error, and it stops: every call
+    then raises ``RuntimeError``.
 
     A call returns once it is checked and logged, and leaves reading data and
-    computing to the workers. Only :meth:`changes`, up to its timeout, and the
-    reads of values, :meth:`outputs`, :meth:`describe`, and
-    :meth:`accumulator_outputs`, wait for work to finish.
+    computing to the workers. Only :meth:`changes`, up to its timeout, and the reads
+    of values, :meth:`outputs`, :meth:`describe`, and :meth:`accumulator_outputs`,
+    wait for work to finish.
+
+    A *plain request* is a request that goes through no stage and reads no
+    accumulator directly: a call through a stage, and every state of an accumulator,
+    has one, and its record is the record of that request.
     """
 
     # Sessions
 
     def open_client(self, proposal: str, submitter: str) -> str:
-        """A new client of the proposal, by ID; it keeps nothing yet."""
+        """Start a client of the proposal and return its ID; it keeps nothing yet."""
         ...
 
     def close_client(self, client: str) -> None:
         """
-        End the client and release all it keeps (see :meth:`release`).
-
-        Ending it again does nothing.
+        End the client and release all it keeps (see :meth:`release`). Ending it again
+        does nothing.
         """
         ...
 
@@ -115,16 +122,21 @@ class BackendProtocol(Protocol):
     def submit(
         self,
         entries: list[Entry],
-        *,
         client: str,
+        *,
         persist: bool | Sequence[str] = False,
     ) -> list[Record]:
         """
         Check every request, then log a pending record for each, in order.
 
-        If one request is refused, none is submitted. A request that references an
-        accumulator pins its state (see :meth:`accumulator_outputs`) and also logs
-        the record of that state, which only the requests of this call read.
+        If one request is refused, none is submitted. A record waits until the records
+        it references have completed. If one fails or is cancelled, the record fails,
+        with a reason that names it.
+
+        A request that references an accumulator pins its state (see
+        :meth:`open_accumulator`), waits until the accumulator reaches it, and is
+        refused if the state's plain request would be refused. The call also logs the
+        record of that state, which only the requests of this call read.
 
         Parameters
         ----------
@@ -133,9 +145,9 @@ class BackendProtocol(Protocol):
         client:
             The client, which keeps the records unless they persist outputs.
         persist:
-            ``True``, or the names of outputs: the store keeps these outputs
-            instead of the client, and the other outputs are dropped. Each record
-            completes once they are written, and fails if a write fails.
+            ``True``, or the names of outputs: the store keeps these outputs instead
+            of the client, and the other outputs are dropped. Each record completes
+            once they are written, and fails if a write fails.
 
         Returns
         -------
@@ -145,15 +157,21 @@ class BackendProtocol(Protocol):
         Raises
         ------
         SubmitError
-            If a request cannot run. A reason's ``entry`` is the request's index in
-            ``entries``, or ``None`` if the reason is not about one request.
+            If a request cannot run: an invalid value, an unknown spec or file, a
+            reference at a field that the spec does not mark ``Referenced[...]``, a
+            reference the client may not read, or one whose data do not fit its field;
+            or if ``persist`` names an output the spec lacks, or the backend has no
+            store. A reason's ``entry`` is the request's index in ``entries``, or
+            ``None`` if the reason is not about one request (see
+            :class:`~ess.apps.errors.FieldError`).
         """
         ...
 
     def cancel(self, ids: Sequence[str], client: str) -> None:
         """
-        End the unfinished records as cancelled, and pass this along to what only
-        they keep. A client may cancel any record of its proposal.
+        End the unfinished records as cancelled, and pass this along: what only they
+        keep is cancelled, and a record that references one fails. A client may cancel
+        any record of its proposal.
         """
         ...
 
@@ -166,6 +184,7 @@ class BackendProtocol(Protocol):
     def records(
         self,
         client: str,
+        *,
         label: str | None = None,
         ids: Sequence[str] | None = None,
     ) -> list[Record]:
@@ -181,11 +200,11 @@ class BackendProtocol(Protocol):
         its feed, and the position to pass next.
 
         This is how a client stays up to date. The feed is one order per proposal, a
-        record is in it when it is submitted and when it finishes, and the client
-        holds its own position, so ``after=0`` replays the proposal from its start. A
-        reply holds each ID once, in the order of its first change in the range. It
-        holds no values, since a record's state only moves forward, a client reads
-        the current state of what changed.
+        record is in it when it is submitted and when it finishes, and the client holds
+        its own position, so ``after=0`` replays the proposal from its start. A reply
+        holds each ID once, in the order of its first change in the range. It holds no
+        values: a record's status only moves forward, so a client reads the current
+        status of what changed.
 
         Accumulators, pushes, and releases are not in the feed. A value that has gone
         is found by asking :meth:`readable`, and reading it raises ``NotReadable``.
@@ -197,8 +216,8 @@ class BackendProtocol(Protocol):
         client:
             The client.
         timeout:
-            How long to wait, in seconds, if nothing has changed since ``after``.
-            The reply then holds no IDs.
+            How long to wait, in seconds, for a change after ``after``. If none comes,
+            the reply holds no IDs.
 
         Raises
         ------
@@ -225,8 +244,8 @@ class BackendProtocol(Protocol):
         select: Selection | None = None,
     ) -> dict[str, Any]:
         """
-        Values of a record's outputs by name, once it has completed; a record persisted
-        at submission is read from the store.
+        Values of a record's outputs by name, once it has completed; a persisted output
+        is read from the store.
 
         A value is the one the workflow returned, not a copy, unless ``select`` is
         given: the caller must not change it.
@@ -236,7 +255,8 @@ class BackendProtocol(Protocol):
         record_id:
             The record.
         names:
-            The outputs to read, or ``None`` for every output the workflow returned.
+            The outputs to read, or ``None`` for every output the client may read that
+            the workflow returned.
         client:
             The client.
         select:
@@ -247,11 +267,14 @@ class BackendProtocol(Protocol):
 
         Raises
         ------
+        KeyError
+            For an output the spec lacks.
         NotReadable
-            If the client may not read an output, also once it releases a record this
-            waits for, or if the store no longer holds it.
+            If the client may not read an output, also once it releases a record that
+            something else still keeps, or if the store no longer holds an output or
+            the workflow did not return it.
         RecordFailed
-            If the record failed or was cancelled.
+            If the record failed or was cancelled, also when releasing it cancelled it.
         ValueError
             If ``select`` is given without ``names``, for an output that takes no
             selection, or if no array field of a group has a dimension of ``select``.
@@ -262,10 +285,10 @@ class BackendProtocol(Protocol):
 
     def describe(self, record_id: str, name: str, client: str) -> dict[str, Any]:
         """
-        What an output is, without its data, by field name: an
-        :class:`~ess.apps.ArrayInfo` for each array of at least one dimension, a dict
-        for a nested group, and a copy of any other field. An output that is itself an
-        array gives ``{name: ArrayInfo}``. Reads and raises as :meth:`outputs` does.
+        What an output is, without its data. A group gives its fields by name, any
+        other output gives ``{name: info}``. An array of at least one dimension is an
+        :class:`~ess.apps.ArrayInfo`, a group or a dict is a dict, a list is a list of
+        these, and anything else is a copy. Reads and raises as :meth:`outputs` does.
         """
         ...
 
@@ -282,10 +305,10 @@ class BackendProtocol(Protocol):
         left alone.
 
         A released record stays in history, and its outputs are dropped once nothing
-        else keeps them. Requests already made through a released stage still run, and
-        it lets go of what its template references if it has not staged. A released
-        accumulator takes no more pushes or readers: the pushes up to the last state
-        pinned are still added, and later ones never are.
+        else keeps them. A released stage takes no more requests, those already made
+        through it still run, and it lets go of what its template references if it has
+        not staged. A released accumulator takes no more pushes or readers: the pushes
+        up to the last state pinned are still added, and later ones never are.
         """
         ...
 
@@ -293,34 +316,40 @@ class BackendProtocol(Protocol):
 
     def open_stage(self, template: Template, client: str) -> tuple[str, Template]:
         """
-        A stage of the client, by ID, and the template with its values as the stage
-        holds them, file names resolved.
+        Open a stage of the client. Returns its ID and the template with its values as
+        the stage holds them, file names resolved.
 
         A request through it (see :class:`Entry`) must have these values, and its
-        record is the record of the plain request. If making the binding's stage
-        fails, the stage stops: its calls fail with the reason.
+        record is the record of the plain request. If making the binding's stage fails,
+        the stage stops: requests already made through it fail with the reason, and
+        later ones are refused with it.
 
-        Raises ``SubmitError`` if the spec's binding makes no stages, or a request
-        would refuse the template.
+        Raises ``SubmitError`` if the spec's binding makes no stages, or a fixed value
+        would be refused in a request, or references an accumulator.
         """
         ...
 
     def open_accumulator(self, template: Template, client: str) -> tuple[str, Template]:
         """
-        An accumulator of the client, by ID, and the template as history holds it.
+        Open an accumulator of the client. Returns its ID and the template as history
+        holds it.
 
-        Its *state n* is the plain request over the rows of its first n pushes.
-        Reading a state pins it, as the state after the pushes logged so far, without
-        waiting for them to be added. Push n+1 waits until the readers of state n are
-        done, so no reader sees a value change.
+        Its *state n* is the accumulator after its first n pushes, and has the outputs
+        of its plain request: the template with each table filled by the rows of these
+        pushes. A call that reads a state pins it: the state after the pushes logged so
+        far. Pinning does not wait for them. Adding push n+1 waits until the readers of
+        state n are done, so no reader sees a value change: the requests that reference
+        it, until their workflows return, and the reads in progress.
 
         The accumulator stops if the binding fails to make the driver, adding a push
-        fails, or a record a push references does not complete. Pushes are then
-        refused, reads raise ``NotReadable``, each with the reason naming the step, and
-        the records of states it did not reach fail.
+        fails, or a record its template or a push references does not complete. Pushes
+        are then refused, and reads raise ``NotReadable``, each with the reason naming
+        the step. The records of states it did not reach fail, and so do the requests
+        that read them.
 
         Raises ``SubmitError`` if the spec's binding makes no accumulators, the blanks
-        are not tables of the spec, or a request would refuse the template.
+        are not tables of the spec, or a fixed value would be refused in a request, or
+        references an accumulator.
         """
         ...
 
@@ -335,27 +364,31 @@ class BackendProtocol(Protocol):
         order logged.
 
         Raises ``SubmitError`` if a table is not a blank of the template or gets no
-        rows, a row is invalid, repeats, or is in its table already, a row references a
-        record that failed or was cancelled, or the accumulator has stopped.
+        rows, a row is invalid, repeats, or is in its table already, a row references
+        an output the client may not read or an accumulator, or the accumulator is
+        released, frozen, or stopped.
         """
         ...
 
     def freeze(
         self,
         accumulator_id: str,
-        *,
         client: str,
+        *,
         persist: bool | Sequence[str] = False,
     ) -> Record:
         """
-        The record of the accumulator's state after the pushes logged so far, without
-        a copy; the client keeps it, or with ``persist``, the store (see
-        :meth:`submit`).
+        The record of the accumulator's state after the pushes logged so far, whose
+        outputs are the driver's, not a copy; the client keeps it, or with ``persist``,
+        the store (see :meth:`submit`).
 
         The accumulator takes no more pushes. Once the record has completed, the
         accumulator is read through it. If it fails or is cancelled, the accumulator
-        may be read and frozen again. Raises ``SubmitError`` if the state's plain
-        request would be refused; the accumulator then takes pushes again.
+        may be read and frozen again.
+
+        Raises ``SubmitError`` if the accumulator is released or stopped, a freeze of it
+        is pending or has completed, or the state's plain request would be refused; the
+        accumulator then takes pushes again.
         """
         ...
 
@@ -370,11 +403,12 @@ class BackendProtocol(Protocol):
         """
         Copies of outputs of the accumulator's state after the pushes logged so far, or
         of the part ``select`` names (see :meth:`outputs`), once it has reached the
-        state. It makes no record, and takes part in no history.
+        state. It makes no record.
 
-        Raises ``NotReadable`` for an accumulator released or stopped, with nothing
-        pushed, or whose state's plain request would be refused, and ``KeyError`` for
-        an output the spec lacks.
+        Raises ``NotReadable`` for an accumulator released, stopped, or read through the
+        record of its freeze, a state whose plain request would be refused, a driver
+        that fails to give outputs, or an output it did not return; ``KeyError`` for an
+        output the spec lacks.
         """
         ...
 
@@ -388,8 +422,8 @@ class BackendProtocol(Protocol):
         self, refs: Sequence[FileRef], client: str
     ) -> list[dict[str, Any]]:
         """
-        The current metadata of each file; raises ``KeyError`` for one the proposal
-        may not read.
+        The current metadata of each file, named by its identity as :meth:`files` gives
+        it; raises ``KeyError`` for one unknown or that the proposal may not read.
         """
         ...
 

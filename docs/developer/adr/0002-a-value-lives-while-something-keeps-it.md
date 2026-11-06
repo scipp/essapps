@@ -38,7 +38,7 @@ So whether it is refused depends only on what its client keeps, not on how far o
 **Nothing is written unless persisted**, since the framework cannot tell which outputs are worth writing (Context).
 A client chooses per output, with `persist=` at submission or at `client.freeze`.
 The store is then the only keeper, as batch reduction and the trigger loop need.
-A failed write fails a record that was persisted at submission, so a controller sees it like any other failed record.
+A failed write fails the record, so a controller sees it like any other failed record.
 The store keys a value by record ID and output name, so a record holds no file name and a write changes no record.
 A persisted output stays readable after an upgrade removes its record's spec version, since the record stays in history.
 
