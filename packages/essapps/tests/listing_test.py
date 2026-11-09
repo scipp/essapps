@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from ess.apps import Backend, Client, Listing, local
+from ess.apps import Backend, Client, ClientId, Listing, local
 from ess.apps.testing import CountingClient, FakeFiles, read_file
 from ess.spec import File, FileRef, RunFile, WorkflowSpec, function_binding
 
@@ -190,10 +190,10 @@ class CountingMetadata:
         return getattr(self._backend, name)
 
     def file_metadata(
-        self, refs: Sequence[FileRef], client: str
+        self, refs: Sequence[FileRef], client_id: ClientId
     ) -> list[dict[str, Any]]:
         self.calls.append(list(refs))
-        return self._backend.file_metadata(refs, client)
+        return self._backend.file_metadata(refs, client_id)
 
 
 def test_a_listing_reads_the_metadata_of_its_files_in_one_call(

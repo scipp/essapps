@@ -50,12 +50,15 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, NewType, Protocol
 
 from ess.spec import FileRef, WorkflowSpec
 
 from .files import Selector
 from .records import Changes, Record, RecordStatus, Request, Template
+
+ClientId = NewType('ClientId', str)
+"""The ID of a client of a backend, from :meth:`BackendProtocol.open_client`."""
 
 Selection = Mapping[str, int | slice]
 """Part of an array: an index or a slice for each dimension it names."""
@@ -100,11 +103,11 @@ class BackendProtocol(Protocol):
 
     # Sessions
 
-    def open_client(self, proposal: str, submitter: str) -> str:
+    def open_client(self, proposal: str, submitter: str) -> ClientId:
         """Start a client of the proposal and return its ID; it keeps nothing yet."""
         ...
 
-    def close_client(self, client: str) -> None:
+    def close_client(self, client_id: ClientId) -> None:
         """
         End the client and release all it keeps (see :meth:`release`). Ending it again
         does nothing.
@@ -113,7 +116,7 @@ class BackendProtocol(Protocol):
 
     # Specs
 
-    def specs(self, client: str) -> list[WorkflowSpec[Any, Any]]:
+    def specs(self, client_id: ClientId) -> list[WorkflowSpec[Any, Any]]:
         """The specs the backend runs, in the order bound."""
         ...
 
@@ -122,7 +125,7 @@ class BackendProtocol(Protocol):
     def submit(
         self,
         entries: list[Entry],
-        client: str,
+        client_id: ClientId,
         *,
         persist: bool | Sequence[str] = False,
     ) -> list[Record]:
@@ -142,7 +145,7 @@ class BackendProtocol(Protocol):
         ----------
         entries:
             The requests.
-        client:
+        client_id:
             The client, which keeps the records unless they persist outputs.
         persist:
             ``True``, or the names of outputs: the store keeps these outputs instead
@@ -167,7 +170,7 @@ class BackendProtocol(Protocol):
         """
         ...
 
-    def cancel(self, ids: Sequence[str], client: str) -> None:
+    def cancel(self, ids: Sequence[str], client_id: ClientId) -> None:
         """
         End the unfinished records as cancelled, and pass this along: what only they
         keep is cancelled, and a record that references one fails. A client may cancel
@@ -175,7 +178,7 @@ class BackendProtocol(Protocol):
         """
         ...
 
-    def status(self, ids: Sequence[str], client: str) -> list[RecordStatus]:
+    def status(self, ids: Sequence[str], client_id: ClientId) -> list[RecordStatus]:
         """The status of each record now, and why it failed, if it did."""
         ...
 
@@ -183,7 +186,7 @@ class BackendProtocol(Protocol):
 
     def records(
         self,
-        client: str,
+        client_id: ClientId,
         *,
         label: str | None = None,
         ids: Sequence[str] | None = None,
@@ -194,7 +197,9 @@ class BackendProtocol(Protocol):
         """
         ...
 
-    def changes(self, after: int, client: str, *, timeout: float = 0.0) -> Changes:
+    def changes(
+        self, after: int, client_id: ClientId, *, timeout: float = 0.0
+    ) -> Changes:
         """
         The IDs of the proposal's records that changed since position ``after`` of
         its feed, and the position to pass next.
@@ -213,7 +218,7 @@ class BackendProtocol(Protocol):
         ----------
         after:
             The position to read from.
-        client:
+        client_id:
             The client.
         timeout:
             How long to wait, in seconds, for a change after ``after``. If none comes,
@@ -226,7 +231,7 @@ class BackendProtocol(Protocol):
         """
         ...
 
-    def plain_request(self, accumulator_id: str, client: str) -> Request:
+    def plain_request(self, accumulator_id: str, client_id: ClientId) -> Request:
         """
         The plain request of the accumulator's state after the pushes logged so far.
         Returns at once. Raises ``NotReadable`` if the state may not be read.
@@ -239,7 +244,7 @@ class BackendProtocol(Protocol):
         self,
         record_id: str,
         names: Sequence[str] | None,
-        client: str,
+        client_id: ClientId,
         *,
         select: Selection | None = None,
     ) -> dict[str, Any]:
@@ -257,7 +262,7 @@ class BackendProtocol(Protocol):
         names:
             The outputs to read, or ``None`` for every output the client may read that
             the workflow returned.
-        client:
+        client_id:
             The client.
         select:
             Copies only this part of each output. It needs ``names``, and each output
@@ -283,7 +288,9 @@ class BackendProtocol(Protocol):
         """
         ...
 
-    def describe(self, record_id: str, name: str, client: str) -> dict[str, Any]:
+    def describe(
+        self, record_id: str, name: str, client_id: ClientId
+    ) -> dict[str, Any]:
         """
         What an output is, without its data. A group gives its fields by name, any
         other output gives ``{name: info}``. An array of at least one dimension is an
@@ -292,14 +299,16 @@ class BackendProtocol(Protocol):
         """
         ...
 
-    def readable(self, ids: Sequence[str], client: str) -> list[tuple[str, ...]]:
+    def readable(
+        self, ids: Sequence[str], client_id: ClientId
+    ) -> list[tuple[str, ...]]:
         """
         The outputs of each record that a request of the client may reference now,
         in declared order. Waits for nothing and reads no value.
         """
         ...
 
-    def release(self, ids: Sequence[str], client: str) -> None:
+    def release(self, ids: Sequence[str], client_id: ClientId) -> None:
         """
         Let go of records, stages, and accumulators the client keeps; others are
         left alone.
@@ -314,7 +323,9 @@ class BackendProtocol(Protocol):
 
     # Stages and accumulators
 
-    def open_stage(self, template: Template, client: str) -> tuple[str, Template]:
+    def open_stage(
+        self, template: Template, client_id: ClientId
+    ) -> tuple[str, Template]:
         """
         Open a stage of the client. Returns its ID and the template with its values as
         the stage holds them, file names resolved.
@@ -329,7 +340,9 @@ class BackendProtocol(Protocol):
         """
         ...
 
-    def open_accumulator(self, template: Template, client: str) -> tuple[str, Template]:
+    def open_accumulator(
+        self, template: Template, client_id: ClientId
+    ) -> tuple[str, Template]:
         """
         Open an accumulator of the client. Returns its ID and the template as history
         holds it.
@@ -354,7 +367,7 @@ class BackendProtocol(Protocol):
         ...
 
     def push(
-        self, accumulator_id: str, rows: Mapping[str, list[Any]], client: str
+        self, accumulator_id: str, rows: Mapping[str, list[Any]], client_id: ClientId
     ) -> None:
         """
         Log rows of one or more blank tables by name; they enter one state.
@@ -373,7 +386,7 @@ class BackendProtocol(Protocol):
     def freeze(
         self,
         accumulator_id: str,
-        client: str,
+        client_id: ClientId,
         *,
         persist: bool | Sequence[str] = False,
     ) -> Record:
@@ -396,7 +409,7 @@ class BackendProtocol(Protocol):
         self,
         accumulator_id: str,
         names: Sequence[str] | None,
-        client: str,
+        client_id: ClientId,
         *,
         select: Selection | None = None,
     ) -> dict[str, Any]:
@@ -414,12 +427,12 @@ class BackendProtocol(Protocol):
 
     # Files
 
-    def files(self, selector: Selector, client: str) -> list[FileRef]:
+    def files(self, selector: Selector, client_id: ClientId) -> list[FileRef]:
         """The matching files the proposal may read, in the order measured."""
         ...
 
     def file_metadata(
-        self, refs: Sequence[FileRef], client: str
+        self, refs: Sequence[FileRef], client_id: ClientId
     ) -> list[dict[str, Any]]:
         """
         The current metadata of each file, named by its identity as :meth:`files` gives

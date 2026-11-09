@@ -10,7 +10,7 @@ from itertools import islice
 
 import pytest
 
-from ess.apps import Backend, Client, Files, Selector, file
+from ess.apps import Backend, Client, ClientId, Files, Selector, file
 from ess.apps.testing import FakeFiles
 from ess.spec import FileRef
 
@@ -67,14 +67,16 @@ class FilesLater:
         self._ref = ref
         self._empty = empty
 
-    def files(self, selector: Selector, client: str) -> list[FileRef]:
+    def files(self, selector: Selector, client_id: ClientId) -> list[FileRef]:
         self._empty -= 1
         return [] if self._empty >= 0 else [self._ref]
 
 
 def test_watch_waits_for_the_interval_between_listings() -> None:
     ref = FileRef(file='uuid:run-1')
-    watch = Files(FilesLater(ref, empty=3), 'client').watch(Selector(), interval=0.01)
+    watch = Files(FilesLater(ref, empty=3), ClientId('client')).watch(
+        Selector(), interval=0.01
+    )
 
     start = time.monotonic()
     assert next(watch) == ref

@@ -81,7 +81,7 @@ def test_a_request_through_a_stage_must_have_the_stage_s_values(
     client = backend.open_client('p1', 'anna')
     stage, template = backend.open_stage(
         Template(SCALE, params={'sample': file(run=1)}, blanks=('scaling',)),
-        client=client,
+        client_id=client,
     )
     twice = {'scaling': {'factor': 2.0}}
     refused = {
@@ -92,10 +92,10 @@ def test_a_request_through_a_stage_must_have_the_stage_s_values(
     }
     for reason, request in refused.items():
         with pytest.raises(SubmitError, match=reason):
-            backend.submit([Entry(request, stage=stage)], client=client)
+            backend.submit([Entry(request, stage=stage)], client_id=client)
 
     (record,) = backend.submit(
-        [Entry(template.fill(params=twice), stage=stage)], client=client
+        [Entry(template.fill(params=twice), stage=stage)], client_id=client
     )
     assert record.request.params['sample'] == template.params['sample']
 
@@ -112,6 +112,6 @@ def test_a_refused_request_is_named_by_its_index(backend: Backend) -> None:
     accepted = Request(LOAD, params={'sample': file(run=1)})
 
     with pytest.raises(SubmitError) as raised:
-        backend.submit([Entry(accepted), Entry(Request(LOAD))], client=client)
+        backend.submit([Entry(accepted), Entry(Request(LOAD))], client_id=client)
 
     assert {error.entry for error in raised.value.errors} == {1}

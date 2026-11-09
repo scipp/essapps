@@ -80,7 +80,7 @@ def test_an_accumulator_value_that_does_not_fit_the_spec_fails_the_reader(
 
 def test_an_accumulator_is_read_through_a_reference(client: Client) -> None:
     with pytest.raises(TypeError, match=r'accumulator\.ref\(output\)'):
-        client.submit(toys.total_accumulator(client))
+        client.submit(toys.total_accumulator(client))  # type: ignore[call-overload]
 
 
 def test_an_accumulator_waits_for_its_fixed_values_and_reads_them_once(
@@ -308,7 +308,7 @@ def test_an_accumulator_refuses_a_template_that_a_request_would_refuse(
     client.release(released)
     # No case of an unknown file: no accumulator here fixes a file field, and
     # the template of an accumulator is checked as that of a stage is.
-    refused = [
+    refused: list[dict[str, Any]] = [
         {'scale': {'factor': 'x'}},  # request_types refuses it
         {'offset': released.ref('value')},  # a record not kept
     ]

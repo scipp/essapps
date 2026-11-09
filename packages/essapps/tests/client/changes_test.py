@@ -12,7 +12,15 @@ from typing import Any
 
 import pytest
 
-from ess.apps import Backend, Changes, Client, ClientEnded, RecordStatus, Status
+from ess.apps import (
+    Backend,
+    Changes,
+    Client,
+    ClientEnded,
+    ClientId,
+    RecordStatus,
+    Status,
+)
 from ess.apps.log import Log
 from ess.apps.testing import FakeFiles, FakeStore
 from ess.spec import Binding
@@ -27,8 +35,10 @@ class CountingFeed(Backend):
         super().__init__(files, bindings)
         self.read: list[int] = []
 
-    def changes(self, after: int, client: str, *, timeout: float = 0.0) -> Changes:
-        changes = super().changes(after, client, timeout=timeout)
+    def changes(
+        self, after: int, client_id: ClientId, *, timeout: float = 0.0
+    ) -> Changes:
+        changes = super().changes(after, client_id, timeout=timeout)
         self.read.append(len(changes.records))
         return changes
 
@@ -341,13 +351,13 @@ class FinishesAfterStatus:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._backend, name)
 
-    def status(self, ids: Sequence[str], client: str) -> list[RecordStatus]:
-        statuses = self._backend.status(ids, client)
+    def status(self, ids: Sequence[str], client_id: ClientId) -> list[RecordStatus]:
+        statuses = self._backend.status(ids, client_id)
         if not self._loading.is_set():
             self._loading.set()
             until(
                 lambda: (
-                    self._backend.status(ids, client)[0].status is not Status.PENDING
+                    self._backend.status(ids, client_id)[0].status is not Status.PENDING
                 )
             )
         return statuses

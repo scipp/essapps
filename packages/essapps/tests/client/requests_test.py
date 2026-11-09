@@ -84,7 +84,9 @@ def test_bind_is_a_list_of_bindings(files: FakeFiles) -> None:
 
 def test_values_go_with_a_spec_or_a_stage(client: Client) -> None:
     with pytest.raises(TypeError, match='params go with a spec or a stage'):
-        client.submit(toys.load_request(1), params={'sample': file(run=2)})
+        client.submit(  # type: ignore[call-overload]
+            toys.load_request(1), params={'sample': file(run=2)}
+        )
 
 
 def test_a_client_gives_the_specs_the_backend_runs(

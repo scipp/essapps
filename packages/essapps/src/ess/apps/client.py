@@ -21,7 +21,7 @@ import functools
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any, Self
+from typing import Any, Protocol, Self, cast, overload
 
 from pydantic import BaseModel
 
@@ -29,7 +29,7 @@ from ess.spec import FileRef, OutputRef, WorkflowSpec
 
 from .errors import FieldError, SubmitError
 from .files import Selector
-from .protocol import BackendProtocol, Entry, Selection
+from .protocol import BackendProtocol, ClientId, Entry, Selection
 from .records import (
     Changes,
     Record,
@@ -45,31 +45,75 @@ _WAIT = 10.0
 """How long :meth:`Client.wait` waits in one call for a change, in seconds."""
 
 
-def _items(what: Any) -> list[Any]:
-    """The items of one item, a list, a tuple, or a dict."""
+type _Items[T] = T | list[T] | Mapping[Any, T]
+"""What a call on several items takes: one item, a list, or a dict."""
+
+
+def _items(what: object) -> list[Any]:
+    """The items of one item, a list, or a dict."""
     if isinstance(what, Mapping):
         return list(what.values())
-    if isinstance(what, list | tuple):
+    if isinstance(what, list):
         return list(what)
     return [what]
 
 
-def _reshape(what: Any, items: list[Any]) -> Any:
+def _reshape(what: object, items: list[Any]) -> Any:
     """``items`` in the shape of ``what``."""
     if isinstance(what, Mapping):
         return dict(zip(what, items, strict=True))
-    if isinstance(what, list | tuple):
-        return type(what)(items)
+    if isinstance(what, list):
+        return items
     return items[0]
 
 
-def _names(what: Any) -> list[str | int | None]:
+def _names(what: object) -> list[str | int | None]:
     """How each item of ``what`` is named in errors: its key or its index."""
     if isinstance(what, Mapping):
         return [str(key) for key in what]
-    if isinstance(what, list | tuple):
+    if isinstance(what, list):
         return list(range(len(what)))
     return [None]
+
+
+class _Shaped[I, O](Protocol):
+    """A call that takes items ``I`` and returns ``O`` for each, in the same shape."""
+
+    @overload
+    def __call__(self, what: I, /) -> O: ...
+
+    @overload
+    def __call__(self, what: list[I], /) -> list[O]: ...
+
+    @overload
+    def __call__[K](self, what: Mapping[K, I], /) -> dict[K, O]: ...
+
+
+class _ShapedMethod[S, I, O](Protocol):
+    """A method of ``S`` that, called on an instance, is a :class:`_Shaped`."""
+
+    def __get__(self, instance: S, owner: type[S] | None = None) -> _Shaped[I, O]: ...
+
+
+def _shaped[S, I, O](
+    method: Callable[[S, list[I]], list[O]],
+) -> _ShapedMethod[S, I, O]:
+    """Makes a method on a list of items take one item, a list, or a dict."""
+
+    @functools.wraps(method)
+    def call(self: S, what: object, /) -> Any:
+        return _reshape(what, method(self, _items(what)))
+
+    return cast('_ShapedMethod[S, I, O]', call)
+
+
+def _typed_as[F](method: F) -> Callable[[Callable[..., Any]], F]:
+    """Gives a function that forwards its arguments to ``method`` the same type."""
+
+    def typed(forwarding: Callable[..., Any]) -> F:
+        return cast('F', forwarding)
+
+    return typed
 
 
 def _named(error: FieldError, names: list[str | int | None]) -> FieldError:
@@ -112,13 +156,21 @@ class Files:
     :class:`~ess.apps.files.Selector`). A request names a file with ``file(...)``.
     """
 
-    def __init__(self, backend: BackendProtocol, client: str) -> None:
+    def __init__(self, backend: BackendProtocol, client_id: ClientId) -> None:
         self._backend = backend
-        self._client = client
+        self._id = client_id
+
+    @_shaped
+    def metadata(self, refs: list[FileRef]) -> list[dict[str, Any]]:
+        """
+        The metadata of each file, in the shape of ``refs``; see
+        :meth:`~ess.apps.protocol.BackendProtocol.file_metadata`.
+        """
+        return self._backend.file_metadata(refs, self._id)
 
     def list(self, selector: Selector) -> list[FileRef]:
         """See :meth:`~ess.apps.protocol.BackendProtocol.files`."""
-        return self._backend.files(selector, self._client)
+        return self._backend.files(selector, self._id)
 
     def watch(self, selector: Selector, *, interval: float = 1.0) -> Iterator[FileRef]:
         """
@@ -132,13 +184,6 @@ class Files:
             yield from fresh
             if not fresh:
                 time.sleep(interval)
-
-    def metadata(self, refs: Any) -> Any:
-        """
-        The metadata of each file, in the shape of ``refs``; see
-        :meth:`~ess.apps.protocol.BackendProtocol.file_metadata`.
-        """
-        return _reshape(refs, self._backend.file_metadata(_items(refs), self._client))
 
 
 @dataclass(frozen=True)
@@ -305,6 +350,46 @@ class Client:
 
     # Submitting
 
+    @overload
+    def submit(
+        self,
+        what: WorkflowSpec[Any, Any] | SpecId | Stage,
+        *,
+        params: Mapping[str, Any] | BaseModel | None = None,
+        label: str | None = None,
+        member: str | None = None,
+        persist: bool | Sequence[str] = False,
+    ) -> Record: ...
+
+    @overload
+    def submit(
+        self,
+        what: Request,
+        *,
+        label: str | None = None,
+        member: str | None = None,
+        persist: bool | Sequence[str] = False,
+    ) -> Record: ...
+
+    @overload
+    def submit(
+        self,
+        what: list[Request],
+        *,
+        label: str | None = None,
+        member: str | None = None,
+        persist: bool | Sequence[str] = False,
+    ) -> list[Record]: ...
+
+    @overload
+    def submit[K](
+        self,
+        what: Mapping[K, Request],
+        *,
+        label: str | None = None,
+        persist: bool | Sequence[str] = False,
+    ) -> dict[K, Record]: ...
+
     def submit(
         self,
         what: Any,
@@ -386,6 +471,7 @@ class Client:
             raise SubmitError(_named(e, names) for e in error.errors) from None
         return _reshape(what, records)
 
+    @_typed_as(submit)
     def compute(self, *args: Any, **kwargs: Any) -> Any:
         """
         :meth:`submit`, then :meth:`wait`, and return the records, which a
@@ -395,11 +481,13 @@ class Client:
         self.wait(records)
         return records
 
-    def status(self, records: Any) -> Any:
+    @_shaped
+    def status(self, records: list[Record]) -> list[Status]:
         """The status of each record now: pending, completed, failed, or cancelled."""
-        return _reshape(records, [s.status for s in self._statuses(records)])
+        return [s.status for s in self._statuses(records)]
 
-    def wait(self, records: Any) -> Any:
+    @_shaped
+    def wait(self, records: list[Record]) -> list[Status]:
         """
         The status of each record once all have finished; a failure is not raised. If
         the client ends meanwhile, raises ``ClientEnded``.
@@ -409,21 +497,22 @@ class Client:
             position = self._position
             statuses = [s.status for s in self._statuses(records)]
             if Status.PENDING not in statuses:
-                return _reshape(records, statuses)
+                return statuses
             changes = self._backend.changes(position, self._id, timeout=_WAIT)
             self._position = changes.cursor
 
-    def failure(self, records: Any) -> Any:
+    @_shaped
+    def failure(self, records: list[Record]) -> list[str | None]:
         """
         Why each record failed, or why the backend cancelled it; see
         :class:`~ess.apps.RecordStatus`.
         """
-        return _reshape(records, [s.failure for s in self._statuses(records)])
+        return [s.failure for s in self._statuses(records)]
 
-    def _statuses(self, records: Any) -> list[RecordStatus]:
-        return self._backend.status([r.id for r in _items(records)], self._id)
+    def _statuses(self, records: list[Record]) -> list[RecordStatus]:
+        return self._backend.status([r.id for r in records], self._id)
 
-    def cancel(self, records: Any) -> None:
+    def cancel(self, records: _Items[Record]) -> None:
         """See :meth:`~ess.apps.protocol.BackendProtocol.cancel`."""
         self._backend.cancel([r.id for r in _items(records)], self._id)
 
@@ -434,7 +523,7 @@ class Client:
         A stage of the template; see
         :meth:`~ess.apps.protocol.BackendProtocol.open_stage`.
         """
-        stage_id, resolved = self._backend.open_stage(template, client=self._id)
+        stage_id, resolved = self._backend.open_stage(template, client_id=self._id)
         return Stage(resolved, stage_id)
 
     def accumulator(self, template: Template) -> Accumulator:
@@ -443,10 +532,10 @@ class Client:
         :meth:`~ess.apps.protocol.BackendProtocol.open_accumulator`.
         """
         accumulator_id, resolved = self._backend.open_accumulator(
-            template, client=self._id
+            template, client_id=self._id
         )
         outputs = tuple(self.spec(resolved.spec).outputs.model_fields)
-        push = functools.partial(self._backend.push, accumulator_id, client=self._id)
+        push = functools.partial(self._backend.push, accumulator_id, client_id=self._id)
         return Accumulator(resolved, accumulator_id, outputs, push)
 
     def freeze(
@@ -458,14 +547,32 @@ class Client:
         """
         return self._backend.freeze(accumulator.id, self._id, persist=persist)
 
-    def release(self, what: Any) -> None:
+    def release[T: Record | Stage | Accumulator](self, what: _Items[T]) -> None:
         """
         Release records, stages, or accumulators: one, a list, or a dict. See
         :meth:`~ess.apps.protocol.BackendProtocol.release`.
         """
-        self._backend.release([x.id for x in _items(what)], client=self._id)
+        self._backend.release([x.id for x in _items(what)], client_id=self._id)
 
     # Reading
+
+    @overload
+    def output(
+        self,
+        what: Record | Accumulator,
+        name: None = None,
+        *,
+        select: Selection | None = None,
+    ) -> dict[str, Any]: ...
+
+    @overload
+    def output(
+        self,
+        what: Record | Accumulator,
+        name: str,
+        *,
+        select: Selection | None = None,
+    ) -> Any: ...
 
     def output(
         self,
@@ -509,7 +616,8 @@ class Client:
         """
         return self._backend.describe(record.id, name, self._id)
 
-    def readable(self, records: Any) -> Any:
+    @_shaped
+    def readable(self, records: list[Record]) -> list[tuple[str, ...]]:
         """
         The outputs of each record, by name, that a plain submission of this client
         may reference now. A picker of records calls it at each refresh::
@@ -519,8 +627,7 @@ class Client:
 
         See :meth:`~ess.apps.protocol.BackendProtocol.readable`.
         """
-        ids = [r.id for r in _items(records)]
-        return _reshape(records, self._backend.readable(ids, self._id))
+        return self._backend.readable([r.id for r in records], self._id)
 
     def records(
         self, *, label: str | None = None, ids: Sequence[str] | None = None

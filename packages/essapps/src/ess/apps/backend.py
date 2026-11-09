@@ -185,7 +185,14 @@ from .log import (
     Pushed,
     Submitted,
 )
-from .protocol import BackendProtocol, Entry, FileSource, Selection, Store
+from .protocol import (
+    BackendProtocol,
+    ClientId,
+    Entry,
+    FileSource,
+    Selection,
+    Store,
+)
 from .records import (
     ArrayInfo,
     Changes,
@@ -547,7 +554,7 @@ class Backend(BackendProtocol):
         self._views = Views()
         self._stopped: Exception | None = None  # why an append failed
         # Not history
-        self._clients: dict[str, _Client] = {}  # by client ID, until it ends
+        self._clients: dict[ClientId, _Client] = {}  # by client ID, until it ends
         # by record ID and name
         self._outputs: dict[tuple[str, str], Any] = {}
         # a value, as (record ID, name) or (accumulator, number of pushes), to
@@ -657,8 +664,8 @@ class Backend(BackendProtocol):
                 return f'{where} was not persisted'
         return None
 
-    def specs(self, client: str) -> list[Spec]:
-        self._client(client)
+    def specs(self, client_id: ClientId) -> list[Spec]:
+        self._client(client_id)
         return [binding.spec for binding in self._bindings.values()]
 
     def _spec(self, spec_id: SpecId) -> Spec:
@@ -702,7 +709,7 @@ class Backend(BackendProtocol):
     def submit(
         self,
         entries: list[Entry],
-        client: str,
+        client_id: ClientId,
         *,
         persist: bool | Sequence[str] = False,
     ) -> list[Record]:
@@ -715,20 +722,20 @@ class Backend(BackendProtocol):
         A persist request is logged with the submission (see the module
         docstring).
         """
-        proposal = self._client(client).proposal
+        proposal = self._client(client_id).proposal
         prepared = [self._prepare(i, e, proposal) for i, e in enumerate(entries)]
         requests = [request for request, _ in prepared]
         persisted = [self._persisted(r.spec, persist) for r in requests]
         referenced = {ref.record for r in requests for ref in r.upstream()}
         with self._changed:
-            pinned = self._pin_states(self._client(client), referenced)
+            pinned = self._pin_states(self._client(client_id), referenced)
         try:
             states = {
                 i: (acc, upto, self._check_state(acc, upto))
                 for i, (acc, upto) in pinned.items()
             }
             with self._changed:
-                caller = self._client(client)
+                caller = self._client(client_id)
                 for i, (entry, (request, reads)) in enumerate(
                     zip(entries, prepared, strict=True)
                 ):
@@ -1415,39 +1422,41 @@ class Backend(BackendProtocol):
 
     # Clients and what they keep
 
-    def open_client(self, proposal: str, submitter: str) -> str:
-        client = uuid.uuid4().hex
+    def open_client(self, proposal: str, submitter: str) -> ClientId:
+        client_id = ClientId(uuid.uuid4().hex)
         with self._changed:
             self._check_running()
-            self._clients[client] = _Client(proposal, submitter)
-        return client
+            self._clients[client_id] = _Client(proposal, submitter)
+        return client_id
 
-    def close_client(self, client: str) -> None:
+    def close_client(self, client_id: ClientId) -> None:
         with self._changed:
-            caller = self._clients.get(client)
+            caller = self._clients.get(client_id)
             if caller is None:
                 return
-            self.release([*caller.kept, *caller.stages, *caller.accumulators], client)
-            del self._clients[client]
+            self.release(
+                [*caller.kept, *caller.stages, *caller.accumulators], client_id
+            )
+            del self._clients[client_id]
             self._changed.notify_all()
 
-    def _client(self, client: str) -> _Client:
+    def _client(self, client_id: ClientId) -> _Client:
         """The client, unless it has ended or the backend has stopped."""
         with self._changed:
             self._check_running()
-            caller = self._clients.get(client)
+            caller = self._clients.get(client_id)
         if caller is None:
-            raise ClientEnded(f'client {client} has ended')
+            raise ClientEnded(f'client {client_id} has ended')
         return caller
 
-    def release(self, ids: Sequence[str], client: str) -> None:
+    def release(self, ids: Sequence[str], client_id: ClientId) -> None:
         """
         A pending record that nothing else keeps is cancelled (see :meth:`_drop`).
         The steps of a released accumulator are dropped again each time a reader
         lets go (see :meth:`_unneeded`), and its driver once its readers are done.
         """
         with self._changed:
-            caller = self._client(client)
+            caller = self._client(client_id)
             for i in ids:
                 if (stage := caller.stages.pop(i, None)) is not None:
                     self._let_go_of_template(stage)
@@ -1480,7 +1489,9 @@ class Backend(BackendProtocol):
             self._let_go(reads)
         self._advance(acc)
 
-    def open_stage(self, template: Template, client: str) -> tuple[str, Template]:
+    def open_stage(
+        self, template: Template, client_id: ClientId
+    ) -> tuple[str, Template]:
         """
         A stage of the client, and its template as the stage holds it.
 
@@ -1491,7 +1502,7 @@ class Backend(BackendProtocol):
         or it is released.
         """
         spec_id = template.spec
-        proposal = self._client(client).proposal
+        proposal = self._client(client_id).proposal
         self._spec(spec_id)  # an unknown spec is refused as such
         binding = self._bindings[spec_id]
         if not isinstance(binding, StageBinding):
@@ -1499,14 +1510,16 @@ class Backend(BackendProtocol):
         stored, _, reads = self._checks[spec_id].template(template, proposal)
         stage_id = uuid.uuid4().hex
         with self._changed:
-            caller = self._client(client)
+            caller = self._client(client_id)
             self._check_reads(reads, caller, {})
             given = frozenset(stored.blanks)
             stage = caller.stages[stage_id] = _Stage(binding, stored, given)
             self._readers.update(stage.reads)
         return stage_id, stored
 
-    def open_accumulator(self, template: Template, client: str) -> tuple[str, Template]:
+    def open_accumulator(
+        self, template: Template, client_id: ClientId
+    ) -> tuple[str, Template]:
         """
         An accumulator of the client, and its template as history holds it.
 
@@ -1518,7 +1531,7 @@ class Backend(BackendProtocol):
         with these values, defaults filled in, by name (see :meth:`_advance`).
         """
         spec_id, blanks = template.spec, template.blanks
-        caller = self._client(client)
+        caller = self._client(client_id)
         spec = self._spec(spec_id)
         tables = spec.tables
         binding = self._bindings[spec_id]
@@ -1533,7 +1546,7 @@ class Backend(BackendProtocol):
         stored, fixed, reads = self._checks[spec_id].template(template, caller.proposal)
         accumulator_id = uuid.uuid4().hex
         with self._changed:
-            caller = self._client(client)
+            caller = self._client(client_id)
             self._check_reads(reads, caller, {})
             # The blank tables without rows, so that the pushes extend them
             # into the plain request of each state.
@@ -1553,7 +1566,7 @@ class Backend(BackendProtocol):
         return accumulator_id, acc.template
 
     def push(
-        self, accumulator_id: str, rows: Mapping[str, list[Any]], client: str
+        self, accumulator_id: str, rows: Mapping[str, list[Any]], client_id: ClientId
     ) -> None:
         """
         Log a push of rows of one or more tables, by name; they enter one
@@ -1568,13 +1581,13 @@ class Backend(BackendProtocol):
         is refused if the freeze is logged.
         """
         with self._changed:
-            caller = self._client(client)
+            caller = self._client(client_id)
             acc = self._pushed_into(caller, accumulator_id)
         spec_id = acc.template.spec
         checks = self._checks[spec_id]
         values, reads = checks.push(acc.template.blanks, rows, caller.proposal)
         with self._changed:
-            caller, acc = self._settled(client, accumulator_id)
+            caller, acc = self._settled(client_id, accumulator_id)
             if acc.frozen is not None:
                 raise SubmitError.at(
                     (), f'the accumulator was frozen as record {acc.frozen}'
@@ -1590,7 +1603,7 @@ class Backend(BackendProtocol):
     def freeze(
         self,
         accumulator_id: str,
-        client: str,
+        client_id: ClientId,
         *,
         persist: bool | Sequence[str] = False,
     ) -> Record:
@@ -1612,7 +1625,7 @@ class Backend(BackendProtocol):
         last reader of its state is done, since no push comes to drop them.
         """
         with self._changed:
-            _, acc = self._settled(client, accumulator_id)
+            _, acc = self._settled(client_id, accumulator_id)
             persisted = self._persisted(acc.template.spec, persist)
             if acc.frozen is not None and self._views.status(acc.frozen) is (
                 Status.PENDING
@@ -1627,7 +1640,7 @@ class Backend(BackendProtocol):
             if (refused := self._check_state(acc, upto)) is not None:
                 raise SubmitError.at((), refused)
             with self._changed:
-                caller = self._client(client)
+                caller = self._client(client_id)
                 self._pushed_into(caller, accumulator_id)  # not released or stopped
                 record_id = uuid.uuid4().hex
                 pinned = {accumulator_id: (acc, upto, None)}
@@ -1798,21 +1811,21 @@ class Backend(BackendProtocol):
             raise SubmitError.at((), str(error)) from None
 
     def _settled(
-        self, client: str, accumulator_id: str
+        self, client_id: ClientId, accumulator_id: str
     ) -> tuple[_Client, _Accumulator]:
         """
         The client and its accumulator, for a push or a freeze, once no freeze
         of it is being checked; lock held, and released while it waits.
         """
         while True:
-            caller = self._client(client)
+            caller = self._client(client_id)
             acc = self._pushed_into(caller, accumulator_id)
             if not acc.freezing:
                 return caller, acc
             self._changed.wait()
 
     def _current(
-        self, accumulator_id: str, client: str, *, reader: bool
+        self, accumulator_id: str, client_id: ClientId, *, reader: bool
     ) -> tuple[_Accumulator, int]:
         """
         The accumulator and its number of pushes logged, its current state
@@ -1821,7 +1834,7 @@ class Backend(BackendProtocol):
         may not be read (see :meth:`_accumulator`).
         """
         with self._changed:
-            acc = self._accumulator(self._client(client), accumulator_id)
+            acc = self._accumulator(self._client(client_id), accumulator_id)
             upto = len(self._views.pushes.get(accumulator_id, ()))
             if reader:
                 self._readers[(acc, upto)] += 1
@@ -1844,9 +1857,9 @@ class Backend(BackendProtocol):
             raise KeyError(f'no record {record_id} in proposal {proposal}')
         return record
 
-    def status(self, ids: Sequence[str], client: str) -> list[RecordStatus]:
+    def status(self, ids: Sequence[str], client_id: ClientId) -> list[RecordStatus]:
         with self._changed:
-            proposal = self._client(client).proposal
+            proposal = self._client(client_id).proposal
             for record_id in ids:
                 self._mine(record_id, proposal)
             finished = [self._views.finished.get(i) for i in ids]
@@ -1857,16 +1870,18 @@ class Backend(BackendProtocol):
                 for f in finished
             ]
 
-    def cancel(self, ids: Sequence[str], client: str) -> None:
+    def cancel(self, ids: Sequence[str], client_id: ClientId) -> None:
         with self._changed:
-            proposal = self._client(client).proposal
+            proposal = self._client(client_id).proposal
             for record_id in ids:
                 self._mine(record_id, proposal)
                 self._finish(record_id, Status.CANCELLED)
 
-    def readable(self, ids: Sequence[str], client: str) -> list[tuple[str, ...]]:
+    def readable(
+        self, ids: Sequence[str], client_id: ClientId
+    ) -> list[tuple[str, ...]]:
         with self._changed:
-            caller = self._client(client)
+            caller = self._client(client_id)
             return [
                 tuple(
                     name
@@ -1876,14 +1891,14 @@ class Backend(BackendProtocol):
                 for record_id in ids
             ]
 
-    def plain_request(self, accumulator_id: str, client: str) -> Request:
-        acc, upto = self._current(accumulator_id, client, reader=False)
+    def plain_request(self, accumulator_id: str, client_id: ClientId) -> Request:
+        acc, upto = self._current(accumulator_id, client_id, reader=False)
         with self._changed:
             return self._views.plain(acc.id, upto)
 
     def records(
         self,
-        client: str,
+        client_id: ClientId,
         *,
         label: str | None = None,
         ids: Sequence[str] | None = None,
@@ -1891,7 +1906,7 @@ class Backend(BackendProtocol):
         if label is not None and ids is not None:
             raise ValueError('give a label or ids, not both')
         with self._changed:
-            proposal = self._client(client).proposal
+            proposal = self._client(client_id).proposal
             records = self._views.records
             if ids is not None:
                 return [self._mine(i, proposal) for i in ids]
@@ -1901,36 +1916,40 @@ class Backend(BackendProtocol):
                 ]
             return [r for r in records.values() if r.proposal == proposal]
 
-    def changes(self, after: int, client: str, *, timeout: float = 0.0) -> Changes:
+    def changes(
+        self, after: int, client_id: ClientId, *, timeout: float = 0.0
+    ) -> Changes:
         """Wakes once an event is appended, or the client ends (see :meth:`_append`)."""
         with self._changed:
-            proposal = self._client(client).proposal
+            proposal = self._client(client_id).proposal
             self._changed.wait_for(
                 lambda: (
                     self._stopped is not None
-                    or client not in self._clients
+                    or client_id not in self._clients
                     or self._views.changes(proposal, after).records
                 ),
                 timeout,
             )
-            self._client(client)
+            self._client(client_id)
             return self._views.changes(proposal, after)
 
     def outputs(
         self,
         record_id: str,
         names: Sequence[str] | None,
-        client: str,
+        client_id: ClientId,
         *,
         select: Selection | None = None,
     ) -> dict[str, Any]:
-        values = self._read(record_id, names, client, select=select)
+        values = self._read(record_id, names, client_id, select=select)
         if select is None:
             return values
         return {n: _selected(v, select) for n, v in values.items()}
 
-    def describe(self, record_id: str, name: str, client: str) -> dict[str, Any]:
-        value = self._read(record_id, [name], client, select=None)[name]
+    def describe(
+        self, record_id: str, name: str, client_id: ClientId
+    ) -> dict[str, Any]:
+        value = self._read(record_id, [name], client_id, select=None)[name]
         info = _info(value)
         return info if isinstance(value, BaseModel) else {name: info}
 
@@ -1938,7 +1957,7 @@ class Backend(BackendProtocol):
         self,
         record_id: str,
         names: Sequence[str] | None,
-        client: str,
+        client_id: ClientId,
         *,
         select: Selection | None,
     ) -> dict[str, Any]:
@@ -1948,7 +1967,7 @@ class Backend(BackendProtocol):
         """
         views = self._views
         with self._changed:
-            caller = self._client(client)
+            caller = self._client(client_id)
             record = self._mine(record_id, caller.proposal)
             if select is not None:
                 self._check_select(record.spec, names)
@@ -1965,8 +1984,8 @@ class Backend(BackendProtocol):
                     return False
                 return not any(views.persists((record_id, n)) for n in wanted)
 
-            self._wait_for(lambda: client not in self._clients or ready())
-            self._client(client)
+            self._wait_for(lambda: client_id not in self._clients or ready())
+            self._client(client_id)
             kept = record_id in caller.kept
             every = names is None
             if names is None:
@@ -2014,7 +2033,7 @@ class Backend(BackendProtocol):
         self,
         accumulator_id: str,
         names: Sequence[str] | None,
-        client: str,
+        client_id: ClientId,
         *,
         select: Selection | None = None,
     ) -> dict[str, Any]:
@@ -2023,19 +2042,19 @@ class Backend(BackendProtocol):
         checked, its outputs are computed if no reader has yet, and the outputs or
         their parts are copied (see the module docstring).
         """
-        acc, upto = self._current(accumulator_id, client, reader=True)
+        acc, upto = self._current(accumulator_id, client_id, reader=True)
         try:
             if select is not None:
                 self._check_select(acc.template.spec, names)
             with self._changed:
                 self._wait_for(
                     lambda: (
-                        client not in self._clients
+                        client_id not in self._clients
                         or acc.added == upto
                         or acc.stopped is not None
                     )
                 )
-                self._client(client)
+                self._client(client_id)
                 if acc.added != upto:
                     raise NotReadable(acc.stopped)
             declared = list(self._bindings[acc.template.spec].spec.outputs.model_fields)
@@ -2059,8 +2078,8 @@ class Backend(BackendProtocol):
 
     # Files, within the client's proposal
 
-    def files(self, selector: Selector, client: str) -> list[FileRef]:
-        proposal = self._client(client).proposal
+    def files(self, selector: Selector, client_id: ClientId) -> list[FileRef]:
+        proposal = self._client(client_id).proposal
         return [
             ref
             for ref in self._files.list(selector)
@@ -2068,9 +2087,9 @@ class Backend(BackendProtocol):
         ]
 
     def file_metadata(
-        self, refs: Sequence[FileRef], client: str
+        self, refs: Sequence[FileRef], client_id: ClientId
     ) -> list[dict[str, Any]]:
-        proposal = self._client(client).proposal
+        proposal = self._client(client_id).proposal
         found = [self._files.metadata(ref) for ref in refs]
         for ref, metadata in zip(refs, found, strict=True):
             if not readable(metadata, proposal):

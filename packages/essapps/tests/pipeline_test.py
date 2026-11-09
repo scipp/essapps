@@ -192,4 +192,4 @@ def test_a_field_without_a_key_cannot_be_a_blank(
     backend.close()
 
     assert client.status(record) is Status.FAILED
-    assert "['annotation']: without a key" in client.failure(record)
+    assert "['annotation']: without a key" in str(client.failure(record))

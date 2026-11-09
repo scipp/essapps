@@ -5,10 +5,12 @@
 """Accumulator.push, and the order of pushes against reads."""
 
 import threading
+from typing import Any
 
 import pytest
 
 from ess.apps import (
+    Accumulator,
     Client,
     NotReadable,
     Record,
@@ -54,7 +56,7 @@ def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
     client.release(released)
     total = toys.total_accumulator(client)
     summed = client.accumulator(Template(toys.SUM, blanks=('runs',)))
-    pushes = [
+    pushes: list[tuple[Accumulator, Any, dict[str, Any]]] = [
         (total, toys.TOTAL, {'parts': [{'value': 'x'}]}),  # request_types refuses it
         (total, toys.TOTAL, {'parts': [released.ref('value')]}),  # a record not kept
         (summed, toys.SUM, {'runs': [file(run=9)]}),  # an unknown file

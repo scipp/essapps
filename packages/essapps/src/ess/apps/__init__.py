@@ -8,7 +8,7 @@ from .client import Accumulator, Client, Files, Provenance, Stage
 from .errors import ClientEnded, FieldError, NotReadable, RecordFailed, SubmitError
 from .files import FolderFiles, Selector, file
 from .listing import Listing
-from .protocol import BackendProtocol, FileSource, Store
+from .protocol import BackendProtocol, ClientId, FileSource, Store
 from .records import (
     ArrayInfo,
     Changes,
@@ -29,6 +29,7 @@ __all__ = [
     'Changes',
     'Client',
     'ClientEnded',
+    'ClientId',
     'FieldError',
     'FileSource',
     'Files',
