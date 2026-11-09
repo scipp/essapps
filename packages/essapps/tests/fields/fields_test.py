@@ -3,6 +3,7 @@
 import subprocess
 import sys
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -1204,6 +1205,109 @@ def test_held_leaves_out_what_has_something_missing(
     assert ('run',) in [e.loc for e in missing]
     with pytest.raises(SubmitError):
         form.params
+
+
+def picked(hour: int) -> datetime:
+    """What a time picker gives: no zone, to the second."""
+    return datetime(2026, 3, 4, hour, 6, 7)  # noqa: DTZ001
+
+
+@pytest.mark.parametrize(
+    ('given', 'label', 'edited'),
+    [
+        ('2026-03-04T05:06:07Z', 'At (UTC)', '2026-03-04T06:06:07Z'),
+        ('2026-03-04T05:06:07+02:00', 'At (UTC+02:00)', '2026-03-04T06:06:07+02:00'),
+        ('2026-03-04T05:06:07', 'At (no time zone)', '2026-03-04T06:06:07'),
+        ('2026-03-04T05:06:07.123Z', 'At (UTC)', '2026-03-04T06:06:07Z'),
+    ],
+)
+def test_a_time_edited_keeps_its_zone(
+    client: Client, times_and_lists: Fields, given: str, label: str, edited: str
+) -> None:
+    times = {**GIVEN_TIMES, 'at': given}
+    times_and_lists.set({'times': times, 'lists': {'banks': []}}, Listing(client))
+    time = widget(times_and_lists, label)
+    assert time.value.replace(microsecond=0) == picked(5)
+    time.value = picked(6)
+    assert times_and_lists.params['times'] == {**times, 'at': edited}
+
+
+def test_a_time_unchanged_keeps_its_fraction_of_a_second(
+    client: Client, times_and_lists: Fields
+) -> None:
+    times = {**GIVEN_TIMES, 'at': '2026-03-04T05:06:07.123Z'}
+    times_and_lists.set({'times': times, 'lists': {'banks': []}}, Listing(client))
+    widget(times_and_lists, 'At (UTC)').value = picked(5)
+    assert times_and_lists.params['times'] == {
+        **times,
+        'at': '2026-03-04T05:06:07.123000Z',
+    }
+
+
+def test_a_time_without_a_value_is_in_the_zone_of_its_type(
+    client: Client, times_and_lists: Fields
+) -> None:
+    times_and_lists.set({'lists': {'banks': []}}, Listing(client))
+    widget(times_and_lists, 'At (no time zone)').value = picked(5)
+    widget(times_and_lists, 'Naive (no time zone)').value = picked(5)
+    widget(times_and_lists, 'Aware (UTC)').value = picked(5)
+    assert times_and_lists.params['times'] == GIVEN_TIMES
+
+
+def test_a_value_of_another_type_is_refused_and_the_last_stays(
+    client: Client, options: Fields
+) -> None:
+    options.set({'settings': {'flag': False, 'count': 1}}, Listing(client))
+
+    with pytest.raises(ValueError, match='abc'):
+        options.set({'settings': {'flag': False, 'count': 'abc'}}, Listing(client))
+
+    assert widget(options, 'Count').value == 1
+
+
+def test_a_value_a_picker_does_not_list_leaves_it_unset(
+    client: Client, options: Fields
+) -> None:
+    options.set(
+        {'settings': {'flag': False, 'count': 1, 'mode': 'nope'}}, Listing(client)
+    )
+
+    assert (('settings', 'mode'), 'give a value') in missing(options)
+
+
+def test_a_value_that_no_way_writes_is_refused(
+    client: Client, subtract: Fields
+) -> None:
+    with pytest.raises(ValueError, match='not one of'):
+        subtract.set(
+            {'background': {'scale': 1.0}, 'centre': FileRef(file='uuid:1')},
+            Listing(client),
+        )
+
+
+def test_update_with_no_row_selected_adds_nothing(stack: Fields, run: FileRef) -> None:
+    table(stack, 'Shots').remove_rows()
+    widget_in(stack, 'Shots', 'Run').value = run
+
+    table(stack, 'Shots').update_row()
+
+    assert rows(stack, 'Shots') == []
+
+
+def test_watch_stays_silent_when_nothing_held_changes(
+    client: Client, stack: Fields, run: FileRef
+) -> None:
+    shots = [{'run': run, 'thickness': 2.0}, {'run': run, 'thickness': 3.0}]
+    stack.set({'runs': [run], 'shots': shots}, Listing(client))
+    calls: list[None] = []
+    stack.watch(lambda: calls.append(None))
+
+    table(stack, 'Shots').select([1])
+    table(stack, 'Shots').discard()
+    table(stack, 'Shots').select([])
+    table(stack, 'Shots').add_row()  # refused: the editor has nothing given
+
+    assert calls == []
 
 
 def test_the_fields_import_no_widget_library() -> None:

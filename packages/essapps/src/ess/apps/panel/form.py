@@ -93,9 +93,12 @@ def _input_widget(field: Input) -> Any:
 
 def _input(field: Input) -> Any:
     widget = _input_widget(field)
+    options: list[tuple[str, Any]] = []
 
     def show() -> None:
-        if isinstance(widget, pn.widgets.Select) and widget.options != field.options:
+        nonlocal options
+        if list(field.options.items()) != options:
+            options = list(field.options.items())
             widget.options = dict(field.options)
         widget.label = field.label
         widget.value = field.value

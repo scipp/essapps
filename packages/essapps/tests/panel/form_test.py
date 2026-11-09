@@ -10,6 +10,7 @@ from typing import Any
 
 import panel as pn
 import pytest
+from pydantic import BaseModel, Field
 
 from ess.apps import Client, Listing, SubmitError
 from ess.apps.panel import Form
@@ -103,6 +104,12 @@ def sent(widget: Any, value: Any) -> None:
     widget.param.update(**widget._process_property_change({'value': value}))
 
 
+def message(form: Form, title: str) -> Any:
+    """The message of the table of the section ``title``."""
+    (found,) = section(form, title).select(pn.pane.Markdown)
+    return found
+
+
 def missing(form: Form) -> set[tuple[tuple[str | int, ...], str]]:
     """Each place where the form has nothing given, with what to do there."""
     with pytest.raises(SubmitError) as refused:
@@ -126,48 +133,81 @@ def test_values_of_each_type_start_at_their_default_or_with_nothing_given(
     assert shown(widget(options, 'Start (UTC)')) == '2026-01-01 00:00:00'
 
 
-@pytest.mark.parametrize(
-    ('given', 'label', 'edited'),
-    [
-        ('2026-03-04T05:06:07Z', 'At (UTC)', '2026-03-04T06:06:07Z'),
-        ('2026-03-04T05:06:07+02:00', 'At (UTC+02:00)', '2026-03-04T06:06:07+02:00'),
-        ('2026-03-04T05:06:07', 'At (no time zone)', '2026-03-04T06:06:07'),
-        ('2026-03-04T05:06:07.123Z', 'At (UTC)', '2026-03-04T06:06:07Z'),
-    ],
-)
 def test_a_time_edited_in_the_browser_keeps_its_zone(
-    client: Client, times_and_lists: Form, given: str, label: str, edited: str
+    client: Client, times_and_lists: Form
 ) -> None:
-    times = {**GIVEN_TIMES, 'at': given}
+    times = {**GIVEN_TIMES, 'at': '2026-03-04T05:06:07Z'}
     times_and_lists.set({'times': times, 'lists': {'banks': []}}, Listing(client))
-    picker = widget(times_and_lists, label)
+    picker = widget(times_and_lists, 'At (UTC)')
     assert shown(picker) == '2026-03-04 05:06:07'
     sent(picker, '2026-03-04 06:06:07')
-    assert times_and_lists.params['times'] == {**times, 'at': edited}
+    assert times_and_lists.params['times'] == {**times, 'at': '2026-03-04T06:06:07Z'}
 
 
-def test_a_time_unchanged_in_the_browser_keeps_its_fraction_of_a_second(
-    client: Client,
-    times_and_lists: Form,
+@pytest.mark.parametrize(
+    ('title', 'label', 'kind'),
+    [
+        ('Settings', 'Count', pn.widgets.IntInput),
+        ('Settings', 'Name', pn.widgets.TextInput),
+        ('Settings', 'Mode', pn.widgets.Select),
+        ('Settings', 'Start (UTC)', pn.widgets.DatetimePicker),
+    ],
+)
+def test_each_kind_of_scalar_has_its_widget(
+    options: Form, title: str, label: str, kind: type
 ) -> None:
-    times = {**GIVEN_TIMES, 'at': '2026-03-04T05:06:07.123Z'}
-    times_and_lists.set({'times': times, 'lists': {'banks': []}}, Listing(client))
-    sent(widget(times_and_lists, 'At (UTC)'), '2026-03-04 05:06:07')
-    assert times_and_lists.params['times'] == {
-        **times,
-        'at': '2026-03-04T05:06:07.123000Z',
-    }
+    assert isinstance(widget_in(options, title, label), kind)
 
 
-def test_a_time_without_a_value_is_in_the_zone_of_its_type(
+def test_a_float_has_a_float_input_with_the_description_of_its_field(
     client: Client,
-    times_and_lists: Form,
 ) -> None:
-    times_and_lists.set({'lists': {'banks': []}}, Listing(client))
-    sent(widget(times_and_lists, 'At (no time zone)'), '2026-03-04 05:06:07')
-    sent(widget(times_and_lists, 'Naive (no time zone)'), '2026-03-04 05:06:07')
-    sent(widget(times_and_lists, 'Aware (UTC)'), '2026-03-04 05:06:07')
-    assert times_and_lists.params['times'] == GIVEN_TIMES
+    class Model(BaseModel):
+        thickness: float = Field(default=1.0, description='In mm.')
+
+    found = widget(Form(Model, Listing(client)), 'Thickness')
+
+    assert isinstance(found, pn.widgets.FloatInput)
+    assert found.description == 'In mm.'
+
+
+def test_a_choice_in_a_group_shows_in_a_card_titled_by_its_field(
+    client: Client, nested_spec: Spec
+) -> None:
+    cards = form_of(nested_spec, client).panel().select(pn.Card)
+
+    assert 'Window' in [card.title for card in cards]
+
+
+def test_a_file_set_stays_picked_once_shown_in_a_browser(
+    client: Client, reduce_spec: Spec
+) -> None:
+    form = form_of(reduce_spec, client)
+    form.panel().get_root()  # a rendered Select moves a value its options lack
+    first, second = FileRef(file='uuid:1'), FileRef(file='uuid:2')
+
+    form.set({'run': first}, Listing(client))
+    form.set({'run': second}, Listing(client))
+
+    assert form.held()[0]['run'] == second
+
+
+def test_the_way_chosen_is_the_way_shown(client: Client, subtract: Form) -> None:
+    subtract.set(
+        {'background': {'scale': 1.0}, 'centre': {'x': 2.0, 'y': 0.0}}, Listing(client)
+    )
+    x = widget_in(subtract, 'Centre', 'X')
+    (given,) = (c for c in section(subtract, 'Centre').select(pn.Column) if x in c)
+    assert given.visible is True
+
+    way(subtract, 'Centre').value = 'None'
+
+    assert given.visible is False
+
+
+def test_the_selector_of_one_way_is_hidden(subtract: Form) -> None:
+    assert way(subtract, 'Background').visible is False
+    assert way(subtract, 'Centre').visible is True
 
 
 def test_an_input_and_its_field_follow_each_other(
@@ -203,6 +243,43 @@ def test_the_buttons_of_the_elements_change_the_field(
     assert missing(options) >= {(('settings', 'banks', 0), 'give a value')}
     widget(options, 'Remove from Banks').clicks += 1
     assert options.params['settings']['banks'] == []
+
+
+def test_the_buttons_of_a_table_change_its_field(
+    client: Client, stack: Form, run: FileRef
+) -> None:
+    stack.set({'runs': [run]}, Listing(client))
+    click(stack, 'Shots', 'Add as new row')
+    assert 'choose a file' in message(stack, 'Shots').object
+    assert widget_in(stack, 'Shots', 'Update row').disabled is True
+
+    widget_in(stack, 'Shots', 'Run').value = run
+    widget_in(stack, 'Shots', 'Thickness').value = 2.0
+    click(stack, 'Shots', 'Add as new row')
+    assert stack.params['shots'] == [{'run': run, 'thickness': 2.0}]
+    assert table(stack, 'Shots').selection == [0]
+    assert widget_in(stack, 'Shots', 'Update row').disabled is False
+
+    widget_in(stack, 'Shots', 'Thickness').value = 3.0
+    click(stack, 'Shots', 'Discard')
+    assert widget_in(stack, 'Shots', 'Thickness').value == 2.0
+
+    click(stack, 'Shots', 'Remove')
+    assert stack.params['shots'] == []
+
+
+def test_a_selection_refused_goes_back_in_the_table(
+    client: Client, stack: Form, run: FileRef
+) -> None:
+    shots = [{'run': run, 'thickness': 2.0}, {'run': run, 'thickness': 3.0}]
+    stack.set({'runs': [run], 'shots': shots}, Listing(client))
+    table(stack, 'Shots').selection = [0]
+    widget_in(stack, 'Shots', 'Thickness').value = 9.0
+
+    table(stack, 'Shots').selection = [1]
+
+    assert table(stack, 'Shots').selection == [0]
+    assert 'holds changes' in message(stack, 'Shots').object
 
 
 def test_a_way_and_its_field_follow_each_other(client: Client, subtract: Form) -> None:

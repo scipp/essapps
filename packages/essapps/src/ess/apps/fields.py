@@ -49,6 +49,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime, tzinfo
 from enum import Enum
+from numbers import Integral, Real
 from typing import Any, Literal, Union, get_args, get_origin
 
 from pydantic import AwareDatetime, BaseModel
@@ -78,6 +79,9 @@ type Missing = list[FieldError]
 
 type Changed = Callable[[], None]
 """Called when a field changed."""
+
+_KINDS = {'float': Real, 'int': Integral, 'text': str, 'time': datetime}
+"""What an input of each kind holds, besides ``None``."""
 
 _HOLDS_CHANGES = 'the editor holds changes: add or update a row, or discard them'
 """What a user who changed the editor of a table is to do before going on."""
@@ -240,7 +244,9 @@ class ScalarField(Input):
     A scalar: an ``int``, ``float``, or ``str`` input, or a picker of a time,
     that may be unset, or for a ``bool``, an enum, or a ``Literal``, a picker
     of its values with an option for none, :data:`UNSET` as at a file, so that it
-    may start unset. It gives the JSON form of its value.
+    may start unset. It gives the JSON form of its value. ``set`` raises
+    ``ValueError`` for a value of another type, and a value that a picker does
+    not list leaves it unset.
     """
 
     def __init__(
@@ -295,6 +301,10 @@ class ScalarField(Input):
             value = self._type(value)  # a record holds an enum by its value
         if self.kind == 'time':
             value = self._time(value)
+        if self.kind == 'pick':
+            value = value if value in self.options.values() else UNSET
+        elif value is not None and not isinstance(value, _KINDS[self.kind]):
+            raise ValueError(f'{self.label}: {value!r} is not of the kind {self.kind}')
         self._value = value
         self._notify()
 
@@ -515,9 +525,17 @@ class ChoiceField(Field):
         self._notify()
 
     def _label(self, value: Any) -> str | None:
-        """The label of the way that writes ``value``, or ``None`` if unset."""
+        """
+        The label of the way that writes ``value``, or ``None`` if unset. Raises
+        ``ValueError`` if no way writes it.
+        """
         if value is UNSET:
             return next(iter(self.ways)) if len(self.ways) == 1 else None
+        if (label := self._kind_of_way(value)) in self.ways:
+            return label
+        raise ValueError(f'{value!r}: not one of {self.offered}')
+
+    def _kind_of_way(self, value: Any) -> str:
         if value is None:
             return self.NONE
         ref = as_ref(value)
@@ -605,8 +623,22 @@ class RowsField(Field):
         if referenced:
             self._refs['Record'] = OutputRef
         self.editor = _make('', element, (), UNSET, listing)
-        self.editor.subscribe(self._notify)
+        self.editor.subscribe(self._editor_changed)
+        self._loading = False
         self.set(UNSET)
+
+    def _editor_changed(self) -> None:
+        if not self._loading:
+            self._notify()
+
+    @contextmanager
+    def _loads(self) -> Iterator[None]:
+        """Load the editor without telling of each field on the way."""
+        self._loading = True
+        try:
+            yield
+        finally:
+            self._loading = False
 
     def _selected(self) -> int | None:
         """The row selected, if one is."""
@@ -637,7 +669,8 @@ class RowsField(Field):
 
     def _load(self) -> None:
         i = self._selected()
-        self.editor.set(UNSET if i is None else (self._rows or [])[i])
+        with self._loads():
+            self.editor.set(UNSET if i is None else (self._rows or [])[i])
         self._shown = self._held()
         self.can_update = i is not None
         self.message = ''
@@ -648,8 +681,9 @@ class RowsField(Field):
         self._write(None)
 
     def update_row(self) -> None:
-        """Write the editor to the row selected, if nothing is missing."""
-        self._write(self._selected())
+        """Write the editor to the row selected, if one is and nothing is missing."""
+        if (i := self._selected()) is not None:
+            self._write(i)
 
     def _write(self, i: int | None) -> None:
         value, missing = self._held()
@@ -734,10 +768,11 @@ class RowsField(Field):
             self._rows = None
         else:
             self._rows = []
-            for item in value:
-                self.editor.set(item)
-                given, missing = self._held()
-                self._rows.append(item if missing else given)
+            with self._loads():
+                for item in value:
+                    self.editor.set(item)
+                    given, missing = self._held()
+                    self._rows.append(item if missing else given)
         self.selection = []
         self._load()
         self._render()
@@ -746,7 +781,8 @@ class RowsField(Field):
     def refresh(self, listing: Listing) -> None:
         self._listing = listing
         changed = self._held() != self._shown
-        self.editor.refresh(listing)
+        with self._loads():
+            self.editor.refresh(listing)
         if not changed:
             self._shown = self._held()
         self._render()
@@ -786,19 +822,25 @@ class Fields:
         }
         self.titles = {n: field_types.title(n, i) for n, i in shown.items()}
         self._on_change: Changed | None = None
+        self._last: Any = None
         self._loading = False
         for field in self.fields.values():
             field.subscribe(self._changed)
 
     def watch(self, on_change: Changed) -> None:
         """
-        Call ``on_change`` when a person changes what the fields hold. :meth:`set`
-        and :meth:`refresh` do not call it, whatever they change.
+        Call ``on_change`` when a person changes what the fields hold or what
+        is missing. Selecting a row does neither. :meth:`set` and :meth:`refresh`
+        do not call it, whatever they change.
         """
         self._on_change = on_change
+        self._last = self.held()
 
     def _changed(self) -> None:
-        if self._on_change is not None and not self._loading:
+        if self._on_change is None or self._loading:
+            return
+        if (held := self.held()) != self._last:
+            self._last = held
             self._on_change()
 
     @contextmanager
@@ -808,6 +850,8 @@ class Fields:
             yield
         finally:
             self._loading = False
+            if self._on_change is not None:
+                self._last = self.held()
 
     @property
     def params(self) -> dict[str, Any]:
