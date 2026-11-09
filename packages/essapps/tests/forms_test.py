@@ -825,7 +825,7 @@ def test_the_schema_of_a_file_field_holds_its_metadata() -> None:
 
 def _failed(client: Client, record: Record) -> str:
     assert client.wait(record) is Status.FAILED
-    return client.failure(record)
+    return str(client.failure(record))
 
 
 def test_an_inline_value_and_a_reference_to_equal_data_are_two_rows(

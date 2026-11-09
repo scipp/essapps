@@ -388,10 +388,10 @@ def test_a_referenced_value_that_fails_its_type_s_check_fails_where_it_is_read(
     acc = client.accumulator(Template(USE_MANY, blanks=('positive',)))
     acc.push(positive=[made])
 
-    assert 'not positive' in client.failure(
-        client.compute(USE, params={'positive': made})
+    assert 'not positive' in str(
+        client.failure(client.compute(USE, params={'positive': made}))
     )
-    assert 'not positive' in client.failure(client.compute(stage))
+    assert 'not positive' in str(client.failure(client.compute(stage)))
     with pytest.raises(NotReadable, match=r'push 0 failed: (?s:.*)not positive'):
         client.output(acc, 'value')
     with pytest.raises(SubmitError, match='the accumulator stopped'):

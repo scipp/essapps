@@ -168,7 +168,7 @@ def test_a_stage_whose_staging_fails_fails_the_calls_waiting_for_it_and_stops(
     loading.set()
     client.wait(pending)
 
-    assert sorted(client.failure(r) for r in pending) == [
+    assert sorted(str(client.failure(r)) for r in pending) == [
         'OSError: staging failed',
         *['the stage stopped: staging failed: OSError: staging failed'] * 2,
     ]
@@ -183,7 +183,7 @@ def test_a_stage_refuses_a_template_that_a_request_would_refuse(
 ) -> None:
     released = client.compute(toys.load_request(1))
     client.release(released)
-    refused = [
+    refused: list[tuple[Any, dict[str, Any], str]] = [
         (toys.SHIFT, {'source': file(run=1)}, 'shift'),  # request_types refuses it
         (toys.SHIFT, {'source': released.ref('value')}, 'shift'),  # a record not kept
         (toys.SCALE, {'sample': file(run=9)}, 'scaling'),  # an unknown file

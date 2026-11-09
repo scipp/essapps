@@ -10,6 +10,7 @@ import threading
 import pytest
 
 from ess.apps import (
+    Accumulator,
     Backend,
     Client,
     ClientEnded,
@@ -174,7 +175,8 @@ def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
 ) -> None:
     load = client.compute(toys.load_request(1))
     total = client.accumulator(Template(toys.TOTAL, blanks=('parts',)))
-    client.release([load, total])
+    both: list[Record | Accumulator] = [load, total]
+    client.release(both)
     unknown_load = load.model_copy(update={'id': 'unknown'})
     unknown_total = copy.copy(total)
     unknown_total.id = 'unknown'
