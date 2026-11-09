@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ess.apps import Client, Listing, Record, SpecId, Status, local
 from ess.apps.panel import App, Outputs, Records
 from ess.apps.panel.records import describe
+from ess.apps.plotting import Plot
 from ess.apps.testing import FakeFiles, RecordingClient, read_file
 from ess.spec import (
     FileRef,
@@ -607,7 +608,7 @@ def test_plots_configured_for_a_spec_are_views_of_the_outputs_of_its_records(
     scale = client.submit(SCALE, params={'curve': curve.ref('curve')})
     client.wait([curve, scale])
     seen = Seen()
-    plots = {SpecId.of(CURVE): {'Counts': seen.counts}}
+    plots = {SpecId.of(CURVE): {'Counts': Plot(seen.counts)}}
     outputs = Outputs(client, Listing(client), plots=plots)
     assert outputs.views.options == ['Plot', 'Provenance']
 
@@ -634,7 +635,7 @@ def test_a_view_the_record_does_not_offer_falls_back_to_the_plot(
     curve = client.submit(CURVE, params={'run': file})
     scale = client.submit(SCALE, params={'curve': curve.ref('curve')})
     client.wait([curve, scale])
-    plots = {SpecId.of(CURVE): {'Counts': Seen().counts}}
+    plots = {SpecId.of(CURVE): {'Counts': Plot(Seen().counts)}}
     outputs = Outputs(client, Listing(client), plots=plots)
     outputs.select(curve, 'curve')
     outputs.views.value = 'Counts'
@@ -654,7 +655,7 @@ def test_a_configured_plot_that_fails_shows_why_as_text(
     curve = client.submit(CURVE, params={'run': file})
     client.wait(curve)
     outputs = Outputs(
-        client, Listing(client), plots={SpecId.of(CURVE): {'Bad': explode}}
+        client, Listing(client), plots={SpecId.of(CURVE): {'Bad': Plot(explode)}}
     )
     outputs.select(curve, 'curve')
 
@@ -665,8 +666,64 @@ def test_a_configured_plot_that_fails_shows_why_as_text(
     assert 'RuntimeError: no plot today' in text.object
 
 
+def scale_on_curve(out: ScaleOutputs, curve: Curve) -> Any:
+    return pp.plot(curve.counts, title=f'{out.total.__class__.__name__} on curve')
+
+
+@pytest.fixture
+def scale_view(client: Client, file: FileRef) -> tuple[Outputs, Record, Record]:
+    """The outputs with a view of a scale that draws the curve it referenced."""
+    curve = client.submit(CURVE, params={'run': file})
+    scale = client.submit(SCALE, params={'curve': curve.ref('curve')})
+    client.wait([curve, scale])
+    plots = {SpecId.of(SCALE): {'On curve': Plot(scale_on_curve, inputs=('curve',))}}
+    return Outputs(client, Listing(client), plots=plots), curve, scale
+
+
+def test_a_configured_plot_takes_the_value_its_record_referenced(
+    scale_view: tuple[Outputs, Record, Record],
+) -> None:
+    outputs, _, scale = scale_view
+    outputs.select(scale, 'total')
+
+    outputs.views.value = 'On curve'
+
+    (pane,) = outputs.view.objects
+    assert isinstance(pane, pn.pane.Matplotlib), pane.object
+    assert pane.object.axes[0].get_title() == 'Total on curve'
+
+
+def test_a_configured_plot_whose_input_is_released_shows_why_as_text(
+    client: Client, scale_view: tuple[Outputs, Record, Record]
+) -> None:
+    outputs, curve, scale = scale_view
+    client.release(curve)
+    outputs.select(scale, 'total')
+
+    outputs.views.value = 'On curve'
+
+    (text,) = outputs.view.objects
+    assert 'On curve failed' in text.object
+    assert 'NotReadable' in text.object
+
+
+def test_a_configured_plot_input_must_reference_an_output(
+    client: Client, file: FileRef
+) -> None:
+    curve = client.submit(CURVE, params={'run': file})
+    client.wait(curve)
+    plots = {SpecId.of(CURVE): {'Counts': Plot(Seen().counts, inputs=('run',))}}
+    outputs = Outputs(client, Listing(client), plots=plots)
+    outputs.select(curve, 'curve')
+
+    outputs.views.value = 'Counts'
+
+    (text,) = outputs.view.objects
+    assert 'run does not reference a whole output' in text.object
+
+
 def test_a_configured_plot_cannot_take_the_name_of_a_view_of_every_record() -> None:
-    plots = {SpecId.of(CURVE): {'Plot': explode}}
+    plots = {SpecId.of(CURVE): {'Plot': Plot(explode)}}
     with pytest.raises(ValueError, match="curve/v1: \\['Plot'\\]"):
         Outputs(None, None, plots=plots)  # type: ignore[arg-type]
 
@@ -675,7 +732,7 @@ def test_the_app_passes_its_plots_to_the_outputs(client: Client, file: FileRef) 
     curve = client.submit(CURVE, params={'run': file})
     client.wait(curve)
     seen = Seen()
-    app = App(client, plots={SpecId.of(CURVE): {'Counts': seen.counts}})
+    app = App(client, plots={SpecId.of(CURVE): {'Counts': Plot(seen.counts)}})
     app.poll()
 
     app.outputs.select(curve, 'curve')

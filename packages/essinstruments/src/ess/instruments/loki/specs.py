@@ -3,14 +3,21 @@
 """
 The specs of LoKI's reductions.
 
-A reduction is three records, each of which a person may look at before the next::
+A reduction is a chain of records, each of which a person may look at before the
+next::
 
-    masks = client.submit(MASKS, params={'run': file(run=60339),
+    detector = client.submit(CALIBRATED_DETECTOR, params={'run': file(run=60339)})
+    masks = client.submit(MASKS, params={'detector': detector.ref('detector'),
                                          'mask_files': [file(path=mask_file)]})
-    centre = client.submit(BEAM_CENTRE, params={'sample': file(run=60339),
+    centre = client.submit(BEAM_CENTRE, params={'detector': detector.ref('detector'),
                                                 'masks': masks.ref('masks')})
     iofq = client.submit(IOFQ, params={'masks': masks.ref('masks'),
                                        'beam_centre': centre.ref('centre'), ...})
+
+The detector is loaded once. The specs that read it take it by reference and return
+only their small outputs, so that the request of such a record names the detector its
+outputs were computed from, and a plot finds the detector there. They take no file of
+the run, which could differ from the detector, so the detector holds all they need.
 
 The specs are separate where a value can outlive one sample: the masks hold for an
 experiment, and one beam centre can serve the samples of a sample changer, though a
@@ -20,10 +27,10 @@ depend on the sample, and a stage with the sample blank reduces the can once.
 """
 
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
 import scipp as sc
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ess.spec import (
     BackgroundRunFile,
@@ -50,7 +57,8 @@ class PixelMasks(BaseModel, arbitrary_types_allowed=True):
 
 class DetectorImage(BaseModel, arbitrary_types_allowed=True):
     """
-    The counts per pixel of one run, with each pixel's position and the masks.
+    The counts per pixel of one run, with each pixel's ``position`` and
+    ``detector_number``, and the ``sample_position`` and ``source_position`` of the run.
 
     The positions are those of the file, not corrected by a beam centre. With the
     sample at the origin, as in the files of the detector test at Larmor, a beam
@@ -106,8 +114,28 @@ class TransmissionCurves(BaseModel, arbitrary_types_allowed=True):
     can: sc.DataArray
 
 
+class CalibratedDetectorParams(BaseModel):
+    run: RunFile = Field(description='The run to load the detector of.')
+
+
+class CalibratedDetectorOutputs(BaseModel):
+    detector: DetectorImage
+
+
+CALIBRATED_DETECTOR = WorkflowSpec(
+    name='loki-calibrated-detector',
+    version=1,
+    title='Calibrated detector',
+    description='The counts per pixel of a run, with the position of each pixel.',
+    params=CalibratedDetectorParams,
+    outputs=CalibratedDetectorOutputs,
+)
+
+
 class MasksParams(BaseModel):
-    run: RunFile = Field(description='The run to show the masks on.')
+    detector: Referenced[DetectorImage] = Field(
+        description='The detector whose pixels the masks hold.'
+    )
     mask_files: list[MaskFile] = Field(
         description='The files of the masks. Without any, no pixel is left out.'
     )
@@ -115,27 +143,27 @@ class MasksParams(BaseModel):
 
 class MasksOutputs(BaseModel):
     masks: PixelMasks
-    image: DetectorImage
 
 
 MASKS = WorkflowSpec(
     name='loki-masks',
     version=1,
     title='Pixel masks',
-    description='Pixel masks from mask files, shown on the detector image of a run.',
+    description='Pixel masks from mask files.',
     params=MasksParams,
     outputs=MasksOutputs,
 )
 
 
 class BeamCentreParams(BaseModel):
-    sample: SampleRunFile = Field(description='The run to find the beam centre from.')
+    detector: Referenced[DetectorImage] = Field(
+        description='The detector to find the beam centre from.'
+    )
     masks: Referenced[PixelMasks] = Field(description='The pixels to leave out.')
 
 
 class BeamCentreOutputs(BaseModel):
     centre: BeamCentre
-    image: DetectorImage
 
 
 BEAM_CENTRE = WorkflowSpec(
@@ -145,6 +173,44 @@ BEAM_CENTRE = WorkflowSpec(
     description='The beam centre, from the centre of mass of the counts of a run.',
     params=BeamCentreParams,
     outputs=BeamCentreOutputs,
+)
+
+
+class AngleRange(BaseModel):
+    """The pixels whose angle to the beam, seen from the sample, is in [start, stop)."""
+
+    start: float = Field(ge=0, description='The lower limit, in degrees.')
+    stop: float = Field(le=180, description='The upper limit, in degrees.')
+
+    @model_validator(mode='after')
+    def _stop_follows_start(self) -> Self:
+        if self.stop <= self.start:
+            raise ValueError(f'stop {self.stop} must exceed start {self.start}')
+        return self
+
+
+class CreateMaskParams(BaseModel):
+    detector: Referenced[DetectorImage] = Field(
+        description='The detector whose pixels the mask holds.'
+    )
+    beam_centre: BeamCentre | Referenced[BeamCentre] = Field(
+        description='The beam centre, typed in or found by a beam-centre record.'
+    )
+    base: Referenced[PixelMasks] | None = Field(
+        description='The masks to add to. None starts without any.'
+    )
+    shapes: list[AngleRange] = Field(
+        min_length=1, description='The pixels to leave out, any of these.'
+    )
+
+
+CREATE_MASK = WorkflowSpec(
+    name='loki-create-mask',
+    version=1,
+    title='Create mask',
+    description='A pixel mask of the angle ranges given, added to other masks.',
+    params=CreateMaskParams,
+    outputs=MasksOutputs,
 )
 
 

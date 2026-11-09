@@ -24,8 +24,9 @@ record has completed. A field of one or two dimensions is read with the output
 and drawn whole. A field of more dimensions has a slider for each dimension but
 the last two, and a cut of it is read with ``select=`` for the positions of the
 sliders, so no more of the array is read than is drawn. A plot configured for a
-spec is a function of the record's outputs, every one of them read: it returns a
-plopp figure, or fails, which the view shows as text.
+spec (:class:`~ess.apps.plotting.Plot`) is a function of the record's outputs, every
+one of them read, and of the values its request referenced that it declares: it
+returns a plopp figure, or fails, which the view shows as text.
 
 Removing an output releases its record (``client.release``), so the record
 stays in the proposal's history and in the graphs of the records that read it.
@@ -40,12 +41,11 @@ from typing import Any
 import panel as pn
 import plopp as pp
 from plopp.core.typing import FigureLike as Figure
-from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
 from ess.apps import ArrayInfo, Client, Listing, NotReadable, Record, SpecId, Status
-from ess.apps.plotting import slider_dims
-from ess.spec import field_types
+from ess.apps.plotting import Plot, slider_dims
+from ess.spec import OutputRef, field_types
 
 from .graph import Graph
 from .table import Table, with_sidebar
@@ -53,9 +53,8 @@ from .table import Table, with_sidebar
 _PLOT = 'Plot'
 _PROVENANCE = 'Provenance'
 
-Plots = Mapping[SpecId, Mapping[str, Callable[[BaseModel], Figure]]]
-"""Plots by the name of a view, for the records of a spec: each a function of the
-record's outputs, as an instance of ``spec.outputs``."""
+Plots = Mapping[SpecId, Mapping[str, Plot]]
+"""Plots by the name of a view, for the records of a spec."""
 
 
 class Outputs:
@@ -69,7 +68,7 @@ class Outputs:
     while its record is pending or completed, and when its record has failed,
     until removed. ``refresh`` is called once an output is removed; by
     default it lists the outputs again. ``plots`` holds, for the spec of a
-    record, functions by the name of the view that shows their figure.
+    record, the plots by the name of the view that shows their figure.
     """
 
     def __init__(
@@ -218,15 +217,24 @@ class Outputs:
         if self._listing.status[record.id] is not Status.COMPLETED:
             return pn.pane.Markdown('')
         try:
-            make = self._plots[record.spec][view]
+            plot = self._plots[record.spec][view]
             model = self._listing.specs[record.id].outputs
             values = self._client.output(record)
             outputs = model.model_construct(
                 **{n: values.get(n) for n in model.model_fields}
             )
-            return _figure_pane(make(outputs))
+            inputs = {name: self._input(record, name) for name in plot.inputs}
+            return _figure_pane(plot.function(outputs, **inputs))
         except Exception as error:  # a plot is code of the workflow's author
             return pn.pane.Markdown(f'{view} failed: `{type(error).__name__}: {error}`')
+
+    def _input(self, record: Record, name: str) -> Any:
+        """The value that the param ``name`` of the record's request references."""
+        ref = record.request.params[name]
+        if not isinstance(ref, OutputRef) or ref.key is not None:
+            raise ValueError(f'{name} does not reference a whole output')
+        (source,) = self._client.records(ids=[ref.record])
+        return self._client.output(source, ref.output)
 
     def _plot(self, record: Record, name: str) -> list[Any]:
         """
