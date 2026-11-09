@@ -142,7 +142,8 @@ client.failure(result)                               # why it failed, or None
 An application learns what an output is from `client.describe`, which gives the sizes, unit, and coordinate names of each array field and reads no array, and then reads the part it shows with `select=`.
 A value that was persisted and is no longer in memory is read from the store to be described.
 The plot of an array of more than two dimensions has a slider for each dimension but the last two, and moving it reads one cut (`ess.apps.panel.Outputs`; which dimensions get a slider is decided in `ess.apps.plotting`, which needs no widget library).
-A workflow package can configure plots for its spec: `App(client, plots={spec_id: {'Centre on image': function}})`, where a function takes an instance of the spec's outputs model and returns a plopp figure.
+A workflow package can configure plots for its spec: `App(client, plots={spec_id: {'Centre on image': Plot(function, inputs=('detector',))}})`, where the function takes an instance of the spec's outputs model, and returns a plopp figure.
+Each of `inputs` names a parameter that references an output, and is passed by name as that value, so that a small output, such as a mask, is drawn on the large value it was computed from, without holding a copy.
 
 A request is checked in two phases:
 

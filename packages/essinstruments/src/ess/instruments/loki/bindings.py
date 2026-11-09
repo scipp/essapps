@@ -3,19 +3,23 @@
 """
 The bindings of LoKI's specs over esssans, for the LoKI detector test at Larmor.
 
-The masks and the beam centre are functions, since esssans builds its masks by
-changing a pipeline, and its beam-centre finder takes a pipeline. I(Q) is a
+The detector, the masks, and the beam centre are functions, since esssans builds its
+masks by changing a pipeline, and its beam-centre finder takes a pipeline. Those that
+read the detector give esssans what the detector holds in place of the file. I(Q) is a
 pipeline, so that it serves stages. Its masks are a value given to the pipeline,
 which replaces the provider of esssans that reads them from a file and the
 sample run.
 """
 
 from collections.abc import Mapping
+from functools import reduce
+from operator import or_
 from pathlib import Path
 from typing import Any
 
 import sciline
 import scipp as sc
+import scippnexus as snx
 from ess import sans
 from ess.loki.larmor_workflow import LokiAtLarmorWorkflow
 from ess.sans.types import (
@@ -24,6 +28,7 @@ from ess.sans.types import (
     BeamCenter,
     CorrectedDetector,
     CorrectForGravity,
+    DetectorIDs,
     DetectorMasks,
     DirectBeam,
     DirectBeamFilename,
@@ -31,6 +36,7 @@ from ess.sans.types import (
     Filename,
     Measurement,
     Numerator,
+    Position,
     QBins,
     ReturnEvents,
     SampleRun,
@@ -47,12 +53,17 @@ from ess.spec.pipeline import PipelineBinding
 
 from .specs import (
     BEAM_CENTRE,
+    CALIBRATED_DETECTOR,
+    CREATE_MASK,
     IOFQ,
     MASKS,
     BeamCentre,
     BeamCentreOutputs,
     BeamCentreParams,
+    CalibratedDetectorOutputs,
+    CalibratedDetectorParams,
     Corrections,
+    CreateMaskParams,
     DetectorImage,
     IofQ,
     MasksOutputs,
@@ -64,6 +75,9 @@ from .specs import (
 _NO_CORRECTION = sc.vector([0.0, 0.0, 0.0], unit='m')
 """The value of esssans' key that applies no beam-centre correction."""
 
+_ANGLE_RANGES = 'angle ranges'
+"""The name of the mask of the angle ranges of a record."""
+
 
 def _run_workflow(run: Path) -> sciline.Pipeline:
     """The workflow of the detector of one run, with no beam-centre correction."""
@@ -73,37 +87,82 @@ def _run_workflow(run: Path) -> sciline.Pipeline:
     return workflow
 
 
-def _image(detector: sc.DataArray) -> DetectorImage:
-    return DetectorImage(counts=detector.bins.sum())
+def load_detector(params: CalibratedDetectorParams) -> CalibratedDetectorOutputs:
+    workflow = _run_workflow(params.run)
+    workflow[DetectorMasks] = {}
+    detector = CorrectedDetector[SampleRun, Numerator]
+    sample = Position[snx.NXsample, SampleRun]
+    source = Position[snx.NXsource, SampleRun]
+    values = workflow.compute((detector, sample, source))
+    counts = values[detector].bins.sum()
+    return CalibratedDetectorOutputs(
+        detector=DetectorImage(
+            counts=counts.assign_coords(
+                sample_position=values[sample], source_position=values[source]
+            )
+        )
+    )
 
 
 def compute_masks(params: MasksParams) -> MasksOutputs:
-    workflow = _run_workflow(params.run)
+    names = [path.name for path in params.mask_files]
+    if len(set(names)) < len(names):
+        # Masks are named by file, so that one mask would replace the other.
+        raise ValueError(f'mask files with the same name: {sorted(names)}')
     masks: dict[str, sc.Variable] = {}
     if params.mask_files:
+        workflow = LokiAtLarmorWorkflow()
+        workflow[DetectorIDs] = params.detector.counts.coords['detector_number']
         # esssans names each mask by the path of its file, which differs by host.
         by_path = sans.with_pixel_mask_filenames(
             workflow, [str(path) for path in params.mask_files]
         ).compute(DetectorMasks)
         masks = {Path(path).name: mask for path, mask in by_path.items()}
-    workflow[DetectorMasks] = masks
-    detector = workflow.compute(CorrectedDetector[SampleRun, Numerator])
-    return MasksOutputs(masks=PixelMasks(masks=masks), image=_image(detector))
+    return MasksOutputs(masks=PixelMasks(masks=masks))
 
 
 def find_beam_centre(params: BeamCentreParams) -> BeamCentreOutputs:
-    workflow = _run_workflow(params.sample)
-    workflow[DetectorMasks] = params.masks.masks
-    key = CorrectedDetector[SampleRun, Numerator]
-    detector = workflow.compute(key)
-    workflow[key] = detector  # so that the finder does not load the run again
+    counts = params.detector.counts.assign_masks(params.masks.masks)
+    # The finder raises its cutoff until pixels are left, so without any it never ends.
+    if not counts.sum().value > 0:
+        raise ValueError('no counts outside the masks to find a beam centre from')
+    workflow = LokiAtLarmorWorkflow()
+    workflow[Position[snx.NXsample, SampleRun]] = counts.coords['sample_position']
+    workflow[Position[snx.NXsource, SampleRun]] = counts.coords['source_position']
+    # The finder sums the dimensions that the positions lack, and else expects events.
+    workflow[CorrectedDetector[SampleRun, Numerator]] = sc.concat([counts], 'summed')
     centre = sans.beam_center_from_center_of_mass(workflow).to(unit='m')
     return BeamCentreOutputs(
         centre=BeamCentre(
             x=centre.fields.x.value, y=centre.fields.y.value, z=centre.fields.z.value
-        ),
-        image=_image(detector),
+        )
     )
+
+
+def _angle_to_beam(counts: sc.DataArray, centre: BeamCentre) -> sc.Variable:
+    """The angle of each pixel to the beam, seen from the sample, in degrees."""
+    to_pixel = counts.coords['position'] - counts.coords['sample_position']
+    beam = sc.vector([centre.x, centre.y, centre.z], unit='m')
+    angle = sc.atan2(y=sc.norm(sc.cross(beam, to_pixel)), x=sc.dot(beam, to_pixel))
+    return angle.to(unit='deg')
+
+
+def create_mask(params: CreateMaskParams) -> MasksOutputs:
+    angle = _angle_to_beam(params.detector.counts, params.beam_centre)
+    mask = reduce(
+        or_,
+        (
+            (angle >= sc.scalar(s.start, unit='deg'))
+            & (angle < sc.scalar(s.stop, unit='deg'))
+            for s in params.shapes
+        ),
+    )
+    base = {} if params.base is None else params.base.masks
+    masks = {name: value.copy() for name, value in base.items()}
+    if _ANGLE_RANGES in masks:
+        mask = mask | masks[_ANGLE_RANGES]
+    masks[_ANGLE_RANGES] = mask
+    return MasksOutputs(masks=PixelMasks(masks=masks))
 
 
 def _detector_masks(masks: PixelMasks) -> DetectorMasks:
@@ -166,8 +225,10 @@ def _iofq_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
     return pipeline
 
 
+detector_binding = function_binding(CALIBRATED_DETECTOR, load_detector)
 masks_binding = function_binding(MASKS, compute_masks)
 beam_centre_binding = function_binding(BEAM_CENTRE, find_beam_centre)
+create_mask_binding = function_binding(CREATE_MASK, create_mask)
 iofq_binding = PipelineBinding(
     IOFQ,
     _iofq_pipeline,
@@ -181,4 +242,10 @@ iofq_binding = PipelineBinding(
     },
 )
 
-BINDINGS = [masks_binding, beam_centre_binding, iofq_binding]
+BINDINGS = [
+    detector_binding,
+    masks_binding,
+    beam_centre_binding,
+    create_mask_binding,
+    iofq_binding,
+]

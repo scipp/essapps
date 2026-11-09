@@ -11,9 +11,16 @@ from pathlib import Path
 import pytest
 import scipp as sc
 from ess.instruments.loki.bindings import BINDINGS
-from ess.instruments.loki.specs import BEAM_CENTRE, IOFQ, MASKS, BeamCentre
+from ess.instruments.loki.specs import (
+    BEAM_CENTRE,
+    CALIBRATED_DETECTOR,
+    CREATE_MASK,
+    IOFQ,
+    MASKS,
+    BeamCentre,
+)
 
-from ess.apps import Client, FolderFiles, SubmitError, Template, file, local
+from ess.apps import Client, FolderFiles, Record, SubmitError, Template, file, local
 
 
 @pytest.fixture
@@ -34,6 +41,22 @@ def client(sample: Path, mask_file: Path, direct_beam: Path) -> Iterator[Client]
 
 
 @pytest.fixture
+def detector(client: Client) -> Record:
+    return client.submit(CALIBRATED_DETECTOR, params={'run': file(run=60339)})
+
+
+@pytest.fixture
+def masks(client: Client, detector: Record, mask_file: Path) -> Record:
+    return client.submit(
+        MASKS,
+        params={
+            'detector': detector.ref('detector'),
+            'mask_files': [file(path=mask_file)],
+        },
+    )
+
+
+@pytest.fixture
 def iofq_settings(direct_beam: Path) -> dict[str, object]:
     return {
         'can': file(run=60393),
@@ -47,18 +70,15 @@ def iofq_settings(direct_beam: Path) -> dict[str, object]:
 
 def test_masks_then_centre_then_iofq(
     client: Client,
-    mask_file: Path,
+    detector: Record,
+    masks: Record,
     iofq_settings: dict[str, object],
     plain_esssans_iofq: sc.DataArray,
     tutorial_centre: BeamCentre,
 ) -> None:
-    masks = client.submit(
-        MASKS,
-        params={'run': file(run=60339), 'mask_files': [file(path=mask_file)]},
-    )
     centre = client.submit(
         BEAM_CENTRE,
-        params={'sample': file(run=60339), 'masks': masks.ref('masks')},
+        params={'detector': detector.ref('detector'), 'masks': masks.ref('masks')},
     )
     iofq = client.submit(
         IOFQ,
@@ -83,16 +103,73 @@ def test_masks_then_centre_then_iofq(
     assert sc.all(difference < 0.1 * sc.stddevs(plain_esssans_iofq.data)).value
 
 
+def test_an_angle_mask_of_the_centre_found_changes_iofq(
+    client: Client,
+    detector: Record,
+    masks: Record,
+    iofq_settings: dict[str, object],
+) -> None:
+    centre = client.submit(
+        BEAM_CENTRE,
+        params={'detector': detector.ref('detector'), 'masks': masks.ref('masks')},
+    )
+    angles = client.submit(
+        CREATE_MASK,
+        params={
+            'detector': detector.ref('detector'),
+            'beam_centre': centre.ref('centre'),
+            'base': masks.ref('masks'),
+            'shapes': [{'start': 3.0, 'stop': 180.0}],
+        },
+    )
+    runs = {'sample': file(run=60339), 'sample_transmission': file(run=60394)}
+    settings = {**iofq_settings, **runs, 'beam_centre': centre.ref('centre')}
+    without = client.compute(IOFQ, params={**settings, 'masks': masks.ref('masks')})
+    with_angles = client.compute(
+        IOFQ, params={**settings, 'masks': angles.ref('masks')}
+    )
+    first = client.output(without, 'iofq').intensity
+    second = client.output(with_angles, 'iofq').intensity
+    assert sc.identical(first['Q', 0], second['Q', 0])  # well inside the range kept
+    assert not sc.identical(first, second)
+
+
+def test_a_mask_around_a_typed_centre_needs_no_other_masks(
+    client: Client, detector: Record
+) -> None:
+    angles = client.compute(
+        CREATE_MASK,
+        params={
+            'detector': detector.ref('detector'),
+            'beam_centre': {'x': 0.0, 'y': 0.0, 'z': 1.0},
+            'base': None,
+            'shapes': [{'start': 0.0, 'stop': 1.0}],
+        },
+    )
+    assert client.failure(angles) is None
+
+
+def test_a_mask_without_ranges_is_refused_at_submit(
+    client: Client, detector: Record
+) -> None:
+    with pytest.raises(SubmitError, match='shapes'):
+        client.submit(
+            CREATE_MASK,
+            params={
+                'detector': detector.ref('detector'),
+                'beam_centre': {'x': 0.0, 'y': 0.0, 'z': 1.0},
+                'base': None,
+                'shapes': [],
+            },
+        )
+
+
 def test_batch_through_a_stage_with_one_can(
     client: Client,
-    mask_file: Path,
+    masks: Record,
     iofq_settings: dict[str, object],
     tutorial_centre: BeamCentre,
 ) -> None:
-    masks = client.submit(
-        MASKS,
-        params={'run': file(run=60339), 'mask_files': [file(path=mask_file)]},
-    )
     template = Template(
         IOFQ,
         params={
@@ -129,12 +206,8 @@ def test_batch_through_a_stage_with_one_can(
 
 
 def test_a_file_of_another_kind_is_refused(
-    client: Client, mask_file: Path, iofq_settings: dict[str, object]
+    client: Client, masks: Record, mask_file: Path, iofq_settings: dict[str, object]
 ) -> None:
-    masks = client.submit(
-        MASKS,
-        params={'run': file(run=60339), 'mask_files': [file(path=mask_file)]},
-    )
     with pytest.raises(SubmitError, match='does not fit the field'):
         client.submit(
             IOFQ,
@@ -149,12 +222,8 @@ def test_a_file_of_another_kind_is_refused(
 
 
 def test_a_typed_beam_centre_without_a_distance_is_refused_at_submit(
-    client: Client, mask_file: Path, iofq_settings: dict[str, object]
+    client: Client, masks: Record, iofq_settings: dict[str, object]
 ) -> None:
-    masks = client.submit(
-        MASKS,
-        params={'run': file(run=60339), 'mask_files': [file(path=mask_file)]},
-    )
     with pytest.raises(SubmitError, match='beam_centre'):
         client.submit(
             IOFQ,

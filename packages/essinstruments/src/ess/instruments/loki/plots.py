@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The plots of LoKI's specs: each a function of the outputs of one record that
-returns a plopp figure, as ``ess.apps.panel.App(plots=)`` takes them. They need
-plopp, not Panel, so a notebook can draw them as well.
+The plots of LoKI's specs: each a function of the outputs of one record, and of
+what its request referenced, that returns a plopp figure, as
+``ess.apps.panel.App(plots=)`` takes them. They need plopp, not Panel, so a notebook
+can draw them as well.
 """
 
 import plopp as pp
@@ -11,21 +12,26 @@ import scipp as sc
 from plopp.core.typing import FigureLike as Figure
 
 from ess.apps import SpecId
+from ess.apps.plotting import Plot
 
 from .specs import (
     BEAM_CENTRE,
+    CALIBRATED_DETECTOR,
+    CREATE_MASK,
     IOFQ,
     MASKS,
     BeamCentreOutputs,
+    CalibratedDetectorOutputs,
+    DetectorImage,
     IofQOutputs,
     MasksOutputs,
+    PixelMasks,
 )
 
 
-def on_detector(image: sc.DataArray, *, masked: bool = True) -> sc.DataArray:
+def on_detector(image: sc.DataArray) -> sc.DataArray:
     """The counts by the position of each pixel on the detector plane."""
-    pixels = image if masked else image.drop_masks(list(image.masks))
-    pixels = pixels.flatten(to='id')
+    pixels = image.flatten(to='id')
     # hist needs contiguous coordinates, and a field is a view with strides.
     pixels.coords['x'] = pixels.coords['position'].fields.x.copy()
     pixels.coords['y'] = pixels.coords['position'].fields.y.copy()
@@ -33,20 +39,27 @@ def on_detector(image: sc.DataArray, *, masked: bool = True) -> sc.DataArray:
     return pixels.drop_coords(others).hist(y=128, x=128)
 
 
-def masks_on_image(outputs: MasksOutputs) -> Figure:
+def detector_image(outputs: CalibratedDetectorOutputs) -> Figure:
+    """The counts of every pixel."""
+    return pp.plot(on_detector(outputs.detector.counts), norm='log', title='All pixels')
+
+
+def masks_on_image(outputs: MasksOutputs, detector: DetectorImage) -> Figure:
     """The detector image without the masked pixels, which are left blank."""
     return pp.plot(
-        on_detector(outputs.image.counts),
+        on_detector(detector.counts.assign_masks(outputs.masks.masks)),
         norm='log',
         title='Without the masked pixels',
     )
 
 
-def centre_on_image(outputs: BeamCentreOutputs) -> Figure:
+def centre_on_image(
+    outputs: BeamCentreOutputs, detector: DetectorImage, masks: PixelMasks
+) -> Figure:
     """The detector image, with a red cross at the beam centre."""
     centre = outputs.centre
     figure = pp.plot(
-        on_detector(outputs.image.counts),
+        on_detector(detector.counts.assign_masks(masks.masks)),
         norm='log',
         title=f'Beam centre: x = {centre.x:.4f} m, y = {centre.y:.4f} m',
     )
@@ -65,8 +78,17 @@ def transmission_curves(outputs: IofQOutputs) -> Figure:
     return pp.plot({'sample': curves.sample, 'can': curves.can}, title='Transmission')
 
 
+_MASKS_ON_IMAGE = Plot(masks_on_image, inputs=('detector',))
+
 PLOTS = {
-    SpecId.of(MASKS): {'Masks on image': masks_on_image},
-    SpecId.of(BEAM_CENTRE): {'Centre on image': centre_on_image},
-    SpecId.of(IOFQ): {'I(Q)': iofq_curve, 'Transmission': transmission_curves},
+    SpecId.of(CALIBRATED_DETECTOR): {'Detector image': Plot(detector_image)},
+    SpecId.of(MASKS): {'Masks on image': _MASKS_ON_IMAGE},
+    SpecId.of(CREATE_MASK): {'Masks on image': _MASKS_ON_IMAGE},
+    SpecId.of(BEAM_CENTRE): {
+        'Centre on image': Plot(centre_on_image, inputs=('detector', 'masks'))
+    },
+    SpecId.of(IOFQ): {
+        'I(Q)': Plot(iofq_curve),
+        'Transmission': Plot(transmission_curves),
+    },
 }
