@@ -172,7 +172,7 @@ class DataRefused(Exception):
     ``T`` of ``Referenced[T]``, with ``errors``. It is not a ``ValueError``, so
     that pydantic does not try the next member of a union with the
     reference: the request phase checked that the output is of ``T``, so the
-    data are refused (see :func:`ess.spec.request_types.validated`).
+    data are refused (see :func:`ess.spec.validation.validated`).
     """
 
     def __init__(self, ref: OutputRef, errors: list[ErrorDetails]) -> None:

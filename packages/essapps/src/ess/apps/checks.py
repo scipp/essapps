@@ -29,9 +29,9 @@ a push give only some of the params:
   checked when it was given.
 
 They share ``_values``, which validates a value by its request type (see
-:func:`ess.spec.request_types.held`), resolves each file with the file source,
-and returns what the record stores. Three choices in it follow from the call
-phase:
+:func:`ess.spec.validation.validate_request_value`), resolves each file with
+the file source, and returns what the record stores. Three choices in it follow
+from the call phase:
 
 - A parameter that holds no reference to an output is also validated whole by
   the params model, with the local path of each file, so that the validators of
@@ -43,7 +43,7 @@ phase:
 
 Each check returns the references to outputs in the values, each with its
 position and the type its data must fit (see
-:data:`ess.spec.request_types.Reads`). The backend checks each against what the
+:data:`ess.spec.validation.OutputReads`). The backend checks each against what the
 client may read (see :func:`check_fit`).
 
 The params model's model validators never run: a stage and a driver never get a
@@ -66,11 +66,11 @@ from ess.spec import (
     OutputRef,
     WorkflowSpec,
     field_types,
-    request_types,
+    validation,
 )
 from ess.spec.binding import fixed_values
 from ess.spec.refs import Loc, ParamsError
-from ess.spec.request_types import Reads
+from ess.spec.validation import OutputReads
 
 from .errors import SubmitError
 from .files import Selector, readable
@@ -91,7 +91,7 @@ class Checks:
         self.id = SpecId.of(spec)
         self._files = files
 
-    def request(self, request: Request, proposal: str) -> tuple[Request, Reads]:
+    def request(self, request: Request, proposal: str) -> tuple[Request, OutputReads]:
         """
         The request as the record holds it: names resolved, defaults filled
         in, inline values in JSON's types; and the references to outputs in it.
@@ -103,7 +103,7 @@ class Checks:
 
     def template(
         self, template: Template, proposal: str
-    ) -> tuple[Template, dict[str, Any], Reads]:
+    ) -> tuple[Template, dict[str, Any], OutputReads]:
         """
         The template as given, with file names resolved, as the stage or
         the accumulator holds it, its fixed values by name, defaults filled
@@ -123,7 +123,7 @@ class Checks:
 
     def push(
         self, blanks: Collection[str], rows: Mapping[str, Any], proposal: str
-    ) -> tuple[dict[str, list[Any]], Reads]:
+    ) -> tuple[dict[str, list[Any]], OutputReads]:
         """
         The rows of a push by the name of their table, as the log holds them,
         and the references to outputs in them.
@@ -162,7 +162,7 @@ class Checks:
 
     def _values(
         self, values: Mapping[str, Any], proposal: str
-    ) -> tuple[dict[str, Any], Reads]:
+    ) -> tuple[dict[str, Any], OutputReads]:
         """
         ``values`` by name as the record holds them, and the references to
         outputs in them (see :meth:`_value`).
@@ -173,14 +173,14 @@ class Checks:
             reads.extend(found)
         return stored, reads
 
-    def _value(self, name: str, value: Any, proposal: str) -> tuple[Any, Reads]:
+    def _value(self, name: str, value: Any, proposal: str) -> tuple[Any, OutputReads]:
         """
         The value of parameter ``name`` as the record holds it, the JSON form
         of an inline value with each file resolved, and the references to
-        outputs in it (see :func:`ess.spec.request_types.held`).
+        outputs in it (see :func:`ess.spec.validation.validate_request_value`).
         """
         try:
-            return request_types.held(
+            return validation.validate_request_value(
                 self.spec.params,
                 name,
                 value,

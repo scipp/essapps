@@ -32,14 +32,18 @@ from ess.spec import (
 )
 from ess.spec.field_types import alternatives, field_metadata, unwrapped
 from ess.spec.refs import Loc, ParamsError, Ref
-from ess.spec.request_types import held, sources, validated
+from ess.spec.request_types import sources
+from ess.spec.validation import local_paths, validate_request_value, validated
 
 
 def _stored(
-    model: type[BaseModel], name: str, value: Any, files: request_types.Files
+    model: type[BaseModel], name: str, value: Any, files: request_types.FileResolver
 ) -> Any:
-    """What the record stores of ``value``, as :func:`held` gives it."""
-    stored, _ = held(model, name, value, files, _path)
+    """
+    What the record stores of ``value``, as
+    :func:`~ess.spec.validation.validate_request_value` gives it.
+    """
+    stored, _ = validate_request_value(model, name, value, files, _path)
     return stored
 
 
@@ -566,7 +570,9 @@ def test_the_validators_of_a_file_field_run_on_its_local_path_when_written() -> 
     places = (('mask', FILE, ('mask',)), ('masks', [FILE], ('masks', 0)))
     for name, value, loc in places:
         with pytest.raises(ParamsError) as raised:
-            held(Checked, name, value, _named, lambda identity: Path('mask.xml'))
+            validate_request_value(
+                Checked, name, value, _named, lambda identity: Path('mask.xml')
+            )
         ((at, msg),) = raised.value.errors
         assert at == loc
         assert 'only a NeXus file is allowed here' in msg
@@ -590,7 +596,9 @@ def test_the_validators_of_a_group_that_holds_a_file_run_when_it_is_written() ->
         'run': FILE.model_dump()
     }
     with pytest.raises(ParamsError) as raised:
-        held(MeasurementParams, 'measurement', value, _named, lambda i: Path('a.xml'))
+        validate_request_value(
+            MeasurementParams, 'measurement', value, _named, lambda i: Path('a.xml')
+        )
     ((at, msg),) = raised.value.errors
     assert at == ('measurement',)
     assert 'not a NeXus file' in msg
@@ -611,7 +619,9 @@ def test_a_parameter_that_holds_a_reference_gets_no_local_paths_when_written() -
         return _path(ref)
 
     value = {'run': FILE, 'sample': OUTPUT}
-    stored, _ = held(SpecimenParams, 'specimen', value, _named, local_path)
+    stored, _ = validate_request_value(
+        SpecimenParams, 'specimen', value, _named, local_path
+    )
     assert stored == {'run': FILE.model_dump(), 'sample': OUTPUT.model_dump()}
     assert looked_up == []
 
@@ -763,12 +773,14 @@ def test_each_reference_to_an_output_is_given_with_the_type_its_data_fit() -> No
         {'run': FILE, 'centre': OUTPUT},
         {'run': FILE, 'centre': {'x': 1.0}},
     ]
-    _, reads = held(SpecimenParams, 'specimens', rows, _named, _path)
+    _, reads = validate_request_value(SpecimenParams, 'specimens', rows, _named, _path)
     assert reads == [
         (('specimens', 0, 'transmission'), other, Transmission),
         (('specimens', 1, 'centre'), OUTPUT, Computed),
     ]
-    _, reads = held(Params, 'samples', [{'thickness': 2.0}, OUTPUT], _named, _path)
+    _, reads = validate_request_value(
+        Params, 'samples', [{'thickness': 2.0}, OUTPUT], _named, _path
+    )
     assert reads == [(('samples', 1), OUTPUT, Sample)]
 
 
@@ -854,7 +866,7 @@ def _run_errors(stored: Any, read: Callable[[Ref], Any]) -> tuple[Any, ...]:
 def test_a_request_error_at_a_field_named_like_a_tag_is_at_its_field() -> None:
     corr = {'kind': 'scale', 'scale': 2.0, 'unit': 1, 'transmission': OUTPUT}
     with pytest.raises(ParamsError) as raised:
-        held(CorrectedParams, 'rows', [{'corr': corr}], _named, _path)
+        validate_request_value(CorrectedParams, 'rows', [{'corr': corr}], _named, _path)
     assert raised.value.errors == (
         (('rows', 0, 'corr', 'unit'), 'Input should be a valid string'),
     )
@@ -880,7 +892,7 @@ def test_a_call_error_is_at_its_position_in_the_stored_value_once(
     row = {'corr': {'kind': 'scale', 'transmission': OUTPUT, **corr}}
     # The request phase takes the row: the validators of a group that holds a
     # reference run when the request runs.
-    stored, _ = held(CorrectedParams, 'rows', [row], _named, _path)
+    stored, _ = validate_request_value(CorrectedParams, 'rows', [row], _named, _path)
     assert _run_errors(stored, lambda ref: data) == (error,)
 
 
@@ -896,7 +908,9 @@ def test_data_that_fail_a_check_of_their_type_are_one_error_at_the_reference() -
     class EitherSamples(BaseModel):
         samples: list[Either] = []
 
-    stored, _ = held(EitherSamples, 'samples', [{'sample': OUTPUT}], _named, _path)
+    stored, _ = validate_request_value(
+        EitherSamples, 'samples', [{'sample': OUTPUT}], _named, _path
+    )
     thin_sample = Sample(thickness=0.5)
     made = value_of(EitherSamples, 'samples', stored, lambda r: thin_sample, PATHS)
     assert made[0].sample is thin_sample
@@ -921,18 +935,22 @@ def test_a_union_of_referenced_groups_takes_the_data_of_any_member() -> None:
 def test_a_list_is_validated_whole_and_a_table_without_its_length() -> None:
     one_row = [{'thickness': 2.0}]
     with pytest.raises(ParamsError) as raised:
-        held(Params, 'samples', one_row, _named, _path)
+        validate_request_value(Params, 'samples', one_row, _named, _path)
     assert raised.value.errors == (
         (('samples',), 'List should have at least 2 items after validation, not 1'),
     )
-    stored, _ = held(Params, 'samples', one_row, _named, _path, table=True)
+    stored, _ = validate_request_value(
+        Params, 'samples', one_row, _named, _path, table=True
+    )
     assert stored == one_row
     assert validated(Params, 'samples', one_row, table=True) == [Sample(thickness=2)]
 
 
 def test_a_table_takes_a_list_of_rows() -> None:
     with pytest.raises(ParamsError) as raised:
-        held(Params, 'samples', {'thickness': 2.0}, _named, _path, table=True)
+        validate_request_value(
+            Params, 'samples', {'thickness': 2.0}, _named, _path, table=True
+        )
     assert raised.value.errors == ((('samples',), 'Input should be a valid array'),)
 
 
@@ -956,7 +974,9 @@ def test_a_validator_of_a_list_of_files_runs_on_their_local_paths_when_written()
 ):
     assert _stored(NexusRuns, 'runs', [FILE], _named) == [FILE.model_dump()]
     with pytest.raises(ParamsError) as raised:
-        held(NexusRuns, 'runs', [FILE], _named, lambda ref: Path('run.json'))
+        validate_request_value(
+            NexusRuns, 'runs', [FILE], _named, lambda ref: Path('run.json')
+        )
     ((at, msg),) = raised.value.errors
     assert at == ('runs',)
     assert 'only NeXus files' in msg
@@ -1008,7 +1028,7 @@ def test_a_file_that_no_file_field_resolved_is_refused() -> None:
 def test_the_local_paths_of_values_are_by_the_identity_of_each_file() -> None:
     other = FileRef(file='pid-2')
     values = {'measured': {'run': FILE.model_dump()}, 'runs': [FILE, other]}
-    assert request_types.local_paths(values, _path) == {
+    assert local_paths(values, _path) == {
         FILE_ID: _path(FILE),
         'pid-2': _path(other),
     }

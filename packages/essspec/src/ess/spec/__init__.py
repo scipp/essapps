@@ -11,9 +11,9 @@ and ADR 0001 (docs/developer/adr in the package) the rationale. The helpers
 are in their modules: :mod:`~.field_types` for what the framework reads
 from field types, such as :func:`~.field_types.fits`, :mod:`~.refs` for
 finding the references of a request, :mod:`~.request_types` for the request
-type, which validates a request and is the params schema, and how the call
-phase makes a value, and :mod:`~.binding` for the values a binding is made
-with.
+type, which is the params schema, :mod:`~.validation` for how a request and
+the call phase validate a value, and :mod:`~.binding` for the values a binding
+is made with.
 
 The package does not import :mod:`~.conversions` (needs scipp),
 :mod:`~.pipeline` (``PipelineBinding``, needs sciline), and :mod:`~.testing`

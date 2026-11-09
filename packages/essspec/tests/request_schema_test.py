@@ -2,8 +2,8 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 The request type validates a request and is the params schema, so the two
-agree: a request that :func:`ess.spec.request_types.held` accepts is one that the
-params schema takes, and the other way round.
+agree: a request that :func:`ess.spec.validation.validate_request_value`
+accepts is one that the params schema takes, and the other way round.
 """
 
 from pathlib import Path
@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 
 from ess.spec import File, FileRef, Referenced, RunFile, WorkflowSpec
 from ess.spec.refs import ParamsError
-from ess.spec.request_types import held
+from ess.spec.validation import validate_request_value
 
 
 class Reduction(BaseModel):
@@ -165,7 +165,7 @@ def test_the_params_schema_takes_what_a_request_may_write(
     jsonschema = pytest.importorskip('jsonschema')
     validator = jsonschema.Draft202012Validator(SPEC.serialize().params_schema)
     try:
-        held(Params, name, value, _resolved, _path)
+        validate_request_value(Params, name, value, _resolved, _path)
     except ParamsError:
         accepted = False
     else:

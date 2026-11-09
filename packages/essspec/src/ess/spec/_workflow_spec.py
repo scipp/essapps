@@ -28,8 +28,8 @@ The checks take field types apart with :mod:`ess.spec.field_types`, the
 functions that the request type and the forms use too, so a type that
 passes here is one they understand. A default is checked by validating it
 as a request and as a binding would (:func:`_default_problem`, with
-:func:`~ess.spec.request_types.held` and
-:func:`~ess.spec.request_types.validated`), not by rules of its own, so
+:func:`~ess.spec.validation.validate_request_value` and
+:func:`~ess.spec.validation.validated`), not by rules of its own, so
 that a default passes when a request could write it. Each problem names the
 model and field it concerns, and the fix where it is not plain.
 
@@ -69,7 +69,7 @@ from pydantic import (
 )
 from pydantic.fields import FieldInfo
 
-from . import field_types, request_types
+from . import field_types, request_types, validation
 from .parameters import REFERENCED, File
 from .refs import FileRef, ParamsError, iter_refs
 
@@ -609,7 +609,7 @@ def _group_problems(
     from the object of its fields; or for a problem of a field (see
     :func:`_fields_problems`). Field and model validators of any mode are
     allowed: they run whenever the group is validated (see
-    :func:`ess.spec.request_types.validated`).
+    :func:`ess.spec.validation.validated`).
     """
     if group in stack:
         return [
@@ -654,9 +654,9 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
     """
     Why the default of the field ``name`` of ``model`` is not a value, or
     ``None``: what a request may write, without a reference to an output or
-    a file (see :func:`ess.spec.request_types.held`), and the value that
+    a file (see :func:`ess.spec.validation.validate_request_value`), and the value that
     validating it gives, since pydantic does not validate a default, and a
-    binding gets it as it is (see :func:`ess.spec.request_types.validated`). So a
+    binding gets it as it is (see :func:`ess.spec.validation.validated`). So a
     group's default is an instance, not the object of its fields, and a
     list's default keeps the length constraints of the list. A file field has
     no default but ``None`` or ``[]``: each ``Path`` in the default names a
@@ -664,13 +664,15 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
     """
     default = model.model_fields[name].get_default(call_default_factory=True)
     try:
-        held, _ = request_types.held(model, name, default, _no_file, _no_path)
+        held, _ = validation.validate_request_value(
+            model, name, default, _no_file, _no_path
+        )
         if refs := [
             (loc, f'{ref} is a reference; a default is a value')
             for loc, ref in iter_refs({name: held})
         ]:
             raise ParamsError(refs)
-        made = request_types.validated(model, name, default)
+        made = validation.validated(model, name, default)
     except ParamsError as error:
         return f'the default is not a value a request may write: {error}'
     if made != default:
