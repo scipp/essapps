@@ -78,6 +78,7 @@ class BatchView:
         spec = batch.spec
         model, listing = spec.params, self._listing
         self.settings = Form(model, listing, fields=batch.settings_fields)
+        self.settings.watch(self._show)  # changed settings make results stale
         self.row = Form(model, listing, fields=batch.columns)
         self.tweak = Form(model, listing)
         self._titles = {

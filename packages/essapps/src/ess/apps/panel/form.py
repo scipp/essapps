@@ -47,7 +47,8 @@ value is in UTC. The fraction of a second of the value is kept.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime, tzinfo
 from enum import Enum
 from typing import Any, Union, get_args, get_origin
@@ -82,6 +83,9 @@ field as it starts, at its default or unset.
 type _Missing = list[FieldError]
 """The fields with nothing given, each with what the user is to do."""
 
+type _Changed = Callable[[], None]
+"""Called when the value of a widget may have changed."""
+
 _HOLDS_CHANGES = 'the editor holds changes: add or update a row, or discard them'
 """What a user who changed the editor of a table is to do before going on."""
 
@@ -90,7 +94,8 @@ type _Widget = (
 )
 """
 The widget of a value: ``value(loc, missing)`` gives it as a request writes
-it, ``set`` shows a value, ``refresh`` lists the files and records anew.
+it, ``set`` shows a value, ``refresh`` lists the files and records anew,
+``watch`` calls back when the value changes.
 """
 
 
@@ -211,6 +216,9 @@ class _File:
         self.widget.options = options
         self.widget.value = picked
 
+    def watch(self, changed: _Changed) -> None:
+        self.widget.param.watch(lambda _: changed(), 'value')
+
     def panel(self) -> Any:
         return self.widget
 
@@ -305,6 +313,9 @@ class _Scalar:
     def refresh(self, listing: Listing) -> None:
         pass
 
+    def watch(self, changed: _Changed) -> None:
+        self.widget.param.watch(lambda _: changed(), 'value')
+
     def panel(self) -> Any:
         return self.widget
 
@@ -325,13 +336,18 @@ class _Scalars:
         self._default = default
         self._description = description
         self._elements: list[_Scalar] | None = None  # unset
+        self._changed: _Changed = lambda: None
         self._column = pn.Column(sizing_mode='stretch_width')
         add = pn.widgets.Button(label=f'Add to {label}')
-        add.on_click(lambda _: self._resize(len(self._elements or []) + 1))
+        add.on_click(lambda _: self._click(len(self._elements or []) + 1))
         remove = pn.widgets.Button(label=f'Remove from {label}')
-        remove.on_click(lambda _: self._resize(len(self._elements or []) - 1))
+        remove.on_click(lambda _: self._click(len(self._elements or []) - 1))
         self._panel = pn.Column(self._column, pn.Row(add, remove))
         self.set(UNSET)
+
+    def _click(self, n: int) -> None:
+        self._resize(n)
+        self._changed()
 
     def _resize(self, n: int) -> None:
         """
@@ -341,10 +357,12 @@ class _Scalars:
         elements = self._elements or []
         del elements[n:]
         default = '' if self._type is str else UNSET
-        elements.extend(
-            _Scalar(f'{self._label} [{i}]', self._type, default, self._description)
-            for i in range(len(elements), n)
-        )
+        for i in range(len(elements), n):
+            element = _Scalar(
+                f'{self._label} [{i}]', self._type, default, self._description
+            )
+            element.watch(lambda: self._changed())
+            elements.append(element)
         self._elements = elements
         self._column.objects = [e.panel() for e in elements]
 
@@ -367,6 +385,9 @@ class _Scalars:
 
     def refresh(self, listing: Listing) -> None:
         pass
+
+    def watch(self, changed: _Changed) -> None:
+        self._changed = changed
 
     def panel(self) -> Any:
         return self._panel
@@ -416,6 +437,10 @@ class _Group:
         for field in self._fields.values():
             field.refresh(listing)
 
+    def watch(self, changed: _Changed) -> None:
+        for field in self._fields.values():
+            field.watch(changed)
+
     def panel(self) -> Any:
         return self._panel
 
@@ -443,6 +468,9 @@ class _Record:
     def set(self, value: Any) -> None:
         _pick(self.widget, value)
 
+    def watch(self, changed: _Changed) -> None:
+        self.widget.param.watch(lambda _: changed(), 'value')
+
     def panel(self) -> Any:
         return self.widget
 
@@ -457,6 +485,9 @@ class _Nothing:
         pass
 
     def refresh(self, listing: Listing) -> None:
+        pass
+
+    def watch(self, changed: _Changed) -> None:
         pass
 
     def panel(self) -> Any:
@@ -546,6 +577,11 @@ class _Choice:
                 return label
         raise ValueError(f'{tag[self._tag]}: not an alternative')
 
+    def watch(self, changed: _Changed) -> None:
+        self._selector.param.watch(lambda _: changed(), 'value')
+        for way in self._ways.values():
+            way.watch(changed)
+
     def panel(self) -> Any:
         return self._panel
 
@@ -582,6 +618,7 @@ class _Rows:
         self._default = default
         self._listing = listing
         self._rows: list[Any] | None = None  # unset
+        self._changed: _Changed = lambda: None
         # The selection that the editor shows, which the table's differs from
         # only while it is being restored.
         self._selection: list[int] = []
@@ -694,6 +731,7 @@ class _Rows:
         else:
             rows[i] = value
             self._render()
+        self._changed()
 
     def _remove(self) -> None:
         selected = set(self._selection)
@@ -703,6 +741,7 @@ class _Rows:
             self._table.selection = []
             self._load()
         self._render()
+        self._changed()
 
     def _render(self) -> None:
         """Show the rows in the table, a file or an output by its label."""
@@ -777,6 +816,10 @@ class _Rows:
             self._shown = self._held()
         self._render()
 
+    def watch(self, changed: _Changed) -> None:
+        self._changed = changed
+        self._editor.watch(changed)
+
     def panel(self) -> Any:
         return self._panel
 
@@ -813,6 +856,10 @@ class Form:
         self._params = {
             name: _field(name, info, listing) for name, info in shown.items()
         }
+        self._on_change: _Changed | None = None
+        self._loading = False
+        for widget in self._params.values():
+            widget.watch(self._changed)
         heading = f'**{title}**: {description}' if title else description
         self._panel = pn.Column(
             pn.pane.Markdown(heading),
@@ -831,6 +878,25 @@ class Form:
             ),
             sizing_mode='stretch_width',
         )
+
+    def watch(self, on_change: _Changed) -> None:
+        """
+        Call ``on_change`` when a person changes what the form holds. :meth:`set`
+        and :meth:`refresh` do not call it, whatever they change.
+        """
+        self._on_change = on_change
+
+    def _changed(self) -> None:
+        if self._on_change is not None and not self._loading:
+            self._on_change()
+
+    @contextmanager
+    def _loads(self) -> Iterator[None]:
+        self._loading = True
+        try:
+            yield
+        finally:
+            self._loading = False
 
     @property
     def params(self) -> dict[str, Any]:
@@ -873,8 +939,9 @@ class Form:
         if unknown := set(params) - self._every:
             raise KeyError(f'{self.title} has no parameters {sorted(unknown)}')
         self.refresh(listing)
-        for name, widget in self._params.items():
-            widget.set(params.get(name, UNSET))
+        with self._loads():
+            for name, widget in self._params.items():
+                widget.set(params.get(name, UNSET))
 
     def ways(self, name: str) -> list[str]:
         """
@@ -888,8 +955,9 @@ class Form:
 
     def refresh(self, listing: Listing) -> None:
         """List the files and the records that fit again, from ``listing``."""
-        for widget in self._params.values():
-            widget.refresh(listing)
+        with self._loads():
+            for widget in self._params.values():
+                widget.refresh(listing)
 
     def panel(self) -> Any:
         return self._panel

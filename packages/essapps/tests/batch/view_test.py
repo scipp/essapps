@@ -293,6 +293,17 @@ def test_a_column_chosen_is_written_to_all_selected_even_at_its_default(
     assert view.write.value == ''
 
 
+def test_changing_a_setting_shows_the_results_as_stale(
+    view: BatchView, client: Client
+) -> None:
+    view.reduce_all()
+    done(view, client)
+
+    view.settings.panel().select(pn.widgets.IntInput)[0].value = 3
+
+    assert results(view) == {'1': 'stale', '2': 'stale', '3': 'incomplete'}
+
+
 def test_nothing_changed_says_so(view: BatchView) -> None:
     view.table.select_keys(['1', '2'])
 

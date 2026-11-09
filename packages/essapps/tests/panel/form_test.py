@@ -1200,6 +1200,45 @@ def test_values_at_any_depth_round_trip_through_a_record(
     assert nested.params == record.request.params
 
 
+def test_watch_tells_of_a_changed_input_and_not_of_set_or_refresh(
+    client: Client, reduce_spec: Spec
+) -> None:
+    form = form_of(reduce_spec, client)
+    calls: list[None] = []
+    form.watch(lambda: calls.append(None))
+
+    form.set({'reduction': {'bins': 7}}, Listing(client))
+    form.refresh(Listing(client))
+    assert calls == []
+
+    widget(form, 'Bins').value = 8
+    assert len(calls) == 1
+
+
+def test_watch_tells_of_an_element_added_and_of_its_value(options: Form) -> None:
+    calls: list[None] = []
+    options.watch(lambda: calls.append(None))
+
+    widget(options, 'Add to Banks').clicks += 1
+    assert len(calls) == 1
+
+    widget(options, 'Banks [0]').value = 3
+    assert len(calls) == 2
+
+
+def test_watch_tells_of_a_row_written_and_removed(stack: Form, run: FileRef) -> None:
+    calls: list[None] = []
+    widget_in(stack, 'Shots', 'Run').value = run
+    stack.watch(lambda: calls.append(None))
+
+    click(stack, 'Shots', 'Add as new row')
+    assert calls
+    calls.clear()
+
+    click(stack, 'Shots', 'Remove')
+    assert calls
+
+
 def test_a_form_can_be_limited_to_some_parameters(
     client: Client, reduce_spec: Spec
 ) -> None:
