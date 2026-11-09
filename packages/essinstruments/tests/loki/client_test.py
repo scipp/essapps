@@ -134,6 +134,36 @@ def test_an_angle_mask_of_the_centre_found_changes_iofq(
     assert not sc.identical(first, second)
 
 
+def test_a_mask_around_a_typed_centre_needs_no_other_masks(
+    client: Client, detector: Record
+) -> None:
+    angles = client.compute(
+        CREATE_MASK,
+        params={
+            'detector': detector.ref('detector'),
+            'beam_centre': {'x': 0.0, 'y': 0.0, 'z': 1.0},
+            'base': None,
+            'shapes': [{'start': 0.0, 'stop': 1.0}],
+        },
+    )
+    assert client.failure(angles) is None
+
+
+def test_a_mask_without_ranges_is_refused_at_submit(
+    client: Client, detector: Record
+) -> None:
+    with pytest.raises(SubmitError, match='shapes'):
+        client.submit(
+            CREATE_MASK,
+            params={
+                'detector': detector.ref('detector'),
+                'beam_centre': {'x': 0.0, 'y': 0.0, 'z': 1.0},
+                'base': None,
+                'shapes': [],
+            },
+        )
+
+
 def test_batch_through_a_stage_with_one_can(
     client: Client,
     masks: Record,

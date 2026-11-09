@@ -105,6 +105,10 @@ class ScaleOutputs(BaseModel):
     total: Total
 
 
+class FrameParams(BaseModel):
+    picture: Referenced[Image]
+
+
 CURVE = WorkflowSpec(
     name='curve',
     version=1,
@@ -119,6 +123,16 @@ SCALE = WorkflowSpec(
     title='Scale',
     description='The total of a curve.',
     params=ScaleParams,
+    outputs=ScaleOutputs,
+)
+
+
+FRAME = WorkflowSpec(
+    name='frame',
+    version=1,
+    title='Frame',
+    description='The total of an image.',
+    params=FrameParams,
     outputs=ScaleOutputs,
 )
 
@@ -186,9 +200,13 @@ def client(run: tuple[FakeFiles, FileRef], gate: threading.Event) -> Iterator[Cl
     def scale(params: ScaleParams) -> ScaleOutputs:
         return ScaleOutputs(total=Total(value=params.curve.total))
 
+    def frame(params: FrameParams) -> ScaleOutputs:
+        return ScaleOutputs(total=Total(value=params.picture.counts.sum()))
+
     bind = [
         function_binding(CURVE, curve),
         function_binding(SCALE, scale),
+        function_binding(FRAME, frame),
         function_binding(CUBE, cube),
     ]
     with local(proposal='p1', files=run[0], bind=bind) as client:
@@ -666,45 +684,47 @@ def test_a_configured_plot_that_fails_shows_why_as_text(
     assert 'RuntimeError: no plot today' in text.object
 
 
-def scale_on_curve(out: ScaleOutputs, curve: Curve) -> Any:
-    return pp.plot(curve.counts, title=f'{out.total.__class__.__name__} on curve')
+def draw_picture(out: ScaleOutputs, *, picture: Image) -> Any:
+    return pp.plot(picture.counts, title=str(picture.counts.sum().value))
 
 
 @pytest.fixture
-def scale_view(client: Client, file: FileRef) -> tuple[Outputs, Record, Record]:
-    """The outputs with a view of a scale that draws the curve it referenced."""
+def frame_view(client: Client, file: FileRef) -> tuple[Outputs, Record, Record]:
+    """The outputs with a view of a frame that draws the image it referenced."""
     curve = client.submit(CURVE, params={'run': file})
-    scale = client.submit(SCALE, params={'curve': curve.ref('curve')})
-    client.wait([curve, scale])
-    plots = {SpecId.of(SCALE): {'On curve': Plot(scale_on_curve, inputs=('curve',))}}
-    return Outputs(client, Listing(client), plots=plots), curve, scale
+    frame = client.submit(FRAME, params={'picture': curve.ref('image')})
+    client.wait([curve, frame])
+    plots = {SpecId.of(FRAME): {'Picture': Plot(draw_picture, inputs=('picture',))}}
+    return Outputs(client, Listing(client), plots=plots), curve, frame
 
 
 def test_a_configured_plot_takes_the_value_its_record_referenced(
-    scale_view: tuple[Outputs, Record, Record],
+    client: Client, frame_view: tuple[Outputs, Record, Record]
 ) -> None:
-    outputs, _, scale = scale_view
-    outputs.select(scale, 'total')
+    outputs, curve, frame = frame_view
+    outputs.select(frame, 'total')
 
-    outputs.views.value = 'On curve'
+    outputs.views.value = 'Picture'
 
     (pane,) = outputs.view.objects
     assert isinstance(pane, pn.pane.Matplotlib), pane.object
-    assert pane.object.axes[0].get_title() == 'Total on curve'
+    total = client.output(curve, 'image').counts.sum().value
+    assert pane.object.axes[0].get_title() == str(total)
 
 
-def test_a_configured_plot_whose_input_is_released_shows_why_as_text(
-    client: Client, scale_view: tuple[Outputs, Record, Record]
+def test_a_configured_plot_whose_input_is_released_says_what_to_do(
+    client: Client, frame_view: tuple[Outputs, Record, Record]
 ) -> None:
-    outputs, curve, scale = scale_view
+    outputs, curve, frame = frame_view
     client.release(curve)
-    outputs.select(scale, 'total')
+    outputs.select(frame, 'total')
 
-    outputs.views.value = 'On curve'
+    outputs.views.value = 'Picture'
 
     (text,) = outputs.view.objects
-    assert 'On curve failed' in text.object
-    assert 'NotReadable' in text.object
+    assert 'Picture failed' in text.object
+    assert 'NotReadable: picture is no longer available' in text.object
+    assert 'Compute it again' in text.object
 
 
 def test_a_configured_plot_input_must_reference_an_output(

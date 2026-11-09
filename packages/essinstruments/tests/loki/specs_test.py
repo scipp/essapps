@@ -24,6 +24,14 @@ def test_a_beam_centre_without_a_distance_from_the_sample_is_refused(z: float) -
         BeamCentre(x=0.01, y=0.01, z=z)
 
 
+@pytest.mark.parametrize(('start', 'stop'), [(-1.0, 1.0), (1.0, 181.0)])
+def test_an_angle_range_outside_0_to_180_degrees_is_refused(
+    start: float, stop: float
+) -> None:
+    with pytest.raises(ValidationError):
+        AngleRange(start=start, stop=stop)
+
+
 @pytest.mark.parametrize(('start', 'stop'), [(2.0, 1.0), (1.0, 1.0)])
 def test_an_angle_range_that_holds_no_angle_is_refused(
     start: float, stop: float

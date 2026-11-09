@@ -4,8 +4,13 @@
 
 import subprocess
 import sys
+from datetime import UTC, datetime
 
-from ess.apps.plotting import slider_dims
+import pytest
+
+from ess.apps import Record, Request, SpecId
+from ess.apps.plotting import Plot, read_inputs, slider_dims
+from ess.spec import OutputRef
 
 
 def test_every_dimension_but_the_last_two_has_a_slider() -> None:
@@ -17,6 +22,20 @@ def test_every_dimension_but_the_last_two_has_a_slider() -> None:
     assert slider_dims({'y': 3, 'x': 4}) == []
     assert slider_dims({'x': 4}) == []
     assert slider_dims({}) == []
+
+
+def test_a_plot_input_cannot_be_an_element_of_an_output() -> None:
+    element = OutputRef(record='r', output='images', key='first')
+    record = Record(
+        id='s',
+        request=Request(SpecId(name='s', version=1), params={'image': element}),
+        proposal='p',
+        submitter='u',
+        created=datetime.now(UTC),
+        outputs=(),
+    )
+    with pytest.raises(ValueError, match='image does not reference a whole output'):
+        read_inputs(Plot(print, inputs=('image',)), None, record)  # type: ignore[arg-type]
 
 
 def test_what_an_application_decides_about_plots_needs_no_panel() -> None:

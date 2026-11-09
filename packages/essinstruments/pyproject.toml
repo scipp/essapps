@@ -35,6 +35,7 @@ dependencies = [
 loki = [
     "esssans>=26.10.0",
     "essspec[sciline]",
+    "scippnexus>=25.06.0",
 ]
 loki-app = [
     "essinstruments[loki]",

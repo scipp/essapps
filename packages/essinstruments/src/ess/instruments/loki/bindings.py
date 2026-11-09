@@ -105,6 +105,10 @@ def load_detector(params: CalibratedDetectorParams) -> CalibratedDetectorOutputs
 
 
 def compute_masks(params: MasksParams) -> MasksOutputs:
+    names = [path.name for path in params.mask_files]
+    if len(set(names)) < len(names):
+        # Masks are named by file, so that one mask would replace the other.
+        raise ValueError(f'mask files with the same name: {sorted(names)}')
     masks: dict[str, sc.Variable] = {}
     if params.mask_files:
         workflow = LokiAtLarmorWorkflow()
@@ -118,14 +122,15 @@ def compute_masks(params: MasksParams) -> MasksOutputs:
 
 
 def find_beam_centre(params: BeamCentreParams) -> BeamCentreOutputs:
-    counts = params.detector.counts
+    counts = params.detector.counts.assign_masks(params.masks.masks)
+    # The finder raises its cutoff until pixels are left, so without any it never ends.
+    if not counts.sum().value > 0:
+        raise ValueError('no counts outside the masks to find a beam centre from')
     workflow = LokiAtLarmorWorkflow()
     workflow[Position[snx.NXsample, SampleRun]] = counts.coords['sample_position']
     workflow[Position[snx.NXsource, SampleRun]] = counts.coords['source_position']
     # The finder sums the dimensions that the positions lack, and else expects events.
-    workflow[CorrectedDetector[SampleRun, Numerator]] = sc.concat(
-        [counts.assign_masks(params.masks.masks)], 'summed'
-    )
+    workflow[CorrectedDetector[SampleRun, Numerator]] = sc.concat([counts], 'summed')
     centre = sans.beam_center_from_center_of_mass(workflow).to(unit='m')
     return BeamCentreOutputs(
         centre=BeamCentre(

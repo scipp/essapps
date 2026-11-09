@@ -116,6 +116,7 @@ def test_the_plots_of_loki_draw_the_outputs_of_real_records(session: Session) ->
     outputs = session.app.outputs
     drawn = {}
     for record, name, view in [
+        (session.detector, 'detector', 'Detector image'),
         (session.masks, 'masks', 'Masks on image'),
         (session.angles, 'masks', 'Masks on image'),
         (session.centre, 'centre', 'Centre on image'),
@@ -136,8 +137,13 @@ def test_the_plots_of_loki_draw_the_outputs_of_real_records(session: Session) ->
         for record in (session.masks, session.angles)
     )
     assert 0 < angle_masks < file_masks
+    all_pixels = of(session.detector, 'Detector image').images[0].get_array()
+    assert file_masks < np.nansum(all_pixels)
     centre = of(session.centre, 'Centre on image')
-    assert any(line.get_marker() == '+' for line in centre.lines)
+    assert np.nansum(centre.images[0].get_array()) == file_masks
+    (cross,) = (line for line in centre.lines if line.get_marker() == '+')
+    found = session.app.client.output(session.centre, 'centre')
+    assert (cross.get_xdata()[0], cross.get_ydata()[0]) == (found.x, found.y)
     assert of(session.iofq, 'I(Q)').get_yscale() == 'log'
     legend = of(session.iofq, 'Transmission').get_legend()
     assert [t.get_text() for t in legend.get_texts()] == ['sample', 'can']

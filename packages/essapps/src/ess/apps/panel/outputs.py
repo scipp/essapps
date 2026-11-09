@@ -44,8 +44,8 @@ from plopp.core.typing import FigureLike as Figure
 from pydantic.fields import FieldInfo
 
 from ess.apps import ArrayInfo, Client, Listing, NotReadable, Record, SpecId, Status
-from ess.apps.plotting import Plot, slider_dims
-from ess.spec import OutputRef, field_types
+from ess.apps.plotting import Plot, read_inputs, slider_dims
+from ess.spec import field_types
 
 from .graph import Graph
 from .table import Table, with_sidebar
@@ -223,18 +223,10 @@ class Outputs:
             outputs = model.model_construct(
                 **{n: values.get(n) for n in model.model_fields}
             )
-            inputs = {name: self._input(record, name) for name in plot.inputs}
+            inputs = read_inputs(plot, self._client, record)
             return _figure_pane(plot.function(outputs, **inputs))
         except Exception as error:  # a plot is code of the workflow's author
             return pn.pane.Markdown(f'{view} failed: `{type(error).__name__}: {error}`')
-
-    def _input(self, record: Record, name: str) -> Any:
-        """The value that the param ``name`` of the record's request references."""
-        ref = record.request.params[name]
-        if not isinstance(ref, OutputRef) or ref.key is not None:
-            raise ValueError(f'{name} does not reference a whole output')
-        (source,) = self._client.records(ids=[ref.record])
-        return self._client.output(source, ref.output)
 
     def _plot(self, record: Record, name: str) -> list[Any]:
         """

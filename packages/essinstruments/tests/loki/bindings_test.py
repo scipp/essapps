@@ -4,6 +4,7 @@
 The bindings on the runs of the LoKI detector test, against plain esssans.
 """
 
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -64,6 +65,29 @@ def test_masks_are_named_by_file_and_fit_the_detector(
     assert detector.counts.sizes == masks[mask_file.name].sizes
 
 
+def test_each_mask_file_gives_a_mask(
+    detector: DetectorImage, mask_file: Path, tmp_path: Path
+) -> None:
+    copy = tmp_path / 'copy.xml'
+    shutil.copy(mask_file, copy)
+    outputs = bindings.masks_binding.compute(
+        MasksParams(detector=detector, mask_files=[mask_file, copy])
+    )
+    assert set(outputs.masks.masks) == {mask_file.name, 'copy.xml'}
+
+
+def test_mask_files_with_the_same_name_are_refused(
+    detector: DetectorImage, mask_file: Path, tmp_path: Path
+) -> None:
+    (tmp_path / 'a').mkdir()
+    (tmp_path / 'b').mkdir()
+    files = [tmp_path / 'a' / 'm.xml', tmp_path / 'b' / 'm.xml']
+    for path in files:
+        shutil.copy(mask_file, path)
+    with pytest.raises(ValueError, match='the same name'):
+        bindings.masks_binding.compute(MasksParams(detector=detector, mask_files=files))
+
+
 def test_without_mask_files_no_pixel_is_masked(detector: DetectorImage) -> None:
     outputs = bindings.masks_binding.compute(
         MasksParams(detector=detector, mask_files=[])
@@ -83,6 +107,18 @@ def test_beam_centre_is_that_of_the_tutorial(
     assert outputs.centre.y == pytest.approx(tutorial_centre.y)
     # esssans gives the tutorial's distance to five decimals.
     assert outputs.centre.z == pytest.approx(tutorial_centre.z, abs=1e-5)
+
+
+def test_a_beam_centre_without_counts_outside_the_masks_is_refused(
+    detector: DetectorImage,
+) -> None:
+    everything = sc.ones(sizes=detector.counts.sizes, dtype=bool)
+    with pytest.raises(ValueError, match='no counts outside the masks'):
+        bindings.beam_centre_binding.compute(
+            BeamCentreParams(
+                detector=detector, masks=PixelMasks(masks={'all': everything})
+            )
+        )
 
 
 def angle_mask(
@@ -120,6 +156,42 @@ def test_an_angle_range_masks_the_pixels_at_those_angles(
     assert np.array_equal(
         mask.values, ((1 <= angle) & (angle < 2)) | ((3 <= angle) & (angle < 4))
     )
+
+
+def two_pixels(sample_z: float, *positions: list[float]) -> DetectorImage:
+    pixels = sc.vectors(dims=['pixel'], values=positions, unit='m')
+    return DetectorImage(
+        counts=sc.DataArray(
+            sc.ones(sizes=pixels.sizes),
+            coords={
+                'position': pixels,
+                'sample_position': sc.vector([0.0, 0.0, sample_z], unit='m'),
+            },
+        )
+    )
+
+
+def test_an_angle_is_measured_from_the_sample() -> None:
+    # 0 and 90 degrees from the sample at z = 1, but 0 and 45 from the origin.
+    detector = two_pixels(1.0, [0.0, 0.0, 2.0], [1.0, 0.0, 1.0])
+    masks = angle_mask(
+        detector,
+        BeamCentre(x=0.0, y=0.0, z=1.0),
+        [AngleRange(start=0.0, stop=60.0)],
+    )
+    (mask,) = masks.masks.values()
+    assert mask.values.tolist() == [True, False]
+
+
+def test_an_angle_range_holds_its_start_but_not_its_stop() -> None:
+    detector = two_pixels(0.0, [0.0, 0.0, 1.0], [1.0, 0.0, 0.0])
+    masks = angle_mask(
+        detector,
+        BeamCentre(x=0.0, y=0.0, z=1.0),
+        [AngleRange(start=0.0, stop=90.0)],
+    )
+    (mask,) = masks.masks.values()
+    assert mask.values.tolist() == [True, False]
 
 
 def test_an_angle_is_measured_from_the_beam_centre(

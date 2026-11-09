@@ -16,10 +16,12 @@ from ess.apps.plotting import Plot
 
 from .specs import (
     BEAM_CENTRE,
+    CALIBRATED_DETECTOR,
     CREATE_MASK,
     IOFQ,
     MASKS,
     BeamCentreOutputs,
+    CalibratedDetectorOutputs,
     DetectorImage,
     IofQOutputs,
     MasksOutputs,
@@ -35,6 +37,11 @@ def on_detector(image: sc.DataArray) -> sc.DataArray:
     pixels.coords['y'] = pixels.coords['position'].fields.y.copy()
     others = [c for c in pixels.coords if c not in ('x', 'y')]
     return pixels.drop_coords(others).hist(y=128, x=128)
+
+
+def detector_image(outputs: CalibratedDetectorOutputs) -> Figure:
+    """The counts of every pixel."""
+    return pp.plot(on_detector(outputs.detector.counts), norm='log', title='All pixels')
 
 
 def masks_on_image(outputs: MasksOutputs, detector: DetectorImage) -> Figure:
@@ -74,6 +81,7 @@ def transmission_curves(outputs: IofQOutputs) -> Figure:
 _MASKS_ON_IMAGE = Plot(masks_on_image, inputs=('detector',))
 
 PLOTS = {
+    SpecId.of(CALIBRATED_DETECTOR): {'Detector image': Plot(detector_image)},
     SpecId.of(MASKS): {'Masks on image': _MASKS_ON_IMAGE},
     SpecId.of(CREATE_MASK): {'Masks on image': _MASKS_ON_IMAGE},
     SpecId.of(BEAM_CENTRE): {
