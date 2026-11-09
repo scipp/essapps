@@ -1,841 +1,228 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A form for a pydantic model of params, such as a spec's.
+A form for a pydantic model of params: the fields of :mod:`ess.apps.fields`, shown.
 
-The form gives the params as a request does: at each field, at any depth,
-the JSON form of a value, a file, a reference to an output, or ``None``. It
-is filled from params as a record stores them, so that a record's request
-can be edited and submitted again.
+This module only places widgets and connects their events. What a field holds, and
+what is missing, is in :mod:`ess.apps.fields`.
 
 The form has a tab per parameter, with the tabs on the left, as
-esslivedata's dashboard has (scipp/esslivedata#1426). The widget of a field
-follows from its type, as the table in ``packages/essspec/docs/params.md``
-gives (see :func:`_widget`), and is labelled by
-:func:`ess.spec.field_types.title`, a parameter by the title of its tab. The
-same widgets serve a parameter, a field of a group at any depth, and the
-element of a list. At a field of a group, a choice and a table show in a card
-titled by the field, so that a nested group is a card of its fields.
+esslivedata's dashboard has (scipp/esslivedata#1426). A parameter is labelled by
+the title of its tab. The same widgets serve a parameter, a field of a group at any
+depth, and the element of a list. At a field of a group, a choice and a table show
+in a card titled by the field, so that a nested group is a card of its fields.
 
-A record's output fits a field if its type, from the record's spec, fits the
-field, and a request of the client may reference it now
-(``client.readable``), so a pending record is offered too. A file is offered for
-a file field as :meth:`ess.apps.Listing.files` says, among those the backend
-accepts there. A file that the form is set to, such as one a record names, stays
-picked when the listing no longer has it.
+A picker's option of nothing has the value ``UNSET``: Panel does not send a value
+of ``None`` to the browser when it first shows a picker, which then shows no
+option at all.
 
 A table is a ``Tabulator``, so a notebook loads Panel with
 ``pn.extension('tabulator')``.
-
-A field without a default starts unset, so that a value a correct reduction
-needs is never filled in for the user; so does a list, of rows or of scalars,
-until an element is added or removed, so that a table, which has no default, is
-never given without rows by mistake. A field is left out of the request only if
-it is a choice with no way chosen, which it is only without a default, so the
-backend refuses it as required. A way chosen, or an input, with nothing given
-is not left out, since the backend would fill in the default: the params name
-it as missing (see :attr:`Form.params`). An empty text is the value ``''``
-where the field has a default, and nothing given where it has none, since a
-text input cannot tell an empty text from none; an element of a list of texts
-is a text, ``''`` too, since it was added.
-
-A time is picked to the second, in the zone of the value the picker was
-set to, or of the default, which its label names: ``Start (UTC)``. A time
-without a zone stays without one, and a time of ``AwareDatetime`` without a
-value is in UTC. The fraction of a second of the value is kept.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterator, Mapping
-from contextlib import contextmanager
-from datetime import UTC, datetime, tzinfo
-from enum import Enum
-from typing import Any, Union, get_args, get_origin
+from collections.abc import Callable, Collection
+from typing import Any
 
 import pandas as pd
 import panel as pn
-from pydantic import AwareDatetime, BaseModel
-from pydantic.fields import FieldInfo
-from pydantic_core import to_json, to_jsonable_python
+from pydantic import BaseModel
 
-from ess.apps import FieldError, Listing, SubmitError
-from ess.spec import (
-    File,
-    FileRef,
-    OutputRef,
-    field_types,
+from ess.apps import Listing
+from ess.apps.fields import (
+    ChoiceField,
+    Field,
+    Fields,
+    FileField,
+    GroupField,
+    Input,
+    NothingField,
+    RowsField,
+    ScalarField,
+    ScalarsField,
 )
-from ess.spec.refs import Loc, as_ref
 
 
-class _Unset:
-    def __repr__(self) -> str:
-        return 'UNSET'
+def _bound(
+    field: Field,
+    widget: Any,
+    show: Callable[[], None],
+    written: Callable[[Any], None],
+    name: str = 'value',
+) -> None:
+    """
+    Run ``show`` now and whenever ``field`` changes, and give ``written`` what a
+    person sets at ``name`` of ``widget``. What ``show`` does to the widget does not
+    count, also where Panel moves a value that new options lack.
+    """
+    showing = False
+
+    def shown() -> None:
+        nonlocal showing
+        showing = True
+        try:
+            show()
+        finally:
+            showing = False
+
+    def changed(event: Any) -> None:
+        if not showing:
+            written(event.new)
+
+    shown()
+    field.subscribe(shown)
+    widget.param.watch(changed, name)
 
 
-UNSET: Any = _Unset()
-"""
-The value of a field that the request leaves out; given to ``set``, the
-field as it starts, at its default or unset.
-"""
-
-type _Missing = list[FieldError]
-"""The fields with nothing given, each with what the user is to do."""
-
-type _Changed = Callable[[], None]
-"""Called when the value of a widget may have changed."""
-
-_HOLDS_CHANGES = 'the editor holds changes: add or update a row, or discard them'
-"""What a user who changed the editor of a table is to do before going on."""
-
-type _Widget = (
-    _Scalar | _Scalars | _File | _Group | _Record | _Nothing | _Choice | _Rows
-)
-"""
-The widget of a value: ``value(loc, missing)`` gives it as a request writes
-it, ``set`` shows a value, ``refresh`` lists the files and records anew,
-``watch`` calls back when the value changes.
-"""
+def _input_widget(field: Input) -> Any:
+    options: dict[str, Any] = {'label': field.label, 'sizing_mode': 'stretch_width'}
+    if not isinstance(field, ScalarField):
+        return pn.widgets.Select(**options)
+    options['description'] = field.description
+    if field.kind == 'float':
+        return pn.widgets.FloatInput(**options)
+    if field.kind == 'int':
+        return pn.widgets.IntInput(**options)
+    if field.kind == 'text':
+        return pn.widgets.TextInput(**options)
+    if field.kind == 'time':
+        return pn.widgets.DatetimePicker(**options)
+    return pn.widgets.Select(**options)
 
 
-def _field(name: str, info: FieldInfo, listing: Listing) -> _Widget:
-    """The widget of the field ``name`` with ``info``, of a group or of the params."""
-    return _widget(
-        field_types.title(name, info),
-        info.annotation,
-        field_types.field_metadata(info),
-        UNSET if info.is_required() else info.get_default(call_default_factory=True),
-        listing,
-        info.description,
+def _input(field: Input) -> Any:
+    widget = _input_widget(field)
+
+    def show() -> None:
+        if isinstance(widget, pn.widgets.Select) and widget.options != field.options:
+            widget.options = dict(field.options)
+        widget.label = field.label
+        widget.value = field.value
+
+    def written(value: Any) -> None:
+        field.value = value
+
+    _bound(field, widget, show, written)
+    return widget
+
+
+def _scalars(field: ScalarsField) -> Any:
+    column = pn.Column(sizing_mode='stretch_width')
+    shown: dict[ScalarField, Any] = {}
+
+    def show() -> None:
+        nonlocal shown
+        shown = {e: shown[e] if e in shown else _input(e) for e in field.elements}
+        objects = list(shown.values())
+        if column.objects != objects:
+            column.objects = objects
+
+    show()
+    field.subscribe(show)
+    add = pn.widgets.Button(label=f'Add to {field.label}')
+    add.on_click(lambda _: field.add())
+    remove = pn.widgets.Button(label=f'Remove from {field.label}')
+    remove.on_click(lambda _: field.remove())
+    return pn.Column(column, pn.Row(add, remove))
+
+
+def _group(field: GroupField) -> Any:
+    return pn.Column(
+        *(
+            _view(f)
+            if isinstance(f, ScalarField | ScalarsField | FileField)
+            else pn.Card(
+                _view(f),
+                title=field.titles[name],
+                collapsible=False,
+                sizing_mode='stretch_width',
+            )
+            for name, f in field.fields.items()
+        ),
+        sizing_mode='stretch_width',
     )
 
 
-def _widget(
-    label: str,
-    annotation: Any,
-    metadata: tuple[Any, ...],
-    default: Any,
-    listing: Listing,
-    description: str | None = None,
-) -> _Widget:
-    """
-    The widget of a value of type ``annotation`` with ``metadata`` (see
-    :func:`ess.spec.field_types.field_metadata`), at any depth.
+def _choice(field: ChoiceField) -> Any:
+    selector = pn.widgets.RadioBoxGroup(options=field.offered, inline=True)
+    ways = {label: _view(way) for label, way in field.ways.items()}
 
-    The type is read with :func:`ess.spec.field_types.split`, as the sources of its
-    request type are (:func:`ess.spec.request_types.sources`). A scalar is an input
-    of its type, and a file field a picker of the files to offer. Anything with
-    more than one way to give the value is a :class:`_Choice`: the alternatives of
-    a union of groups, a group (one way, ``Given``, whose selector is hidden), a
-    scalar or a file field with ``None`` or a ``Referenced[...]`` member
-    (``Given``, ``A file``), ``From a record``, and ``None``. A list of scalars is
-    :class:`_Scalars`, and any other list :class:`_Rows`.
-    """
-    tp, none, metadata = field_types.unwrapped(annotation, metadata)
-    if get_origin(tp) is list:
-        (element,) = get_args(tp)
-        if field_types.is_scalar(item := field_types.plain(element)):
-            return _Scalars(label, item, default, description)
-        return _Rows(element, default, listing)
-    inline, inline_metadata, referenced = field_types.split(tp, *metadata)
-    union = field_types.alternatives(inline, *inline_metadata)
-    marker = field_types.file_marker(inline, *inline_metadata)
-    if not (none or referenced or union):
-        if marker is not None:
-            return _File(marker, listing, label)
-        if not field_types.is_group(inline):
-            return _Scalar(label, inline, default, description)
-    ways: dict[str, _Widget] = {}
-    if union is not None:
-        tag, groups = union
-        for value, group in groups.items():
-            way = field_types.title(value, group.model_fields[tag])
-            ways[way] = _Group(group, {tag: value}, listing)
-    elif marker is not None:
-        ways[_Choice.FILE] = _File(marker, listing)
-    elif field_types.is_group(inline):
-        ways[_Choice.GIVEN] = _Group(inline, {}, listing)
-    elif inline is not None:
-        ways[_Choice.GIVEN] = _Scalar(label, inline, UNSET, description)
-    if referenced:
-        ways[_Choice.RECORD] = _Record(Union[referenced], listing)  # noqa: UP007
-    if none:
-        ways[_Choice.NONE] = _Nothing()
-    return _Choice(ways, None if union is None else union[0], default)
+    def show() -> None:
+        selector.value = field.chosen
+        selector.visible = field.selector_visible
+        for label, way in ways.items():
+            way.visible = label == field.chosen
+
+    def written(label: str | None) -> None:
+        field.chosen = label
+
+    _bound(field, selector, show, written)
+    return pn.Column(selector, *ways.values(), sizing_mode='stretch_width')
 
 
-def _picked(widget: Any, options: Mapping[str, Any]) -> None:
-    """Give a picker ``options``; its value stays if it is one of them."""
-    value = widget.value
-    widget.options = dict(options)
-    _pick(widget, value)
+def _rows(field: RowsField) -> Any:
+    table = pn.widgets.Tabulator(
+        disabled=True,
+        selectable=True,
+        sortable=False,
+        show_index=False,
+        layout='fit_columns',
+        sizing_mode='stretch_width',
+    )
+    message = pn.pane.Markdown()
+    add = pn.widgets.Button(label='Add as new row')
+    add.on_click(lambda _: field.add_row())
+    update = pn.widgets.Button(label='Update row', disabled=True)
+    update.on_click(lambda _: field.update_row())
+    remove = pn.widgets.Button(label='Remove')
+    remove.on_click(lambda _: field.remove_rows())
+    discard = pn.widgets.Button(label='Discard')
+    discard.on_click(lambda _: field.discard())
+    columns: dict[str, list[str]] | None = None
+
+    def show() -> None:
+        nonlocal columns
+        if columns is not field.columns:
+            columns = field.columns
+            # Of text, since Tabulator formats a column by its type when first
+            # shown, and a column without rows would be one of numbers.
+            table.value = pd.DataFrame(columns, dtype=str)
+        table.selection = field.selection
+        update.disabled = not field.can_update
+        message.object = field.message
+
+    _bound(field, table, show, field.select, 'selection')
+    return pn.Column(
+        table,
+        _view(field.editor),
+        pn.Row(add, update, remove, discard),
+        message,
+        sizing_mode='stretch_width',
+    )
 
 
-def _pick(widget: Any, value: Any) -> None:
-    """Pick ``value`` if the picker lists it, else nothing."""
-    widget.value = value if value in widget.options.values() else UNSET
-
-
-class _File:
-    """
-    A file field: a picker of the files to offer for its marker
-    (:meth:`~ess.apps.Listing.files`), labelled ``label``. A
-    file that the form is set to and the listing lacks stays picked,
-    labelled by its reference as given, an identity or a name such as
-    ``run:101``.
-
-    A picker's option of nothing has the value ``UNSET``: Panel does not
-    send a value of ``None`` to the browser when it first shows a picker,
-    which then shows no option at all.
-    """
-
-    def __init__(self, marker: File, listing: Listing, label: str = '') -> None:
-        self._marker = marker
-        self._listed: dict[str, Any] = {}
-        self.widget = pn.widgets.Select(label=label, sizing_mode='stretch_width')
-        self.refresh(listing)
-
-    def refresh(self, listing: Listing) -> None:
-        self._listed = {'(choose a file)': UNSET, **listing.files(self._marker)}
-        self.set(self.widget.value)
-
-    def value(self, loc: Loc, missing: _Missing) -> Any:
-        if self.widget.value is not UNSET:
-            return self.widget.value
-        missing.append(FieldError(None, loc, 'choose a file'))
-        return UNSET
-
-    def set(self, value: Any) -> None:
-        # A reference, or its JSON form, as a request may give it.
-        ref = None if value is UNSET else as_ref(value)
-        picked = ref if isinstance(ref, FileRef) else UNSET
-        options = dict(self._listed)
-        if picked is not UNSET and picked not in options.values():
-            options[str(picked)] = picked
-        self.widget.options = options
-        self.widget.value = picked
-
-    def watch(self, changed: _Changed) -> None:
-        self.widget.param.watch(lambda _: changed(), 'value')
-
-    def panel(self) -> Any:
-        return self.widget
-
-
-class _Scalar:
-    """
-    A scalar: an ``int``, ``float``, or ``str`` input, or a picker of a time,
-    that may be unset, or for a ``bool``, an enum, or a ``Literal``, a picker
-    of its values with an option for none, ``UNSET`` as at a file, so that it
-    may start unset. It gives the JSON form of its value.
-    """
-
-    def __init__(
-        self, label: str, tp: Any, default: Any, description: str | None = None
-    ) -> None:
-        self._label = label
-        self._type = tp
-        self._default = default
-        self._zone: tzinfo | None = None
-        self._time_set: datetime | None = None  # with the zone and fraction
-        options: dict[str, Any] = {
-            'label': label,
-            'description': description,
-            'sizing_mode': 'stretch_width',
-        }
-        self.widget: Any
-        if tp is float:
-            self.widget = pn.widgets.FloatInput(**options)
-        elif tp is int:
-            self.widget = pn.widgets.IntInput(**options)
-        elif tp is str:
-            self.widget = pn.widgets.TextInput(**options)
-        elif tp in field_types.TIMES:
-            self.widget = pn.widgets.DatetimePicker(**options)
-        elif tp is bool:
-            self.widget = self._picker({'True': True, 'False': False}, options)
-        elif isinstance(tp, type) and issubclass(tp, Enum):
-            self.widget = self._picker({m.name: m for m in tp}, options)
-        else:  # a Literal
-            self.widget = self._picker({str(v): v for v in get_args(tp)}, options)
-        self.set(UNSET)
-
-    @staticmethod
-    def _picker(values: dict[str, Any], options: dict[str, Any]) -> Any:
-        return pn.widgets.Select(options={'(choose)': UNSET, **values}, **options)
-
-    def value(self, loc: Loc, missing: _Missing) -> Any:
-        value = self.widget.value
-        if value is None or value is UNSET or (value == '' and self._default is UNSET):
-            missing.append(FieldError(None, loc, 'give a value'))
-            return UNSET
-        if self._type in field_types.TIMES:
-            # The picker gives a time without a zone, to the second: the time
-            # set, unless the user changed it.
-            value = value.replace(tzinfo=self._zone)
-            if (set_ := self._time_set) is not None and value == set_.replace(
-                microsecond=0
-            ):
-                value = set_
-        return to_jsonable_python(value)
-
-    def set(self, value: Any) -> None:
-        if value is UNSET:
-            value = self._default
-        if value is UNSET:
-            if not isinstance(self.widget, pn.widgets.Select):
-                value = '' if self._type is str else None
-        elif isinstance(self._type, type) and issubclass(self._type, Enum):
-            value = self._type(value)  # a record holds an enum by its value
-        if self._type in field_types.TIMES:
-            value = self._time(value)
-        self.widget.value = value
-
-    def _time(self, value: datetime | str | None) -> datetime | None:
-        """
-        ``value``, a time, or its text, as a record holds it, as the picker
-        shows it: without its zone, which is kept and named in the label, and
-        without its fraction of a second, which is kept until the user changes
-        the time.
-        """
-        if isinstance(value, str):
-            value = datetime.fromisoformat(value)
-        if value is None:
-            self._zone = UTC if self._type is AwareDatetime else None
-        else:
-            self._zone = value.tzinfo
-        self._time_set = value
-        zone = 'no time zone' if self._zone is None else self._zone.tzname(value)
-        self.widget.label = f'{self._label} ({zone})'
-        return None if value is None else value.replace(tzinfo=None)
-
-    def refresh(self, listing: Listing) -> None:
-        pass
-
-    def watch(self, changed: _Changed) -> None:
-        self.widget.param.watch(lambda _: changed(), 'value')
-
-    def panel(self) -> Any:
-        return self.widget
-
-
-class _Scalars:
-    """
-    A list of scalars: an input per element, as :class:`_Scalar` has it, and
-    buttons that add an element and remove the last. Unset, it has no
-    element until one is added or removed: a removal gives no element, the
-    empty list.
-    """
-
-    def __init__(
-        self, label: str, tp: Any, default: Any, description: str | None = None
-    ) -> None:
-        self._label = label
-        self._type = tp
-        self._default = default
-        self._description = description
-        self._elements: list[_Scalar] | None = None  # unset
-        self._changed: _Changed = lambda: None
-        self._column = pn.Column(sizing_mode='stretch_width')
-        add = pn.widgets.Button(label=f'Add to {label}')
-        add.on_click(lambda _: self._click(len(self._elements or []) + 1))
-        remove = pn.widgets.Button(label=f'Remove from {label}')
-        remove.on_click(lambda _: self._click(len(self._elements or []) - 1))
-        self._panel = pn.Column(self._column, pn.Row(add, remove))
-        self.set(UNSET)
-
-    def _click(self, n: int) -> None:
-        self._resize(n)
-        self._changed()
-
-    def _resize(self, n: int) -> None:
-        """
-        Keep the first ``n`` elements, none for ``-1``, or add elements with
-        nothing given, but a text, which is ``''``.
-        """
-        elements = self._elements or []
-        del elements[n:]
-        default = '' if self._type is str else UNSET
-        for i in range(len(elements), n):
-            element = _Scalar(
-                f'{self._label} [{i}]', self._type, default, self._description
-            )
-            element.watch(lambda: self._changed())
-            elements.append(element)
-        self._elements = elements
-        self._column.objects = [e.panel() for e in elements]
-
-    def value(self, loc: Loc, missing: _Missing) -> Any:
-        if self._elements is None:
-            missing.append(FieldError(None, loc, 'add an element, or remove for none'))
-            return UNSET
-        return [e.value((*loc, i), missing) for i, e in enumerate(self._elements)]
-
-    def set(self, value: Any) -> None:
-        if value is UNSET:
-            value = self._default
-        if value is UNSET:
-            self._elements = None
-            self._column.objects = []
-            return
-        self._resize(len(value))
-        for element, item in zip(self._elements or [], value, strict=True):
-            element.set(item)
-
-    def refresh(self, listing: Listing) -> None:
-        pass
-
-    def watch(self, changed: _Changed) -> None:
-        self._changed = changed
-
-    def panel(self) -> Any:
-        return self._panel
-
-
-class _Group:
-    """
-    The fields of a group, each the widget of its type; the tag of an
-    alternative has none. A choice or a table shows in a card titled by its
-    field.
-    """
-
-    def __init__(
-        self, group: type[BaseModel], tag: dict[str, str], listing: Listing
-    ) -> None:
-        self.tag = tag
-        self._fields = {
-            name: _field(name, info, listing)
-            for name, info in group.model_fields.items()
-            if name not in tag
-        }
-        self._panel = pn.Column(
-            *(
-                w.panel()
-                if isinstance(w, _Scalar | _Scalars | _File)
-                else pn.Card(
-                    w.panel(),
-                    title=field_types.title(name, group.model_fields[name]),
-                    collapsible=False,
-                    sizing_mode='stretch_width',
-                )
-                for name, w in self._fields.items()
-            ),
-            sizing_mode='stretch_width',
-        )
-
-    def value(self, loc: Loc, missing: _Missing) -> dict[str, Any]:
-        given = {n: w.value((*loc, n), missing) for n, w in self._fields.items()}
-        return self.tag | {n: v for n, v in given.items() if v is not UNSET}
-
-    def set(self, value: Any) -> None:
-        given = {} if value is UNSET else dict(value)
-        for name, field in self._fields.items():
-            field.set(given.get(name, UNSET))
-
-    def refresh(self, listing: Listing) -> None:
-        for field in self._fields.values():
-            field.refresh(listing)
-
-    def watch(self, changed: _Changed) -> None:
-        for field in self._fields.values():
-            field.watch(changed)
-
-    def panel(self) -> Any:
-        return self._panel
-
-
-class _Record:
-    """
-    An output of a record that fits ``tp``, a group or a union of groups: a
-    picker of references, with ``UNSET`` for none, as at a file.
-    """
-
-    def __init__(self, tp: Any, listing: Listing) -> None:
-        self._tp = tp
-        self.widget = pn.widgets.Select(sizing_mode='stretch_width')
-        self.refresh(listing)
-
-    def refresh(self, listing: Listing) -> None:
-        _picked(self.widget, {'(choose a record)': UNSET, **listing.fitting(self._tp)})
-
-    def value(self, loc: Loc, missing: _Missing) -> Any:
-        if self.widget.value is UNSET:
-            missing.append(FieldError(None, loc, 'choose a record'))
-            return UNSET
-        return self.widget.value
-
-    def set(self, value: Any) -> None:
-        _pick(self.widget, value)
-
-    def watch(self, changed: _Changed) -> None:
-        self.widget.param.watch(lambda _: changed(), 'value')
-
-    def panel(self) -> Any:
-        return self.widget
-
-
-class _Nothing:
-    """``None``: no value."""
-
-    def value(self, loc: Loc, missing: _Missing) -> None:
-        return None
-
-    def set(self, value: Any) -> None:
-        pass
-
-    def refresh(self, listing: Listing) -> None:
-        pass
-
-    def watch(self, changed: _Changed) -> None:
-        pass
-
-    def panel(self) -> Any:
+def _view(field: Field) -> Any:
+    """The widgets of ``field``, kept up to date with it."""
+    if isinstance(field, Input):
+        return _input(field)
+    if isinstance(field, ScalarsField):
+        return _scalars(field)
+    if isinstance(field, GroupField):
+        return _group(field)
+    if isinstance(field, ChoiceField):
+        return _choice(field)
+    if isinstance(field, RowsField):
+        return _rows(field)
+    if isinstance(field, NothingField):
         return pn.Spacer(height=0)
+    raise TypeError(f'no widget for {type(field).__name__}')
 
 
-class _Choice:
+class Form(Fields):
     """
-    The ways of giving a value, each a widget: the alternatives of a union
-    of groups, whose tag field is ``tag``; a group, a file, or a scalar
-    given; an output of a record; ``None``. A radio button per way that is
-    offered, hidden if it offers one way only, and the widget of the chosen
-    way.
-
-    It starts at its default's way. Without a default, it starts unset,
-    unless it has one way only. Set, each way not chosen is as it starts, so
-    that it shows no value set before, such as a row shown before.
-    """
-
-    GIVEN = 'Given'
-    RECORD = 'From a record'
-    FILE = 'A file'
-    NONE = 'None'
-
-    def __init__(self, ways: dict[str, _Widget], tag: str | None, default: Any) -> None:
-        self._ways = ways
-        self._tag = tag
-        self._default = default
-        self._selector = pn.widgets.RadioBoxGroup(options=list(ways), inline=True)
-        self._selector.param.watch(lambda _: self._show(), 'value')
-        self._panel = pn.Column(
-            self._selector,
-            *(w.panel() for w in ways.values()),
-            sizing_mode='stretch_width',
-        )
-        self.set(UNSET)
-
-    def _show(self) -> None:
-        for label, way in self._ways.items():
-            way.panel().visible = label == self._selector.value
-
-    def refresh(self, listing: Listing) -> None:
-        for way in self._ways.values():
-            way.refresh(listing)
-        self._offer()
-
-    def _offer(self) -> None:
-        chosen = self._selector.value
-        self._selector.options = list(self._ways)
-        self._selector.value = chosen  # Panel picks the first option otherwise
-        self._selector.visible = len(self._selector.options) > 1 or chosen is None
-        self._show()
-
-    @property
-    def offered(self) -> list[str]:
-        return list(self._selector.options)
-
-    def value(self, loc: Loc, missing: _Missing) -> Any:
-        chosen = self._selector.value
-        return UNSET if chosen is None else self._ways[chosen].value(loc, missing)
-
-    def set(self, value: Any) -> None:
-        if value is UNSET:
-            value = self._default
-        label = self._label(value)
-        self._selector.value = label
-        for way_label, way in self._ways.items():
-            way.set(value if way_label == label else UNSET)
-        self._offer()
-
-    def _label(self, value: Any) -> str | None:
-        """The label of the way that writes ``value``, or ``None`` if unset."""
-        if value is UNSET:
-            return next(iter(self._ways)) if len(self._ways) == 1 else None
-        if value is None:
-            return self.NONE
-        ref = as_ref(value)
-        if isinstance(ref, OutputRef):
-            return self.RECORD
-        if isinstance(ref, FileRef):
-            return self.FILE
-        if self._tag is None:
-            return self.GIVEN
-        tag = {self._tag: dict(value)[self._tag]}
-        for label, way in self._ways.items():
-            if isinstance(way, _Group) and way.tag == tag:
-                return label
-        raise ValueError(f'{tag[self._tag]}: not an alternative')
-
-    def watch(self, changed: _Changed) -> None:
-        self._selector.param.watch(lambda _: changed(), 'value')
-        for way in self._ways.values():
-            way.watch(changed)
-
-    def panel(self) -> Any:
-        return self._panel
-
-
-class _Rows:
-    """
-    A list of ``element``, not a scalar: a table with a row per element, and
-    a column per field of the element, of the tag and the fields of every
-    alternative of a union, and of the file and the output that a row may
-    be given as, such as ``File`` and ``Record`` for ``list[Run |
-    Referenced[X]]``; and below it the editor of a row, the widget of the
-    element's type. A cell is empty where an alternative lacks the field,
-    and shows a group or a list as its JSON text. The rows are held as a
-    request writes them, so the widgets do not grow with the rows.
-
-    The editor shows the row selected, and is empty if none or several are.
-    ``Update row`` writes the editor back to the row selected, and ``Add as
-    new row`` appends it, each only if nothing is missing in it, so that every
-    row is complete. ``Remove`` removes the rows selected, with any changes to
-    them in the editor. ``Discard`` shows the selection in the editor again.
-
-    So that a change in the editor is not lost unseen, the selection stays
-    while the editor differs from what it showed, and the params refuse it. A
-    refresh is no change: a record gone from the listing leaves its row as it
-    is, as a row the editor cannot show whole.
-
-    Unset, it has no row until one is added or ``Remove`` is clicked, which
-    gives the empty list. A row set that the editor cannot show whole, such
-    as a reference to an output that the client may not read now, is kept
-    as given.
-    """
-
-    def __init__(self, element: Any, default: Any, listing: Listing) -> None:
-        self._default = default
-        self._listing = listing
-        self._rows: list[Any] | None = None  # unset
-        self._changed: _Changed = lambda: None
-        # The selection that the editor shows, which the table's differs from
-        # only while it is being restored.
-        self._selection: list[int] = []
-        # What the editor held as it showed the selection, which differs from
-        # the row if the editor cannot show it whole.
-        self._shown: tuple[Any, _Missing] = (UNSET, [])
-        tp, _, metadata = field_types.unwrapped(element)
-        inline, inline_metadata, referenced = field_types.split(tp, *metadata)
-        self._marker = field_types.file_marker(inline, *inline_metadata)
-        # The tag field of a union, and the title of each alternative by tag.
-        self._tag: str | None = None
-        self._titles: dict[str, str] = {}
-        groups = [] if inline is None or self._marker is not None else [inline]
-        if (union := field_types.alternatives(inline, *inline_metadata)) is not None:
-            self._tag, alternatives = union
-            self._titles = {
-                value: field_types.title(value, group.model_fields[self._tag])
-                for value, group in alternatives.items()
-            }
-            groups = list(alternatives.values())
-        # The title of each field, of every alternative, and its marker if a
-        # file field.
-        self._fields: dict[str, tuple[str, File | None]] = {}
-        for group in groups:
-            for name, info in group.model_fields.items():
-                if name != self._tag and name not in self._fields:
-                    self._fields[name] = (
-                        field_types.title(name, info),
-                        field_types.file_of(info),
-                    )
-        # The columns of the file and of the output that a row may be given as.
-        self._refs: dict[str, type[FileRef | OutputRef]] = {}
-        if self._marker is not None:
-            self._refs['File'] = FileRef
-        if referenced:
-            self._refs['Record'] = OutputRef
-        self._editor = _widget('', element, (), UNSET, listing)
-        self._table = pn.widgets.Tabulator(
-            disabled=True,
-            selectable=True,
-            sortable=False,
-            show_index=False,
-            layout='fit_columns',
-            sizing_mode='stretch_width',
-        )
-        self._table.param.watch(lambda _: self._select(), 'selection')
-        self._message = pn.pane.Markdown()
-        add = pn.widgets.Button(label='Add as new row')
-        add.on_click(lambda _: self._write(None))
-        self._update = pn.widgets.Button(label='Update row', disabled=True)
-        self._update.on_click(lambda _: self._write(self._selected()))
-        remove = pn.widgets.Button(label='Remove')
-        remove.on_click(lambda _: self._remove())
-        discard = pn.widgets.Button(label='Discard')
-        discard.on_click(lambda _: self._load())
-        self._panel = pn.Column(
-            self._table,
-            self._editor.panel(),
-            pn.Row(add, self._update, remove, discard),
-            self._message,
-            sizing_mode='stretch_width',
-        )
-        self.set(UNSET)
-
-    def _selected(self) -> int | None:
-        """The row selected, if one is."""
-        return self._selection[0] if len(self._selection) == 1 else None
-
-    def _held(self) -> tuple[Any, _Missing]:
-        """
-        The editor's value and what is missing in it, which names any changes
-        in the editor of a table within this editor.
-        """
-        missing: _Missing = []
-        return self._editor.value((), missing), missing
-
-    def _select(self) -> None:
-        """Show the selection in the editor, or restore it if the editor changed."""
-        if self._table.selection == self._selection:
-            return
-        if self._held() != self._shown:
-            self._table.selection = self._selection
-            self._message.object = _HOLDS_CHANGES
-            return
-        self._selection = self._table.selection
-        self._load()
-
-    def _load(self) -> None:
-        """Show the row selected in the editor, or nothing if none is."""
-        i = self._selected()
-        self._editor.set(UNSET if i is None else (self._rows or [])[i])
-        self._shown = self._held()
-        self._update.disabled = i is None
-        self._message.object = ''
-
-    def _write(self, i: int | None) -> None:
-        """Write the editor to the row ``i``, or a new row, if nothing is missing."""
-        value, missing = self._held()
-        if value is UNSET and not missing:  # a choice with no way chosen
-            missing.append(FieldError(None, (), 'choose a way'))
-        self._message.object = '\n'.join(f'- {e}' for e in missing)
-        if missing:
-            return
-        self._shown = (value, missing)
-        rows = self._rows or []
-        if i is None:
-            self._rows = [*rows, value]
-            self._render()
-            self._table.selection = [len(self._rows) - 1]
-        else:
-            rows[i] = value
-            self._render()
-        self._changed()
-
-    def _remove(self) -> None:
-        selected = set(self._selection)
-        self._rows = [r for i, r in enumerate(self._rows or []) if i not in selected]
-        if selected:
-            self._selection = []
-            self._table.selection = []
-            self._load()
-        self._render()
-        self._changed()
-
-    def _render(self) -> None:
-        """Show the rows in the table, a file or an output by its label."""
-        rows = self._rows or []
-        listed: dict[File, dict[FileRef, str]] = {}
-
-        def text(value: Any, marker: File | None) -> str:
-            ref = as_ref(value)
-            if isinstance(ref, OutputRef):
-                return self._listing.output_label(ref)
-            if isinstance(ref, FileRef) and marker is not None:
-                if marker not in listed:
-                    files = self._listing.files(marker)
-                    listed[marker] = {r: label for label, r in files.items()}
-                return listed[marker].get(ref, str(ref))
-            if isinstance(value, dict | list):
-                return to_json(value).decode()
-            return '' if value is None else str(value)
-
-        refs = [as_ref(r) for r in rows]
-        columns: dict[str, list[str]] = {}
-        if self._tag is not None:
-            columns[field_types.title(self._tag, FieldInfo())] = [
-                self._titles[r[self._tag]] if ref is None else ''
-                for r, ref in zip(rows, refs, strict=True)
-            ]
-        for name, (title, marker) in self._fields.items():
-            columns[title] = [
-                text(r.get(name), marker) if ref is None else ''
-                for r, ref in zip(rows, refs, strict=True)
-            ]
-        for column, kind in self._refs.items():
-            columns[column] = [
-                text(r, self._marker) if isinstance(ref, kind) else ''
-                for r, ref in zip(rows, refs, strict=True)
-            ]
-        # Of text, since Tabulator formats a column by its type when first
-        # shown, and a column without rows would be one of numbers.
-        self._table.value = pd.DataFrame(columns, dtype=str)
-
-    def value(self, loc: Loc, missing: _Missing) -> Any:
-        if self._rows is None:
-            missing.append(FieldError(None, loc, 'add a row, or remove for none'))
-            return UNSET
-        if self._held() != self._shown:
-            i = self._selected()
-            at = loc if i is None else (*loc, i)
-            missing.append(FieldError(None, at, _HOLDS_CHANGES))
-        return list(self._rows)
-
-    def set(self, value: Any) -> None:
-        if value is UNSET:
-            value = self._default
-        if value is UNSET:
-            self._rows = None
-        else:
-            self._rows = []
-            for item in value:
-                self._editor.set(item)
-                given, missing = self._held()
-                self._rows.append(item if missing else given)
-        self._selection = []
-        self._table.selection = []
-        self._load()
-        self._render()
-
-    def refresh(self, listing: Listing) -> None:
-        self._listing = listing
-        changed = self._held() != self._shown
-        self._editor.refresh(listing)
-        if not changed:
-            self._shown = self._held()
-        self._render()
-
-    def watch(self, changed: _Changed) -> None:
-        self._changed = changed
-        self._editor.watch(changed)
-
-    def panel(self) -> Any:
-        return self._panel
-
-
-class Form:
-    """
-    The params of one pydantic model, such as a spec's ``params``: a widget per
-    parameter, listing what ``listing`` offers at each field.
-
-    ``fields`` limits the form to these parameters. So a template's two parts
-    are one form each, its values and its blanks::
-
-        Form(IOFQ.params, listing, fields=settings)
-        Form(IOFQ.params, listing, fields=('sample', 'sample_transmission'))
-
-    Raises ``KeyError`` for a name that is not a parameter of the model.
+    The :class:`~ess.apps.fields.Fields` of a pydantic model, shown as tabs by
+    :meth:`panel`.
     """
 
     def __init__(
@@ -847,30 +234,18 @@ class Form:
         title: str = '',
         description: str = '',
     ) -> None:
-        self.title = title or model.__name__
-        every = model.model_fields
-        self._every = frozenset(every)
-        if unknown := sorted(set(fields or ()) - self._every):
-            raise KeyError(f'{self.title} has no parameters {unknown}')
-        shown = {n: i for n, i in every.items() if fields is None or n in fields}
-        self._params = {
-            name: _field(name, info, listing) for name, info in shown.items()
-        }
-        self._on_change: _Changed | None = None
-        self._loading = False
-        for widget in self._params.values():
-            widget.watch(self._changed)
+        super().__init__(model, listing, fields=fields, title=title)
         heading = f'**{title}**: {description}' if title else description
         self._panel = pn.Column(
             pn.pane.Markdown(heading),
             pn.Tabs(
                 *(
                     pn.Column(
-                        w.panel(),
-                        name=field_types.title(name, shown[name]),
+                        _view(field),
+                        name=self.titles[name],
                         sizing_mode='stretch_width',
                     )
-                    for name, w in self._params.items()
+                    for name, field in self.fields.items()
                 ),
                 tabs_location='left',
                 sizing_mode='stretch_width',
@@ -878,86 +253,6 @@ class Form:
             ),
             sizing_mode='stretch_width',
         )
-
-    def watch(self, on_change: _Changed) -> None:
-        """
-        Call ``on_change`` when a person changes what the form holds. :meth:`set`
-        and :meth:`refresh` do not call it, whatever they change.
-        """
-        self._on_change = on_change
-
-    def _changed(self) -> None:
-        if self._on_change is not None and not self._loading:
-            self._on_change()
-
-    @contextmanager
-    def _loads(self) -> Iterator[None]:
-        self._loading = True
-        try:
-            yield
-        finally:
-            self._loading = False
-
-    @property
-    def params(self) -> dict[str, Any]:
-        """
-        The params as a request gives them; a field with no way chosen is
-        left out. Raises :class:`~ess.apps.SubmitError` at each field
-        where a way is chosen, or an input or a list is, with nothing given::
-
-            beam_centre: choose a record
-            reduction.bins: give a value
-            sample: add a row, or remove for none
-            sample[1]: the editor holds changes: add or update a row, or discard them
-        """
-        given, missing = self.held()
-        if missing:
-            raise SubmitError(missing)
-        return given
-
-    def held(self) -> tuple[dict[str, Any], list[FieldError]]:
-        """
-        What the form holds: the params given in full, leaving out each with
-        anything missing, and what is missing, as :attr:`params` names it.
-        """
-        missing: _Missing = []
-        given = {n: w.value((n,), missing) for n, w in self._params.items()}
-        incomplete = {e.loc[0] for e in missing if e.loc}
-        return {
-            n: v for n, v in given.items() if v is not UNSET and n not in incomplete
-        }, missing
-
-    def set(self, params: Mapping[str, Any], listing: Listing) -> None:
-        """
-        Show ``params``, as a record or a request holds them, such as
-        ``record.request.params``, with what ``listing`` offers; a field left
-        out is as it starts, at its default or unset, and a parameter that the
-        form does not show is ignored. A reference that the client may not
-        read now chooses the way of a record, with no record picked; a file
-        that is not listed stays picked.
-        """
-        if unknown := set(params) - self._every:
-            raise KeyError(f'{self.title} has no parameters {sorted(unknown)}')
-        self.refresh(listing)
-        with self._loads():
-            for name, widget in self._params.items():
-                widget.set(params.get(name, UNSET))
-
-    def ways(self, name: str) -> list[str]:
-        """
-        The ways offered at the parameter ``name``, a choice, such as
-        ``['Given', 'From a record']``. Raises ``TypeError`` for a
-        parameter of another widget, such as a file or a list.
-        """
-        if not isinstance(widget := self._params[name], _Choice):
-            raise TypeError(f'{name}: not a choice of ways')
-        return widget.offered
-
-    def refresh(self, listing: Listing) -> None:
-        """List the files and the records that fit again, from ``listing``."""
-        with self._loads():
-            for widget in self._params.values():
-                widget.refresh(listing)
 
     def panel(self) -> Any:
         return self._panel
