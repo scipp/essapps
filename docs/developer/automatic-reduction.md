@@ -1,31 +1,8 @@
-# Batch and automatic reduction
+# Automatic reduction
 
 This sub-design builds on the core of [README.md](README.md).
 From the core it needs only that records show their label and member, and `client.files`.
-Its stories are S7, C1, D1 to D6, and E1 to E4 in [user-stories.md](user-stories.md).
-
-## Batches
-
-`apply` fills a template for each file and returns the requests keyed by member, the value of a metadata field (by default the run number).
-It reads metadata through `client.files` and builds plain data; it submits nothing.
-The examples reduce samples with `IOFQ`, whose parameters `sample` and `transmission` are file fields, and find each sample's beam centre with `BEAM_CENTRE`.
-
-```python
-template = Template(IOFQ, params={'can': file(run=60393), ...}, blanks=('sample',))
-requests = apply(template, samples, client.files, at='sample', member_field='sample_name')
-records = client.submit(requests, label='batch', persist=True)
-```
-
-Each file fills the template's one blank, `at`. `apply` refuses two files with one member, since one would replace the other.
-A batch whose parameters differ per file, such as the transmission run of each sample, is a dict of requests, each with its own params:
-
-```python
-requests = {row['name']: template.fill(params={'sample': file(run=row['sample']),
-                                               'transmission': file(run=row['transmission'])})
-            for row in table}
-```
-
-A batch application submits with `persist=`, so its client keeps nothing, and the results are read later from the store ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
+Its stories are S7 and E1 to E4 in [user-stories.md](user-stories.md).
 
 ## Rules
 

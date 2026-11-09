@@ -424,7 +424,7 @@ def test_the_app_lists_a_record_pending_until_a_poll_after_it_finished(
 ) -> None:
     gate.clear()
     app = App(client)
-    app.form.set({'run': file})
+    app.form.set({'run': file}, Listing(app.client))
 
     record = app.submit()
     assert record is not None

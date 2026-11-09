@@ -12,7 +12,8 @@ The details live one level down:
 | how to write a spec: field types, files, references, unions, defaults | [packages/essspec/docs/params.md](../../packages/essspec/docs/params.md) |
 | how to write a binding: a function, a sciline pipeline, or a driver | [packages/essspec/docs/bindings.md](../../packages/essspec/docs/bindings.md) |
 | stages, accumulators, and their symmetries | [accumulators.md](accumulators.md) |
-| batch and automatic reduction | [automatic-reduction.md](automatic-reduction.md) |
+| automatic reduction | [automatic-reduction.md](automatic-reduction.md) |
+| how to build an application that reduces many samples | [packages/essapps/docs/batch.md](../../packages/essapps/docs/batch.md) |
 | the rules behind each call: what is kept and readable, when a call returns, what it raises | [`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py) |
 | the shapes and shortcuts of the client | the docstrings of `ess.apps.client` |
 | how the code is built | the module docstrings |
@@ -98,7 +99,7 @@ client = connect('https://reduce.example', proposal='p1')              # the ser
 ```
 
 `local` is for interactive work, and can bind a spec to code defined in the notebook.
-Batch and automatic reduction run on the *service*, which runs only workflows from installed packages.
+The *service*, for unattended work, runs only workflows from installed packages.
 The backend decides when and where a request runs; the caller sees the same records and outputs either way.
 
 **Client.** A *client* is one connection to one backend, for one proposal.
@@ -226,9 +227,9 @@ for run in islice(client.files.watch(Selector(scan='17')), 300):
 total = client.freeze(volume)                               # the final sum, as a record
 ```
 
-## Batch and automatic reduction
+## Automatic reduction
 
-`apply` fills a template once per file. A *rule* calls an application's function for each new file as it arrives; the function pairs runs as the technique needs and submits what the file needs ([automatic-reduction.md](automatic-reduction.md)):
+A *rule* calls an application's function for each new file as it arrives; the function pairs runs as the technique needs and submits what the file needs ([automatic-reduction.md](automatic-reduction.md)):
 
 ```python
 def reduce_transmission(client: Client, run: FileRef) -> Record:

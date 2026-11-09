@@ -60,7 +60,7 @@ def test_a_place_with_nothing_given_is_shown_and_nothing_is_submitted(
 
 def test_a_refused_request_shows_each_reason_by_its_place(app: App) -> None:
     app.picker.value = 'Options'
-    app.form.set({'settings': {'flag': True, 'count': 1}})
+    app.form.set({'settings': {'flag': True, 'count': 1}}, Listing(app.client))
 
     assert app.submit() is None
     assert app.message.object == (
@@ -70,7 +70,7 @@ def test_a_refused_request_shows_each_reason_by_its_place(app: App) -> None:
 
 def test_a_failed_record_shows_why(app: App, run: FileRef) -> None:
     app.picker.value = 'Reduce'
-    app.form.set({'run': run, 'sample': {'thickness': 0.0}})
+    app.form.set({'run': run, 'sample': {'thickness': 0.0}}, Listing(app.client))
 
     finish(app, app.submit())
     assert app.message.object == 'Failed: ZeroDivisionError: float division by zero'
@@ -79,7 +79,7 @@ def test_a_failed_record_shows_why(app: App, run: FileRef) -> None:
 def test_a_computed_record_is_listed_and_offered_by_the_forms(
     app: App, client: Client, run: FileRef
 ) -> None:
-    app.form.set({'run': run})
+    app.form.set({'run': run}, Listing(app.client))
 
     record = app.submit()
     finish(app, record)
@@ -93,7 +93,7 @@ def test_a_computed_record_is_listed_and_offered_by_the_forms(
 def test_a_record_of_another_client_appears_on_a_poll(
     app: App, client: Client, other: Client, run: FileRef
 ) -> None:
-    record = other.submit(app.form.spec, params={'run': run})
+    record = other.submit(app.spec, params={'run': run})
 
     app.poll()
 
@@ -106,7 +106,7 @@ def test_a_poll_without_a_change_reads_no_records_and_lists_nothing_again(
 ) -> None:
     counting = CountingClient(client)
     app = CountingApp(counting)  # type: ignore[arg-type]
-    app.form.set({'run': run})
+    app.form.set({'run': run}, Listing(app.client))
     finish(app, app.submit())
     counting.reads.clear()
     refreshes = app.refreshes
@@ -122,11 +122,11 @@ def test_a_refresh_after_one_change_reads_only_that_record(
 ) -> None:
     counting = CountingClient(client)
     app = App(counting)  # type: ignore[arg-type]
-    other.compute(app.form.spec, params={'run': run})
-    other.compute(app.form.spec, params={'run': run})
+    other.compute(app.spec, params={'run': run})
+    other.compute(app.spec, params={'run': run})
     app.refresh()
     counting.reads.clear()
-    other.submit(app.form.spec, params={'run': run})
+    other.submit(app.spec, params={'run': run})
 
     app.refresh()
 
@@ -136,8 +136,8 @@ def test_a_refresh_after_one_change_reads_only_that_record(
 def test_a_released_output_is_no_longer_offered(
     app: App, client: Client, run: FileRef
 ) -> None:
-    app.form.set({'run': run})
-    found = client.compute(app.form.spec, params={'run': run})
+    app.form.set({'run': run}, Listing(app.client))
+    found = client.compute(app.spec, params={'run': run})
     app.refresh()
 
     def offered() -> list[object]:

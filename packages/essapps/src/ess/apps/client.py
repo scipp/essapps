@@ -67,6 +67,23 @@ def _reshape(what: object, items: list[Any]) -> Any:
     return items[0]
 
 
+def _filled(template: Template, each: Any) -> Any:
+    """
+    The template filled by each item of ``each``, in its shape. Raises
+    ``SubmitError`` for the items refused, each reason naming its item.
+    """
+    requests = []
+    errors: list[FieldError] = []
+    for name, item in zip(_names(each), _items(each), strict=True):
+        try:
+            requests.append(template.fill(params=item))
+        except SubmitError as error:  # noqa: PERF203
+            errors += [replace(e, entry=name) for e in error.errors]
+    if errors:
+        raise SubmitError(errors)
+    return _reshape(each, requests)
+
+
 def _names(what: object) -> list[str | int | None]:
     """How each item of ``what`` is named in errors: its key or its index."""
     if isinstance(what, Mapping):
@@ -395,6 +412,7 @@ class Client:
         what: Any,
         *,
         params: Mapping[str, Any] | BaseModel | None = None,
+        each: list[Any] | Mapping[Any, Any] | None = None,
         label: str | None = None,
         member: str | None = None,
         persist: bool | Sequence[str] = False,
@@ -421,6 +439,13 @@ class Client:
                 client.submit(IOFQ, params={'reduction': Reduction(bins=4),
                                             'sample': file(run=60339),
                                             'transmission': t.ref('t')})
+        each:
+            With a :class:`Stage`, in place of ``params``: the values of its blanks
+            for each of several requests, a list or a dict. They are submitted
+            together, and the records come back in its shape::
+
+                client.submit(stage, each={'water': {'sample': file(run=1)},
+                                           'sds': {'sample': file(run=2)}})
         label:
             Names a sequence of records, such as all I(Q) reductions of an
             experiment. Under a label, the keys of a dict become the members.
@@ -443,10 +468,18 @@ class Client:
             (see :class:`~ess.apps.errors.FieldError`).
         """
         stage = None
+        if each is not None and (params is not None or not isinstance(what, Stage)):
+            raise TypeError('each goes with a stage, in place of params')
         if isinstance(what, WorkflowSpec | SpecId):
             what = Request(what, params=params)
         elif isinstance(what, Stage):
-            stage, what = what.id, what.template.fill(params=params)
+            template = what.template
+            stage = what.id
+            what = (
+                template.fill(params=params)
+                if each is None
+                else _filled(template, each)
+            )
         elif isinstance(what, Accumulator):
             raise TypeError(
                 'an accumulator is read by referencing it in a request: '

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A form for a spec's params, generated from its pydantic models, on a client.
+A form for a pydantic model of params, such as a spec's.
 
 The form gives the params as a request does: at each field, at any depth,
 the JSON form of a value, a file, a reference to an output, or ``None``. It
@@ -47,7 +47,7 @@ value is in UTC. The fraction of a second of the value is kept.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import UTC, datetime, tzinfo
 from enum import Enum
 from typing import Any, Union, get_args, get_origin
@@ -58,12 +58,11 @@ from pydantic import AwareDatetime, BaseModel
 from pydantic.fields import FieldInfo
 from pydantic_core import to_json, to_jsonable_python
 
-from ess.apps import Client, FieldError, Listing, SubmitError
+from ess.apps import FieldError, Listing, SubmitError
 from ess.spec import (
     File,
     FileRef,
     OutputRef,
-    WorkflowSpec,
     field_types,
 )
 from ess.spec.refs import Loc, as_ref
@@ -784,25 +783,44 @@ class _Rows:
 
 class Form:
     """
-    The params of one spec: a widget per parameter, listing what ``client``
-    may give at each field.
+    The params of one pydantic model, such as a spec's ``params``: a widget per
+    parameter, listing what ``listing`` offers at each field.
+
+    ``fields`` limits the form to these parameters. So a template's two parts
+    are one form each, its values and its blanks::
+
+        Form(IOFQ.params, listing, fields=settings)
+        Form(IOFQ.params, listing, fields=('sample', 'sample_transmission'))
+
+    Raises ``KeyError`` for a name that is not a parameter of the model.
     """
 
-    def __init__(self, spec: WorkflowSpec[Any, Any], client: Client) -> None:
-        self.spec = spec
-        self._client = client
-        listing = Listing(client)
-        fields = spec.params.model_fields
+    def __init__(
+        self,
+        model: type[BaseModel],
+        listing: Listing,
+        *,
+        fields: Collection[str] | None = None,
+        title: str = '',
+        description: str = '',
+    ) -> None:
+        self.title = title or model.__name__
+        every = model.model_fields
+        self._every = frozenset(every)
+        if unknown := sorted(set(fields or ()) - self._every):
+            raise KeyError(f'{self.title} has no parameters {unknown}')
+        shown = {n: i for n, i in every.items() if fields is None or n in fields}
         self._params = {
-            name: _field(name, info, listing) for name, info in fields.items()
+            name: _field(name, info, listing) for name, info in shown.items()
         }
+        heading = f'**{title}**: {description}' if title else description
         self._panel = pn.Column(
-            pn.pane.Markdown(f'**{spec.title}**: {spec.description}'),
+            pn.pane.Markdown(heading),
             pn.Tabs(
                 *(
                     pn.Column(
                         w.panel(),
-                        name=field_types.title(name, fields[name]),
+                        name=field_types.title(name, shown[name]),
                         sizing_mode='stretch_width',
                     )
                     for name, w in self._params.items()
@@ -826,23 +844,35 @@ class Form:
             sample: add a row, or remove for none
             sample[1]: the editor holds changes: add or update a row, or discard them
         """
-        missing: _Missing = []
-        given = {n: w.value((n,), missing) for n, w in self._params.items()}
+        given, missing = self.held()
         if missing:
             raise SubmitError(missing)
-        return {n: v for n, v in given.items() if v is not UNSET}
+        return given
 
-    def set(self, params: Mapping[str, Any]) -> None:
+    def held(self) -> tuple[dict[str, Any], list[FieldError]]:
+        """
+        What the form holds: the params given in full, leaving out each with
+        anything missing, and what is missing, as :attr:`params` names it.
+        """
+        missing: _Missing = []
+        given = {n: w.value((n,), missing) for n, w in self._params.items()}
+        incomplete = {e.loc[0] for e in missing if e.loc}
+        return {
+            n: v for n, v in given.items() if v is not UNSET and n not in incomplete
+        }, missing
+
+    def set(self, params: Mapping[str, Any], listing: Listing) -> None:
         """
         Show ``params``, as a record or a request holds them, such as
-        ``record.request.params``; a field left out is as it starts, at its
-        default or unset. A reference that the client may not read now
-        chooses the way of a record, with no record picked; a file that
-        is not listed stays picked.
+        ``record.request.params``, with what ``listing`` offers; a field left
+        out is as it starts, at its default or unset, and a parameter that the
+        form does not show is ignored. A reference that the client may not
+        read now chooses the way of a record, with no record picked; a file
+        that is not listed stays picked.
         """
-        if unknown := set(params) - set(self._params):
-            raise KeyError(f'{self.spec.title} has no parameters {sorted(unknown)}')
-        self.refresh()
+        if unknown := set(params) - self._every:
+            raise KeyError(f'{self.title} has no parameters {sorted(unknown)}')
+        self.refresh(listing)
         for name, widget in self._params.items():
             widget.set(params.get(name, UNSET))
 
@@ -856,12 +886,8 @@ class Form:
             raise TypeError(f'{name}: not a choice of ways')
         return widget.offered
 
-    def refresh(self, listing: Listing | None = None) -> None:
-        """
-        List the files and the records that fit again, from ``listing``,
-        or from one looked up now.
-        """
-        listing = Listing(self._client) if listing is None else listing
+    def refresh(self, listing: Listing) -> None:
+        """List the files and the records that fit again, from ``listing``."""
         for widget in self._params.values():
             widget.refresh(listing)
 

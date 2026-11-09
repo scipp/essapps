@@ -6,7 +6,7 @@
 
 import pytest
 
-from ess.apps import Client, RecordFailed, Request, Status
+from ess.apps import Client, Listing, RecordFailed, Request, Status, file
 
 from . import toys
 
@@ -50,3 +50,9 @@ def test_reading_an_output_of_a_failed_record_raises(
     assert raised.value.record == failed.id
     assert raised.value.status is Status.FAILED
     assert raised.value.reason == client.failure(failed)
+
+
+def test_a_file_named_rather_than_identified_is_labelled_by_its_name(
+    client: Client,
+) -> None:
+    assert Listing(client).file_label(file(run=404)) == str(file(run=404))

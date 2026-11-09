@@ -16,7 +16,7 @@ import pytest
 from ess.instruments.loki.bindings import BINDINGS
 from ess.instruments.loki.plots import PLOTS
 
-from ess.apps import FolderFiles, Record, file, local
+from ess.apps import FolderFiles, Listing, Record, file, local
 from ess.apps.panel import App
 
 pn.extension('tabulator')
@@ -60,7 +60,7 @@ def session(
 
         def submit(title: str, params: dict[str, Any]) -> Record:
             app.picker.value = title
-            app.form.set(params)
+            app.form.set(params, Listing(app.client))
             record = app.submit()
             assert record is not None
             client.wait(record)

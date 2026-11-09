@@ -218,17 +218,19 @@ class Template:
     def fill(self, *, params: Mapping[str, Any] | BaseModel | None = None) -> Request:
         """
         The request with the blanks filled by ``params``, a blank table by
-        its rows. Raises ``SubmitError`` for each blank not filled, and each
-        value the template fixes. The values are checked when the request is
-        submitted.
+        its rows. Raises ``SubmitError`` for each blank not filled, each
+        value the template fixes, and each other name given. The values are
+        checked when the request is submitted.
         """
         params = _given(params)
         missing = [b for b in self.blanks if b not in params]
         fixed = sorted(params.keys() & self.params.keys())
-        if missing or fixed:
+        other = sorted(params.keys() - self.params.keys() - set(self.blanks))
+        if missing or fixed or other:
             raise SubmitError(
                 [FieldError(None, (b,), 'a blank, not filled') for b in missing]
                 + [FieldError(None, (f,), 'fixed by the template') for f in fixed]
+                + [FieldError(None, (o,), 'not a blank of the template') for o in other]
             )
         return Request(self.spec, params={**self.params, **params})
 

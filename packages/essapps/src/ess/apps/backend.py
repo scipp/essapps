@@ -173,7 +173,7 @@ from ess.spec.validation import OutputReads
 
 from .checks import Checks, check_fit, distinct
 from .client import Client
-from .errors import ClientEnded, NotReadable, RecordFailed, SubmitError
+from .errors import ClientEnded, FieldError, NotReadable, RecordFailed, SubmitError
 from .files import Selector, readable
 from .log import (
     Event,
@@ -328,6 +328,23 @@ def _output_reads(params: Mapping[str, Any]) -> list[tuple[str, str]]:
 def _refused(index: int, error: SubmitError) -> SubmitError:
     """The reasons of ``error``, each naming the request at ``index``."""
     return SubmitError(replace(e, entry=index) for e in error.errors)
+
+
+def _every[T, R](items: Sequence[T], check: Callable[[int, T], R]) -> list[R]:
+    """
+    ``check`` of each item, by its index. Raises one ``SubmitError`` with the
+    reasons of all items, so that a caller learns of every refused request at once.
+    """
+    results: list[R] = []
+    errors: list[FieldError] = []
+    for i, item in enumerate(items):
+        try:
+            results.append(check(i, item))
+        except SubmitError as error:  # noqa: PERF203
+            errors += error.errors
+    if errors:
+        raise SubmitError(errors)
+    return results
 
 
 class _Stage:
@@ -723,7 +740,7 @@ class Backend(BackendProtocol):
         docstring).
         """
         proposal = self._client(client_id).proposal
-        prepared = [self._prepare(i, e, proposal) for i, e in enumerate(entries)]
+        prepared = _every(entries, lambda i, e: self._prepare(i, e, proposal))
         requests = [request for request, _ in prepared]
         persisted = [self._persisted(r.spec, persist) for r in requests]
         referenced = {ref.record for r in requests for ref in r.upstream()}
@@ -736,10 +753,12 @@ class Backend(BackendProtocol):
             }
             with self._changed:
                 caller = self._client(client_id)
-                for i, (entry, (request, reads)) in enumerate(
-                    zip(entries, prepared, strict=True)
-                ):
-                    self._check_entry(i, entry, request, reads, caller, states)
+                _every(
+                    list(zip(entries, prepared, strict=True)),
+                    lambda i, item: self._check_entry(
+                        i, item[0], item[1][0], item[1][1], caller, states
+                    ),
+                )
                 state_ids = {i: uuid.uuid4().hex for i in states}
                 return self._create(
                     entries, requests, caller, states, state_ids, persisted

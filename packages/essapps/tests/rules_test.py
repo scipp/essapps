@@ -20,7 +20,6 @@ from ess.apps import (
     SubmitError,
     Template,
     TriggerLoop,
-    apply,
     file,
 )
 from ess.apps.testing import CountingClient, FakeFiles, FakeStore, read_file
@@ -600,68 +599,19 @@ def test_two_rules_with_one_label_in_one_step_submit_each_file_once(
     assert len(client.records(label='loaded')) == 1
 
 
-def test_apply_fills_the_blank_at_for_each_file(
-    client: Client, files: FakeFiles
-) -> None:
-    sample = files.measure(1, 6.0, role='sample')
-    reference = files.measure(2, 2.0, role='reference')
-    template = Template(NORMALIZE, params={'reference': reference}, blanks=('sample',))
-
-    normalized = apply(template, [sample], client.files, at='sample')
-
-    assert normalized['1'].params == {'sample': sample, 'reference': reference}
-    assert client.output(client.compute(normalized['1']), 'value') == 3.0
-
-
-@pytest.mark.parametrize(
-    ('blanks', 'at', 'reason'),
-    [
-        (('sample', 'reference'), 'sample', 'a file fills one blank'),
-        (('sample',), 'reference', "a file fills the blank 'sample', not 'reference'"),
-    ],
-)
-def test_apply_refuses_a_template_that_a_file_does_not_fill(
-    client: Client, files: FakeFiles, blanks: tuple[str, ...], at: str, reason: str
-) -> None:
-    sample = files.measure(1, 6.0, role='sample')
-
-    with pytest.raises(ValueError, match=re.escape(reason)):
-        apply(Template(NORMALIZE, blanks=blanks), [sample], client.files, at=at)
-
-
-def test_apply_refuses_two_files_of_one_member(
-    client: Client, files: FakeFiles
-) -> None:
-    runs = [files.measure(n, 1.0, sample='water') for n in (1, 2)]
-    template = Template(LOAD, blanks=('sample',))
-
-    with pytest.raises(ValueError, match='two files have sample water'):
-        apply(template, runs, client.files, at='sample', member_field='sample')
-
-
-def test_apply_raises_for_a_file_without_the_member_field(
-    client: Client, files: FakeFiles
-) -> None:
-    run = files.measure(1, 1.0)
-    template = Template(LOAD, blanks=('sample',))
-
-    with pytest.raises(LookupError):
-        apply(template, [run], client.files, at='sample', member_field='sample')
-
-
-def test_apply_at_a_list_parameter_makes_requests_the_backend_refuses(
+def test_a_file_at_a_list_parameter_is_refused_by_the_backend(
     client: Client, files: FakeFiles
 ) -> None:
     sample = files.measure(1, 2.0, role='sample')
     template = Template(SUM_RUNS, blanks=('runs',))
 
-    summed = apply(template, [sample], client.files, at='runs')
+    summed = template.fill(params={'runs': sample})
 
     with pytest.raises(
         SubmitError,
         match=r'^runs: uuid:run-1 is a reference to a whole list; a reference stands',
     ):
-        client.submit(summed['1'])
+        client.submit(summed)
 
 
 def test_a_batch_with_a_file_that_cannot_be_read_fails_only_its_record(
@@ -670,9 +620,11 @@ def test_a_batch_with_a_file_that_cannot_be_read_fails_only_its_record(
     runs = [files.measure(n, float(n)) for n in (1, 2, 3)]
     files.corrupt(runs[1])
 
-    requests = apply(
-        Template(LOAD, blanks=('sample',)), runs, client.files, at='sample'
-    )
+    template = Template(LOAD, blanks=('sample',))
+    requests = {
+        str(client.files.metadata(run)['run']): template.fill(params={'sample': run})
+        for run in runs
+    }
     scan = client.compute(requests, label='scan')
 
     assert client.wait(scan) == {'1': 'completed', '2': 'failed', '3': 'completed'}

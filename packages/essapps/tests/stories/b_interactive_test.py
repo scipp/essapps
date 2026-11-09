@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """Section B of docs/developer/user-stories.md: manual and interactive reduction."""
 
-from ess.apps import Client, Template, apply
+from ess.apps import Client, Template
 
 from . import toys
 
@@ -29,7 +29,10 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
         blanks=('sample',),
     )
     new = measure(2, [2.0, 1.0, 4.0, 3.0])
-    requests = apply(beamtime, [new], client.files, at='sample', member_field='run')
+    requests = {
+        str(client.files.metadata(f)['run']): beamtime.fill(params={'sample': f})
+        for f in [new]
+    }
     (reduced,) = client.compute(requests, label='iofq-beamtime').values()
 
     assert len(client.records(label='tuning')) == 4

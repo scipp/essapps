@@ -3,7 +3,6 @@
 """Framework for ESS data-reduction applications."""
 
 from .backend import Backend, local
-from .batch import apply
 from .client import Accumulator, Client, Files, Provenance, Stage
 from .errors import ClientEnded, FieldError, NotReadable, RecordFailed, SubmitError
 from .files import FolderFiles, Selector, file
@@ -51,7 +50,6 @@ __all__ = [
     'SubmitError',
     'Template',
     'TriggerLoop',
-    'apply',
     'file',
     'local',
 ]
