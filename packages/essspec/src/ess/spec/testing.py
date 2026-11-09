@@ -23,7 +23,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from . import request_types
+from . import validation
 from ._workflow_spec import WorkflowSpec
 from .binding import Binding, Driver, StageBinding, fixed_values
 
@@ -77,7 +77,7 @@ def instance(spec: WorkflowSpec[Any, Any], values: Mapping[str, Any]) -> BaseMod
     model: type[BaseModel] = spec.params
     return model.model_construct(
         **{
-            n: request_types.validated(model, n, v, n in spec.tables)
+            n: validation.validated(model, n, v, n in spec.tables)
             for n, v in values.items()
         }
     )
