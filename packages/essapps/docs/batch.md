@@ -1,7 +1,7 @@
 # Batch toolbox for application developers
 
 `ess.apps.batch` is for applications that reduce many samples with one workflow: a table of rows, settings shared by all rows, and the result of each row.
-It is built on the client of `ess.apps`, and that is all you need to know of the framework to start.
+It is built on the client of `ess.apps`. A *spec* declares a workflow's parameters, and a *binding* connects a spec to code. [The client guide](../../../docs/developer/roles/client-authors.ipynb) explains specs, records, labels, and stages.
 Your application supplies what depends on the technique: which files make which rows, and optionally how to draw a result.
 
 ## An application
@@ -14,16 +14,16 @@ from ess.apps.panel import App
 
 def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
     """A row per sample run, with the transmission run of the same sample."""
-    partner = {f.metadata['sample']: f.ref for f in files
+    partner = {f.metadata.get('sample'): f.ref for f in files
                if f.metadata.get('role') == 'transmission'}
     rows = []
     for f in files:
         if f.metadata.get('role') == 'sample':
-            name = f.metadata['sample']
+            name = f.metadata.get('sample')
             values = {'sample': f.ref}
             if name in partner:
                 values['sample_transmission'] = partner[name]
-            rows.append(Row(str(f.metadata['run']), values, info={'sample': name}))
+            rows.append(Row(str(f.metadata['run']), values, info={'sample': str(name)}))
     return rows
 
 client = local(proposal='p1', files=files, bind=BINDINGS)
@@ -35,7 +35,7 @@ App(client, plots=PLOTS, tabs={'I(Q)': view}).panel().servable()
 ```
 
 `python -m ess.apps.batch.panel.demo` serves a complete application on fake files and fake workflows.
-`ess.instruments.loki.batch` is the same for the real LoKI workflows.
+`ess.instruments.loki.batch` holds a source and a `Batch` for the real LoKI workflows, without a view.
 
 The same logic works without widgets, in a notebook or a test:
 
@@ -58,7 +58,7 @@ batch.cancel()
 - A **row** has a **key**, a value per column, and read-only **info** to show with it. A cell can hold anything a request can: a file, a reference to an output, a number, a list of runs.
 - A **source** is your function from files to rows. A **scan** calls it.
 - An **edit** is a cell set by hand, by a person or by your code.
-- A row's **result** is the newest record of the client's submitter, with the batch's spec and label, and the row's key as its member.
+- A row's **result** is the newest record of the client's submitter, with the batch's spec and label, and the row's key as its member. So two `Batch` objects with the same spec and label are one batch: give each batch its own label.
 
 Choose a key that does not change from one scan to the next, such as the run number. Results and edits are found by key. Put the name of the sample in `info`.
 
@@ -77,22 +77,21 @@ t = t.rescan([Row('a', {'x': 99, 'y': 98}), Row('b', {'x': 3}), Row('c', {'x': 5
 
 A row added by hand stays. An edited row that a scan no longer gives is not shown, and comes back with its edits if a later scan gives it. `reset(key)` forgets a row's edits and that it was removed. `EMPTY` clears a cell whatever the scan gives. None of this is stored: a new session starts from a new scan.
 
-**A row is ready if it can run now.** Each column with no default has a value, no cell reads a record that failed or was cancelled, and its result is not running. An empty cell of a column with a default takes the default.
+**A row is ready if it is complete and not running.** Each column with no default has a value, no cell reads a record that failed or was cancelled, and its result is not running. An empty cell of a column with a default takes the default. Whether a value is valid, such as a thickness below zero, is checked at submission.
 
 | Function | Gives |
 |---|---|
 | `ready(states)` | every row that can run now |
 | `remaining(states)` | ready rows with no result, a failed or cancelled one, or a stale one |
 | `summary(states)` | the number of rows in each state |
-| `pending(states)` | the results still running |
 
-**A result is stale** if the row's cells or the settings differ from those it was submitted with. `Batch` remembers that for the rows it submitted in this session, and only when `state` is given the settings.
+**A result is stale** if the row's cells or the settings differ from those it was submitted with. `Batch` remembers that for the rows it submitted, and works it out only when `state` is given the settings. Requests are compared as given, so writing a default out, or naming a file another way, shows a row as stale: at worst a row is offered for a rerun. The table shows this at its next update, such as after a button; `Reduce remaining` always uses the settings in the form.
 
-**`reduce` is strict and all-or-nothing.** The rows given are submitted in one call. If any is refused, none is submitted, and the `SubmitError` lists every reason. `FieldError.entry` is the row's key and `loc[0]` the column. A reason about the settings appears once, with no key. So `reduce(settings, ready(state))` skips rows that cannot run, while a person who picks such a row is told why.
+**`reduce` is strict and all-or-nothing.** The rows given are submitted in one call. If any is refused, or still running, none is submitted, and the `SubmitError` names the rows refused. `FieldError.entry` is the row's key and `loc[0]` the column. A reason about the settings appears once, with no key. So `reduce(settings, ready(state))` skips incomplete and running rows, while one invalid value refuses the whole call and names the row. The backend checks values first and references second, so correcting the rows named can bring up more.
 
-**With `staged=True`** the rows go through a stage, and what they share is computed once. It needs a binding that makes stages. A stage is reused while the settings are the same. A column that the binding has no key for, or one that everything depends on, gives no saving or a refusal.
+**With `staged=True`** the rows go through a stage, and what they share is computed once. It needs a binding that makes stages. A stage is reused while the settings are the same. Whether a column can vary through a stage is the binding's to decide, and a refusal says so; a column that everything depends on saves nothing.
 
-**One row with other settings.** `tweak(key, params)` submits one request with all of its parameters, which becomes the row's result. It does not count as stale until the row is reduced again. If a parameter differs for many rows, make it a column.
+**One row with other settings.** `tweak(key, params)` submits one request with all of its parameters, which becomes the row's result. It is stale only if the row's cells change after that. If a parameter differs for many rows, make it a column.
 
 ## Writing a source
 
@@ -107,7 +106,7 @@ def test_a_sample_run_pairs_with_its_transmission_run():
 
 Group runs by giving a cell a list of files. Leave a cell out if a partner is missing, so the row shows as incomplete and the rest of the batch can run. A key given twice is refused with the key named, and nothing changes.
 
-Pairing is yours to write. The framework knows no technique.
+Pairing is yours to write. The framework knows no technique. If a source raises, the view shows the error in its message.
 
 ## When the metadata is wrong or missing
 
@@ -134,12 +133,12 @@ App(client, tabs={'I(Q)': view, 'Runs': sheet})
 A cell may read another record, also one still running, so a row can use a value computed for that row:
 
 ```python
-centres = find.reduce(settings, ready(find.state()))
+centres = find.reduce(settings, remaining(find.state()))
 for key, record in centres.items():
     iofq.rows = iofq.rows.edit(key, {'beam_centre': record.ref('centre')})
 ```
 
-Run this again after reducing the failed centres. The field must be typed `Referenced[...]` in the spec.
+After a centre failed, this reruns only what is left, and points those rows at the new centre. The field must be typed `Referenced[...]` in the spec.
 
 ## The UI
 
@@ -148,7 +147,8 @@ Run this again after reducing the failed centres. The field must be typed `Refer
 - the settings form, the table of rows with a filter by state, and a count of each state;
 - buttons to scan, reduce all, reduce remaining, reduce selected, cancel, and show the settings of a selected result;
 - details of a selected row, with the reason it failed;
-- an editor: select rows, change cells, and **Update selected** writes only the changed cells, to all of them;
+- an editor: select rows, change cells, and **Update selected** writes only the changed cells, to all of them. A cell with something missing is not written and is named. To write a value that equals its default to several rows, choose the column in **Write**;
+- **Bring back removed rows**;
 - a form for a tweak of one row.
 
 `draw(records)` gets the completed results of the rows selected, by key, and returns a Panel object.
@@ -188,7 +188,7 @@ Raise in the fake to make a row fail; hold it back on a `threading.Event` to kee
 
 ## What it does not do
 
-- Keep the table across sessions. Scan again; results are found by key.
+- Keep the table across sessions. A new `Batch` scans again. It finds results by key in its backend, so `local()` per session starts with none, and against a shared backend a value must be persisted for another client to read it.
 - Show a stale result after a restart.
 - Read a table from a CSV file. That is one more source.
 - Free the values of replaced results. They stay until the client closes or they are released, unless the batch persists them (`persist=`).

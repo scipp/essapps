@@ -112,3 +112,17 @@ def test_a_table_is_not_changed_by_an_operation(table: RowTable) -> None:
     table.edit('a', {'x': 10}).remove('b').add(Row('c'))
 
     assert cells(table) == {'a': {'x': 1, 'y': 2}, 'b': {'x': 3}}
+
+
+def test_removing_a_row_added_over_a_scanned_one_removes_both(table: RowTable) -> None:
+    added = table.rescan([Row('c', {'x': 2})]).add(Row('d')).remove('c')
+    over = RowTable().add(Row('a', {'x': 1})).rescan([Row('a', {'x': 2})])
+
+    assert 'c' not in added
+    assert 'a' not in over.remove('a')
+
+
+def test_a_row_added_takes_no_edit_left_from_a_row_gone() -> None:
+    orphan = RowTable().rescan([Row('a', {'x': 1})]).edit('a', {'x': 9}).rescan([])
+
+    assert orphan.add(Row('a', {'x': 5, 'y': 7}))['a'].values == {'x': 5, 'y': 7}

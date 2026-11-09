@@ -33,7 +33,8 @@ class CorrectedFiles:
 
     Listing asks ``source`` for every file and selects by the corrected
     metadata, so the source must select through :meth:`Selector.matches`, as
-    those that read a folder or a table do.
+    those that read a folder or a table do. A name such as ``file(run=1)`` is
+    resolved by ``source``, so a correction of ``run`` does not rename a file.
     """
 
     def __init__(self, source: FileSource) -> None:

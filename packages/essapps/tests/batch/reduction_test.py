@@ -187,12 +187,6 @@ def test_a_rerun_becomes_the_result(scanned: Batch, client: Client) -> None:
     assert scanned.state()['1'].record == again['1']
 
 
-def test_a_failed_row_is_left_to_do(scanned: Batch, client: Client) -> None:
-    client.wait(scanned.reduce({'binning': {'bins': 1}}, ['1']))
-
-    assert remaining(scanned.state(SETTINGS)) == ['1', '2']
-
-
 def test_an_edited_row_is_stale_and_left_to_do(scanned: Batch, client: Client) -> None:
     client.wait(scanned.reduce(SETTINGS, ['1', '2']))
     scanned.rows = scanned.rows.edit('1', {'thickness': 2.0})
@@ -229,8 +223,8 @@ def test_cancel_reaches_what_was_just_submitted(
     scanned.cancel()
     gate.open()
 
-    assert set(client.wait(records).values()) <= {'cancelled', 'completed'}
-    assert remaining(scanned.state(SETTINGS)) != []
+    assert client.wait(records) == {'1': 'cancelled', '2': 'cancelled'}
+    assert remaining(scanned.state(SETTINGS)) == ['1', '2']
 
 
 def test_cancel_leaves_other_rows_when_given_keys(
@@ -333,3 +327,42 @@ def test_persisting_goes_with_the_batch(files: CorrectedFiles, sample: Measure) 
         client.wait(records)
 
         assert (records['1'].id, 'total') in store
+
+
+def test_a_row_running_is_refused_when_picked(
+    scanned: Batch, client: Client, gate: Gate
+) -> None:
+    gate.close()
+    first = scanned.reduce(SETTINGS, ['1'])
+
+    with pytest.raises(SubmitError, match='1: still running'):
+        scanned.reduce(SETTINGS, ['1'])
+    with pytest.raises(SubmitError, match='1: still running'):
+        scanned.tweak('1', {**SETTINGS, **scanned.rows['1'].values})
+    gate.open()
+    client.wait(first)
+    assert len(client.records(label='scan')) == 1
+
+
+def test_a_cell_edited_after_a_tweak_makes_the_row_stale(
+    scanned: Batch, client: Client
+) -> None:
+    client.wait(scanned.reduce(SETTINGS, ['1']))
+    client.wait(scanned.tweak('1', {**OTHER_SETTINGS, **scanned.rows['1'].values}))
+
+    scanned.rows = scanned.rows.edit('1', {'thickness': 2.0})
+
+    assert scanned.state(SETTINGS)['1'].stale
+
+
+def test_cancel_reaches_a_row_removed_since(
+    scanned: Batch, client: Client, gate: Gate
+) -> None:
+    gate.close()
+    records = scanned.reduce(SETTINGS, ['1'])
+    scanned.rows = scanned.rows.remove('1')
+
+    scanned.cancel()
+    gate.open()
+
+    assert client.wait(records) == {'1': 'cancelled'}

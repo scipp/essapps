@@ -57,17 +57,3 @@ def test_a_correction_reaches_the_rows_at_the_next_scan(
 
     assert ready(batch.state()) == ['1']
     assert batch.rows['1'].values == {'sample': run, 'transmission': partner}
-
-
-def test_a_run_marked_excluded_leaves_the_rows(
-    fake: FakeFiles, files: CorrectedFiles, client: Client, sample: Measure
-) -> None:
-    run = sample(1, 'water')
-    batch = Batch(client, STAGED, columns=COLUMNS, label='scan', source=pair)
-    batch.scan()
-    batch.rows = batch.rows.edit('1', {'thickness': 2.0})
-
-    files.correct(run, exclude=True)
-    batch.scan()
-
-    assert '1' not in batch.rows

@@ -13,11 +13,12 @@ from pydantic import BaseModel
 from ess.apps import Client, Listing, Record
 from ess.apps.batch import Batch, CorrectedFiles
 from ess.apps.batch.panel import BatchView, RunSheet
+from ess.apps.batch.panel.cells import cell_text
 from ess.apps.batch.panel.demo import build
 from ess.apps.panel import App
 from ess.apps.testing import FakeFiles
 
-from .toys import Gate, Measure
+from .toys import COLUMNS, STAGED, Gate, Measure
 
 pn.extension('tabulator')
 
@@ -95,20 +96,11 @@ def test_reduce_selected_names_the_empty_cell_of_a_row_picked(
 def test_reduce_remaining_runs_only_what_is_left(
     view: BatchView, client: Client
 ) -> None:
-    view.reduce_all()
+    view.table.select_keys(['1'])
+    view.reduce_selected()
     done(view, client)
 
-    assert view.reduce_remaining() == {}
-
-
-def test_a_second_reduce_all_does_not_resubmit_what_runs(
-    view: BatchView, client: Client, gate: Gate
-) -> None:
-    gate.close()
-    view.reduce_all()
-
-    assert view.reduce_all() == {}
-    gate.open()
+    assert sorted(view.reduce_remaining()) == ['2']
 
 
 def test_cancel_shows_as_cancelled(view: BatchView, client: Client, gate: Gate) -> None:
@@ -119,7 +111,7 @@ def test_cancel_shows_as_cancelled(view: BatchView, client: Client, gate: Gate) 
     gate.open()
     done(view, client)
 
-    assert set(results(view).values()) <= {'cancelled', 'completed', 'incomplete'}
+    assert results(view) == {'1': 'cancelled', '2': 'cancelled', '3': 'incomplete'}
 
 
 def test_updating_writes_only_the_cell_changed(view: BatchView, client: Client) -> None:
@@ -172,9 +164,18 @@ def test_removing_and_undoing(view: BatchView) -> None:
     view.remove()
     assert '1' not in rows_shown(view)
 
-    view.batch.rows = view.batch.rows.reset('1')
-    view.scan()
+    view.restore()
     assert '1' in rows_shown(view)
+
+
+def test_undoing_the_edits_of_a_row(view: BatchView, client: Client) -> None:
+    view.table.select_keys(['1'])
+    view.row.set({**view.batch.rows['1'].values, 'thickness': 3.0}, Listing(client))
+    view.update()
+
+    view.reset()
+
+    assert 'thickness' not in view.batch.rows['1'].values
 
 
 def test_adding_a_row_by_name(view: BatchView, client: Client) -> None:
@@ -223,12 +224,11 @@ def test_draw_gets_only_completed_results_of_the_selection(
     view = BatchView(batch, draw=draw)
     view.scan()
     view.settings.set(SETTINGS, Listing(client))
-    view.reduce_all()
+    view.table.select_keys(['2'])
+    view.reduce_selected()
     done(view, client)
 
-    assert drawn == []
-    view.table.select_keys(['2'])
-    view.refresh(Listing(client))
+    view.table.select_keys(['1', '2'])
     assert drawn == [['2']]
     assert len(view.view.objects) == 1
 
@@ -261,6 +261,128 @@ def test_a_tweak_becomes_the_result_of_its_row(view: BatchView, client: Client) 
     assert results(view)['1'] == 'completed'
 
 
+def test_a_cell_with_something_missing_is_kept_and_named(
+    view: BatchView, client: Client
+) -> None:
+    view.table.select_keys(['1'])
+    kept = view.batch.rows['1'].values['sample']
+    cells = {k: v for k, v in view.batch.rows['1'].values.items() if k != 'sample'}
+
+    view.row.set({**cells, 'thickness': 3.0}, Listing(client))
+    view.update()
+
+    assert view.batch.rows['1'].values['sample'] == kept
+    assert view.batch.rows['1'].values['thickness'] == 3.0
+    assert 'Not written' in view.message.object
+    assert 'sample' in view.message.object
+
+
+def test_a_column_chosen_is_written_to_all_selected_even_at_its_default(
+    view: BatchView, client: Client
+) -> None:
+    view.batch.rows = view.batch.rows.edit('1', {'thickness': 2.0}).edit(
+        '2', {'thickness': 3.0}
+    )
+    view.table.select_keys(['1', '2'])
+
+    view.write.value = 'thickness'
+    view.update()
+
+    assert view.batch.rows['1'].values['thickness'] == 1.0
+    assert view.batch.rows['2'].values['thickness'] == 1.0
+    assert view.write.value == ''
+
+
+def test_nothing_changed_says_so(view: BatchView) -> None:
+    view.table.select_keys(['1', '2'])
+
+    view.update()
+
+    assert 'No cell changed' in view.message.object
+
+
+def test_a_tweak_starts_from_the_rows_cells_and_its_latest_result(
+    view: BatchView, client: Client
+) -> None:
+    view.table.select_keys(['1'])
+    view.reduce_selected()
+    done(view, client)
+    view.batch.rows = view.batch.rows.edit('1', {'thickness': 7.0})
+    view.refresh(Listing(client))
+    assert view.tweak.params['thickness'] == 7.0
+
+    view.settings.set({'binning': {'bins': 3}}, Listing(client))
+    view.reduce_selected()
+    done(view, client)
+
+    assert view.tweak.params['binning'] == {'bins': 3}
+
+
+def test_a_row_the_editor_cannot_show_still_says_why(view: BatchView) -> None:
+    view.batch.rows = view.batch.rows.edit('3', {'bogus': 1})
+    view.refresh(Listing(view.batch.client))
+
+    view.table.select_keys(['3'])
+
+    assert 'cannot show' in view.message.object
+    assert 'not a column' in view.details.object
+
+
+def test_a_source_that_raises_says_so_in_the_message(
+    client: Client, sample: Measure
+) -> None:
+    def broken(_: Any) -> list[Any]:
+        raise KeyError('sample')
+
+    batch = Batch(client, STAGED, columns=COLUMNS, label='x', source=broken)
+    view = BatchView(batch)
+
+    view.scan()
+
+    assert 'The scan failed' in view.message.object
+
+
+def test_a_drawing_that_raises_says_so_in_its_place(
+    batch: Batch, client: Client, sample: Measure
+) -> None:
+    def draw(_: Any) -> Any:
+        raise RuntimeError('released')
+
+    sample(1, 'water')
+    view = BatchView(batch, draw=draw)
+    view.scan()
+    view.settings.set(SETTINGS, Listing(client))
+    view.table.select_keys(['1'])
+    view.reduce_selected()
+    done(view, client)
+
+    assert 'Cannot draw' in view.view.objects[0].object
+
+
+def test_a_scan_offers_new_files_in_the_editor(
+    view: BatchView, client: Client, fake: FakeFiles
+) -> None:
+    run = fake.measure(9, 9.0, role='sample', sample='new')
+
+    view.scan()
+
+    pickers = view.row.panel().select(pn.widgets.Select)
+    assert any(run in picker.values for picker in pickers)
+
+
+@pytest.mark.parametrize(
+    ('value', 'text'),
+    [
+        ([1, 2], '1, 2'),
+        ({'x': 1}, '{"x":1}'),
+        (None, 'none'),
+        (2.5, '2.5'),
+    ],
+)
+def test_the_text_of_a_cell(value: Any, text: str, client: Client) -> None:
+    assert cell_text(value, Listing(client)) == text
+
+
 class Marks(BaseModel):
     role: str | None = None
 
@@ -287,6 +409,19 @@ def test_a_correction_on_the_run_sheet_reaches_the_rows(
     assert frame.set_index('File').loc['run 2', 'Role'] == 'transmission'
 
 
+def test_a_field_chosen_on_the_run_sheet_is_written_at_its_default(
+    client: Client, files: CorrectedFiles, fake: FakeFiles
+) -> None:
+    runs = [fake.measure(n, 1.0, role='sample') for n in (1, 2)]
+    sheet = RunSheet(files, client, Marks)
+    sheet.table.select_keys(runs)
+
+    sheet.write.value = 'role'
+    sheet.correct()
+
+    assert [files.metadata(r)['role'] for r in runs] == [None, None]
+
+
 def test_the_app_shows_its_tabs_first_and_refreshes_them(
     view: BatchView, client: Client, batch: Batch
 ) -> None:
@@ -305,5 +440,5 @@ def test_the_demo_builds_and_reduces(tmp_path: Path) -> None:
 
     records = view.reduce_all()
 
-    assert app.client.wait(records)
+    assert set(app.client.wait(records).values()) == {'completed'}
     app.client.close()

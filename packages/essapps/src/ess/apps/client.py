@@ -407,6 +407,27 @@ class Client:
         persist: bool | Sequence[str] = False,
     ) -> dict[K, Record]: ...
 
+    @overload
+    def submit(
+        self,
+        what: Stage,
+        *,
+        each: list[Any],
+        label: str | None = None,
+        member: str | None = None,
+        persist: bool | Sequence[str] = False,
+    ) -> list[Record]: ...
+
+    @overload
+    def submit[K](
+        self,
+        what: Stage,
+        *,
+        each: Mapping[K, Any],
+        label: str | None = None,
+        persist: bool | Sequence[str] = False,
+    ) -> dict[K, Record]: ...
+
     def submit(
         self,
         what: Any,

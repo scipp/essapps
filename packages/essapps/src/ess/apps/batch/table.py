@@ -110,7 +110,8 @@ class RowTable:
         """
         if row.key in self:
             raise SubmitError([FieldError(row.key, (), 'a row has this key already')])
-        return replace(self, added=(*self.added, row))
+        edits = {k: v for k, v in self.edits.items() if k != row.key}
+        return replace(self, added=(*self.added, row), edits=edits)
 
     def edit(self, key: str, values: Mapping[str, Any]) -> RowTable:
         """
@@ -130,10 +131,10 @@ class RowTable:
         """
         self[key]
         edits = {k: v for k, v in self.edits.items() if k != key}
-        if any(row.key == key for row in self.added):
-            added = tuple(row for row in self.added if row.key != key)
-            return replace(self, added=added, edits=edits)
-        return replace(self, removed=self.removed | {key}, edits=edits)
+        added = tuple(row for row in self.added if row.key != key)
+        in_scan = any(row.key == key for row in self.scan)
+        removed = self.removed | {key} if in_scan else self.removed
+        return replace(self, added=added, edits=edits, removed=removed)
 
     def reset(self, key: str) -> RowTable:
         """Forget the edits of a row, and that it was removed, if it was."""

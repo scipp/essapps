@@ -41,6 +41,12 @@ class FileInfo:
     metadata: Mapping[str, Any]
 
 
+def _running(row: RowState) -> list[FieldError]:
+    if row.status is Status.PENDING:
+        return [FieldError(row.key, (), 'still running')]
+    return []
+
+
 type RowSource = Callable[[Sequence[FileInfo]], Sequence[Row]]
 """
 What an application knows of its technique: which files make which rows. It
@@ -106,7 +112,7 @@ class Batch:
         self._persist = persist
         self._stage: tuple[Template, Stage] | None = None
         self._submitted: dict[str, Request] = {}
-        self._tweaked: set[str] = set()
+        self._tweaked: dict[str, Mapping[str, Any]] = {}
 
     def scan(self) -> None:
         """Make rows from the files now; what was set by hand stays."""
@@ -136,17 +142,20 @@ class Batch:
     def state(self, settings: Mapping[str, Any] | None = None) -> dict[str, RowState]:
         """
         Where each row stands now, read from the client. With ``settings``,
-        also which rows are stale. A row whose result came from :meth:`tweak`
-        is not stale, until it is reduced again.
+        also which rows are stale. A result that came from :meth:`tweak` is
+        stale only if the row's cells have changed since.
         """
-        records = self.client.records(label=self.label)
-        found = state.results(records, SpecId.of(self.spec), self.client.submitter)
+        found = self._results()
         upstream = self._records_read()
         status = self._status([*found.values(), *upstream])
         stale = set() if settings is None else self._stale(settings)
         return state.row_states(
             self.rows, self.spec.params, self.columns, found, status, stale
         )
+
+    def _results(self) -> dict[str, Record]:
+        records = self.client.records(label=self.label)
+        return state.results(records, SpecId.of(self.spec), self.client.submitter)
 
     def _records_read(self) -> list[Record]:
         """The records that cells reference, if the client knows them all."""
@@ -162,14 +171,16 @@ class Batch:
 
     def _stale(self, settings: Mapping[str, Any]) -> set[str]:
         template = self.template(settings)
-        return {
-            row.key
-            for row in self.rows
-            if row.key in self._submitted
-            and row.key not in self._tweaked
+        return {row.key for row in self.rows if self._differs(row, template)}
+
+    def _differs(self, row: Row, template: Template) -> bool:
+        if row.key in self._tweaked:
+            return row.values != self._tweaked[row.key]
+        return (
+            row.key in self._submitted
             and not state.problems(row, self.spec.params, self.columns, {})
             and template.fill(params=self._cells(row)) != self._submitted[row.key]
-        }
+        )
 
     def reduce(
         self, settings: Mapping[str, Any], keys: Sequence[str]
@@ -177,16 +188,13 @@ class Batch:
         """
         Submit the rows of ``keys``, all or none; their records by key.
 
-        Raises ``SubmitError`` if a row cannot run, naming it by key and the
-        cell by column. A reason about the settings is named once, without a key.
+        Raises ``SubmitError`` if a row cannot run or is still running, naming
+        it by key and the cell by column. A reason about the settings is named
+        once, without a key.
         """
+        states = self.state()
         rows = [self.rows[key] for key in keys]
-        status = self._status(self._records_read())
-        refused = [
-            e
-            for row in rows
-            for e in state.problems(row, self.spec.params, self.columns, status)
-        ]
+        refused = [e for k in keys for e in (*states[k].problems, *_running(states[k]))]
         if refused:
             raise SubmitError(refused)
         if not rows:
@@ -198,7 +206,8 @@ class Batch:
         except SubmitError as error:
             raise SubmitError(self._once(error.errors)) from None
         self._submitted |= {k: template.fill(params=c) for k, c in each.items()}
-        self._tweaked -= set(keys)
+        for key in keys:
+            self._tweaked.pop(key, None)
         return records
 
     def _submit(
@@ -235,24 +244,24 @@ class Batch:
     def tweak(self, key: str, params: Mapping[str, Any]) -> Record:
         """
         Submit one row with ``params``, all of its request's, which become its
-        result. It is not stale for differing from the settings, until it
-        is reduced again.
+        result. It is not stale for differing from the settings or the cells,
+        only if the cells change after this. Raises ``SubmitError`` if the row
+        is still running.
         """
-        self.rows[key]
+        if running := _running(self.state()[key]):
+            raise SubmitError(running)
         request = Request(self.spec, params=params)
         record = self.client.submit(
             request, label=self.label, member=key, persist=self._persist
         )
-        self._submitted[key] = request
-        self._tweaked.add(key)
+        self._tweaked[key] = self.rows[key].values
         return record
 
     def cancel(self, keys: Sequence[str] | None = None) -> None:
-        """Cancel the results still running, of ``keys`` if given."""
-        states = self.state()
-        if keys is not None:
-            states = {k: s for k, s in states.items() if k in keys}
-        self.client.cancel(state.pending(states))
+        """Cancel the results still running, of ``keys`` if given, or of any row."""
+        chosen = [r for k, r in self._results().items() if keys is None or k in keys]
+        status = self._status(chosen)
+        self.client.cancel([r for r in chosen if status[r.id] is Status.PENDING])
 
     def close(self) -> None:
         """Release the open stage, if any; what was submitted through it still runs."""

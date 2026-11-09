@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -106,7 +106,7 @@ def build(directory: Path, samples: int = 20) -> App:
         staged=True,
     )
 
-    def draw(records: dict[str, Record]) -> pn.pane.Markdown:
+    def draw(records: Mapping[str, Record]) -> pn.pane.Markdown:
         lines = [f'{k}: {client.output(r, "total")}' for k, r in records.items()]
         return pn.pane.Markdown('\n\n'.join(lines))
 

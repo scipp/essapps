@@ -10,14 +10,15 @@ values and the blanks of the batch's template.
 
 The editor writes only the cells that differ from what it was showing, so
 updating one cell of a row, or of several rows at once, leaves the others as
-the scan gave them. The status of a selected row changes while a person edits
+the scan gave them. A cell with something missing is not written, and is named
+in the message. The status of a selected row changes while a person edits
 it, so the editor is loaded again only when the selection or the row's cells
 change. Changes not yet written are lost when the selection changes.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 import panel as pn
@@ -26,8 +27,8 @@ from ess.apps import FieldError, Listing, Record, Status, SubmitError
 from ess.apps.panel import Form, Table, describe
 from ess.spec import field_types
 
-from .. import Batch, Row, RowState, cell_text, ready, remaining, summary
-from ..table import EMPTY
+from .. import Batch, Row, RowState, ready, remaining, summary
+from .cells import cell_text, changed_cells, write_choice
 
 type Draw = Callable[[Mapping[str, Record]], Any]
 """Draws the completed results of the rows selected, by key; returns a pane."""
@@ -46,8 +47,8 @@ _FILTERS = (
 )
 
 
-def _refused(errors: tuple[FieldError, ...]) -> str:
-    return 'Refused:\n\n' + '\n'.join(f'- {e}' for e in errors)
+def _refused(errors: Iterable[FieldError], heading: str = 'Refused') -> str:
+    return f'{heading}:\n\n' + '\n'.join(f'- {e}' for e in errors)
 
 
 class BatchView:
@@ -71,6 +72,7 @@ class BatchView:
         self._listing = Listing(batch.client)
         self._states: dict[str, RowState] = {}
         self._loaded: tuple[tuple[str, ...], list[Any]] | None = None
+        self._tweak_loaded: tuple[str, Any, str | None] | None = None
         self._shown: dict[str, Any] = {}
         self._drawn: tuple[tuple[str, str], ...] = ()
         spec = batch.spec
@@ -107,11 +109,14 @@ class BatchView:
                 if action != self.scan or batch.source is not None
             )
         )
+        self.write = write_choice(self._titles)
         self._edits = pn.Row(
+            self.write,
             self._button('Add row', self.add),
             self._button('Update selected', self.update),
             self._button('Remove selected', self.remove),
             self._button('Undo edits of selected', self.reset),
+            self._button('Bring back removed rows', self.restore),
         )
         self._tweak_button = self._button('Submit for selected row', self.submit_tweak)
         self._show()
@@ -166,7 +171,13 @@ class BatchView:
 
     def _selected(self) -> None:
         keys = [k for k in self.table.selected_keys if k in self.batch.rows]
-        self._load_editor(keys)
+        try:
+            self._load_editor(keys)
+            self._load_tweak(keys)
+        except (KeyError, TypeError, ValueError) as error:  # a cell no widget can show
+            self.message.object = f'The editor cannot show a cell: {error}'
+            self.row.set({}, self._listing)
+            self._shown = self.row.held()[0]
         self._describe(keys)
         self._draw_selected(keys)
 
@@ -179,12 +190,24 @@ class BatchView:
         self._shown = self.row.held()[0]
         if len(keys) == 1:
             self.key.value = keys[0]
-            record = self._states[keys[0]].record
-            settings = self._current_settings() or {}
-            given = cells[0] if record is None else record.request.params
-            self.tweak.set(
-                {**settings, **given} if record is None else given, self._listing
-            )
+
+    def _load_tweak(self, keys: list[str]) -> None:
+        """Load the row's cells and what its result ran with, once per result."""
+        if len(keys) != 1:
+            return
+        cells = self.batch.rows[keys[0]].values
+        record = self._states[keys[0]].record
+        source = (keys[0], cells, None if record is None else record.id)
+        if self._tweak_loaded == source:
+            return
+        self._tweak_loaded = source
+        base = (
+            (self._current_settings() or {})
+            if record is None
+            else (record.request.params)
+        )
+        rest = {k: v for k, v in base.items() if k not in self.batch.columns}
+        self.tweak.set({**rest, **cells}, self._listing)
 
     def _describe(self, keys: list[str]) -> None:
         state = self._states[keys[0]] if len(keys) == 1 else None
@@ -206,7 +229,10 @@ class BatchView:
         drawn = tuple((k, r.id) for k, r in completed.items())
         if drawn != self._drawn:
             self._drawn = drawn
-            self.view.objects = [self._draw(completed)] if completed else []
+            try:
+                self.view.objects = [self._draw(completed)] if completed else []
+            except Exception as error:  # a drawing is code of the application
+                self.view.objects = [pn.pane.Markdown(f'Cannot draw: {error!r}')]
 
     # What a person does
 
@@ -216,7 +242,9 @@ class BatchView:
             self.batch.scan()
         except SubmitError as error:
             self.message.object = _refused(error.errors)
-        self._show()
+        except Exception as error:  # a source is code of the application
+            self.message.object = f'The scan failed: {error!r}'
+        self._list_again()
 
     def _reduce(
         self, keys_of: Callable[[dict[str, RowState]], Sequence[str]]
@@ -274,16 +302,20 @@ class BatchView:
 
     def update(self) -> None:
         """Write the cells changed in the editor to the rows selected."""
-        given = self.row.held()[0]
-        changed = {
-            column: given.get(column, EMPTY)
-            for column in self.batch.columns
-            if given.get(column, EMPTY) != self._shown.get(column, EMPTY)
-        }
+        given, missing = self.row.held()
+        chosen = self.write.value
+        changed = changed_cells(given, self._shown, chosen)
         rows = self.batch.rows
         for key in self.table.selected_keys:
             rows = rows.edit(key, changed)
         self.batch.rows = rows
+        self.write.value = ''
+        skipped = [e for e in missing if e.loc[0] == chosen or e.loc[0] in self._shown]
+        self.message.object = (
+            _refused(skipped, 'Not written')
+            if skipped
+            else ('' if changed else 'No cell changed, so nothing was written.')
+        )
         self._show()
 
     def remove(self) -> None:
@@ -298,6 +330,14 @@ class BatchView:
         """Forget the edits of the rows selected."""
         rows = self.batch.rows
         for key in self.table.selected_keys:
+            rows = rows.reset(key)
+        self.batch.rows = rows
+        self._show()
+
+    def restore(self) -> None:
+        """Bring back every row that was removed."""
+        rows = self.batch.rows
+        for key in rows.removed:
             rows = rows.reset(key)
         self.batch.rows = rows
         self._show()

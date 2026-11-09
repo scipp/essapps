@@ -2,7 +2,7 @@
 
 This sub-design builds on the core of [README.md](README.md).
 From the core it needs only that records show their label and member, and `client.files`.
-Its stories are S7 and E1 to E4 in [user-stories.md](user-stories.md).
+Its stories are E1 to E4 in [user-stories.md](user-stories.md).
 
 ## Rules
 

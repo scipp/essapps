@@ -3,8 +3,8 @@
 """
 Where each row of a batch stands, worked out from plain data.
 
-Nothing here calls a client, so every rule of what is ready, what is left to
-do, and what a cell shows is tested on values. :class:`~.reduction.Batch` reads
+Nothing here calls a client, so every rule of what is ready and what is left
+to do is tested on values. :class:`~.reduction.Batch` reads
 the records and gives them to these functions.
 """
 
@@ -14,27 +14,17 @@ from collections import Counter
 from collections.abc import Collection, Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
-from typing import Any, Protocol
 
 from pydantic import BaseModel
-from pydantic_core import to_json
 
-from ess.spec import FileRef, OutputRef
-from ess.spec.refs import as_ref, iter_refs
+from ess.spec import OutputRef
+from ess.spec.refs import iter_refs
 
 from ..errors import FieldError
 from ..records import Record, SpecId, Status
 from .table import Row
 
 _RERUN = (Status.FAILED, Status.CANCELLED)
-
-
-class Labels(Protocol):
-    """How a cell names a file or an output; ``Listing`` is one."""
-
-    def file_label(self, ref: FileRef) -> str: ...
-
-    def output_label(self, ref: OutputRef) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -163,29 +153,6 @@ def remaining(states: Mapping[str, RowState]) -> list[str]:
     ]
 
 
-def pending(states: Mapping[str, RowState]) -> list[Record]:
-    """The results that are still running."""
-    return [
-        s.record
-        for s in states.values()
-        if s.record is not None and s.status is Status.PENDING
-    ]
-
-
 def summary(states: Mapping[str, RowState]) -> dict[str, int]:
     """The number of rows of each :attr:`RowState.text`, sorted by it."""
     return dict(sorted(Counter(s.text for s in states.values()).items()))
-
-
-def cell_text(value: Any, labels: Labels) -> str:
-    """What a table shows for a cell: a file or an output by its label."""
-    ref = as_ref(value)
-    if isinstance(ref, OutputRef):
-        return labels.output_label(ref)
-    if isinstance(ref, FileRef):
-        return labels.file_label(ref)
-    if isinstance(value, list):
-        return ', '.join(cell_text(item, labels) for item in value)
-    if isinstance(value, dict):
-        return to_json(value).decode()
-    return 'none' if value is None else str(value)

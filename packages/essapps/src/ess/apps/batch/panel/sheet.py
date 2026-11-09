@@ -20,7 +20,8 @@ from ess.apps import Client, Listing, Selector
 from ess.apps.panel import Form, Table
 from ess.spec import FileRef, field_types
 
-from .. import CorrectedFiles, cell_text
+from .. import CorrectedFiles
+from .cells import cell_text, changed_cells, write_choice
 
 
 class RunSheet:
@@ -59,7 +60,8 @@ class RunSheet:
         reset.on_click(lambda _: self.reset())
         relist = pn.widgets.Button(label='List files')
         relist.on_click(lambda _: self.list_files())
-        self._buttons = pn.Row(relist, apply, reset)
+        self.write = write_choice(self._titles)
+        self._buttons = pn.Row(relist, self.write, apply, reset)
         self.list_files()
 
     def refresh(self, listing: Listing) -> None:
@@ -95,10 +97,10 @@ class RunSheet:
 
     def correct(self) -> None:
         """Write the fields changed in the editor to the files selected."""
-        given = self.form.held()[0]
-        changed = {n: v for n, v in given.items() if v != self._shown.get(n)}
+        changed = changed_cells(self.form.held()[0], self._shown, self.write.value)
         for ref in self.table.selected_keys:
             self._files.correct(ref, **changed)
+        self.write.value = ''
         self._changed()
 
     def reset(self) -> None:

@@ -103,7 +103,7 @@ Besides the calls in README.md, the stories use this one:
 record.request.files()    # the files the request names directly
 ```
 
-The trigger loop belongs to the sub-design for batch and automatic reduction.
+The trigger loop belongs to the sub-design for automatic reduction.
 The stories use two of its calls:
 
 ```python
@@ -473,7 +473,7 @@ assert client.wait(scan) == {
 assert {r.member: r for r in client.records(label='scan')} == scan
 ```
 
-Gap: `member_field`, and labels and members on records, are tentative (README.md open question 3).
+Gap: labels and members on records are tentative (README.md open question 3).
 Later, the result at 250 K is `client.latest('scan', member='250K')`.
 
 ### D2. Overnight cluster batch
@@ -914,7 +914,7 @@ What the design leaves open or defers, with the stories each item affects.
 - **The service** (sections D and E): designed and not implemented; the format of each persisted output type and the layout of the store are open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 - **Looks that compute** (B4, D7): a selection only indexes; a projection or a thick slice summed waits for the plotting work; README.md open question 4.
 - **Persist at submission** (D1, D2, D3, D6, E1 to E4): whether `persist=` should also keep the values for the client; README.md open question 6.
-- **Labels and members** (D1, D2, and every story that calls `Template.fill`): `member_field`, and labels and members on records, are tentative; README.md open question 3.
+- **Labels and members** (D1, D2): labels and members on records are tentative; README.md open question 3.
 - **Grouping** (system story D7): spreading one accumulator over several nodes needs a merge of two drivers; README.md open question 1.
 - **Recomputing in a record's environment** (F2): deferred.
 - **Publishing** (C2): a published output is a derived dataset in the catalogue, and a workflow reads its file as it reads a run; `publish` and SciCat are not implemented.
