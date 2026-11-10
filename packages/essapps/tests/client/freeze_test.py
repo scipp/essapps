@@ -173,6 +173,8 @@ def test_a_freeze_cancelled_while_it_waits_for_its_state_lets_go_of_it(
         sides.push(samples=[loads[1].ref('value')])
     again = client.freeze(sides)
     assert toys.listed(client.output(again, 'difference')) == [-1.0]
+    gc.collect()
+    assert subtracting.held[0]() is None  # the cancelled freeze holds no state
 
 
 def test_a_frozen_driver_is_dropped_once_its_readers_are_done(

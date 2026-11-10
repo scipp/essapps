@@ -451,7 +451,7 @@ def test_a_refused_call_writes_nothing_to_the_log(
     total.push(part=[load.ref('value')])
     written += 2  # the accumulator opened, and the push
     live = OutputRef(record=total.id, output='value')
-    with pytest.raises(SubmitError, match='an accumulator cannot be referenced'):
+    with pytest.raises(SubmitError, match='cannot be referenced'):
         client.submit(TOTAL, params={'part': [live]})
     with pytest.raises(SubmitError, match='not a blank table'):
         total.push(other=[load.ref('value')])

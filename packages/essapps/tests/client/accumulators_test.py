@@ -7,16 +7,16 @@
 import gc
 import re
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import pytest
 
 from ess.apps import (
+    Accumulator,
     Client,
     NotReadable,
     Record,
-    Request,
     Status,
     SubmitError,
     Template,
@@ -24,8 +24,9 @@ from ess.apps import (
     file,
     local,
 )
+from ess.apps.log import Log
 from ess.apps.testing import FakeFiles
-from ess.spec import DriverBinding, OutputRef, function_binding
+from ess.spec import Binding, DriverBinding, OutputRef, function_binding
 
 from . import toys
 
@@ -350,58 +351,186 @@ def test_an_accumulator_adds_each_row_once(
     assert summing.pushed == 4
 
 
-def test_no_request_template_or_push_references_an_accumulator(
-    client: Client,
-) -> None:
+def _refused(accumulator_id: str, frozen: Record | None = None) -> str:
+    """Why a reference to an accumulator is refused, naming ``frozen`` if given."""
+    which = 'a freeze' if frozen is None else f'its freeze, {frozen.id}'
+    return (
+        f'accumulator {accumulator_id} cannot be referenced; '
+        f'a request references the record of {which}'
+    )
+
+
+@pytest.fixture
+def total(client: Client) -> Accumulator:
+    """An accumulator of TOTAL with one push."""
+    total = toys.total_accumulator(client)
+    total.push(parts=[toys.Amount(value=1.0)])
+    return total
+
+
+# The references to an accumulator, each with the accumulator it references.
+
+
+def _output(client: Client, total: Accumulator) -> tuple[Accumulator, Any]:
+    return total, OutputRef(record=total.id, output='value')
+
+
+def _written(client: Client, total: Accumulator) -> tuple[Accumulator, Any]:
+    return total, {'@ref': 'output', 'record': total.id, 'output': 'value'}
+
+
+def _element(client: Client, total: Accumulator) -> tuple[Accumulator, Any]:
+    split = client.accumulator(Template(toys.SPLIT_TOTAL, blanks=('amounts',)))
+    split.push(amounts=[toys.Amount(value=3.0)])
+    return split, OutputRef(record=split.id, output='parts', key='half')
+
+
+# The submissions that hold a reference, each with its position.
+
+
+def _request(client: Client, total: Accumulator, ref: Any) -> None:
+    client.submit(toys.SHIFT, params={'source': ref})
+
+
+def _push_into_it(client: Client, total: Accumulator, ref: Any) -> None:
+    total.push(parts=[ref])
+
+
+def _push_into_another(client: Client, total: Accumulator, ref: Any) -> None:
+    toys.total_accumulator(client).push(parts=[ref])
+
+
+def _stage(client: Client, total: Accumulator, ref: Any) -> None:
+    client.stage(Template(toys.SHIFT, params={'source': ref}, blanks=('shift',)))
+
+
+def _accumulator(client: Client, total: Accumulator, ref: Any) -> None:
+    client.accumulator(Template(toys.SUM, params={'offset': ref}, blanks=('runs',)))
+
+
+def _call_through_a_stage(client: Client, total: Accumulator, ref: Any) -> None:
+    stage = client.stage(
+        Template(toys.SHIFT, params={'shift': toys.Shift()}, blanks=('source',))
+    )
+    client.submit(stage, params={'source': ref})
+
+
+def _group(client: Client, total: Accumulator, ref: Any) -> None:
     load = client.compute(toys.load_request(1))
-    total, other = toys.total_accumulator(client), toys.total_accumulator(client)
-    total.push(parts=[load.ref('value')])
-    refused = re.escape(
-        f'accumulator {total.id}: an accumulator cannot be referenced; '
-        'freeze it first, and reference the record of the freeze'
-    )
-    written = {'@ref': 'output', 'record': total.id, 'output': 'value'}
-    for ref in (OutputRef(record=total.id, output='value'), written):
-        with pytest.raises(SubmitError, match=rf'^source: {refused}$'):
-            client.submit(toys.SHIFT, params={'source': ref})
-        for accumulator in (total, other):
-            with pytest.raises(SubmitError, match=rf'^parts\[0\]: {refused}$'):
-                accumulator.push(parts=[ref])
-        with pytest.raises(SubmitError, match=rf'^source: {refused}$'):
-            client.stage(
-                Template(toys.SHIFT, params={'source': ref}, blanks=('shift',))
-            )
-        with pytest.raises(SubmitError, match=rf'^offset: {refused}$'):
-            client.accumulator(
-                Template(toys.SUM, params={'offset': ref}, blanks=('runs',))
-            )
-    frozen = client.freeze(total)
-    with pytest.raises(SubmitError, match=rf'^source: {refused}$'):
-        client.submit(toys.SHIFT, params={'source': written})
-    shifted = client.compute(toys.read_request(frozen))
-    assert client.output(shifted, 'value') == toys.Amount(value=1.0)
+    terms = [{'amount': load.ref('value')}]
+    client.submit(toys.TERMS, params={'terms': terms, 'offset': {'amount': ref}})
 
 
-def test_reads_while_rows_are_pushed_each_see_one_state(
-    in_place: Client, files: FakeFiles
+@pytest.mark.parametrize('refer', [_output, _written, _element])
+@pytest.mark.parametrize(
+    ('submit', 'position'),
+    [
+        (_request, 'source'),
+        (_push_into_it, 'parts[0]'),
+        (_push_into_another, 'parts[0]'),
+        (_stage, 'source'),
+        (_accumulator, 'offset'),
+        (_call_through_a_stage, 'source'),
+        (_group, 'offset.amount'),
+    ],
+)
+def test_a_reference_to_an_accumulator_is_refused_at_its_position(
+    client: Client,
+    total: Accumulator,
+    refer: Callable[[Client, Accumulator], tuple[Accumulator, Any]],
+    submit: Callable[[Client, Accumulator, Any], None],
+    position: str,
 ) -> None:
-    client = in_place
-    runs = [files.measure(n, float(n)) for n in range(3, 23)]
-    loads = client.compute(
-        [Request(toys.ARRAY, params={'sample': run}) for run in runs]
-    )
-    total = toys.array_total_accumulator(client)
-    total.push(parts=[loads[0].ref('value')])
-    pushing = threading.Thread(
-        target=lambda: [total.push(parts=[x.ref('value')]) for x in loads[1:]]
-    )
-    pushing.start()
-    reads = [toys.listed(client.output(total, 'value')) for _ in range(20)]
-    pushing.join()
+    referenced, ref = refer(client, total)
 
-    sums = [[float(sum(range(3, 3 + n)))] for n in range(1, 21)]
-    assert all(read in sums for read in reads)  # the sum over a whole push each
-    assert reads == sorted(reads)  # a later read sees a later state
+    with pytest.raises(SubmitError) as refused:
+        submit(client, total, ref)
+    assert str(refused.value) == f'{position}: {_refused(referenced.id)}'
+
+
+def _live(client: Client, total: Accumulator, loading: threading.Event) -> None:
+    return None
+
+
+def _released(client: Client, total: Accumulator, loading: threading.Event) -> None:
+    client.release(total)
+
+
+def _stopped(client: Client, total: Accumulator, loading: threading.Event) -> None:
+    loading.clear()
+    pending = client.submit(toys.load_request(2))
+    total.push(parts=[pending.ref('value')])
+    frozen = client.freeze(total)  # fails once the accumulator stops
+    client.cancel(pending)
+    assert client.wait(frozen) is Status.FAILED
+
+
+def _freeze_pending(
+    client: Client, total: Accumulator, loading: threading.Event
+) -> Record:
+    loading.clear()
+    pending = client.submit(toys.load_request(2))
+    total.push(parts=[pending.ref('value')])
+    return client.freeze(total)  # waits for the push, which waits for the load
+
+
+def _freeze_cancelled(
+    client: Client, total: Accumulator, loading: threading.Event
+) -> None:
+    client.cancel(_freeze_pending(client, total, loading))
+
+
+def _freeze_completed(
+    client: Client, total: Accumulator, loading: threading.Event
+) -> Record:
+    frozen = client.freeze(total)
+    client.wait(frozen)
+    return frozen
+
+
+@pytest.mark.parametrize(
+    'condition',
+    [
+        _live,
+        _released,
+        _stopped,
+        _freeze_pending,
+        _freeze_cancelled,
+        _freeze_completed,
+    ],
+)
+def test_a_refused_accumulator_reference_names_a_pending_or_completed_freeze(
+    client: Client,
+    total: Accumulator,
+    loading: threading.Event,
+    condition: Callable[[Client, Accumulator, threading.Event], Record | None],
+) -> None:
+    frozen = condition(client, total, loading)
+
+    ref = OutputRef(record=total.id, output='value')
+    with pytest.raises(SubmitError) as refused:
+        client.submit(toys.SHIFT, params={'source': ref})
+    assert str(refused.value) == f'source: {_refused(total.id, frozen)}'
+    loading.set()
+
+
+def test_a_reference_to_an_accumulator_opened_before_a_restart_is_refused(
+    files: FakeFiles, bindings: list[Binding], log: Log
+) -> None:
+    def start() -> Client:
+        """A client of a new workspace over ``log``."""
+        workspace = Workspace(proposal='p1', files=files, bind=bindings, log=log)
+        return Client(workspace, submitter='anna', on_close=workspace.close)
+
+    with start() as client:
+        total = toys.total_accumulator(client)
+        total.push(parts=[toys.Amount(value=1.0)])
+    ref = OutputRef(record=total.id, output='value')
+
+    with start() as client:
+        with pytest.raises(SubmitError) as refused:
+            client.submit(toys.SHIFT, params={'source': ref})
+    assert str(refused.value) == f'source: {_refused(total.id)}'
 
 
 def test_an_output_the_spec_lacks_is_not_read_from_an_accumulator(
@@ -448,12 +577,11 @@ def test_concurrent_readers_of_one_state_compute_its_outputs_once(
     subtracting.compute.clear()
     read = toys.start_in_thread(lambda: client.output(sides, 'difference'))
     subtracting.computing.wait(timeout=5)  # the read computes, and holds the state
-    other = toys.start_in_thread(lambda: client.output(sides, 'total'))
-    frozen = client.freeze(sides)
+    frozen = client.freeze(sides)  # the other reader, whose record reads the outputs
     subtracting.compute.set()
+
     assert toys.listed(read.result(timeout=5)) == [1.0]
-    assert toys.listed(other.result(timeout=5)) == [1.0]
-    assert toys.listed(client.output(frozen, 'difference')) == [1.0]
+    assert toys.listed(client.output(frozen, 'total')) == [1.0]
     assert subtracting.computed == 1
 
 
@@ -469,7 +597,7 @@ def test_reading_an_accumulator_whose_driver_returns_no_outputs_instance_raises(
             client.output(untyped)
 
 
-def test_a_read_while_a_push_adds_pins_the_state_after_it(
+def test_a_read_while_a_push_adds_is_of_the_state_after_it(
     in_place: Client, loads: list[Record], subtracting: toys.Subtracting
 ) -> None:
     client = in_place
@@ -482,13 +610,17 @@ def test_a_read_while_a_push_adds_pins_the_state_after_it(
     subtracting.adding.wait(timeout=5)  # the push adds
     read = toys.start_in_thread(lambda: client.output(sides, 'difference'))
     plain = client.provenance(sides).request
-    frozen = client.freeze(sides)  # returns at once, of the same state
-
-    assert frozen.request == plain
-    assert len(plain.params['backgrounds']) == 1
     with pytest.raises(TimeoutError):
         read.result(timeout=0.05)  # waits for the state, as for a record
+    subtracting.computing.clear()
+    subtracting.compute.clear()
     subtracting.go.set()
+    subtracting.computing.wait(timeout=5)  # the read computes, and holds the state
+    frozen = client.freeze(sides)
+    subtracting.compute.set()
+
+    assert len(plain.params['backgrounds']) == 1
+    assert frozen.request == plain
     assert toys.listed(read.result(timeout=5)) == [-1.0]
     assert toys.listed(client.output(frozen, 'difference')) == [-1.0]
 
