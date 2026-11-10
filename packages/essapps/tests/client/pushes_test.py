@@ -15,7 +15,6 @@ from ess.apps import (
     NotReadable,
     Record,
     Request,
-    Status,
     SubmitError,
     Template,
     file,
@@ -40,15 +39,14 @@ def test_a_push_takes_rows_as_a_request_does(client: Client) -> None:
     weighted = client.accumulator(Template(toys.WEIGHTED, blanks=('parts',)))
     for row in rows:
         weighted.push(parts=[row])
-    read = client.compute(toys.read_request(weighted))
     plain = client.compute(toys.WEIGHTED, params={'parts': rows})
 
     assert (
-        client.output(read, 'value')
+        client.output(weighted, 'value')
         == client.output(plain, 'value')
         == toys.Amount(value=5.0)
     )
-    assert toys.state_record(client, read).request == plain.request
+    assert client.provenance(weighted).request == plain.request
 
 
 def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
@@ -117,10 +115,9 @@ def test_a_push_takes_a_pending_record_and_refuses_one_that_did_not_complete(
     with pytest.raises(SubmitError, match=f'{cancelled.id} cancelled'):
         total.push(parts=[cancelled.ref('value')])
     total.push(parts=[pending.ref('value')])  # added once pending completes
-    read = client.submit(toys.read_request(total))
     loading.set()
 
-    assert client.output(read, 'value') == toys.Amount(value=1.0)
+    assert client.output(total, 'value') == toys.Amount(value=1.0)
 
 
 def test_concurrent_pushes_add_in_the_order_they_are_logged(
@@ -137,97 +134,10 @@ def test_concurrent_pushes_add_in_the_order_they_are_logged(
         push.start()
     for push in pushes:
         push.join()
-    read = client.compute(toys.read_request(digits))
-    pushed = toys.state_record(
-        client, read
-    ).request.params  # in the order they were logged
+    pushed = client.provenance(digits).request.params  # in the order logged
     plain = client.compute(toys.DIGITS, params=pushed)
 
-    assert client.output(read, 'value') == client.output(plain, 'value')
-
-
-def test_a_push_is_added_after_a_request_that_has_not_started(
-    client: Client, loading: threading.Event
-) -> None:
-    loads = client.compute([toys.load_request(n) for n in (1, 2)])
-    total = toys.total_accumulator(client)
-    total.push(parts=[loads[0].ref('value')])
-    loading.clear()
-    pending = client.submit(toys.load_request(2))
-    parts = [total.ref('value'), pending.ref('value')]
-    summed = client.submit(
-        toys.TOTAL, params={'parts': parts}
-    )  # once pending completes
-    total.push(parts=[loads[1].ref('value')])  # returns at once
-    read = toys.start_in_thread(lambda: client.output(total, 'value'))
-
-    with pytest.raises(TimeoutError):
-        read.result(timeout=0.05)  # the push waits for summed
-    loading.set()
-    assert read.result(timeout=5) == toys.Amount(value=3.0)
-    assert client.output(summed, 'value') == toys.Amount(
-        value=3.0
-    )  # read 1.0 before the push
-
-
-def test_a_push_is_added_once_the_requests_that_read_the_state_before_it_have_run(
-    in_place: Client, loads: list[Record], copying: toys.Copying
-) -> None:
-    client = in_place
-    copying.go.clear()
-    total = toys.array_total_accumulator(client)
-    total.push(parts=[loads[0].ref('value')])
-    copied = toys.submit_copy(client, total)
-    copying.started.wait(timeout=5)  # the copy runs, and reads the value
-    total.push(parts=[loads[1].ref('value')])  # returns at once
-    read = toys.start_in_thread(lambda: client.output(total, 'value'))
-
-    with pytest.raises(TimeoutError):
-        read.result(timeout=0.05)
-    copying.go.set()
-    assert toys.listed(read.result(timeout=5)) == [3.0]
-    assert toys.listed(client.output(copied, 'value')) == [1.0]
-
-
-def test_cancelling_a_request_that_has_not_started_lets_the_push_be_added(
-    client: Client, loading: threading.Event
-) -> None:
-    loads = client.compute([toys.load_request(n) for n in (1, 2)])
-    total = toys.total_accumulator(client)
-    total.push(parts=[loads[0].ref('value')])
-    loading.clear()
-    pending = client.submit(toys.load_request(2))
-    parts = [total.ref('value'), pending.ref('value')]
-    summed = client.submit(toys.TOTAL, params={'parts': parts})
-    total.push(parts=[loads[1].ref('value')])
-    read = toys.start_in_thread(lambda: client.output(total, 'value'))
-
-    with pytest.raises(TimeoutError):
-        read.result(timeout=0.05)
-    client.cancel(summed)
-    assert read.result(timeout=5) == toys.Amount(value=3.0)
-    assert client.status([pending, summed]) == [Status.PENDING, Status.CANCELLED]
-    loading.set()
-
-
-def test_a_push_is_added_once_a_cancelled_request_that_still_runs_returns(
-    in_place: Client, loads: list[Record], copying: toys.Copying
-) -> None:
-    client = in_place
-    copying.go.clear()
-    total = toys.array_total_accumulator(client)
-    total.push(parts=[loads[0].ref('value')])
-    copied = toys.submit_copy(client, total)
-    copying.started.wait(timeout=5)
-    client.cancel(copied)
-    total.push(parts=[loads[1].ref('value')])
-    read = toys.start_in_thread(lambda: client.output(total, 'value'))
-
-    with pytest.raises(TimeoutError):
-        read.result(timeout=0.05)
-    copying.go.set()
-    assert toys.listed(read.result(timeout=5)) == [3.0]
-    assert client.status(copied) is Status.CANCELLED
+    assert client.output(digits, 'value') == client.output(plain, 'value')
 
 
 def test_a_push_is_added_once_a_read_of_the_outputs_in_progress_is_done(
@@ -255,20 +165,12 @@ def test_a_push_proceeds_after_readers_whose_outputs_failed(
     sides = toys.sides_accumulator(client)
     sides.push(samples=[loads[0].ref('value')])
     subtracting.failing = True
-    copied = toys.submit_copy(client, sides, 'difference')
-    client.wait(copied)
-    subtracting.failing = True
     with pytest.raises(NotReadable, match=r'^ValueError: cannot compute$'):
         client.output(sides, 'difference')
 
     toys.start_in_thread(
         lambda: sides.push(backgrounds=[loads[1].ref('value')])
     ).result(5)
-    state = toys.state_record(client, copied)
-    assert client.failure([state, copied]) == [
-        'ValueError: cannot compute',
-        f'record {state.id} failed',
-    ]
     assert toys.listed(client.output(sides, 'difference')) == [-1.0]
 
 
@@ -279,7 +181,9 @@ def test_a_push_of_several_rows_gives_one_state(
     sides = toys.sides_accumulator(client)
     rows = [x.ref('value') for x in loads]
     sides.push(samples=rows)
-    copied = toys.submit_copy(client, sides, 'difference')
     plain = client.compute(toys.SIDES, params={'samples': rows, 'backgrounds': []})
 
-    assert toys.state_record(client, copied).request == plain.request
+    assert client.provenance(sides).request == plain.request
+    assert toys.listed_sides(client.output(sides)) == toys.listed_sides(
+        client.output(plain)
+    )

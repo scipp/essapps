@@ -13,7 +13,6 @@ import pytest
 from pydantic import BaseModel, model_validator
 
 from ess.apps import (
-    Backend,
     Client,
     FieldError,
     Request,
@@ -25,7 +24,7 @@ from ess.apps import (
     local,
 )
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows
-from ess.spec import Binding, File, RunFile, function_binding
+from ess.spec import Binding, File, OutputRef, RunFile, function_binding
 
 from . import toys
 
@@ -89,7 +88,7 @@ def test_values_go_with_a_spec_or_a_stage(client: Client) -> None:
         )
 
 
-def test_a_client_gives_the_specs_the_backend_runs(
+def test_a_client_gives_the_specs_the_workspace_runs(
     client: Client, bindings: list[Binding]
 ) -> None:
     load = client.compute(toys.load_request(1))
@@ -121,15 +120,6 @@ def test_a_reference_to_a_missing_output_is_refused(client: Client) -> None:
 
     with pytest.raises(SubmitError, match="source: load/v1 has no output 'total'"):
         client.submit(toys.SHIFT, params={'source': missing})
-
-
-def test_a_reference_to_another_proposal_is_refused(backend: Backend) -> None:
-    theirs = Client(backend, proposal='p2', submitter='eve')
-    mine = Client(backend, proposal='p1', submitter='anna')
-    loaded = mine.compute(toys.load_request(1))
-
-    with pytest.raises(SubmitError, match='belongs to proposal p1'):
-        theirs.submit(toys.read_request(loaded))
 
 
 def test_a_reference_to_a_failed_record_is_refused(
@@ -377,14 +367,20 @@ def test_an_accumulator_takes_rows_that_hold_references(client: Client) -> None:
         acc.push(terms=[{'scale': 1.0, 'amount': a.ref('value')}])
 
 
-def test_a_reference_to_an_accumulator_inside_a_row_reads_its_state(
+def test_a_reference_to_an_accumulator_inside_a_row_is_refused(
     client: Client,
 ) -> None:
     a = client.submit(toys.load_request(2))
     acc = client.accumulator(Template(toys.TERMS_ROWS, blanks=('terms',)))
     acc.push(terms=[{'amount': a.ref('value')}])
 
-    rows = [{'scale': 3.0, 'amount': acc.ref('value')}]
+    live = [{'scale': 3.0, 'amount': OutputRef(record=acc.id, output='value')}]
+    with pytest.raises(
+        SubmitError, match=r'^terms\[0\]\.amount: accumulator .* cannot be referenced'
+    ):
+        client.submit(toys.TERMS, params={'terms': live})
+    frozen = client.freeze(acc)
+    rows = [{'scale': 3.0, 'amount': frozen.ref('value')}]
     summed = client.compute(toys.TERMS, params={'terms': rows})
 
     assert client.output(summed, 'value') == toys.Amount(value=6.0)

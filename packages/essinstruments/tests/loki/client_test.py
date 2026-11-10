@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The three specs through a client of an in-process backend, over a folder of
+The three specs through a client of an in-process workspace, over a folder of
 files and a table a person fills.
 """
 

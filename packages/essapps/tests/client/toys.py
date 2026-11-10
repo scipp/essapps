@@ -458,16 +458,9 @@ def load_request(n: int) -> Request:
     return Request(LOAD, params={'sample': file(run=n)})
 
 
-def read_request(accumulator: Accumulator | Record, output: str = 'value') -> Request:
-    """A request that reads an output of an accumulator or a record: SHIFT by 0."""
-    return Request(SHIFT, params={'source': accumulator.ref(output)})
-
-
-def state_record(client: Client, reader: Record) -> Record:
-    """The record of the state of an accumulator that ``reader`` reads as its source."""
-    ref = reader.request.params['source']
-    (state,) = [r for r in client.records() if r.id == ref.record]
-    return state
+def read_request(record: Record, output: str = 'value') -> Request:
+    """A request that reads an output of a record: SHIFT by 0."""
+    return Request(SHIFT, params={'source': record.ref(output)})
 
 
 def stage_shift(client: Client, record: Record) -> Any:
@@ -690,12 +683,6 @@ def _subtract(samples: Any, backgrounds: Any) -> Sides:
 def array_total_accumulator(client: Client) -> Accumulator:
     """An accumulator of ARRAY_TOTAL, the sum of a table of arrays."""
     return client.accumulator(Template(ARRAY_TOTAL, blanks=('parts',)))
-
-
-def submit_copy(
-    client: Client, accumulator: Accumulator, output: str = 'value'
-) -> Record:
-    return client.submit(COPY, params={'source': accumulator.ref(output)})
 
 
 def sides_accumulator(client: Client) -> Accumulator:

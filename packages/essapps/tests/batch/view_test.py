@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""The tab through its widgets and actions, on a real in-process backend."""
+"""The tab through its widgets and actions, on a real in-process workspace."""
 
 from collections.abc import Mapping
 from pathlib import Path

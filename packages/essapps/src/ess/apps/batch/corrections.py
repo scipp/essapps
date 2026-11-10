@@ -24,7 +24,7 @@ class CorrectedFiles:
     """
     A file source over ``source``, with corrections a person makes.
 
-    The backend gets this source, so forms, rules, and sources of rows all see
+    The workspace gets this source, so forms, rules, and sources of rows all see
     a file as corrected, as :class:`~ess.apps.protocol.FileSource` requires::
 
         files = CorrectedFiles(FolderFiles('/data', table))

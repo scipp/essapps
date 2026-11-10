@@ -5,7 +5,7 @@ A tab to correct the metadata of runs by hand, such as the role of each.
 
 An application names the fields with a pydantic model, so a person chooses
 from what the application allows. The corrections go to the
-:class:`~ess.apps.batch.CorrectedFiles` that the backend reads.
+:class:`~ess.apps.batch.CorrectedFiles` that the workspace reads.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Deciders: Simon
-- Date: 2026-10-05, rewritten 2026-10-15
+- Date: 2026-10-05, rewritten 2026-11-10
 
 ## Context
 
@@ -38,16 +38,14 @@ A joint fit, such as the scale factors of reflectometry angles, has a driver tha
 Only a driver accumulates: the framework never decides how rows combine, not even by keeping them.
 The framework needs no particular driver; a package writes its own or adapts a generic one, such as `StreamProcessor`.
 
-**Pinning a state makes a record of its plain request.**
-A submission that references `acc.ref('iofq')` also logs the record of the plain request of the pinned state.
-The reference becomes `OutputRef(record=..., output='iofq')`, an output of that record.
+**A freeze makes a record of the plain request of the logged state.**
+`client.freeze(acc)` logs the record of the plain request of the accumulator's *logged state*, state n for the n pushes logged so far ([ADR 0003](0003-accumulators-add-in-place.md) says when n is taken).
+A request references an output of that record, `OutputRef(record=..., output='iofq')`, as it references any record.
 Records never name an accumulator, as records of calls through a stage never name the stage.
-Each submission makes its own record of the state, whose outputs are what the driver returned, not a copy.
+The record's outputs are what the driver returned, not a copy.
 That record reads the driver, not the values its rows reference.
 So its edges to the records its rows reference are provenance, and the client may release those records after pushing.
-No client keeps the record of a state that a submission makes, since no client asked for it.
-So no later submission can reference it ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)), and only the requests of its submission read it.
-This is why no wait goes round in a circle ([ADR 0003](0003-accumulators-add-in-place.md)).
+A read of a state, `client.output(acc, ...)`, makes no record ([ADR 0003](0003-accumulators-add-in-place.md)).
 
 **What the framework sees is flat.**
 A row is what the reduction repeats: the file of a run, or a group written inline, such as a time slice.
@@ -109,7 +107,7 @@ iofq.push(sample=[file(run=613), file(run=615)])   # one push, one state
 - **List parameters, with the framework finding new runs by comparing lists.** The framework would have to compare lists, and track which tuned values the per-run part read. A push names the new row.
 - **A chain of totals**, each a request over the previous total and one new run. A record would not mean the sum of its runs, and a growing total is copied at every step.
 - **The framework keeps the rows for a binding without a driver**, and computes the plain request over all of them at each read. How rows combine would be decided in two places, and a framework strategy would serve workflows that never chose it. A workflow that needs every row at once writes a driver that keeps them.
-- **Records that name a state**, by a reference to an accumulator and a push count, or as a snapshot from `client.submit(acc)`. This adds a third kind of reference, which provenance and rerunning a record would have to resolve into pushes. A snapshot's value changes at the next push.
+- **Records that name a state**, by a reference to an accumulator and a push count, or as a record from `client.submit(acc)` that holds the driver's outputs. This adds a third kind of reference, which provenance and rerunning a record would have to resolve into pushes. Such a record's value changes at the next push.
 - **Accumulating with `StreamProcessor`** from essreduce, as in the spike. Of `StreamProcessor`, an accumulator needs only the static part, the dynamic keys, the summed accumulators, and finalize. The context keys, rolling windows, and `clear()` of `StreamProcessor` would break the arrival symmetry. Importing it loads essreduce, with scippneutron, scippnexus, scipy, and dask. A package's driver may still adapt it: `accumulate` is `push`, and `finalize` is `outputs`. The framework itself does not import it.
 - **Nested tables**, such as rows that hold a table of banks. The framework would need a push per level, and rules on which work repeats at which level.
 

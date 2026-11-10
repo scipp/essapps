@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""The backend's log: what it holds, and a backend started from it."""
+"""The workspace's log: what it holds, and a workspace started from it."""
 
 import json
 import shutil
@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 
 from ess.apps import (
     Accumulator,
-    Backend,
     Client,
     NotReadable,
     Record,
@@ -24,6 +23,7 @@ from ess.apps import (
     Status,
     SubmitError,
     Template,
+    Workspace,
     file,
 )
 from ess.apps.log import (
@@ -151,8 +151,8 @@ def windows() -> list[Any]:
 def start(
     files: FakeFiles, loading: threading.Event, windows: list[Any]
 ) -> Iterator[Callable[[Path], Client]]:
-    """A client of a new backend over the log at a path."""
-    backends: list[Backend] = []
+    """A client of a new workspace over the log at a path."""
+    workspaces: list[Workspace] = []
 
     def load(params: LoadParams) -> ValueOutputs:
         window = params.window
@@ -167,19 +167,21 @@ def start(
             kept_rows(TOTAL, total),
             kept_rows(RUNS, runs),
         ]
-        backends.append(Backend(files, bind, log=Log(path)))
-        return Client(backends[-1], proposal='p1', submitter='anna')
+        workspaces.append(
+            Workspace(proposal='p1', files=files, bind=bind, log=Log(path))
+        )
+        return Client(workspaces[-1], submitter='anna')
 
     yield start
-    for backend in backends:
-        backend.close()
+    for workspace in workspaces:
+        workspace.close()
 
 
 @pytest.fixture
 def restart(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> Callable[[Path], Client]:
-    """A client of a backend over a copy of a log, as if the old one had stopped."""
+    """A client of a workspace over a copy of a log, as if the old one had stopped."""
 
     def restart(path: Path) -> Client:
         copy = tmp_path / uuid.uuid4().hex
@@ -213,17 +215,12 @@ def _total(client: Client) -> Accumulator:
     return client.accumulator(Template(TOTAL, blanks=('part',)))
 
 
-def _read(total: Accumulator) -> dict[str, Any]:
-    """The params of a request of TOTAL that reads the value of ``total``."""
-    return {'part': [total.ref('value')]}
-
-
 def _record(client: Client, record_id: str) -> Record:
     (record,) = [r for r in client.records() if r.id == record_id]
     return record
 
 
-def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
+def test_a_workspace_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
     tmp_path: Path,
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
@@ -236,15 +233,15 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
     total = _total(first)
     for load in loads.values():
         total.push(part=[load.ref('value')])
-    read = first.compute(TOTAL, params=_read(total))
+    frozen = first.freeze(total)
+    read = first.compute(TOTAL, params={'part': [frozen.ref('value')]})
 
     again = restart(tmp_path / 'log')
 
     assert again.records() == first.records()
     assert again.records(label='loads') == list(loads.values())
-    state = _record(again, read.request.params['part'][0].record)
     assert again.provenance(read) == first.provenance(read)
-    assert again.provenance(read).records() == [state, *loads.values()]
+    assert again.provenance(read).records() == [frozen, *loads.values()]
 
 
 def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
@@ -268,7 +265,7 @@ def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
     assert again.output(rerun, 'value') == Amount(value=3.0)
 
 
-def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_record(
+def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_freeze_as_a_record(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
@@ -276,7 +273,7 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
     total = _total(client)
     for load in loads:
         total.push(part=[load.ref('value')])
-    read = client.compute(TOTAL, params=_read(total))
+    frozen = client.freeze(total)
 
     events = Log.read(tmp_path / 'log')
     assert events[6:10] == [
@@ -294,20 +291,19 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
             for load in loads
         ),
     ]
-    state, reader = events[10].records  # the record of the state, then its reader
-    assert state == NewStateRecord(
-        id=state.id, accumulator=total.id, pushes=3, outputs=('value',)
+    assert events[10].records == (
+        NewStateRecord(
+            id=frozen.id, accumulator=total.id, pushes=3, outputs=('value',)
+        ),
     )
-    assert reader.id == read.id
-    assert read.request.params['part'] == [OutputRef(record=state.id, output='value')]
-    assert _record(client, state.id).request == Request(
+    assert frozen.request == Request(
         TOTAL,
         params={
             'weight': None,
             'part': [load.ref('value') for load in loads],
         },
     )
-    assert client.output(read, 'value') == Amount(value=6.0)
+    assert client.output(frozen, 'value') == Amount(value=6.0)
 
 
 def test_a_push_is_logged_as_its_rows_by_table_with_references_as_written(
@@ -337,15 +333,14 @@ def test_rows_of_files_are_logged_and_are_the_provenance_of_a_state(
     )
     acc.push(runs=[file(run=1)])
     acc.push(runs=[file(run=2)])
-    read = client.compute(TOTAL, params=_read(acc))
 
     opened, *pushed = [
         e for e in Log.read(tmp_path / 'log') if isinstance(e, Opened | Pushed)
     ]
     assert opened.params == {'cans': [can], 'runs': []}
     assert pushed == [Pushed(accumulator=acc.id, params={'runs': [s]}) for s in samples]
-    assert client.provenance(read).files() == [can, *samples]
-    assert client.output(read, 'value') == Amount(value=0.0)
+    assert client.provenance(acc).files() == [can, *samples]
+    assert client.output(acc, 'value') == Amount(value=0.0)
 
 
 def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) -> None:
@@ -379,19 +374,19 @@ def test_records_pending_in_the_log_are_cancelled_at_a_restart(
     total = _total(first)
     total.push(part=[done.ref('value')])
     total.push(part=[pending.ref('value')])  # waits for ``pending``
-    read = first.submit(TOTAL, params=_read(total))
-    state = _record(first, read.request.params['part'][0].record)
+    frozen = first.freeze(total)
+    read = first.submit(TOTAL, params={'part': [frozen.ref('value')]})
 
     again = restart(tmp_path / 'log')
     loading.set()
 
-    records = [pending, state, read]
-    assert again.status(records) == [Status.CANCELLED] * 3  # no client keeps them
-    assert again.failure(records) == ['the backend restarted'] * 3
+    records = [pending, frozen, read]
+    assert again.status(records) == [Status.CANCELLED] * 3  # nothing keeps them
+    assert again.failure(records) == ['the workspace restarted'] * 3
     with pytest.raises(SubmitError, match=f'record {pending.id} cancelled'):
         again.submit(TOTAL, params={'part': [pending.ref('value')]})
-    with pytest.raises(SubmitError, match='is not kept by this client'):
-        again.submit(TOTAL, params=_read(total))  # the accumulator did not survive
+    with pytest.raises(NotReadable, match=f'accumulator {total.id} is not open'):
+        again.output(total)  # the accumulator did not survive
 
 
 def test_outputs_are_not_in_the_log(
@@ -404,7 +399,7 @@ def test_outputs_are_not_in_the_log(
     again = restart(tmp_path / 'log')
 
     assert again.wait(load) == Status.COMPLETED
-    with pytest.raises(NotReadable, match='not kept by this client'):
+    with pytest.raises(NotReadable, match='is not kept'):
         again.output(load, 'value')
 
 
@@ -418,7 +413,7 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
     again = restart(tmp_path / 'log')
 
     total = _total(again)
-    with pytest.raises(SubmitError, match='not kept by this client'):
+    with pytest.raises(SubmitError, match='is not kept'):
         total.push(part=[load.ref('value')])
 
 
@@ -455,9 +450,9 @@ def test_a_refused_call_writes_nothing_to_the_log(
     total = _total(client)
     total.push(part=[load.ref('value')])
     written += 2  # the accumulator opened, and the push
-    other = OutputRef(record=total.id, output='other')
-    with pytest.raises(SubmitError, match='has no output'):
-        client.submit(TOTAL, params={'part': [other]})
+    live = OutputRef(record=total.id, output='value')
+    with pytest.raises(SubmitError, match='cannot be referenced'):
+        client.submit(TOTAL, params={'part': [live]})
     with pytest.raises(SubmitError, match='not a blank table'):
         total.push(other=[load.ref('value')])
     with pytest.raises(SubmitError, match='gives no rows'):
@@ -496,12 +491,31 @@ def test_a_log_file_has_one_writer(tmp_path: Path) -> None:
     Log(path).close()  # free once the first has let go
 
 
+@pytest.mark.parametrize('kind', ['submitted', 'opened'])
+def test_a_workspace_refuses_a_log_of_another_proposal_and_closes_it(
+    tmp_path: Path, files: FakeFiles, kind: str
+) -> None:
+    path = tmp_path / 'log'
+    request = Request(LOAD, params={'sample': files.resolve(file(run=1))})
+    opened = Opened(
+        accumulator='total',
+        proposal='p1',
+        template=Template(TOTAL, blanks=('part',)),
+        params={'weight': None, 'part': []},
+    )
+    _write(path, _submitted('load', request) if kind == 'submitted' else opened)
+
+    with pytest.raises(ValueError, match='proposal p1, not p2'):
+        Workspace(proposal='p2', files=files, bind=[], log=Log(path))
+    Log(path).close()  # the refused workspace has let go of the file
+
+
 def test_a_last_line_cut_short_is_dropped(tmp_path: Path, files: FakeFiles) -> None:
     path = tmp_path / 'log'
     request = Request(LOAD, params={'sample': files.resolve(file(run=1))})
     _write(path, _submitted('load', request))
     with path.open('ab') as log:
-        log.write(b'{"kind":"finish')  # the backend stopped while writing
+        log.write(b'{"kind":"finish')  # the workspace stopped while writing
 
     _write(path, Finished(record='load', status=Status.COMPLETED))
 

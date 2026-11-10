@@ -7,8 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from ess.apps import Backend, Client, Record, Request, file
-from ess.apps.testing import FakeFiles, StagedFunction, kept_rows
+from ess.apps import Client, Record, Request, Workspace, file
+from ess.apps.log import Log
+from ess.apps.testing import FakeFiles, FakeStore, StagedFunction, kept_rows
 from ess.spec import (
     Binding,
     DriverBinding,
@@ -140,15 +141,21 @@ def bindings(
 
 
 @pytest.fixture
-def backend(files: FakeFiles, bindings: list[Binding]) -> Iterator[Backend]:
-    backend = Backend(files, bindings)
-    yield backend
-    backend.close()
+def workspace(files: FakeFiles, bindings: list[Binding]) -> Iterator[Workspace]:
+    workspace = Workspace(proposal='p1', files=files, bind=bindings)
+    yield workspace
+    workspace.close()
 
 
 @pytest.fixture
-def client(backend: Backend) -> Client:
-    return Client(backend, proposal='p1', submitter='anna')
+def client(workspace: Workspace) -> Client:
+    return Client(workspace, submitter='anna')
+
+
+@pytest.fixture
+def other(workspace: Workspace) -> Client:
+    """A second client of ``workspace``, of another user."""
+    return Client(workspace, submitter='bob')
 
 
 @pytest.fixture
@@ -157,24 +164,41 @@ def summing() -> Sum:
 
 
 @pytest.fixture
-def summed_backend(files: FakeFiles, summing: Sum) -> Iterator[Backend]:
-    """A backend that sums TOTAL with ``summing``."""
-    backend = Backend(
-        files,
-        [
+def log() -> Log:
+    """The history of ``summed_workspace``."""
+    return Log()
+
+
+@pytest.fixture
+def store() -> FakeStore:
+    """Where ``summed_workspace`` writes persisted outputs."""
+    return FakeStore()
+
+
+@pytest.fixture
+def summed_workspace(
+    files: FakeFiles, summing: Sum, log: Log, store: FakeStore
+) -> Iterator[Workspace]:
+    """A workspace that sums TOTAL with ``summing``."""
+    workspace = Workspace(
+        proposal='p1',
+        files=files,
+        bind=[
             function_binding(LOAD, load_run),
             function_binding(SHIFT, shift),
             DriverBinding(TOTAL, summing),
         ],
+        log=log,
+        store=store,
     )
-    yield backend
-    backend.close()
+    yield workspace
+    workspace.close()
 
 
 @pytest.fixture
-def summed(summed_backend: Backend) -> Client:
-    """A client of ``summed_backend``."""
-    return Client(summed_backend, proposal='p1', submitter='anna')
+def summed(summed_workspace: Workspace) -> Client:
+    """A client of ``summed_workspace``."""
+    return Client(summed_workspace, submitter='anna')
 
 
 @pytest.fixture
@@ -194,10 +218,10 @@ def subtracting() -> Subtracting:
 
 
 @pytest.fixture
-def in_place(
+def in_place_workspace(
     files: FakeFiles, copying: Copying, subtracting: Subtracting
-) -> Iterator[Client]:
-    """A client of a backend whose ARRAY_TOTAL and SIDES add arrays in place."""
+) -> Iterator[Workspace]:
+    """A workspace whose ARRAY_TOTAL and SIDES add arrays in place."""
     bind = [
         function_binding(ARRAY, array),
         folding(ARRAY_TOTAL, add_counts_in_place),
@@ -205,12 +229,18 @@ def in_place(
         DriverBinding(SIDES, subtracting),
         DriverBinding(BOTH, subtracting),
     ]
-    backend = Backend(files, bind)
-    yield Client(backend, proposal='p1', submitter='anna')
+    workspace = Workspace(proposal='p1', files=files, bind=bind)
+    yield workspace
     copying.go.set()
     subtracting.go.set()
     subtracting.compute.set()
-    backend.close()
+    workspace.close()
+
+
+@pytest.fixture
+def in_place(in_place_workspace: Workspace) -> Client:
+    """A client of ``in_place_workspace``."""
+    return Client(in_place_workspace, submitter='anna')
 
 
 @pytest.fixture

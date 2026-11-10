@@ -53,7 +53,7 @@ def test_c2_vanadium_from_the_catalogue(
         toys.VANADIUM,
         params={
             'scaling': toys.Scaling(scale=2.0),
-            'vanadium': measure(1, [1.0, 1.0]),
+            'vanadium': measure(1, [1.0, 1.0], proposal='p2'),
         },
     )
     pid = other.publish(vanadium.ref('normalization'), 'scicat')

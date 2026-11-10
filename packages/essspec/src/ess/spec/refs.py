@@ -60,9 +60,8 @@ class OutputRef(_Ref, frozen=True):
     the output is a list or a dict.
 
     The identity ``record`` is opaque to the spec. In a request, the framework
-    accepts the ID of an accumulator in ``record``: it replaces it, when it
-    accepts the request, by the record of the accumulator's state at that
-    moment, so a record never names an accumulator.
+    refuses the ID of an accumulator in ``record``: a request references the
+    record of the accumulator's freeze instead.
     """
 
     kind: Literal['output'] = Field(default='output', alias='@ref', repr=False)

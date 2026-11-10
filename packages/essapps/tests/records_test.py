@@ -87,7 +87,7 @@ def test_a_params_model_makes_the_request_of_its_dict() -> None:
     by_dict = Request(WALK, params={'steps': steps})
     scaled = Request(WALK, params=WalkParams(scale=Scale(factor=2.0), steps=steps))
 
-    assert by_model == by_dict  # defaults left to the backend's spec
+    assert by_model == by_dict  # defaults left to the workspace's spec
     assert scaled.params['scale'] == {'factor': 2.0}
 
 

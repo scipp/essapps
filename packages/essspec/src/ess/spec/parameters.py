@@ -56,7 +56,7 @@ class File:
     keys and the rules of a file field.
 
     Validated with the context ``{'paths': {identity: local path}}``, as the
-    backend validates a request, the marker replaces the stored form of a
+    workspace validates a request, the marker replaces the stored form of a
     file by its local path, validated as ``Path``, and refuses any other
     value. Validated without ``paths``, as in direct use, the field takes a
     ``Path`` as it is. Two markers are equal if their metadata are, each
@@ -184,7 +184,7 @@ class DataRefused(Exception):
 class _Referenced:
     """
     The marker of :data:`Referenced`. Validated with the context
-    ``{'read': read}``, as the backend validates a request when it runs, it
+    ``{'read': read}``, as the workspace validates a request when it runs, it
     replaces a reference to an output with its data, ``read(ref)``,
     validated as ``T``, and refuses any other value. Data of ``T`` that fail
     a check of ``T``, such as an ``AfterValidator``, raise

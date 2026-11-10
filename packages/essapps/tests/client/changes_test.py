@@ -13,13 +13,11 @@ from typing import Any
 import pytest
 
 from ess.apps import (
-    Backend,
     Changes,
     Client,
-    ClientEnded,
-    ClientId,
     RecordStatus,
     Status,
+    Workspace,
 )
 from ess.apps.log import Log
 from ess.apps.testing import FakeFiles, FakeStore
@@ -28,17 +26,15 @@ from ess.spec import Binding
 from . import toys
 
 
-class CountingFeed(Backend):
+class CountingFeed(Workspace):
     """Logs how many record IDs each read of the feed returned."""
 
     def __init__(self, files: FakeFiles, bindings: list[Binding]) -> None:
-        super().__init__(files, bindings)
+        super().__init__(proposal='p1', files=files, bind=bindings)
         self.read: list[int] = []
 
-    def changes(
-        self, after: int, client_id: ClientId, *, timeout: float = 0.0
-    ) -> Changes:
-        changes = super().changes(after, client_id, timeout=timeout)
+    def changes(self, after: int, *, timeout: float = 0.0) -> Changes:
+        changes = super().changes(after, timeout=timeout)
         self.read.append(len(changes.records))
         return changes
 
@@ -54,10 +50,16 @@ def until(condition: Callable[[], bool], timeout: float = 5.0) -> None:
 def stored(
     files: FakeFiles, bindings: list[Binding], tmp_path: Path
 ) -> Iterator[Client]:
-    """A client of a backend with a store and a log file."""
-    backend = Backend(files, bindings, store=FakeStore(), log=Log(tmp_path / 'log'))
-    yield Client(backend, proposal='p1', submitter='anna')
-    backend.close()
+    """A client of a workspace with a store and a log file."""
+    workspace = Workspace(
+        proposal='p1',
+        files=files,
+        bind=bindings,
+        store=FakeStore(),
+        log=Log(tmp_path / 'log'),
+    )
+    yield Client(workspace, submitter='anna')
+    workspace.close()
 
 
 def test_after_zero_gives_every_record_and_a_later_call_only_what_changed(
@@ -126,46 +128,33 @@ def test_opening_an_accumulator_and_a_push_report_nothing_of_their_own(
     assert client.changes(after=done.cursor) == Changes((), done.cursor)
 
 
-def test_reading_a_state_reports_its_state_record(client: Client) -> None:
+def test_reading_a_state_reports_nothing_and_a_freeze_its_record(
+    client: Client,
+) -> None:
     load = client.compute(toys.load_request(1))
     total = toys.total_accumulator(client)
     total.push(parts=[load.ref('value')])
     done = client.changes()
 
-    read = client.compute(toys.read_request(total))
+    client.output(total)
+    assert client.changes(after=done.cursor).records == ()
+    frozen = client.freeze(total)
+    client.wait(frozen)
 
-    state = toys.state_record(client, read)
-    assert set(client.changes(after=done.cursor).records) == {state.id, read.id}
+    assert client.changes(after=done.cursor).records == (frozen.id,)
 
 
 def test_another_client_of_the_proposal_sees_the_changes(
-    backend: Backend, client: Client
+    workspace: Workspace, client: Client
 ) -> None:
-    other = Client(backend, proposal='p1', submitter='bob')
+    other = Client(workspace, submitter='bob')
     record = client.compute(toys.load_request(1))
 
     assert other.changes() == client.changes()
     assert other.changes().records == (record.id,)
 
 
-def test_a_client_of_another_proposal_sees_none_and_its_cursor_is_unaffected(
-    backend: Backend, client: Client, files: FakeFiles
-) -> None:
-    files.measure(4, 4.0, proposal='p2')
-    theirs = Client(backend, proposal='p2', submitter='eve')
-    client.compute(toys.load_request(1))
-
-    assert theirs.changes() == Changes((), 0)
-
-    ours = client.changes()
-    elsewhere = theirs.compute(toys.load_request(4))
-
-    assert client.changes() == ours
-    assert theirs.changes().records == (elsewhere.id,)
-    assert theirs.changes(after=0).cursor == 2
-
-
-def test_a_backend_restarted_from_its_log_gives_the_same_feed(
+def test_a_workspace_restarted_from_its_log_gives_the_same_feed(
     files: FakeFiles, bindings: list[Binding], stored: Client, tmp_path: Path
 ) -> None:
     load = stored.compute(toys.load_request(1))
@@ -174,14 +163,16 @@ def test_a_backend_restarted_from_its_log_gives_the_same_feed(
     copy = tmp_path / 'copy'
     shutil.copy(tmp_path / 'log', copy)
 
-    backend = Backend(files, bindings, store=FakeStore(), log=Log(copy))
+    workspace = Workspace(
+        proposal='p1', files=files, bind=bindings, store=FakeStore(), log=Log(copy)
+    )
     try:
-        again = Client(backend, proposal='p1', submitter='anna')
+        again = Client(workspace, submitter='anna')
         assert again.changes().records == (load.id, other.id)
         for cursor in range(stored.changes().cursor + 1):
             assert again.changes(after=cursor) == stored.changes(after=cursor)
     finally:
-        backend.close()
+        workspace.close()
 
 
 @pytest.mark.parametrize('after', [-1, 3])
@@ -204,17 +195,6 @@ def test_records_with_an_unknown_id_raise(client: Client) -> None:
         client.records(ids=['nope'])
 
 
-def test_records_with_an_id_of_another_proposal_raise(
-    backend: Backend, client: Client, files: FakeFiles
-) -> None:
-    files.measure(4, 4.0, proposal='p2')
-    theirs = Client(backend, proposal='p2', submitter='eve')
-    elsewhere = theirs.compute(toys.load_request(4))
-
-    with pytest.raises(KeyError, match=elsewhere.id):
-        client.records(ids=[elsewhere.id])
-
-
 def test_records_with_a_label_and_ids_raise(client: Client) -> None:
     with pytest.raises(ValueError, match='label or ids'):
         client.records(label='scan', ids=[])
@@ -234,9 +214,9 @@ def test_changes_waits_for_a_change_up_to_its_timeout(
 
 
 def test_changes_is_woken_by_a_submission_of_another_client(
-    backend: Backend, client: Client
+    workspace: Workspace, client: Client
 ) -> None:
-    other = Client(backend, proposal='p1', submitter='bob')
+    other = Client(workspace, submitter='bob')
     cursor = client.changes().cursor
 
     with ThreadPoolExecutor() as pool:
@@ -257,41 +237,26 @@ def test_a_position_outside_the_feed_raises_without_waiting(client: Client) -> N
         client.changes(after=1, timeout=60)
 
 
-def test_a_client_that_ends_raises_in_changes_and_in_wait(
-    client: Client, loading: threading.Event
-) -> None:
-    loading.clear()
-    load = client.submit(toys.load_request(1))
-    cursor = client.changes().cursor
-
-    with ThreadPoolExecutor() as pool:
-        changes = pool.submit(client.changes, after=cursor, timeout=60)
-        wait = pool.submit(client.wait, load)
-        client.close()
-        with pytest.raises(ClientEnded):
-            changes.result(timeout=5)
-        with pytest.raises(ClientEnded):
-            wait.result(timeout=5)
-    loading.set()
-
-
-def test_a_read_waiting_when_its_client_ends_raises(
-    client: Client, loading: threading.Event
+def test_a_read_and_a_wait_waiting_when_the_workspace_closes_raise(
+    workspace: Workspace, client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
     load = client.submit(toys.load_request(1))
 
     with ThreadPoolExecutor() as pool:
         read = pool.submit(client.output, load, 'value')
-        time.sleep(0.05)  # so that the read is waiting
-        client.close()
-        with pytest.raises(ClientEnded):
+        wait = pool.submit(client.wait, load)
+        time.sleep(0.05)  # so that both are waiting
+        threading.Timer(0.05, loading.set).start()  # so that closing can return
+        workspace.close()
+        with pytest.raises(RuntimeError, match='closed'):
             read.result(timeout=5)
-    loading.set()
+        with pytest.raises(RuntimeError, match='closed'):
+            wait.result(timeout=5)
 
 
-def test_a_read_of_an_accumulator_waiting_when_its_client_ends_raises(
-    client: Client, loading: threading.Event
+def test_a_read_of_an_accumulator_waiting_when_the_workspace_closes_raises(
+    workspace: Workspace, client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
     total = toys.total_accumulator(client)
@@ -300,31 +265,31 @@ def test_a_read_of_an_accumulator_waiting_when_its_client_ends_raises(
     with ThreadPoolExecutor() as pool:
         read = pool.submit(client.output, total, 'value')
         time.sleep(0.05)  # so that the read is waiting
-        client.close()
-        with pytest.raises(ClientEnded):
+        threading.Timer(0.05, loading.set).start()
+        workspace.close()
+        with pytest.raises(RuntimeError, match='closed'):
             read.result(timeout=5)
-    loading.set()
 
 
 def test_waits_read_each_change_of_the_feed_once(
     files: FakeFiles, bindings: list[Binding], loading: threading.Event
 ) -> None:
-    backend = CountingFeed(files, bindings)
-    client = Client(backend, proposal='p1', submitter='anna')
+    workspace = CountingFeed(files, bindings)
+    client = Client(workspace, submitter='anna')
     runs = 20
 
     for n in range(runs):
         loading.clear()
         threading.Timer(0.001, loading.set).start()
         client.compute(toys.load_request(1 + n % 2))
-    backend.close()
+    workspace.close()
 
-    assert backend.read  # the waits did wait
-    assert sum(backend.read) <= 2 * runs  # a submission and a finish of each
+    assert workspace.read  # the waits did wait
+    assert sum(workspace.read) <= 2 * runs  # a submission and a finish of each
 
 
-def test_a_client_that_ends_with_nothing_pending_raises_in_changes(
-    client: Client,
+def test_a_workspace_that_closes_with_nothing_pending_raises_in_changes(
+    workspace: Workspace, client: Client
 ) -> None:
     client.compute(toys.load_request(1))
     cursor = client.changes().cursor
@@ -332,42 +297,38 @@ def test_a_client_that_ends_with_nothing_pending_raises_in_changes(
     with ThreadPoolExecutor() as pool:
         changes = pool.submit(client.changes, after=cursor, timeout=60)
         time.sleep(0.05)  # so that it is waiting: closing logs nothing to wake it
-        client.close()
-        with pytest.raises(ClientEnded):
+        workspace.close()
+        with pytest.raises(RuntimeError, match='closed'):
             changes.result(timeout=5)
 
 
 class FinishesAfterStatus:
     """
-    Delegates to a backend. The first status it answers lets the record finish
+    Delegates to a workspace. The first status it answers lets the record finish
     before it returns, so the finish falls between a client's reading of the status
     and its next call.
     """
 
-    def __init__(self, backend: Backend, loading: threading.Event) -> None:
-        self._backend = backend
+    def __init__(self, workspace: Workspace, loading: threading.Event) -> None:
+        self._workspace = workspace
         self._loading = loading
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._backend, name)
+        return getattr(self._workspace, name)
 
-    def status(self, ids: Sequence[str], client_id: ClientId) -> list[RecordStatus]:
-        statuses = self._backend.status(ids, client_id)
+    def status(self, ids: Sequence[str]) -> list[RecordStatus]:
+        statuses = self._workspace.status(ids)
         if not self._loading.is_set():
             self._loading.set()
-            until(
-                lambda: (
-                    self._backend.status(ids, client_id)[0].status is not Status.PENDING
-                )
-            )
+            until(lambda: self._workspace.status(ids)[0].status is not Status.PENDING)
         return statuses
 
 
 def test_wait_sees_a_finish_right_after_it_read_the_status(
-    backend: Backend, loading: threading.Event
+    workspace: Workspace, loading: threading.Event
 ) -> None:
-    gated = FinishesAfterStatus(backend, loading)
-    client = Client(gated, proposal='p1', submitter='anna')
+    gated = FinishesAfterStatus(workspace, loading)
+    client = Client(gated, submitter='anna')
     loading.clear()
     load = client.submit(toys.load_request(1))
 

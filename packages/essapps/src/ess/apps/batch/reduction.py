@@ -162,7 +162,7 @@ class Batch:
         ids = sorted(state.references(self.rows))
         try:
             return self.client.records(ids=ids) if ids else []
-        except KeyError:  # the backend refuses such a cell at submission
+        except KeyError:  # the workspace refuses such a cell at submission
             return []
 
     def _status(self, records: list[Record]) -> dict[str, Status]:

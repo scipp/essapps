@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from ess.apps import Backend, Client, Record, RecordFailed, Request, Status, file
+from ess.apps import Client, Record, RecordFailed, Request, Status, Workspace, file
 from ess.apps.log import Event, Log
 from ess.apps.testing import FakeFiles
 from ess.spec import Binding
@@ -24,11 +24,16 @@ class FullDisk(Log):
     def __init__(self) -> None:
         super().__init__()
         self.full = False
+        self.closed = False
 
     def append(self, event: Event) -> Event:
         if self.full:
             raise OSError('no space left on device')
         return super().append(event)
+
+    def close(self) -> None:
+        self.closed = True
+        super().close()
 
 
 def _sum(*records: Record, output: str = 'value') -> Request:
@@ -136,24 +141,12 @@ def test_cancel_drops_what_is_running(
     assert (raised.value.status, raised.value.reason) == (Status.CANCELLED, None)
 
 
-def test_closing_waits_until_no_record_is_pending(
-    backend: Backend, client: Client, loading: threading.Event
-) -> None:
-    loading.clear()
-    a = client.submit(toys.load_request(1))
-    shifted = client.submit(toys.read_request(a))
-    threading.Timer(0.05, loading.set).start()
-    backend.close()
-
-    assert client.status([a, shifted]) == [Status.COMPLETED, Status.COMPLETED]
-
-
-def test_a_failed_append_stops_the_backend(
+def test_a_failed_append_stops_the_workspace(
     files: FakeFiles, bindings: list[Binding], loading: threading.Event
 ) -> None:
     log = FullDisk()
-    backend = Backend(files, bindings, log=log)
-    client = Client(backend, proposal='p1', submitter='anna')
+    workspace = Workspace(proposal='p1', files=files, bind=bindings, log=log)
+    client = Client(workspace, submitter='anna')
     loading.clear()
     record = client.submit(toys.load_request(1))
     log.full = True
@@ -164,17 +157,15 @@ def test_a_failed_append_stops_the_backend(
     with pytest.raises(RuntimeError, match='no space left on device'):
         client.submit(toys.load_request(2))
     with pytest.raises(RuntimeError, match='no space left on device'):
-        Client(backend, proposal='p1', submitter='bob')
-    with pytest.raises(RuntimeError, match='no space left on device'):
-        backend.close()
+        workspace.close()
 
 
 def test_a_failed_append_wakes_what_waits(
     files: FakeFiles, bindings: list[Binding], loading: threading.Event
 ) -> None:
     log = FullDisk()
-    backend = Backend(files, bindings, log=log)
-    client = Client(backend, proposal='p1', submitter='anna')
+    workspace = Workspace(proposal='p1', files=files, bind=bindings, log=log)
+    client = Client(workspace, submitter='anna')
     loading.clear()
     record = client.submit(toys.load_request(1))
     cursor = client.changes().cursor
@@ -190,25 +181,25 @@ def test_a_failed_append_wakes_what_waits(
             waiting.result(timeout=2)
     loading.set()
     with pytest.raises(RuntimeError, match='no space left on device'):
-        backend.close()
+        workspace.close()
 
 
-def test_on_close_is_called_if_ending_the_client_raises(
-    files: FakeFiles, bindings: list[Binding]
+def test_a_failed_append_while_closing_lets_go_and_raises(
+    files: FakeFiles, bindings: list[Binding], loading: threading.Event
 ) -> None:
     log = FullDisk()
-    backend = Backend(files, bindings, log=log)
-    closed: list[bool] = []
-    client = Client(
-        backend, proposal='p1', submitter='anna', on_close=lambda: closed.append(True)
-    )
+    workspace = Workspace(proposal='p1', files=files, bind=bindings, log=log)
+    client = Client(workspace, submitter='anna', on_close=workspace.close)
+    loading.clear()
+    client.submit(toys.load_request(1))  # closing cancels it, which logs
     log.full = True
-    with pytest.raises(OSError, match='no space left on device'):
-        client.submit(toys.load_request(1))
+    threading.Timer(0.05, loading.set).start()  # closing waits for the workflow
 
+    with pytest.raises(RuntimeError, match='no space left on device') as raised:
+        client.close()
+    assert isinstance(raised.value.__cause__, OSError)
+    assert log.closed
+    events = len(log)
     with pytest.raises(RuntimeError, match='no space left on device'):
         client.close()
-
-    assert closed == [True]
-    with pytest.raises(RuntimeError, match='no space left on device'):
-        backend.close()
+    assert len(log) == events

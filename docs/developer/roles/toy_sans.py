@@ -61,7 +61,7 @@ from ess.spec import (
 )
 from ess.spec.pipeline import PipelineBinding
 
-# The specs: what apps, clients, and the backend see.
+# The specs: what apps, clients, and the workspace see.
 
 
 PIXEL_COUNT = 4
