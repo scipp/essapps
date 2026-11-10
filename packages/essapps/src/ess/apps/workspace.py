@@ -56,9 +56,8 @@ the write; a workflow reads the outputs it references from memory while the
 workspace holds them.
 
 A request waits until every record it references has completed, the record
-of an accumulator's state until the accumulator has reached that state, and
-an accumulator's steps as described below. This is the only scheduling there
-is.
+of a freeze until the accumulator has reached its state, and an accumulator's
+steps as described below. This is the only scheduling there is.
 
 Request and call phase
 ----------------------
@@ -98,7 +97,7 @@ Accumulators
 ------------
 An accumulator keeps the rows logged, by JSON form, to refuse a repeated row, so
 a push takes time in proportion to its rows. The driver gets each step's values
-as the log holds them, so that it and the record of a state agree. Opening and
+as the log holds them, so that it and the record of a freeze agree. Opening and
 pushing return once the checks pass and the event is logged, as a submission
 does; they do not wait for a record that is pending.
 
@@ -109,31 +108,31 @@ make the driver. A push is one push into the driver per table it gives rows of,
 in the order given, each row first read and validated by its table's element
 type. If a step fails, or a record it references has not completed, the
 accumulator stops: it takes no more pushes or readers, the steps after it are
-dropped, and the requests that wait for a state it will not reach fail. Its
+dropped, and the record of a freeze of a state it will not reach fails. Its
 driver is dropped once no reader holds its current state, without waiting for
 it to be released.
 
-A read pins the accumulator's state after the pushes logged so far, without
-waiting for a push to be added. A submission that references the accumulator
-logs, before its requests, one record of the plain request of the pinned state,
-as the accumulator and its number of pushes; the requests reference that
-record's outputs. The workspace does not keep this record, so only the requests
-of that submission read it. The first read of a state checks the number of rows of each
-blank table against its length constraints, outside the workspace's lock.
+A read or a freeze pins the accumulator's state after the pushes logged so
+far, without waiting for a push to be added. A request never references an
+accumulator, only the record of its freeze, so no request holds back a push.
+A freeze logs one record of the plain request of the pinned state, as the
+accumulator and its number of pushes. The first read of a state checks the
+number of rows of each blank table against its length constraints, outside the
+workspace's lock.
 
 The outputs of a state are computed outside the lock, all at once, the first time
-a record of the state or a read of its outputs needs them, and kept until the next
-push. The record of a state gets what the driver returns, not a copy, which may
-share memory with the driver; a read of the outputs copies them, or only the part
-that a selection names. So the next push waits until the readers of the state
-before it are done, since the driver cannot go back to that state and no reader
-may see its outputs change. The readers are the records of that state, until the
-requests that read them have run (even those cancelled while they run), and the
-reads in progress. Every wait is for work logged before the waiter: a request
-waits for records submitted before it and for pushes logged before its
-submission, and a push waits for the records of the state before it and the
-requests of their submissions, all logged before the push. So no wait goes round
-in a circle.
+the record of a freeze or a read of its outputs needs them, and kept until the
+next push. The record of a freeze gets what the driver returns, not a copy, which
+may share memory with the driver; a read of the outputs copies them, or only the
+part that a selection names. So the next push waits until the readers of the
+state before it are done, since the driver cannot go back to that state and no
+reader may see its outputs change. The readers are the reads in progress, and a
+freeze, while it is checked, and then its record, until it has finished and its
+workflow, if it ran, has returned (see ``_Read``). Every wait is for work that
+came before the waiter: a request waits for records submitted before it, a read
+and the record of a freeze for the pushes logged before their state was pinned,
+and a push for the readers of the state before it, which pinned that state
+before the push was logged. So no wait goes round in a circle.
 
 Releasing an accumulator and freezing it are described at
 :meth:`~ess.apps.protocol.WorkspaceProtocol.release` and
@@ -168,7 +167,7 @@ from ess.spec import (
     field_types,
     validation,
 )
-from ess.spec.refs import Loc, ParamsError, iter_refs, map_refs
+from ess.spec.refs import Loc, ParamsError, iter_refs
 from ess.spec.validation import OutputReads
 
 from .checks import Checks, check_fit, distinct
@@ -485,25 +484,19 @@ class _Accumulator:
 
 
 def _state_key(accumulator_id: str, upto: int) -> str:
-    """What the record of the state after ``upto`` pushes waits for."""
+    """What the record of a freeze of the state after ``upto`` pushes waits for."""
     return f'{accumulator_id}[:{upto}]'
 
-
-_Pinned = tuple[_Accumulator, int, str | None]
-"""
-A state a submission pinned: the accumulator, its number of pushes, and why
-the plain request of that state would be refused, or ``None``.
-"""
 
 _Read = tuple[str, str] | tuple[_Accumulator, int]
 """
 A value that is read: an output by record ID and name, or an accumulator's
 state by its number of pushes. The readers of an output are the pending
 records, steps, and stages that have yet to read it. The readers of a state
-are the records of the state, the reads of the accumulator's outputs in
-progress, and the submissions and freezes being checked, from the pin until
-the records of the states are logged and hold it themselves: otherwise a push
-could move past the pinned state before its record holds it.
+are the reads of the accumulator's outputs in progress, a freeze being
+checked, from the pin until its record is logged and holds the state itself,
+and the record of the freeze, until it has finished and its workflow, if it
+ran, has returned.
 """
 
 
@@ -583,10 +576,7 @@ class Workspace(WorkspaceProtocol):
         self._dependents: dict[str, set[str]] = {}
         self._accumulating: set[_Accumulator] = set()  # with steps not yet done
         self._stage_of: dict[str, _Stage] = {}  # unfinished record ID to its stage
-        # the record of a state to the state it reads, until it lets go of it:
-        # in _finish if it fails or is cancelled before it runs, in _run if it
-        # does not complete or is the record of a freeze, and in _drop once
-        # its outputs are dropped
+        # the unfinished record of a freeze to the state it reads
         self._state_of: dict[str, tuple[_Accumulator, int]] = {}
         # values whose last reader let go, for _let_go's loop to work through
         self._unread_values: deque[_Read] = deque()
@@ -645,7 +635,7 @@ class Workspace(WorkspaceProtocol):
            other pending records.
         2. Otherwise it runs if each value it reads is a file, is written,
            or is an output of a pending record that runs, and fails if not.
-           A record of a state fails, since the driver it reads is gone.
+           The record of a freeze fails, since the driver it reads is gone.
            A call through a stage runs as its plain request, since the stage
            is gone, so it reads the values of the stage's template too.
 
@@ -754,99 +744,32 @@ class Workspace(WorkspaceProtocol):
         persist: bool | Sequence[str] = False,
     ) -> list[Record]:
         """
-        File names are resolved before the workspace's lock is taken. The state of
-        each accumulator that the requests reference is pinned to the pushes
-        logged so far, and its plain request is checked outside the lock (see
-        :meth:`_check_state`). The records are pending, and the workspace keeps
-        their outputs, but not those of the records of states. A persist
-        request is logged with the submission (see the module docstring).
+        File names are resolved before the workspace's lock is taken. The records
+        are pending, and the workspace keeps the outputs of those that persist
+        none. A persist request is logged with the submission (see the module
+        docstring).
         """
         self._check_running()
         prepared = _every(entries, self._prepare)
         requests = [request for request, _ in prepared]
         persisted = [self._persisted(r.spec, persist) for r in requests]
-        referenced = {ref.record for r in requests for ref in r.upstream()}
         with self._changed:
             self._check_running()
-            pinned = self._pin_states(referenced)
-        try:
-            states = {
-                i: (acc, upto, self._check_state(acc, upto))
-                for i, (acc, upto) in pinned.items()
-            }
-            with self._changed:
-                self._check_running()
-                _every(
-                    list(zip(entries, prepared, strict=True)),
-                    lambda i, item: self._check_entry(
-                        i, item[0], item[1][0], item[1][1], states
-                    ),
-                )
-                state_ids = {i: uuid.uuid4().hex for i in states}
-                return self._create(
-                    entries, requests, submitter, states, state_ids, persisted
-                )
-        finally:
-            with self._changed:
-                self._let_go(pinned.values())
-
-    def _create(
-        self,
-        entries: list[Entry],
-        requests: list[Request],
-        submitter: str,
-        states: Mapping[str, _Pinned],
-        state_ids: Mapping[str, str],
-        persisted: Sequence[tuple[str, ...]],
-        persist_states: tuple[str, ...] = (),
-    ) -> list[Record]:
-        """
-        Log and schedule the checked requests as records of ``submitter``; lock
-        held.
-
-        The record of each state in ``states``, by accumulator ID, is logged
-        and scheduled first, with its ID in ``state_ids``, and the references
-        to its accumulator name that record's outputs. A freeze logs the
-        record of its state alone, with no requests. ``persisted`` names the
-        outputs each request persists, and ``persist_states`` those the
-        records of the states persist, as a freeze may; the workspace keeps the
-        requests' records that persist none.
-        """
-        ids = [uuid.uuid4().hex for _ in entries]
-
-        def outputs(spec_id: SpecId) -> tuple[str, ...]:
-            return tuple(self._bindings[spec_id].spec.outputs.model_fields)
-
-        def state_record(ref: Ref) -> Ref:
-            if isinstance(ref, OutputRef) and ref.record in state_ids:
-                return ref.model_copy(update={'record': state_ids[ref.record]})
-            return ref
-
-        requests = [
-            r.model_copy(update={'params': map_refs(r.params, state_record)})
-            for r in requests
-        ]
-        self._append(
-            Submitted(
-                time=datetime.now(UTC),
-                proposal=self._proposal,
-                submitter=submitter,
-                records=(
-                    *(
-                        NewStateRecord(
-                            id=state_ids[i],
-                            accumulator=i,
-                            pushes=upto,
-                            outputs=outputs(acc.template.spec),
-                            persist=persist_states,
-                        )
-                        for i, (acc, upto, _) in states.items()
-                    ),
-                    *(
+            _every(
+                list(zip(entries, prepared, strict=True)),
+                lambda i, item: self._check_entry(i, item[0], item[1][0], item[1][1]),
+            )
+            ids = [uuid.uuid4().hex for _ in entries]
+            self._append(
+                Submitted(
+                    time=datetime.now(UTC),
+                    proposal=self._proposal,
+                    submitter=submitter,
+                    records=tuple(
                         NewRecord(
                             id=record_id,
                             request=request,
-                            outputs=outputs(request.spec),
+                            outputs=self._output_names(request.spec),
                             label=e.label,
                             member=e.member,
                             persist=names,
@@ -855,20 +778,20 @@ class Workspace(WorkspaceProtocol):
                             ids, requests, entries, persisted, strict=True
                         )
                     ),
-                ),
+                )
             )
-        )
-        self._kept.update(
-            i for i, names in zip(ids, persisted, strict=True) if not names
-        )
-        for i, (acc, upto, _) in states.items():
-            self._state_of[state_ids[i]] = (acc, upto)
-            self._schedule(state_ids[i])
-        for record_id, entry in zip(ids, entries, strict=True):
-            if entry.stage is not None:
-                self._stage_of[record_id] = self._stages[entry.stage]
-            self._schedule(record_id)
-        return [self._views.records[i] for i in ids]
+            self._kept.update(
+                i for i, names in zip(ids, persisted, strict=True) if not names
+            )
+            for record_id, entry in zip(ids, entries, strict=True):
+                if entry.stage is not None:
+                    self._stage_of[record_id] = self._stages[entry.stage]
+                self._schedule(record_id)
+            return [self._views.records[i] for i in ids]
+
+    def _output_names(self, spec_id: SpecId) -> tuple[str, ...]:
+        """The names of the outputs the spec declares; needs no lock."""
+        return tuple(self._bindings[spec_id].spec.outputs.model_fields)
 
     def _persisted(
         self, spec_id: SpecId, persist: bool | Sequence[str]
@@ -905,30 +828,8 @@ class Workspace(WorkspaceProtocol):
         except SubmitError as error:
             raise _refused(index, error) from None
 
-    def _pin_states(self, ids: Iterable[str]) -> dict[str, tuple[_Accumulator, int]]:
-        """
-        The current state of each open accumulator among ``ids``, by ID, as the
-        accumulator and its number of pushes logged, each held as a reader
-        holds it until the caller lets go of it; lock held.
-
-        An accumulator that is released, unknown, or takes no readers is left
-        out.
-        """
-        pinned = {}
-        for i in ids:
-            acc = self._accumulators.get(i)
-            if acc is not None and acc.stopped is None:
-                pinned[i] = (acc, len(self._views.pushes.get(i, ())))
-        self._readers.update(pinned.values())
-        return pinned
-
     def _check_entry(
-        self,
-        index: int,
-        entry: Entry,
-        request: Request,
-        reads: OutputReads,
-        states: Mapping[str, _Pinned],
+        self, index: int, entry: Entry, request: Request, reads: OutputReads
     ) -> None:
         """
         Check the stage a request of a submission goes through, if any, and
@@ -941,35 +842,26 @@ class Workspace(WorkspaceProtocol):
             if stage is not None:
                 read, also = stage.read_part(request).params, stage.reads
                 reads = [r for r in reads if r[0][0] in read]
-            self._check_reads(reads, states, also)
+            self._check_reads(reads, also)
         except SubmitError as error:
             raise _refused(index, error) from None
 
     def _check_reads(
-        self,
-        reads: OutputReads,
-        states: Mapping[str, _Pinned],
-        also: Collection[tuple[str, str]] = (),
+        self, reads: OutputReads, also: Collection[tuple[str, str]] = ()
     ) -> None:
         """
-        Check the outputs of records and accumulators that a request reads,
-        ``reads``, each with its position and the type its data must fit;
-        lock held. Each must be one that may be referenced (see
+        Check the outputs of records that a request, a template, or a push
+        reads, ``reads``, each with its position and the type its data must
+        fit; lock held. Each must be one that may be referenced (see
         :meth:`_source_spec`), declared by its spec, and fit its field (see
         :func:`.checks.check_fit`).
 
-        Only a submission reads accumulators, from the ``states`` it pinned;
-        it reads the records of these states, which it makes in
-        :meth:`_create`, after these checks. A stage, an accumulator, or a
-        push passes no states: a stage or an accumulator that held a state of
-        an accumulator would hold back its every push for as long as it
-        lives, and a value pushed into one would read another's while it
-        adds. A request through a stage that has yet to stage also reads
-        ``also``, what the stage keeps, which :meth:`_check_stage` has checked
-        it for; one through a stage that has staged reads only its blanks.
+        A request through a stage that has yet to stage also reads ``also``,
+        what the stage keeps, which :meth:`_check_stage` has checked it for;
+        one through a stage that has staged reads only its blanks.
         """
         for loc, ref, tp in reads:
-            source = self._source_spec(ref, loc, states, also)
+            source = self._source_spec(ref, loc, also)
             check_fit(self._bindings[source].spec, ref, tp, loc)
 
     def _check_stage(self, entry: Entry, request: Request) -> _Stage | None:
@@ -1003,29 +895,22 @@ class Workspace(WorkspaceProtocol):
         return stage
 
     def _source_spec(
-        self,
-        ref: OutputRef,
-        loc: Loc,
-        states: Mapping[str, _Pinned],
-        also: Collection[tuple[str, str]],
+        self, ref: OutputRef, loc: Loc, also: Collection[tuple[str, str]]
     ) -> SpecId:
         """
-        The spec of a record or accumulator a request may read; lock held.
+        The spec of a record a request may read; lock held. The record's
+        output must be one that may be referenced (see :meth:`_refusal`).
 
-        An accumulator must be open, not stopped, and its state pinned in
-        ``states`` readable. A record's output must be one that may be
-        referenced (see :meth:`_refusal`).
+        An accumulator is refused: a reader of its state would hold back its
+        next push until the reader's workflow has returned, so a request reads
+        the record of its freeze instead.
         """
         if ref.record in self._views.accumulators:
-            try:
-                acc = self._accumulator(ref.record)
-            except LookupError as error:  # not readable
-                raise SubmitError.at(loc, error.args[0]) from None
-            if ref.record not in states:
-                raise SubmitError.at(loc, 'only a request may reference an accumulator')
-            if (refused := states[ref.record][2]) is not None:
-                raise SubmitError.at(loc, refused)
-            return acc.template.spec
+            raise SubmitError.at(
+                loc,
+                f'accumulator {ref.record}: an accumulator cannot be referenced; '
+                'freeze it first, and reference the record of the freeze',
+            )
         record = self._views.records.get(ref.record)
         if record is None:
             raise SubmitError.at(loc, f'unknown record or accumulator {ref.record}')
@@ -1046,9 +931,7 @@ class Workspace(WorkspaceProtocol):
         output, ``also``, and it is read from memory; or the record must
         persist the output, and it is read from the store. A pending record
         passes: whether a request is accepted does not depend on how far what
-        it reads has run. So no request references the record of a state,
-        which only the submission that made it reads (see the module
-        docstring), unless a freeze persisted it.
+        it reads has run.
         """
         record_id, name = key
         status = self._views.status(record_id)
@@ -1067,7 +950,7 @@ class Workspace(WorkspaceProtocol):
         """
         Start the record, or let it wait for what it reads to finish; lock held.
 
-        A record of a state reads only the state, which it waits for; the
+        The record of a freeze reads only the state, which it waits for; the
         pushes have read the outputs its rows reference. A record through a
         stage that has staged reads only the outputs its blanks reference. An
         output is written before its record finishes, so waiting for the record also
@@ -1099,10 +982,9 @@ class Workspace(WorkspaceProtocol):
         and write the outputs persisted at its submission before it completes.
 
         It holds them even once the record is cancelled, since the workflow
-        still reads them, and lets go of them before the write. A record of a
-        state that completes holds the state until its outputs are dropped
-        (see :meth:`_drop`), except the record of a freeze, after which the
-        accumulator takes no readers.
+        still reads them, and lets go of them before the write. The record of
+        a freeze holds the state until it has finished; once it has completed,
+        the accumulator takes no readers: that record is read.
         """
         with self._changed:
             if record_id in self._views.finished:
@@ -1124,21 +1006,14 @@ class Workspace(WorkspaceProtocol):
             names = self._views.persisted.get(record_id, ())
         failure = self._write(record_id, {n: outputs[n] for n in names if n in outputs})
         with self._changed:
-            # A record of a state that completed lets go of the state in
-            # _drop, once its outputs are dropped. The record of a freeze
-            # holds the outputs of the accumulator's last state, which takes
-            # no more pushes, so it lets go here, and the accumulator takes
-            # no more readers: that record is read.
-            frozen = state[0] if state and state[0].frozen == record_id else None
-            if frozen is not None:
-                self._state_of.pop(record_id, None)
             self._complete(record_id, outputs, failure)
-            completed = self._views.status(record_id) is Status.COMPLETED
-            if frozen is not None and completed:
-                frozen.stopped = (
-                    f'the accumulator is frozen: read record {record_id} instead'
-                )
-            if state is not None and (not completed or frozen is not None):
+            if state is not None:
+                if self._views.status(record_id) is Status.COMPLETED:
+                    state[
+                        0
+                    ].stopped = (
+                        f'the accumulator is frozen: read record {record_id} instead'
+                    )
                 self._let_go(reads)
 
     def _compute(
@@ -1316,8 +1191,7 @@ class Workspace(WorkspaceProtocol):
         A pending record that nothing keeps and that persists nothing is
         cancelled, since its outputs would be dropped the moment they are
         computed; cancelling lets go of
-        what it reads, so this passes along a chain. A record of a state that
-        has completed lets go of the state once its outputs are dropped.
+        what it reads, so this passes along a chain.
         """
         if record_id in self._kept:
             return
@@ -1330,12 +1204,6 @@ class Workspace(WorkspaceProtocol):
         for name in names:
             if name not in kept:
                 self._outputs.pop((record_id, name), None)
-        state = self._state_of.get(record_id)
-        if state is not None and not any(
-            (record_id, n) in self._outputs for n in names
-        ):
-            del self._state_of[record_id]
-            self._let_go([state])
 
     def _complete(
         self, record_id: str, outputs: dict[str, Any], failure: str | None
@@ -1408,8 +1276,7 @@ class Workspace(WorkspaceProtocol):
                     if not dependents:
                         del self._dependents[key]
             self._stage_of.pop(finished_id, None)
-            if finished is not Status.COMPLETED:  # lets go of the state with its reads
-                self._state_of.pop(finished_id, None)
+            self._state_of.pop(finished_id, None)
             for dependent in self._dependents.pop(finished_id, set()):
                 if finished is not Status.COMPLETED:
                     todo.append(
@@ -1466,9 +1333,8 @@ class Workspace(WorkspaceProtocol):
         whenever the last reader of one of its states lets go.
 
         A reader needs the steps up to the state it pinned. The step a worker
-        is doing cannot be stopped, so it stays. The records of states that
-        wait for a dropped step have all been cancelled, since a pending one
-        is a reader.
+        is doing cannot be stopped, so it stays. No record of a freeze waits
+        for a dropped step, since a pending one is a reader.
         """
         pinned = [upto for held, upto in self._readers if held is acc]
         done = -1 if acc.added is None else acc.added  # the opening is step 0
@@ -1500,7 +1366,7 @@ class Workspace(WorkspaceProtocol):
         stage_id = uuid.uuid4().hex
         with self._changed:
             self._check_running()
-            self._check_reads(reads, {})
+            self._check_reads(reads)
             given = frozenset(stored.blanks)
             stage = self._stages[stage_id] = _Stage(binding, stored, given)
             self._readers.update(stage.reads)
@@ -1534,7 +1400,7 @@ class Workspace(WorkspaceProtocol):
         accumulator_id = uuid.uuid4().hex
         with self._changed:
             self._check_running()
-            self._check_reads(reads, {})
+            self._check_reads(reads)
             # The blank tables without rows, so that the pushes extend them
             # into the plain request of each state.
             empty: dict[str, list[Any]] = {b: [] for b in blanks}
@@ -1578,7 +1444,7 @@ class Workspace(WorkspaceProtocol):
                     (), f'the accumulator was frozen as record {acc.frozen}'
                 )
             seen = {t: distinct(t, v, acc.seen[t]) for t, v in values.items()}
-            self._check_reads(reads, {})
+            self._check_reads(reads)
             self._append(Pushed(accumulator=accumulator_id, params=values))
             for table, rows_seen in seen.items():
                 acc.seen[table].update(rows_seen)
@@ -1628,19 +1494,27 @@ class Workspace(WorkspaceProtocol):
                 self._check_running()
                 self._pushed_into(accumulator_id)  # not released or stopped
                 record_id = uuid.uuid4().hex
-                pinned = {accumulator_id: (acc, upto, None)}
-                self._create(
-                    [],
-                    [],
-                    submitter,
-                    pinned,
-                    {accumulator_id: record_id},
-                    [],
-                    persist_states=persisted,
+                self._append(
+                    Submitted(
+                        time=datetime.now(UTC),
+                        proposal=self._proposal,
+                        submitter=submitter,
+                        records=(
+                            NewStateRecord(
+                                id=record_id,
+                                accumulator=accumulator_id,
+                                pushes=upto,
+                                outputs=self._output_names(acc.template.spec),
+                                persist=persisted,
+                            ),
+                        ),
+                    )
                 )
                 if not persisted:
                     self._kept.add(record_id)
                 acc.frozen = record_id
+                self._state_of[record_id] = (acc, upto)
+                self._schedule(record_id)
                 return self._views.records[record_id]
         finally:
             with self._changed:
@@ -1725,7 +1599,7 @@ class Workspace(WorkspaceProtocol):
     def _stop(self, acc: _Accumulator, failure: str) -> None:
         """
         Stop the accumulator: it takes no more pushes or readers, its steps
-        are dropped, and the records of its states that wait for them fail;
+        are dropped, and the record of a freeze that waits for them fails;
         lock held. The driver is dropped now if no reader holds its
         current state, and otherwise once the last one is done.
         """

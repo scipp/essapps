@@ -163,9 +163,8 @@ class Request(BaseModel, frozen=True):
 
     def upstream(self) -> list[OutputRef]:
         """
-        The outputs of other records this request reads, and, before it is
-        submitted, of accumulators: submitting replaces each accumulator by the
-        record of the state it reads. Files are not listed: see :meth:`files`.
+        The outputs of other records this request reads. Files are not listed:
+        see :meth:`files`.
         """
         return [ref for _, ref in iter_refs(self.params) if isinstance(ref, OutputRef)]
 
@@ -265,10 +264,8 @@ class Record(BaseModel, frozen=True):
     no output values. Running the same request again makes a new record.
 
     ``request`` has every value filled in, inline values in their JSON form
-    and references as :data:`~ess.spec.Ref`: file names resolved, defaults
-    filled, and each reference to an
-    accumulator replaced by a reference to the record of the state it reads, a
-    record of the plain request of that state.
+    and references as :data:`~ess.spec.Ref`: file names resolved and defaults
+    filled.
     ``outputs`` lists the output names the spec declares; ``label`` and
     ``member`` are given at submission and do not change the result.
 

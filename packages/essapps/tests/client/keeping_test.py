@@ -105,7 +105,7 @@ def test_a_released_pending_record_that_nothing_reads_is_cancelled(
         client.submit(toys.read_request(load))
 
 
-def test_closing_the_workspace_cancels_the_reads_of_its_accumulator(
+def test_closing_the_workspace_cancels_the_freeze_of_its_accumulator(
     summed_workspace: Workspace, summed: Client, summing: toys.Sum, log: Log
 ) -> None:
     client = summed
@@ -113,13 +113,13 @@ def test_closing_the_workspace_cancels_the_reads_of_its_accumulator(
     summing.go.clear()
     total = toys.total_accumulator(client)
     total.push(parts=[load.ref('value')])
-    shifted = client.submit(toys.read_request(total))
-    state = toys.state_record(client, shifted)
+    frozen = client.freeze(total)
+    shifted = client.submit(toys.read_request(frozen))
     threading.Timer(0.05, summing.go.set).start()
     summed_workspace.close()
 
     finished = {e.record: e.status for e in log if isinstance(e, Finished)}
-    assert [finished[state.id], finished[shifted.id]] == [Status.CANCELLED] * 2
+    assert [finished[frozen.id], finished[shifted.id]] == [Status.CANCELLED] * 2
 
 
 def test_closing_the_workspace_writes_a_pending_persisted_freeze(
@@ -166,9 +166,9 @@ def test_another_client_goes_through_the_stages_and_reads_the_accumulators(
     total.push(parts=[load.ref('value')])
 
     shifted = toys.submit_shift(other, stage, 2.0)
-    read = other.submit(toys.read_request(total))
     assert other.output(total) == {'value': toys.Amount(value=1.0)}
-    assert other.wait([shifted, read]) == [Status.COMPLETED] * 2
+    frozen = other.freeze(total)
+    assert other.wait([shifted, frozen]) == [Status.COMPLETED] * 2
 
 
 def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
@@ -261,7 +261,6 @@ def test_every_call_of_a_closed_workspace_raises(
         lambda: client.describe(load, 'value'),
         lambda: client.files.metadata(load.request.params['sample']),
         lambda: toys.submit_shift(client, stage, 1.0),
-        lambda: client.submit(toys.read_request(total)),
         lambda: total.push(parts=[load.ref('value')]),
         lambda: client.status(load),
         lambda: client.output(load, 'value'),
@@ -328,7 +327,6 @@ def test_every_output_of_a_record_or_an_accumulator_is_read_without_a_name(
     assert client.output(load) == {'value': one, 'extra': toys.Amount(value=-1.0)}
     assert client.output(total) == {'value': one}
     assert load.refs() == {name: load.ref(name) for name in ('value', 'extra')}
-    assert total.refs() == {'value': total.ref('value')}
 
 
 def test_on_close_is_called_by_each_close(workspace: Workspace) -> None:

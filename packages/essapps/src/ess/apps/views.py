@@ -34,10 +34,10 @@ class _Records(Mapping[str, Record]):
     """
     The records by ID, in the order submitted.
 
-    A record of an accumulator's state is held as the accumulator and its
-    number of pushes, and its request is listed from the accumulator's
-    template and pushes each time it is read, so the views grow by a
-    constant amount per read of an accumulator.
+    The record of a freeze is held as the accumulator and its number of
+    pushes, and its request is listed from the accumulator's template and
+    pushes each time it is read, so the views grow by a constant amount per
+    freeze.
     """
 
     def __init__(self, views: Views) -> None:
@@ -80,7 +80,7 @@ class Views:
 
     ``finished`` holds the event that finished a record; a record without one
     is pending. ``states`` holds the accumulator and number of pushes of each
-    record of a state. ``accumulators`` holds the event that opened each
+    record of a freeze. ``accumulators`` holds the event that opened each
     accumulator, and ``pushes`` its pushes in order, each rows of its tables.
 
     ``persisted`` names the outputs each record persists; their write is the
