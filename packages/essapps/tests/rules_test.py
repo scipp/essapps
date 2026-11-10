@@ -129,8 +129,9 @@ def files(tmp_path: Path) -> FakeFiles:
 @pytest.fixture
 def client(files: FakeFiles) -> Iterator[Client]:
     backend = Backend(
-        files,
-        [
+        proposal='p1',
+        files=files,
+        bind=[
             function_binding(LOAD, load),
             function_binding(LOAD_GROUP, load_group),
             function_binding(LOAD_MASK, load_mask),
@@ -141,7 +142,7 @@ def client(files: FakeFiles) -> Iterator[Client]:
         ],
         store=FakeStore(),
     )
-    yield Client(backend, proposal='p1', submitter='anna')
+    yield Client(backend, submitter='anna')
     backend.close()
 
 

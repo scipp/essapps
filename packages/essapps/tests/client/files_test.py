@@ -10,16 +10,17 @@ from itertools import islice
 
 import pytest
 
-from ess.apps import Backend, Client, ClientId, Files, Selector, file
+from ess.apps import Backend, Client, Files, Selector, file
 from ess.apps.testing import FakeFiles
 from ess.spec import FileRef
 
 
-def test_a_client_sees_only_the_files_of_its_proposal(
+def test_a_client_sees_only_the_files_of_its_backend_s_proposal(
     backend: Backend, files: FakeFiles
 ) -> None:
-    mine = Client(backend, proposal='p1', submitter='anna')
-    theirs = Client(backend, proposal='p2', submitter='eve')
+    mine = Client(backend, submitter='anna')
+    p2 = Backend(proposal='p2', files=files, bind=[])
+    theirs = Client(p2, submitter='eve', on_close=p2.close)
     other = files.measure(4, 4.0, proposal='p2')
     existing = [files.resolve(file(run=n)) for n in (1, 2)]
 
@@ -33,12 +34,13 @@ def test_a_client_sees_only_the_files_of_its_proposal(
     assert theirs.files.metadata(other)['run'] == 4
     with pytest.raises(KeyError, match='in proposal p1'):
         mine.files.metadata(other)
+    theirs.close()
 
 
 def test_watch_lists_again_until_a_file_is_new(
     backend: Backend, files: FakeFiles
 ) -> None:
-    client = Client(backend, proposal='p1', submitter='anna')
+    client = Client(backend, submitter='anna')
     watch = client.files.watch(Selector(), interval=0.01)
     list(islice(watch, 2))
     arrives = threading.Timer(0.05, files.measure, args=(5, 5.0))
@@ -53,7 +55,7 @@ def test_watch_lists_again_until_a_file_is_new(
 def test_metadata_takes_one_or_a_list_of_files(
     backend: Backend, files: FakeFiles
 ) -> None:
-    client = Client(backend, proposal='p1', submitter='anna')
+    client = Client(backend, submitter='anna')
     refs = [files.resolve(file(run=n)) for n in (1, 2)]
 
     assert client.files.metadata(refs[0])['run'] == 1
@@ -67,16 +69,14 @@ class FilesLater:
         self._ref = ref
         self._empty = empty
 
-    def files(self, selector: Selector, client_id: ClientId) -> list[FileRef]:
+    def files(self, selector: Selector) -> list[FileRef]:
         self._empty -= 1
         return [] if self._empty >= 0 else [self._ref]
 
 
 def test_watch_waits_for_the_interval_between_listings() -> None:
     ref = FileRef(file='uuid:run-1')
-    watch = Files(FilesLater(ref, empty=3), ClientId('client')).watch(
-        Selector(), interval=0.01
-    )
+    watch = Files(FilesLater(ref, empty=3)).watch(Selector(), interval=0.01)
 
     start = time.monotonic()
     assert next(watch) == ref

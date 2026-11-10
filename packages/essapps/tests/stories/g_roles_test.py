@@ -30,17 +30,17 @@ def test_g2_developer_iterates_on_a_workflow(
 
 
 def test_g5_reference_across_proposals_refused(
-    connect: Callable[..., Client], measure: toys.Measure
+    connect: Callable[..., Client], measure: toys.Measure, files: FakeFiles
 ) -> None:
-    theirs = connect(proposal='p1', user='anna')
-    mine = connect(proposal='p2', user='eve')
+    theirs = connect(user='anna')
+    mine = local(proposal='p2', files=files, bind=list(toys.TOYS.values()))
     centre = theirs.compute(
         toys.BEAM_CENTRE,
         params={'direct_beam': measure(1, [1.0, 1.0], proposal='p1')},
     )
     sample = measure(2, [2.0, 2.0], proposal='p2')
 
-    with pytest.raises(SubmitError, match='p1'):
+    with pytest.raises(SubmitError, match=f'unknown record or accumulator {centre.id}'):
         mine.compute(
             toys.IOFQ,
             params={
@@ -50,3 +50,4 @@ def test_g5_reference_across_proposals_refused(
             },
         )
     assert mine.records() == []
+    mine.close()

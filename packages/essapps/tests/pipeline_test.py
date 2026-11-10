@@ -127,8 +127,8 @@ def client(
             keys={**FILE_KEYS, 'offsets': (Offsets,), 'total': (Total,)},
         ),
     ]
-    backend = Backend(files, bind)
-    yield Client(backend, proposal='p1', submitter='anna')
+    backend = Backend(proposal='p1', files=files, bind=bind)
+    yield Client(backend, submitter='anna')
     backend.close()
 
 
@@ -182,14 +182,14 @@ def test_a_field_without_a_key_cannot_be_a_blank(
     binding = PipelineBinding(
         SHIFT, make_pipeline, keys={**FILE_KEYS, 'annotation': (), 'value': (Shifted,)}
     )
-    backend = Backend(files, [binding])
-    client = Client(backend, proposal='p1', submitter='anna')
+    backend = Backend(proposal='p1', files=files, bind=[binding])
+    client = Client(backend, submitter='anna')
     annotate = client.stage(
         Template(SHIFT, params={'sample': file(run=1)}, blanks=('annotation',))
     )
 
     record = client.compute(annotate, params={'annotation': {'note': 'x'}})
-    backend.close()
 
     assert client.status(record) is Status.FAILED
     assert "['annotation']: without a key" in str(client.failure(record))
+    backend.close()

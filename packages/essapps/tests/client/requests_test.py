@@ -13,7 +13,6 @@ import pytest
 from pydantic import BaseModel, model_validator
 
 from ess.apps import (
-    Backend,
     Client,
     FieldError,
     Request,
@@ -121,15 +120,6 @@ def test_a_reference_to_a_missing_output_is_refused(client: Client) -> None:
 
     with pytest.raises(SubmitError, match="source: load/v1 has no output 'total'"):
         client.submit(toys.SHIFT, params={'source': missing})
-
-
-def test_a_reference_to_another_proposal_is_refused(backend: Backend) -> None:
-    theirs = Client(backend, proposal='p2', submitter='eve')
-    mine = Client(backend, proposal='p1', submitter='anna')
-    loaded = mine.compute(toys.load_request(1))
-
-    with pytest.raises(SubmitError, match='belongs to proposal p1'):
-        theirs.submit(toys.read_request(loaded))
 
 
 def test_a_reference_to_a_failed_record_is_refused(

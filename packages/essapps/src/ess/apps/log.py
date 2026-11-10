@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 The backend's history: an append-only log of what ran, with which params,
-and what came of it.
+and what came of it, for one proposal, which each submission and opening names.
 
 There are four events: a submission, a record that finished, an accumulator
 that opened, and a push into one. A persist request is part of a submission or
@@ -19,8 +19,8 @@ record the records it reads, and a record of a state its accumulator. Applying t
 events in order relies on this, and so does a restart, which walks the pending
 records backwards.
 
-Clients and their stages and accumulators are not history, and neither are
-output values or anything a binding computed; those have their own lifetime.
+Stages and accumulators are not history, and neither are output values or
+anything a binding computed; those have their own lifetime.
 A submission is one event, so a backend that stops half-way through one has
 all of it or none of it.
 """

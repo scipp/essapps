@@ -167,8 +167,8 @@ def start(
             kept_rows(TOTAL, total),
             kept_rows(RUNS, runs),
         ]
-        backends.append(Backend(files, bind, log=Log(path)))
-        return Client(backends[-1], proposal='p1', submitter='anna')
+        backends.append(Backend(proposal='p1', files=files, bind=bind, log=Log(path)))
+        return Client(backends[-1], submitter='anna')
 
     yield start
     for backend in backends:
@@ -386,11 +386,11 @@ def test_records_pending_in_the_log_are_cancelled_at_a_restart(
     loading.set()
 
     records = [pending, state, read]
-    assert again.status(records) == [Status.CANCELLED] * 3  # no client keeps them
+    assert again.status(records) == [Status.CANCELLED] * 3  # nothing keeps them
     assert again.failure(records) == ['the backend restarted'] * 3
     with pytest.raises(SubmitError, match=f'record {pending.id} cancelled'):
         again.submit(TOTAL, params={'part': [pending.ref('value')]})
-    with pytest.raises(SubmitError, match='is not kept by this client'):
+    with pytest.raises(SubmitError, match=f'accumulator {total.id} is not open'):
         again.submit(TOTAL, params=_read(total))  # the accumulator did not survive
 
 
@@ -404,7 +404,7 @@ def test_outputs_are_not_in_the_log(
     again = restart(tmp_path / 'log')
 
     assert again.wait(load) == Status.COMPLETED
-    with pytest.raises(NotReadable, match='not kept by this client'):
+    with pytest.raises(NotReadable, match='is not kept'):
         again.output(load, 'value')
 
 
@@ -418,7 +418,7 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
     again = restart(tmp_path / 'log')
 
     total = _total(again)
-    with pytest.raises(SubmitError, match='not kept by this client'):
+    with pytest.raises(SubmitError, match='is not kept'):
         total.push(part=[load.ref('value')])
 
 
@@ -494,6 +494,17 @@ def test_a_log_file_has_one_writer(tmp_path: Path) -> None:
     with Log(path), pytest.raises(RuntimeError, match='held by another log'):
         Log(path)
     Log(path).close()  # free once the first has let go
+
+
+def test_a_backend_refuses_a_log_of_another_proposal(
+    tmp_path: Path, files: FakeFiles
+) -> None:
+    path = tmp_path / 'log'
+    request = Request(LOAD, params={'sample': files.resolve(file(run=1))})
+    _write(path, _submitted('load', request))
+
+    with Log(path) as log, pytest.raises(ValueError, match='proposal p1, not p2'):
+        Backend(proposal='p2', files=files, bind=[], log=log)
 
 
 def test_a_last_line_cut_short_is_dropped(tmp_path: Path, files: FakeFiles) -> None:

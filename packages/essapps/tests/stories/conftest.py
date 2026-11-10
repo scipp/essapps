@@ -4,9 +4,8 @@
 """
 Fixtures of the user stories (docs/developer/user-stories.md), over the toys.
 
-After each story, every record whose outputs a client of the story still keeps
-is run again as its request by that client, and must give the same outputs
-(``replay``).
+After each story, every record whose outputs the backend still keeps is run
+again as its request by a client, and must give the same outputs (``replay``).
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ import pytest
 from ess.apps import (
     Backend,
     Client,
-    ClientEnded,
     NotReadable,
     Record,
     SpecId,
@@ -67,7 +65,15 @@ def backends(
     files: FakeFiles, store: FakeStore, history: Log
 ) -> Iterator[list[Backend]]:
     """The backend, and those that upgrades started after it; the current one last."""
-    backends = [Backend(files, list(TOYS.values()), log=history, store=store)]
+    backends = [
+        Backend(
+            proposal='p1',
+            files=files,
+            bind=list(TOYS.values()),
+            log=history,
+            store=store,
+        )
+    ]
     yield backends
     for backend in backends:
         backend.close()
@@ -90,21 +96,21 @@ def upgrade(
     """
     A client of a new backend over the same files, history, and store,
     which offers the given toy specs, every one by default; ``connect`` then
-    makes clients of it. The upgrade ends every client of the backend before
-    it, and that backend once its persisted work is done.
+    makes clients of it. The upgrade closes the backend before it, which
+    cancels the work that persists nothing and waits for the rest.
     """
 
     def upgrade(specs: list[WorkflowSpec[Any, Any]] | None = None) -> Client:
-        for client in clients:
-            client.close()
         backends[-1].close()
         bind = (
             list(TOYS.values())
             if specs is None
             else [TOYS[SpecId.of(s)] for s in specs]
         )
-        backends.append(Backend(files, bind, log=history, store=store))
-        clients.append(Client(backends[-1], proposal='p1', submitter='anna'))
+        backends.append(
+            Backend(proposal='p1', files=files, bind=bind, log=history, store=store)
+        )
+        clients.append(Client(backends[-1], submitter='anna'))
         return clients[-1]
 
     return upgrade
@@ -112,10 +118,10 @@ def upgrade(
 
 @pytest.fixture
 def connect(backends: list[Backend], clients: list[Client]) -> Callable[..., Client]:
-    """A new client of the current backend, by default for proposal p1."""
+    """A new client of the current backend, of proposal p1."""
 
-    def connect(proposal: str = 'p1', user: str = 'anna') -> Client:
-        clients.append(Client(backends[-1], proposal=proposal, submitter=user))
+    def connect(user: str = 'anna') -> Client:
+        clients.append(Client(backends[-1], submitter=user))
         return clients[-1]
 
     return connect
@@ -152,12 +158,12 @@ def repair(files: FakeFiles) -> Callable[..., None]:
 @pytest.fixture(autouse=True)
 def replay(backends: list[Backend], clients: list[Client]) -> Iterator[None]:
     """
-    After the story, each client that has not ended runs every completed
-    record whose outputs it keeps again as its request, and compares the
-    outputs.
+    After the story, a client of the backend that is open runs every completed
+    record whose outputs the backend keeps again as its request, and compares
+    the outputs.
 
     This is a safety net over every story: a record says all that its outputs
-    depend on. A reference to an output the client does not keep, such as one
+    depend on. A reference to an output the backend does not keep, such as one
     of the record of an accumulator's state, is replaced by the same output of
     that record run again. No record names an accumulator in a reference:
     each names a record that the provenance finds. It runs before the
@@ -167,12 +173,13 @@ def replay(backends: list[Backend], clients: list[Client]) -> Iterator[None]:
     for client in list(clients):
         try:
             records = {r.id: r for r in client.records()}
-        except ClientEnded:
+        except RuntimeError:  # its backend is closed
             continue
         client.wait(list(records.values()))
         for record in records.values():
             client.provenance(record)
         _replay(client, records)
+        return  # every client of the backend reads the same values
 
 
 def _replay(client: Client, records: Mapping[str, Record]) -> None:
@@ -202,7 +209,7 @@ def _replay(client: Client, records: Mapping[str, Record]) -> None:
             continue
         try:
             expected = client.output(record)
-        except NotReadable:  # not kept by this client
+        except NotReadable:  # released, or not persisted
             continue
         where = f'{record.id} {record.spec} {record.label} {record.member}'
         assert_close(client.output(again(record)), expected, where=where)

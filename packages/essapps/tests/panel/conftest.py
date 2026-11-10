@@ -307,20 +307,20 @@ def backend(files: FakeFiles) -> Iterator[Backend]:
         function_binding(STACK, stack),
         function_binding(NESTED, nested),
     ]
-    backend = Backend(files, bind)
+    backend = Backend(proposal='p1', files=files, bind=bind)
     yield backend
     backend.close()
 
 
 @pytest.fixture
 def client(backend: Backend) -> Client:
-    return Client(backend, proposal='p1', submitter='anna')
+    return Client(backend, submitter='anna')
 
 
 @pytest.fixture
 def other(backend: Backend) -> Client:
     """Another client of the proposal of ``client``."""
-    return Client(backend, proposal='p1', submitter='bob')
+    return Client(backend, submitter='bob')
 
 
 @pytest.fixture

@@ -4,10 +4,10 @@
 
 from .backend import Backend, local
 from .client import Accumulator, Client, Files, Provenance, Stage
-from .errors import ClientEnded, FieldError, NotReadable, RecordFailed, SubmitError
+from .errors import FieldError, NotReadable, RecordFailed, SubmitError
 from .files import FolderFiles, Selector, file
 from .listing import Listing
-from .protocol import BackendProtocol, ClientId, FileSource, Store
+from .protocol import BackendProtocol, FileSource, Store
 from .records import (
     ArrayInfo,
     Changes,
@@ -27,8 +27,6 @@ __all__ = [
     'BackendProtocol',
     'Changes',
     'Client',
-    'ClientEnded',
-    'ClientId',
     'FieldError',
     'FileSource',
     'Files',

@@ -46,8 +46,8 @@ class Rule:
 
     ``submit`` does not wait for a record or read an output: the loop calls one
     function at a time, and a request can reference a pending record. It persists what
-    it submits: the loop's client should keep nothing, and a reference must stay
-    readable when the loop's process has restarted.
+    it submits: the loop never releases, so the backend should keep nothing for it,
+    and a reference must stay readable after a restart.
     """
 
     name: str

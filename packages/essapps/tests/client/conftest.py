@@ -141,14 +141,14 @@ def bindings(
 
 @pytest.fixture
 def backend(files: FakeFiles, bindings: list[Binding]) -> Iterator[Backend]:
-    backend = Backend(files, bindings)
+    backend = Backend(proposal='p1', files=files, bind=bindings)
     yield backend
     backend.close()
 
 
 @pytest.fixture
 def client(backend: Backend) -> Client:
-    return Client(backend, proposal='p1', submitter='anna')
+    return Client(backend, submitter='anna')
 
 
 @pytest.fixture
@@ -160,8 +160,9 @@ def summing() -> Sum:
 def summed_backend(files: FakeFiles, summing: Sum) -> Iterator[Backend]:
     """A backend that sums TOTAL with ``summing``."""
     backend = Backend(
-        files,
-        [
+        proposal='p1',
+        files=files,
+        bind=[
             function_binding(LOAD, load_run),
             function_binding(SHIFT, shift),
             DriverBinding(TOTAL, summing),
@@ -174,7 +175,7 @@ def summed_backend(files: FakeFiles, summing: Sum) -> Iterator[Backend]:
 @pytest.fixture
 def summed(summed_backend: Backend) -> Client:
     """A client of ``summed_backend``."""
-    return Client(summed_backend, proposal='p1', submitter='anna')
+    return Client(summed_backend, submitter='anna')
 
 
 @pytest.fixture
@@ -205,8 +206,8 @@ def in_place(
         DriverBinding(SIDES, subtracting),
         DriverBinding(BOTH, subtracting),
     ]
-    backend = Backend(files, bind)
-    yield Client(backend, proposal='p1', submitter='anna')
+    backend = Backend(proposal='p1', files=files, bind=bind)
+    yield Client(backend, submitter='anna')
     copying.go.set()
     subtracting.go.set()
     subtracting.compute.set()

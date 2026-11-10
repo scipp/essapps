@@ -130,8 +130,9 @@ def backend(tmp_path: Path, gate: threading.Event) -> Iterator[Backend]:
         )
 
     backend = Backend(
-        FakeFiles('p1', tmp_path),
-        [function_binding(IMAGE, image), function_binding(HELD, held)],
+        proposal='p1',
+        files=FakeFiles('p1', tmp_path),
+        bind=[function_binding(IMAGE, image), function_binding(HELD, held)],
         store=FakeStore(),
     )
     yield backend
@@ -141,7 +142,7 @@ def backend(tmp_path: Path, gate: threading.Event) -> Iterator[Backend]:
 
 @pytest.fixture
 def client(backend: Backend) -> Client:
-    return Client(backend, proposal='p1', submitter='anna')
+    return Client(backend, submitter='anna')
 
 
 def test_a_group_is_its_arrays_by_what_they_are_and_its_other_fields_by_value(
@@ -241,15 +242,14 @@ def test_a_value_released_by_the_client_is_not_readable(client: Client) -> None:
         client.describe(record, 'image')
 
 
-def test_a_value_another_client_keeps_is_not_readable_unless_persisted(
+def test_another_client_describes_a_value_kept_or_persisted(
     backend: Backend, client: Client
 ) -> None:
-    other = Client(backend, proposal='p1', submitter='bob')
+    other = Client(backend, submitter='bob')
     kept = other.compute(IMAGE)
     persisted = other.compute(IMAGE, persist=('image',))
 
-    with pytest.raises(NotReadable):
-        client.describe(kept, 'image')
+    assert client.describe(kept, 'image')['counts'].sizes == {'y': 2, 'x': 3}
     assert client.describe(persisted, 'image')['counts'].sizes == {'y': 2, 'x': 3}
 
 

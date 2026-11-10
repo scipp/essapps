@@ -130,8 +130,8 @@ def client(files: FakeFiles) -> Iterator[Client]:
         function_binding(CHANNELS, _channels),
         function_binding(CHECKED, lambda p: Outputs(total=Total(value=0.0))),
     ]
-    backend = Backend(files, bindings)
-    yield Client(backend, proposal='p1', submitter='anna')
+    backend = Backend(proposal='p1', files=files, bind=bindings)
+    yield Client(backend, submitter='anna')
     backend.close()
 
 

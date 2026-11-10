@@ -307,8 +307,9 @@ def client(tmp_path: Path) -> Iterator[Client]:
     files.measure(2, 2.0)
     files.measure(3, 10.0, kind='mask')
     backend = Backend(
-        files,
-        [
+        proposal='p1',
+        files=files,
+        bind=[
             function_binding(LOAD, load),
             function_binding(ADD, add),
             function_binding(
@@ -332,7 +333,7 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(MASKED, masked),
         ],
     )
-    yield Client(backend, proposal='p1', submitter='anna')
+    yield Client(backend, submitter='anna')
     backend.close()
 
 
@@ -888,9 +889,11 @@ def test_a_reference_at_a_field_of_a_row_reaches_the_binding_as_its_data(
         return Value(value=sum(r.transmission.fraction.value for r in params.samples))
 
     backend = Backend(
-        files, [function_binding(LOAD, measure), function_binding(SAMPLES, samples)]
+        proposal='p1',
+        files=files,
+        bind=[function_binding(LOAD, measure), function_binding(SAMPLES, samples)],
     )
-    client = Client(backend, proposal='p1', submitter='anna')
+    client = Client(backend, submitter='anna')
     try:
         loaded = client.compute(LOAD, params={'sample': file_ref(run=1)})
         row = {'run': file_ref(run=1), 'transmission': loaded.ref('transmission')}

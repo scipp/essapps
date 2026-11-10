@@ -5,8 +5,9 @@ Request-phase checks: what the backend checks of a request, a template, a
 push, and the state of an accumulator before any data is read.
 
 The backend checks a request in two phases (see ``backend.py``): this module
-is the part of the request phase that needs neither the backend's lock nor a
-client. What depends on history or on what a client keeps is the backend's.
+is the part of the request phase that needs neither the backend's lock nor
+its history. What depends on history or on what the backend keeps is the
+backend's.
 :class:`Checks` holds the checks of one spec, one method for each thing
 checked::
 
@@ -43,8 +44,8 @@ from the call phase:
 
 Each check returns the references to outputs in the values, each with its
 position and the type its data must fit (see
-:data:`ess.spec.validation.OutputReads`). The backend checks each against what the
-client may read (see :func:`check_fit`).
+:data:`ess.spec.validation.OutputReads`). The backend checks each against what
+may be read (see :func:`check_fit`).
 
 The params model's model validators never run: a stage and a driver never get a
 whole params instance. The terms (group, file field, reference, table) and the

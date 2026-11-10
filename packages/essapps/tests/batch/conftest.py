@@ -53,20 +53,20 @@ def staged_binding(gate: toys.Gate) -> StagedFunction:
 def backend(files: CorrectedFiles, staged_binding: StagedFunction) -> Iterator[Backend]:
     plain = function_binding(toys.PLAIN, staged_binding.function)
     find = function_binding(toys.FIND, _find)
-    backend = Backend(files, [staged_binding, plain, find])
+    backend = Backend(proposal='p1', files=files, bind=[staged_binding, plain, find])
     yield backend
     backend.close()
 
 
 @pytest.fixture
 def client(backend: Backend) -> Client:
-    return Client(backend, proposal='p1', submitter='anna')
+    return Client(backend, submitter='anna')
 
 
 @pytest.fixture
 def other(backend: Backend) -> Client:
     """Another client of the proposal of ``client``."""
-    return Client(backend, proposal='p1', submitter='bob')
+    return Client(backend, submitter='bob')
 
 
 @pytest.fixture

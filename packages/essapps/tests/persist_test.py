@@ -237,7 +237,7 @@ def backend(
     bind: list[Binding],
     log: Log,
 ) -> Iterator[Backend]:
-    backend = Backend(files, bind, store=store, log=log)
+    backend = Backend(proposal='p1', files=files, bind=bind, store=store, log=log)
     yield backend
     store.gate.set()
     backend.close()
@@ -245,7 +245,7 @@ def backend(
 
 @pytest.fixture
 def connect(backend: Backend) -> Callable[[], Client]:
-    return lambda: Client(backend, proposal='p1', submitter='anna')
+    return lambda: Client(backend, submitter='anna')
 
 
 @pytest.fixture
@@ -272,9 +272,9 @@ def test_persisted_at_submission_the_store_keeps_the_outputs_named(
     assert other.output(load, 'value') == Amount(value=1.0)
     assert (load.id, 'value') in store
     assert (load.id, 'extra') not in store
-    with pytest.raises(NotReadable, match='not kept by this client'):
+    with pytest.raises(NotReadable, match='is not kept'):
         client.output(load, 'extra')  # dropped once the record completed
-    with pytest.raises(SubmitError, match='not kept by this client'):
+    with pytest.raises(SubmitError, match='is not kept'):
         client.submit(SHIFT, params={'source': load.ref('extra')})
     shift = other.compute(SHIFT, params={'source': load.ref('value')})
     assert other.output(shift, 'value') == Amount(value=11.0)
@@ -368,6 +368,29 @@ def test_a_frozen_accumulator_persisted_is_kept_by_the_store(
         client.output(total, 'value')
 
 
+def test_closing_cancels_what_persists_nothing_and_runs_what_persisted_work_reads(
+    backend: Backend,
+    client: Client,
+    store: GatedStore,
+    log: Log,
+    loading: threading.Event,
+) -> None:
+    loading.clear()
+    load = client.submit(LOAD, params=_sample(1))
+    shifted = client.submit(SHIFT, params={'source': load.ref('value')}, persist=True)
+    other = client.submit(LOAD, params=_sample(2))
+    threading.Timer(0.05, loading.set).start()
+    backend.close()
+
+    finished = {e.record: e.status for e in log if isinstance(e, Finished)}
+    assert [finished[r.id] for r in (load, shifted, other)] == [
+        Status.COMPLETED,
+        Status.COMPLETED,
+        Status.CANCELLED,
+    ]
+    assert (shifted.id, 'value') in store
+
+
 def test_closing_a_local_client_waits_until_what_is_persisted_is_written(
     files: FakeFiles, bind: list[Binding], store: GatedStore
 ) -> None:
@@ -436,8 +459,10 @@ def start(
     backends: list[Backend] = []
 
     def start(path: Path) -> Client:
-        backends.append(Backend(files, bind, log=Log(path), store=store))
-        return Client(backends[-1], proposal='p1', submitter='anna')
+        backends.append(
+            Backend(proposal='p1', files=files, bind=bind, log=Log(path), store=store)
+        )
+        return Client(backends[-1], submitter='anna')
 
     yield start
     store.gate.set()
@@ -471,7 +496,7 @@ def _referenced(client: Client, record: Record) -> tuple[str, ...]:
     return tuple(accepted)
 
 
-def test_readable_gives_every_output_returned_of_a_record_the_client_keeps(
+def test_readable_gives_every_output_returned_of_a_record_the_backend_keeps(
     client: Client,
 ) -> None:
     load = client.compute(LOAD, params=_sample(1))  # returns no note
@@ -491,7 +516,7 @@ def test_readable_gives_every_output_of_a_pending_record_without_waiting(
     loading.set()
 
 
-def test_readable_gives_nothing_of_a_record_released_or_of_another_client(
+def test_readable_gives_nothing_of_a_record_released_and_the_same_to_every_client(
     client: Client, connect: Callable[[], Client]
 ) -> None:
     released, kept = (
@@ -502,8 +527,9 @@ def test_readable_gives_nothing_of_a_record_released_or_of_another_client(
     other = connect()
 
     assert client.readable([released, kept]) == [(), ('value', 'extra')]
-    assert other.readable({'kept': kept}) == {'kept': ()}
-    assert _referenced(client, released) == _referenced(other, kept) == ()
+    assert other.readable({'kept': kept}) == {'kept': ('value', 'extra')}
+    assert _referenced(client, released) == ()
+    assert _referenced(other, kept) == ('value', 'extra')
 
 
 def test_readable_gives_the_outputs_persisted_to_every_client(
@@ -672,7 +698,7 @@ def test_a_read_of_a_persisted_output_waits_for_its_write_and_no_other_does(
     with ThreadPoolExecutor() as pool:
         value = pool.submit(other.output, load, 'value')
         assert store.entered.wait(timeout=5)
-        with pytest.raises(NotReadable, match='not kept by this client'):
+        with pytest.raises(NotReadable, match='is not kept'):
             other.output(load, 'extra')  # never written, so nothing to wait for
         store.gate.set()
         assert value.result(timeout=5) == Amount(value=1.0)
@@ -685,7 +711,7 @@ def test_a_pending_record_that_persists_outlives_its_release_and_its_last_reader
     load = client.submit(LOAD, params=_sample(1), persist=True)
     shift = client.submit(SHIFT, params={'source': load.ref('value')})
 
-    client.release(load)  # the store keeps it, not the client
+    client.release(load)  # the store keeps it, not the backend
     client.release(shift)  # cancels the reader, which lets go of ``load``
 
     assert client.status(load) is Status.PENDING
@@ -728,7 +754,7 @@ def test_a_persisted_value_is_read_from_the_store_while_a_reader_holds_it(
     assert client.output(reader, 'value') == Amount(value=13.0)
 
 
-def test_a_client_that_persists_a_freeze_does_not_keep_it(
+def test_a_persisted_freeze_is_kept_by_the_store_alone(
     client: Client, store: GatedStore
 ) -> None:
     load = client.compute(LOAD, params=_sample(1))
