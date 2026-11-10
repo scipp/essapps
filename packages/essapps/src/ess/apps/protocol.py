@@ -18,8 +18,8 @@ kept with the proposal's history. History is dropped as a whole once the
 proposal has been idle for days to weeks: no call and no pending record. An
 output value may be large and lives only while a *keeper* keeps it:
 
-- the workspace, for a record submitted without persisting its outputs, until the
-  record is released or the workspace closes;
+- the workspace, for a record that a submission or a freeze made without
+  persisting its outputs, until the record is released or the workspace closes;
 - a pending request that reads it, until the request's workflow has returned;
 - a push, a stage, or an accumulator's template that references it, until the
   binding has taken it, or the push, stage, or accumulator is released, stopped,
@@ -86,10 +86,10 @@ class WorkspaceProtocol(Protocol):
     Every record and accumulator of the workspace's history is of its proposal. A
     record or accumulator ID that the history lacks raises ``KeyError``; inside a
     request, template, or push it raises ``SubmitError``, and :meth:`release` leaves
-    it alone. Once the workspace closes (:meth:`ess.apps.Workspace.close`), a call,
-    also one waiting when it closes, raises ``RuntimeError``. If the workspace
-    cannot log, the call that found this raises that error, and it stops: every call
-    then raises ``RuntimeError``.
+    it alone. Once the workspace closes (:meth:`ess.apps.Workspace.close`), every
+    later call raises ``RuntimeError``, and so does a call waiting when it closes.
+    If the workspace cannot log, the call that found this raises that error, and it
+    stops: every call then raises ``RuntimeError``.
 
     A call returns once it is checked and logged, and leaves reading data and
     computing to the workers. Only :meth:`changes`, up to its timeout, and the reads

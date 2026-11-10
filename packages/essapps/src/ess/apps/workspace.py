@@ -30,16 +30,16 @@ it.
 
 Keepers and readers
 -------------------
-The workspace keeps the outputs of the records it submitted without persisting
-them, until they are released (``_kept``). The pending records, steps of
-accumulators, and stages that have yet to read a value are its readers
-(``_readers``, see ``_Read``). A value is dropped when the workspace does not keep
-it and no reader is left (``_drop``). A pending record whose outputs nothing
-keeps is cancelled, since they would be dropped the moment they are computed;
-cancelling lets go of what it reads, so this passes along a chain. A workflow
-already running is not interrupted: its record is cancelled at once, and its
-outputs are dropped when it returns. Once a stage has staged, or a step is
-done, what the binding holds is its own.
+The workspace keeps the outputs of the records that a submission or a freeze
+made without persisting them, until they are released (``_kept``). The pending
+records, steps of accumulators, and stages that have yet to read a value are its
+readers (``_readers``, see ``_Read``). A value is dropped when the workspace does
+not keep it and no reader is left (``_drop``). A pending record whose outputs
+nothing keeps is cancelled, since they would be dropped the moment they are
+computed; cancelling lets go of what it reads, so this passes along a chain. A
+workflow already running is not interrupted: its record is cancelled at once,
+and its outputs are dropped when it returns. Once a stage has staged, or a step
+is done, what the binding holds is its own.
 
 A persist request made with a submission or a freeze replaces the workspace's
 hold: the worker writes the outputs named when the workflow returns, and the
@@ -520,8 +520,9 @@ class Workspace(WorkspaceProtocol):
     memory if not given, and ``store`` is where persisted outputs are
     written. A workspace started on an existing log needs the store the earlier
     workspace wrote to: without one, the persisted work it goes on with fails,
-    since it has no store. Raises ``ValueError`` for a log with an event of
-    another proposal.
+    since it has no store. The workspace owns its log and closes it in
+    :meth:`close`. Raises ``ValueError`` for a log with an event of another
+    proposal, and closes the log.
     """
 
     def __init__(
@@ -551,21 +552,22 @@ class Workspace(WorkspaceProtocol):
                 raise ValueError(f'two specs are bound as {spec_id}')
             self._bindings[spec_id] = binding
             self._checks[spec_id] = Checks(binding.spec, files)
-        self._executor = ThreadPoolExecutor(max_workers=workers)
-        self._changed = threading.Condition()
         self._log = Log() if log is None else log
         for event in self._log:
             if isinstance(event, Submitted | Opened) and event.proposal != proposal:
+                self._log.close()  # the workspace owns its log
                 raise ValueError(
                     f'the log holds history of proposal {event.proposal}, '
                     f'not {proposal}'
                 )
+        self._executor = ThreadPoolExecutor(max_workers=workers)
+        self._changed = threading.Condition()
         self._views = Views()
         self._stopped: Exception | None = None  # why an append failed
         self._closed = False
         # Not history
-        # the records whose outputs the workspace keeps: those submitted without
-        # persisting outputs, until released
+        # the records whose outputs the workspace keeps: those a submission or a
+        # freeze made without persisting outputs, until released
         self._kept: set[str] = set()
         self._stages: dict[str, _Stage] = {}  # open, by ID
         self._accumulators: dict[str, _Accumulator] = {}  # open, by ID
@@ -603,24 +605,33 @@ class Workspace(WorkspaceProtocol):
 
         Releasing cancels the pending work that persists nothing (see
         :meth:`release`), so what is left to wait for is the work that writes
-        to the store, and what it reads. From the start of closing, every call,
-        also one waiting, raises ``RuntimeError``.
+        to the store, and what it reads. Once closing has started, every later
+        call raises ``RuntimeError``, and so does a call waiting in the
+        workspace. A call under way that does not wait returns or raises, by
+        how far it has got. If an append fails while releasing, the workspace
+        stops.
         """
-        with self._changed:
-            self._closed = True
-            if self._stopped is None:  # a workspace that stopped logs nothing more
-                self._release([*self._kept, *self._stages, *self._accumulators])
-            self._changed.wait_for(
-                lambda: (
-                    self._stopped is not None
-                    or (
-                        self._views.records.keys() <= self._views.finished.keys()
-                        and not self._accumulating
+        try:
+            with self._changed:
+                self._closed = True
+                if self._stopped is None:  # a workspace that stopped logs nothing more
+                    try:
+                        self._release([*self._kept, *self._stages, *self._accumulators])
+                    except Exception as error:
+                        if error is not self._stopped:  # not a failed append
+                            raise
+                self._changed.wait_for(
+                    lambda: (
+                        self._stopped is not None
+                        or (
+                            self._views.records.keys() <= self._views.finished.keys()
+                            and not self._accumulating
+                        )
                     )
                 )
-            )
-        self._executor.shutdown(wait=True, cancel_futures=self._stopped is not None)
-        self._log.close()
+        finally:
+            self._executor.shutdown(wait=True, cancel_futures=self._stopped is not None)
+            self._log.close()
         self._check_stopped()
 
     def _restart(self) -> None:

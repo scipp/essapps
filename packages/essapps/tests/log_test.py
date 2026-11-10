@@ -498,15 +498,23 @@ def test_a_log_file_has_one_writer(tmp_path: Path) -> None:
     Log(path).close()  # free once the first has let go
 
 
-def test_a_workspace_refuses_a_log_of_another_proposal(
-    tmp_path: Path, files: FakeFiles
+@pytest.mark.parametrize('kind', ['submitted', 'opened'])
+def test_a_workspace_refuses_a_log_of_another_proposal_and_closes_it(
+    tmp_path: Path, files: FakeFiles, kind: str
 ) -> None:
     path = tmp_path / 'log'
     request = Request(LOAD, params={'sample': files.resolve(file(run=1))})
-    _write(path, _submitted('load', request))
+    opened = Opened(
+        accumulator='total',
+        proposal='p1',
+        template=Template(TOTAL, blanks=('part',)),
+        params={'weight': None, 'part': []},
+    )
+    _write(path, _submitted('load', request) if kind == 'submitted' else opened)
 
-    with Log(path) as log, pytest.raises(ValueError, match='proposal p1, not p2'):
-        Workspace(proposal='p2', files=files, bind=[], log=log)
+    with pytest.raises(ValueError, match='proposal p1, not p2'):
+        Workspace(proposal='p2', files=files, bind=[], log=Log(path))
+    Log(path).close()  # the refused workspace has let go of the file
 
 
 def test_a_last_line_cut_short_is_dropped(tmp_path: Path, files: FakeFiles) -> None:

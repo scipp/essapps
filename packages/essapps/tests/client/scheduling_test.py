@@ -24,11 +24,16 @@ class FullDisk(Log):
     def __init__(self) -> None:
         super().__init__()
         self.full = False
+        self.closed = False
 
     def append(self, event: Event) -> Event:
         if self.full:
             raise OSError('no space left on device')
         return super().append(event)
+
+    def close(self) -> None:
+        self.closed = True
+        super().close()
 
 
 def _sum(*records: Record, output: str = 'value') -> Request:
@@ -177,3 +182,24 @@ def test_a_failed_append_wakes_what_waits(
     loading.set()
     with pytest.raises(RuntimeError, match='no space left on device'):
         workspace.close()
+
+
+def test_a_failed_append_while_closing_lets_go_and_raises(
+    files: FakeFiles, bindings: list[Binding], loading: threading.Event
+) -> None:
+    log = FullDisk()
+    workspace = Workspace(proposal='p1', files=files, bind=bindings, log=log)
+    client = Client(workspace, submitter='anna', on_close=workspace.close)
+    loading.clear()
+    client.submit(toys.load_request(1))  # closing cancels it, which logs
+    log.full = True
+    threading.Timer(0.05, loading.set).start()  # closing waits for the workflow
+
+    with pytest.raises(RuntimeError, match='no space left on device') as raised:
+        client.close()
+    assert isinstance(raised.value.__cause__, OSError)
+    assert log.closed
+    events = len(log)
+    with pytest.raises(RuntimeError, match='no space left on device'):
+        client.close()
+    assert len(log) == events
