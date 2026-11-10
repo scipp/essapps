@@ -34,7 +34,7 @@ rule = Rule('iofq', reduce_sample, selector=Selector(run_type='sans'), label='io
 The function returns the record that *settles* the file: one under the rule's label that holds the file at the parameter `at`, or in a row of it if `at` is a list.
 The loop checks this and raises `TypeError` otherwise, since it would call the function for that file again at every step.
 
-The function persists what it submits. The loop never releases, so the workspace should keep nothing for it, and a reference must stay readable once the loop's process has restarted.
+The function persists what it submits. The loop never releases, so the workspace should keep nothing for it. A reference must also stay readable once the loop's process has restarted.
 
 A function may run again for a file: when a step stopped before the settling record, or when that record was refused. So it submits the settling record last, and reuses what an earlier call submitted, as with the centre above.
 It does not reuse a failed or cancelled record, since a reference to one is refused, and the file would never settle. With a new centre, the reduction is accepted while the centre is pending, then fails with it, and that failed record settles the file.

@@ -234,7 +234,7 @@ A parameter that sets no key cannot be a blank, nor can a union of groups, since
 
 A *driver* is the object behind an accumulator: tables are pushed into it, and it gives the outputs over the rows so far.
 The workflow package writes it, for one spec, and it holds everything an accumulator keeps.
-The framework never decides how rows combine, not even by keeping them; only a driver accumulates.
+The workspace never decides how rows combine, not even by keeping their values; only a driver accumulates.
 A driver is a sciline driver in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245):
 
 ```python

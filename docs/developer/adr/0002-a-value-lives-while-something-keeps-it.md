@@ -28,7 +28,7 @@ A *workspace* holds the history and the values of one proposal.
 A *client* is a connection to a workspace, and keeps nothing.
 So every client of a workspace reads, references, and releases the same values.
 Releasing is explicit, since only the clients know which outputs they still need.
-Closing a client releases nothing.
+Closing a client made with `Client(workspace, ...)` releases nothing.
 Forgetting to release costs memory until the workspace closes.
 
 **The binding is a black box.**
@@ -52,7 +52,7 @@ A persisted output stays readable after an upgrade removes its record's spec ver
 
 | | user's process (`local()`) | service |
 |---|---|---|
-| workspaces | one, behind the client that `local()` returns | one per proposal, or per user of a proposal (Open) |
+| workspaces | one, behind the client that `local()` returns | one per proposal |
 | values not persisted | in the process's memory | in the service's memory, bounded per workspace (Open) |
 | the workspace closes | when its client closes, or with its process | when the service ends it (Open) |
 | the store | given to `local(store=...)` | the proposal's area |
@@ -70,7 +70,8 @@ Each pending record is
 
 ## Alternatives considered
 
-- **Each client keeps what it asks for.** A client would keep its records until it released them or ended, and another client, even one in the same process, would read a value only once persisted. The service would bound each client's memory by a *cap*, and end a client that makes no call within its *lease*, a time limit that every call renews. A second connection of the same user, such as a reloaded web page, could not read the values of the first. Every call would name its client, and the core would check ownership per client, which is multi-tenancy inside the core. A service gets the separation between proposals by running one workspace per proposal instead.
+- **Each client keeps what it asks for.** A client would keep its records until it released them or ended, and another client, even one in the same process, would read a value only once persisted. The service would bound each client's memory by a *cap*, and end a client that makes no call within its *lease*, a time limit that every call renews. The lease frees the values of a client that vanished without releasing them, such as a closed browser tab, so the service would bound leaks without relying on users to free memory, as the Context asks. It is not chosen for two reasons. A second connection of the same user, such as a reloaded web page, could not read the values of the first (Context, several connections). Every call would name its client, and the core would check ownership per client, which is multi-tenancy inside the core.
+- **One workspace for many proposals.** The core would separate the history, values, and files of each proposal, and check every call against them. A service gets the separation between proposals by running one workspace per proposal instead.
 - **Record objects keep values, as dask futures do.** `client.records()`, `client.latest()`, and provenance each return a new object for the same record, so no single object could own the value. A dict of records (D2, kept for the morning check) would keep every value, and so would Jupyter's `Out[n]`.
 - **Persisting a kept record later (`client.persist`).** A person could keep a result after seeing it without computing it again. No story or application needs it. A write that ends after its record has finished has no record to fail, so its failure would need a channel of its own, such as an error raised when the workspace closes. It needs two more kinds of event in history. It can be added when a story needs it.
 - **Keep only on request (`keep=True`).** The flag must be given at submission, since a value dropped when its request finishes cannot be kept later without a race. Forgetting it shows only when a later `client.output` or reference is refused.
@@ -86,7 +87,10 @@ Each pending record is
 - A chain may release its intermediate records once the requests that read them are submitted. Releasing the last request cancels the whole chain, unless something else keeps a part of it.
 - Values that are not persisted are lost when the workspace closes. The records stay in history.
 - A client can release a value that another client still shows. A read of it then raises `NotReadable`, so an application asks `client.readable` for what it shows.
+- A release by one client also cancels pending work that another client submitted, if nothing else keeps it. A read of that record then raises `RecordFailed`, not `NotReadable` (`WorkspaceProtocol.outputs`).
+- A second connection, such as a reloaded web page, reads every value the workspace keeps. It reaches a stage or an accumulator of the first connection only if it is handed the object, since no client call lists them or reopens one by its ID ([README, open question 9](../README.md#open-questions)).
 - A client that ends without releasing, such as a closed browser tab, leaves the values it asked for kept until another client releases them or the workspace closes.
+- Nothing in the Decision bounds the memory of a workspace on the service. Until the open point on how the service bounds that memory is decided, the service does not meet the Context's requirement to bound leaks and peak memory by design.
 - A kernel restart ends the process, its workspace, and everything the workspace keeps. Continuing after the user's process crashed is a non-goal ([requirements](../../requirements/README.md)).
 - The placement symmetry ([accumulators.md, Symmetries](../accumulators.md#symmetries)) holds only if every output reads back from the store as the workflow returned it. The fake store keeps values in memory, so no test checks this.
 
@@ -94,7 +98,7 @@ Each pending record is
 
 To be designed with the service (scipp/essapps#27):
 
-- Whether two users of one proposal share one workspace, or each has one and they share values through the store.
+- Whether the users of one proposal share the values of its workspace in memory, or the service separates or bounds them per user. The history is one per proposal.
 - How the service bounds the memory of a workspace: what counts against the bound, such as the drivers of accumulators and values waiting to be written, and what happens to a value that does not fit. Where a workspace's values are held when its work spreads over nodes.
 - When the service ends a workspace that is idle, since a client that ends without releasing leaves its values kept.
 - How the service holds an accumulator's driver. One cluster job per accumulator, with a memory size and deadline that its client declares, fits a spectroscopy volume of hundreds of GB. That rests on items Assumed or Open in [spectroscopy](../../requirements/spectroscopy.md), and on whether the service may submit cluster jobs ([systems](../../requirements/systems.md)). Most drivers hold little, such as 0.34 MB for LoKI's I(Q).

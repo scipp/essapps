@@ -22,7 +22,7 @@ Two forces bound its size.
 
 **Pins multiply rows.** Story D7 pins an accumulator after each of its 300 pushes.
 If each record of a state listed its rows, history would hold about 45,000 rows, and every layer that handles records would handle them all.
-In the workspace in the user's process, D7 with 1000 pushes took 5.6 s with every row listed (501,500 stored references), and 0.86 s with a count of pushes.
+In a local workspace, the workspace in the user's process that `local()` makes, D7 with 1000 pushes took 5.6 s with every row listed (501,500 stored references), and 0.86 s with a count of pushes.
 
 **A proposal has no defined end.** Users need their records and outputs for days to weeks ([tensions](../../requirements/tensions.md), "Finding results again versus a second catalogue").
 

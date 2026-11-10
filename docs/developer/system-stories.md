@@ -39,7 +39,7 @@ Property: with a driver that sums, such as `Summing`, pushing a run into an accu
 ### B4. Explore a 4D volume
 
 Actor: spectroscopy user in the web UI. Goal: cuts follow a slider as it is dragged.
-Property: a selection of an output returns in a fraction of a second, and only the slice leaves the workspace; the volume is not copied to the UI. On the service, the volume is held in the workspace's memory and written only if persisted; how the service bounds that memory is open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), Open).
+Property: a selection of an output returns in a fraction of a second, and only the slice leaves the workspace; the volume is not copied to the UI. On the service, the volume is held in the workspace's memory and written only if persisted. How the service bounds that memory is open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), Open).
 
 ### B6. Find last week's result
 

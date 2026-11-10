@@ -14,14 +14,14 @@ Several programs will be built on it, and they need different things installed:
 
 | Program | Runs | Needs |
 |---|---|---|
-| notebook, Jupyter app | VISA (ESS's remote desktops) or a laptop; both count as local | client, in-process workspace, workflow packages, a GUI toolkit |
+| notebook, Jupyter app | VISA (ESS's remote desktops) or a laptop; both count as local | client, local workspace (the workspace in the user's process that `local()` makes), workflow packages, a GUI toolkit |
 | web frontend (not Python) | in a browser, against a local workspace or the service | an HTTP server in front of a workspace |
 | remote client, CLI | anywhere | client, HTTP client |
 | the service | DMSC (ESS's data centre) | workspaces, HTTP server, durable storage, workers, SciCat (ESS's data catalogue), workflow packages |
 | workflow package (esssans, ...) | everywhere a workspace runs | the spec vocabulary, the binding protocol, and the bindings |
 
 A *workflow package*, such as esssans or essreflectometry, holds the sciline workflows of one technique and its instruments.
-The in-process workspace needs nothing the client does not: pydantic and the standard library.
+The local workspace needs nothing the client does not: pydantic and the standard library.
 The heavy dependencies are elsewhere:
 
 - **The science stack.** Installing essreduce pulls in scipp, scippnexus, scippneutron, dask, scipy, and graphviz. `ess.spec` needs only pydantic; a module that defines specs also imports scipp, for the types of the data in the groups that references to outputs fill.
@@ -108,7 +108,7 @@ essapps run loki-iofq/1 --sample run:loki/4711 --url https://reduce.example --pr
 ## Alternatives considered
 
 - **The HTTP layer, the GUIs, and the service as distributions of their own**, such as `essappspanel` next to `essapps`. Each would pin a narrow range of the core and be released with it, and each name would repeat the core's.
-- **Client and workspace as separate distributions.** They have the same dependencies, and apps on VISA use `local()`, so the split installs nothing less. The client depends only on `WorkspaceProtocol`, not on `Workspace`.
+- **Client and workspace as separate distributions.** They have the same dependencies, and apps on VISA use `local()`, so the split installs nothing less. The client depends only on `WorkspaceProtocol`, not on `Workspace`, so the code keeps them apart without a second distribution.
 - **The instruments' specs and bindings in `essapps`**, as `ess.apps.loki`. A fix to one instrument would ship whatever changed in the core. Since `ess.apps` is a regular package, moving an instrument out later renames every import of it.
 - **The instruments' specs in `essspec`, with the bindings behind extras such as `essspec[loki]`.** `essspec[loki]` would depend on esssans, which will depend on `essspec` once it writes bindings. The vocabulary would carry this application's glue to every consumer, such as esslivedata, which has its own, and each instrument fix would be a release of the distribution that all of them pin.
 - **The instruments' specs importable without their workflow packages**, as a distribution of their own, for a remote Python client. Such a client runs in an ESS environment, which has the workflow packages, and a client without them reads `SerializedWorkflowSpec`.

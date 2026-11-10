@@ -605,7 +605,7 @@ binding = DriverBinding(SUM, RowSum)</code></pre>
         <li><b>Records and references.</b> Every connection between requests is a reference: <code>record.ref('centre')</code>, <code>file(run=611)</code>, or <code>acc.ref('iofq')</code>, which the workspace replaces at submission by an output of a record of the state's plain request. A reference to a pending record is valid. The workspace waits for it.</li>
         <li><b>Template</b> is the shared building block: stage, accumulator, batch, and rules all start from one.</li>
         <li><b>Controllers.</b> The workspace never decides what to submit or push. A notebook, an app, or the <code>TriggerLoop</code> of rules does.</li>
-        <li><b>Where it runs.</b> Both: values in memory while something keeps them, written only when persisted. The service (designed, not built) runs a workspace for each proposal, or for each user of a proposal. How it bounds a workspace's memory, and where it holds an accumulator's driver, are open. Placement says the results do not differ.</li>
+        <li><b>Where it runs.</b> Both: values in memory while something keeps them, written only when persisted. The service (designed, not built) runs one workspace for each proposal. Whether the users of a proposal share its values in memory, or the service separates or bounds them per user, is open. So are how it bounds a workspace's memory, and where it holds an accumulator's driver. Placement says the results do not differ.</li>
       </ul>
     </div>
     <div>

@@ -48,9 +48,10 @@ for the types of the data in a group that a reference fills, but never sciline o
 
 The package also holds the *bindings*, the other half of the contract with
 workflow packages: a binding is what the workspace (`ess.apps.Workspace`,
-which runs requests) calls to compute a spec's requests, made by the workflow author from a pipeline, a driver, or a function,
-each for one spec (`ess.spec.binding`). `ess.spec.testing` checks the
-symmetries that a binding keeps.
+which runs requests) calls to compute a spec's requests, made by the workflow
+author from a pipeline, a driver, or a function, each for one spec
+(`ess.spec.binding`). `ess.spec.testing` checks the symmetries that a binding
+keeps.
 
 ### The spec is pure interface: no factory, no keys, no registry
 

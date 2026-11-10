@@ -188,7 +188,7 @@ rule = Rule('reflectivity', stitch,
 TriggerLoop(client, rules=[rule]).run()` },
   { level: 11, caller: 'all', placement: 'service', planned: SERVICE, title: 'Many controllers, one history',
     body: `<p>All clients of a proposal share its history. A notebook can reference a transmission that the trigger loop computed, and the app lists that record in its pickers.</p>
-           <p>Every client of a workspace reads the same values. The trigger loop persists its outputs, so they outlive the workspace. Whether two users of one proposal share one workspace is open. Provenance follows each reference back to the files.</p>`,
+           <p>Every client of a workspace reads the same values. The trigger loop persists its outputs, so they outlive the workspace. A proposal has one workspace. Whether its users share the values in memory, or the service separates or bounds them per user, is open. Provenance follows each reference back to the files.</p>`,
     code: `# computed by the trigger loop
 t = client.latest('transmission', member='250K')
 record = client.submit(IOFQ, params={

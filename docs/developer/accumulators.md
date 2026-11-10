@@ -11,7 +11,9 @@ Stages and accumulators keep what such work computes in the workspace's memory b
 
 Both make records that are identical to the records of plain requests with the same values (see Symmetries).
 The workspace keeps a stage or an accumulator until a client releases it or the workspace closes.
-Every client of the workspace may call through a stage, and push into and read an accumulator.
+Every client that holds a stage or an accumulator may call through it, push into it, and read it.
+No client call lists them or reopens one by its ID, and they are not in the changes.
+So a second connection, such as a reloaded web page, reaches the stages and accumulators of the first only if it is handed them ([README, open question 9](README.md#open-questions)).
 Making one over a binding that does not serve it is refused.
 [ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md) and [ADR 0003](adr/0003-accumulators-add-in-place.md) give the reasons; [bindings.md](../../packages/essspec/docs/bindings.md) gives the binding's side of the contract.
 
@@ -88,7 +90,7 @@ A controller that should skip pins while the workspace is behind checks whether 
 
 The workspace does not keep the record of a state that a submission makes, so `client.output` of it raises.
 A record never names an accumulator: the submission replaces `acc.ref(...)` by a reference to the record of the state.
-Every client of the workspace may pin an open accumulator, and no push or template references an accumulator.
+Every client that holds an open accumulator may pin it, and no push or template references an accumulator.
 
 **Push n+1 waits for the readers of state n.** A driver only moves forward, and may add the next push into the arrays its last outputs returned.
 So the workspace adds push n+1 only once the *readers* of state n are done: requests that read the record of state n, until their workflow has returned, and pins of state n, until they have copied.
@@ -113,7 +115,8 @@ client.output(total, 'iofq')
 client.freeze(volume, persist=True)         # the store keeps the outputs, not the workspace
 ```
 
-At the end of a scan, freezing makes the final volume an ordinary record, which the workspace keeps, and which a client can reference from another template or push, where the accumulator itself may not be referenced.
+At the end of a scan, freezing makes the final volume an ordinary record, which the workspace keeps.
+A client can reference that record from another template or push, where the accumulator itself may not be referenced.
 A controller that should skip a run whose reduction failed waits for that record before it pushes, since a failed push stops the accumulator.
 [`WorkspaceProtocol`](../../packages/essapps/src/ess/apps/protocol.py) states the rules of `freeze`, `release`, and a stopped accumulator.
 

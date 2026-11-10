@@ -2,7 +2,7 @@
 
 A *spec* (`ess.spec.WorkflowSpec`) declares what a workflow takes and what it returns, without the code that computes it.
 Every workflow package writes one spec per workflow.
-The framework, its forms, and its clients read everything they need from the spec's two pydantic models:
+The workspace (`ess.apps.Workspace`, which runs requests), forms, and clients read everything they need from the spec's two pydantic models:
 
 | Model | Holds | A request gives | The workflow gets |
 |---|---|---|---|
@@ -139,7 +139,7 @@ A field typed `Referenced[T]` is filled by an output of another record, such as 
 A field typed `Referenced[sc.DataArray]` would fit every array output, so a picker would list unrelated records; a group's class says what the value is.
 So a workflow that computes an array outputs a group that holds it, such as `ComputedTransmission`.
 `Referenced[A | B]` is refused; a field that takes either is `Referenced[A] | Referenced[B]`.
-The framework does not look inside `T` otherwise, so a field of `T` may be of any type, such as `sc.DataArray`.
+The workspace does not look inside `T` otherwise, so a field of `T` may be of any type, such as `sc.DataArray`.
 
 `Referenced[T]` is `Annotated[T, REFERENCED]`, so pydantic, the binding, and any direct use of the params model see `T`.
 It types a field of the params only: the data of an output are not a reference.
@@ -154,7 +154,7 @@ beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
 
 A reference fills only a field typed `Referenced[...]`, at any depth, or a member of a union there, such as `specimens[0].transmission`; never a whole list.
 `record.ref(name, key)` names one element of a list or dict output, which fits by the element type.
-`acc.ref(name)` names an output of an accumulator: when the workspace (`ess.apps.Workspace`, which runs requests) accepts the request, it replaces the reference by one to the record of the accumulator's state at that moment.
+`acc.ref(name)` names an output of an accumulator: when the workspace accepts the request, it replaces the reference by one to the record of the accumulator's state at that moment.
 
 | Output | Field | Fits |
 |---|---|---|
@@ -336,7 +336,7 @@ A value written inline must round-trip through JSON: a validator that changes an
 
 A check across parameters, such as a Q range the wavelength band can reach, belongs to the workflow and fails when the request runs.
 Since each parameter is validated alone, the params model has no field validators, serializers, or computed fields.
-It may have model validators, but the framework never calls them, since a stage and a driver never get a whole params instance; a binding may, with `IofQParams.model_validate(dict(params))`.
+It may have model validators, but the workspace never calls them, since a stage and a driver never get a whole params instance; a binding may, with `IofQParams.model_validate(dict(params))`.
 
 ## What `WorkflowSpec` refuses
 

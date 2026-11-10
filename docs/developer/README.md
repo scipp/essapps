@@ -1,6 +1,6 @@
 # ESS data-reduction framework
 
-**Status: the workspace in the user's process (`local()`) implements this design, including freeze, `select=`, and persist to a fake store. Not implemented: the service, `client.publish`, and software versions in provenance. The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
+**Status: the local workspace, the workspace in the user's process that `local()` makes, implements this design, including freeze, `select=`, and persist to a fake store. Not implemented: the service, `client.publish`, and software versions in provenance. The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
 
 This page gives an overview of the framework: its components, what each promises the others, and the ideas that client code is built from.
 The details live one level down:
@@ -91,6 +91,7 @@ It promises not to modify what it gets, and not to return an output that shares 
 [bindings.md](../../packages/essspec/docs/bindings.md) shows how to write each.
 
 **Workspace.** The *workspace* of a proposal (an experiment at ESS) runs its requests, and keeps its records and output values.
+It is not a Mantid workspace: what Mantid calls a workspace, a data object, is an output value here.
 There are two deployments:
 
 ```python
@@ -101,7 +102,8 @@ client = connect('https://reduce.example', proposal='p1')              # the ser
 `local` is for interactive work, and can bind a spec to code defined in the notebook.
 The *service*, for unattended work, runs only workflows from installed packages.
 The workspace decides when and where a request runs; the caller sees the same records and outputs either way.
-The service runs a workspace for each proposal, or for each user of a proposal (open question 8), and workspaces share values only through the store.
+The service runs one workspace for each proposal, and workspaces share values only through the store.
+Whether the users of one proposal share the values in memory, or the service separates or bounds them per user, is open (open question 8).
 
 **Client.** A *client* is one connection to one workspace.
 It keeps nothing: every client of a workspace reads, references, and releases the same values.
@@ -188,8 +190,8 @@ beamtime = Template(final.request.spec, params=final.request.params, blanks=('sa
 A record is kept with the proposal's history.
 An output value lives only while something keeps it: the workspace, a pending request that reads it, or the store once persisted.
 The workspace keeps a value until a client releases its record, or the workspace closes.
-Releasing is for every client of the workspace, since they all read the same values.
-Closing a client releases nothing.
+A release by one client applies to every client of the workspace.
+Closing a client made with `Client(workspace, ...)` releases nothing.
 Work whose outputs nothing would keep is cancelled ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)):
 
 ```python
@@ -280,4 +282,5 @@ Not visible in the code of notebooks, apps, or workflow packages:
 5. **Accumulators on the service.** How the service holds a driver, bounds its memory, and drops it ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), scipp/essapps#27).
 6. **Persist at submission.** Should `persist=` at submission also keep the values in the workspace? To be decided when a story needs it.
 7. **Values modified in place.** In the user's process, a notebook that modifies a value `client.output` returned changes what later requests read. A shallow copy protects the dicts of coordinates and masks, not arithmetic in place.
-8. **Workspaces on the service.** Whether two users of one proposal share one workspace, how the service bounds the memory of a workspace, and when it ends a workspace that is idle ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), scipp/essapps#27).
+8. **Workspaces on the service.** A proposal has one workspace and one history. Open are whether its users share the values in memory, or the service separates or bounds them per user, how the service bounds the memory of a workspace, and when it ends a workspace that is idle ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), scipp/essapps#27).
+9. **Reaching stages and accumulators.** No client call lists the stages and accumulators of a workspace or reopens one by its ID, and they are not in the changes. So a second connection, such as a reloaded web page, reads every value the workspace keeps, but reaches a stage or an accumulator of the first connection only if it is handed the object. Whether the client lists them, or reopens one by its ID, is open.

@@ -80,11 +80,11 @@ A story may add a toy spec to the list of toy specs; it must take runs directly,
 ## Conventions
 
 Fixtures: `client` is a client for proposal `p1`.
-In the notebook stories it is `local(proposal='p1', files=files, bind=...)`, a client of a workspace in the user's process ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
+In the notebook stories it is `local(proposal='p1', files=files, bind=...)`, a client of a *local workspace*, the workspace in the user's process that `local()` makes ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 In the batch and automatic stories, sections D and E, it is `connect(url, proposal='p1')`, a client of the service at `url` ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)), which is designed and not implemented.
-In the story tests, every client of `p1` is a `Client` of one in-process `Workspace`, for both, with a fake store in memory.
+In the story tests, every client of `p1`, in the notebook stories and in sections D and E alike, is a `Client` of one `ess.apps.Workspace`, with a fake store in memory.
 In the stories, `connect(proposal=..., user=...)` is `connect(url, ...)` to the same service, by default for `client`'s proposal and user; `user=` stands for logging in as another user.
-`other` is a client of a second workspace.
+`other` is a client of the workspace of proposal `p2`.
 Every workspace in the stories reads the same files and publishes to the same `scicat`.
 `measure(n, counts, **fields)` makes run `n` appear as a raw file with the given counts and metadata, and returns its reference.
 The metadata of such a file also holds its run number, as `run`; `measure(..., proposal=...)` makes the file belong to another proposal.
@@ -387,11 +387,11 @@ A beam centre found again later is a new record under `beam-centre`; the templat
 
 ### C2. Vanadium from the catalogue
 
-Actor: user. Goal: use a vanadium result that another workspace published to SciCat.
+Actor: user. Goal: use a vanadium result that another proposal published to SciCat.
 
 ```python
 vanadium = other.compute(VANADIUM, params={'scaling': Scaling(scale=2.0),
-                                           'vanadium': measure(1, [1.0, 1.0])})
+                                           'vanadium': measure(1, [1.0, 1.0], proposal='p2')})
 pid = other.publish(vanadium.ref('normalization'), 'scicat')
 published = files.add_published(scicat.entries[pid])
 
@@ -401,7 +401,7 @@ result = client.compute(IOFQ, params={'sample': sample, 'normalization': file(pi
 assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]    # [4, 8] / ((1 + 1) * 2)
 assert result.request.params['normalization'] == published
 assert set(client.provenance(result).files()) == {sample, published}
-assert client.records() == [result]              # the vanadium record is on the other workspace
+assert client.records() == [result]              # the vanadium record is in the history of p2
 ```
 
 Provenance stops at the published file, since what lies behind a file belongs to its source. How the workspace reads the published output is system story C2.
@@ -781,7 +781,7 @@ Actor: workflow developer. Goal: run a workflow defined in a notebook without in
 
 ```python
 draft = iofq                                                  # IOFQ's function, being edited
-dev = local(proposal='p1', files=files, bind=[function_binding(IOFQ, draft)])   # a workspace in this process
+dev = local(proposal='p1', files=files, bind=[function_binding(IOFQ, draft)])   # a local workspace
 result = dev.compute(IOFQ, params={'sample': measure(1, [1.0, 2.0, 3.0, 4.0])})
 
 assert dev.output(result, 'iofq').values.tolist() == [3.0, 7.0]
