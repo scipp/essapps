@@ -5,7 +5,7 @@ A batch from files, as a command::
 
     essapps-batch files my.package:read_metadata --with runs.xlsx -o files.csv
     essapps-batch -b my.package:BINDINGS reduce iofq.yaml runs.csv -l water -o done.csv
-    essapps-batch -b my.package:BINDINGS export done.csv reduced -o files.csv
+    essapps-batch -b my.package:BINDINGS export done.csv reduced -o exported.csv
 
 ``iofq.yaml`` is a :class:`~ess.apps.Template`, and ``runs.csv`` has a row for each
 sample, with a column for each blank (see :mod:`.tables`). Each command is one
