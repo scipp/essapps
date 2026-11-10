@@ -223,6 +223,14 @@ raw/60339.nxs,60339,raw,sample
 masks/mask.xml,,mask,
 ```
 
+`files` writes a first version of it from the files in the folder:
+
+```sh
+essapps-batch files ess.instruments.loki.files:read_metadata -o files.csv
+```
+
+`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). A file says its kind, its run, and perhaps its sample, but not what a run is for. So fill in `role` by hand where a row source or a file field needs it: a source that pairs runs reads it, and a field such as the direct beam requires it.
+
 The workspace outlives the command, so a template references a record of an earlier command. A template without blanks is one request, and `reduce` without a table submits it:
 
 ```sh

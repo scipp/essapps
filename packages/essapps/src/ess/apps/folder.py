@@ -7,6 +7,7 @@ and h5py.
 The folder holds what a workspace needs to go on after its process ended::
 
     files.csv     the table of FolderFiles: file, run, kind, role, ...
+                  (written by hand, or started with scan_folder)
     log.jsonl     history (see ess.apps.log)
     store/        persisted outputs, <record>/<output>.h5
 
@@ -23,7 +24,7 @@ the keys of its rows.
 from __future__ import annotations
 
 import csv
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,33 @@ class FolderStore:
         if not path.is_file():
             raise LookupError(f'the store holds no {output} of {record}')
         return hdf5.read(tp, path)
+
+
+_OWN = ('files.csv', 'log.jsonl', 'store')
+"""What the workspace keeps in its folder, which no request names."""
+
+
+def scan_folder(
+    directory: Path, read: Callable[[Path], Mapping[str, Any] | None]
+) -> list[dict[str, Any]]:
+    """
+    A row of ``files.csv`` for each file in ``directory``, at any depth, that
+    ``read`` knows, sorted by path.
+
+    ``read`` takes the path of a file and returns its metadata, such as
+    ``{'kind': 'raw', 'run': 60339}``, or ``None`` for a file that is none of
+    the workspace's. It knows the files of one instrument, so an instrument
+    package provides it. What no file says of itself, such as the role of a
+    run, a person adds to the table.
+    """
+    rows = []
+    for path in sorted(p for p in directory.rglob('*') if p.is_file()):
+        relative = path.relative_to(directory)
+        if relative.parts[0] in _OWN:
+            continue
+        if (metadata := read(path)) is not None:
+            rows.append({'file': str(relative), **metadata})
+    return rows
 
 
 def open_folder(

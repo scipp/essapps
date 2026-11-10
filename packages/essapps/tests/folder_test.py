@@ -10,7 +10,7 @@ import pytest
 import scipp as sc
 
 from ess.apps import Client, file
-from ess.apps.folder import FolderStore, open_folder
+from ess.apps.folder import FolderStore, open_folder, scan_folder
 from ess.apps.testing import read_file
 from ess.spec import Binding, WorkflowSpec, function_binding
 
@@ -156,3 +156,31 @@ def test_a_folder_without_a_file_table_is_refused(
 ) -> None:
     with pytest.raises(FileNotFoundError):
         open_folder(tmp_path, bindings)
+
+
+def by_suffix(path: Path) -> dict[str, object] | None:
+    return {'run': int(path.stem)} if path.suffix == '.json' else None
+
+
+def test_a_scan_gives_a_row_for_each_file_that_the_reader_knows(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / 'raw').mkdir()
+    for name in ('raw/2.json', 'raw/1.json', '3.json', 'notes.txt'):
+        (tmp_path / name).write_text('1.0')
+
+    assert scan_folder(tmp_path, by_suffix) == [
+        {'file': '3.json', 'run': 3},
+        {'file': 'raw/1.json', 'run': 1},
+        {'file': 'raw/2.json', 'run': 2},
+    ]
+
+
+def test_a_scan_leaves_out_what_the_workspace_keeps_in_its_folder(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / 'store' / 'r1').mkdir(parents=True)
+    for name in ('store/r1/7.json', 'files.csv', 'log.jsonl', '1.json'):
+        (tmp_path / name).write_text('1.0')
+
+    assert scan_folder(tmp_path, lambda path: {}) == [{'file': '1.json'}]

@@ -3,6 +3,7 @@
 """
 A batch from files, as a command::
 
+    essapps-batch files my.package:read_metadata -o files.csv
     essapps-batch -b my.package:BINDINGS reduce iofq.yaml runs.csv -l water -o done.csv
     essapps-batch -b my.package:BINDINGS export done.csv reduced -o files.csv
 
@@ -35,7 +36,7 @@ from pydantic import TypeAdapter
 
 from ..client import Client
 from ..errors import SubmitError
-from ..folder import open_folder
+from ..folder import open_folder, scan_folder
 from ..records import Status, Template
 from . import tables
 from .export import export_table
@@ -99,6 +100,11 @@ def _parser() -> argparse.ArgumentParser:
     export.add_argument('table', type=Path, help='a table that reduce wrote')
     export.add_argument('directory', type=Path, help='the folder to write to')
 
+    files = commands.add_parser(
+        'files', parents=[output], help='make files.csv from the files in the folder'
+    )
+    files.add_argument('read', help='a file to its metadata, as package.module:name')
+
     rows = commands.add_parser(
         'rows', parents=[output], help='make a table from the files'
     )
@@ -128,12 +134,23 @@ def _run(client: Client, args: argparse.Namespace) -> pd.DataFrame:
     )
 
 
+def _write(table: pd.DataFrame, path: Path | None) -> None:
+    if path is None:
+        table.to_csv(sys.stdout, index=False)
+    else:
+        tables.write_table(table, path)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the command, and return its exit status (see the module)."""
     parser = _parser()
     args = parser.parse_args(argv)
     if args.output is not None and args.output.suffix not in tables.SUFFIXES:
         parser.error(f'{args.output}: a table is one of {", ".join(tables.SUFFIXES)}')
+    if args.command == 'files':
+        rows = scan_folder(args.workspace, _named(args.read))
+        _write(pd.DataFrame(rows, dtype=str).fillna(''), args.output)
+        return 0
     bind = [] if args.bind is None else _named(args.bind)
     with open_folder(args.workspace, bind, proposal=args.proposal) as client:
         try:
@@ -141,10 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (SubmitError, ValueError) as error:
             sys.stderr.write(f'{error}\n')
             return 2
-    if args.output is None:
-        result.to_csv(sys.stdout, index=False)
-    else:
-        tables.write_table(result, args.output)
+    _write(result, args.output)
     done = args.command != 'reduce' or all(result['status'] == Status.COMPLETED)
     return 0 if done else 3
 
