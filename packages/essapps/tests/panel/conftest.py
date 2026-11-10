@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, NaiveDatetime
 
 from ess.apps import Backend, Client
 from ess.apps.testing import FakeFiles, read_file
@@ -168,6 +168,43 @@ class NestedParams(BaseModel):
 
 
 type Spec = WorkflowSpec[Any, Any]
+
+
+class Value(BaseModel):
+    value: float
+
+
+class Times(BaseModel):
+    at: datetime
+    naive: NaiveDatetime
+    aware: AwareDatetime
+
+
+class Lists(BaseModel):
+    banks: list[int]
+    angles: list[float] = [1.0, 2.0]
+    names: list[str] = []
+
+
+class TimesAndLists(BaseModel):
+    times: Times
+    lists: Lists
+
+
+TIMES_AND_LISTS: Spec = WorkflowSpec(
+    name='times-and-lists',
+    version=1,
+    title='Times and lists',
+    description='Times in each zone, and lists of scalars.',
+    params=TimesAndLists,
+    outputs=Value,
+)
+
+GIVEN_TIMES = {
+    'at': '2026-03-04T05:06:07',
+    'naive': '2026-03-04T05:06:07',
+    'aware': '2026-03-04T05:06:07Z',
+}
 
 FIND: Spec = WorkflowSpec(
     name='find',
