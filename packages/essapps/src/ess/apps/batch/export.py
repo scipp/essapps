@@ -3,7 +3,7 @@
 """
 The files that a person takes away from a batch. It needs pandas, scipp, and h5py.
 
-:func:`export_table` takes the table that :func:`.tables.reduce_table` returned,
+:func:`export_table` takes the table that :func:`.frames.reduce_table` returned,
 and writes the outputs of each completed row to a folder named by its key. It
 finds a row's outputs by the ``record`` column, so it exports what the table
 says, also after later reductions under the same label.
@@ -22,7 +22,7 @@ import pandas as pd
 from .. import hdf5
 from ..client import Client
 from ..records import Record, Status
-from .tables import RESULT
+from .frames import RESULT
 
 RECORD_FILE = '_record.json'
 """The file of the record in the folder of a row; no output is named so."""

@@ -10,7 +10,7 @@ import yaml
 
 from ess.apps import Template
 from ess.apps.batch.cli import load_template, main
-from ess.apps.batch.tables import read_table
+from ess.apps.batch.frames import read_table
 from ess.apps.folder import open_folder
 
 from . import toys

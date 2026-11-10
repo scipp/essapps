@@ -13,7 +13,7 @@ import scipp as sc
 
 from ess.apps import Client, Record, Template, file, hdf5
 from ess.apps.batch.export import export_table, write_outputs
-from ess.apps.batch.tables import reduce_table
+from ess.apps.batch.frames import reduce_table
 from ess.apps.folder import open_folder
 from ess.spec import Binding, WorkflowSpec, function_binding
 

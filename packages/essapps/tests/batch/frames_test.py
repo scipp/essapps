@@ -11,7 +11,7 @@ import pytest
 
 from ess.apps import Client, SubmitError, Template, file
 from ess.apps.batch import Row
-from ess.apps.batch.tables import (
+from ess.apps.batch.frames import (
     described,
     read_table,
     reduce_table,
