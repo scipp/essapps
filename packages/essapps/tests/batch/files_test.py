@@ -387,3 +387,35 @@ def test_main_returns_2_and_says_why_if_two_files_are_of_one_run(
 
     assert code == 2
     assert 'run' in capsys.readouterr().err
+
+
+def test_main_writes_the_files_with_a_run_table_over_a_table_that_exists(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (folder / 'cli_toys_by_stem.py').write_text(
+        "def read(path):\n"
+        "    if path.suffix == '.json':\n"
+        "        return {'run': path.stem.removeprefix('run-')}\n"
+    )
+    monkeypatch.syspath_prepend(folder)
+    runs = str(folder / 'runs.csv')
+    Path(runs).write_text('run,role\n1,sample\n999,sample\n')
+    out = folder / 'files.csv'
+
+    code = main(
+        [
+            '-w',
+            str(folder),
+            'files',
+            'cli_toys_by_stem:read',
+            '-o',
+            str(out),
+            '--with',
+            runs,
+        ]
+    )
+
+    files = pd.read_csv(out, dtype=str, keep_default_na=False)
+    assert code == 0
+    assert dict(zip(files['run'], files['role'], strict=True))['1'] == 'sample'
+    assert '999' not in set(files['run'])

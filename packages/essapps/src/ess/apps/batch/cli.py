@@ -3,7 +3,7 @@
 """
 A batch from files, as a command::
 
-    essapps-batch files my.package:read_metadata -o files.csv
+    essapps-batch files my.package:read_metadata --with runs.xlsx -o files.csv
     essapps-batch -b my.package:BINDINGS reduce iofq.yaml runs.csv -l water -o done.csv
     essapps-batch -b my.package:BINDINGS export done.csv reduced -o files.csv
 
@@ -104,6 +104,13 @@ def _parser() -> argparse.ArgumentParser:
         'files', parents=[output], help='make files.csv from the files in the folder'
     )
     files.add_argument('read', help='a file to its metadata, as package.module:name')
+    files.add_argument(
+        '--with',
+        dest='run_table',
+        type=Path,
+        metavar='TABLE',
+        help='a table with a row per run, which says its role and other metadata',
+    )
 
     rows = commands.add_parser(
         'rows', parents=[output], help='make a table from the files'
@@ -148,14 +155,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.output is not None and args.output.suffix not in tables.SUFFIXES:
         parser.error(f'{args.output}: a table is one of {", ".join(tables.SUFFIXES)}')
     if args.command == 'files':
-        if args.output is not None and args.output.exists():
+        by_hand = args.run_table is None
+        if by_hand and args.output is not None and args.output.exists():
             parser.error(f'{args.output} exists, and may hold what a person added')
         try:
             rows = scan_folder(args.workspace, _named(args.read))
+            files = pd.DataFrame(rows, dtype=str).fillna('')
+            if not by_hand:
+                files = tables.described(files, tables.read_table(args.run_table))
         except ValueError as error:
             sys.stderr.write(f'{error}\n')
             return 2
-        _write(pd.DataFrame(rows, dtype=str).fillna(''), args.output)
+        _write(files, args.output)
         return 0
     if args.bind is None:
         # a workspace goes on with pending records, which need their bindings

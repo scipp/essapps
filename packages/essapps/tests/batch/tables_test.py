@@ -12,6 +12,7 @@ import pytest
 from ess.apps import Client, SubmitError, Template, file
 from ess.apps.batch import Row
 from ess.apps.batch.tables import (
+    described,
     read_table,
     reduce_table,
     rows_of,
@@ -381,3 +382,75 @@ def test_a_table_of_numbers_made_in_a_notebook_is_reduced(
 
     assert list(result['status']) == ['completed', 'completed']
     assert [r.member for r in folder_client.records(label='typed')] == ['1', '2']
+
+
+@pytest.fixture
+def scanned() -> pd.DataFrame:
+    """The table of a scan: two runs with a title, and a file that is no run."""
+    return pd.DataFrame(
+        {
+            'file': ['1.nxs', '2.nxs', 'beam.h5'],
+            'run': ['1', '2', ''],
+            'title': ['one', 'two', ''],
+        }
+    )
+
+
+def test_a_file_gets_what_the_run_table_says_of_its_run(scanned: pd.DataFrame) -> None:
+    run_table = pd.DataFrame({'run': [2, 1], 'role': ['transmission', 'sample']})
+
+    files = described(scanned, run_table)
+
+    assert list(files.columns) == ['file', 'run', 'title', 'role']
+    assert list(files['role']) == ['sample', 'transmission', '']
+
+
+def test_a_run_of_the_run_table_without_a_file_is_ignored(
+    scanned: pd.DataFrame,
+) -> None:
+    run_table = pd.DataFrame({'run': ['1', '7'], 'role': ['sample', 'sample']})
+
+    files = described(scanned, run_table)
+
+    assert list(files['file']) == ['1.nxs', '2.nxs', 'beam.h5']
+    assert list(files['role']) == ['sample', '', '']
+
+
+def test_a_row_of_the_run_table_without_a_run_describes_the_file_it_names(
+    scanned: pd.DataFrame,
+) -> None:
+    run_table = pd.DataFrame(
+        {'run': ['1', ''], 'file': ['', 'beam.h5'], 'role': ['sample', 'direct_beam']}
+    )
+
+    files = described(scanned, run_table)
+
+    assert list(files['role']) == ['sample', '', 'direct_beam']
+
+
+def test_a_cell_of_the_run_table_replaces_what_the_file_says_unless_it_is_empty(
+    scanned: pd.DataFrame,
+) -> None:
+    run_table = pd.DataFrame({'run': ['1', '2'], 'title': ['water', '']})
+
+    files = described(scanned, run_table)
+
+    assert list(files['title']) == ['water', 'two', '']
+
+
+def test_two_rows_of_the_run_table_for_one_run_are_refused(
+    scanned: pd.DataFrame,
+) -> None:
+    run_table = pd.DataFrame({'run': ['1', 1], 'role': ['sample', 'background']})
+
+    with pytest.raises(
+        ValueError, match='two rows of the run table describe the run 1'
+    ):
+        described(scanned, run_table)
+
+
+def test_a_row_of_the_run_table_that_names_neither_run_nor_file_is_refused(
+    scanned: pd.DataFrame,
+) -> None:
+    with pytest.raises(ValueError, match='neither a run nor a file'):
+        described(scanned, pd.DataFrame({'run': [''], 'role': ['sample']}))

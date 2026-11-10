@@ -184,6 +184,7 @@ Each step is a command, and a function for a notebook that takes and returns a p
 
 | Step | Command | Function |
 |---|---|---|
+| list the files | `files package.module:read --with runs` | `tables.described(pd.DataFrame(scan_folder(folder, read)), runs)` |
 | make the table | `rows package.module:source`, or a spreadsheet | `tables.table_of(source(batch.file_infos(client)))` |
 | reduce it | `reduce template table --label ...` | `tables.reduce_table(client, template, table, label=...)` |
 | write the outputs to files | `export table folder` | `export.export_table(client, table, folder)` |
@@ -234,13 +235,23 @@ raw/60339.nxs,60339,raw,sample
 masks/mask.xml,,mask,
 ```
 
-`files` writes a first version of it from the files in the folder:
+`files` writes it from the files in the folder and, with `--with`, a table that says what each run is:
 
 ```sh
-essapps-batch files ess.instruments.loki.files:read_metadata -o files.csv
+essapps-batch files ess.instruments.loki.files:read_metadata --with runs.xlsx -o files.csv
 ```
 
-`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. A file that cannot be read is left out, with a warning. Two files of one run are refused, and so is a table that exists, which may hold what a person added. A file says its kind, its run, and perhaps its sample, but not what a run is for. So fill in `role` by hand where a row source or a file field needs it: a source that pairs runs reads it, and a field such as the direct beam requires it.
+```
+# runs.xlsx: a row per run, kept by a person
+run,role,sample
+60339,sample,water
+60394,transmission,water
+,direct_beam,          <- with a column file: a file that is no run
+```
+
+`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. A file that cannot be read is left out, with a warning. Two files of one run are refused.
+
+A file says its kind, its run, and perhaps its sample, but not what a run is for. A row source that pairs runs reads the `role`, and a field such as the direct beam requires it. The run table gives it (`tables.described`): a row describes the file of its `run`, or the file at its `file` if it has no run. A run of the table that has no file in the folder is ignored, so the table may cover more than the folder holds. A file that no row describes keeps what it says of itself, and where both have a column, a cell of the run table that is not empty wins. Two rows for one run are refused. Without `--with`, the roles are typed into `files.csv`, so `files` then refuses to write over a table that exists.
 
 The workspace outlives the command, so a template references a record of an earlier command. A template without blanks is one request, and `reduce` without a table submits it:
 
