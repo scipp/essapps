@@ -335,8 +335,9 @@ class Summing:
         self._sums: dict[str, Any] = dict.fromkeys(spec.tables, 0.0)
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
-        for run in rows:
-            self._sums[table] += _counts(run)  # in place from the second row
+        contributions = [_counts(run) for run in rows]
+        for contribution in contributions:
+            self._sums[table] += contribution  # in place from the second row
 
     def outputs(self) -> BaseModel:
         return self._finalize(**self._sums, **self._fixed)

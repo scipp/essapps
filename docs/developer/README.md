@@ -275,7 +275,7 @@ Not visible in the code of notebooks, apps, or workflow packages:
 
 ## Open questions
 
-1. **Grouping.** Spreading one accumulator over several nodes needs a merge of two drivers. No requirement asks for it ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
+1. **Grouping.** Spreading one accumulator over several nodes needs a merge of two drivers. No requirement asks for it ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)). A driver whose per-row part the framework runs, split from adding, would let that part run in other processes or on other nodes; ADR 0006 lists when it is worth building.
 2. **Removing a row.** Whether an accumulator offers `remove` depends on whether it keeps each row.
 3. **Labels and members** on records are tentative.
 4. **Looks that compute.** `client.describe` and `select=` give an application the sizes of an output and a cut of it. `select=` only indexes. A projection, or a thick slice summed, would run a spec next to the value without making a record; it is still open whether that is a second call or part of `select=`. So is reading the latest state already added, without waiting for the pushes logged after it, and describing an accumulator's state, which `describe` does not take. A configured plot function takes every output of its record, read whole; whether it may take cuts is open.

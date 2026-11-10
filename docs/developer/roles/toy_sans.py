@@ -429,11 +429,13 @@ class IofQDriver:
     def push(self, table: str, rows: Sequence[Any]) -> None:
         stage = self._contribute[table]
         (key,) = single.keys[table]
-        for row in rows:
-            parts = stage.apply({key: row})
+        contributions = [stage.apply({key: row}) for row in rows]
+        for contribution in contributions:
             old = self._sums.get(table)
             self._sums[table] = (
-                parts if old is None else {k: old[k] + v for k, v in parts.items()}
+                contribution
+                if old is None
+                else {k: old[k] + v for k, v in contribution.items()}
             )
 
     def outputs(self) -> IofQOutputs:

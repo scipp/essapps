@@ -258,7 +258,9 @@ A plain request is an accumulator with no blanks, read once: it too computes wit
 - An output that the spec declares optional may be `None`.
 - A driver may refuse a state, such as one whose runs it cannot combine yet, by raising in `outputs()`. Later pushes may make the state valid.
 
-A push that raises stops the accumulator, since the driver may hold part of its rows.
+A driver computes the contribution of every row of a push, what the row adds to the driver's sums, before it adds any.
+A row that fails then leaves the sums as they were, and the part that computes a contribution touches no state of the driver, so it may run on several threads.
+A push that raises still stops the accumulator, since the workspace cannot tell whether the driver holds part of its rows.
 
 ### What the caller promises
 
@@ -276,11 +278,12 @@ class IofQDriver:
         self._bins = fixed['reduction'].bins
         self._sums = {}                           # per table: numerator and denominator
 
-    def push(self, table, rows):
-        for row in rows:                          # the local path of a sample or a can run
-            parts = numerator_and_denominator(row, self._bins)
+    def push(self, table, rows):                  # each row the local path of a sample or a can run
+        contributions = [numerator_and_denominator(row, self._bins) for row in rows]
+        for contribution in contributions:        # in the order of the rows
             old = self._sums.get(table)
-            self._sums[table] = parts if old is None else [a + b for a, b in zip(old, parts)]
+            self._sums[table] = (contribution if old is None
+                                 else [a + b for a, b in zip(old, contribution)])
 
     def outputs(self):                            # a state read has a sample row and a can row
         sample_num, sample_den = self._sums['sample']
