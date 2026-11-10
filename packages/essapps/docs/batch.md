@@ -190,6 +190,29 @@ Each step is a command, and a function for a notebook that takes and returns a p
 
 A table is a `.csv`, `.tsv`, or `.xlsx` file.
 
+In a notebook, the table is made and changed as a `DataFrame`, and the template as a `Template`; no file is needed:
+
+```python
+from ess.apps import Template
+from ess.apps.batch import tables
+from ess.apps.batch.export import export_table
+from ess.apps.batch.reduction import file_infos
+from ess.apps.folder import open_folder
+
+client = open_folder(Path(), BINDINGS)       # or local(...), for a workspace in memory
+table = tables.table_of(pair_by_sample(file_infos(client)))    # or pd.DataFrame({...})
+table = table[table['name'] != 'test']
+table['thickness'] = [1.0, None, 0.5]        # numbers as numbers; None or NaN is an empty cell
+
+template = Template(IOFQ, params={'can': file(run=60393), ...},
+                    blanks=('sample', 'sample_transmission', 'thickness'))
+done = tables.reduce_table(client, template, table, label='water-series')
+done[done['status'] != 'completed']          # what failed, and why
+exported = export_table(client, done, Path('reduced'))
+```
+
+A cell that is not text is its value, so only a table read from a file is all text. To write `None` itself in a cell, as opposed to leaving it empty, write the text `null`.
+
 **The table.** The first column holds the key of each row; it may also be a blank, as `sample` above. A column named as a blank holds its cells. A column of any other name is info, which comes back as it is. Two mistakes are refused: a blank that is no column, such as a misspelt header, and a column named as a parameter that the template fixes, whose cells no row would use. An empty cell takes the parameter's default.
 
 **A cell** is read as JSON if it is JSON, so `1.5`, `null`, and `{"x": 0, "y": 1}` are values, and anything else is text. Text that is JSON is written in quotes, such as `"12"` for a sample name at a string parameter. At a parameter that is a file field, or a list of them, a whole number names a run, `pid:...` a file by its kind, and other text a path, relative to the working directory. The same holds for the values of the template's file. A file field inside a group takes the JSON form, `{"@ref": "file", "file": "run:60339"}`. Every file is one that the workspace's file source knows.

@@ -4,6 +4,9 @@
 The rows of a batch as a table of text, a pandas ``DataFrame``, which a person
 writes in a spreadsheet and a program writes to a file. It needs pandas.
 
+A table read from a file holds text; one made in a notebook may hold numbers,
+gaps (``None``, ``NaN``), and any value that a request takes.
+
 The first column holds the key of each row. A column named as a parameter holds
 the cells of that column of the batch, and any other column is ``info``. The key
 column may itself be a parameter, such as the sample run::
@@ -21,7 +24,9 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Sequence
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
@@ -59,6 +64,18 @@ def write_table(table: pd.DataFrame, path: Path) -> None:
         raise ValueError(f'{path}: a table is one of {", ".join(_READERS)}')
 
 
+def _empty(cell: Any) -> bool:
+    """Whether a cell holds nothing: no text, or what pandas reads a gap as."""
+    return cell is None or cell is pd.NA or cell == '' or cell != cell
+
+
+def _value(cell: Any) -> Any:
+    """A cell of text as :func:`.text.read_cell` reads it; any other as it is."""
+    if isinstance(cell, str):
+        return read_cell(cell)
+    return cell.item() if isinstance(cell, np.generic) else cell
+
+
 def rows_of(
     table: pd.DataFrame, model: type[BaseModel], columns: Collection[str]
 ) -> list[Row]:
@@ -66,7 +83,8 @@ def rows_of(
     A row of a batch for each row of ``table``, keyed by its first column.
 
     ``columns`` are the columns of the batch, parameters of ``model``. An empty
-    cell is left out of the row's values. Raises ``ValueError`` if the table
+    cell is left out of the row's values. A cell that is not text, as in a table
+    made in a notebook, is its value. Raises ``ValueError`` if the table
     lacks one of ``columns``, so that a misspelt header is not read as info, or
     has a column of another parameter, whose cells no row would use.
     """
@@ -80,9 +98,9 @@ def rows_of(
         )
     rows = []
     for record in table.to_dict('records'):
-        cells = {name: str(text) for name, text in record.items() if text != ''}
-        values = {c: read_cell(cells[c]) for c in columns if c in cells}
-        info = {name: text for name, text in cells.items() if name not in columns}
+        cells = {name: cell for name, cell in record.items() if not _empty(cell)}
+        values = {c: _value(cells[c]) for c in columns if c in cells}
+        info = {n: str(cell) for n, cell in cells.items() if n not in columns}
         key = str(record[table.columns[0]])
         rows.append(Row(key, with_named_files(model, values), info))
     return rows

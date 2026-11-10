@@ -74,6 +74,8 @@ def named_file(name: Any) -> Any:
     path, relative to the working directory. Anything else is returned as it is,
     for the workspace to refuse.
     """
+    if isinstance(name, float) and name.is_integer():
+        name = int(name)  # pandas holds whole numbers next to a gap as floats
     if isinstance(name, int) and not isinstance(name, bool):
         return file(run=name)
     if not isinstance(name, str):

@@ -317,3 +317,41 @@ def test_rows_pending_after_a_restart_finish_and_are_not_submitted_again(
         assert list(result['status']) == ['completed', 'completed']
         assert list(result['record']) == list(done['record'])
         assert len(second.records(label='scan')) == 2
+
+
+# A table made in a notebook
+
+
+def test_a_table_of_numbers_and_gaps_is_read_as_one_of_text() -> None:
+    typed = pd.DataFrame(
+        {
+            'name': ['a', 'b', 'c'],
+            'sample': [1.0, 2.0, None],  # pandas holds numbers next to a gap as floats
+            'thickness': [0.5, float('nan'), 2],
+        }
+    )
+    text = frame(
+        name=['a', 'b', 'c'], sample=['1', '2', ''], thickness=['0.5', '', '2']
+    )
+    columns = ['sample', 'thickness']
+
+    assert rows_of(typed, toys.Params, columns) == rows_of(text, toys.Params, columns)
+
+
+def test_a_cell_may_hold_a_value_that_is_not_text() -> None:
+    table = pd.DataFrame({'name': ['a'], 'binning': [{'bins': 3}], 'offset': [None]})
+
+    (row,) = rows_of(table, toys.Params, ['binning', 'offset'])
+
+    assert row.values == {'binning': {'bins': 3}}
+
+
+def test_a_table_of_numbers_made_in_a_notebook_is_reduced(
+    folder_client: Client, template: Template
+) -> None:
+    table = pd.DataFrame({'sample': [1, 2], 'transmission': [1001, 1002]})
+
+    result = reduce_table(folder_client, template, table, label='typed')
+
+    assert list(result['status']) == ['completed', 'completed']
+    assert [r.member for r in folder_client.records(label='typed')] == ['1', '2']
