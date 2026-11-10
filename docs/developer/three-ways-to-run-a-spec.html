@@ -150,7 +150,8 @@ a { color: var(--stage); }
   <div><dt>push</dt><dd>Appends one or more rows to one table of an accumulator.</dd></div>
   <div><dt>plain request</dt><dd>A spec with every value given. The workspace keeps nothing between plain requests.</dd></div>
   <div><dt>stage, accumulator</dt><dd>Templates the workspace keeps. A stage's blanks are replaced on each call; an accumulator's tables grow with each push.</dd></div>
-  <div><dt>state n</dt><dd>An accumulator after its first n pushes. Not a record: <code>client.output</code> copies it, and <code>client.freeze</code> makes the last state a record of its plain request.</dd></div>
+  <div><dt>state n</dt><dd>An accumulator after its first n pushes. Not a record: <code>client.output</code> copies it, and <code>client.freeze</code> makes the logged state a record of its plain request.</dd></div>
+  <div><dt>logged state</dt><dd>State n for the n pushes logged so far, whether or not they have been added. A read is of the logged state when it is called, a freeze once no other freeze of the accumulator is being checked.</dd></div>
   <div><dt>driver</dt><dd>The object behind an accumulator, with <code>push(table, rows)</code> and <code>outputs()</code>. The workflow package writes it, e.g. to sum a numerator and a denominator.</dd></div>
   <div><dt>controller</dt><dd>Client code that decides what to submit, push, and release: a notebook, an app, the trigger loop.</dd></div>
 </dl>
@@ -229,7 +230,7 @@ can: list[Run] = []
 acc.push('sample', [611])
 acc.push('can', [614])
 client.output(acc, 'iofq')</pre>
-      <div class="out">→ a copy of state n; <code>client.freeze(acc)</code> makes the last state a record</div>
+      <div class="out">→ a copy of state n; <code>client.freeze(acc)</code> makes the logged state a record</div>
       <div class="s4"><b>order</b>: pushes into different tables commute</div>
     </div>
   </div>
@@ -312,7 +313,7 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
     <div>
       <div class="eyebrow" style="margin-bottom:6px">Not symmetric, on purpose</div>
       <div class="broken">
-        <div><h3>Stage call vs. push</h3><p>A stage call makes a record. A push makes none, and neither does a read of a state. Only a freeze makes a record, of the last state, which requests then reference.</p></div>
+        <div><h3>Stage call vs. push</h3><p>A stage call makes a record. A push makes none, and neither does a read of a state. Only a freeze makes a record, of the logged state, which requests then reference.</p></div>
         <div><h3>Single-run spec × accumulator</h3><p>An accumulator appends rows, and a single-run spec has no table to append to.</p></div>
         <div><h3>Cost</h3><p>Arrival keeps outputs, not cost. A driver that keeps its rows, such as one that stitches angles, repeats the work over every row so far at each read.</p></div>
         <div><h3>Rows within one table</h3><p>A state's plain request lists them in push order. Whether order matters is the driver's business; for a sum, only through rounding.</p></div>
@@ -343,12 +344,12 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
       <tr><th>Template</th><td class="plain">none: every value given</td><td class="stage"><code>Template(SPEC, fixed, blanks=('reduction',))</code><br><span class="note">blanks: any params</span></td><td class="acc"><code>Template(IOFQ_MULTI, fixed, blanks=('sample', 'can'))</code><br><span class="note">blanks: tables only</span></td></tr>
       <tr><th>Open</th><td class="plain">—</td><td class="stage"><code>s = client.stage(t)</code></td><td class="acc"><code>acc = client.accumulator(t)</code></td></tr>
       <tr><th>Each step</th><td class="plain"><code>client.submit(SPEC, values)</code></td><td class="stage"><code>client.submit(s, {'reduction': {'bins': 50}})</code><br><span class="note">blanks <b>replaced</b></span></td><td class="acc"><code>acc.push('sample', [row])</code><br><span class="note">rows <b>appended</b></span></td></tr>
-      <tr><th>Read</th><td class="plain" colspan="2"><code>client.output(record, 'iofq')</code>, <code>record.ref('iofq')</code></td><td class="acc"><code>client.output(acc, 'iofq')</code><br><span class="note">copies the current state</span><br><code>client.freeze(acc)</code>, then <code>record.ref('iofq')</code></td></tr>
+      <tr><th>Read</th><td class="plain" colspan="2"><code>client.output(record, 'iofq')</code>, <code>record.ref('iofq')</code></td><td class="acc"><code>client.output(acc, 'iofq')</code><br><span class="note">copies the logged state</span><br><code>client.freeze(acc)</code>, then <code>record.ref('iofq')</code></td></tr>
 
       <tr class="group"><th colspan="4">Workspace</th></tr>
       <tr><th>Calls the binding</th><td class="plain"><code>compute(params)</code></td><td class="stage"><code>call = make_stage(fixed, blanks)</code> once,<br><code>call({'reduction': {'bins': 50}})</code> per request</td><td class="acc"><code>driver = make_accumulator(fixed, blanks)</code> once,<br><code>driver.push(table, rows)</code> per push,<br><code>driver.outputs()</code> once per state read</td></tr>
       <tr><th>Keeps between steps</th><td class="plain">nothing</td><td class="stage">the fixed part, as a cache it may drop</td><td class="acc">the driver<br><span class="note">e.g. numerator and denominator in Q, 0.34 MB for LoKI</span></td></tr>
-      <tr><th>Each step makes</th><td class="plain">a record</td><td class="stage">a record, identical to the plain request's; it does not name the stage</td><td class="acc">state n (no record). <code>client.freeze(acc)</code> makes the record of the plain request of the last state, which does not name the accumulator</td></tr>
+      <tr><th>Each step makes</th><td class="plain">a record</td><td class="stage">a record, identical to the plain request's; it does not name the stage</td><td class="acc">state n (no record). <code>client.freeze(acc)</code> makes the record of the plain request of the logged state, which does not name the accumulator</td></tr>
       <tr><th>Symmetry</th><td class="plain">one-row: between the two specs</td><td class="stage">caching: with the plain request</td><td class="acc">arrival: with the plain request; order: between pushes</td></tr>
     </tbody>
   </table>
@@ -478,11 +479,11 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
   <div class="cols">
     <ul class="tight">
       <li>Push and open return once logged. The workspace adds pushes one at a time, in log order, on its workers.</li>
-      <li>A read or a freeze is of the state after the pushes logged so far. A read waits for that state and copies it. A freeze returns at once, and a request that references its record waits for the state, as for any pending record.</li>
+      <li>A read or a freeze is of the logged state. A read waits for that state and copies it. A freeze returns without waiting for the pushes to be added, and a request that references its record waits for the state, as for any pending record.</li>
     </ul>
     <ul class="tight">
       <li>A state is read only if its plain request would be accepted. Whole-table checks run at the read, not at the push.</li>
-      <li>A state is a record only once frozen: <code>client.freeze(acc)</code> makes the last state a record of its plain request, without a copy. A request references that record, never the accumulator.</li>
+      <li>A state is a record only once frozen: <code>client.freeze(acc)</code> makes the logged state a record of its plain request, without a copy. A request references that record, never the accumulator.</li>
     </ul>
   </div>
 </section>

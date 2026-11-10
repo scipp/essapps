@@ -223,7 +223,7 @@ So a client that shows outputs asks `client.readable` for the records it shows, 
 
 A *stage* keeps the part of a computation that depends only on its fixed values, so that tuning a parameter does not load the runs again.
 An *accumulator* keeps a sum over runs, so that adding a run does not reduce the earlier ones.
-Each call through either makes the record of the equivalent plain request ([accumulators.md](accumulators.md)):
+A call through a stage, and a freeze of an accumulator, make the record of the equivalent plain request; a push and a read make none ([accumulators.md](accumulators.md)):
 
 ```python
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))

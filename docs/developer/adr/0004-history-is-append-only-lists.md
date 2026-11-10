@@ -20,7 +20,7 @@ The stories need four things from history:
 
 Two forces bound its size.
 
-**Records of states repeat rows.** The plain request of state n holds the rows of the first n pushes, and the record of a freeze is the record of that request ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)).
+**The record of a freeze.** The plain request of state n holds the rows of the first n pushes, and the record of a freeze is the record of that request ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)).
 Story D7 pushes 300 runs and freezes once, so a record that listed its rows would hold the 300 rows a second time.
 A read of a state makes no record.
 
@@ -38,7 +38,7 @@ History is four lists, each only appended to:
 | pushes | push into an accumulator | accumulator ID, one row per table |
 
 - A record never changes. Its status is its finish, and a record without one is pending.
-- The record of a freeze ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)) is stored as the accumulator and its number of pushes. Its rows are those of the first n pushes, taken from the pushes list when needed. So history grows by a constant amount per push and per freeze, and reads of a state add nothing.
+- The record of a freeze ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)) is stored as the accumulator and its number of pushes. Its request is listed from the pushes list when it is read: its rows are those of the first n pushes. So the record of a freeze takes a constant amount of history, and reads of a state add nothing.
 - A persist request is part of the record. The outcome of the write is the record's finish ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)).
 - Output values are not history ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)). History names no file.
 - Once a proposal has been idle ([`ess.apps.protocol`](../../../packages/essapps/src/ess/apps/protocol.py)) for the retention period, days to weeks as the deployment sets it, its history is dropped as a whole. An output needed for longer is published (README, [Provenance and publication](../README.md#provenance-and-publication)).
@@ -66,3 +66,7 @@ History is four lists, each only appended to:
 - Old event formats must stay readable as long as the log is kept.
 - A workspace that rebuilds its indexes of records from the log at start holds every record of its proposal in memory.
 - A restart keeps history, not values, so pending work goes on only if what it reads was persisted ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)).
+
+## Open
+
+- **The form of the record of a freeze.** Only a freeze makes a record of a state, and an accumulator is frozen again only after a freeze has failed or been cancelled. A record of a freeze stored with its rows would hold each row about twice, once in its push and once in the record. Whether storing it as the accumulator and its number of pushes still earns its place is open.

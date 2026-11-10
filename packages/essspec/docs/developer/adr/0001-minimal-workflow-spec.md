@@ -92,9 +92,8 @@ sources:
   `{'bins': 100}`;
 - a *file*, `file(run=60339)`, which the workspace resolves to the file's
   identity in the request phase;
-- a *reference to an output*, which names an output of an earlier record or
-  of an accumulator. In the request phase it is the reference; in the call
-  phase it is the data.
+- a *reference to an output*, which names an output of an earlier record. In
+  the request phase it is the reference; in the call phase it is the data.
 
 The *JSON form* of a value is what it dumps to as JSON,
 `model_dump(mode='json')`. The record holds the JSON form of each value, file,
@@ -264,9 +263,9 @@ found beam centre, and an array is a field of a group, such as
 A reference to an output (`OutputRef`) names a record, an output name, and
 optionally the key of one element of a list or dict output. The identity of
 the record is opaque to the spec, as a file's is. In a request, the framework
-accepts the ID of an accumulator in `record`: it replaces it, when it accepts
-the request, by the record of the accumulator's state, so a record never names
-an accumulator. The JSON form of a reference to an output, and of a file
+refuses the ID of an accumulator in `record`: a request references the record
+of the accumulator's freeze instead, so a record never names an accumulator.
+The JSON form of a reference to an output, and of a file
 (`FileRef`: one identity string), is an object with the key `@ref`, which
 names its kind:
 

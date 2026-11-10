@@ -38,8 +38,8 @@ A joint fit, such as the scale factors of reflectometry angles, has a driver tha
 Only a driver accumulates: the framework never decides how rows combine, not even by keeping them.
 The framework needs no particular driver; a package writes its own or adapts a generic one, such as `StreamProcessor`.
 
-**A freeze makes a record of the plain request of the last state.**
-`client.freeze(acc)` logs the record of the plain request of the state after the pushes logged so far.
+**A freeze makes a record of the plain request of the logged state.**
+`client.freeze(acc)` logs the record of the plain request of the accumulator's *logged state*, state n for the n pushes logged so far ([ADR 0003](0003-accumulators-add-in-place.md) says when n is taken).
 A request references an output of that record, `OutputRef(record=..., output='iofq')`, as it references any record.
 Records never name an accumulator, as records of calls through a stage never name the stage.
 The record's outputs are what the driver returned, not a copy.

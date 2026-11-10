@@ -21,9 +21,9 @@ Making one over a binding that does not serve it is refused.
 
 - A call through a stage, and every state of an accumulator, has a plain request. The record of a stage call, and of a freeze, is the record of that request.
 - A push returns once logged. The workspace adds it later, in the order logged.
-- `client.output(acc, ...)` copies the state after the pushes logged so far, and makes no record.
+- `client.output(acc, ...)` copies the *logged state*, state n for the n pushes logged so far, and makes no record.
 - Push n+1 waits until everyone reading state n is done, so no reader ever sees a value change.
-- `freeze` turns the last state into an ordinary record, without a copy. A request references that record, never the accumulator.
+- `freeze` turns the logged state into an ordinary record, without a copy. A request references that record, never the accumulator.
 - A failure in a push stops the accumulator for good.
 
 ## Stage
@@ -75,7 +75,7 @@ A plain request with a repeated row is refused too.
 
 ## Reading a state
 
-Each call below is of state n, where n is the number of pushes logged when it is called.
+Each call below reads the logged state, state n, where n is the number of pushes logged when it is called; a freeze takes n once no other freeze of the accumulator is being checked.
 It does not wait for these pushes to be added before it returns, except where it returns the value itself:
 
 | Call | Returns | Push n+1 waits |
@@ -85,10 +85,9 @@ It does not wait for these pushes to be added before it returns, except where it
 | `client.provenance(acc)` | the provenance of state n's plain request, at once | no |
 
 `select=` copies only the part it names, but the outputs of a state are computed whole, the first time a read or a freeze needs them.
-Every client that holds an open accumulator may read it.
 
 A request, a template, and a push never reference an accumulator.
-Each is refused with a `SubmitError` that says to freeze the accumulator first.
+Each is refused with a `SubmitError`, which names the record of the accumulator's freeze if one is pending or has completed.
 A request reads an accumulator's outputs through the record of its freeze, as any other record's (see Freeze).
 
 **Push n+1 waits for the readers of state n.** A driver only moves forward, and may add the next push into the arrays its last outputs returned.
@@ -107,7 +106,7 @@ In Rust's terms, each reader of a state holds a shared borrow of the driver, and
 ## Freeze, release, stop
 
 ```python
-total = client.freeze(iofq)                 # the record of the last state; no copy, no more pushes
+total = client.freeze(iofq)                 # the record of the logged state; no copy, no more pushes
 client.output(total, 'iofq')
 final = client.freeze(volume, persist=True) # the store keeps the outputs, not the workspace
 cut = client.submit(CUT, params={'position': Position(index=0), 'volume': final.ref('volume')})
@@ -116,7 +115,7 @@ cut = client.submit(CUT, params={'position': Position(index=0), 'volume': final.
 At the end of a scan, freezing makes the final volume an ordinary record, which the workspace keeps.
 A client can reference that record from a request, a template, or a push, where the accumulator itself may not be referenced.
 A record of a state while the accumulator goes on is not offered ([ADR 0003](adr/0003-accumulators-add-in-place.md), Open).
-A controller that should skip a run whose reduction failed waits for that record before it pushes, since a failed push stops the accumulator.
+A controller that should skip a run whose reduction failed waits for the record of that run's reduction before it pushes, since a failed push stops the accumulator.
 [`WorkspaceProtocol`](../../packages/essapps/src/ess/apps/protocol.py) states the rules of `freeze`, `release`, and a stopped accumulator.
 
 ## Validation
