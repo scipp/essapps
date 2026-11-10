@@ -14,6 +14,7 @@ from ess.apps import (
     Client,
     NotReadable,
     Record,
+    RecordFailed,
     Selector,
     Status,
     SubmitError,
@@ -213,6 +214,18 @@ def test_another_client_releases_what_the_workspace_keeps(
         toys.submit_shift(client, stage, 1.0)
     with pytest.raises(NotReadable, match=f'accumulator {total.id} is not open'):
         client.output(total)
+
+
+def test_a_release_by_another_client_cancels_pending_work_and_its_read_fails(
+    client: Client, other: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    load = client.submit(toys.load_request(1))
+    other.release(load)
+    loading.set()
+
+    with pytest.raises(RecordFailed, match=f'^record {load.id} cancelled'):
+        client.output(load, 'value')
 
 
 def test_another_client_s_name_is_on_what_it_submits_and_freezes(
