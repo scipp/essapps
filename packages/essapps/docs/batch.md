@@ -154,7 +154,7 @@ params:
   can_transmission: 60392
   empty_beam: 60392
   direct_beam: /data/direct-beam.h5        # a path; null for none
-  masks: {'@ref': output, record: ff0386aa..., output: masks}
+  masks: {'@latest': masks, output: masks}  # the newest record labelled masks
   beam_centre: {x: -0.029, y: -0.018, z: 4.116}
   wavelength: {start: 1.0, stop: 13.0, num_bins: 200}
   q: {start: 0.01, stop: 0.3, num_bins: 100}
@@ -170,11 +170,11 @@ sample,sample_transmission,name
 ```sh
 B="essapps-batch --bind ess.instruments.loki.bindings:BINDINGS"
 $B reduce iofq.yaml runs.csv --label water-series -o done.csv
-$B export done.csv reduced -o files.csv
+$B export done.csv reduced -o exported.csv
 ```
 
 ```
-# files.csv
+# exported.csv
 sample,sample_transmission,name,status,record,failure,iofq,transmission
 60339,60394,water,completed,2e35ce83...,,reduced/60339/iofq.h5,reduced/60339/transmission.h5
 60250,60394,sds,failed,bd9864f1...,OSError: ...,,
@@ -203,27 +203,37 @@ reduced/60339/iofq.h5          what scipp.io.load_hdf5 reads: a DataGroup of the
 reduced/60339/_record.json     the record: every file and value the outputs came from
 ```
 
-An output with a JSON form, such as a beam centre, is `<output>.json`. A format of a technique, such as NXcanSAS, is not written. Once outputs can be published to a catalogue, a column of identifiers takes the place of the paths.
+These files are a placeholder (`ess.apps.hdf5` states the format). A format of a technique, such as NXcanSAS, is not written. Once outputs can be published to a catalogue, a column of identifiers takes the place of the paths.
 
 **Exit status.** 0: done, and for `reduce`, every row completed. 2: the command or a row was refused, and nothing ran. 3: a row did not complete. 1: any other error.
 
-**The workspace** of the command is a folder, `--workspace`, the working directory by default (`ess.apps.folder`):
+**The workspace** of the command is a folder, `--workspace`, the working directory by default (`ess.apps.folder`). It holds one input, which you write, and what the commands keep:
 
 ```
-files.csv      file,run,kind,role,...   the table of FolderFiles; a path is relative to the folder
+files.csv      input: the raw files, masks, and calibrations that a request may name
 log.jsonl      history
-store/         every output of every row
+store/         every output of every row, <record>/<output>.h5
 ```
 
-It outlives the command, so a template references a record of an earlier command by its ID. A template without blanks is one request, and `reduce` without a table submits it:
+`files.csv` is the table of `FolderFiles`, a stand-in for a catalogue: a row per file with its path, relative to the folder, and its metadata as text. A run number in a template or a table is looked up here.
+
+```
+file,run,kind,role
+raw/60339.nxs,60339,raw,sample
+masks/mask.xml,,mask,
+```
+
+The workspace outlives the command, so a template references a record of an earlier command. A template without blanks is one request, and `reduce` without a table submits it:
 
 ```sh
 $B reduce detector.yaml --label detector      # prints key,status,record,failure
-$B reduce masks.yaml --label masks            # masks.yaml names the detector's record
+$B reduce masks.yaml --label masks            # detector: {'@latest': detector, output: detector}
 $B reduce iofq.yaml runs.csv --label water-series
 ```
 
-One command holds the folder at a time. If a command was killed, the next one first finishes the rows that were running. The store holds pickles, which only the same versions of the packages read back, and nothing removes them. The metadata in `files.csv` are text.
+`{'@latest': label, output: name}` is read when the command starts, as the output of the newest record under the label, of `member` if given. The record of each row holds the ID that it was read as. A reference by ID is `{'@ref': output, record: ..., output: ...}`.
+
+One command holds the folder at a time. If a command was killed, the next one first finishes the rows that were running. Nothing removes the files of the store.
 
 ## The UI
 

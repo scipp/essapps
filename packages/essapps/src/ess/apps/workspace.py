@@ -1150,7 +1150,14 @@ class Workspace(WorkspaceProtocol):
         """
         if self._store is None:
             raise NotReadable(f'{ref}: the workspace has no store')
-        return _element(self._store.read(ref.record, ref.output), ref)
+        spec_id = self._views.records[ref.record].spec
+        if (binding := self._bindings.get(spec_id)) is None:
+            raise NotReadable(
+                f'{ref}: the workspace does not run {spec_id}, which says what '
+                'the output is'
+            )
+        tp = binding.spec.outputs.model_fields[ref.output].annotation
+        return _element(self._store.read(ref.record, ref.output, tp), ref)
 
     def _let_go(self, keys: Iterable[_Read]) -> None:
         """

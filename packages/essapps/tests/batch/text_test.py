@@ -8,8 +8,14 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from ess.apps import file
-from ess.apps.batch.text import named_file, read_cell, with_named_files, write_cell
+from ess.apps import Client, file
+from ess.apps.batch.text import (
+    named_file,
+    read_cell,
+    with_latest,
+    with_named_files,
+    write_cell,
+)
 from ess.spec import FileRef, Referenced, RunFile
 
 from . import toys
@@ -118,3 +124,76 @@ def test_names_at_file_parameters_become_files_and_other_values_stay(
     model: type[BaseModel], params: dict[str, Any], expected: dict[str, Any]
 ) -> None:
     assert with_named_files(model, params) == expected
+
+
+# @latest
+
+
+def _find(client: Client, run: int, *, label: str, member: str | None = None):
+    record = client.submit(
+        toys.FIND, params={'sample': file(run=run)}, label=label, member=member
+    )
+    client.wait([record])
+    return record
+
+
+def test_latest_becomes_the_reference_to_the_output_of_the_newest_record(
+    folder_client: Client,
+) -> None:
+    _find(folder_client, 1, label='offset')
+    newest = _find(folder_client, 2, label='offset')
+
+    value = with_latest(folder_client, {'@latest': 'offset', 'output': 'offset'})
+
+    assert value == newest.ref('offset')
+
+
+def test_latest_with_a_member_selects_among_the_members_of_the_label(
+    folder_client: Client,
+) -> None:
+    wanted = _find(folder_client, 1, label='offset', member='a')
+    _find(folder_client, 2, label='offset', member='b')
+
+    value = with_latest(
+        folder_client, {'@latest': 'offset', 'member': 'a', 'output': 'offset'}
+    )
+
+    assert value == wanted.ref('offset')
+
+
+def test_latest_is_found_inside_a_dict_and_a_list(folder_client: Client) -> None:
+    record = _find(folder_client, 1, label='offset')
+    latest = {'@latest': 'offset', 'output': 'offset'}
+
+    value = with_latest(folder_client, {'a': {'b': [latest, 1]}, 'c': 2})
+
+    assert value == {'a': {'b': [record.ref('offset'), 1]}, 'c': 2}
+
+
+def test_latest_of_a_label_without_records_is_refused(folder_client: Client) -> None:
+    with pytest.raises(ValueError, match='nothing'):
+        with_latest(folder_client, {'@latest': 'nothing', 'output': 'offset'})
+
+
+def test_latest_of_an_output_that_the_record_lacks_is_refused(
+    folder_client: Client,
+) -> None:
+    _find(folder_client, 1, label='offset')
+
+    with pytest.raises(ValueError, match='nothing'):
+        with_latest(folder_client, {'@latest': 'offset', 'output': 'nothing'})
+
+
+def test_latest_with_another_key_next_to_it_is_refused(folder_client: Client) -> None:
+    _find(folder_client, 1, label='offset')
+
+    with pytest.raises(ValueError, match='member and output only'):
+        with_latest(
+            folder_client, {'@latest': 'offset', 'output': 'offset', 'extra': 1}
+        )
+
+
+def test_a_value_without_latest_comes_back_equal(folder_client: Client) -> None:
+    value = {'a': [1, {'b': 'x'}], 'c': None, 'd': 2.5}
+
+    assert with_latest(folder_client, value) == value

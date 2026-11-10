@@ -11,7 +11,7 @@ sample, with a column for each blank (see :mod:`.tables`). Each command is one
 function, for a notebook: :func:`.tables.reduce_table` and
 :func:`.export.export_table`. The workspace is kept in a folder (see
 :mod:`ess.apps.folder`), so a template may reference a record of an earlier
-command by its ID.
+command, by its ID or by its label (see :func:`.text.with_latest`).
 
 The guide is ``packages/essapps/docs/batch.md``.
 
@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ from ..records import Status, Template
 from . import tables
 from .export import export_table
 from .reduction import file_infos
+from .text import with_latest
 
 
 def load_template(path: Path) -> Template:
@@ -114,9 +116,10 @@ def _run(client: Client, args: argparse.Namespace) -> pd.DataFrame:
         if args.table is None
         else tables.read_table(args.table)
     )
+    template = load_template(args.template)
     return tables.reduce_table(
         client,
-        load_template(args.template),
+        replace(template, params=with_latest(client, template.params)),
         table,
         label=args.label,
         staged=args.staged,

@@ -12,13 +12,31 @@ import scipp as sc
 from ess.apps import Client, file
 from ess.apps.folder import FolderStore, open_folder
 from ess.apps.testing import read_file
-from ess.spec import Binding, function_binding
+from ess.spec import Binding, WorkflowSpec, function_binding
 
 from .batch import toys
 
 
 class Array(pydantic.BaseModel, arbitrary_types_allowed=True):
     data: sc.DataArray
+
+
+class Curve(pydantic.BaseModel):
+    iofq: Array
+
+
+class NoParams(pydantic.BaseModel):
+    pass
+
+
+CURVE = WorkflowSpec(
+    name='curve',
+    version=1,
+    title='Curve',
+    description='A toy.',
+    params=NoParams,
+    outputs=Curve,
+)
 
 
 def _find(params: toys.FindParams) -> toys.FindOutputs:
@@ -60,34 +78,27 @@ def find_offset(client: Client) -> str:
     return record.id
 
 
-def test_a_store_reads_back_a_model_holding_an_array(tmp_path: Path) -> None:
-    store = FolderStore(tmp_path)
-    x = sc.arange('x', 3.0, unit='m')
-    array = sc.DataArray(x, coords={'x': x})
-
-    store.write('r1', 'out', Array(data=array))
-
-    assert sc.identical(store.read('r1', 'out').data, array)
-
-
-def test_a_store_reads_back_a_data_group_with_an_array_and_a_list(
-    tmp_path: Path,
-) -> None:
-    store = FolderStore(tmp_path)
-    x = sc.arange('x', 3.0, unit='m')
-    group = sc.DataGroup(array=sc.DataArray(x, coords={'x': x}), items=[1, 'a'])
-
-    store.write('r1', 'out', group)
-
-    read = store.read('r1', 'out')
-    assert isinstance(read, sc.DataGroup)
-    assert sc.identical(read['array'], group['array'])
-    assert read['items'] == [1, 'a']
-
-
 def test_a_store_refuses_to_read_what_was_never_written(tmp_path: Path) -> None:
     with pytest.raises(LookupError):
-        FolderStore(tmp_path).read('r1', 'out')
+        FolderStore(tmp_path).read('r1', 'out', float)
+
+
+def test_a_second_session_reads_a_group_holding_an_array_that_the_first_persisted(
+    folder: Path,
+) -> None:
+    x = sc.arange('x', 3.0, unit='m')
+    array = sc.DataArray(x, coords={'x': x})
+    bindings = [function_binding(CURVE, lambda params: Curve(iofq=Array(data=array)))]
+
+    with open_folder(folder, bindings) as first:
+        record = first.submit(CURVE, params={}, persist=True)
+        first.wait([record])
+    with open_folder(folder, bindings) as second:
+        (record,) = second.records(ids=[record.id])
+        read = second.output(record, 'iofq')
+
+    assert isinstance(read, Array)
+    assert sc.identical(read.data, array)
 
 
 def test_a_second_session_lists_the_records_of_the_first(

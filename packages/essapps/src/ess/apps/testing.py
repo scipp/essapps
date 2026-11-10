@@ -199,7 +199,7 @@ class FakeStore:
         with self._lock:
             self._values[(record, output)] = copy.deepcopy(value)
 
-    def read(self, record: str, output: str) -> Any:
+    def read(self, record: str, output: str, tp: Any = None) -> Any:
         with self._lock:
             return copy.deepcopy(self._values[(record, output)])
 

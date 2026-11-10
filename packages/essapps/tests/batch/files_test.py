@@ -48,10 +48,30 @@ from ess.apps.batch import Row
 from ess.apps.testing import read_file
 from ess.spec import RunFile, WorkflowSpec, function_binding
 from pydantic import BaseModel
+from ess.spec import Referenced
+
+
+class Offset(BaseModel):
+    value: float = 0.0
 
 
 class Params(BaseModel):
     sample: RunFile
+    offset: Offset | Referenced[Offset] | None = None
+
+
+class FindOutputs(BaseModel):
+    offset: Offset
+
+
+class FindParams(BaseModel):
+    sample: RunFile
+
+
+FIND = WorkflowSpec(
+    name='cli-find', version=1, title='Find', description='A toy.',
+    params=FindParams, outputs=FindOutputs,
+)
 
 
 class Outputs(BaseModel):
@@ -71,7 +91,11 @@ def _reduce(params: Params) -> Outputs:
     return Outputs(total=value)
 
 
-BINDINGS = [function_binding(SPEC, _reduce)]
+def _find(params: FindParams) -> FindOutputs:
+    return FindOutputs(offset=Offset(value=read_file(params.sample)))
+
+
+BINDINGS = [function_binding(SPEC, _reduce), function_binding(FIND, _find)]
 
 
 def pair(files):
@@ -211,7 +235,7 @@ def test_main_exports_the_files_of_a_table_that_it_reduced(
     result = read_table(files)
     assert code == 0
     assert list(result['total']) == [
-        str(folder / 'reduced' / 'row-0' / 'total.json'),
+        str(folder / 'reduced' / 'row-0' / 'total.h5'),
         '',
     ]
     assert Path(result.loc[0, 'total']).is_file()
@@ -251,3 +275,52 @@ def test_main_runs_with_the_proposal_of_the_files(
 
     assert code == 0
     assert list(read_table(out)['status']) == ['completed']
+
+
+@pytest.fixture
+def find_template(folder: Path) -> Path:
+    path = folder / 'find.yaml'
+    path.write_text('spec: {name: cli-find, version: 1}\nblanks: [sample]\n')
+    return path
+
+
+@pytest.fixture
+def offset_template(folder: Path) -> Path:
+    path = folder / 'offset.yaml'
+    path.write_text(
+        'spec: {name: cli-toy, version: 1}\n'
+        'blanks: [sample]\n'
+        'params: {offset: {"@latest": offset, output: offset}}\n'
+    )
+    return path
+
+
+def test_main_reduces_with_the_newest_record_of_a_label_in_the_template(
+    command: list[str], find_template: Path, offset_template: Path, folder: Path
+) -> None:
+    runs = write_rows(folder, ['1'])
+    assert (
+        main([*command, 'reduce', str(find_template), str(runs), '-l', 'offset']) == 0
+    )
+
+    code = main([*command, 'reduce', str(offset_template), str(runs), '-l', 'x'])
+
+    assert code == 0
+    with open_folder(folder, []) as client:
+        (found,) = client.records(label='offset')
+        (record,) = client.records(label='x')
+        assert record.request.params['offset'].record == found.id
+
+
+def test_main_returns_2_and_says_why_if_the_template_names_a_label_without_records(
+    command: list[str],
+    offset_template: Path,
+    folder: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs = write_rows(folder, ['1'])
+
+    code = main([*command, 'reduce', str(offset_template), str(runs), '-l', 'x'])
+
+    assert code == 2
+    assert "no record under 'offset'" in capsys.readouterr().err

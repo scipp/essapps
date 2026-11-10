@@ -22,6 +22,11 @@ file field, or a list of them, a file is named by text (see :func:`named_file`):
 
 Only a parameter is read this way, not a file field inside a group, which takes
 the JSON form of a file, as the record holds it.
+
+A file that is written before the records it reads exist names them by label
+(see :func:`with_latest`)::
+
+    masks: {'@latest': masks, output: masks}
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ from pydantic_core import to_json
 
 from ess.spec import FileRef, field_types
 
+from ..client import Client
 from ..files import file
 
 _KIND = re.compile(r'[a-z]+:')
@@ -105,3 +111,26 @@ def with_named_files(
                 else named_file(value)
             )
     return read
+
+
+def with_latest(client: Client, value: Any) -> Any:
+    """
+    ``value``, such as the params of a template, with each object that has the
+    key ``@latest`` as the reference to ``output`` of the newest record under
+    that label, of ``member`` if given, as the client finds it now. The request
+    made of it holds the record's ID.
+
+    Raises ``ValueError`` if no record has the label, or the output.
+    """
+    if isinstance(value, list):
+        return [with_latest(client, v) for v in value]
+    if not isinstance(value, Mapping):
+        return value
+    if '@latest' not in value:
+        return {k: with_latest(client, v) for k, v in value.items()}
+    if value.keys() - {'@latest', 'member', 'output'}:
+        raise ValueError(f'{dict(value)}: @latest goes with member and output only')
+    try:
+        return client.latest(value['@latest'], value.get('member')).ref(value['output'])
+    except KeyError as error:
+        raise ValueError(f'{dict(value)}: {error.args[0]}') from None

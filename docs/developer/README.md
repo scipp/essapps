@@ -1,6 +1,6 @@
 # ESS data-reduction framework
 
-**Status: the local workspace, the workspace in the user's process that `local()` makes, implements this design, including freeze, `select=`, and persist to a fake store or to pickles in a folder (`ess.apps.folder`). Not implemented: the service, `client.publish`, and software versions in provenance. The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
+**Status: the local workspace, the workspace in the user's process that `local()` makes, implements this design, including freeze, `select=`, and persist to a fake store or to scipp HDF5 files in a folder (`ess.apps.folder`). Not implemented: the service, `client.publish`, and software versions in provenance. The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
 
 This page gives an overview of the framework: its components, what each promises the others, and the ideas that client code is built from.
 The details live one level down:

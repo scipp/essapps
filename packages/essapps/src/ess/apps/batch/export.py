@@ -8,54 +8,23 @@ and writes the outputs of each completed row to a folder named by its key. It
 finds a row's outputs by the ``record`` column, so it exports what the table
 says, also after later reductions under the same label.
 
-The format is generic. A format of a technique, such as NXcanSAS, needs a
-writer for the output's type, which this module does not offer.
+The files are those of :mod:`ess.apps.hdf5`, a placeholder for the formats of
+the techniques, such as NXcanSAS, each of which needs a writer for the type of
+its output.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
-import scipp as sc
-from pydantic import BaseModel
-from pydantic_core import PydanticSerializationError, to_json
 
+from .. import hdf5
 from ..client import Client
 from ..records import Record, Status
 
 RECORD_FILE = '_record.json'
 """The file of the record in the folder of a row; no output is named so."""
-
-
-def _as_scipp(value: Any) -> Any:
-    """
-    ``value`` with each group, dict, and list in it a ``DataGroup``, a list by
-    the index of each element, without the values that are ``None``.
-    """
-    if isinstance(value, BaseModel):
-        value = {name: getattr(value, name) for name in type(value).model_fields}
-    if isinstance(value, list | tuple):
-        value = {str(i): v for i, v in enumerate(value)}
-    if isinstance(value, dict):
-        return sc.DataGroup(
-            {k: _as_scipp(v) for k, v in value.items() if v is not None}
-        )
-    return value
-
-
-def _write(value: Any, stem: Path) -> Path:
-    """Write ``value`` as JSON if it has a JSON form, or else as HDF5."""
-    try:
-        data = to_json(value, indent=2)
-    except PydanticSerializationError:
-        path = stem.with_name(f'{stem.name}.h5')
-        sc.io.save_hdf5(_as_scipp(value), path)
-    else:
-        path = stem.with_name(f'{stem.name}.json')
-        path.write_bytes(data)
-    return path
 
 
 def write_outputs(client: Client, record: Record, directory: Path) -> dict[str, Path]:
@@ -64,19 +33,18 @@ def write_outputs(client: Client, record: Record, directory: Path) -> dict[str, 
     the record itself, which names the files and the values they were computed
     from::
 
-        beam_centre.json   an output that has a JSON form
-        iofq.h5            any other: what scipp.io.load_hdf5 reads, a group as a
-                           DataGroup of its fields, without those that are None
+        iofq.h5            what scipp.io.load_hdf5 reads (see ess.apps.hdf5)
         _record.json       the record
 
     Returns the path of each output's file by its name.
     """
     directory.mkdir(parents=True, exist_ok=True)
     (directory / RECORD_FILE).write_text(record.model_dump_json(indent=2))
-    return {
-        name: _write(value, directory / name)
-        for name, value in client.output(record).items()
-    }
+    paths = {}
+    for name, value in client.output(record).items():
+        paths[name] = directory / f'{name}.h5'
+        hdf5.write(value, paths[name])
+    return paths
 
 
 def export_table(client: Client, table: pd.DataFrame, directory: Path) -> pd.DataFrame:

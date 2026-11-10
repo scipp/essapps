@@ -11,7 +11,7 @@ import pydantic
 import pytest
 import scipp as sc
 
-from ess.apps import Client, Record, Template, file
+from ess.apps import Client, Record, Template, file, hdf5
 from ess.apps.batch.export import export_table, write_outputs
 from ess.apps.batch.tables import reduce_table
 from ess.apps.folder import open_folder
@@ -94,7 +94,7 @@ def test_the_record_is_written_with_its_outputs(client: Client, tmp_path: Path) 
     assert written['id'] == record.id
 
 
-def test_outputs_with_a_json_form_are_written_as_json(
+def test_numbers_and_groups_are_written_as_hdf5_that_reads_back(
     client: Client, tmp_path: Path
 ) -> None:
     number = run(client, toys.PLAIN, sample=file(run=1), transmission=file(run=2))
@@ -103,9 +103,9 @@ def test_outputs_with_a_json_form_are_written_as_json(
     paths = write_outputs(client, number, tmp_path / 'a')
     more = write_outputs(client, group, tmp_path / 'b')
 
-    assert json.loads(paths['total'].read_text()) == 1.0
-    assert json.loads(more['offset'].read_text()) == {'value': 3.0}
-    assert (paths['total'].name, more['offset'].name) == ('total.json', 'offset.json')
+    assert hdf5.read(float, paths['total']) == 1.0
+    assert hdf5.read(toys.Offset, more['offset']) == toys.Offset(value=3.0)
+    assert (paths['total'].name, more['offset'].name) == ('total.h5', 'offset.h5')
 
 
 def test_a_group_holding_an_array_is_written_as_hdf5_with_the_array(
@@ -121,7 +121,7 @@ def test_a_group_holding_an_array_is_written_as_hdf5_with_the_array(
     assert sc.identical(loaded['data'], _array(4).data)
 
 
-def test_an_output_left_out_and_a_list_of_groups_are_written_without_error(
+def test_a_list_of_groups_and_a_number_are_written_each_as_a_file(
     client: Client, tmp_path: Path
 ) -> None:
     record = run(client, MANY, n=2)
@@ -132,7 +132,7 @@ def test_an_output_left_out_and_a_list_of_groups_are_written_without_error(
     curves = sc.io.load_hdf5(paths['curves'])
     assert list(curves) == ['0', '1']
     assert sc.identical(curves['1']['data'], _array(3).data)
-    assert json.loads(paths['total'].read_text()) == 1.5
+    assert hdf5.read(float, paths['total']) == 1.5
 
 
 def test_each_completed_row_is_exported_under_its_key(
@@ -143,8 +143,8 @@ def test_each_completed_row_is_exported_under_its_key(
 
     result = export_table(client, reduced, out)
 
-    assert list(result['total']) == [str(out / k / 'total.json') for k in 'ab']
-    assert json.loads((out / 'b' / 'total.json').read_text()) == 1.0
+    assert list(result['total']) == [str(out / k / 'total.h5') for k in 'ab']
+    assert hdf5.read(float, out / 'b' / 'total.h5') == 1.0
     assert (out / 'a' / '_record.json').is_file()
 
 
@@ -159,7 +159,7 @@ def test_a_row_that_failed_has_no_folder_and_empty_output_columns(
 
     result = export_table(client, reduced, out)
 
-    assert list(result['total']) == [str(out / 'a' / 'total.json'), '']
+    assert list(result['total']) == [str(out / 'a' / 'total.h5'), '']
     assert sorted(p.name for p in out.iterdir()) == ['a']
 
 

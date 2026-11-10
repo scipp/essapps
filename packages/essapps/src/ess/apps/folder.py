@@ -1,90 +1,65 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A workspace kept in a folder, for one person on one machine.
+A workspace kept in a folder, for one person on one machine. It needs scipp
+and h5py.
 
 The folder holds what a workspace needs to go on after its process ended::
 
     files.csv     the table of FolderFiles: file, run, kind, role, ...
     log.jsonl     history (see ess.apps.log)
-    store/        persisted outputs, <record>/<output>.pickle
+    store/        persisted outputs, <record>/<output>.h5
 
 So a command that runs and ends, and the next one, are clients of one workspace:
 the second reads the records of the first, and references their outputs if they
 were persisted. One process holds the folder at a time, since a log has one
 writer.
 
-A file of the store is not for people: it is a pickle, which only the same
-versions of the packages read back. :mod:`ess.apps.batch.export` writes the files
-that a person keeps.
+A file of the store is named by the ID of its record.
+:mod:`ess.apps.batch.export` writes the files of a batch to folders named by
+the keys of its rows.
 """
 
 from __future__ import annotations
 
 import csv
-import io
-import pickle
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from ess.spec import Binding
 
+from . import hdf5
 from .client import Client
 from .files import FolderFiles
 from .log import Log
 from .workspace import Workspace
 
-_ARRAYS = ('Variable', 'DataArray', 'Dataset')
-
-
-def _from_hdf5(data: bytes) -> Any:
-    import scipp as sc
-
-    return sc.io.load_hdf5(io.BytesIO(data))
-
-
-class _Pickler(pickle.Pickler):
-    """
-    Pickles a scipp array, which has no pickle of its own, as its HDF5 file.
-    Any other value, a ``DataGroup`` among them, is pickled as it is.
-    """
-
-    def reducer_override(self, obj: Any) -> Any:
-        tp = type(obj)
-        if tp.__module__.partition('.')[0] != 'scipp' or tp.__name__ not in _ARRAYS:
-            return NotImplemented
-        data = io.BytesIO()
-        obj.save_hdf5(data)
-        return _from_hdf5, (data.getvalue(),)
-
 
 class FolderStore:
     """
-    A store of one file per output in ``directory``, ``<record>/<output>.pickle``.
-
-    A value is read back as the workflow returned it, whatever its type, by the
-    versions of the packages that wrote it.
+    A store of one scipp HDF5 file per output in ``directory``,
+    ``<record>/<output>.h5`` (see :mod:`ess.apps.hdf5` for the format, and for
+    the types of outputs that it takes).
     """
 
     def __init__(self, directory: Path) -> None:
         self._directory = directory
 
-    def _path(self, record: str, output: str) -> Path:
-        return self._directory / record / f'{output}.pickle'
+    def path(self, record: str, output: str) -> Path:
+        """The file of an output, written or not."""
+        return self._directory / record / f'{output}.h5'
 
     def write(self, record: str, output: str, value: Any) -> None:
-        path = self._path(record, output)
+        path = self.path(record, output)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open('wb') as f:
-            _Pickler(f).dump(value)
+        hdf5.write(value, path)
 
-    def read(self, record: str, output: str) -> Any:
-        try:
-            with self._path(record, output).open('rb') as f:
-                return pickle.load(f)  # noqa: S301
-        except FileNotFoundError:
-            raise LookupError(f'the store holds no {output} of {record}') from None
+    def read(self, record: str, output: str, tp: Any) -> Any:
+        path = self.path(record, output)
+        if not path.is_file():
+            raise LookupError(f'the store holds no {output} of {record}')
+        return hdf5.read(tp, path)
 
 
 def open_folder(
