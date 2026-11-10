@@ -32,8 +32,8 @@ back. Nothing is written to the store unless a submission or a freeze persists
 it, since the framework cannot tell which outputs are worth writing.
 
 A request may reference, and a client may read, only the output values the
-workspace keeps, persisted outputs, and files; a client may also read the current
-states of its open accumulators. A request never references an accumulator, only
+workspace keeps, persisted outputs, and files; a client may also read the states
+of its open accumulators. A request never references an accumulator, only
 the record of its freeze. Every client of the workspace reads the same values. A
 pending record passes this rule, so a request is not refused because what it reads
 is still running. It is refused once that record has failed or been cancelled.
@@ -210,8 +210,9 @@ class WorkspaceProtocol(Protocol):
 
     def plain_request(self, accumulator_id: str) -> Request:
         """
-        The plain request of the accumulator's state after the pushes logged so far.
-        Returns at once. Raises ``NotReadable`` if the state may not be read.
+        The plain request of the accumulator's logged state (see
+        :meth:`open_accumulator`). Returns at once. Raises ``NotReadable`` if the
+        state may not be read.
         """
         ...
 
@@ -316,9 +317,11 @@ class WorkspaceProtocol(Protocol):
 
         Its *state n* is the accumulator after its first n pushes, and has the outputs
         of its plain request: the template with each table filled by the rows of these
-        pushes. A read or a freeze is of state n, where n is the number of pushes
-        logged when it is called, whether or not they have been added. Adding push n+1
-        waits until the reads of state n in progress are done, so no reader sees a
+        pushes. Its *logged state* is state n for the n pushes logged so far, whether
+        or not they have been added. A read is of the logged state when it is called. A
+        freeze is of the logged state once no other freeze of the accumulator is being
+        checked; a push that waited for that check may be logged first. Adding push
+        n+1 waits until the reads of state n in progress are done, so no reader sees a
         value change. A request never references an accumulator, only the record of its
         freeze.
 
@@ -356,8 +359,8 @@ class WorkspaceProtocol(Protocol):
         persist: bool | Sequence[str] = False,
     ) -> Record:
         """
-        The record of the accumulator's state after the pushes logged so far, whose
-        outputs are the driver's, not a copy; the workspace keeps it, or with
+        The record of the accumulator's logged state (see :meth:`open_accumulator`),
+        whose outputs are the driver's, not a copy; the workspace keeps it, or with
         ``persist``, the store (see :meth:`submit`). ``submitter`` is as for
         :meth:`submit`.
 
@@ -379,8 +382,8 @@ class WorkspaceProtocol(Protocol):
         select: Selection | None = None,
     ) -> dict[str, Any]:
         """
-        Copies of outputs of the accumulator's state after the pushes logged so far, or
-        of the part ``select`` names (see :meth:`outputs`), once it has reached the
+        Copies of outputs of the accumulator's logged state when it is called, or of
+        the part ``select`` names (see :meth:`outputs`), once it has reached the
         state. It makes no record.
 
         Raises ``NotReadable`` for an accumulator released, stopped, or read through the

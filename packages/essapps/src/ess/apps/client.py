@@ -147,8 +147,8 @@ class Provenance(BaseModel, frozen=True):
     """
     Where a record came from: what it ran, what it read, and their files.
 
-    ``request`` is the record's request, or for the state of an accumulator,
-    the plain request over the rows pushed so far. ``upstream`` holds every
+    ``request`` is the record's request, or for an accumulator, the plain
+    request of its logged state. ``upstream`` holds every
     record read through all references, directly or through other records,
     nearest first. It stops at files.
     """
@@ -221,9 +221,10 @@ class Accumulator:
     """
     A template whose blanks, tables, are filled one push at a time.
 
-    Its outputs are those of the plain request over the rows pushed so far. A
-    client reads them with :meth:`Client.output`; a request references them only
-    through the record of :meth:`Client.freeze`. See
+    Its outputs are those of the plain request of its *logged state*, over the
+    rows of every push logged so far. A client reads them with
+    :meth:`Client.output`; a request references them only through the record of
+    :meth:`Client.freeze`. See
     :meth:`~ess.apps.protocol.WorkspaceProtocol.open_accumulator`.
 
     ``template`` holds the other values as the workspace accepted them, and ``id``
@@ -560,7 +561,7 @@ class Client:
         self, accumulator: Accumulator, *, persist: bool | Sequence[str] = False
     ) -> Record:
         """
-        The record of the accumulator's last state; see
+        The record of the accumulator's logged state; see
         :meth:`~ess.apps.protocol.WorkspaceProtocol.freeze`.
         """
         return self._workspace.freeze(accumulator.id, self.submitter, persist=persist)
@@ -689,12 +690,11 @@ class Client:
 
     def provenance(self, what: Record | Accumulator) -> Provenance:
         """
-        Where a record, or the current state of an accumulator, came from.
+        Where a record, or the logged state of an accumulator, came from.
 
-        An accumulator's state is the plain request over the rows pushed so
-        far, so its provenance is that of the record of this request. It
-        returns at once, without waiting for the pushes logged so far to be
-        added.
+        The provenance of an accumulator's logged state is that of the record
+        of its plain request. It returns at once, without waiting for the
+        pushes logged to be added.
         """
         if isinstance(what, Accumulator):
             request = self._workspace.plain_request(what.id)

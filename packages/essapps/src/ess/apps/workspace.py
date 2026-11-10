@@ -109,12 +109,14 @@ in the order given, each row first read and validated by its table's element
 type. If a step fails, or a record it references has not completed, the
 accumulator stops: it takes no more pushes or readers, the steps after it are
 dropped, and the record of a freeze of a state it will not reach fails. Its
-driver is dropped once no reader holds its current state, without waiting for
-it to be released.
+driver is dropped once no reader holds the state the driver is in, without
+waiting for it to be released.
 
-A read or a freeze is of the accumulator's state after the pushes logged when
-it is called, whether or not they have been added. A request never references an
-accumulator, only the record of its freeze, so no request holds back a push.
+An accumulator's *logged state* is state n for the n pushes logged so far,
+whether or not they have been added. A read is of the logged state when it is
+called, and a freeze of the logged state once no other freeze of the
+accumulator is being checked. A request never references an accumulator, only
+the record of its freeze, so no request holds back a push.
 A freeze logs one record of the plain request of that state, as the
 accumulator and its number of pushes. The first read of a state checks the
 number of rows of each blank table against its length constraints, outside the
@@ -131,8 +133,8 @@ freeze, while it is checked, and then its record, until it has finished and its
 workflow, if it ran, has returned (see ``_Read``). Every wait is for work that
 came before the waiter: a request waits for records submitted before it, a read
 and the record of a freeze for the pushes logged before the read or the freeze
-was called, and a push for the readers of the state before it, which were called
-before the push was logged. So no wait goes round in a circle.
+took its state, and a push for the readers of the state before it, which took
+that state before the push was logged. So no wait goes round in a circle.
 
 Releasing an accumulator and freezing it are described at
 :meth:`~ess.apps.protocol.WorkspaceProtocol.release` and
@@ -408,8 +410,8 @@ class _Accumulator:
     ``seen`` holds the rows of each blank table logged so far, by JSON form,
     with their indexes (see :func:`.checks.distinct`).
 
-    ``checked`` holds the number of pushes of the last state whose plain
-    request was checked, and why it would be refused, or ``None``. Two
+    ``checked`` holds the number of pushes of the state checked last, and
+    why its plain request would be refused, or ``None``. Two
     reads that check different states at once may overwrite each other's,
     which costs only another check.
     ``stopped`` says why the accumulator takes no more pushes or readers, or
@@ -419,9 +421,9 @@ class _Accumulator:
     wait until it ends. ``frozen`` names the record of its last freeze, once
     logged: the accumulator then takes no more pushes.
 
-    :meth:`outputs` computes every output of the current state the first time
-    a reader reads it, and keeps them until :meth:`drop`, which the workspace
-    calls before a push adds. They are computed under a lock of their own,
+    :meth:`outputs` computes every output of the state the driver is in the
+    first time a reader reads it, and keeps them until :meth:`drop`, which the
+    workspace calls before a push adds. They are computed under a lock of their own,
     outside the workspace's, so ``driver.outputs`` is called from one thread at a
     time and never while a push adds.
     """
@@ -453,8 +455,8 @@ class _Accumulator:
 
     def outputs(self) -> dict[str, Any]:
         """
-        Every output of the current state that the driver returns, for one of
-        its readers; needs no lock.
+        Every output of the state the driver is in, for one of its readers;
+        needs no lock.
 
         They are what the driver returns, not a copy (see the module
         docstring), computed once for the state.
@@ -468,15 +470,16 @@ class _Accumulator:
 
     def drop(self) -> None:
         """
-        Drop the outputs computed for the current state; the workspace's lock
-        held, and no reader left, so none computes.
+        Drop the outputs computed for the state the driver is in; the
+        workspace's lock held, and no reader left, so none computes.
         """
         self._computed = None
 
     def end(self) -> None:
         """
         Drop the driver of an accumulator that takes no more readers, once
-        the last reader of its current state is done; the workspace's lock held.
+        the last reader of the state the driver is in is done; the workspace's
+        lock held.
         """
         self._computed = None
         if hasattr(self, 'driver'):  # an accumulator that failed to open has none
@@ -903,13 +906,23 @@ class Workspace(WorkspaceProtocol):
 
         An accumulator is refused: a reader of its state would hold back its
         next push until the reader's workflow has returned, so a request reads
-        the record of its freeze instead.
+        the record of its freeze instead. The refusal names that record if the
+        accumulator has one that is pending or has completed; at most one is,
+        since a freeze is refused while one is pending and after one has
+        completed.
         """
         if ref.record in self._views.accumulators:
+            frozen = [
+                record_id
+                for record_id, (acc_id, _) in self._views.states.items()
+                if acc_id == ref.record
+                and self._views.status(record_id) in (Status.PENDING, Status.COMPLETED)
+            ]
+            which = f'its freeze, {frozen[0]}' if frozen else 'a freeze'
             raise SubmitError.at(
                 loc,
-                f'accumulator {ref.record}: an accumulator cannot be referenced; '
-                'freeze it first, and reference the record of the freeze',
+                f'accumulator {ref.record} cannot be referenced; '
+                f'a request references the record of {which}',
             )
         record = self._views.records.get(ref.record)
         if record is None:
@@ -1008,10 +1021,9 @@ class Workspace(WorkspaceProtocol):
         with self._changed:
             self._complete(record_id, outputs, failure)
             if state is not None:
+                acc, _ = state
                 if self._views.status(record_id) is Status.COMPLETED:
-                    state[
-                        0
-                    ].stopped = (
+                    acc.stopped = (
                         f'the accumulator is frozen: read record {record_id} instead'
                     )
                 self._let_go(reads)
@@ -1459,8 +1471,8 @@ class Workspace(WorkspaceProtocol):
         persist: bool | Sequence[str] = False,
     ) -> Record:
         """
-        Freeze the accumulator: the record of the plain request of its state
-        after the pushes logged so far, which the workspace keeps; with
+        Freeze the accumulator: the record of the plain request of its logged
+        state (see the module docstring), which the workspace keeps; with
         ``persist``, the store keeps it instead, as for a submission (see
         :meth:`submit`).
 
@@ -1600,8 +1612,8 @@ class Workspace(WorkspaceProtocol):
         """
         Stop the accumulator: it takes no more pushes or readers, its steps
         are dropped, and the record of a freeze that waits for them fails;
-        lock held. The driver is dropped now if no reader holds its
-        current state, and otherwise once the last one is done.
+        lock held. The driver is dropped now if no reader holds the state it
+        is in, and otherwise once the last one is done.
         """
         acc.stopped = f'the accumulator stopped: {failure}'
         acc.busy = False
@@ -1627,7 +1639,7 @@ class Workspace(WorkspaceProtocol):
         pushed, in push order. The number of rows of each blank table must
         meet its length constraints, so a table that needs a row must have
         one (see :meth:`.checks.Checks.state`).
-        ``acc.checked`` keeps the answer for the last state checked.
+        ``acc.checked`` keeps the answer for the state checked last.
         """
         checked = acc.checked
         if checked is not None and checked[0] == upto:
@@ -1678,14 +1690,14 @@ class Workspace(WorkspaceProtocol):
                 return acc
             self._changed.wait()
 
-    def _current(
+    def _logged_state(
         self, accumulator_id: str, *, reader: bool
     ) -> tuple[_Accumulator, int]:
         """
-        The accumulator and its number of pushes logged, which name the state
-        a read is of; held as a reader holds it if ``reader``, until the
-        caller lets go of it. Raises ``NotReadable`` if the state
-        may not be read (see :meth:`_accumulator`).
+        The accumulator and its number of pushes logged, which name its logged
+        state, the state a read is of; held as a reader holds it if ``reader``,
+        until the caller lets go of it. Raises ``NotReadable`` if the state may
+        not be read (see :meth:`_accumulator`).
         """
         with self._changed:
             self._check_running()
@@ -1745,7 +1757,7 @@ class Workspace(WorkspaceProtocol):
             ]
 
     def plain_request(self, accumulator_id: str) -> Request:
-        acc, upto = self._current(accumulator_id, reader=False)
+        acc, upto = self._logged_state(accumulator_id, reader=False)
         with self._changed:
             return self._views.plain(acc.id, upto)
 
@@ -1887,7 +1899,7 @@ class Workspace(WorkspaceProtocol):
         checked, its outputs are computed if no reader has yet, and the outputs or
         their parts are copied (see the module docstring).
         """
-        acc, upto = self._current(accumulator_id, reader=True)
+        acc, upto = self._logged_state(accumulator_id, reader=True)
         try:
             if select is not None:
                 self._check_select(acc.template.spec, names)
