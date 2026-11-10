@@ -18,12 +18,12 @@ from .records import Record, Status
 
 class Listing:
     """
-    What a request of ``client`` may name now, and the state of the client's
+    What a request of ``client`` may name now, and the state of the proposal's
     records, looked up once for a refresh of any number of views: the files
-    to offer for each file field and the client's records, each by a label, and the
-    outputs a request may reference. ``cursor`` is the position in the client's
-    changes (:meth:`~ess.apps.Client.changes`) that the listing is up to date
-    with. Given the ``previous`` listing, it reads only the records that changed
+    to offer for each file field and the proposal's records, each by a label, and
+    the outputs a request may reference. ``cursor`` is the position in the
+    proposal's changes (:meth:`~ess.apps.Client.changes`) that the listing is up
+    to date with. Given the ``previous`` listing, it reads only the records that changed
     since, in the records, their status, and what is readable, and takes the
     rest from ``previous``, which stays as it is. The records are oldest
     first. Labels and the outputs offered are worked out from all the records

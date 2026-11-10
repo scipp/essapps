@@ -3,7 +3,7 @@
 """
 A minimal app on a client, in three tabs that fill the window and scroll by
 themselves: a form for each spec the workspace runs with a button that submits, the
-outputs of the client's records, and the records themselves.
+outputs of the proposal's records, and the records themselves.
 
 The app needs a client only. It submits the shown form's request through the
 client and shows what the workspace says: each reason a request is refused, by
@@ -51,7 +51,7 @@ class Tab(Protocol):
 
 class App:
     """
-    A form per spec, a button that submits, and the outputs of the client's
+    A form per spec, a button that submits, and the outputs of the proposal's
     records. ``plots`` are the plots configured for a spec, as :class:`Outputs`
     takes them. ``tabs`` holds the tabs of the application by title, shown before
     the app's own.
