@@ -1,6 +1,6 @@
 # Writing a binding
 
-A *binding* is what the backend calls to compute the requests of a spec ([params.md](params.md)).
+A *binding* is what the workspace (`ess.apps.Workspace`, which runs requests) calls to compute the requests of a spec ([params.md](params.md)).
 A workflow package writes one binding per spec, from a function, a sciline pipeline, or a driver:
 
 ```python
@@ -27,7 +27,7 @@ Making a stage or an accumulator over a binding that does not serve it is refuse
 **In short:**
 
 - A binding gets values, never a reference or a file name: each group as its model, each file as its local path, each table as the list of its rows, every default filled in.
-- A binding is pure: it modifies no value it gets, returns no output that shares memory with one, and gives the same outputs for the same values. The backend may call it from several threads at once.
+- A binding is pure: it modifies no value it gets, returns no output that shares memory with one, and gives the same outputs for the same values. The workspace may call it from several threads at once.
 - Defaults belong to the spec. A pipeline holds no value at a key that a parameter's key leads to, since the parameter would then have no effect.
 - In a `PipelineBinding` each parameter sets the sciline key of its class. A parameter whose class names no role, such as a file or an `int`, gives its key with `keys=`. A parameter typed `X | None` sets no key.
 - A driver gives the outputs of the plain request over the rows pushed so far, however the rows were grouped into pushes and whatever the order of pushes into different tables.
@@ -55,7 +55,7 @@ Every value is of its field's type, whether the request gave it inline or by ref
 | a file, `SampleRunFile` | the file's local path, a `Path` |
 | a table, `list[SampleRunFile]` | the list of its rows, each a `Path` |
 
-The backend reads the data of each reference, and resolves each file, before it calls the binding.
+The workspace reads the data of each reference, and resolves each file, before it calls the binding.
 `compute` gets every parameter, with the defaults of the model filled in, and so do `make_pipeline` and `make_driver` for the fixed values.
 The params model's model validators have not run; a binding may run them ([params.md, When values are validated](params.md#when-values-are-validated)).
 
@@ -234,7 +234,7 @@ A parameter that sets no key cannot be a blank, nor can a union of groups, since
 
 A *driver* is the object behind an accumulator: tables are pushed into it, and it gives the outputs over the rows so far.
 The workflow package writes it, for one spec, and it holds everything an accumulator keeps.
-The framework never decides how rows combine, not even by keeping them; only a driver accumulates.
+The workspace never decides how rows combine, not even by keeping their values; only a driver accumulates.
 A driver is a sciline driver in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245):
 
 ```python
@@ -319,7 +319,7 @@ A table of `X | Referenced[X]` has one key.
 
 ### Calling a driver by hand
 
-Code that calls a driver itself keeps the order of the backend, and is done with the outputs of a state before it pushes:
+Code that calls a driver itself keeps the order of the workspace, and is done with the outputs of a state before it pushes:
 
 ```python
 driver = binding.make_accumulator(fixed, blanks=('runs',))
@@ -329,11 +329,11 @@ for run in runs:                                  # each the local path of a run
     show(counts['q', 0])                          # done with it before the next push
 ```
 
-A driver needs no spec, backend, or client, so a package uses and tests it as plain code.
+A driver needs no spec, workspace, or client, so a package uses and tests it as plain code.
 
 ## Threading
 
-The backend may make and call bindings from several threads at once:
+The workspace may make and call bindings from several threads at once:
 
 | Call | From several threads at once |
 |---|---|

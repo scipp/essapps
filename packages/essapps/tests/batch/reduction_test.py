@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""A batch on a real in-process backend with fake workflows."""
+"""A batch on a real in-process workspace with fake workflows."""
 
 from collections.abc import Sequence
 from typing import Any

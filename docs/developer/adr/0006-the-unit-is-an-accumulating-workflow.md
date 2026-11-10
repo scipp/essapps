@@ -45,7 +45,7 @@ Records never name an accumulator, as records of calls through a stage never nam
 Each submission makes its own record of the state, whose outputs are what the driver returned, not a copy.
 That record reads the driver, not the values its rows reference.
 So its edges to the records its rows reference are provenance, and the client may release those records after pushing.
-No client keeps the record of a state that a submission makes, since no client asked for it.
+The workspace does not keep the record of a state that a submission makes, since no client asked for it.
 So no later submission can reference it ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)), and only the requests of its submission read it.
 This is why no wait goes round in a circle ([ADR 0003](0003-accumulators-add-in-place.md)).
 

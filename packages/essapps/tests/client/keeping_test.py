@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 
 
-"""What a client keeps and reads, and closing and ending a client."""
+"""What the workspace keeps and every client reads, and closing."""
 
 import copy
 import threading
@@ -11,18 +11,19 @@ import pytest
 
 from ess.apps import (
     Accumulator,
-    Backend,
     Client,
-    ClientEnded,
     NotReadable,
     Record,
+    RecordFailed,
     Selector,
     Status,
     SubmitError,
     Template,
+    Workspace,
     local,
 )
-from ess.apps.testing import FakeFiles, read_file
+from ess.apps.log import Finished, Log
+from ess.apps.testing import FakeFiles, FakeStore, read_file
 from ess.spec import function_binding
 
 from . import toys
@@ -32,7 +33,7 @@ def test_a_released_value_is_not_kept_and_the_record_stays(client: Client) -> No
     load = client.compute(toys.load_request(1))
     client.release(load)
 
-    not_kept = f'record {load.id} is not kept by this client'
+    not_kept = f'record {load.id} is not kept'
     with pytest.raises(NotReadable, match=not_kept):
         client.output(load, 'value')
     with pytest.raises(SubmitError, match=rf'^source: {not_kept}$'):
@@ -67,7 +68,7 @@ def test_a_released_pending_record_is_refused_and_still_runs_for_its_readers(
     )
     client.release(load)
 
-    not_kept = rf'^source: record {load.id} is not kept by this client$'
+    not_kept = rf'^source: record {load.id} is not kept$'
     with pytest.raises(SubmitError, match=not_kept):  # however far it has run
         client.submit(toys.read_request(load))
     loading.set()
@@ -104,70 +105,70 @@ def test_a_released_pending_record_that_nothing_reads_is_cancelled(
         client.submit(toys.read_request(load))
 
 
-def test_closing_a_client_cancels_the_work_that_nothing_else_keeps(
-    backend: Backend, client: Client, loading: threading.Event
+def test_closing_the_workspace_cancels_the_reads_of_its_accumulator(
+    summed_workspace: Workspace, summed: Client, summing: toys.Sum, log: Log
 ) -> None:
-    other = Client(backend, proposal='p1', submitter='bob')
-    loading.clear()
-    pending = client.submit(toys.load_request(2))
-    shifted = client.submit(toys.read_request(pending))
-    client.close()
-    loading.set()
-
-    assert other.status([pending, shifted]) == [Status.CANCELLED] * 2
-
-
-def test_ending_a_client_cancels_the_reads_of_its_accumulator(
-    summed_backend: Backend,
-    summed: Client,
-    summed_loads: list[Record],
-    summing: toys.Sum,
-) -> None:
-    other = Client(summed_backend, proposal='p1', submitter='bob')
+    client = summed
+    load = client.compute(toys.load_request(1))
     summing.go.clear()
-    total = toys.total_accumulator(summed)
-    total.push(parts=[summed_loads[0].ref('value')])
-    shifted = summed.submit(toys.read_request(total))
-    state = toys.state_record(summed, shifted)
-    summed.close()
-    summing.go.set()
+    total = toys.total_accumulator(client)
+    total.push(parts=[load.ref('value')])
+    shifted = client.submit(toys.read_request(total))
+    state = toys.state_record(client, shifted)
+    threading.Timer(0.05, summing.go.set).start()
+    summed_workspace.close()
 
-    assert other.status([state, shifted]) == [Status.CANCELLED] * 2
+    finished = {e.record: e.status for e in log if isinstance(e, Finished)}
+    assert [finished[state.id], finished[shifted.id]] == [Status.CANCELLED] * 2
 
 
-def test_a_client_reads_and_references_only_what_it_keeps(
-    backend: Backend, client: Client, loading: threading.Event
+def test_closing_the_workspace_writes_a_pending_persisted_freeze(
+    summed_workspace: Workspace,
+    summed: Client,
+    summing: toys.Sum,
+    log: Log,
+    store: FakeStore,
 ) -> None:
-    other = Client(backend, proposal='p1', submitter='bob')
+    client = summed
+    load = client.compute(toys.load_request(1))
+    summing.go.clear()
+    total = toys.total_accumulator(client)
+    total.push(parts=[load.ref('value')])
+    frozen = client.freeze(total, persist=True)
+    threading.Timer(0.05, summing.go.set).start()
+    summed_workspace.close()
+
+    finished = {e.record: e.status for e in log if isinstance(e, Finished)}
+    assert finished[frozen.id] is Status.COMPLETED
+    assert store.read(frozen.id, 'value') == toys.Amount(value=1.0)
+
+
+def test_another_client_reads_and_references_the_records_the_workspace_keeps(
+    client: Client, other: Client, loading: threading.Event
+) -> None:
     done = client.compute(toys.load_request(1))
     loading.clear()
     pending = client.submit(toys.load_request(2))
 
-    for record in (done, pending):
-        not_kept = f'record {record.id} is not kept by this client'
-        with pytest.raises(NotReadable, match=not_kept):
-            other.output(record, 'value')
-        with pytest.raises(SubmitError, match=rf'^source: {not_kept}$'):
-            other.submit(toys.read_request(record))
+    reads = [other.submit(toys.read_request(r)) for r in (done, pending)]
     loading.set()
-    assert other.wait(pending) is Status.COMPLETED  # its status is the proposal's
+    assert other.output(done, 'value') == toys.Amount(value=1.0)
+    assert other.output(pending, 'value') == toys.Amount(value=2.0)
+    assert other.wait(reads) == [Status.COMPLETED] * 2
 
 
-def test_the_stages_and_accumulators_of_another_client_are_refused(
-    backend: Backend, client: Client
+def test_another_client_goes_through_the_stages_and_reads_the_accumulators(
+    client: Client, other: Client
 ) -> None:
-    theirs = Client(backend, proposal='p1', submitter='bob')
     load = client.compute(toys.load_request(1))
     stage = toys.stage_shift(client, load)
     total = client.accumulator(Template(toys.TOTAL, blanks=('parts',)))
     total.push(parts=[load.ref('value')])
 
-    with pytest.raises(SubmitError, match='the stage was released or is unknown'):
-        toys.submit_shift(theirs, stage, 2.0)
-    with pytest.raises(SubmitError, match='is not kept by this client'):
-        theirs.submit(toys.read_request(total))
-    with pytest.raises(NotReadable, match='is not kept by this client'):
-        theirs.output(total)
+    shifted = toys.submit_shift(other, stage, 2.0)
+    read = other.submit(toys.read_request(total))
+    assert other.output(total) == {'value': toys.Amount(value=1.0)}
+    assert other.wait([shifted, read]) == [Status.COMPLETED] * 2
 
 
 def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
@@ -185,9 +186,9 @@ def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
         lambda: client.output(load, 'value'),
         lambda: client.output(total),
     ):
-        with pytest.raises(NotReadable, match='is not kept by this client'):
+        with pytest.raises(NotReadable, match=r'is not (kept|open)$'):
             released()
-    with pytest.raises(SubmitError, match='is not kept by this client'):
+    with pytest.raises(SubmitError, match='is not open'):
         total.push(parts=[toys.Amount(value=1.0)])  # a push is refused, not read
     for unknown in (
         lambda: client.output(unknown_load, 'value'),
@@ -199,22 +200,66 @@ def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
         client.output(load, 'nope')
 
 
-def test_a_client_releases_only_what_it_keeps(backend: Backend, client: Client) -> None:
+def test_another_client_releases_what_the_workspace_keeps(
+    client: Client, other: Client
+) -> None:
     load = client.compute(toys.load_request(1))
-    Client(backend, proposal='p1', submitter='bob').release(load)
+    stage = toys.stage_shift(client, load)
+    total = toys.total_accumulator(client)
+    other.release([load, stage, total])
 
-    assert client.output(load, 'value') == toys.Amount(value=1.0)
+    with pytest.raises(NotReadable, match=f'record {load.id} is not kept'):
+        client.output(load, 'value')
+    with pytest.raises(SubmitError, match='the stage was released'):
+        toys.submit_shift(client, stage, 1.0)
+    with pytest.raises(NotReadable, match=f'accumulator {total.id} is not open'):
+        client.output(total)
 
 
-def test_every_call_of_a_closed_client_raises_client_ended(client: Client) -> None:
+def test_a_release_by_another_client_cancels_pending_work_and_its_read_fails(
+    client: Client, other: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    load = client.submit(toys.load_request(1))
+    other.release(load)
+    loading.set()
+
+    with pytest.raises(RecordFailed, match=f'^record {load.id} cancelled'):
+        client.output(load, 'value')
+
+
+def test_another_client_s_name_is_on_what_it_submits_and_freezes(
+    client: Client, other: Client
+) -> None:
+    load = other.compute(toys.load_request(1))
+    total = toys.total_accumulator(client)
+    total.push(parts=[load.ref('value')])
+    frozen = other.freeze(total)
+
+    assert [r.submitter for r in client.records(ids=[load.id, frozen.id])] == [
+        'bob',
+        'bob',
+    ]
+    assert client.output(frozen, 'value') == toys.Amount(value=1.0)
+
+
+def test_every_call_of_a_closed_workspace_raises(
+    workspace: Workspace, client: Client
+) -> None:
     load = client.compute(toys.load_request(1))
     stage = toys.stage_shift(client, load)
     total = client.accumulator(Template(toys.TOTAL, blanks=('parts',)))
     total.push(parts=[load.ref('value')])
-    client.close()
+    workspace.close()
 
     calls = [
         lambda: client.submit(toys.load_request(1)),
+        lambda: client.freeze(total),
+        lambda: client.cancel(load),
+        lambda: client.changes(),
+        lambda: client.wait(load),
+        lambda: client.describe(load, 'value'),
+        lambda: client.files.metadata(load.request.params['sample']),
         lambda: toys.submit_shift(client, stage, 1.0),
         lambda: client.submit(toys.read_request(total)),
         lambda: total.push(parts=[load.ref('value')]),
@@ -232,21 +277,24 @@ def test_every_call_of_a_closed_client_raises_client_ended(client: Client) -> No
         lambda: client.files.list(Selector()),
     ]
     for call in calls:
-        with pytest.raises(ClientEnded) as raised:
+        with pytest.raises(RuntimeError, match=r'^the workspace is closed$'):
             call()
-        assert not isinstance(raised.value, RuntimeError | LookupError)
 
 
-def test_a_with_block_closes_the_client(backend: Backend) -> None:
-    with Client(backend, proposal='p1', submitter='anna') as client:
-        load = client.compute(toys.load_request(1))
+def test_closing_a_client_releases_nothing(
+    workspace: Workspace, other: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    with Client(workspace, submitter='anna') as client:
+        pending = client.submit(toys.load_request(2))
+        shifted = client.submit(toys.read_request(pending))
+    loading.set()
 
-    with pytest.raises(ClientEnded):
-        client.output(load, 'value')
-    client.close()  # closing again does nothing
+    assert other.wait([pending, shifted]) == [Status.COMPLETED] * 2
+    assert other.output(pending, 'value') == toys.Amount(value=2.0)
 
 
-def test_closing_a_local_client_closes_its_backend_once_its_workflows_return(
+def test_closing_a_local_client_closes_its_workspace_once_its_workflows_return(
     files: FakeFiles, loading: threading.Event
 ) -> None:
     started = threading.Event()
@@ -283,18 +331,12 @@ def test_every_output_of_a_record_or_an_accumulator_is_read_without_a_name(
     assert total.refs() == {'value': total.ref('value')}
 
 
-def test_on_close_is_called_once_the_client_has_ended(backend: Backend) -> None:
-    def on_close() -> None:
-        with pytest.raises(ClientEnded):
-            client.records()
-        closed.append(True)
-
+def test_on_close_is_called_by_each_close(workspace: Workspace) -> None:
     closed: list[bool] = []
-    client = Client(backend, proposal='p1', submitter='anna', on_close=on_close)
+    with Client(workspace, submitter='anna', on_close=lambda: closed.append(True)) as c:
+        c.close()
 
-    client.close()
-
-    assert closed == [True]
+    assert closed == [True, True]
 
 
 def test_closing_a_local_client_cancels_what_has_not_started_before_it_waits(

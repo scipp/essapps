@@ -13,7 +13,6 @@ from typing import Any
 import pytest
 
 from ess.apps import (
-    Backend,
     Client,
     NotReadable,
     Record,
@@ -21,6 +20,7 @@ from ess.apps import (
     Status,
     SubmitError,
     Template,
+    Workspace,
     file,
     local,
 )
@@ -420,7 +420,7 @@ def test_only_a_request_reads_an_accumulator_and_no_client_its_state(
 
     refusals = {
         total.ref('value'): 'only a request may reference an accumulator',
-        state: f'record {state.record} is not kept by this client',
+        state: f'record {state.record} is not kept',
     }
     for ref, refused in refusals.items():
         for accumulator in (total, other):
@@ -450,7 +450,7 @@ def test_no_client_reads_the_record_of_a_state(
     copied = toys.submit_copy(client, total)  # holds the state until it has run
     state = toys.state_record(client, copied)
 
-    with pytest.raises(NotReadable, match=f'^record {state.id} is not kept by'):
+    with pytest.raises(NotReadable, match=f'^record {state.id} is not kept$'):
         client.output(state, 'value')
     copying.go.set()
     assert toys.listed(client.output(copied, 'value')) == [1.0]
@@ -543,12 +543,11 @@ def test_cancelling_the_record_of_a_state_fails_its_readers_and_frees_the_push(
 
 
 def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(
-    backend: Backend, client: Client
+    client: Client,
 ) -> None:
     total = toys.total_accumulator(client)
     load = client.compute(toys.load_request(1))
     total.push(parts=[load.ref('value')])
-    elsewhere = Client(backend, proposal='p2', submitter='carl')
     extra = OutputRef(record=total.id, output='extra')
 
     for read in (lambda: total.ref('extra'), lambda: client.output(total, 'extra')):
@@ -561,12 +560,6 @@ def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(
             toys.SHIFT,
             params={'shift': total.ref('value'), 'source': toys.Amount(value=1.0)},
         )
-    with pytest.raises(
-        SubmitError, match=r'^source: no accumulator .* in proposal p2$'
-    ):
-        elsewhere.submit(toys.read_request(total))
-    with pytest.raises(KeyError, match='in proposal p2'):
-        elsewhere.output(total)
 
 
 def test_a_reference_to_an_accumulator_in_json_form_reads_its_state(
@@ -786,8 +779,8 @@ def test_a_stopped_driver_is_dropped_before_the_accumulator_is_released(
     assert subtracting.held[0]() is None  # nothing reads it any more
 
 
-def test_closing_a_client_drops_the_pushes_that_no_read_needs(
-    summed_backend: Backend,
+def test_closing_the_workspace_drops_the_pushes_that_no_read_needs(
+    summed_workspace: Workspace,
     summed: Client,
     summed_loads: list[Record],
     summing: toys.Sum,
@@ -797,15 +790,14 @@ def test_closing_a_client_drops_the_pushes_that_no_read_needs(
     for load in summed_loads[:2]:
         total.push(parts=[load.ref('value')])
     summing.adding.wait(timeout=5)
-    summed.close()
-    summing.go.set()
-    summed_backend.close()
+    threading.Timer(0.05, summing.go.set).start()  # so that closing can return
+    summed_workspace.close()
 
-    assert summing.pushed == 1  # the push being added when the client closed
+    assert summing.pushed == 1  # the push being added when the workspace closed
 
 
 def test_a_released_accumulator_drops_the_pushes_once_their_reader_is_cancelled(
-    summed_backend: Backend,
+    summed_workspace: Workspace,
     summed: Client,
     summed_loads: list[Record],
     summing: toys.Sum,
@@ -819,10 +811,10 @@ def test_a_released_accumulator_drops_the_pushes_once_their_reader_is_cancelled(
     summing.adding.wait(timeout=5)
     client.release(total)  # the read keeps the pushes
     client.release(read)  # and no longer once it is cancelled
-    summing.go.set()
-    summed_backend.close()
-
     assert client.status(read) is Status.CANCELLED
+    summing.go.set()
+    summed_workspace.close()
+
     assert summing.pushed == 1  # the push being added when the read was cancelled
 
 
@@ -873,7 +865,7 @@ def test_a_released_accumulator_takes_no_pushes_or_references_and_is_still_read(
     copied = toys.submit_copy(client, total)
     client.release(total)  # the copy is still a reader of its state
 
-    released = f'accumulator {total.id} is not kept by this client'
+    released = f'accumulator {total.id} is not open'
     with pytest.raises(SubmitError, match=f'^{released}$'):
         total.push(parts=[loads[1].ref('value')])
     with pytest.raises(SubmitError, match=rf'^source: {released}$'):

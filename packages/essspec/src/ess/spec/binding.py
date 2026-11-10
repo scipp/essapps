@@ -1,14 +1,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Bindings: what the backend calls to compute a spec's requests.
+Bindings: what the workspace (``ess.apps.Workspace``) calls to compute a
+spec's requests.
 
 ``packages/essspec/docs/bindings.md`` is a guide for workflow authors.
 
-The protocols name what the backend calls: :class:`Binding` for a plain
+The protocols name what the workspace calls: :class:`Binding` for a plain
 request, :class:`StageBinding` for a stage, and :class:`AccumulatorBinding`
 for an accumulator, whose :class:`Driver` the workflow package writes. The
-backend checks which protocol a binding implements when a stage or an
+workspace checks which protocol a binding implements when a stage or an
 accumulator is made, and refuses one that the binding does not serve.
 
 This module holds the bindings that need no sciline: :class:`DriverBinding`
@@ -39,7 +40,7 @@ type StageCall[O] = Callable[[Mapping[str, Any]], O]
 @runtime_checkable
 class Binding[P: BaseModel, O: BaseModel](Protocol):
     """
-    What the backend calls to compute a plain request.
+    What the workspace calls to compute a plain request.
 
     Every binding is one, whatever else it serves. See
     ``packages/essspec/docs/bindings.md``.
@@ -60,7 +61,7 @@ class StageBinding[P: BaseModel, O: BaseModel](Binding[P, O], Protocol):
     """
     A binding that serves stages.
 
-    The backend calls :meth:`make_stage` at a stage's first call, and the
+    The workspace calls :meth:`make_stage` at a stage's first call, and the
     callable it returns once per call through the stage. See
     ``packages/essspec/docs/bindings.md``.
     """
@@ -107,7 +108,7 @@ class AccumulatorBinding[P: BaseModel, O: BaseModel](Binding[P, O], Protocol):
     """
     A binding that serves accumulators.
 
-    The backend calls :meth:`make_accumulator` when an accumulator opens, then
+    The workspace calls :meth:`make_accumulator` when an accumulator opens, then
     :meth:`Driver.push` once per table of a push, with its rows, and
     :meth:`Driver.outputs` once per state that is read. See
     ``packages/essspec/docs/bindings.md``.

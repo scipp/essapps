@@ -47,10 +47,11 @@ for the types of the data in a group that a reference fills, but never sciline o
 0007 of scipp/essapps).
 
 The package also holds the *bindings*, the other half of the contract with
-workflow packages: a binding is what the backend calls to compute a spec's
-requests, made by the workflow author from a pipeline, a driver, or a function,
-each for one spec (`ess.spec.binding`). `ess.spec.testing` checks the
-symmetries that a binding keeps.
+workflow packages: a binding is what the workspace (`ess.apps.Workspace`,
+which runs requests) calls to compute a spec's requests, made by the workflow
+author from a pipeline, a driver, or a function, each for one spec
+(`ess.spec.binding`). `ess.spec.testing` checks the symmetries that a binding
+keeps.
 
 ### The spec is pure interface: no factory, no keys, no registry
 
@@ -81,15 +82,15 @@ service adopts this spec.
 ### Params: values, files, and references to outputs
 
 A request goes through two phases. The *request phase* is what the client and
-the backend do with a request before any data is read: validate, log, record,
-pin. The *call phase* starts when the backend reads data for the binding.
+the workspace do with a request before any data is read: validate, log, record,
+pin. The *call phase* starts when the workspace reads data for the binding.
 
 A request gives each field of the params, at any depth, in one of three
 sources:
 
 - *written inline*: the value itself, such as `Reduction(bins=100)` or
   `{'bins': 100}`;
-- a *file*, `file(run=60339)`, which the backend resolves to the file's
+- a *file*, `file(run=60339)`, which the workspace resolves to the file's
   identity in the request phase;
 - a *reference to an output*, which names an output of an earlier record or
   of an accumulator. In the request phase it is the reference; in the call
@@ -98,7 +99,7 @@ sources:
 The *JSON form* of a value is what it dumps to as JSON,
 `model_dump(mode='json')`. The record holds the JSON form of each value, file,
 and reference. A value *round-trips* when its JSON form reads back as the
-value. The params model types the call phase only. The backend reads each
+value. The params model types the call phase only. The workspace reads each
 reference to an output and builds the params instance from the values and the
 data, so every field of it holds the type it declares. The binding gets that
 instance: `compute(params) -> outputs`.
@@ -141,7 +142,7 @@ source of a
 value is known from its `@ref` key alone, so the request phase validates a
 value by the type of its source, the JSON schema of the request type is the
 params schema, and a form offers a widget for each source the field takes.
-The backend, the schema, and a form thus agree by construction. The params
+The workspace, the schema, and a form thus agree by construction. The params
 model stays the type of the call phase; the record stores the JSON form of
 the request type.
 
@@ -235,14 +236,14 @@ CalibrationFile = Annotated[Path, File(kind='calibration')]
 ```
 
 A request writes a file as `file(...)`, such as `file(run=60339)` or
-`file(path=...)`. The backend resolves it to the file's identity in the
+`file(path=...)`. The workspace resolves it to the file's identity in the
 request phase, given the marker, so that the file source checks that the file
 is known, that the request's proposal may read it, and that its metadata fit
 the marker's, but for the role of a raw file. The record holds the identity. A file's identity and local path
 are therefore known when the request arrives, as a value typed in is, so a
 group that holds a file is validated then, and its validators see the path.
 The params model holds the local path, a `Path`: a workflow sees paths only,
-never identities, and a program without a backend gives the path,
+never identities, and a program without a workspace gives the path,
 `IofQParams(sample=Path('run-60339.nxs'), ...)`. The marker carries no
 validators: one that reads the file would read it from a network mount in the
 request phase, and a check of a file's content belongs to the workflow. A
@@ -297,7 +298,7 @@ are resolved:
 | Fits if | the output's class is `T` or a subclass of it | the file's metadata have the marker's metadata, but for the role |
 | Resolved | in the call phase, to the stored output | in the request phase, to the file's identity; the params model holds its local path |
 | Found in a record | by its `@ref` key, without the spec | the same |
-| Access check at submission | records the client may read | files the proposal may read |
+| Access check at submission | outputs that may be read | files the proposal may read |
 
 A reference to an output fits a union through its members `Referenced[T]`.
 Such a member needs no tag, so the workflow that computes `T` knows nothing of
@@ -342,7 +343,7 @@ class IofQOutputs(BaseModel):
 IOFQ = WorkflowSpec(name='sans-iofq', version=1, ..., params=IofQParams, outputs=IofQOutputs)
 ```
 
-Two requests, written with essapps: `client` connects to a backend,
+Two requests, written with essapps: `client` is a client of a workspace,
 `file(...)` names a file, `finder` is the record of a request that finds
 the beam centre, so `finder.ref('centre')` names its output `centre`, and `t`
 is the record of a transmission reduction:
@@ -531,7 +532,7 @@ Each table is a `list` of the single-run type, without a default, so a request
 gives every table, `[]` for one without rows, and a template that forgets a
 table is refused. `Field(min_length=1)` states that a table needs a row. The
 model states the length constraints, so that the model, its schema, and the
-backend agree that the table has a row. The field `tables` of `WorkflowSpec` is
+workspace agree that the table has a row. The field `tables` of `WorkflowSpec` is
 a tuple of the names of the tables. A list parameter makes a table only when
 `tables` names it. A spec whose outputs differ from those of a single-run spec,
 such as a stitch of all angles, or that has no single-run spec, such as a sum

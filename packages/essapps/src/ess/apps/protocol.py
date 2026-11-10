@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The seams of a backend: :class:`BackendProtocol` is what a client calls,
-:class:`FileSource` and :class:`Store` are what a backend calls.
+The seams of a workspace: :class:`WorkspaceProtocol` is what a client calls,
+:class:`FileSource` and :class:`Store` are what a workspace calls.
 
 The protocol holds the rules that a client relies on. Anything that changes
 what happens belongs here, and the client only adapts: it reshapes, wraps IDs
@@ -10,12 +10,16 @@ in objects, and adds shortcuts.
 
 Records and values
 ------------------
+A workspace holds the history and the values of one proposal; its clients are
+connections to it, and keep nothing.
+
 Records and output values have different lifetimes. A record is small and is
 kept with the proposal's history. History is dropped as a whole once the
-proposal has been idle for days to weeks: it has no open client and no pending
-record. An output value may be large and lives only while a *keeper* keeps it:
+proposal has been idle for days to weeks: no call and no pending record. An
+output value may be large and lives only while a *keeper* keeps it:
 
-- the client that asked for the record, until it releases the record or ends;
+- the workspace, for a record that a submission or a freeze made without
+  persisting its outputs, until the record is released or the workspace closes;
 - a pending request that reads it, until the request's workflow has returned;
 - a push, a stage, or an accumulator's template that references it, until the
   binding has taken it, or the push, stage, or accumulator is released, stopped,
@@ -27,22 +31,21 @@ A record object or a reference keeps nothing. A value that is gone does not come
 back. Nothing is written to the store unless a submission or a freeze persists
 it, since the framework cannot tell which outputs are worth writing.
 
-A request may reference, and a client may read, only the output values it keeps,
-persisted outputs, files, and the current states of its own accumulators. So
-another client, even one in the same process, reads a value only once it is
-persisted. A pending record passes this rule, so a request is not refused because
-what it reads is still running. It is refused once that record has failed or been
-cancelled.
+A request may reference, and a client may read, only the output values the
+workspace keeps, persisted outputs, files, and the current states of its open
+accumulators. Every client of the workspace reads the same values. A pending record
+passes this rule, so a request is not refused because what it reads is still
+running. It is refused once that record has failed or been cancelled.
 
 Work that nothing would keep is cancelled: a pending record whose outputs have
 no keeper finishes as cancelled. Since a cancelled request keeps nothing it
 reads, this passes along a chain. A running workflow is not interrupted: its
 record is cancelled at once, and its outputs are dropped when it returns.
 
-In the user's process, values live in its memory. A hosted service limits the
-memory of each client, ends a client that makes no call within its lease, and
-gives each proposal a store. ``docs/developer/accumulators.md`` explains stages
-and accumulators, and ``packages/essspec/docs/params.md`` the terms of params.
+In the user's process, values live in its memory. A hosted service runs a
+workspace for each proposal, limits its memory, and gives it a store.
+``docs/developer/accumulators.md`` explains stages and accumulators, and
+``packages/essspec/docs/params.md`` the terms of params.
 """
 
 from __future__ import annotations
@@ -50,15 +53,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NewType, Protocol
+from typing import Any, Protocol
 
 from ess.spec import FileRef, WorkflowSpec
 
 from .files import Selector
 from .records import Changes, Record, RecordStatus, Request, Template
-
-ClientId = NewType('ClientId', str)
-"""The ID of a client of a backend, from :meth:`BackendProtocol.open_client`."""
 
 Selection = Mapping[str, int | slice]
 """Part of an array: an index or a slice for each dimension it names."""
@@ -79,17 +79,17 @@ class Entry:
     stage: str | None = None
 
 
-class BackendProtocol(Protocol):
+class WorkspaceProtocol(Protocol):
     """
-    What a client calls on a backend, for many clients and proposals, named by ID.
+    What a client calls on a workspace of one proposal.
 
-    Every call but :meth:`open_client` names its client, and the client's proposal
-    bounds every check and query. A record or accumulator ID that is not of the
-    proposal raises ``KeyError``; inside a request, template, or push it raises
-    ``SubmitError``, and :meth:`release` leaves it alone. A call of a client that has
-    ended, also one waiting when it ends, raises ``ClientEnded``. If the backend
-    cannot log, the call that found this raises that error, and it stops: every call
-    then raises ``RuntimeError``.
+    Every record and accumulator of the workspace's history is of its proposal. A
+    record or accumulator ID that the history lacks raises ``KeyError``; inside a
+    request, template, or push it raises ``SubmitError``, and :meth:`release` leaves
+    it alone. Once the workspace closes (:meth:`ess.apps.Workspace.close`), every
+    later call raises ``RuntimeError``, and so does a call waiting when it closes.
+    If the workspace cannot log, the call that found this raises that error, and it
+    stops: every call then raises ``RuntimeError``.
 
     A call returns once it is checked and logged, and leaves reading data and
     computing to the workers. Only :meth:`changes`, up to its timeout, and the reads
@@ -101,23 +101,10 @@ class BackendProtocol(Protocol):
     has one, and its record is the record of that request.
     """
 
-    # Sessions
-
-    def open_client(self, proposal: str, submitter: str) -> ClientId:
-        """Start a client of the proposal and return its ID; it keeps nothing yet."""
-        ...
-
-    def close_client(self, client_id: ClientId) -> None:
-        """
-        End the client and release all it keeps (see :meth:`release`). Ending it again
-        does nothing.
-        """
-        ...
-
     # Specs
 
-    def specs(self, client_id: ClientId) -> list[WorkflowSpec[Any, Any]]:
-        """The specs the backend runs, in the order bound."""
+    def specs(self) -> list[WorkflowSpec[Any, Any]]:
+        """The specs the workspace runs, in the order bound."""
         ...
 
     # Requests
@@ -125,7 +112,7 @@ class BackendProtocol(Protocol):
     def submit(
         self,
         entries: list[Entry],
-        client_id: ClientId,
+        submitter: str,
         *,
         persist: bool | Sequence[str] = False,
     ) -> list[Record]:
@@ -145,11 +132,11 @@ class BackendProtocol(Protocol):
         ----------
         entries:
             The requests.
-        client_id:
-            The client, which keeps the records unless they persist outputs.
+        submitter:
+            Who submits, as the records name them.
         persist:
             ``True``, or the names of outputs: the store keeps these outputs instead
-            of the client, and the other outputs are dropped. Each record completes
+            of the workspace, and the other outputs are dropped. Each record completes
             once they are written, and fails if a write fails.
 
         Returns
@@ -162,23 +149,22 @@ class BackendProtocol(Protocol):
         SubmitError
             If a request cannot run: an invalid value, an unknown spec or file, a
             reference at a field that the spec does not mark ``Referenced[...]``, a
-            reference the client may not read, or one whose data do not fit its field;
-            or if ``persist`` names an output the spec lacks, or the backend has no
+            reference that may not be read, or one whose data do not fit its field;
+            or if ``persist`` names an output the spec lacks, or the workspace has no
             store. A reason's ``entry`` is the request's index in ``entries``, or
             ``None`` if the reason is not about one request (see
             :class:`~ess.apps.errors.FieldError`).
         """
         ...
 
-    def cancel(self, ids: Sequence[str], client_id: ClientId) -> None:
+    def cancel(self, ids: Sequence[str]) -> None:
         """
         End the unfinished records as cancelled, and pass this along: what only they
-        keep is cancelled, and a record that references one fails. A client may cancel
-        any record of its proposal.
+        keep is cancelled, and a record that references one fails.
         """
         ...
 
-    def status(self, ids: Sequence[str], client_id: ClientId) -> list[RecordStatus]:
+    def status(self, ids: Sequence[str]) -> list[RecordStatus]:
         """The status of each record now, and why it failed, if it did."""
         ...
 
@@ -186,7 +172,6 @@ class BackendProtocol(Protocol):
 
     def records(
         self,
-        client_id: ClientId,
         *,
         label: str | None = None,
         ids: Sequence[str] | None = None,
@@ -197,16 +182,14 @@ class BackendProtocol(Protocol):
         """
         ...
 
-    def changes(
-        self, after: int, client_id: ClientId, *, timeout: float = 0.0
-    ) -> Changes:
+    def changes(self, after: int, *, timeout: float = 0.0) -> Changes:
         """
         The IDs of the proposal's records that changed since position ``after`` of
         its feed, and the position to pass next.
 
-        This is how a client stays up to date. The feed is one order per proposal, a
-        record is in it when it is submitted and when it finishes, and the client holds
-        its own position, so ``after=0`` replays the proposal from its start. A reply
+        This is how a client stays up to date. The feed is one order, a record is in
+        it when it is submitted and when it finishes, and the client holds its own
+        position, so ``after=0`` replays the proposal from its start. A reply
         holds each ID once, in the order of its first change in the range. It holds no
         values: a record's status only moves forward, so a client reads the current
         status of what changed.
@@ -218,8 +201,6 @@ class BackendProtocol(Protocol):
         ----------
         after:
             The position to read from.
-        client_id:
-            The client.
         timeout:
             How long to wait, in seconds, for a change after ``after``. If none comes,
             the reply holds no IDs.
@@ -231,7 +212,7 @@ class BackendProtocol(Protocol):
         """
         ...
 
-    def plain_request(self, accumulator_id: str, client_id: ClientId) -> Request:
+    def plain_request(self, accumulator_id: str) -> Request:
         """
         The plain request of the accumulator's state after the pushes logged so far.
         Returns at once. Raises ``NotReadable`` if the state may not be read.
@@ -244,7 +225,6 @@ class BackendProtocol(Protocol):
         self,
         record_id: str,
         names: Sequence[str] | None,
-        client_id: ClientId,
         *,
         select: Selection | None = None,
     ) -> dict[str, Any]:
@@ -260,10 +240,8 @@ class BackendProtocol(Protocol):
         record_id:
             The record.
         names:
-            The outputs to read, or ``None`` for every output the client may read that
+            The outputs to read, or ``None`` for every output that may be read and that
             the workflow returned.
-        client_id:
-            The client.
         select:
             Copies only this part of each output. It needs ``names``, and each output
             must be declared as an array or a group with an array field. Of a group, it
@@ -275,9 +253,9 @@ class BackendProtocol(Protocol):
         KeyError
             For an output the spec lacks.
         NotReadable
-            If the client may not read an output, also once it releases a record that
-            something else still keeps, or if the store no longer holds an output or
-            the workflow did not return it.
+            If an output may not be read, also once its record is released while
+            something else still keeps it, or if the store no longer holds an output
+            or the workflow did not return it.
         RecordFailed
             If the record failed or was cancelled, also when releasing it cancelled it.
         ValueError
@@ -288,9 +266,7 @@ class BackendProtocol(Protocol):
         """
         ...
 
-    def describe(
-        self, record_id: str, name: str, client_id: ClientId
-    ) -> dict[str, Any]:
+    def describe(self, record_id: str, name: str) -> dict[str, Any]:
         """
         What an output is, without its data. A group gives its fields by name, any
         other output gives ``{name: info}``. An array of at least one dimension is an
@@ -299,18 +275,16 @@ class BackendProtocol(Protocol):
         """
         ...
 
-    def readable(
-        self, ids: Sequence[str], client_id: ClientId
-    ) -> list[tuple[str, ...]]:
+    def readable(self, ids: Sequence[str]) -> list[tuple[str, ...]]:
         """
-        The outputs of each record that a request of the client may reference now,
-        in declared order. Waits for nothing and reads no value.
+        The outputs of each record that a request may reference now, in declared
+        order. Waits for nothing and reads no value.
         """
         ...
 
-    def release(self, ids: Sequence[str], client_id: ClientId) -> None:
+    def release(self, ids: Sequence[str]) -> None:
         """
-        Let go of records, stages, and accumulators the client keeps; others are
+        Let go of records, stages, and accumulators the workspace keeps; others are
         left alone.
 
         A released record stays in history, and its outputs are dropped once nothing
@@ -323,11 +297,9 @@ class BackendProtocol(Protocol):
 
     # Stages and accumulators
 
-    def open_stage(
-        self, template: Template, client_id: ClientId
-    ) -> tuple[str, Template]:
+    def open_stage(self, template: Template) -> tuple[str, Template]:
         """
-        Open a stage of the client. Returns its ID and the template with its values as
+        Open a stage. Returns its ID and the template with its values as
         the stage holds them, file names resolved.
 
         A request through it (see :class:`Entry`) must have these values, and its
@@ -340,11 +312,9 @@ class BackendProtocol(Protocol):
         """
         ...
 
-    def open_accumulator(
-        self, template: Template, client_id: ClientId
-    ) -> tuple[str, Template]:
+    def open_accumulator(self, template: Template) -> tuple[str, Template]:
         """
-        Open an accumulator of the client. Returns its ID and the template as history
+        Open an accumulator. Returns its ID and the template as history
         holds it.
 
         Its *state n* is the accumulator after its first n pushes, and has the outputs
@@ -366,9 +336,7 @@ class BackendProtocol(Protocol):
         """
         ...
 
-    def push(
-        self, accumulator_id: str, rows: Mapping[str, list[Any]], client_id: ClientId
-    ) -> None:
+    def push(self, accumulator_id: str, rows: Mapping[str, list[Any]]) -> None:
         """
         Log rows of one or more blank tables by name; they enter one state.
 
@@ -378,7 +346,7 @@ class BackendProtocol(Protocol):
 
         Raises ``SubmitError`` if a table is not a blank of the template or gets no
         rows, a row is invalid, repeats, or is in its table already, a row references
-        an output the client may not read or an accumulator, or the accumulator is
+        an output that may not be read or an accumulator, or the accumulator is
         released, frozen, or stopped.
         """
         ...
@@ -386,14 +354,15 @@ class BackendProtocol(Protocol):
     def freeze(
         self,
         accumulator_id: str,
-        client_id: ClientId,
+        submitter: str,
         *,
         persist: bool | Sequence[str] = False,
     ) -> Record:
         """
         The record of the accumulator's state after the pushes logged so far, whose
-        outputs are the driver's, not a copy; the client keeps it, or with ``persist``,
-        the store (see :meth:`submit`).
+        outputs are the driver's, not a copy; the workspace keeps it, or with
+        ``persist``, the store (see :meth:`submit`). ``submitter`` is as for
+        :meth:`submit`.
 
         The accumulator takes no more pushes. Once the record has completed, the
         accumulator is read through it. If it fails or is cancelled, the accumulator
@@ -409,7 +378,6 @@ class BackendProtocol(Protocol):
         self,
         accumulator_id: str,
         names: Sequence[str] | None,
-        client_id: ClientId,
         *,
         select: Selection | None = None,
     ) -> dict[str, Any]:
@@ -427,13 +395,11 @@ class BackendProtocol(Protocol):
 
     # Files
 
-    def files(self, selector: Selector, client_id: ClientId) -> list[FileRef]:
+    def files(self, selector: Selector) -> list[FileRef]:
         """The matching files the proposal may read, in the order measured."""
         ...
 
-    def file_metadata(
-        self, refs: Sequence[FileRef], client_id: ClientId
-    ) -> list[dict[str, Any]]:
+    def file_metadata(self, refs: Sequence[FileRef]) -> list[dict[str, Any]]:
         """
         The current metadata of each file, named by its identity as :meth:`files` gives
         it; raises ``KeyError`` for one unknown or that the proposal may not read.
@@ -445,16 +411,16 @@ class FileSource(Protocol):
     """
     Which files exist, and what they hold.
 
-    A backend has one. It resolves names and finds files through it, and answers
+    A workspace has one. It resolves names and finds files through it, and answers
     through it the queries of its clients: listing files and reading their metadata.
-    A client sees only the files its proposal may read. Tests use a fake
+    A client sees only the files the workspace's proposal may read. Tests use a fake
     (``testing.FakeFiles``).
 
-    The backend, its rules, and the forms tell which files fit a field or a selector
+    The workspace, its rules, and the forms tell which files fit a field or a selector
     only by the metadata the source gives, in :meth:`metadata` and :meth:`list`. A
     source that corrects the metadata of a file, such as the role of a run tagged
     wrongly, corrects them in both, so that each sees the file as corrected.
-    A role is optional, and what the backend does not check (:meth:`Selector.of`).
+    A role is optional, and what the workspace does not check (:meth:`Selector.of`).
     """
 
     def resolve(self, name: FileRef) -> FileRef:
@@ -466,7 +432,7 @@ class FileSource(Protocol):
         A local path to the file, for a workflow to read: a lookup by
         identity that never raises.
 
-        The files are on a network mount, and the backend calls ``path`` for
+        The files are on a network mount, and the workspace calls ``path`` for
         each file of a request when the request is submitted, so that the
         validators of a group that holds a file see its path. So ``path``
         neither stages nor downloads the file, and does not check that it can
@@ -494,7 +460,7 @@ class Store(Protocol):
     """
     Where persisted outputs are written, and read back.
 
-    The backend is given a store; each deployment configures its own, and tests
+    The workspace is given a store; each deployment configures its own, and tests
     use a fake (``testing.FakeStore``). A value is found by the record's ID and
     the output's name, so history names no file. A store reads a value back as
     the workflow returned it. The format of each output type and the layout of

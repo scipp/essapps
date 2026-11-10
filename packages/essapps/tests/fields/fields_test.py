@@ -272,7 +272,7 @@ def test_a_cleared_input_of_a_value_with_a_default_is_not_given_the_default(
     assert options.params['settings']['name'] == ''
 
 
-def test_a_choice_without_a_default_starts_unset_and_the_backend_refuses_it(
+def test_a_choice_without_a_default_starts_unset_and_the_workspace_refuses_it(
     client: Client, options: Fields, options_spec: Spec
 ) -> None:
     options.set({'settings': {'flag': False, 'count': 1}}, Listing(client))

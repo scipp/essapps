@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""The toy reduction of ``toys`` on a real in-process backend."""
+"""The toy reduction of ``toys`` on a real in-process workspace."""
 
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from ess.apps import Backend, Client
+from ess.apps import Client, Workspace
 from ess.apps.batch import Batch, CorrectedFiles
 from ess.apps.testing import FakeFiles, StagedFunction, read_file
 from ess.spec import FileRef, function_binding
@@ -50,23 +50,27 @@ def staged_binding(gate: toys.Gate) -> StagedFunction:
 
 
 @pytest.fixture
-def backend(files: CorrectedFiles, staged_binding: StagedFunction) -> Iterator[Backend]:
+def workspace(
+    files: CorrectedFiles, staged_binding: StagedFunction
+) -> Iterator[Workspace]:
     plain = function_binding(toys.PLAIN, staged_binding.function)
     find = function_binding(toys.FIND, _find)
-    backend = Backend(files, [staged_binding, plain, find])
-    yield backend
-    backend.close()
+    workspace = Workspace(
+        proposal='p1', files=files, bind=[staged_binding, plain, find]
+    )
+    yield workspace
+    workspace.close()
 
 
 @pytest.fixture
-def client(backend: Backend) -> Client:
-    return Client(backend, proposal='p1', submitter='anna')
+def client(workspace: Workspace) -> Client:
+    return Client(workspace, submitter='anna')
 
 
 @pytest.fixture
-def other(backend: Backend) -> Client:
+def other(workspace: Workspace) -> Client:
     """Another client of the proposal of ``client``."""
-    return Client(backend, proposal='p1', submitter='bob')
+    return Client(workspace, submitter='bob')
 
 
 @pytest.fixture

@@ -586,7 +586,7 @@ class TestModelRules:
         spec(**fields)
 
     def test_a_model_validator_of_the_params_model_is_allowed(self) -> None:
-        # The framework never calls it (see the backend's tests); a binding may.
+        # The framework never calls it (see the workspace's tests); a binding may.
         assert IofQParams.__pydantic_decorators__.model_validators
         with pytest.raises(pydantic.ValidationError, match='the sample run is not'):
             IofQParams.model_validate({'sample': Path('a.nxs'), 'can': Path('a.nxs')})

@@ -40,7 +40,7 @@ at any depth, is the group's own class, with its validators. A group that
 holds one is a model derived from it without its validators (see
 :func:`_group_request_type`): they run when the params model validates the
 group (see :func:`ess.spec.validation.validated`). A file is a
-:class:`~ess.spec.refs.FileRef`, which a backend validates with a resolver of
+:class:`~ess.spec.refs.FileRef`, which a workspace validates with a resolver of
 files, :data:`FileResolver`, given the field's
 :class:`~ess.spec.parameters.File` marker.
 """
@@ -349,7 +349,7 @@ def single_field_request_model(
     A model of the field ``name`` of ``model`` alone, typed its request type,
     with the config of ``model``; without the length constraints of a list
     if it is a ``table``: an accumulator takes a table a few rows at a time,
-    and the backend checks the number of rows of the whole table. It is made
+    and the workspace checks the number of rows of the whole table. It is made
     from the one field, so that a problem of another field does not hide that
     of this one.
     """

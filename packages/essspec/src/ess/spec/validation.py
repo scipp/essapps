@@ -3,12 +3,12 @@
 """
 Validation of the parameters of a request, in the request phase and the call phase.
 
-The backend validates each parameter of a request with
+The workspace validates each parameter of a request with
 :func:`validate_request_value`, which it gives a resolver of files,
 :data:`~ess.spec.request_types.FileResolver`, and the local path of a file,
 :data:`LocalPath`. It returns what the record holds, the JSON form of the
 request type, and each reference to an output with the type its data must
-fit, :data:`OutputReads`, which the backend checks against history. The call
+fit, :data:`OutputReads`, which the workspace checks against history. The call
 phase validates the params model itself from the record (see
 :func:`validated`).
 
@@ -43,7 +43,7 @@ call phase     :func:`validated`, with the        validates a parameter by
 =============  =================================  ==========================
 
 The *request phase* is when a request is submitted, before any data is
-read. The *call phase* is when the request runs, once the backend has read
+read. The *call phase* is when the request runs, once the workspace has read
 the data of each reference to an output. :func:`validated` validates by the
 params model, not by the request type; the request types are in
 :mod:`ess.spec.request_types`.
@@ -131,7 +131,7 @@ def validate_request_value(
         The value as the record stores it, the JSON form of the validated
         value (see :func:`_validate_round_trip`), and each reference to an output in it
         with the type its data must fit, read from the request type, so that
-        the backend checks it against history without validating again.
+        the workspace checks it against history without validating again.
 
     Raises
     ------
@@ -267,7 +267,7 @@ def _single_field_params_model(
 
     With ``table``, the field is a table, validated without its length
     constraints: an accumulator takes a table a few rows at a time, and the
-    backend checks the number of rows of the whole table.
+    workspace checks the number of rows of the whole table.
     """
     info = model.model_fields[name]
     field = (info.annotation, Field()) if table else (info.annotation, info)

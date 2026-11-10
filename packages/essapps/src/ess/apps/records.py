@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Requests and records: what a user asks for and what the backend made of it.
+Requests and records: what a user asks for and what the workspace made of it.
 
 Both are plain data. A request names a spec and its params by name, each an
 inline value or a reference; a record is the request with every value filled
-in, as the backend accepted it. A record never changes. Its status, which
+in, as the workspace accepted it. A record never changes. Its status, which
 changes once from pending to finished, is asked of the client.
 """
 
@@ -60,12 +60,12 @@ def as_values(value: Any) -> Any:
 
     So a request, a template, and a push take a params model or a group as a
     model or as a dict alike. Defaults are left out, as they are of a dict, so
-    that the backend fills in those of its own spec; a reference is kept
+    that the workspace fills in those of its own spec; a reference is kept
     whole, since its kind is a default.
 
     A tag is kept, given or not. It is a field whose type is a ``Literal`` of
     one value, such as ``mode: Literal['time'] = 'time'``, which a union
-    discriminates on. Its value is fixed by its type, and the backend cannot
+    discriminates on. Its value is fixed by its type, and the workspace cannot
     pick the member of the union without it.
     """
     if isinstance(value, BaseModel) and not isinstance(value, Ref):
@@ -111,7 +111,7 @@ class SpecId(BaseModel, frozen=True):
 
     A caller without the workflow package gives ``SpecId(name='sans-iofq',
     version=1)`` wherever a spec is expected, such as in :class:`Request`,
-    :class:`Template`, and :meth:`~ess.apps.Client.submit`; the backend runs
+    :class:`Template`, and :meth:`~ess.apps.Client.submit`; the workspace runs
     the spec it knows under that identity (see :meth:`~ess.apps.Client.spec`).
     ``record.spec`` is one.
     """
@@ -143,7 +143,7 @@ class Request(BaseModel, frozen=True):
     request are found without its spec (see :func:`ess.spec.refs.iter_refs`).
 
     A request is data: making one checks only the form of a reference, and
-    the backend validates the rest at submission. ``spec`` may be a
+    the workspace validates the rest at submission. ``spec`` may be a
     :class:`SpecId`. ``params`` may be left out if every parameter has a
     default.
     """
@@ -191,7 +191,7 @@ class Template:
                             blanks=('sample',))
 
     Like a request, a template is data and checks no value when made. The
-    backend validates the fixed values as it does a request's, and checks that
+    workspace validates the fixed values as it does a request's, and checks that
     each reference to an output is readable and fits its field, when a
     template is opened with :meth:`~ess.apps.Client.stage` or
     :meth:`~ess.apps.Client.accumulator`. Change a template with
@@ -245,7 +245,7 @@ class Status(StrEnum):
 @dataclass(frozen=True)
 class RecordStatus:
     """
-    The status of a record, and ``failure``: why it failed, or why the backend
+    The status of a record, and ``failure``: why it failed, or why the workspace
     cancelled it; ``None`` for a record pending, completed, or cancelled by a
     client.
 
@@ -261,7 +261,7 @@ class RecordStatus:
 
 class Record(BaseModel, frozen=True):
     """
-    A request as the backend accepted it, with the names of its outputs but
+    A request as the workspace accepted it, with the names of its outputs but
     no output values. Running the same request again makes a new record.
 
     ``request`` has every value filled in, inline values in their JSON form
@@ -331,7 +331,7 @@ class ArrayInfo:
 class Changes:
     """
     The records of a proposal that changed since a position in its feed (see
-    :meth:`~ess.apps.protocol.BackendProtocol.changes`).
+    :meth:`~ess.apps.protocol.WorkspaceProtocol.changes`).
 
     ``records`` holds their IDs, each once, in the order of their first change
     in the range; it holds no values. ``cursor`` is the position to pass next

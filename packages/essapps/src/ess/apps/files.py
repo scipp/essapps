@@ -4,7 +4,7 @@
 Naming files, and the file source that knows them.
 
 A person names a file by what they know: a run number, a path, or a PID.
-The backend asks its file source to resolve such a name to the file's
+The workspace asks its file source to resolve such a name to the file's
 identity when a request is submitted, so a record names the file itself.
 """
 
@@ -22,7 +22,7 @@ def file(
 ) -> FileRef:
     """
     A file by its run number, its path, or the PID of the SciCat dataset
-    that holds it, as a request writes it. The backend resolves it to the
+    that holds it, as a request writes it. The workspace resolves it to the
     file's identity when the request is submitted, and the record holds that
     identity in place of the name. Exactly one of the three is given::
 
@@ -60,7 +60,7 @@ class Selector:
     def of(cls, marker: File) -> Selector:
         """
         The files that may fill a field with ``marker``: those with each key and
-        value of its metadata, but for raw files not ``role``. The backend refuses
+        value of its metadata, but for raw files not ``role``. The workspace refuses
         any other file.
 
         The role of a run says what the run is used for, which a request states by
