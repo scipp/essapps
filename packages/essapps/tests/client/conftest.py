@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from ess.apps import Client, Record, Request, Workspace, file
-from ess.apps.testing import FakeFiles, StagedFunction, kept_rows
+from ess.apps.log import Log
+from ess.apps.testing import FakeFiles, FakeStore, StagedFunction, kept_rows
 from ess.spec import (
     Binding,
     DriverBinding,
@@ -152,12 +153,32 @@ def client(workspace: Workspace) -> Client:
 
 
 @pytest.fixture
+def other(workspace: Workspace) -> Client:
+    """A second client of ``workspace``, of another user."""
+    return Client(workspace, submitter='bob')
+
+
+@pytest.fixture
 def summing() -> Sum:
     return Sum()
 
 
 @pytest.fixture
-def summed_workspace(files: FakeFiles, summing: Sum) -> Iterator[Workspace]:
+def log() -> Log:
+    """The history of ``summed_workspace``."""
+    return Log()
+
+
+@pytest.fixture
+def store() -> FakeStore:
+    """Where ``summed_workspace`` writes persisted outputs."""
+    return FakeStore()
+
+
+@pytest.fixture
+def summed_workspace(
+    files: FakeFiles, summing: Sum, log: Log, store: FakeStore
+) -> Iterator[Workspace]:
     """A workspace that sums TOTAL with ``summing``."""
     workspace = Workspace(
         proposal='p1',
@@ -167,6 +188,8 @@ def summed_workspace(files: FakeFiles, summing: Sum) -> Iterator[Workspace]:
             function_binding(SHIFT, shift),
             DriverBinding(TOTAL, summing),
         ],
+        log=log,
+        store=store,
     )
     yield workspace
     workspace.close()

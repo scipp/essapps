@@ -233,25 +233,7 @@ def test_a_position_outside_the_feed_raises_without_waiting(client: Client) -> N
         client.changes(after=1, timeout=60)
 
 
-def test_closing_the_workspace_raises_in_changes_and_in_wait(
-    workspace: Workspace, client: Client, loading: threading.Event
-) -> None:
-    loading.clear()
-    load = client.submit(toys.load_request(1))
-    cursor = client.changes().cursor
-
-    with ThreadPoolExecutor() as pool:
-        changes = pool.submit(client.changes, after=cursor, timeout=60)
-        wait = pool.submit(client.wait, load)
-        threading.Timer(0.05, loading.set).start()  # so that closing can return
-        workspace.close()
-        with pytest.raises(RuntimeError, match='closed'):
-            changes.result(timeout=5)
-        with pytest.raises(RuntimeError, match='closed'):
-            wait.result(timeout=5)
-
-
-def test_a_read_waiting_when_the_workspace_closes_raises(
+def test_a_read_and_a_wait_waiting_when_the_workspace_closes_raise(
     workspace: Workspace, client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
@@ -259,11 +241,14 @@ def test_a_read_waiting_when_the_workspace_closes_raises(
 
     with ThreadPoolExecutor() as pool:
         read = pool.submit(client.output, load, 'value')
-        time.sleep(0.05)  # so that the read is waiting
-        threading.Timer(0.05, loading.set).start()
+        wait = pool.submit(client.wait, load)
+        time.sleep(0.05)  # so that both are waiting
+        threading.Timer(0.05, loading.set).start()  # so that closing can return
         workspace.close()
         with pytest.raises(RuntimeError, match='closed'):
             read.result(timeout=5)
+        with pytest.raises(RuntimeError, match='closed'):
+            wait.result(timeout=5)
 
 
 def test_a_read_of_an_accumulator_waiting_when_the_workspace_closes_raises(

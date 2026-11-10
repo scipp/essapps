@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """Section G of docs/developer/user-stories.md: roles and deployment."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 import pytest
 
@@ -29,11 +29,17 @@ def test_g2_developer_iterates_on_a_workflow(
     assert dev.output(result, 'iofq').values.tolist() == [3.0, 7.0]
 
 
+@pytest.fixture
+def mine(files: FakeFiles) -> Iterator[Client]:
+    """A client of a workspace of proposal p2."""
+    with local(proposal='p2', files=files, bind=list(toys.TOYS.values())) as client:
+        yield client
+
+
 def test_g5_reference_across_proposals_refused(
-    connect: Callable[..., Client], measure: toys.Measure, files: FakeFiles
+    connect: Callable[..., Client], measure: toys.Measure, mine: Client
 ) -> None:
     theirs = connect(user='anna')
-    mine = local(proposal='p2', files=files, bind=list(toys.TOYS.values()))
     centre = theirs.compute(
         toys.BEAM_CENTRE,
         params={'direct_beam': measure(1, [1.0, 1.0], proposal='p1')},
@@ -50,4 +56,3 @@ def test_g5_reference_across_proposals_refused(
             },
         )
     assert mine.records() == []
-    mine.close()

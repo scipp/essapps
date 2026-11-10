@@ -80,18 +80,11 @@ def workspaces(
 
 
 @pytest.fixture
-def clients() -> list[Client]:
-    """Every client that ``connect`` and ``upgrade`` made."""
-    return []
-
-
-@pytest.fixture
 def upgrade(
     files: FakeFiles,
     store: FakeStore,
     history: Log,
     workspaces: list[Workspace],
-    clients: list[Client],
 ) -> Callable[..., Client]:
     """
     A client of a new workspace over the same files, history, and store,
@@ -110,21 +103,17 @@ def upgrade(
         workspaces.append(
             Workspace(proposal='p1', files=files, bind=bind, log=history, store=store)
         )
-        clients.append(Client(workspaces[-1], submitter='anna'))
-        return clients[-1]
+        return Client(workspaces[-1], submitter='anna')
 
     return upgrade
 
 
 @pytest.fixture
-def connect(
-    workspaces: list[Workspace], clients: list[Client]
-) -> Callable[..., Client]:
+def connect(workspaces: list[Workspace]) -> Callable[..., Client]:
     """A new client of the current workspace, of proposal p1."""
 
     def connect(user: str = 'anna') -> Client:
-        clients.append(Client(workspaces[-1], submitter=user))
-        return clients[-1]
+        return Client(workspaces[-1], submitter=user)
 
     return connect
 
@@ -158,7 +147,7 @@ def repair(files: FakeFiles) -> Callable[..., None]:
 
 
 @pytest.fixture(autouse=True)
-def replay(workspaces: list[Workspace], clients: list[Client]) -> Iterator[None]:
+def replay(workspaces: list[Workspace]) -> Iterator[None]:
     """
     After the story, a client of the workspace that is open runs every completed
     record whose outputs the workspace keeps again as its request, and compares
@@ -172,16 +161,13 @@ def replay(workspaces: list[Workspace], clients: list[Client]) -> Iterator[None]
     workspaces are closed.
     """
     yield
-    for client in list(clients):
-        try:
-            records = {r.id: r for r in client.records()}
-        except RuntimeError:  # its workspace is closed
-            continue
-        client.wait(list(records.values()))
-        for record in records.values():
-            client.provenance(record)
-        _replay(client, records)
-        return  # every client of the workspace reads the same values
+    # Every client of the workspace reads the same values, so one is enough.
+    client = Client(workspaces[-1], submitter='replay')
+    records = {r.id: r for r in client.records()}
+    client.wait(list(records.values()))
+    for record in records.values():
+        client.provenance(record)
+    _replay(client, records)
 
 
 def _replay(client: Client, records: Mapping[str, Record]) -> None:

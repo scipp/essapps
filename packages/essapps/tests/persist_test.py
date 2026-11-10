@@ -519,16 +519,19 @@ def test_readable_gives_every_output_of_a_pending_record_without_waiting(
 def test_readable_gives_nothing_of_a_record_released_and_the_same_to_every_client(
     client: Client, connect: Callable[[], Client]
 ) -> None:
+    other = connect()
     released, kept = (
         client.compute(LOAD, params=_sample(1)),
         client.compute(LOAD, params=_sample(2)),
     )
     client.release(released)
-    other = connect()
 
     assert client.readable([released, kept]) == [(), ('value', 'extra')]
-    assert other.readable({'kept': kept}) == {'kept': ('value', 'extra')}
-    assert _referenced(client, released) == ()
+    assert other.readable({'released': released, 'kept': kept}) == {
+        'released': (),
+        'kept': ('value', 'extra'),
+    }
+    assert _referenced(client, released) == _referenced(other, released) == ()
     assert _referenced(other, kept) == ('value', 'extra')
 
 

@@ -6,21 +6,27 @@
 
 import threading
 import time
+from collections.abc import Iterator
 from itertools import islice
 
 import pytest
 
-from ess.apps import Client, Files, Selector, Workspace, file
+from ess.apps import Client, Files, Selector, Workspace, file, local
 from ess.apps.testing import FakeFiles
 from ess.spec import FileRef
 
 
+@pytest.fixture
+def theirs(files: FakeFiles) -> Iterator[Client]:
+    """A client of a workspace of proposal p2."""
+    with local(proposal='p2', files=files, bind=[], submitter='eve') as client:
+        yield client
+
+
 def test_a_client_sees_only_the_files_of_its_workspace_s_proposal(
-    workspace: Workspace, files: FakeFiles
+    workspace: Workspace, files: FakeFiles, theirs: Client
 ) -> None:
     mine = Client(workspace, submitter='anna')
-    p2 = Workspace(proposal='p2', files=files, bind=[])
-    theirs = Client(p2, submitter='eve', on_close=p2.close)
     other = files.measure(4, 4.0, proposal='p2')
     existing = [files.resolve(file(run=n)) for n in (1, 2)]
 
@@ -34,7 +40,6 @@ def test_a_client_sees_only_the_files_of_its_workspace_s_proposal(
     assert theirs.files.metadata(other)['run'] == 4
     with pytest.raises(KeyError, match='in proposal p1'):
         mine.files.metadata(other)
-    theirs.close()
 
 
 def test_watch_lists_again_until_a_file_is_new(

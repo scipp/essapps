@@ -22,8 +22,8 @@ from ess.apps import (
     local,
 )
 from ess.apps.log import Finished, Log
-from ess.apps.testing import FakeFiles, read_file
-from ess.spec import DriverBinding, function_binding
+from ess.apps.testing import FakeFiles, FakeStore, read_file
+from ess.spec import function_binding
 
 from . import toys
 
@@ -105,16 +105,9 @@ def test_a_released_pending_record_that_nothing_reads_is_cancelled(
 
 
 def test_closing_the_workspace_cancels_the_reads_of_its_accumulator(
-    files: FakeFiles, summing: toys.Sum
+    summed_workspace: Workspace, summed: Client, summing: toys.Sum, log: Log
 ) -> None:
-    log = Log()
-    bind = [
-        function_binding(toys.LOAD, toys.load_run),
-        function_binding(toys.SHIFT, toys.shift),
-        DriverBinding(toys.TOTAL, summing),
-    ]
-    workspace = Workspace(proposal='p1', files=files, bind=bind, log=log)
-    client = Client(workspace, submitter='anna')
+    client = summed
     load = client.compute(toys.load_request(1))
     summing.go.clear()
     total = toys.total_accumulator(client)
@@ -122,16 +115,36 @@ def test_closing_the_workspace_cancels_the_reads_of_its_accumulator(
     shifted = client.submit(toys.read_request(total))
     state = toys.state_record(client, shifted)
     threading.Timer(0.05, summing.go.set).start()
-    workspace.close()
+    summed_workspace.close()
 
     finished = {e.record: e.status for e in log if isinstance(e, Finished)}
     assert [finished[state.id], finished[shifted.id]] == [Status.CANCELLED] * 2
 
 
-def test_another_client_reads_and_references_the_records_the_workspace_keeps(
-    workspace: Workspace, client: Client, loading: threading.Event
+def test_closing_the_workspace_writes_a_pending_persisted_freeze(
+    summed_workspace: Workspace,
+    summed: Client,
+    summing: toys.Sum,
+    log: Log,
+    store: FakeStore,
 ) -> None:
-    other = Client(workspace, submitter='bob')
+    client = summed
+    load = client.compute(toys.load_request(1))
+    summing.go.clear()
+    total = toys.total_accumulator(client)
+    total.push(parts=[load.ref('value')])
+    frozen = client.freeze(total, persist=True)
+    threading.Timer(0.05, summing.go.set).start()
+    summed_workspace.close()
+
+    finished = {e.record: e.status for e in log if isinstance(e, Finished)}
+    assert finished[frozen.id] is Status.COMPLETED
+    assert store.read(frozen.id, 'value') == toys.Amount(value=1.0)
+
+
+def test_another_client_reads_and_references_the_records_the_workspace_keeps(
+    client: Client, other: Client, loading: threading.Event
+) -> None:
     done = client.compute(toys.load_request(1))
     loading.clear()
     pending = client.submit(toys.load_request(2))
@@ -144,18 +157,17 @@ def test_another_client_reads_and_references_the_records_the_workspace_keeps(
 
 
 def test_another_client_goes_through_the_stages_and_reads_the_accumulators(
-    workspace: Workspace, client: Client
+    client: Client, other: Client
 ) -> None:
-    theirs = Client(workspace, submitter='bob')
     load = client.compute(toys.load_request(1))
     stage = toys.stage_shift(client, load)
     total = client.accumulator(Template(toys.TOTAL, blanks=('parts',)))
     total.push(parts=[load.ref('value')])
 
-    shifted = toys.submit_shift(theirs, stage, 2.0)
-    read = theirs.submit(toys.read_request(total))
-    assert theirs.output(total) == {'value': toys.Amount(value=1.0)}
-    assert theirs.wait([shifted, read]) == [Status.COMPLETED] * 2
+    shifted = toys.submit_shift(other, stage, 2.0)
+    read = other.submit(toys.read_request(total))
+    assert other.output(total) == {'value': toys.Amount(value=1.0)}
+    assert other.wait([shifted, read]) == [Status.COMPLETED] * 2
 
 
 def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
@@ -188,13 +200,34 @@ def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
 
 
 def test_another_client_releases_what_the_workspace_keeps(
-    workspace: Workspace, client: Client
+    client: Client, other: Client
 ) -> None:
     load = client.compute(toys.load_request(1))
-    Client(workspace, submitter='bob').release(load)
+    stage = toys.stage_shift(client, load)
+    total = toys.total_accumulator(client)
+    other.release([load, stage, total])
 
     with pytest.raises(NotReadable, match=f'record {load.id} is not kept'):
         client.output(load, 'value')
+    with pytest.raises(SubmitError, match='the stage was released'):
+        toys.submit_shift(client, stage, 1.0)
+    with pytest.raises(NotReadable, match=f'accumulator {total.id} is not open'):
+        client.output(total)
+
+
+def test_another_client_s_name_is_on_what_it_submits_and_freezes(
+    client: Client, other: Client
+) -> None:
+    load = other.compute(toys.load_request(1))
+    total = toys.total_accumulator(client)
+    total.push(parts=[load.ref('value')])
+    frozen = other.freeze(total)
+
+    assert [r.submitter for r in client.records(ids=[load.id, frozen.id])] == [
+        'bob',
+        'bob',
+    ]
+    assert client.output(frozen, 'value') == toys.Amount(value=1.0)
 
 
 def test_every_call_of_a_closed_workspace_raises(
@@ -208,6 +241,12 @@ def test_every_call_of_a_closed_workspace_raises(
 
     calls = [
         lambda: client.submit(toys.load_request(1)),
+        lambda: client.freeze(total),
+        lambda: client.cancel(load),
+        lambda: client.changes(),
+        lambda: client.wait(load),
+        lambda: client.describe(load, 'value'),
+        lambda: client.files.metadata(load.request.params['sample']),
         lambda: toys.submit_shift(client, stage, 1.0),
         lambda: client.submit(toys.read_request(total)),
         lambda: total.push(parts=[load.ref('value')]),
@@ -230,9 +269,8 @@ def test_every_call_of_a_closed_workspace_raises(
 
 
 def test_closing_a_client_releases_nothing(
-    workspace: Workspace, loading: threading.Event
+    workspace: Workspace, other: Client, loading: threading.Event
 ) -> None:
-    other = Client(workspace, submitter='bob')
     loading.clear()
     with Client(workspace, submitter='anna') as client:
         pending = client.submit(toys.load_request(2))
