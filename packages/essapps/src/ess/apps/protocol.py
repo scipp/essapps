@@ -32,10 +32,11 @@ back. Nothing is written to the store unless a submission or a freeze persists
 it, since the framework cannot tell which outputs are worth writing.
 
 A request may reference, and a client may read, only the output values the
-workspace keeps, persisted outputs, files, and the current states of its open
-accumulators. Every client of the workspace reads the same values. A pending record
-passes this rule, so a request is not refused because what it reads is still
-running. It is refused once that record has failed or been cancelled.
+workspace keeps, persisted outputs, and files; a client may also read the states
+of its open accumulators. A request never references an accumulator, only
+the record of its freeze. Every client of the workspace reads the same values. A
+pending record passes this rule, so a request is not refused because what it reads
+is still running. It is refused once that record has failed or been cancelled.
 
 Work that nothing would keep is cancelled: a pending record whose outputs have
 no keeper finishes as cancelled. Since a cancelled request keeps nothing it
@@ -96,9 +97,9 @@ class WorkspaceProtocol(Protocol):
     of values, :meth:`outputs`, :meth:`describe`, and :meth:`accumulator_outputs`,
     wait for work to finish.
 
-    A *plain request* is a request that goes through no stage and reads no
-    accumulator directly: a call through a stage, and every state of an accumulator,
-    has one, and its record is the record of that request.
+    A *plain request* is a request that goes through no stage: a call through a
+    stage, and every state of an accumulator, has one, and its record is the record
+    of that request.
     """
 
     # Specs
@@ -123,11 +124,6 @@ class WorkspaceProtocol(Protocol):
         it references have completed. If one fails or is cancelled, the record fails,
         with a reason that names it.
 
-        A request that references an accumulator pins its state (see
-        :meth:`open_accumulator`), waits until the accumulator reaches it, and is
-        refused if the state's plain request would be refused. The call also logs the
-        record of that state, which only the requests of this call read.
-
         Parameters
         ----------
         entries:
@@ -149,10 +145,10 @@ class WorkspaceProtocol(Protocol):
         SubmitError
             If a request cannot run: an invalid value, an unknown spec or file, a
             reference at a field that the spec does not mark ``Referenced[...]``, a
-            reference that may not be read, or one whose data do not fit its field;
-            or if ``persist`` names an output the spec lacks, or the workspace has no
-            store. A reason's ``entry`` is the request's index in ``entries``, or
-            ``None`` if the reason is not about one request (see
+            reference that may not be read, to an accumulator, or one whose data do
+            not fit its field; or if ``persist`` names an output the spec lacks, or
+            the workspace has no store. A reason's ``entry`` is the request's index in
+            ``entries``, or ``None`` if the reason is not about one request (see
             :class:`~ess.apps.errors.FieldError`).
         """
         ...
@@ -214,8 +210,9 @@ class WorkspaceProtocol(Protocol):
 
     def plain_request(self, accumulator_id: str) -> Request:
         """
-        The plain request of the accumulator's state after the pushes logged so far.
-        Returns at once. Raises ``NotReadable`` if the state may not be read.
+        The plain request of the accumulator's logged state (see
+        :meth:`open_accumulator`). Returns at once. Raises ``NotReadable`` if the
+        state may not be read.
         """
         ...
 
@@ -291,7 +288,8 @@ class WorkspaceProtocol(Protocol):
         else keeps them. A released stage takes no more requests, those already made
         through it still run, and it lets go of what its template references if it has
         not staged. A released accumulator takes no more pushes or readers: the pushes
-        up to the last state pinned are still added, and later ones never are.
+        that a read in progress or the record of a freeze needs are still added, and
+        later ones never are.
         """
         ...
 
@@ -308,7 +306,7 @@ class WorkspaceProtocol(Protocol):
         later ones are refused with it.
 
         Raises ``SubmitError`` if the spec's binding makes no stages, or a fixed value
-        would be refused in a request, or references an accumulator.
+        would be refused in a request.
         """
         ...
 
@@ -319,20 +317,22 @@ class WorkspaceProtocol(Protocol):
 
         Its *state n* is the accumulator after its first n pushes, and has the outputs
         of its plain request: the template with each table filled by the rows of these
-        pushes. A call that reads a state pins it: the state after the pushes logged so
-        far. Pinning does not wait for them. Adding push n+1 waits until the readers of
-        state n are done, so no reader sees a value change: the requests that reference
-        it, until their workflows return, and the reads in progress.
+        pushes. Its *logged state* is state n for the n pushes logged so far, whether
+        or not they have been added. A read is of the logged state when it is called. A
+        freeze is of the logged state once no other freeze of the accumulator is being
+        checked; a push that waited for that check may be logged first. Adding push
+        n+1 waits until the reads of state n in progress are done, so no reader sees a
+        value change. A request never references an accumulator, only the record of its
+        freeze.
 
         The accumulator stops if the binding fails to make the driver, adding a push
         fails, or a record its template or a push references does not complete. Pushes
         are then refused, and reads raise ``NotReadable``, each with the reason naming
-        the step. The records of states it did not reach fail, and so do the requests
-        that read them.
+        the step. The record of a freeze of a state it did not reach fails, and so do
+        the requests that read it.
 
         Raises ``SubmitError`` if the spec's binding makes no accumulators, the blanks
-        are not tables of the spec, or a fixed value would be refused in a request, or
-        references an accumulator.
+        are not tables of the spec, or a fixed value would be refused in a request.
         """
         ...
 
@@ -359,8 +359,8 @@ class WorkspaceProtocol(Protocol):
         persist: bool | Sequence[str] = False,
     ) -> Record:
         """
-        The record of the accumulator's state after the pushes logged so far, whose
-        outputs are the driver's, not a copy; the workspace keeps it, or with
+        The record of the accumulator's logged state (see :meth:`open_accumulator`),
+        whose outputs are the driver's, not a copy; the workspace keeps it, or with
         ``persist``, the store (see :meth:`submit`). ``submitter`` is as for
         :meth:`submit`.
 
@@ -382,8 +382,8 @@ class WorkspaceProtocol(Protocol):
         select: Selection | None = None,
     ) -> dict[str, Any]:
         """
-        Copies of outputs of the accumulator's state after the pushes logged so far, or
-        of the part ``select`` names (see :meth:`outputs`), once it has reached the
+        Copies of outputs of the accumulator's logged state when it is called, or of
+        the part ``select`` names (see :meth:`outputs`), once it has reached the
         state. It makes no record.
 
         Raises ``NotReadable`` for an accumulator released, stopped, or read through the

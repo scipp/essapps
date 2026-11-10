@@ -613,7 +613,7 @@ for run in islice(client.files.watch(Selector(scan='17')), 300):
     scan.push(runs=[run])                                      # added once the previous cut is copied
     pushed.append(run)
     cuts.append(client.output(scan, 'volume', select={'q': 0}))     # a copy of the cut; no record
-total = client.freeze(scan, persist=True)                      # the last state, written once
+total = client.freeze(scan, persist=True)                      # the logged state, written once
 
 assert [c.counts.value for c in cuts] == [float(k) for k in range(1, 301)]
 assert client.output(total, 'volume').counts.values.tolist() == [300.0, 45150.0]
@@ -625,8 +625,8 @@ assert len(client.provenance(total).files()) == 300            # run 5, measured
 `watch` yields run 5 once, although its file arrives twice.
 A second push of run 5 would be refused, since the rows of a table are distinct.
 Each push reduces one run and adds it to the volume in place, so one volume is kept, not one per cut.
-Each cut pins the state after its push and copies only the selected cut, and the next push is added once the copy is made.
-`freeze` turns the last state into a record without a copy: its value is the volume itself, written once to the store.
+Each cut reads the state after its push and copies only the selected cut, and the next push is added once the copy is made.
+`freeze` turns the *logged state*, state 300 for the 300 pushes logged, into a record without a copy: its value is the volume itself, written once to the store.
 Where the service holds the volume is open (README.md open question 5).
 That a cut is ready within seconds of each run, and how history grows with the runs, is system story D7.
 

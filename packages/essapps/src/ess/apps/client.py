@@ -28,7 +28,7 @@ from typing import Any, Protocol, Self, cast, overload
 
 from pydantic import BaseModel
 
-from ess.spec import FileRef, OutputRef, WorkflowSpec
+from ess.spec import FileRef, WorkflowSpec
 
 from .errors import FieldError, SubmitError
 from .files import Selector
@@ -147,11 +147,10 @@ class Provenance(BaseModel, frozen=True):
     """
     Where a record came from: what it ran, what it read, and their files.
 
-    ``request`` is the record's request, or for the state of an accumulator,
-    the plain request over the rows pushed so far. ``upstream`` holds every
+    ``request`` is the record's request, or for an accumulator, the plain
+    request of its logged state. ``upstream`` holds every
     record read through all references, directly or through other records,
-    nearest first; where a value is an output of an accumulator's state, the
-    record listed is the record of that state. It stops at files.
+    nearest first. It stops at files.
     """
 
     request: Request
@@ -222,26 +221,24 @@ class Accumulator:
     """
     A template whose blanks, tables, are filled one push at a time.
 
-    Its outputs are those of the plain request over the rows pushed so far. A
-    client reads them with :meth:`Client.output`, or references them in a request
-    through :meth:`ref` and :meth:`refs`. See
+    Its outputs are those of the plain request of its *logged state*, over the
+    rows of every push logged so far. A client reads them with
+    :meth:`Client.output`; a request references them only through the record of
+    :meth:`Client.freeze`. See
     :meth:`~ess.apps.protocol.WorkspaceProtocol.open_accumulator`.
 
-    ``template`` holds the other values as the workspace accepted them,
-    ``outputs`` the output names the spec declares, and ``id`` names the
-    accumulator in the workspace.
+    ``template`` holds the other values as the workspace accepted them, and ``id``
+    names the accumulator in the workspace.
     """
 
     def __init__(
         self,
         template: Template,
         accumulator_id: str,
-        outputs: tuple[str, ...],
         push: Callable[[dict[str, list[Any]]], None],
     ) -> None:
         self.template = template
         self.id = accumulator_id
-        self.outputs = outputs
         self._push = push
 
     def push(self, **rows: Sequence[Any]) -> None:
@@ -273,24 +270,6 @@ class Accumulator:
                     f'not {given!r}'
                 )
         self._push({name: as_values(list(r)) for name, r in rows.items()})
-
-    def ref(self, output: str, key: str | None = None) -> OutputRef:
-        """
-        A reference to an output of the accumulator, or to its element ``key`` if the
-        output is a list or a dict, for a request.
-
-        Submitting the request pins the state after the rows pushed so far, so the
-        request waits until the accumulator has reached it, and is refused if the
-        state's plain request would be refused. Raises ``KeyError`` for an output the
-        spec lacks.
-        """
-        if output not in self.outputs:
-            raise KeyError(f'{self.template.spec} has no output {output!r}')
-        return OutputRef(record=self.id, output=output, key=key)
-
-    def refs(self, *outputs: str) -> dict[str, OutputRef]:
-        """A reference to each of ``outputs`` by name; to every output if none."""
-        return {name: self.ref(name) for name in outputs or self.outputs}
 
 
 class Client:
@@ -438,8 +417,8 @@ class Client:
         what:
             A spec (or its ``SpecId``) with ``params``; a :class:`Stage` with the
             values of its blanks in ``params``; or requests, one, a list, or a dict.
-            An accumulator is not submitted: a request reads it through
-            :meth:`Accumulator.ref`.
+            An accumulator is not submitted: a request reads the record of its
+            :meth:`freeze`.
         params:
             The parameters by name, or an instance of the params model if it holds
             no reference to an output. Each parameter, or each row of a list
@@ -492,8 +471,8 @@ class Client:
             )
         elif isinstance(what, Accumulator):
             raise TypeError(
-                'an accumulator is read by referencing it in a request: '
-                'accumulator.ref(output)'
+                'an accumulator is not submitted: read it with client.output, '
+                'or freeze it and reference the record of the freeze'
             )
         elif params is not None:
             raise TypeError('params go with a spec or a stage')
@@ -575,15 +554,14 @@ class Client:
         :meth:`~ess.apps.protocol.WorkspaceProtocol.open_accumulator`.
         """
         accumulator_id, resolved = self._workspace.open_accumulator(template)
-        outputs = tuple(self.spec(resolved.spec).outputs.model_fields)
         push = functools.partial(self._workspace.push, accumulator_id)
-        return Accumulator(resolved, accumulator_id, outputs, push)
+        return Accumulator(resolved, accumulator_id, push)
 
     def freeze(
         self, accumulator: Accumulator, *, persist: bool | Sequence[str] = False
     ) -> Record:
         """
-        The record of the accumulator's last state; see
+        The record of the accumulator's logged state; see
         :meth:`~ess.apps.protocol.WorkspaceProtocol.freeze`.
         """
         return self._workspace.freeze(accumulator.id, self.submitter, persist=persist)
@@ -712,12 +690,11 @@ class Client:
 
     def provenance(self, what: Record | Accumulator) -> Provenance:
         """
-        Where a record, or the current state of an accumulator, came from.
+        Where a record, or the logged state of an accumulator, came from.
 
-        An accumulator's state is the plain request over the rows pushed so
-        far, so its provenance is that of the record of this request. It pins
-        the state, but returns at once, without waiting for the pushes to be
-        added.
+        The provenance of an accumulator's logged state is that of the record
+        of its plain request. It returns at once, without waiting for the
+        pushes logged to be added.
         """
         if isinstance(what, Accumulator):
             request = self._workspace.plain_request(what.id)

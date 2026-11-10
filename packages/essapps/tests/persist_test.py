@@ -620,9 +620,8 @@ def test_a_restart_fails_persisted_work_that_reads_what_is_gone(
     unpersisted = first.submit(
         TOTAL, params={'part': [kept.ref('value'), pending.ref('value')]}, persist=True
     )
-    of_state = first.submit(SHIFT, params={'source': total.ref('value')}, persist=True)
-    (input_,) = of_state.request.upstream()
-    state = next(r for r in first.records() if r.id == input_.record)
+    state = first.freeze(total)
+    of_state = first.submit(SHIFT, params={'source': state.ref('value')}, persist=True)
     downstream = first.submit(
         SHIFT, params={'source': pending.ref('value')}, persist=True
     )

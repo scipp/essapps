@@ -72,8 +72,6 @@ def test_a_frozen_accumulator_is_read_through_its_record(
 
     with pytest.raises(NotReadable, match=f'read record {total.id} instead'):
         client.output(sides)
-    with pytest.raises(SubmitError, match=f'read record {total.id} instead'):
-        toys.submit_copy(client, sides, 'difference')
     with pytest.raises(NotReadable, match=f'read record {total.id} instead'):
         client.provenance(sides)
     copied = client.compute(toys.COPY, params={'source': total.ref('difference')})
@@ -156,25 +154,43 @@ def test_a_failed_freeze_leaves_the_accumulator_readable_and_shut(
     assert toys.listed(client.output(again, 'total')) == [1.0]
 
 
-def test_a_frozen_driver_is_dropped_once_its_readers_are_done(
-    in_place: Client,
-    loads: list[Record],
-    copying: toys.Copying,
-    subtracting: toys.Subtracting,
+def test_a_freeze_cancelled_while_it_waits_for_its_state_lets_go_of_it(
+    in_place: Client, loads: list[Record], subtracting: toys.Subtracting
 ) -> None:
     client = in_place
     sides = toys.sides_accumulator(client)
     sides.push(samples=[loads[0].ref('value')])
-    copying.go.clear()
-    copied = toys.submit_copy(client, sides, 'difference')  # pins the same state
-    copying.started.wait(timeout=5)
-    total = client.freeze(sides)
-    client.wait(total)
+    subtracting.go.clear()
+    sides.push(backgrounds=[loads[1].ref('value')])  # adds once go is set
+    cancelled = client.freeze(sides)  # waits for that push
+    copied = client.submit(toys.COPY, params={'source': cancelled.ref('difference')})
+    client.cancel(cancelled)
+    subtracting.go.set()
 
-    assert subtracting.held[0]() is not None  # the copy still reads the state
-    copying.go.set()
-    client.wait(copied)
-    client.release(copied)
+    assert client.failure(copied) == f'record {cancelled.id} cancelled'
+    assert toys.listed(client.output(sides, 'difference')) == [-1.0]
+    with pytest.raises(SubmitError, match=f'frozen as record {cancelled.id}'):
+        sides.push(samples=[loads[1].ref('value')])
+    again = client.freeze(sides)
+    assert toys.listed(client.output(again, 'difference')) == [-1.0]
+    gc.collect()
+    assert subtracting.held[0]() is None  # the cancelled freeze holds no state
+
+
+def test_a_frozen_driver_is_dropped_once_its_readers_are_done(
+    in_place: Client, loads: list[Record], subtracting: toys.Subtracting
+) -> None:
+    client = in_place
+    sides = toys.sides_accumulator(client)
+    sides.push(samples=[loads[0].ref('value')])
+    subtracting.compute.clear()
+    read = toys.start_in_thread(lambda: client.output(sides, 'difference'))
+    subtracting.computing.wait(timeout=5)  # the read holds the state
+    total = client.freeze(sides)  # of the same state
+    subtracting.compute.set()
+
+    assert toys.listed(read.result(timeout=5)) == [1.0]
+    assert client.wait(total) is Status.COMPLETED
     gc.collect()
     assert subtracting.held[0]() is None
     assert toys.listed(client.output(total, 'difference')) == [1.0]

@@ -66,7 +66,7 @@ Each pending record is
 
 - cancelled, unless a persist request names it, or a record named by a persist request reads it, directly or through other pending records;
 - run, if every value it reads is a file, is written, or comes from a pending record that runs;
-- failed otherwise, as the record of an accumulator's state is, since its driver is gone.
+- failed otherwise, as the record of a freeze is, since its driver is gone.
 
 ## Alternatives considered
 
@@ -75,7 +75,7 @@ Each pending record is
 - **Record objects keep values, as dask futures do.** `client.records()`, `client.latest()`, and provenance each return a new object for the same record, so no single object could own the value. A dict of records (D2, kept for the morning check) would keep every value, and so would Jupyter's `Out[n]`.
 - **Persisting a kept record later (`client.persist`).** A person could keep a result after seeing it without computing it again. No story or application needs it. A write that ends after its record has finished has no record to fail, so its failure would need a channel of its own, such as an error raised when the workspace closes. It needs two more kinds of event in history. It can be added when a story needs it.
 - **Keep only on request (`keep=True`).** The flag must be given at submission, since a value dropped when its request finishes cannot be kept later without a race. Forgetting it shows only when a later `client.output` or reference is refused.
-- **Views first, and a record made only at persist.** A read returns a view, a handle without a record. It needs a second handle type, records of upstream views that have no values, which a later `persist` cannot complete, and pinned states kept inside views. A record is one entry in history, so making it lazily saves nothing worth that.
+- **Views first, and a record made only at persist.** A read returns a view, a handle without a record. It needs a second handle type, records of upstream views that have no values, which a later `persist` cannot complete, and the states of accumulators kept inside views. A record is one entry in history, so making it lazily saves nothing worth that.
 - **Sessions or nested scopes.** A session reopened by name is lost when the workspace restarts, and needs names and an expiry. A scope is a `with` block, which a notebook cannot hold across cells.
 - **A submission reads any value that something keeps**, such as a released record that a pending request still reads. Whether the same code is refused would depend on whether that record has completed and been dropped yet.
 - **A stage keeps its template's values until it is released**, so that the workspace could stage it again. Nothing drops what a stage computed, and a staging that failed most often fails again, such as on a corrupt file.

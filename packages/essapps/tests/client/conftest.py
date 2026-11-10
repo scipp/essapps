@@ -218,10 +218,10 @@ def subtracting() -> Subtracting:
 
 
 @pytest.fixture
-def in_place(
+def in_place_workspace(
     files: FakeFiles, copying: Copying, subtracting: Subtracting
-) -> Iterator[Client]:
-    """A client of a workspace whose ARRAY_TOTAL and SIDES add arrays in place."""
+) -> Iterator[Workspace]:
+    """A workspace whose ARRAY_TOTAL and SIDES add arrays in place."""
     bind = [
         function_binding(ARRAY, array),
         folding(ARRAY_TOTAL, add_counts_in_place),
@@ -230,11 +230,17 @@ def in_place(
         DriverBinding(BOTH, subtracting),
     ]
     workspace = Workspace(proposal='p1', files=files, bind=bind)
-    yield Client(workspace, submitter='anna')
+    yield workspace
     copying.go.set()
     subtracting.go.set()
     subtracting.compute.set()
     workspace.close()
+
+
+@pytest.fixture
+def in_place(in_place_workspace: Workspace) -> Client:
+    """A client of ``in_place_workspace``."""
+    return Client(in_place_workspace, submitter='anna')
 
 
 @pytest.fixture

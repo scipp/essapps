@@ -24,7 +24,7 @@ from ess.apps import (
     local,
 )
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows
-from ess.spec import Binding, File, RunFile, function_binding
+from ess.spec import Binding, File, OutputRef, RunFile, function_binding
 
 from . import toys
 
@@ -367,14 +367,20 @@ def test_an_accumulator_takes_rows_that_hold_references(client: Client) -> None:
         acc.push(terms=[{'scale': 1.0, 'amount': a.ref('value')}])
 
 
-def test_a_reference_to_an_accumulator_inside_a_row_reads_its_state(
+def test_a_reference_to_an_accumulator_inside_a_row_is_refused(
     client: Client,
 ) -> None:
     a = client.submit(toys.load_request(2))
     acc = client.accumulator(Template(toys.TERMS_ROWS, blanks=('terms',)))
     acc.push(terms=[{'amount': a.ref('value')}])
 
-    rows = [{'scale': 3.0, 'amount': acc.ref('value')}]
+    live = [{'scale': 3.0, 'amount': OutputRef(record=acc.id, output='value')}]
+    with pytest.raises(
+        SubmitError, match=r'^terms\[0\]\.amount: accumulator .* cannot be referenced'
+    ):
+        client.submit(toys.TERMS, params={'terms': live})
+    frozen = client.freeze(acc)
+    rows = [{'scale': 3.0, 'amount': frozen.ref('value')}]
     summed = client.compute(toys.TERMS, params={'terms': rows})
 
     assert client.output(summed, 'value') == toys.Amount(value=6.0)

@@ -77,7 +77,7 @@ INLINE: Final = 'inline'
 FILE: Final = 'file'
 """A file, an object with ``"@ref": "file"``."""
 OUTPUT: Final = 'output'
-"""A reference to an output, of a record or of an accumulator."""
+"""A reference to an output of a record."""
 
 
 def source_of(value: Any) -> str | None:

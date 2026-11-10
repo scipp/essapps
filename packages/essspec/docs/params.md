@@ -154,7 +154,7 @@ beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
 
 A reference fills only a field typed `Referenced[...]`, at any depth, or a member of a union there, such as `specimens[0].transmission`; never a whole list.
 `record.ref(name, key)` names one element of a list or dict output, which fits by the element type.
-`acc.ref(name)` names an output of an accumulator: when the workspace accepts the request, it replaces the reference by one to the record of the accumulator's state at that moment.
+A reference never names an accumulator: a request reads an accumulator's outputs through the record that `client.freeze` returns ([accumulators.md](../../../docs/developer/accumulators.md#freeze-release-stop)).
 
 | Output | Field | Fits |
 |---|---|---|

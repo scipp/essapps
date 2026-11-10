@@ -150,7 +150,8 @@ a { color: var(--stage); }
   <div><dt>push</dt><dd>Appends one or more rows to one table of an accumulator.</dd></div>
   <div><dt>plain request</dt><dd>A spec with every value given. The workspace keeps nothing between plain requests.</dd></div>
   <div><dt>stage, accumulator</dt><dd>Templates the workspace keeps. A stage's blanks are replaced on each call; an accumulator's tables grow with each push.</dd></div>
-  <div><dt>state n</dt><dd>An accumulator after its first n pushes. Not a record; a request that reads it reads a record of its plain request, made at submission.</dd></div>
+  <div><dt>state n</dt><dd>An accumulator after its first n pushes. Not a record: <code>client.output</code> copies it, and <code>client.freeze</code> makes the logged state a record of its plain request.</dd></div>
+  <div><dt>logged state</dt><dd>State n for the n pushes logged so far, whether or not they have been added. A read is of the logged state when it is called, a freeze once no other freeze of the accumulator is being checked.</dd></div>
   <div><dt>driver</dt><dd>The object behind an accumulator, with <code>push(table, rows)</code> and <code>outputs()</code>. The workflow package writes it, e.g. to sum a numerator and a denominator.</dd></div>
   <div><dt>controller</dt><dd>Client code that decides what to submit, push, and release: a notebook, an app, the trigger loop.</dd></div>
 </dl>
@@ -229,7 +230,7 @@ can: list[Run] = []
 acc.push('sample', [611])
 acc.push('can', [614])
 client.output(acc, 'iofq')</pre>
-      <div class="out">→ state n; a request reads it through a record of its plain request</div>
+      <div class="out">→ a copy of state n; <code>client.freeze(acc)</code> makes the logged state a record</div>
       <div class="s4"><b>order</b>: pushes into different tables commute</div>
     </div>
   </div>
@@ -312,7 +313,7 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
     <div>
       <div class="eyebrow" style="margin-bottom:6px">Not symmetric, on purpose</div>
       <div class="broken">
-        <div><h3>Stage call vs. push</h3><p>A stage call makes a record. A push makes none, so a state that no request reads costs no record. A request that reads a state reads a record of the state's plain request, made when the request is submitted.</p></div>
+        <div><h3>Stage call vs. push</h3><p>A stage call makes a record. A push makes none, and neither does a read of a state. Only a freeze makes a record, of the logged state, which requests then reference.</p></div>
         <div><h3>Single-run spec × accumulator</h3><p>An accumulator appends rows, and a single-run spec has no table to append to.</p></div>
         <div><h3>Cost</h3><p>Arrival keeps outputs, not cost. A driver that keeps its rows, such as one that stitches angles, repeats the work over every row so far at each read.</p></div>
         <div><h3>Rows within one table</h3><p>A state's plain request lists them in push order. Whether order matters is the driver's business; for a sum, only through rounding.</p></div>
@@ -343,12 +344,12 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
       <tr><th>Template</th><td class="plain">none: every value given</td><td class="stage"><code>Template(SPEC, fixed, blanks=('reduction',))</code><br><span class="note">blanks: any params</span></td><td class="acc"><code>Template(IOFQ_MULTI, fixed, blanks=('sample', 'can'))</code><br><span class="note">blanks: tables only</span></td></tr>
       <tr><th>Open</th><td class="plain">—</td><td class="stage"><code>s = client.stage(t)</code></td><td class="acc"><code>acc = client.accumulator(t)</code></td></tr>
       <tr><th>Each step</th><td class="plain"><code>client.submit(SPEC, values)</code></td><td class="stage"><code>client.submit(s, {'reduction': {'bins': 50}})</code><br><span class="note">blanks <b>replaced</b></span></td><td class="acc"><code>acc.push('sample', [row])</code><br><span class="note">rows <b>appended</b></span></td></tr>
-      <tr><th>Read</th><td class="plain" colspan="2"><code>client.output(record, 'iofq')</code>, <code>record.ref('iofq')</code></td><td class="acc"><code>client.output(acc, 'iofq')</code>, <code>acc.ref('iofq')</code><br><span class="note">pins the current state</span></td></tr>
+      <tr><th>Read</th><td class="plain" colspan="2"><code>client.output(record, 'iofq')</code>, <code>record.ref('iofq')</code></td><td class="acc"><code>client.output(acc, 'iofq')</code><br><span class="note">copies the logged state</span><br><code>client.freeze(acc)</code>, then <code>record.ref('iofq')</code></td></tr>
 
       <tr class="group"><th colspan="4">Workspace</th></tr>
       <tr><th>Calls the binding</th><td class="plain"><code>compute(params)</code></td><td class="stage"><code>call = make_stage(fixed, blanks)</code> once,<br><code>call({'reduction': {'bins': 50}})</code> per request</td><td class="acc"><code>driver = make_accumulator(fixed, blanks)</code> once,<br><code>driver.push(table, rows)</code> per push,<br><code>driver.outputs()</code> once per state read</td></tr>
       <tr><th>Keeps between steps</th><td class="plain">nothing</td><td class="stage">the fixed part, as a cache it may drop</td><td class="acc">the driver<br><span class="note">e.g. numerator and denominator in Q, 0.34 MB for LoKI</span></td></tr>
-      <tr><th>Each step makes</th><td class="plain">a record</td><td class="stage">a record, identical to the plain request's; it does not name the stage</td><td class="acc">state n (no record). A request that reads it makes a record of the plain request of state n, which the request's record references; neither names the accumulator</td></tr>
+      <tr><th>Each step makes</th><td class="plain">a record</td><td class="stage">a record, identical to the plain request's; it does not name the stage</td><td class="acc">state n (no record). <code>client.freeze(acc)</code> makes the record of the plain request of the logged state, which does not name the accumulator</td></tr>
       <tr><th>Symmetry</th><td class="plain">one-row: between the two specs</td><td class="stage">caching: with the plain request</td><td class="acc">arrival: with the plain request; order: between pushes</td></tr>
     </tbody>
   </table>
@@ -357,9 +358,9 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
 </section>
 <section class="slide" id="timeline">
   <div class="eyebrow">Backup B · An accumulator over time</div>
-  <h2>Pushes advance a state; reads pin one; the driver adds in place</h2>
+  <h2>Pushes advance a state, reads copy it, a freeze makes it a record</h2>
   <div class="fig">
-  <svg viewBox="0 0 980 430" role="img" aria-label="Timeline of an accumulator: the controller opens it, pushes three times, and reads twice; the driver grows from D0 to D3; each read state equals a plain request over its rows.">
+  <svg viewBox="0 0 980 430" role="img" aria-label="Timeline of an accumulator: the controller opens it, pushes three times, copies a cut of state 2, and freezes state 3; the driver grows from D0 to D3; each state read equals a plain request over its rows.">
     <defs>
       <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"/></marker>
       <marker id="arrAcc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--acc)"/></marker>
@@ -393,9 +394,9 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
       <text x="420" y="46" text-anchor="middle" class="muted" style="font-size:11px">can 614</text>
 
       <rect x="502" y="72" width="16" height="16" style="fill: var(--panel); stroke: var(--stage); stroke-width:2"/>
-      <text x="510" y="30" text-anchor="middle" class="mono" style="font-size:11px">submit(EXPORT,</text>
-      <text x="510" y="46" text-anchor="middle" class="mono" style="font-size:11px">acc.ref('iofq'))</text>
-      <text x="510" y="62" text-anchor="middle" style="font-size:11px; fill: var(--stage)">pins state 2</text>
+      <text x="510" y="30" text-anchor="middle" class="mono" style="font-size:11px">output(acc,</text>
+      <text x="510" y="46" text-anchor="middle" class="mono" style="font-size:11px">select=...)</text>
+      <text x="510" y="62" text-anchor="middle" style="font-size:11px; fill: var(--stage)">reads state 2</text>
 
       <circle cx="660" cy="80" r="5" style="fill: var(--acc)"/>
       <text x="660" y="30" text-anchor="middle" class="mono" style="font-size:11px">push 3</text>
@@ -403,8 +404,8 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
       <text x="660" y="62" text-anchor="middle" class="muted" style="font-size:10px">returns once logged</text>
 
       <rect x="822" y="72" width="16" height="16" style="fill: var(--panel); stroke: var(--stage); stroke-width:2"/>
-      <text x="830" y="30" text-anchor="middle" class="mono" style="font-size:11px">output(acc, 'iofq')</text>
-      <text x="830" y="62" text-anchor="middle" style="font-size:11px; fill: var(--stage)">pins state 3</text>
+      <text x="830" y="30" text-anchor="middle" class="mono" style="font-size:11px">freeze(acc)</text>
+      <text x="830" y="62" text-anchor="middle" style="font-size:11px; fill: var(--stage)">freezes state 3</text>
     </g>
 
     <!-- driver states -->
@@ -430,22 +431,22 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
       <line x1="330" y1="185" x2="378" y2="185" style="stroke: var(--acc); stroke-width:1.5" marker-end="url(#arrAcc)"/>
       <line x1="460" y1="185" x2="618" y2="185" style="stroke: var(--acc); stroke-width:1.5; stroke-dasharray:5 4" marker-end="url(#arrAcc)"/>
 
-      <!-- outputs of state 2 read by EXPORT -->
+      <!-- a cut of state 2 copied -->
       <rect x="470" y="226" width="80" height="30" rx="4" style="fill: var(--stage-soft); stroke: var(--stage)"/>
-      <text x="510" y="245" text-anchor="middle" style="font-size:11px">EXPORT runs</text>
+      <text x="510" y="245" text-anchor="middle" style="font-size:11px">cut copied</text>
       <text x="522" y="124" style="font-size:10.5px; fill: var(--warn)">push 3 is added only</text>
-      <text x="522" y="139" style="font-size:10.5px; fill: var(--warn)">after EXPORT has run</text>
+      <text x="522" y="139" style="font-size:10.5px; fill: var(--warn)">after the cut is copied</text>
       <text x="556" y="245" class="muted" style="font-size:10px">reads D2</text>
 
       <rect x="790" y="150" width="80" height="70" rx="4" style="fill: var(--stage-soft); stroke: var(--stage)"/>
       <text x="830" y="172" text-anchor="middle" class="mono" style="font-size:11px">outputs()</text>
       <text x="830" y="190" text-anchor="middle" class="muted" style="font-size:10px">computed once</text>
       <text x="830" y="203" text-anchor="middle" class="muted" style="font-size:10px">per state read;</text>
-      <text x="830" y="216" text-anchor="middle" class="muted" style="font-size:10px">a copy returned</text>
+      <text x="830" y="216" text-anchor="middle" class="muted" style="font-size:10px">not copied</text>
       <line x1="700" y1="185" x2="788" y2="185" style="stroke: var(--muted)" marker-end="url(#arr)"/>
     </g>
 
-    <!-- pins down -->
+    <!-- reads down -->
     <line x1="510" y1="90" x2="510" y2="224" style="stroke: var(--stage); stroke-dasharray:3 3"/>
     <line x1="420" y1="222" x2="470" y2="240" style="stroke: var(--stage); stroke-dasharray:3 3"/>
     <line x1="830" y1="90" x2="830" y2="148" style="stroke: var(--stage); stroke-dasharray:3 3"/>
@@ -457,14 +458,14 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
       <text x="304" y="334" class="mono" style="font-size:11px">submit(IOFQ_MULTI, {**shared,</text>
       <text x="304" y="352" class="mono" style="font-size:11px">  'sample': [611],</text>
       <text x="304" y="370" class="mono" style="font-size:11px">  'can':    [614]})</text>
-      <text x="304" y="396" style="font-size:11px; fill: var(--stage)">a record of this request; EXPORT reads it</text>
+      <text x="304" y="396" style="font-size:11px; fill: var(--stage)">output copies a cut, makes no record</text>
 
       <rect x="640" y="290" width="330" height="118" rx="4" style="fill: var(--plain-soft); stroke: var(--plain)"/>
       <text x="654" y="312" style="font-size:12px; font-weight:600">state 3 ≡ plain request (arrival)</text>
       <text x="654" y="334" class="mono" style="font-size:11px">submit(IOFQ_MULTI, {**shared,</text>
       <text x="654" y="352" class="mono" style="font-size:11px">  'sample': [611, 612],</text>
       <text x="654" y="370" class="mono" style="font-size:11px">  'can':    [614]})</text>
-      <text x="654" y="396" class="muted" style="font-size:11px">client.provenance(acc) reports this request</text>
+      <text x="654" y="396" style="font-size:11px; fill: var(--stage)">a record of this request, which freeze returns</text>
 
       <text x="120" y="320" class="muted" style="font-size:11px">States 0 and 1 are</text>
       <text x="120" y="336" class="muted" style="font-size:11px">never read: their</text>
@@ -478,11 +479,11 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
   <div class="cols">
     <ul class="tight">
       <li>Push and open return once logged. The workspace adds pushes one at a time, in log order, on its workers.</li>
-      <li>A read pins the state after the pushes logged so far. A request that references a state not yet reached waits for it, as for a pending record.</li>
+      <li>A read or a freeze is of the logged state. A read waits for that state and copies it. A freeze returns without waiting for the pushes to be added, and a request that references its record waits for the state, as for any pending record.</li>
     </ul>
     <ul class="tight">
       <li>A state is read only if its plain request would be accepted. Whole-table checks run at the read, not at the push.</li>
-      <li>A state is never a record. A request that reads a state reads a record of its plain request, whose outputs are dropped once the request has run. To keep the last state, freeze the accumulator: <code>client.freeze(acc)</code>.</li>
+      <li>A state is a record only once frozen: <code>client.freeze(acc)</code> makes the logged state a record of its plain request, without a copy. A request references that record, never the accumulator.</li>
     </ul>
   </div>
 </section>
@@ -602,7 +603,7 @@ binding = DriverBinding(SUM, RowSum)</code></pre>
     <div>
       <div class="eyebrow" style="margin-bottom:6px">Needed to read the grid</div>
       <ul class="tight">
-        <li><b>Records and references.</b> Every connection between requests is a reference: <code>record.ref('centre')</code>, <code>file(run=611)</code>, or <code>acc.ref('iofq')</code>, which the workspace replaces at submission by an output of a record of the state's plain request. A reference to a pending record is valid. The workspace waits for it.</li>
+        <li><b>Records and references.</b> Every connection between requests is a reference: <code>record.ref('centre')</code> or <code>file(run=611)</code>. A reference never names an accumulator, only the record of its freeze. A reference to a pending record is valid. The workspace waits for it.</li>
         <li><b>Template</b> is the shared building block: stage, accumulator, batch, and rules all start from one.</li>
         <li><b>Controllers.</b> The workspace never decides what to submit or push. A notebook, an app, or the <code>TriggerLoop</code> of rules does.</li>
         <li><b>Where it runs.</b> Both: values in memory while something keeps them, written only when persisted. The service (designed, not built) runs one workspace for each proposal. Whether the users of a proposal share its values in memory, or the service separates or bounds them per user, is open. So are how it bounds a workspace's memory, and where it holds an accumulator's driver. Placement says the results do not differ.</li>

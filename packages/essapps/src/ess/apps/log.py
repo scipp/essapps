@@ -7,17 +7,16 @@ and what came of it, for one proposal, which each submission and opening names.
 There are four events: a submission, a record that finished, an accumulator
 that opened, and a push into one. A persist request is part of a submission or
 a freeze, and its write is the record's: the record finishes once the outputs
-are written. A submission that read an accumulator, and a freeze, hold a record of
-the plain request of the state read, as the accumulator and its number of pushes,
-before the records that read it; the views list its request when it is read. The
-workspace's views, such as the records by ID, are built by applying the events in
-order, when they are appended and again when a workspace starts from an existing log.
+are written. A freeze is a submission of one record of the plain request of the
+state frozen, as the accumulator and its number of pushes; the views list its
+request when it is read. The workspace's views, such as the records by ID, are
+built by applying the events in order, when they are appended and again when a
+workspace starts from an existing log.
 
-An event names only records and accumulators appended before it, or earlier
-in the same submission: a finish names its record, a push its accumulator, a
-record the records it reads, and a record of a state its accumulator. Applying the
-events in order relies on this, and so does a restart, which walks the pending
-records backwards.
+An event names only records and accumulators appended before it: a finish
+names its record, a push its accumulator, a record the records it reads, and
+the record of a freeze its accumulator. Applying the events in order relies on
+this, and so does a restart, which walks the pending records backwards.
 
 Stages and accumulators are not history, and neither are output values or
 anything a binding computed; those have their own lifetime.
@@ -58,9 +57,10 @@ class NewRecord(BaseModel, frozen=True, extra='forbid'):
 
 class NewStateRecord(BaseModel, frozen=True, extra='forbid'):
     """
-    The record of the plain request of an accumulator's state: the
-    accumulator's template with each table filled by the rows of its first
-    ``pushes`` pushes. A freeze names the outputs it persists in ``persist``.
+    The record of a freeze: the record of the plain request of an
+    accumulator's state, the accumulator's template with each table filled by
+    the rows of its first ``pushes`` pushes. ``persist`` names the outputs the
+    freeze persists.
     """
 
     id: str

@@ -128,16 +128,20 @@ def test_opening_an_accumulator_and_a_push_report_nothing_of_their_own(
     assert client.changes(after=done.cursor) == Changes((), done.cursor)
 
 
-def test_reading_a_state_reports_its_state_record(client: Client) -> None:
+def test_reading_a_state_reports_nothing_and_a_freeze_its_record(
+    client: Client,
+) -> None:
     load = client.compute(toys.load_request(1))
     total = toys.total_accumulator(client)
     total.push(parts=[load.ref('value')])
     done = client.changes()
 
-    read = client.compute(toys.read_request(total))
+    client.output(total)
+    assert client.changes(after=done.cursor).records == ()
+    frozen = client.freeze(total)
+    client.wait(frozen)
 
-    state = toys.state_record(client, read)
-    assert set(client.changes(after=done.cursor).records) == {state.id, read.id}
+    assert client.changes(after=done.cursor).records == (frozen.id,)
 
 
 def test_another_client_of_the_proposal_sees_the_changes(
