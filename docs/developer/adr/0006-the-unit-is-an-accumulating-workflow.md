@@ -121,3 +121,13 @@ iofq.push(sample=[file(run=613), file(run=615)])   # one push, one state
 - A spec bound to a driver has no stage, so a workflow that needs every row at once, such as `STITCH`, chooses between accumulating and tuning over fixed rows.
 - An accumulator cannot tune a fixed value used before the sum, such as `bins`. Changing it opens a new accumulator, and every row is pushed again. Tuning over a fixed set of runs is a stage's job.
 - Spreading one accumulator over nodes needs a merge of two drivers, which the binding protocol does not offer (README, [Open questions](../README.md#open-questions), Grouping).
+- A driver computes the contributions of the rows of a push inside `push`, before it adds any ([bindings.md, What a driver promises](../../../packages/essspec/docs/bindings.md#what-a-driver-promises)). It may run them on several threads: with eight rows through the backend, a driver that mapped its rows over eight threads took 0.21 s instead of 1.61 s for rows that sleep 0.2 s, and 0.73 s instead of 1.06 s for a scipp histogram of 30 M events per row. The `Driver` protocol could gain an optional form in which the framework, not the driver, computes the contributions:
+
+  ```python
+  class SplitDriver[C, O](Protocol):
+      def contribute(self, table: str, row: Any) -> C: ...                # touches no driver state; may run in parallel
+      def add(self, table: str, contributions: Sequence[C]) -> None: ...  # serial, in the order of the rows
+      def outputs(self) -> O: ...
+  ```
+
+  `push(t, rows)` equals `add(t, [contribute(t, r) for r in rows])`, so a driver with `push` works unchanged. With this form, the framework could read the files of the next push while the driver adds the current one, and could keep an accumulator after a row fails, since a failed `contribute` provably leaves the sums as they were. It could also run `contribute` in other processes or on other nodes. This form is not implemented. It is worth building once a per-run reduction takes longer than the measurement of a run, once file reads need processes to run in parallel, or once one accumulator is spread over nodes.
