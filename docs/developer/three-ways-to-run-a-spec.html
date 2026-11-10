@@ -138,18 +138,18 @@ a { color: var(--stage); }
 <header>
   <div class="eyebrow">essapps · summary of docs/developer/README.md and ADR 0006</div>
   <h1>Three ways to run a spec</h1>
-  <p>A workflow package offers up to two specs of one reduction: a single-run spec, which takes one run of each kind (sample, can), and a multi-run spec, which takes a table of runs of each kind. A notebook runs a spec as a plain request, or through a template the backend keeps: a stage that tunes a parameter, or an accumulator that grows the tables. Symmetries say which of these choices cannot change the outputs. Slides 1 and 2 are the summary. The panels after them are backup.</p>
+  <p>A workflow package offers up to two specs of one reduction: a single-run spec, which takes one run of each kind (sample, can), and a multi-run spec, which takes a table of runs of each kind. A notebook runs a spec as a plain request, or through a template the workspace keeps: a stage that tunes a parameter, or an accumulator that grows the tables. Symmetries say which of these choices cannot change the outputs. Slides 1 and 2 are the summary. The panels after them are backup.</p>
 </header>
 
 <dl class="words" aria-label="Terms used on these slides">
   <div><dt>spec</dt><dd>The signature of a workflow: name, version, params, outputs.</dd></div>
-  <div><dt>binding</dt><dd>What the backend calls to compute a spec's requests: a sciline pipeline (<code>PipelineBinding</code>), a driver (<code>DriverBinding</code>), or a function (<code>function_binding</code>).</dd></div>
-  <div><dt>record</dt><dd>A request as the backend accepted it. It never changes; its outputs are read by name.</dd></div>
+  <div><dt>binding</dt><dd>What the workspace calls to compute a spec's requests: a sciline pipeline (<code>PipelineBinding</code>), a driver (<code>DriverBinding</code>), or a function (<code>function_binding</code>).</dd></div>
+  <div><dt>record</dt><dd>A request as the workspace accepted it. It never changes; its outputs are read by name.</dd></div>
   <div><dt>template</dt><dd>A spec with some values fixed and the others left open as <em>blanks</em>.</dd></div>
   <div><dt>table, row</dt><dd>A param that is a list of flat rows. A row is one run, or runs that belong together.</dd></div>
   <div><dt>push</dt><dd>Appends one or more rows to one table of an accumulator.</dd></div>
-  <div><dt>plain request</dt><dd>A spec with every value given. The backend keeps nothing between plain requests.</dd></div>
-  <div><dt>stage, accumulator</dt><dd>Templates the backend keeps. A stage's blanks are replaced on each call; an accumulator's tables grow with each push.</dd></div>
+  <div><dt>plain request</dt><dd>A spec with every value given. The workspace keeps nothing between plain requests.</dd></div>
+  <div><dt>stage, accumulator</dt><dd>Templates the workspace keeps. A stage's blanks are replaced on each call; an accumulator's tables grow with each push.</dd></div>
   <div><dt>state n</dt><dd>An accumulator after its first n pushes. Not a record; a request that reads it reads a record of its plain request, made at submission.</dd></div>
   <div><dt>driver</dt><dd>The object behind an accumulator, with <code>push(table, rows)</code> and <code>outputs()</code>. The workflow package writes it, e.g. to sum a numerator and a denominator.</dd></div>
   <div><dt>controller</dt><dd>Client code that decides what to submit, push, and release: a notebook, an app, the trigger loop.</dd></div>
@@ -158,14 +158,14 @@ a { color: var(--stage); }
 <!-- ───────────── slide 1: the board ───────────── -->
 <section class="slide" id="board">
   <div class="eyebrow">Slide 1 · The picture</div>
-  <h2>Two specs of one reduction, each run plainly or through a template the backend keeps</h2>
-  <p class="lede">Rows: what the spec takes. Columns: whether the backend keeps anything between calls. Each ≡ links two cells that give the same outputs. <code>611</code> stands for <code>file(run=611)</code>; <code>shared</code> holds the values of the shared groups.</p>
+  <h2>Two specs of one reduction, each run plainly or through a template the workspace keeps</h2>
+  <p class="lede">Rows: what the spec takes. Columns: whether the workspace keeps anything between calls. Each ≡ links two cells that give the same outputs. <code>611</code> stands for <code>file(run=611)</code>; <code>shared</code> holds the values of the shared groups.</p>
   <div class="board">
-  <div class="bgrid" role="img" aria-label="A two by two grid. Rows: single-run spec and multi-run spec. Columns: plain request, and a template the backend keeps, shown as a stage for the single-run spec and an accumulator for the multi-run spec; a stage needs a pipeline binding, an accumulator a driver binding. Caching links plain request and stage, arrival links plain request and accumulator, and one-row links the two plain requests.">
+  <div class="bgrid" role="img" aria-label="A two by two grid. Rows: single-run spec and multi-run spec. Columns: plain request, and a template the workspace keeps, shown as a stage for the single-run spec and an accumulator for the multi-run spec; a stage needs a pipeline binding, an accumulator a driver binding. Caching links plain request and stage, arrival links plain request and accumulator, and one-row links the two plain requests.">
     <div></div>
     <div class="colhead" style="color: var(--plain)">plain request<small>every value given, nothing kept</small></div>
     <div></div>
-    <div class="colhead">template kept by the backend<small>fixed part computed once; blanks filled step by step.<br>A stage needs a <code>PipelineBinding</code>; an accumulator, a <code>DriverBinding</code>.</small></div>
+    <div class="colhead">template kept by the workspace<small>fixed part computed once; blanks filled step by step.<br>A stage needs a <code>PipelineBinding</code>; an accumulator, a <code>DriverBinding</code>.</small></div>
 
     <div class="rowlab">
       <div class="name">single-run spec</div>
@@ -327,7 +327,7 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
 <!-- ───────────── backup A: detail grid ───────────── -->
 <section class="slide" id="grid">
   <div class="eyebrow">Backup A · Each column in detail</div>
-  <h2>What each side writes and what the backend does</h2>
+  <h2>What each side writes and what the workspace does</h2>
   <div class="scroll">
   <table class="grid">
     <thead>
@@ -345,7 +345,7 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
       <tr><th>Each step</th><td class="plain"><code>client.submit(SPEC, values)</code></td><td class="stage"><code>client.submit(s, {'reduction': {'bins': 50}})</code><br><span class="note">blanks <b>replaced</b></span></td><td class="acc"><code>acc.push('sample', [row])</code><br><span class="note">rows <b>appended</b></span></td></tr>
       <tr><th>Read</th><td class="plain" colspan="2"><code>client.output(record, 'iofq')</code>, <code>record.ref('iofq')</code></td><td class="acc"><code>client.output(acc, 'iofq')</code>, <code>acc.ref('iofq')</code><br><span class="note">pins the current state</span></td></tr>
 
-      <tr class="group"><th colspan="4">Backend</th></tr>
+      <tr class="group"><th colspan="4">Workspace</th></tr>
       <tr><th>Calls the binding</th><td class="plain"><code>compute(params)</code></td><td class="stage"><code>call = make_stage(fixed, blanks)</code> once,<br><code>call({'reduction': {'bins': 50}})</code> per request</td><td class="acc"><code>driver = make_accumulator(fixed, blanks)</code> once,<br><code>driver.push(table, rows)</code> per push,<br><code>driver.outputs()</code> once per state read</td></tr>
       <tr><th>Keeps between steps</th><td class="plain">nothing</td><td class="stage">the fixed part, as a cache it may drop</td><td class="acc">the driver<br><span class="note">e.g. numerator and denominator in Q, 0.34 MB for LoKI</span></td></tr>
       <tr><th>Each step makes</th><td class="plain">a record</td><td class="stage">a record, identical to the plain request's; it does not name the stage</td><td class="acc">state n (no record). A request that reads it makes a record of the plain request of state n, which the request's record references; neither names the accumulator</td></tr>
@@ -368,7 +368,7 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
     <!-- lane labels -->
     <text class="lane" x="10" y="44">Controller</text>
     <text class="lane" x="10" y="64" style="font-size:10px">notebook, app</text>
-    <text class="lane" x="10" y="184">Backend</text>
+    <text class="lane" x="10" y="184">Workspace</text>
     <text class="lane" x="10" y="204" style="font-size:10px">driver</text>
     <text class="lane" x="10" y="334">Same as</text>
     <text class="lane" x="10" y="354" style="font-size:10px">plain request</text>
@@ -477,7 +477,7 @@ acc.push('sample', [611])                        <span class="c"># state 2</span
   </div>
   <div class="cols">
     <ul class="tight">
-      <li>Push and open return once logged. The backend adds pushes one at a time, in log order, on its workers.</li>
+      <li>Push and open return once logged. The workspace adds pushes one at a time, in log order, on its workers.</li>
       <li>A read pins the state after the pushes logged so far. A request that references a state not yet reached waits for it, as for a pending record.</li>
     </ul>
     <ul class="tight">
@@ -602,10 +602,10 @@ binding = DriverBinding(SUM, RowSum)</code></pre>
     <div>
       <div class="eyebrow" style="margin-bottom:6px">Needed to read the grid</div>
       <ul class="tight">
-        <li><b>Records and references.</b> Every connection between requests is a reference: <code>record.ref('centre')</code>, <code>file(run=611)</code>, or <code>acc.ref('iofq')</code>, which the backend replaces at submission by an output of a record of the state's plain request. A reference to a pending record is valid. The backend waits for it.</li>
+        <li><b>Records and references.</b> Every connection between requests is a reference: <code>record.ref('centre')</code>, <code>file(run=611)</code>, or <code>acc.ref('iofq')</code>, which the workspace replaces at submission by an output of a record of the state's plain request. A reference to a pending record is valid. The workspace waits for it.</li>
         <li><b>Template</b> is the shared building block: stage, accumulator, batch, and rules all start from one.</li>
-        <li><b>Controllers.</b> The backend never decides what to submit or push. A notebook, an app, or the <code>TriggerLoop</code> of rules does.</li>
-        <li><b>Where it runs.</b> Both: values in memory while something keeps them, written only when persisted. The service (designed, not built) keeps them under a cap per client; where it holds an accumulator's driver is open. Placement says the results do not differ.</li>
+        <li><b>Controllers.</b> The workspace never decides what to submit or push. A notebook, an app, or the <code>TriggerLoop</code> of rules does.</li>
+        <li><b>Where it runs.</b> Both: values in memory while something keeps them, written only when persisted. The service (designed, not built) runs a workspace for each proposal, or for each user of a proposal. How it bounds a workspace's memory, and where it holds an accumulator's driver, are open. Placement says the results do not differ.</li>
       </ul>
     </div>
     <div>
