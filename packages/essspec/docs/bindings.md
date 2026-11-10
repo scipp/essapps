@@ -260,7 +260,7 @@ A plain request is an accumulator with no blanks, read once: it too computes wit
 
 A driver computes the contribution of every row of a push, what the row adds to the driver's sums, before it adds any.
 A row that fails then leaves the sums as they were, and the part that computes a contribution touches no state of the driver, so it may run on several threads.
-A push that raises still stops the accumulator, since the backend cannot tell whether the driver holds part of its rows.
+A push that raises still stops the accumulator, since the workspace cannot tell whether the driver holds part of its rows.
 
 ### What the caller promises
 
