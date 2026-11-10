@@ -78,8 +78,9 @@ from the JSON form the log holds, with each reference replaced by the data read
 and each file by its local path (see :func:`ess.spec.validation.validated`).
 A group that holds a reference is validated only then, so its validators see
 the data. A plain request makes the params instance from these values without
-validating again, so the params model's model validators never run; a stage or
-an accumulator gets the values by name. An output that the spec declares
+validating again, since the params model has no validators of its own, which
+:class:`~ess.spec.WorkflowSpec` refuses; a stage or an accumulator gets the
+values by name. An output that the spec declares
 optional and the binding returns as ``None`` is left out; any other output that
 is not an instance of its type fails the record.
 

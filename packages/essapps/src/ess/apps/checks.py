@@ -46,8 +46,9 @@ position and the type its data must fit (see
 :data:`ess.spec.validation.OutputReads`). The backend checks each against what the
 client may read (see :func:`check_fit`).
 
-The params model's model validators never run: a stage and a driver never get a
-whole params instance. The terms (group, file field, reference, table) and the
+The params model has no validators of its own, which
+:class:`~ess.spec.WorkflowSpec` refuses: a stage and a driver never get a whole
+params instance. The terms (group, file field, reference, table) and the
 rules of what a request may write are in ``packages/essspec/docs/params.md``.
 """
 
@@ -150,7 +151,7 @@ class Checks:
         ``None``.
 
         Each value was checked by its field when it was given, and the params
-        model's model validators never run, so this checks the rest: the
+        model has no validators of its own, so this checks the rest: the
         number of rows of each table among the ``blanks``, by its length
         constraints.
         """
