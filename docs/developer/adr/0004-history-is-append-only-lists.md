@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Deciders: Simon
-- Date: 2026-10-05, rewritten 2026-10-09
+- Date: 2026-10-05, rewritten 2026-11-10
 
 ## Context
 
@@ -20,9 +20,9 @@ The stories need four things from history:
 
 Two forces bound its size.
 
-**Pins multiply rows.** Story D7 pins an accumulator after each of its 300 pushes.
-If each record of a state listed its rows, history would hold about 45,000 rows, and every layer that handles records would handle them all.
-In a local workspace, the workspace in the user's process that `local()` makes, D7 with 1000 pushes took 5.6 s with every row listed (501,500 stored references), and 0.86 s with a count of pushes.
+**Records of states repeat rows.** The plain request of state n holds the rows of the first n pushes, and the record of a freeze is the record of that request ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)).
+Story D7 pushes 300 runs and freezes once, so a record that listed its rows would hold the 300 rows a second time.
+A read of a state makes no record.
 
 **A proposal has no defined end.** Users need their records and outputs for days to weeks ([tensions](../../requirements/tensions.md), "Finding results again versus a second catalogue").
 
@@ -38,7 +38,7 @@ History is four lists, each only appended to:
 | pushes | push into an accumulator | accumulator ID, one row per table |
 
 - A record never changes. Its status is its finish, and a record without one is pending.
-- The record of a state ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)) is stored as the accumulator and its number of pushes. Its rows are those of the first n pushes, taken from the pushes list when needed. So history grows by a constant amount per push and per pin. The record that `freeze` returns is stored the same way.
+- The record of a freeze ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)) is stored as the accumulator and its number of pushes. Its rows are those of the first n pushes, taken from the pushes list when needed. So history grows by a constant amount per push and per freeze, and reads of a state add nothing.
 - A persist request is part of the record. The outcome of the write is the record's finish ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)).
 - Output values are not history ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)). History names no file.
 - Once a proposal has been idle ([`ess.apps.protocol`](../../../packages/essapps/src/ess/apps/protocol.py)) for the retention period, days to weeks as the deployment sets it, its history is dropped as a whole. An output needed for longer is published (README, [Provenance and publication](../README.md#provenance-and-publication)).
@@ -51,7 +51,7 @@ History is four lists, each only appended to:
 - **History kept as long as the proposal.** That may be forever, a second record of what ran next to SciCat.
 - **Each record dropped by age, keeping the older records that a kept record reads.** The trigger loop would reduce again every file whose records were dropped. It would need a memory of its own, such as a set of handled files per rule.
 - **A proposal's history dropped a fixed time after its last record.** A trigger loop that sees no new file for that long loses its rule's records and then reduces every file again. A client still in use would lose the records it reads.
-- **The record of a state stored with every row, in storage that shares repeated rows.** Sharing saves bytes, but every layer above the store still handles every row, and that grows with the square of the number of pins.
+- **The record of a freeze stored with every row, in storage that shares repeated rows.** Sharing saves bytes, but every layer above the store still handles each row twice, once in its push and once in the record.
 - **Output values kept with their records.** This stores one output per state, and makes a catalogue of outputs next to SciCat, which is a non-goal.
 
 ## Consequences
