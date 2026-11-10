@@ -24,7 +24,8 @@ columns of :func:`..frames.with_results`, the status as the table shows it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -35,10 +36,10 @@ from ess.apps import FieldError, Listing, Record, SpecId, Status, SubmitError
 from ess.apps.panel import Form, Table, describe
 from ess.spec import field_types
 
-from .. import Batch, Row, RowState, frames, ready, remaining, summary
+from .. import Batch, Row, RowState, RowTable, frames, ready, remaining, summary
 from ..export import export_table
 from ..text import load_template, with_latest, with_named_files, write_template
-from .cells import cell_text, changed_cells, write_choice
+from .cells import button, cell_texts, changed_cells, write_choice
 
 type Draw = Callable[[Mapping[str, Record]], Any]
 """Draws the completed results of the rows selected, by key; returns a pane."""
@@ -85,8 +86,7 @@ class BatchView:
         self._tweak_loaded: tuple[str, Any, str | None] | None = None
         self._shown: dict[str, Any] = {}
         self._drawn: tuple[tuple[str, str], ...] = ()
-        spec = batch.spec
-        model, listing = spec.params, self._listing
+        model, listing = batch.spec.params, self._listing
         self.settings = Form(model, listing, fields=batch.settings_fields)
         self.settings.watch(self._show)  # changed settings make results stale
         self.row = Form(model, listing, fields=batch.columns)
@@ -107,48 +107,34 @@ class BatchView:
         self.details = pn.pane.Markdown('')
         self.view = pn.Column(sizing_mode='stretch_width')
         self._actions = pn.Row(
-            *(
-                self._button(label, action, color)
-                for label, action, color in (
-                    ('Scan files', self.scan, 'default'),
-                    ('Reduce all', self.reduce_all, 'primary'),
-                    ('Reduce remaining', self.reduce_remaining, 'primary'),
-                    ('Reduce selected', self.reduce_selected, 'default'),
-                    ('Cancel running', self.cancel, 'default'),
-                    ('Use settings of selected', self.use_settings, 'default'),
-                )
-                if action != self.scan or batch.source is not None
-            )
+            *([] if batch.source is None else [button('Scan files', self.scan)]),
+            button('Reduce all', self.reduce_all, 'primary'),
+            button('Reduce remaining', self.reduce_remaining, 'primary'),
+            button('Reduce selected', self.reduce_selected),
+            button('Cancel running', self.cancel),
+            button('Use settings of selected', self.use_settings),
         )
         self.write = write_choice(self._titles)
         self._edits = pn.Row(
             self.write,
-            self._button('Add row', self.add),
-            self._button('Update selected', self.update),
-            self._button('Remove selected', self.remove),
-            self._button('Undo edits of selected', self.reset),
-            self._button('Bring back removed rows', self.restore),
+            button('Add row', self.add),
+            button('Update selected', self.update),
+            button('Remove selected', self.remove),
+            button('Undo edits of selected', self.reset),
+            button('Bring back removed rows', self.restore),
         )
-        self._tweak_button = self._button('Submit for selected row', self.submit_tweak)
+        self._tweak_button = button('Submit for selected row', self.submit_tweak)
         self.path = pn.widgets.TextInput(
             label='File or folder', placeholder='rows.csv, settings.yaml, exported'
         )
         self._files = pn.Row(
-            self._button('Load rows', self.load_rows),
-            self._button('Save rows', self.save_rows),
-            self._button('Load settings', self.load_settings),
-            self._button('Save settings', self.save_settings),
-            self._button('Export selected', self.export_selected),
+            button('Load rows', self.load_rows),
+            button('Save rows', self.save_rows),
+            button('Load settings', self.load_settings),
+            button('Save settings', self.save_settings),
+            button('Export selected', self.export_selected),
         )
         self._show()
-
-    @staticmethod
-    def _button(
-        label: str, action: Callable[[], Any], color: str = 'default'
-    ) -> pn.widgets.Button:
-        button = pn.widgets.Button(label=label, color=color)
-        button.on_click(lambda _: action())
-        return button
 
     # What is shown
 
@@ -183,10 +169,7 @@ class BatchView:
         self._selected()
 
     def _cells(self, row: Row) -> dict[str, str]:
-        cells = {
-            title: cell_text(row.values[c], self._listing) if c in row.values else ''
-            for c, title in self._titles.items()
-        }
+        cells = cell_texts(row.values, self._titles, self._listing)
         info = {name: row.info.get(name, '') for name in self._info}
         return {'Row': row.key, **info, **cells, _RESULT: self._states[row.key].text}
 
@@ -223,9 +206,7 @@ class BatchView:
             return
         self._tweak_loaded = source
         base = (
-            (self._current_settings() or {})
-            if record is None
-            else (record.request.params)
+            self._current_settings() or {} if record is None else record.request.params
         )
         rest = {k: v for k, v in base.items() if k not in self.batch.columns}
         self.tweak.set({**rest, **cells}, self._listing)
@@ -257,6 +238,26 @@ class BatchView:
 
     # What a person does
 
+    @contextmanager
+    def _showing_errors(self, failed: str) -> Iterator[None]:
+        """Show in the message why the block was refused, or ``failed`` and why."""
+        try:
+            yield
+        except SubmitError as error:
+            self.message.object = _refused(error.errors)
+        except (OSError, ValueError) as error:
+            self.message.object = f'{failed}: {error}'
+
+    def _edit_rows(
+        self, edit: Callable[[RowTable, str], RowTable], keys: Iterable[str]
+    ) -> None:
+        """Apply ``edit`` to the rows of ``keys`` in turn, and show the rows."""
+        rows = self.batch.rows
+        for key in keys:
+            rows = edit(rows, key)
+        self.batch.rows = rows
+        self._show()
+
     def scan(self) -> None:
         """Make rows from the files now."""
         try:
@@ -272,12 +273,9 @@ class BatchView:
     ) -> dict[str, Record]:
         """Submit the rows that ``keys_of`` picks from the state of all."""
         records: dict[str, Record] = {}
-        try:
+        with self._showing_errors('Cannot submit'):
             settings = self.settings.params
             records = self.batch.reduce(settings, keys_of(self.batch.state(settings)))
-        except SubmitError as error:
-            self.message.object = _refused(error.errors)
-        else:
             self.message.object = f'Submitted {len(records)} rows.'
         self._list_again()
         return records
@@ -315,10 +313,8 @@ class BatchView:
         if not key:
             self.message.object = 'Give the new row a name.'
             return
-        try:
+        with self._showing_errors('Cannot add the row'):
             self.batch.rows = self.batch.rows.add(Row(key, self.row.held()[0]))
-        except SubmitError as error:
-            self.message.object = _refused(error.errors)
         self._show()
 
     def update(self) -> None:
@@ -326,42 +322,27 @@ class BatchView:
         given, missing = self.row.held()
         chosen = self.write.value
         changed = changed_cells(given, self._shown, chosen)
-        rows = self.batch.rows
-        for key in self.table.selected_keys:
-            rows = rows.edit(key, changed)
-        self.batch.rows = rows
-        self.write.value = ''
         skipped = [e for e in missing if e.loc[0] == chosen or e.loc[0] in self._shown]
+        self.write.value = ''
         self.message.object = (
             _refused(skipped, 'Not written')
             if skipped
             else ('' if changed else 'No cell changed, so nothing was written.')
         )
-        self._show()
+        keys = self.table.selected_keys
+        self._edit_rows(lambda rows, key: rows.edit(key, changed), keys)
 
     def remove(self) -> None:
         """Remove the rows selected."""
-        rows = self.batch.rows
-        for key in self.table.selected_keys:
-            rows = rows.remove(key)
-        self.batch.rows = rows
-        self._show()
+        self._edit_rows(RowTable.remove, self.table.selected_keys)
 
     def reset(self) -> None:
         """Forget the edits of the rows selected."""
-        rows = self.batch.rows
-        for key in self.table.selected_keys:
-            rows = rows.reset(key)
-        self.batch.rows = rows
-        self._show()
+        self._edit_rows(RowTable.reset, self.table.selected_keys)
 
     def restore(self) -> None:
         """Bring back every row that was removed."""
-        rows = self.batch.rows
-        for key in rows.removed:
-            rows = rows.reset(key)
-        self.batch.rows = rows
-        self._show()
+        self._edit_rows(RowTable.reset, self.batch.rows.removed)
 
     def submit_tweak(self) -> Record | None:
         """Submit the tweak form for the row selected, as that row's result."""
@@ -369,29 +350,22 @@ class BatchView:
         if key is None:
             self.message.object = 'Select one row.'
             return None
-        try:
+        with self._showing_errors('Cannot submit'):
             record = self.batch.tweak(key, self.tweak.params)
-        except SubmitError as error:
-            self.message.object = _refused(error.errors)
-            return None
-        self.message.object = f'Submitted {key} by itself.'
-        self._list_again()
-        return record
+            self.message.object = f'Submitted {key} by itself.'
+            self._list_again()
+            return record
+        return None
 
     # The files of the command
 
     def load_rows(self) -> None:
         """Take the rows of the table at :attr:`path` in place of a scan."""
         batch = self.batch
-        try:
+        with self._showing_errors('Cannot load the rows'):
             table = frames.read_table(Path(self.path.value))
             rows = frames.rows_of(table, batch.spec.params, batch.columns)
             batch.rows = batch.rows.rescan(rows)
-        except SubmitError as error:
-            self.message.object = _refused(error.errors)
-        except (OSError, ValueError) as error:
-            self.message.object = f'Cannot load the rows: {error}'
-        else:
             self.message.object = f'Loaded {len(rows)} rows.'
         self._list_again()
 
@@ -402,17 +376,14 @@ class BatchView:
 
     def save_rows(self) -> None:
         """Write the rows as a table to :attr:`path`, by its suffix."""
-        try:
+        with self._showing_errors('Cannot save the rows'):
             frames.write_table(self._table(self.batch.rows), Path(self.path.value))
-        except (OSError, ValueError) as error:
-            self.message.object = f'Cannot save the rows: {error}'
-        else:
             self.message.object = f'Saved the rows to {self.path.value}.'
 
     def load_settings(self) -> None:
         """Show the settings of the template at :attr:`path`."""
         batch = self.batch
-        try:
+        with self._showing_errors('Cannot load the settings'):
             template = load_template(Path(self.path.value))
             if template.spec != SpecId.of(batch.spec):
                 raise ValueError(f'it is a template of {template.spec}')
@@ -420,22 +391,14 @@ class BatchView:
                 raise ValueError(f'its blanks are not {", ".join(batch.columns)}')
             settings = with_named_files(batch.spec.params, template.params)
             self.settings.set(with_latest(batch.client, settings), self._listing)
-        except (OSError, ValueError) as error:
-            self.message.object = f'Cannot load the settings: {error}'
-        else:
             self.message.object = 'Loaded the settings.'
         self._show()
 
     def save_settings(self) -> None:
         """Write the settings as a template to :attr:`path`."""
-        try:
+        with self._showing_errors('Cannot save the settings'):
             template = self.batch.template(self.settings.params)
             write_template(template, Path(self.path.value))
-        except SubmitError as error:
-            self.message.object = _refused(error.errors)
-        except OSError as error:
-            self.message.object = f'Cannot save the settings: {error}'
-        else:
             self.message.object = f'Saved the settings to {self.path.value}.'
 
     def export_selected(self) -> None:
@@ -448,14 +411,10 @@ class BatchView:
         if not completed:
             self.message.object = 'Select rows that completed.'
             return
-        try:
-            export_table(
-                self.batch.client, self._table(completed), Path(self.path.value)
-            )
-        except (OSError, ValueError) as error:
-            self.message.object = f'Cannot export: {error}'
-            return
-        self.message.object = f'Exported {len(completed)} rows to {self.path.value}.'
+        folder = self.path.value
+        with self._showing_errors('Cannot export'):
+            export_table(self.batch.client, self._table(completed), Path(folder))
+            self.message.object = f'Exported {len(completed)} rows to {folder}.'
 
     def panel(self) -> pn.Column:
         return pn.Column(

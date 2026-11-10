@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What the tables of the toolbox show, and what their editors write.
+What the tables of the toolbox show, what their editors write, and their buttons.
 
 An editor writes only the fields that differ from what it started with, so that
 updating one cell leaves the others as they are. With several rows selected it
@@ -11,7 +11,7 @@ change: a person chooses that field in :func:`write_choice`.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import panel as pn
@@ -36,6 +36,16 @@ def cell_text(value: Any, listing: Listing) -> str:
     return 'none' if value is None else str(value)
 
 
+def cell_texts(
+    values: Mapping[str, Any], titles: Mapping[str, str], listing: Listing
+) -> dict[str, str]:
+    """The text of each field of ``titles`` by its title, empty if not in ``values``."""
+    return {
+        title: cell_text(values[name], listing) if name in values else ''
+        for name, title in titles.items()
+    }
+
+
 def write_choice(titles: Mapping[str, str]) -> pn.widgets.Select:
     """A choice of one field to write whatever it holds, among ``titles`` by name."""
     options = {'The cells changed': '', **{t: name for name, t in titles.items()}}
@@ -51,3 +61,12 @@ def changed_cells(
         for name, value in given.items()
         if name == chosen or name not in shown or value != shown[name]
     }
+
+
+def button(
+    label: str, action: Callable[[], Any], color: str = 'default'
+) -> pn.widgets.Button:
+    """A button that calls ``action``."""
+    widget = pn.widgets.Button(label=label, color=color)
+    widget.on_click(lambda _: action())
+    return widget
