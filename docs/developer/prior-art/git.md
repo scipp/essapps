@@ -6,8 +6,8 @@ Twenty years of users have recorded what that model costs.
 
 | Git | Here | Note |
 |---|---|---|
-| commit | record | never changes; git addresses it by content hash, the backend by a random ID |
-| parent link | the order of records under a label | git stores a link; the backend keeps the order the records were logged in |
+| commit | record | never changes; git addresses it by content hash, the workspace by a random ID |
+| parent link | the order of records under a label | git stores a link; the workspace keeps the order the records were logged in |
 | branch, its reflog | label and member, `client.latest` | git moves a pointer; a label is a query over records that are only appended |
 | gitlink (submodule entry) | reference | names one object, never a name |
 | reachability from refs | keepers ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)) | see below: the rules differ |
@@ -37,14 +37,14 @@ A name resolved at submission gives a backlog or a re-run a different input than
 **Git keeps what is reachable, and pays for it under concurrent writers.**
 `git gc` keeps everything reachable from refs and reflogs and prunes unreachable objects after a grace period, two weeks by default ([config/gc L96-L105][gcexp]).
 The grace period protects a concurrent process that is about to reference an object that is unreachable now, and the docs admit that "users who run commands concurrently have to live with some risk of corruption" ([git-gc L157-L173][gcnotes]).
-Here, a reference keeps no value; only keepers do: the client that asked, a pending request until its workflow returns, the store ([`ess.apps.protocol`](../../../packages/essapps/src/ess/apps/protocol.py)).
-A submission may reference only values its client keeps, persisted values, and files, so whether it is refused never depends on how far other work has come ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)).
+Here, a reference keeps no value; only keepers do: the workspace until a client releases the record, a pending request until its workflow returns, the store ([`ess.apps.protocol`](../../../packages/essapps/src/ess/apps/protocol.py)).
+A submission may reference only values the workspace keeps, persisted values, and files, so whether it is refused never depends on how far other work has come ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)).
 That rule removes the race git mitigates with a grace period.
 Git's rule would also keep every intermediate of a chain for as long as its final output is kept.
 
 **Content addressing does not transfer.**
 Git can address by hash because the same content is the same object, wherever it was made.
-A record is written once by one writer, so a random ID (`uuid4` in the backend) serves.
+A record is written once by one writer, so a random ID (`uuid4` in the workspace) serves.
 Running the same request again makes a new record ([Requests and records](../README.md#requests-and-records)).
 Outputs are computed, and the same request is not guaranteed to give the same bytes on two machines, so a hash would give one result two identities.
 

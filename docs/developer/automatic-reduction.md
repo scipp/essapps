@@ -34,7 +34,7 @@ rule = Rule('iofq', reduce_sample, selector=Selector(run_type='sans'), label='io
 The function returns the record that *settles* the file: one under the rule's label that holds the file at the parameter `at`, or in a row of it if `at` is a list.
 The loop checks this and raises `TypeError` otherwise, since it would call the function for that file again at every step.
 
-The function persists what it submits. The loop's client should keep nothing, and a reference must stay readable once the loop's process has restarted.
+The function persists what it submits. The loop never releases, so the workspace should keep nothing for it, and a reference must stay readable once the loop's process has restarted.
 
 A function may run again for a file: when a step stopped before the settling record, or when that record was refused. So it submits the settling record last, and reuses what an earlier call submitted, as with the centre above.
 It does not reuse a failed or cancelled record, since a reference to one is refused, and the file would never settle. With a new centre, the reduction is accepted while the centre is pending, then fails with it, and that failed record settles the file.
@@ -45,7 +45,7 @@ Rules are frozen dataclasses. The core keeps no store of them, and records do no
 
 ## The trigger loop
 
-The trigger loop is the controller for rules. It runs in a server of its own or in a notebook, never in the backend.
+The trigger loop is the controller for rules. It runs in a server of its own or in a notebook, never in the workspace.
 It finds new files through `client.files`, and calls each rule's function for each of them.
 
 ```python
@@ -57,7 +57,7 @@ loop.run()                   # steps forever
 
 The loop keeps nothing that the records do not hold: it reads them from `client.changes`, from the start when it starts, and keeps the files it has seen. A rule has handled a file when a record under the rule's label holds it at the parameter `at`, or in a row of it, so a restarted or replaced loop does not reduce a file again, and a file that arrives again keeps its identity and is not reduced twice.
 A file that the record stores at another field, such as an empty-beam run, does not count.
-This holds while the proposal's history is kept. A running loop keeps it, since a proposal with an open client is not idle ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
+This holds while the proposal's history is kept. A running loop keeps it, since its calls keep the proposal from being idle ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
 
 A record can settle more files than the one it was submitted for. A function that stitches all angles of a sample so far settles every new angle of that sample in one call:
 
@@ -81,4 +81,4 @@ Any other exception stops the loop, as does `RecordFailed` from a function that 
 ## Open
 
 - Adding, replacing, and listing rules in a running trigger loop.
-- A rule that pushes into an accumulator, for a sum that grows with each file (D7 as a rule). The loop's client would keep the accumulator, the only thing it keeps, and freeze it with `persist=` once the sum is complete.
+- A rule that pushes into an accumulator, for a sum that grows with each file (D7 as a rule). The accumulator would be the only thing the workspace keeps for the loop, which would freeze it with `persist=` once the sum is complete.

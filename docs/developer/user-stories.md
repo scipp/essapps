@@ -80,21 +80,21 @@ A story may add a toy spec to the list of toy specs; it must take runs directly,
 ## Conventions
 
 Fixtures: `client` is a client for proposal `p1`.
-In the notebook stories it is `local(proposal='p1', files=files, bind=...)`, a backend in the user's process ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
+In the notebook stories it is `local(proposal='p1', files=files, bind=...)`, a client of a workspace in the user's process ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 In the batch and automatic stories, sections D and E, it is `connect(url, proposal='p1')`, a client of the service at `url` ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)), which is designed and not implemented.
-The story tests make a `Client` of one in-process `Backend` for both, with a fake store in memory.
+In the story tests, every client of `p1` is a `Client` of one in-process `Workspace`, for both, with a fake store in memory.
 In the stories, `connect(proposal=..., user=...)` is `connect(url, ...)` to the same service, by default for `client`'s proposal and user; `user=` stands for logging in as another user.
-`other` is a client of a second backend.
-Every backend in the stories reads the same files and publishes to the same `scicat`.
+`other` is a client of a second workspace.
+Every workspace in the stories reads the same files and publishes to the same `scicat`.
 `measure(n, counts, **fields)` makes run `n` appear as a raw file with the given counts and metadata, and returns its reference.
 The metadata of such a file also holds its run number, as `run`; `measure(..., proposal=...)` makes the file belong to another proposal.
-`files` is the fake file source of every backend; stories query it through `client.files` as in README.md.
+`files` is the fake file source of every workspace; stories query it through `client.files` as in README.md.
 It has a helper for tests: `files.add_published(entry)` lists a published entry as a file of kind `'derived'` and returns its reference.
 SciCat lists such an entry as a derived dataset.
 `scicat` is a fake publisher; `scicat.entries[pid]` is a published entry, with `.provenance`.
 `folder` is a directory with files that hold counts, as `measure` files do.
 `corrupt(run)` makes a file unreadable, with the failure message `'file signature not found'`; `repair(run)` undoes it.
-`upgrade(specs=..., versions=...)` returns a client of an upgraded backend over the same files, history, and store: the specs it offers, every one by default, and the software versions its records name. The upgrade ends every client of the backend before it, and `connect` then makes clients of the upgraded backend.
+`upgrade(specs=..., versions=...)` returns a client of an upgraded workspace over the same files, history, and store: the specs it offers, every one by default, and the software versions its records name. The upgrade closes the workspace before it, and `connect` then makes clients of the upgraded workspace.
 `replace` is `dataclasses.replace`.
 
 Besides the calls in README.md, the stories use this one:
@@ -387,7 +387,7 @@ A beam centre found again later is a new record under `beam-centre`; the templat
 
 ### C2. Vanadium from the catalogue
 
-Actor: user. Goal: use a vanadium result that another backend published to SciCat.
+Actor: user. Goal: use a vanadium result that another workspace published to SciCat.
 
 ```python
 vanadium = other.compute(VANADIUM, params={'scaling': Scaling(scale=2.0),
@@ -401,10 +401,10 @@ result = client.compute(IOFQ, params={'sample': sample, 'normalization': file(pi
 assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]    # [4, 8] / ((1 + 1) * 2)
 assert result.request.params['normalization'] == published
 assert set(client.provenance(result).files()) == {sample, published}
-assert client.records() == [result]              # the vanadium record is on the other backend
+assert client.records() == [result]              # the vanadium record is on the other workspace
 ```
 
-Provenance stops at the published file, since what lies behind a file belongs to its source. How the backend reads the published output is system story C2.
+Provenance stops at the published file, since what lies behind a file belongs to its source. How the workspace reads the published output is system story C2.
 The published normalization is a file of its factor. `IOFQ`'s `normalization` takes it as a file, `RunFile`, or the output of `VANADIUM` by reference, `Referenced[ComputedNormalization]`: one field takes either way ([params.md, Files](../../packages/essspec/docs/params.md#files)). The binding reads the factor from the file.
 A result of another proposal, such as a direct-beam function an instrument scientist prepared for the users of later proposals, is read the same way, never through the other proposal's records (G5).
 
@@ -446,7 +446,7 @@ normalization = reduced[-1].request.params['normalization']
 assert normalization == client.latest('vanadium').ref('normalization')
 ```
 
-The notebook is the controller: it reruns the sample after each vanadium change. Its client keeps the outputs it reads later; a label keeps no values. That the change comes back quickly is system story C5.
+The notebook is the controller: it reruns the sample after each vanadium change. The workspace keeps the outputs it reads later; a label keeps no values. That the change comes back quickly is system story C5.
 
 ## D. Batch
 
@@ -506,7 +506,7 @@ assert morning.status(failed) == ['failed']                          # the failu
 assert len(morning.records(label='night')) == 31                     # and so does its record
 ```
 
-The night's client keeps nothing: each record's outputs are written to the store before it completes, and the morning client reads them there.
+The workspace keeps nothing for the night's client: each record's outputs are written to the store before it completes, and the morning client reads them there.
 
 Gap: labels and members on records are tentative, as in D1.
 That the runs continue while no client is connected is system story D2.
@@ -781,7 +781,7 @@ Actor: workflow developer. Goal: run a workflow defined in a notebook without in
 
 ```python
 draft = iofq                                                  # IOFQ's function, being edited
-dev = local(proposal='p1', files=files, bind=[function_binding(IOFQ, draft)])   # a backend in this process
+dev = local(proposal='p1', files=files, bind=[function_binding(IOFQ, draft)])   # a workspace in this process
 result = dev.compute(IOFQ, params={'sample': measure(1, [1.0, 2.0, 3.0, 4.0])})
 
 assert dev.output(result, 'iofq').values.tolist() == [3.0, 7.0]
@@ -798,7 +798,7 @@ theirs, mine = connect(proposal='p1', user='anna'), connect(proposal='p2', user=
 centre = theirs.compute(BEAM_CENTRE, params={'direct_beam': measure(1, [1.0, 1.0], proposal='p1')})
 sample = measure(2, [2.0, 2.0], proposal='p2')
 
-with pytest.raises(SubmitError, match='p1'):
+with pytest.raises(SubmitError, match=centre.id):          # unknown to the workspace of p2
     mine.compute(IOFQ, params={'sample': sample, 'beam_centre': centre.ref('centre')})
 assert mine.records() == []
 ```
@@ -811,7 +811,7 @@ That no client can get around the refusal is system story G5.
 
 System story only; see [system-stories.md](system-stories.md).
 
-### H2. Backend upgrade with runs in flight
+### H2. Upgrade with runs in flight
 
 System story only; see [system-stories.md](system-stories.md).
 
@@ -911,9 +911,9 @@ The provenance of the sum reaches that record.
 What the design leaves open or defers, with the stories each item affects.
 
 - **Removing a file** (system story A4): deferred, together with whether the outputs derived from it go too.
-- **The service** (sections D and E): designed and not implemented; the format of each persisted output type and the layout of the store are open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
+- **The service** (sections D and E): designed and not implemented; the format of each persisted output type, the layout of the store, and how the service bounds and ends its workspaces are open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md); README.md open question 8).
 - **Looks that compute** (B4, D7): a selection only indexes; a projection or a thick slice summed waits for the plotting work; README.md open question 4.
-- **Persist at submission** (D1, D2, D3, D6, E1 to E4): whether `persist=` should also keep the values for the client; README.md open question 6.
+- **Persist at submission** (D1, D2, D3, D6, E1 to E4): whether `persist=` should also keep the values in the workspace; README.md open question 6.
 - **Labels and members** (D1, D2): labels and members on records are tentative; README.md open question 3.
 - **Grouping** (system story D7): spreading one accumulator over several nodes needs a merge of two drivers; README.md open question 1.
 - **Recomputing in a record's environment** (F2): deferred.

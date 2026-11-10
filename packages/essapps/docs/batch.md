@@ -110,7 +110,7 @@ Pairing is yours to write. The framework knows no technique. If a source raises,
 
 ## When the metadata is wrong or missing
 
-Wrap the file source, and give the wrapper to the backend. Forms, rules, and sources then all see a file as corrected:
+Wrap the file source, and give the wrapper to the workspace. Forms, rules, and sources then all see a file as corrected:
 
 ```python
 files = CorrectedFiles(FolderFiles('/data', table))
@@ -188,8 +188,8 @@ Raise in the fake to make a row fail; hold it back on a `threading.Event` to kee
 
 ## What it does not do
 
-- Keep the table across sessions. A new `Batch` scans again. It finds results by key in its backend, so `local()` per session starts with none, and against a shared backend a value must be persisted for another client to read it.
+- Keep the table across sessions. A new `Batch` scans again. It finds results by key in its workspace, so `local()` per session starts with none, and a result that is not persisted is gone once its workspace closes.
 - Show a stale result after a restart.
 - Read a table from a CSV file. That is one more source.
-- Free the values of replaced results. They stay until the client closes or they are released, unless the batch persists them (`persist=`).
+- Free the values of replaced results. They stay until the workspace closes or they are released, unless the batch persists them (`persist=`).
 - Offer preparatory steps with a **Use** button. A `Referenced[...]` setting offers each record in the settings form.

@@ -2,7 +2,7 @@
 
 A plain request loads its runs again each time it is submitted.
 Tuning `reduction.bins` over three values loads the sample three times, and adding a run to a sum of a hundred runs reduces all hundred again.
-Stages and accumulators keep what such work computes in memory between requests, for one client:
+Stages and accumulators keep what such work computes in the workspace's memory between requests:
 
 | | Made from | Each call gives | Keeps | Needs a binding that |
 |---|---|---|---|---|
@@ -10,14 +10,15 @@ Stages and accumulators keep what such work computes in memory between requests,
 | accumulator | a template whose blanks are tables | rows of one or more tables (a *push*) | the sum, or whatever its driver holds, over the rows so far | makes drivers, such as `DriverBinding` |
 
 Both make records that are identical to the records of plain requests with the same values (see Symmetries).
-A client keeps a stage or an accumulator until it releases it or ends.
+The workspace keeps a stage or an accumulator until a client releases it or the workspace closes.
+Every client of the workspace may call through a stage, and push into and read an accumulator.
 Making one over a binding that does not serve it is refused.
 [ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md) and [ADR 0003](adr/0003-accumulators-add-in-place.md) give the reasons; [bindings.md](../../packages/essspec/docs/bindings.md) gives the binding's side of the contract.
 
 **In short:**
 
 - A call through a stage, and every state of an accumulator, has a plain request, and its record is the record of that request.
-- A push returns once logged. The backend adds it later, in the order logged.
+- A push returns once logged. The workspace adds it later, in the order logged.
 - Reading a state *pins* it: the state after the pushes logged so far.
 - Push n+1 waits until everyone reading state n is done, so no reader ever sees a value change.
 - `freeze` turns the last state into an ordinary record, without a copy.
@@ -63,7 +64,7 @@ A push of no rows is refused, and so is a push into a table that the template fi
 A push gives rows of one or more tables, each row as a request writes it there: a group as a model or a dict, a file as `file(...)` or a `Path`, a reference to an output.
 A push references files and outputs of records, never an accumulator.
 A reference to a record that failed or was cancelled is refused, and a pending record is not waited for when the push is logged.
-`client.accumulator` and `push` return once logged; the backend makes the driver and adds each push later, once the records it references have completed.
+`client.accumulator` and `push` return once logged; the workspace makes the driver and adds each push later, once the records it references have completed.
 
 **Distinct rows.** A push refuses a row that its table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
 Rows are compared as the record stores them: a value written inline by its JSON form, a file by its identity, and a reference by record, output, and key.
@@ -83,14 +84,14 @@ It does not wait for these pushes to be added before it returns, except where it
 | `client.provenance(acc)` | the provenance of state n's plain request, at once | no |
 
 `select=` copies only the part it names, but the outputs of a state are computed whole, the first time a pin needs them.
-A controller that should skip pins while the backend is behind checks whether the record of its previous pin has finished.
+A controller that should skip pins while the workspace is behind checks whether the record of its previous pin has finished.
 
-No client keeps the record of a state that a submission makes, so `client.output` of it raises.
+The workspace does not keep the record of a state that a submission makes, so `client.output` of it raises.
 A record never names an accumulator: the submission replaces `acc.ref(...)` by a reference to the record of the state.
-Only the client that made an accumulator pins it, and no push or template references an accumulator.
+Every client of the workspace may pin an open accumulator, and no push or template references an accumulator.
 
 **Push n+1 waits for the readers of state n.** A driver only moves forward, and may add the next push into the arrays its last outputs returned.
-So the backend adds push n+1 only once the *readers* of state n are done: requests that read the record of state n, until their workflow has returned, and pins of state n, until they have copied.
+So the workspace adds push n+1 only once the *readers* of state n are done: requests that read the record of state n, until their workflow has returned, and pins of state n, until they have copied.
 The calls still read as if they ran one after another:
 
 ```python
@@ -109,12 +110,12 @@ In Rust's terms, each reader of a state holds a shared borrow of the driver, and
 ```python
 total = client.freeze(iofq)                 # the record of the last state; no copy, no more pushes
 client.output(total, 'iofq')
-client.freeze(volume, persist=True)         # the store keeps the outputs, not the client
+client.freeze(volume, persist=True)         # the store keeps the outputs, not the workspace
 ```
 
-At the end of a scan, freezing makes the final volume an ordinary record, which the client can keep or reference from another template or push, where the accumulator itself may not be referenced.
+At the end of a scan, freezing makes the final volume an ordinary record, which the workspace keeps, and which a client can reference from another template or push, where the accumulator itself may not be referenced.
 A controller that should skip a run whose reduction failed waits for that record before it pushes, since a failed push stops the accumulator.
-[`BackendProtocol`](../../packages/essapps/src/ess/apps/protocol.py) states the rules of `freeze`, `release`, and a stopped accumulator.
+[`WorkspaceProtocol`](../../packages/essapps/src/ess/apps/protocol.py) states the rules of `freeze`, `release`, and a stopped accumulator.
 
 ## Validation
 

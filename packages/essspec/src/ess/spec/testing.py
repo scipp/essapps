@@ -7,9 +7,9 @@ Checks of the symmetries that a workflow author promises, for a package's tests.
 package uses them.
 
 Each check computes the same outputs in two ways and compares them with
-:func:`assert_close`. A request is made with :func:`instance`, as the backend
+:func:`assert_close`. A request is made with :func:`instance`, as the workspace
 makes one from data it read, so that a check calls a binding with what the
-backend would pass. The check for shared memory compares only arrays that
+workspace would pass. The check for shared memory compares only arrays that
 numpy holds. A failed check raises ``AssertionError`` naming the symmetry and
 the call.
 """
@@ -69,9 +69,9 @@ def one_row(spec: WorkflowSpec[Any, Any], params: BaseModel) -> BaseModel:
 def instance(spec: WorkflowSpec[Any, Any], values: Mapping[str, Any]) -> BaseModel:
     """
     An instance of the spec's params model from ``values`` by name, as a
-    stage or a driver takes them, made as the backend makes one from data it
+    stage or a driver takes them, made as the workspace makes one from data it
     read: each value validated from the object by its own field, a table
-    without its length constraints, which the backend checks when a request
+    without its length constraints, which the workspace checks when a request
     is submitted, and without the model validators.
     """
     model: type[BaseModel] = spec.params

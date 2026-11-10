@@ -42,7 +42,7 @@ That is one way to keep old event formats readable as long as the log is kept ([
 Snakemake deletes a failed job's outputs, so a half-written file is never taken for a result.
 Files named under `log:` are kept, but the directive captures nothing: the author redirects stdout and stderr into them ([rules.rst](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/docs/snakefiles/rules.rst#L1407-L1422)).
 On Slurm, failures such as `OUT_OF_MEMORY`, `TIMEOUT`, and `NODE_FAIL` come from the batch system, not from the job ([Slurm executor](https://github.com/snakemake/snakemake-executor-plugin-slurm/blob/8c2af56eb7dd1e0b78866691d6981f1d8327e0db/snakemake_executor_plugin_slurm/__init__.py#L1270-L1279)).
-For us: the in-process backend records the message of the workflow's Python exception.
+For us: `ess.apps.Workspace` records the message of the workflow's Python exception.
 A segfault in a C extension, or a process killed for memory, raises none.
 On the service (scipp/essapps#27), a failed record needs the workflow's console output and the batch system's reason, captured by the framework rather than by each binding.
 Because its outputs are gone, Snakemake retries a failed job at the next invocation; our trigger loop counts a failed record as handled, and running it again is the user's decision ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
@@ -51,7 +51,7 @@ Because its outputs are gone, Snakemake retries a failed job at the next invocat
 After a cluster job ends, Snakemake waits up to `--latency-wait` seconds, 5 by default, for its outputs to appear ([cli.py](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/cli.py#L1389-L1397)); open issues report slow scheduling on high-latency file systems ([#2920](https://github.com/snakemake/snakemake/issues/2920), [#4240](https://github.com/snakemake/snakemake/issues/4240)).
 The Slurm executor polls `sacct` or `squeue`, first after 40 s and then at most every 180 s, since Slurm forgets finished jobs after `MinJobAge`, 300 s by default ([Slurm executor](https://github.com/snakemake/snakemake-executor-plugin-slurm/blob/8c2af56eb7dd1e0b78866691d6981f1d8327e0db/snakemake_executor_plugin_slurm/__init__.py#L1280-L1296)).
 For us: whether the service may submit cluster jobs is open ([systems](../../requirements/systems.md)).
-If it does, a record persisted at submission should complete when the worker reports that its writes are closed, not when the backend sees a file.
+If it does, a record persisted at submission should complete when the worker reports that its writes are closed, not when the workspace sees a file.
 Completion learned by polling Slurm lags by up to minutes, which matters for automatic reduction at about one request per second (scipp/essapps#27).
 
 **Resources: declared by the author, overridden by the site, grown on retry.**
@@ -68,8 +68,8 @@ For us: a separate reduction for each value found only in the data is a non-goal
 **A lock without liveness.**
 Snakemake locks by writing the paths of its inputs and outputs into the metadata folder, and deletes them on exit ([persistence](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/persistence/__init__.py#L478-L511)).
 A machine powered off mid-run leaves a stale lock, which the user removes with `--unlock` ([FAQ](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/docs/project_info/faq.rst#L119-L123)).
-For us: a backend started on history that another backend still writes is refused ([system story H2](../system-stories.md#h2-backend-upgrade-with-runs-in-flight)).
-The in-process backend holds its log file with `flock`, which the kernel releases when the process dies; a service backend needs the same property, never a lock that a person removes.
+For us: a workspace started on history that another workspace still writes is refused ([system story H2](../system-stories.md#h2-upgrade-with-runs-in-flight)).
+`ess.apps.Workspace` holds its log file with `flock`, which the kernel releases when the process dies; a workspace on the service needs the same property, never a lock that a person removes.
 
 **Temporary and protected outputs.**
 `temp()` deletes an output once every consumer has run, and `protected()` write-protects an expensive one ([rules.rst](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/docs/snakefiles/rules.rst#L2132-L2160)).

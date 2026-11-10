@@ -1,6 +1,6 @@
 # ESS data-reduction framework
 
-**Status: the in-process backend (`local()`) implements this design, including freeze, `select=`, and persist to a fake store. Not implemented: the service, `client.publish`, and software versions in provenance. The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
+**Status: the workspace in the user's process (`local()`) implements this design, including freeze, `select=`, and persist to a fake store. Not implemented: the service, `client.publish`, and software versions in provenance. The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
 
 This page gives an overview of the framework: its components, what each promises the others, and the ideas that client code is built from.
 The details live one level down:
@@ -52,7 +52,7 @@ client.output(records[60339], 'iofq')
 What the framework adds to the plain loop:
 
 - Each call is kept as a record. The same process finds it later, and on the service, other notebooks and programs too.
-- Output values are kept for the client that asked, and for every client of the proposal once persisted.
+- Output values are kept until a client releases them, and every client of the proposal's workspace reads them. Persisted values are kept in the store.
 - Calls can run elsewhere and in parallel.
 - Every output can answer where it came from: which spec, which parameter values, which files, which software versions.
 
@@ -62,7 +62,7 @@ What the framework adds to the plain loop:
   controller: a notebook, an app, the trigger loop      decides what to run
         │  client: submit, push, output, release, ...
         ▼
-  backend ───── file source: files and their metadata
+  workspace ─── file source: files and their metadata
         │  └─── store: persisted outputs
         │  binding: compute, make_stage, make_accumulator
         ▼
@@ -71,13 +71,13 @@ What the framework adds to the plain loop:
 
 The framework is two packages ([ADR 0007](adr/0007-packages-split-by-dependencies.md)).
 `ess.spec` holds what a workflow package needs: specs, bindings, and checks for tests.
-`ess.apps` holds the client, the backend, and apps built on them, such as the forms of `ess.apps.panel`.
+`ess.apps` holds the client, the workspace, and apps built on them, such as the forms of `ess.apps.panel`.
 
 **Spec.** A workflow package declares a spec, `ess.spec.WorkflowSpec`, for each workflow: a name, a version, and two pydantic models, *params* and *outputs*.
-The spec is all that a client, a form, and the backend know of a workflow; none of them imports the workflow's code.
+The spec is all that a client, a form, and the workspace know of a workflow; none of them imports the workflow's code.
 A parameter is written inline, as a file, or as a reference to another record's output, as its type says ([params.md](../../packages/essspec/docs/params.md)).
 
-**Binding.** A *binding* is what the backend calls to compute a spec's requests.
+**Binding.** A *binding* is what the workspace calls to compute a spec's requests.
 The workflow author makes it from one of three things, and each serves some of the client's calls:
 
 | The author provides | Plain request | Stage | Accumulator |
@@ -90,7 +90,7 @@ The binding gets an instance of the params model, with each file as a local path
 It promises not to modify what it gets, and not to return an output that shares memory with it.
 [bindings.md](../../packages/essspec/docs/bindings.md) shows how to write each.
 
-**Backend.** The *backend* runs requests and keeps records, for one or more proposals (an experiment at ESS).
+**Workspace.** The *workspace* of a proposal (an experiment at ESS) runs its requests, and keeps its records and output values.
 There are two deployments:
 
 ```python
@@ -100,24 +100,26 @@ client = connect('https://reduce.example', proposal='p1')              # the ser
 
 `local` is for interactive work, and can bind a spec to code defined in the notebook.
 The *service*, for unattended work, runs only workflows from installed packages.
-The backend decides when and where a request runs; the caller sees the same records and outputs either way.
+The workspace decides when and where a request runs; the caller sees the same records and outputs either way.
+The service runs a workspace for each proposal, or for each user of a proposal (open question 8), and workspaces share values only through the store.
 
-**Client.** A *client* is one connection to one backend, for one proposal.
-Every call that starts work returns once the backend has *logged* it in the proposal's history; the work happens later.
+**Client.** A *client* is one connection to one workspace.
+It keeps nothing: every client of a workspace reads, references, and releases the same values.
+Every call that starts work returns once the workspace has *logged* it in the proposal's history; the work happens later.
 
-**File source.** The backend finds files, and their metadata, through its *file source*, which DMSC deploys with it.
-A client sees only the files its proposal may read:
+**File source.** The workspace finds files, and their metadata, through its *file source*, which DMSC deploys with it.
+A client sees only the files the workspace's proposal may read:
 
 ```python
 samples = client.files.list(Selector(role='sample'))
 for run in client.files.watch(Selector(scan='17')): ...   # existing ones first, then new ones
 ```
 
-**Store.** The *store* keeps persisted outputs outside the backend's memory, for every client of the proposal ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
+**Store.** The *store* keeps persisted outputs outside the workspace's memory, also after the workspace has closed ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
 
-**Controller.** The backend does not decide what to run.
+**Controller.** The workspace does not decide what to run.
 A *controller* is client code that decides over time what to submit, push, and release, such as a notebook, an app's UI, or the trigger loop of automatic reduction.
-Controllers never run in the backend:
+Controllers never run in the workspace:
 
 ```python
 for run in client.files.watch(Selector(role='transmission')):
@@ -128,7 +130,7 @@ for run in client.files.watch(Selector(role='transmission')):
 ## Requests and records
 
 A *request* is a spec and its params.
-Submitting it returns a *record*: the request as the backend logged it, with every value filled in, defaults included.
+Submitting it returns a *record*: the request as the workspace logged it, with every value filled in, defaults included.
 A record never changes, only its status: `pending`, then `completed`, `failed`, or `cancelled`.
 Running the same request again makes a new record.
 
@@ -149,12 +151,12 @@ Each of `inputs` names a parameter that references an output, and is passed by n
 A request is checked in two phases:
 
 - The *request phase*, at submission, before any data is read: each value is validated by its type, files are resolved and access-checked, and each reference is checked to be readable and to fit its field. A request that cannot run is refused with a `SubmitError`, which names the position of each problem, such as `reduction.bins`.
-- The *call phase*, when the backend reads the data and calls the binding. A failure here fails the record.
+- The *call phase*, when the workspace reads the data and calls the binding. A failure here fails the record.
 
 Validation in the request phase never proves that a workflow will succeed.
 
 **References.** `record.ref(name)` names an output of a record.
-A reference to a pending record is allowed, so a chain is submitted without waiting, and the backend runs the request once the record it reads has completed:
+A reference to a pending record is allowed, so a chain is submitted without waiting, and the workspace runs the request once the record it reads has completed:
 
 ```python
 centre = client.submit(BEAM_CENTRE, params={'direct_beam': file(run=60330)})   # pending
@@ -184,19 +186,21 @@ beamtime = Template(final.request.spec, params=final.request.params, blanks=('sa
 ## Who keeps a value
 
 A record is kept with the proposal's history.
-An output value lives only while something keeps it: the client that asked for it, a pending request that reads it, or the store once persisted.
-A client releases what it no longer needs, and work whose outputs nothing would keep is cancelled.
-Another client reads a value only once it is persisted ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)):
+An output value lives only while something keeps it: the workspace, a pending request that reads it, or the store once persisted.
+The workspace keeps a value until a client releases its record, or the workspace closes.
+Releasing is for every client of the workspace, since they all read the same values.
+Closing a client releases nothing.
+Work whose outputs nothing would keep is cancelled ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)):
 
 ```python
-client.release(centre)              # this client no longer keeps the centre
-client.submit(IOFQ, params={...}, persist=('iofq',))  # the store keeps iofq, for every client of the proposal
+client.release(centre)              # the workspace no longer keeps the centre, for any client
+client.submit(IOFQ, params={...}, persist=('iofq',))  # the store keeps iofq, the workspace does not
 ```
 
 ## What changed
 
 A client that shows records, or reacts to them, asks which records changed since a position in the proposal's history, and reads only those.
-A record changes when it is submitted, by any client of the proposal, and when it finishes.
+A record changes when it is submitted, by any client of the workspace, and when it finishes.
 The reply holds record IDs and no values, each ID once:
 
 ```python
@@ -208,9 +212,9 @@ while True:
         show(record, client.status(record), client.readable(record))
 ```
 
-A backend that starts from its history log gives the same changes at the same cursors.
+A workspace that starts from its history log gives the same changes at the same cursors.
 Accumulators and pushes are not in the feed.
-Neither is `client.release`, nor any other way for a value to go away: the history does not hold lifetimes, and what a client may read is per client.
+Neither is `client.release`, nor any other way for a value to go away: the history does not hold lifetimes, and another client may release a value that this client shows.
 So a client that shows outputs asks `client.readable` for the records it shows, and a read can still raise `NotReadable`.
 
 ## Stages and accumulators
@@ -264,7 +268,7 @@ Not visible in the code of notebooks, apps, or workflow packages:
 - how a run number or path becomes a file identity
 - when and where a request runs, and where a stage or a driver lives
 - the format of persisted outputs and the store's layout
-- how the service notices a vanished client and sets the cap per client (scipp/essapps#27)
+- how the service bounds the memory of a workspace, and when it ends an idle one (open question 8)
 - how access across proposals is enforced
 
 ## Open questions
@@ -274,5 +278,6 @@ Not visible in the code of notebooks, apps, or workflow packages:
 3. **Labels and members** on records are tentative.
 4. **Looks that compute.** `client.describe` and `select=` give an application the sizes of an output and a cut of it. `select=` only indexes. A projection, or a thick slice summed, would run a spec next to the value without making a record; it is still open whether that is a second call or part of `select=`. So is reading the latest state already added, without a pin, and describing an accumulator's state, which `describe` does not take. A configured plot function takes every output of its record, read whole; whether it may take cuts is open.
 5. **Accumulators on the service.** How the service holds a driver, bounds its memory, and drops it ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), scipp/essapps#27).
-6. **Persist at submission.** Should `persist=` at submission also keep the values for the client? To be decided when a story needs it.
+6. **Persist at submission.** Should `persist=` at submission also keep the values in the workspace? To be decided when a story needs it.
 7. **Values modified in place.** In the user's process, a notebook that modifies a value `client.output` returned changes what later requests read. A shallow copy protects the dicts of coordinates and masks, not arithmetic in place.
+8. **Workspaces on the service.** Whether two users of one proposal share one workspace, how the service bounds the memory of a workspace, and when it ends a workspace that is idle ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), scipp/essapps#27).

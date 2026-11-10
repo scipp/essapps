@@ -21,7 +21,7 @@ So an ewoks task corresponds to one of our specs with its binding; the fine-grai
 
 **Dependencies exist only inside one graph.**
 A graph is fixed when it is submitted, and `ewoksjob` submits graphs independently: no Celery chain, chord, or group appears in any source read.
-Here a request may reference an output of a pending record from an earlier submission ([References](../README.md#requests-and-records)), and the backend runs it once that record has completed.
+Here a request may reference an output of a pending record from an earlier submission ([References](../README.md#requests-and-records)), and the workspace runs it once that record has completed.
 `ewoksjob` would leave that scheduling to us.
 
 **What happened is kept in events, not in records.**
