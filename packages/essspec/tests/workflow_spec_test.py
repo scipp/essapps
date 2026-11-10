@@ -170,6 +170,42 @@ class ComputedParams(BaseModel):
         return self.reduction.bins
 
 
+def checked(mode: Literal['before', 'after', 'wrap']) -> type[BaseModel]:
+    """A params model ``P`` with a model validator of ``mode``."""
+
+    def before(cls: type[BaseModel], value: Any) -> Any:
+        return value
+
+    def wrap(cls: type[BaseModel], value: Any, handler: Any) -> Any:
+        return handler(value)
+
+    def after(self: BaseModel) -> BaseModel:
+        return self
+
+    check: Any = {'before': before, 'wrap': wrap, 'after': after}[mode]
+    if mode != 'after':
+        check = classmethod(check)
+    return pydantic.create_model(
+        'P',
+        __validators__={'_check': model_validator(mode=mode)(check)},
+        reduction=(Reduction, Field(default_factory=Reduction)),
+    )
+
+
+class InitParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+
+    def __init__(self, **values: Any) -> None:
+        super().__init__(**values)
+
+
+ALONE = (
+    'each parameter is validated and stored alone, so a check or the JSON form '
+    "of one value belongs to the value's type, and a check across parameters to "
+    'a group that holds them, or to the workflow'
+)
+
+
 class BeamCentre(BaseModel, arbitrary_types_allowed=True):
     """A group with a field that is not a field type: only a reference fills it."""
 
@@ -218,12 +254,6 @@ class IofQSettings(BaseModel):
 class IofQParams(IofQSettings):
     sample: RunFile = Field(title='Sample run')
     can: RunFile
-
-    @model_validator(mode='after')
-    def _sample_is_not_the_can(self) -> 'IofQParams':
-        if self.sample == self.can:
-            raise ValueError('the sample run is not the can run')
-        return self
 
 
 class IofQMultiParams(IofQSettings):
@@ -584,12 +614,6 @@ class TestModelRules:
     )
     def test_accepted(self, fields: dict[str, Any]) -> None:
         spec(**fields)
-
-    def test_a_model_validator_of_the_params_model_is_allowed(self) -> None:
-        # The framework never calls it (see the workspace's tests); a binding may.
-        assert IofQParams.__pydantic_decorators__.model_validators
-        with pytest.raises(pydantic.ValidationError, match='the sample run is not'):
-            IofQParams.model_validate({'sample': Path('a.nxs'), 'can': Path('a.nxs')})
 
     @pytest.mark.parametrize(
         ('fields', 'reason'),
@@ -1274,18 +1298,35 @@ class TestModelRules:
             ),
             (
                 {'params': validated('P', reduction=(Reduction, ...))},
-                r"P: no decorators but model validators, {'field_validators': "
-                r"\['_check'\]}",
+                rf"P: no decorators, {{'field_validators': \['_check'\]}}; {ALONE}",
             ),
             (
                 {'params': SerializedParams},
-                r"SerializedParams: no decorators but model validators, "
-                r"{'field_serializers': \['_bins'\]}",
+                r"SerializedParams: no decorators, {'field_serializers': \['_bins'\]}",
             ),
             (
                 {'params': ComputedParams},
-                r"ComputedParams: no decorators but model validators, "
-                r"{'computed_fields': \['bins'\]}",
+                r"ComputedParams: no decorators, {'computed_fields': \['bins'\]}",
+            ),
+            *(
+                (
+                    {'params': checked(mode)},
+                    rf"P: no decorators, {{'model_validators': \['_check'\]}}; "
+                    f'{ALONE}',
+                )
+                for mode in ('before', 'after', 'wrap')
+            ),
+            (
+                {
+                    'params': pydantic.create_model(
+                        'Q', __base__=checked('after'), bins=(int, 1)
+                    )
+                },
+                r"Q: no decorators, {'model_validators': \['_check'\]}",
+            ),
+            (
+                {'params': InitParams},
+                f'InitParams: no __init__ of its own; {ALONE}',
             ),
             (
                 {'params': model('P', reduction=(Reduction, Field(alias='r')))},

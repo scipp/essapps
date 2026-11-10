@@ -72,7 +72,7 @@ def instance(spec: WorkflowSpec[Any, Any], values: Mapping[str, Any]) -> BaseMod
     stage or a driver takes them, made as the workspace makes one from data it
     read: each value validated from the object by its own field, a table
     without its length constraints, which the workspace checks when a request
-    is submitted, and without the model validators.
+    is submitted.
     """
     model: type[BaseModel] = spec.params
     return model.model_construct(

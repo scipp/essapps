@@ -9,10 +9,10 @@ import math
 from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Self
+from typing import Annotated, Any
 
 import pytest
-from pydantic import AfterValidator, BaseModel, Field, model_validator
+from pydantic import AfterValidator, BaseModel, Field
 
 from ess.apps import (
     Client,
@@ -77,14 +77,8 @@ class Made(BaseModel):
     made: Amount
 
 
-class CheckedParams(BaseModel):
-    """Params whose model validator refuses every instance, to show where it runs."""
-
+class CountParams(BaseModel):
     sample: list[RunFile] = Field(min_length=1)
-
-    @model_validator(mode='after')
-    def _refused(self) -> Self:
-        raise ValueError('the params model refuses')
 
 
 def _spec(
@@ -110,7 +104,7 @@ TOTAL = _spec('total', params=TotalParams, tables=('sample', 'scaling'))
 MAKE = _spec('make', outputs=Made)
 USE = _spec('use', params=PositiveParams)
 USE_MANY = _spec('use-many', params=PositivesParams, tables=('positive',))
-CHECKED = _spec('checked', params=CheckedParams, tables=('sample',))
+COUNT = _spec('count', params=CountParams, tables=('sample',))
 UNSCALED = Template(TOTAL, params={'scaling': []}, blanks=('sample',))
 """The sample runs of ``TOTAL`` as a blank table, without scaling."""
 
@@ -138,7 +132,7 @@ def use_many(params: PositivesParams) -> Value:
 
 
 class Count:
-    """A driver of CHECKED that reads the file of each row pushed, and counts them."""
+    """A driver of COUNT that reads the file of each row pushed, and counts them."""
 
     def __init__(self, fixed: Mapping[str, Any]) -> None:
         self.rows = 0
@@ -181,7 +175,7 @@ def client(files: FakeFiles) -> Iterator[Client]:
             function_binding(MAKE, make),
             StagedFunction(USE, use),
             kept_rows(USE_MANY, use_many),
-            Counting(CHECKED, Count),
+            Counting(COUNT, Count),
         ],
     ) as client:
         yield client
@@ -374,7 +368,7 @@ def test_a_table_that_may_be_empty_is_given_without_rows(client: Client) -> None
 def test_a_push_whose_file_cannot_be_read_stops_the_accumulator(
     client: Client, files: FakeFiles
 ) -> None:
-    acc = client.accumulator(Template(CHECKED, blanks=('sample',)))
+    acc = client.accumulator(Template(COUNT, blanks=('sample',)))
     files.corrupt(files.resolve(file(run=1)))
     acc.push(sample=[file(run=1)])
 
@@ -399,15 +393,3 @@ def test_a_referenced_value_that_fails_its_type_s_check_fails_where_it_is_read(
         client.output(acc, 'value')
     with pytest.raises(SubmitError, match='the accumulator stopped'):
         acc.push(positive=[made])
-
-
-def test_the_params_model_s_model_validator_is_never_called(client: Client) -> None:
-    rows = {'sample': [file(run=1)]}
-    plain = client.compute(CHECKED, params=rows)
-    stage = client.stage(Template(CHECKED, blanks=('sample',)))
-    acc = client.accumulator(Template(CHECKED, blanks=('sample',)))
-    acc.push(**rows)
-
-    assert client.output(plain, 'value') == 1.0
-    assert client.output(client.compute(stage, params=rows), 'value') == 1.0
-    assert client.output(acc, 'value') == 1.0
