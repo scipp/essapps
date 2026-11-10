@@ -184,40 +184,28 @@ Each step is a command, and a function for a notebook that takes and returns a p
 
 | Step | Command | Function |
 |---|---|---|
-| make the table | `rows package.module:source`, or a spreadsheet | `tables.table_of(source(file_infos(client)))` |
+| make the table | `rows package.module:source`, or a spreadsheet | `tables.table_of(source(batch.file_infos(client)))` |
 | reduce it | `reduce template table --label ...` | `tables.reduce_table(client, template, table, label=...)` |
 | write the outputs to files | `export table folder` | `export.export_table(client, table, folder)` |
 
 A table is a `.csv`, `.tsv`, or `.xlsx` file.
 
-In a notebook, the table is made and changed as a `DataFrame`, and the template as a `Template`; no file is needed:
+In a notebook, the table is a `DataFrame` and the template a `Template`, and no file is needed. [loki-batch.ipynb](../../essinstruments/docs/loki-batch.ipynb) runs every step on LoKI's data:
 
 ```python
-from ess.apps import Template
-from ess.apps.batch import tables
-from ess.apps.batch.export import export_table
-from ess.apps.batch.reduction import file_infos
-from ess.apps.folder import open_folder
-
-client = open_folder(Path(), BINDINGS)       # or local(...), for a workspace in memory
-table = tables.table_of(pair_by_sample(file_infos(client)))    # or pd.DataFrame({...})
-table = table[table['name'] != 'test']
-table['thickness'] = [1.0, None, 0.5]        # numbers as numbers; None or NaN is an empty cell
-
-template = Template(IOFQ, params={'can': file(run=60393), ...},
-                    blanks=('sample', 'sample_transmission', 'thickness'))
 done = tables.reduce_table(client, template, table, label='water-series')
-done[done['status'] != 'completed']          # what failed, and why
 exported = export_table(client, done, Path('reduced'))
 ```
 
-A cell that is not text is its value, so only a table read from a file is all text. To write `None` itself in a cell, as opposed to leaving it empty, write the text `null`.
+A cell that is not text is its value, and `None` or `NaN` is an empty cell, so only a table read from a file is all text. To write `None` itself in a cell, as opposed to leaving it empty, write the text `null`.
 
-**The table.** The first column holds the key of each row; it may also be a blank, as `sample` above. A column named as a blank holds its cells. A column of any other name is info, which comes back as it is. Two mistakes are refused: a blank that is no column, such as a misspelt header, and a column named as a parameter that the template fixes, whose cells no row would use. An empty cell takes the parameter's default.
+**The table.** The first column holds the key of each row; it may also be a blank, as `sample` above. A column named as a blank holds its cells. A column of any other name is info, which comes back as it is. Two mistakes are refused: a blank that is no column, such as a misspelt header, and a column named as a parameter that is not a blank, whose cells no row would use. An empty cell takes the parameter's default.
 
-**A cell** is read as JSON if it is JSON, so `1.5`, `null`, and `{"x": 0, "y": 1}` are values, and anything else is text. Text that is JSON is written in quotes, such as `"12"` for a sample name at a string parameter. At a parameter that is a file field, or a list of them, a whole number names a run, `pid:...` a file by its kind, and other text a path, relative to the working directory. The same holds for the values of the template's file. A file field inside a group takes the JSON form, `{"@ref": "file", "file": "run:60339"}`. Every file is one that the workspace's file source knows.
+**A cell** is read as JSON if it is JSON, so `1.5`, `null`, and `{"x": 0, "y": 1}` are values, and anything else is text. Text that is JSON is written in quotes, such as `"12"` for a sample name at a string parameter; a `.csv` file doubles them, `"""12"""`. At a parameter that is a file field, or a list of them, a whole number names a run, `pid:...` a file by its kind, and other text a path, relative to the working directory. A number with a leading zero, such as `0342`, is not JSON, so it is read as a path: write `342`. The same holds for the values of the template's file. A file field inside a group takes the JSON form, `{"@ref": "file", "file": "run:60339"}`. Every file is one that the workspace's file source knows.
 
-**`reduce`** returns the table with three columns, which it replaces if the table has them: `status`, the ID of the `record`, and `failure`, the reason. So its result can be its next table. With `--remaining` it leaves out the rows whose newest record under the label completed. It compares neither cells nor settings: after changing either, reduce without `--remaining`, or under another label. Ctrl-C cancels the rows that have not started, and waits for those running.
+**`reduce`** returns the table with three columns, which it replaces if the table has them: `status`, the ID of the `record`, and `failure`, the reason. So its result can be its next table. With `--remaining` it leaves out the rows whose newest record under the label completed. It compares neither cells nor settings: after changing either, reduce without `--remaining`, or under another label. The `status` of a row is `completed`, `failed`, or `cancelled`.
+
+Ctrl-C cancels every row that has not completed, those running among them, and the command ends with a `KeyboardInterrupt` once the workflows that were running return. It writes no table; reduce again with `--remaining`.
 
 **`export`** writes the outputs of each completed row to `<folder>/<key>/`, and returns the table with a column for each output that holds the path of its file. It finds the outputs by the `record` column, not by the label. A key must be the name of a folder, so one with `/` is refused.
 
@@ -226,9 +214,9 @@ reduced/60339/iofq.h5          what scipp.io.load_hdf5 reads: a DataGroup of the
 reduced/60339/_record.json     the record: every file and value the outputs came from
 ```
 
-These files are a placeholder (`ess.apps.hdf5` states the format). A format of a technique, such as NXcanSAS, is not written. Once outputs can be published to a catalogue, a column of identifiers takes the place of the paths.
+These files are a placeholder (`ess.apps.hdf5` states the format). A format of a technique, such as NXcanSAS, is not written. If the folder is inside the workspace, a later `files` lists what was exported.
 
-**Exit status.** 0: done, and for `reduce`, every row completed. 2: the command or a row was refused, and nothing ran. 3: a row did not complete. 1: any other error.
+**Exit status.** 0: done, and for `reduce`, every row completed. 2: the command or a row was refused, and nothing ran. 3: a row did not complete. 1: any other error. Every command but `files` opens the workspace, and needs `--bind`.
 
 **The workspace** of the command is a folder, `--workspace`, the working directory by default (`ess.apps.folder`). It holds one input, which you write, and what the commands keep:
 
@@ -252,7 +240,7 @@ masks/mask.xml,,mask,
 essapps-batch files ess.instruments.loki.files:read_metadata -o files.csv
 ```
 
-`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). A file says its kind, its run, and perhaps its sample, but not what a run is for. So fill in `role` by hand where a row source or a file field needs it: a source that pairs runs reads it, and a field such as the direct beam requires it.
+`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. Two files of one run are refused, and so is a table that exists, which may hold what a person added. A file says its kind, its run, and perhaps its sample, but not what a run is for. So fill in `role` by hand where a row source or a file field needs it: a source that pairs runs reads it, and a field such as the direct beam requires it.
 
 The workspace outlives the command, so a template references a record of an earlier command. A template without blanks is one request, and `reduce` without a table submits it:
 
@@ -262,9 +250,9 @@ $B reduce masks.yaml --label masks            # detector: {'@latest': detector, 
 $B reduce iofq.yaml runs.csv --label water-series
 ```
 
-`{'@latest': label, output: name}` is read when the command starts, as the output of the newest record under the label, of `member` if given. The record of each row holds the ID that it was read as. A reference by ID is `{'@ref': output, record: ..., output: ...}`.
+`{'@latest': label, output: name}` is read when the command starts, as the output of the newest record under the label, of `member` if given, whoever submitted it. It is for a template, not for a cell of a table. The record of each row holds the ID that it was read as. A reference by ID is `{'@ref': output, record: ..., output: ...}`.
 
-One command holds the folder at a time. If a command was killed, the next one first finishes the rows that were running. Nothing removes the files of the store.
+One command holds the folder at a time. If a command was killed, the next one first finishes the rows that were running, so reduce again with `--remaining`. A workspace reads a persisted output by the type that its spec declares, so only one that runs the spec reads it. Nothing removes the files of the store.
 
 ## The UI
 

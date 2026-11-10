@@ -341,3 +341,49 @@ def test_main_writes_the_table_of_files_that_a_later_command_opens_the_folder_wi
     reduced = main([*command, 'reduce', str(cli_template), str(table), '-l', 'scan'])
 
     assert (scanned, reduced) == (0, 0)
+
+
+@pytest.fixture
+def reader(folder: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """A reader that gives every JSON file the run 1."""
+    (folder / 'cli_toys_one_run.py').write_text(
+        "def read(path):\n    return {'run': 1} if path.suffix == '.json' else None\n"
+    )
+    monkeypatch.syspath_prepend(folder)
+    return 'cli_toys_one_run:read'
+
+
+def test_main_refuses_to_overwrite_a_table_of_files_that_exists(
+    folder: Path, reader: str
+) -> None:
+    out = folder / 'files.csv'
+    before = out.read_text()
+
+    with pytest.raises(SystemExit) as exit_:
+        main(['-w', str(folder), 'files', reader, '-o', str(out)])
+
+    assert exit_.value.code == 2
+    assert out.read_text() == before
+
+
+@pytest.mark.parametrize('subcommand', ['rows', 'export'])
+def test_main_refuses_the_commands_that_need_bindings_without_them(
+    folder: Path, subcommand: str
+) -> None:
+    arguments = {'rows': ['x:y'], 'export': ['done.csv', 'out']}[subcommand]
+
+    with pytest.raises(SystemExit) as exit_:
+        main(['-w', str(folder), subcommand, *arguments])
+
+    assert exit_.value.code == 2
+
+
+def test_main_returns_2_and_says_why_if_two_files_are_of_one_run(
+    folder: Path,
+    reader: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(['-w', str(folder), 'files', reader])
+
+    assert code == 2
+    assert 'run' in capsys.readouterr().err

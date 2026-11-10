@@ -29,10 +29,6 @@ class Curve(pydantic.BaseModel):
     n: int = 3
 
 
-class Curves(pydantic.BaseModel):
-    iofq: Array
-
-
 class Many(pydantic.BaseModel):
     curves: list[Array]
     note: toys.Offset | None = None
@@ -42,10 +38,6 @@ class Many(pydantic.BaseModel):
 def _array(n: int) -> Array:
     x = sc.arange('q', float(n))
     return Array(data=sc.DataArray(x, coords={'q': x}))
-
-
-def _curves(params: Curve) -> Curves:
-    return Curves(iofq=_array(params.n))
 
 
 def _many(params: Curve) -> Many:
@@ -63,7 +55,6 @@ def _spec(name: str, outputs: type[pydantic.BaseModel]) -> WorkflowSpec:
     )
 
 
-CURVES = _spec('curves', Curves)
 MANY = _spec('many', Many)
 
 
@@ -72,7 +63,6 @@ def client(folder: Path, folder_bindings: list[Binding]) -> Iterator[Client]:
     """A client that also runs the workflows that output arrays."""
     bindings = [
         *folder_bindings,
-        function_binding(CURVES, _curves),
         function_binding(MANY, _many),
     ]
     with open_folder(folder, bindings) as client:
@@ -94,45 +84,22 @@ def test_the_record_is_written_with_its_outputs(client: Client, tmp_path: Path) 
     assert written['id'] == record.id
 
 
-def test_numbers_and_groups_are_written_as_hdf5_that_reads_back(
-    client: Client, tmp_path: Path
-) -> None:
-    number = run(client, toys.PLAIN, sample=file(run=1), transmission=file(run=2))
-    group = run(client, toys.FIND, sample=file(run=3))
-
-    paths = write_outputs(client, number, tmp_path / 'a')
-    more = write_outputs(client, group, tmp_path / 'b')
-
-    assert hdf5.read(float, paths['total']) == 1.0
-    assert hdf5.read(toys.Offset, more['offset']) == toys.Offset(value=3.0)
-    assert (paths['total'].name, more['offset'].name) == ('total.h5', 'offset.h5')
-
-
-def test_a_group_holding_an_array_is_written_as_hdf5_with_the_array(
-    client: Client, tmp_path: Path
-) -> None:
-    record = run(client, CURVES, n=4)
-
-    paths = write_outputs(client, record, tmp_path / 'out')
-
-    loaded = sc.io.load_hdf5(paths['iofq'])
-    assert paths['iofq'].name == 'iofq.h5'
-    assert isinstance(loaded, sc.DataGroup)
-    assert sc.identical(loaded['data'], _array(4).data)
-
-
-def test_a_list_of_groups_and_a_number_are_written_each_as_a_file(
+def test_each_output_returned_is_a_file_and_an_output_left_out_has_none(
     client: Client, tmp_path: Path
 ) -> None:
     record = run(client, MANY, n=2)
 
     paths = write_outputs(client, record, tmp_path / 'out')
 
-    assert set(paths) == {'curves', 'total'}
-    curves = sc.io.load_hdf5(paths['curves'])
-    assert list(curves) == ['0', '1']
-    assert sc.identical(curves['1']['data'], _array(3).data)
-    assert hdf5.read(float, paths['total']) == 1.5
+    assert paths == {
+        'curves': tmp_path / 'out' / 'curves.h5',
+        'total': tmp_path / 'out' / 'total.h5',
+    }
+    assert sorted(p.name for p in (tmp_path / 'out').iterdir()) == [
+        '_record.json',
+        'curves.h5',
+        'total.h5',
+    ]
 
 
 def test_each_completed_row_is_exported_under_its_key(
@@ -197,3 +164,29 @@ def test_a_table_exports_the_records_it_names_after_later_reductions(
     ]
     assert ids == list(older['record'])
     assert not set(ids) & set(newer['record'])
+
+
+def test_a_record_that_the_workspace_lacks_is_refused_and_nothing_is_written(
+    client: Client, template: Template, table: pd.DataFrame, tmp_path: Path
+) -> None:
+    reduced = reduce_table(client, template, table, label='scan')
+    reduced.loc[1, 'record'] = 'no-such-record'
+    out = tmp_path / 'export'
+
+    with pytest.raises(ValueError, match='no-such-record'):
+        export_table(client, reduced, out)
+
+    assert not out.exists()
+
+
+def test_a_key_that_two_rows_share_is_refused_and_nothing_is_written(
+    client: Client, template: Template, table: pd.DataFrame, tmp_path: Path
+) -> None:
+    reduced = reduce_table(client, template, table, label='scan')
+    reduced['name'] = 'a'
+    out = tmp_path / 'export'
+
+    with pytest.raises(ValueError, match='one key'):
+        export_table(client, reduced, out)
+
+    assert not out.exists()

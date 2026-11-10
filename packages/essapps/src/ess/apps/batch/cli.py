@@ -148,10 +148,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.output is not None and args.output.suffix not in tables.SUFFIXES:
         parser.error(f'{args.output}: a table is one of {", ".join(tables.SUFFIXES)}')
     if args.command == 'files':
-        rows = scan_folder(args.workspace, _named(args.read))
+        if args.output is not None and args.output.exists():
+            parser.error(f'{args.output} exists, and may hold what a person added')
+        try:
+            rows = scan_folder(args.workspace, _named(args.read))
+        except ValueError as error:
+            sys.stderr.write(f'{error}\n')
+            return 2
         _write(pd.DataFrame(rows, dtype=str).fillna(''), args.output)
         return 0
-    bind = [] if args.bind is None else _named(args.bind)
+    if args.bind is None:
+        # a workspace goes on with pending records, which need their bindings
+        parser.error('--bind is required: the bindings of the workspace')
+    bind = _named(args.bind)
     with open_folder(args.workspace, bind, proposal=args.proposal) as client:
         try:
             result = _run(client, args)

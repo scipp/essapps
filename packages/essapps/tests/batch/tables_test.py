@@ -4,6 +4,7 @@
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pydantic
 import pytest
@@ -111,6 +112,13 @@ def test_info_named_as_a_value_column_is_refused() -> None:
 
     with pytest.raises(ValueError, match='thickness'):
         table_of([row])
+
+
+def test_info_named_as_a_value_of_another_row_is_refused() -> None:
+    rows = [Row('a', {'thickness': 2}), Row('b', {}, {'thickness': 'thick'})]
+
+    with pytest.raises(ValueError, match='thickness'):
+        table_of(rows)
 
 
 def test_a_table_of_rows_names_its_key_column_key() -> None:
@@ -336,6 +344,24 @@ def test_a_table_of_numbers_and_gaps_is_read_as_one_of_text() -> None:
     columns = ['sample', 'thickness']
 
     assert rows_of(typed, toys.Params, columns) == rows_of(text, toys.Params, columns)
+
+
+def test_a_key_column_of_whole_floats_gives_keys_of_whole_numbers() -> None:
+    table = pd.DataFrame({'run': [1.0, 2.0], 'note': ['a', None]})
+
+    rows = rows_of(table, toys.Params, [])
+
+    assert [row.key for row in rows] == ['1', '2']
+
+
+def test_a_cell_of_info_that_holds_an_array_or_a_list_becomes_text() -> None:
+    table = pd.DataFrame(
+        {'name': ['a', 'b'], 'extent': [np.arange(2), [1, 2]]},
+    )
+
+    rows = rows_of(table, toys.Params, [])
+
+    assert [row.info['extent'] for row in rows] == ['[0 1]', '[1, 2]']
 
 
 def test_a_cell_may_hold_a_value_that_is_not_text() -> None:

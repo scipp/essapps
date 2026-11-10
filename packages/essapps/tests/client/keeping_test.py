@@ -140,7 +140,7 @@ def test_closing_the_workspace_writes_a_pending_persisted_freeze(
 
     finished = {e.record: e.status for e in log if isinstance(e, Finished)}
     assert finished[frozen.id] is Status.COMPLETED
-    assert store.read(frozen.id, 'value') == toys.Amount(value=1.0)
+    assert store.read(frozen.id, 'value', toys.Amount) == toys.Amount(value=1.0)
 
 
 def test_another_client_reads_and_references_the_records_the_workspace_keeps(

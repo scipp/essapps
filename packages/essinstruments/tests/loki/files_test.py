@@ -35,6 +35,18 @@ def test_a_file_with_an_entry_identifier_is_a_raw_file_of_that_run(
     }
 
 
+def test_an_entry_identifier_that_is_a_number_gives_the_run_as_its_text(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'raw.hdf'
+    with h5py.File(path, 'w') as file:
+        entry = file.create_group('entry')
+        entry.attrs['NX_class'] = 'NXentry'
+        entry['entry_identifier'] = 342
+
+    assert read_metadata(path) == {'kind': 'raw', 'run': '342'}
+
+
 def test_an_xml_file_is_a_mask(mask_file: Path) -> None:
     assert read_metadata(mask_file) == {'kind': 'mask'}
 

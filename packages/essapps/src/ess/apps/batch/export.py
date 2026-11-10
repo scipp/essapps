@@ -54,16 +54,22 @@ def export_table(client: Client, table: pd.DataFrame, directory: Path) -> pd.Dat
     column for each output, which holds the path of its file, empty for a row
     that has none.
 
-    Raises ``ValueError`` if the table has no ``record`` column, or a key is not
-    the name of a folder, such as one with ``/``; nothing is written.
+    Raises ``ValueError`` if the table has no ``record`` column, names a record
+    that the workspace lacks, has a key twice, or a key that is not the name of a
+    folder, such as one with ``/``; nothing is written.
     """
     if 'record' not in table:
         raise ValueError('the table has no column record: reduce it first')
     keys = table[table.columns[0]].astype(str)
     if bad := sorted(k for k in keys if k in ('', '.', '..') or Path(k).name != k):
         raise ValueError(f'not the name of a folder: {", ".join(map(repr, bad))}')
+    if len(set(keys)) < len(keys):
+        raise ValueError('two rows of the table have one key')
     ids = dict(zip(keys, table['record'].astype(str), strict=True))
-    records = client.records(ids=sorted(i for i in ids.values() if i))
+    try:
+        records = client.records(ids=sorted(i for i in ids.values() if i))
+    except KeyError as error:
+        raise ValueError(f'the workspace has no record {error.args[0]}') from None
     status = dict(zip((r.id for r in records), client.status(records), strict=True))
     by_id = {r.id: r for r in records if status[r.id] is Status.COMPLETED}
     paths = {

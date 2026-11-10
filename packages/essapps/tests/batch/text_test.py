@@ -193,6 +193,13 @@ def test_latest_with_another_key_next_to_it_is_refused(folder_client: Client) ->
         )
 
 
+def test_latest_with_a_label_that_is_not_text_is_refused(
+    folder_client: Client,
+) -> None:
+    with pytest.raises(ValueError, match='as text'):
+        with_latest(folder_client, {'@latest': False, 'output': 'offset'})
+
+
 def test_a_value_without_latest_comes_back_equal(folder_client: Client) -> None:
     value = {'a': [1, {'b': 'x'}], 'c': None, 'd': 2.5}
 

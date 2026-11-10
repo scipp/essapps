@@ -118,6 +118,7 @@ for run in client.files.watch(Selector(scan='17')): ...   # existing ones first,
 ```
 
 **Store.** The *store* keeps persisted outputs outside the workspace's memory, also after the workspace has closed ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
+It reads a value back by the type that the spec declares for the output, so a workspace reads the persisted outputs of the specs it runs.
 
 **Controller.** The workspace does not decide what to run.
 A *controller* is client code that decides over time what to submit, push, and release, such as a notebook, an app's UI, or the trigger loop of automatic reduction.

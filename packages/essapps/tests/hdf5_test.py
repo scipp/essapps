@@ -2,9 +2,12 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """An output as a scipp HDF5 file."""
 
+from datetime import UTC, datetime
+from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pydantic
 import pytest
 import scipp as sc
@@ -24,6 +27,39 @@ class Floats(pydantic.BaseModel):
 
 class Masks(pydantic.BaseModel, arbitrary_types_allowed=True):
     masks: dict[str, sc.Variable]
+
+
+class Mode(StrEnum):
+    FAST = 'fast'
+    SLOW = 'slow'
+
+
+class Level(IntEnum):
+    LOW = 1
+    HIGH = 2
+
+
+class Choice(pydantic.BaseModel):
+    mode: Mode
+    level: Level
+
+
+class Scaled(pydantic.BaseModel):
+    value: float
+
+    @pydantic.field_validator('value')
+    @classmethod
+    def _scale(cls, value: float) -> float:
+        return value * 1000
+
+
+class Numbers(pydantic.BaseModel, arbitrary_types_allowed=True):
+    x: float
+    n: int
+
+
+class Nested(pydantic.BaseModel, arbitrary_types_allowed=True):
+    data: sc.DataGroup
 
 
 def _array(n: int = 3) -> sc.DataArray:
@@ -61,6 +97,17 @@ def equal(a: Any, b: Any) -> bool:
         (float, 1.5),
         (str, 'text'),
         (Group | None, Group(data=_array(), note='text')),
+        (Choice, Choice(mode=Mode.SLOW, level=Level.HIGH)),
+        (Mode, Mode.FAST),
+        (Level, Level.HIGH),
+        (
+            Nested,
+            Nested(
+                data=sc.DataGroup(
+                    {'a': _array(), 'inner': sc.DataGroup({'b': _array(2)})}
+                )
+            ),
+        ),
     ],
     ids=[
         'array',
@@ -72,6 +119,10 @@ def equal(a: Any, b: Any) -> bool:
         'float alone',
         'text alone',
         'optional group holding a group',
+        'group with a str enum and an int enum',
+        'str enum alone',
+        'int enum alone',
+        'group holding a data group holding a data group',
     ],
 )
 def test_a_value_read_is_the_value_written(tmp_path: Path, tp: Any, value: Any) -> None:
@@ -80,6 +131,26 @@ def test_a_value_read_is_the_value_written(tmp_path: Path, tp: Any, value: Any) 
     hdf5.write(value, path)
 
     assert equal(hdf5.read(tp, path), value)
+
+
+def test_a_number_of_numpy_is_read_back_as_the_equal_number(tmp_path: Path) -> None:
+    path = tmp_path / 'out.h5'
+
+    hdf5.write(Numbers.model_construct(x=np.float64(1.5), n=np.int64(3)), path)
+
+    assert hdf5.read(Numbers, path) == Numbers(x=1.5, n=3)
+
+
+def test_a_group_is_read_back_with_the_value_written_not_validated_again(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'out.h5'
+    written = Scaled(value=2.0)
+    assert written.value == 2000.0
+
+    hdf5.write(written, path)
+
+    assert hdf5.read(Scaled, path).value == 2000.0
 
 
 def test_a_group_is_a_data_group_of_its_fields_without_those_that_are_none(
@@ -103,11 +174,33 @@ class Holder(pydantic.BaseModel, arbitrary_types_allowed=True):
     inner: Opaque
 
 
-@pytest.mark.parametrize('value', [Opaque(), Holder(inner=Opaque()), [Opaque()]])
+@pytest.mark.parametrize(
+    'value',
+    [
+        Opaque(),
+        Holder(inner=Opaque()),
+        [Opaque()],
+        [1, None, 3],
+        datetime(2026, 1, 1, tzinfo=UTC),
+        (1, 2),
+        sc.DataGroup({'a': [1, 2]}),
+        sc.DataGroup({'a': Opaque()}),
+    ],
+    ids=[
+        'object',
+        'group holding an object',
+        'list of objects',
+        'list holding None',
+        'datetime',
+        'tuple',
+        'data group holding a list',
+        'data group holding an object',
+    ],
+)
 def test_a_value_that_scipp_has_no_form_for_is_refused(
     value: object, tmp_path: Path
 ) -> None:
-    with pytest.raises(TypeError, match='Opaque'):
+    with pytest.raises(TypeError):
         hdf5.write(value, tmp_path / 'out.h5')
 
     assert not (tmp_path / 'out.h5').exists()

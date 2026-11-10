@@ -74,8 +74,6 @@ def named_file(name: Any) -> Any:
     path, relative to the working directory. Anything else is returned as it is,
     for the workspace to refuse.
     """
-    if isinstance(name, float) and name.is_integer():
-        name = int(name)  # pandas holds whole numbers next to a gap as floats
     if isinstance(name, int) and not isinstance(name, bool):
         return file(run=name)
     if not isinstance(name, str):
@@ -132,6 +130,8 @@ def with_latest(client: Client, value: Any) -> Any:
         return {k: with_latest(client, v) for k, v in value.items()}
     if value.keys() - {'@latest', 'member', 'output'}:
         raise ValueError(f'{dict(value)}: @latest goes with member and output only')
+    if not all(isinstance(v, str) for v in value.values()):
+        raise ValueError(f'{dict(value)}: write each of these as text, in quotes')
     try:
         return client.latest(value['@latest'], value.get('member')).ref(value['output'])
     except KeyError as error:

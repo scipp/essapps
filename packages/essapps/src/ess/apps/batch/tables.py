@@ -66,14 +66,18 @@ def write_table(table: pd.DataFrame, path: Path) -> None:
 
 def _empty(cell: Any) -> bool:
     """Whether a cell holds nothing: no text, or what pandas reads a gap as."""
-    return cell is None or cell is pd.NA or cell == '' or cell != cell
+    if cell is None or cell is pd.NA:
+        return True
+    return isinstance(cell, str | float) and (cell == '' or cell != cell)
 
 
 def _value(cell: Any) -> Any:
     """A cell of text as :func:`.text.read_cell` reads it; any other as it is."""
     if isinstance(cell, str):
         return read_cell(cell)
-    return cell.item() if isinstance(cell, np.generic) else cell
+    cell = cell.item() if isinstance(cell, np.generic) else cell
+    # pandas holds whole numbers next to a gap as floats
+    return int(cell) if isinstance(cell, float) and cell.is_integer() else cell
 
 
 def rows_of(
@@ -93,15 +97,15 @@ def rows_of(
     fixed = set(table.columns) & model.model_fields.keys() - set(columns)
     if fixed:
         raise ValueError(
-            f'the column {", ".join(sorted(fixed))} is a parameter that the template '
-            'fixes: name it as a blank, or rename the column'
+            f'the column {", ".join(sorted(fixed))} is a parameter, but not a '
+            'blank of the template: name it as a blank, or rename the column'
         )
     rows = []
     for record in table.to_dict('records'):
         cells = {name: cell for name, cell in record.items() if not _empty(cell)}
         values = {c: _value(cells[c]) for c in columns if c in cells}
         info = {n: str(cell) for n, cell in cells.items() if n not in columns}
-        key = str(record[table.columns[0]])
+        key = str(_value(record[table.columns[0]]))
         rows.append(Row(key, with_named_files(model, values), info))
     return rows
 
@@ -112,9 +116,11 @@ def table_of(rows: Iterable[Row]) -> pd.DataFrame:
     Raises ``ValueError`` if a row's info has the name of a value or ``key``,
     since a table has one column of a name.
     """
+    rows = list(rows)
+    columns = {'key', *(name for row in rows for name in row.values)}
     records = []
     for row in rows:
-        if twice := sorted(row.info.keys() & {'key', *row.values}):
+        if twice := sorted(row.info.keys() & columns):
             raise ValueError(f'{row.key}: info named as a column: {", ".join(twice)}')
         cells = {name: write_cell(value) for name, value in row.values.items()}
         records.append({'key': row.key, **cells, **row.info})

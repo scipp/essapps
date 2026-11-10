@@ -22,7 +22,8 @@ def _text(entry: h5py.Group, name: str) -> str | None:
     """The text of a field of ``entry``, a scalar or an array of one element."""
     if name not in entry:
         return None
-    return str(np.ravel(entry[name].asstr()[()])[0])
+    value = np.ravel(entry[name][()])[0]
+    return value.decode() if isinstance(value, bytes) else str(value)
 
 
 def read_metadata(path: Path) -> dict[str, Any] | None:

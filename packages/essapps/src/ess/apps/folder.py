@@ -67,18 +67,28 @@ _OWN = ('files.csv', 'log.jsonl', 'store')
 """What the workspace keeps in its folder, which no request names."""
 
 
+def _measured(row: Mapping[str, Any]) -> tuple[bool, int, str]:
+    """Sorts the runs with a whole number first, by it, and the rest by path."""
+    run = str(row.get('run', ''))
+    return (not run.isdigit(), int(run) if run.isdigit() else 0, row['file'])
+
+
 def scan_folder(
     directory: Path, read: Callable[[Path], Mapping[str, Any] | None]
 ) -> list[dict[str, Any]]:
     """
     A row of ``files.csv`` for each file in ``directory``, at any depth, that
-    ``read`` knows, sorted by path.
+    ``read`` knows: the runs by their number, which is the order they were
+    measured in, then the other files by path.
 
     ``read`` takes the path of a file and returns its metadata, such as
     ``{'kind': 'raw', 'run': 60339}``, or ``None`` for a file that is none of
     the workspace's. It knows the files of one instrument, so an instrument
     package provides it. What no file says of itself, such as the role of a
     run, a person adds to the table.
+
+    Raises ``ValueError`` if the rows are not a table of ``FolderFiles``, such
+    as two files of one run.
     """
     rows = []
     for path in sorted(p for p in directory.rglob('*') if p.is_file()):
@@ -87,6 +97,8 @@ def scan_folder(
             continue
         if (metadata := read(path)) is not None:
             rows.append({'file': str(relative), **metadata})
+    rows.sort(key=_measured)
+    FolderFiles(directory, rows)
     return rows
 
 

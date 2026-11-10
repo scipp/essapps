@@ -9,7 +9,7 @@ import pydantic
 import pytest
 import scipp as sc
 
-from ess.apps import Client, file
+from ess.apps import Client, NotReadable, file
 from ess.apps.folder import FolderStore, open_folder, scan_folder
 from ess.apps.testing import read_file
 from ess.spec import Binding, WorkflowSpec, function_binding
@@ -123,6 +123,18 @@ def test_a_second_session_reads_an_output_the_first_persisted(
         assert second.output(record, 'offset') == toys.Offset(value=3)
 
 
+def test_a_session_that_does_not_run_the_spec_of_a_record_cannot_read_its_output(
+    folder: Path, bindings: list[Binding]
+) -> None:
+    with open_folder(folder, bindings) as first:
+        found = find_offset(first)
+
+    with open_folder(folder, [bindings[1]]) as second:
+        (record,) = second.records(ids=[found])
+        with pytest.raises(NotReadable, match='does not run'):
+            second.output(record, 'offset')
+
+
 def test_a_request_of_a_second_session_references_a_persisted_output(
     open_client: Callable[[], Client],
 ) -> None:
@@ -162,7 +174,7 @@ def by_suffix(path: Path) -> dict[str, object] | None:
     return {'run': int(path.stem)} if path.suffix == '.json' else None
 
 
-def test_a_scan_gives_a_row_for_each_file_that_the_reader_knows(
+def test_a_scan_gives_a_row_for_each_file_that_the_reader_knows_by_run(
     tmp_path: Path,
 ) -> None:
     (tmp_path / 'raw').mkdir()
@@ -170,9 +182,9 @@ def test_a_scan_gives_a_row_for_each_file_that_the_reader_knows(
         (tmp_path / name).write_text('1.0')
 
     assert scan_folder(tmp_path, by_suffix) == [
-        {'file': '3.json', 'run': 3},
         {'file': 'raw/1.json', 'run': 1},
         {'file': 'raw/2.json', 'run': 2},
+        {'file': '3.json', 'run': 3},
     ]
 
 
@@ -184,3 +196,30 @@ def test_a_scan_leaves_out_what_the_workspace_keeps_in_its_folder(
         (tmp_path / name).write_text('1.0')
 
     assert scan_folder(tmp_path, lambda path: {}) == [{'file': '1.json'}]
+
+
+def test_a_scan_puts_the_runs_first_by_number_and_then_the_other_files_by_path(
+    tmp_path: Path,
+) -> None:
+    runs = {'a.json': 10, 'b.json': 9, 'c.json': 100}
+    for name in (*runs, 'z.dat', 'm.dat'):
+        (tmp_path / name).write_text('1.0')
+
+    def read(path: Path) -> dict[str, object]:
+        return {'run': runs[path.name]} if path.name in runs else {}
+
+    assert [row['file'] for row in scan_folder(tmp_path, read)] == [
+        'b.json',
+        'a.json',
+        'c.json',
+        'm.dat',
+        'z.dat',
+    ]
+
+
+def test_a_scan_refuses_two_files_of_one_run(tmp_path: Path) -> None:
+    for name in ('a.json', 'b.json'):
+        (tmp_path / name).write_text('1.0')
+
+    with pytest.raises(ValueError, match='run'):
+        scan_folder(tmp_path, lambda path: {'run': 1})
