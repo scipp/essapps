@@ -58,12 +58,20 @@ def _spec(name: str, outputs: type[pydantic.BaseModel]) -> WorkflowSpec:
 MANY = _spec('many', Many)
 
 
+class Named(pydantic.BaseModel):
+    status: float
+
+
+NAMED = _spec('named', Named)
+
+
 @pytest.fixture
 def client(folder: Path, folder_bindings: list[Binding]) -> Iterator[Client]:
     """A client that also runs the workflows that output arrays."""
     bindings = [
         *folder_bindings,
         function_binding(MANY, _many),
+        function_binding(NAMED, lambda params: Named(status=1.0)),
     ]
     with open_folder(folder, bindings) as client:
         yield client
@@ -190,3 +198,15 @@ def test_a_key_that_two_rows_share_is_refused_and_nothing_is_written(
         export_table(client, reduced, out)
 
     assert not out.exists()
+
+
+def test_an_output_named_as_a_column_of_the_result_is_refused_and_nothing_is_written(
+    client: Client, tmp_path: Path
+) -> None:
+    record = run(client, NAMED)
+    table = pd.DataFrame({'key': ['a'], 'status': ['completed'], 'record': [record.id]})
+
+    with pytest.raises(ValueError, match='status'):
+        export_table(client, table, tmp_path / 'export')
+
+    assert not (tmp_path / 'export').exists()

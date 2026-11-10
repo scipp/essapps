@@ -24,6 +24,7 @@ the keys of its rows.
 from __future__ import annotations
 
 import csv
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,9 @@ def scan_folder(
     package provides it. What no file says of itself, such as the role of a
     run, a person adds to the table.
 
+    A file that cannot be read is left out, with a warning. So is a folder
+    that is a link, with all it holds, but without one.
+
     Raises ``ValueError`` if the rows are not a table of ``FolderFiles``, such
     as two files of one run.
     """
@@ -95,7 +99,12 @@ def scan_folder(
         relative = path.relative_to(directory)
         if relative.parts[0] in _OWN:
             continue
-        if (metadata := read(path)) is not None:
+        try:
+            metadata = read(path)
+        except OSError as error:
+            warnings.warn(f'{relative} is left out: {error}', stacklevel=2)
+            continue
+        if metadata is not None:
             rows.append({'file': str(relative), **metadata})
     rows.sort(key=_measured)
     FolderFiles(directory, rows)

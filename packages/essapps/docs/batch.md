@@ -240,7 +240,7 @@ masks/mask.xml,,mask,
 essapps-batch files ess.instruments.loki.files:read_metadata -o files.csv
 ```
 
-`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. Two files of one run are refused, and so is a table that exists, which may hold what a person added. A file says its kind, its run, and perhaps its sample, but not what a run is for. So fill in `role` by hand where a row source or a file field needs it: a source that pairs runs reads it, and a field such as the direct beam requires it.
+`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. A file that cannot be read is left out, with a warning. Two files of one run are refused, and so is a table that exists, which may hold what a person added. A file says its kind, its run, and perhaps its sample, but not what a run is for. So fill in `role` by hand where a row source or a file field needs it: a source that pairs runs reads it, and a field such as the direct beam requires it.
 
 The workspace outlives the command, so a template references a record of an earlier command. A template without blanks is one request, and `reduce` without a table submits it:
 

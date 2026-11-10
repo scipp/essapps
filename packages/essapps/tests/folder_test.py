@@ -223,3 +223,20 @@ def test_a_scan_refuses_two_files_of_one_run(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match='run'):
         scan_folder(tmp_path, lambda path: {'run': 1})
+
+
+def test_a_scan_leaves_out_a_file_that_cannot_be_read_with_a_warning(
+    tmp_path: Path,
+) -> None:
+    for name in ('1.json', '2.json'):
+        (tmp_path / name).write_text('1.0')
+
+    def read(path: Path) -> dict[str, object]:
+        if path.name == '1.json':
+            raise PermissionError('no permission')
+        return {}
+
+    with pytest.warns(UserWarning, match=r'1\.json is left out: no permission'):
+        rows = scan_folder(tmp_path, read)
+
+    assert rows == [{'file': '2.json'}]
