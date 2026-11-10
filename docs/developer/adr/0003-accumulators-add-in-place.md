@@ -18,7 +18,7 @@ For N pushes into a value of size V, with a pin of the state after each push:
 | add in place, a copy for each pin | 2V | N·V (one copy per pin) | N·V |
 | add in place, requests read the value itself | V | V | V |
 
-The first two rows hold N·V after the loop because a client keeps what it asks for ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)).
+The first two rows hold N·V after the loop because the workspace keeps what a client asks for ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)).
 
 Adding a run takes about 1.5 s for LoKI, and longer for a large volume.
 Applications call the client from their UI thread, or over HTTP on the service.
@@ -32,7 +32,7 @@ So a call cannot wait for a push to be added.
 An accumulator keeps one driver, made by its binding ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)), and each push changes it in place (the last row of the table).
 
 **Calls return once logged, and pinning does not wait for pushes to be added**, so that no call waits for a run to be reduced (Context).
-The backend adds the pushes later, in the order logged.
+The workspace adds the pushes later, in the order logged.
 Only `client.output` waits, for its state, before it copies.
 
 **Push n+1 waits for the readers of state n**, the requests that read its record and the pins of it ([accumulators.md, Reading a state: pins](../accumulators.md#reading-a-state-pins)).
@@ -50,12 +50,12 @@ A push waits for the readers of the state before it, all made before the push wa
 **`client.output` copies, and a request reads in place.**
 `client.output(acc, ...)` returns a copy, since the caller may keep it past the next push.
 A request reads the outputs of its state's record without a copy, so a cut costs no second volume.
-All outputs of a state are computed at once, the first time a pin needs them, since the driver, not the backend, knows how to share work between outputs.
+All outputs of a state are computed at once, the first time a pin needs them, since the driver, not the workspace, knows how to share work between outputs.
 Two pins of one state compute once.
 
 **Checks at pin, not at push.**
 A push checks each row by the table's element type alone, and that its rows are new to the table.
-When a state is first pinned, the backend checks the number of rows of each table by its length constraints, so a table that needs a row has one.
+When a state is first pinned, the workspace checks the number of rows of each table by its length constraints, so a table that needs a row has one.
 So a push costs the same however many rows came before it, and a table with a minimum length of two can be filled one row per push.
 Opening an accumulator validates each fixed value by its own field alone.
 The framework never runs a model validator of the params model, on a template, a push, or a state: a driver never gets a whole params instance.
