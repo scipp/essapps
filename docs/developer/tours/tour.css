@@ -89,10 +89,10 @@ button:focus-visible { outline: 2px solid var(--hl); outline-offset: 2px; }
 
 /* what a box is: its shape and stacking, from the outside in */
 .frame { --c: var(--ink-2); --t: transparent; border-style: dashed; border-width: calc(1.2 * var(--u)); z-index: 1; }
-.backend { z-index: 2; }
+.workspace { z-index: 2; }
 .group { border-style: dashed; background: transparent; z-index: 3; }
 .container { background: var(--surface); }
-.container:not(.backend) { z-index: 4; }
+.container:not(.workspace) { z-index: 4; }
 .container.inner { background: var(--t); z-index: 5; }
 .leaf { z-index: 6; }
 .port { z-index: 7; background: var(--surface); text-align: center; justify-content: center; padding: calc(4 * var(--u)); }

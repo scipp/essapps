@@ -1,20 +1,17 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What the backend knows, built from its log.
+What the workspace knows, built from its log.
 
 :meth:`Views.apply` is the only way the views change, and what it does
-depends on nothing but the events. A backend that applies its log again
-therefore has the views of the backend that wrote it. The backend answers
+depends on nothing but the events. A workspace that applies its log again
+therefore has the views of the workspace that wrote it. The workspace answers
 every query from the views, and reads the log only when it starts. So the
 views may change between versions, while the events must stay readable as
-long as a log is kept. What is not history, such as clients and their stages
-and accumulators, and output values, the backend keeps elsewhere.
+long as a log is kept. What is not history, such as stages, accumulators, and
+output values, the workspace keeps elsewhere.
 
-Every order the backend relies on lies within one proposal: labels are kept
-by proposal, an accumulator and its pushes belong to one proposal, and a
-record reads only records of its own proposal. So history may be stored, and
-dropped, per proposal.
+A log, and so the views, hold the history of one proposal: the workspace's.
 """
 
 from __future__ import annotations
@@ -37,10 +34,10 @@ class _Records(Mapping[str, Record]):
     """
     The records by ID, in the order submitted.
 
-    A record of an accumulator's state is held as the accumulator and its
-    number of pushes, and its request is listed from the accumulator's
-    template and pushes each time it is read, so the views grow by a
-    constant amount per read of an accumulator.
+    The record of a freeze is held as the accumulator and its number of
+    pushes, and its request is listed from the accumulator's template and
+    pushes each time it is read, so the views grow by a constant amount per
+    freeze.
     """
 
     def __init__(self, views: Views) -> None:
@@ -55,11 +52,6 @@ class _Records(Mapping[str, Record]):
         """The names of a record's outputs, without listing its request."""
         held = self._held[record_id]
         return held.outputs if isinstance(held, Record) else held[0].outputs
-
-    def proposal(self, record_id: str) -> str:
-        """The proposal of a record, without listing its request."""
-        held = self._held[record_id]
-        return held.proposal if isinstance(held, Record) else held[1].proposal
 
     def __getitem__(self, record_id: str) -> Record:
         held = self._held[record_id]
@@ -88,14 +80,14 @@ class Views:
 
     ``finished`` holds the event that finished a record; a record without one
     is pending. ``states`` holds the accumulator and number of pushes of each
-    record of a state. ``accumulators`` holds the event that opened each
+    record of a freeze. ``accumulators`` holds the event that opened each
     accumulator, and ``pushes`` its pushes in order, each rows of its tables.
 
     ``persisted`` names the outputs each record persists; their write is the
     record's: pending while it is, done once it completes.
 
-    ``feed`` holds, for each proposal, the ID of a record each time an event
-    submits or finishes it, in the order of the events. A position in it is a
+    ``feed`` holds the ID of a record each time an event submits or finishes
+    it, in the order of the events. A position in it is a
     cursor of :meth:`changes`. Opening an accumulator and pushing to it are not in
     the feed.
     """
@@ -103,22 +95,21 @@ class Views:
     def __init__(self) -> None:
         self.records = _Records(self)
         self.finished: dict[str, Finished] = {}
-        self.labels: dict[tuple[str, str], list[str]] = {}  # (proposal, label)
+        self.labels: dict[str, list[str]] = {}
         self.states: dict[str, tuple[str, int]] = {}
         self.accumulators: dict[str, Opened] = {}
         self.pushes: dict[str, list[Pushed]] = {}  # by accumulator ID
         self.persisted: dict[str, tuple[str, ...]] = {}
-        self.feed: dict[str, list[str]] = {}  # by proposal
+        self.feed: list[str] = []
 
     def apply(self, event: Event) -> None:
         match event:
             case Submitted():
                 for new in event.records:
                     self._add(new, event)
-                    self.feed.setdefault(event.proposal, []).append(new.id)
+                    self.feed.append(new.id)
             case Finished():
-                proposal = self.records.proposal(event.record)
-                self.feed.setdefault(proposal, []).append(event.record)
+                self.feed.append(event.record)
                 self.finished[event.record] = event
             case Opened():
                 self.accumulators[event.accumulator] = event
@@ -143,8 +134,7 @@ class Views:
                 )
             )
             if new.label is not None:
-                key = (event.proposal, new.label)
-                self.labels.setdefault(key, []).append(new.id)
+                self.labels.setdefault(new.label, []).append(new.id)
         if new.persist:
             self.persisted[new.id] = new.persist
 
@@ -178,14 +168,14 @@ class Views:
         """Whether the record persists the output."""
         return key[1] in self.persisted.get(key[0], ())
 
-    def changes(self, proposal: str, after: int) -> Changes:
+    def changes(self, after: int) -> Changes:
         """
-        The records of the proposal that events changed since position ``after``
-        of its feed, each once, in the order of their first change.
+        The records that events changed since position ``after`` of the feed,
+        each once, in the order of their first change.
 
         Raises ``ValueError`` if ``after`` is negative or past the end.
         """
-        feed = self.feed.get(proposal, [])
+        feed = self.feed
         if not 0 <= after <= len(feed):
             raise ValueError(
                 f'after is a position in 0..{len(feed)} of the feed, not {after}'

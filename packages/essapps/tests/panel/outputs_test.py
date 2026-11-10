@@ -15,7 +15,6 @@ from typing import Any
 
 import numpy as np
 import panel as pn
-import param
 import plopp as pp
 import pytest
 import scipp as sc
@@ -507,11 +506,19 @@ def cut(outputs: Outputs, n: int = 0) -> Any:
     return fig.axes[0].get_title(), fig.axes[1].get_ylim()
 
 
+def drag(slider: pn.widgets.IntSlider, index: int) -> None:
+    """
+    Drag a slider to ``index`` without releasing it. The event takes the path
+    of one from the browser: assigning ``value`` in Python also sets
+    ``value_throttled``, as a release does.
+    """
+    slider._process_events({'value': index})
+
+
 def move(slider: pn.widgets.IntSlider, index: int) -> None:
     """Drag a slider to ``index`` and release it."""
-    slider.value = index
-    with param.edit_constant(slider):  # as the browser sets it on release
-        slider.value_throttled = index
+    drag(slider, index)
+    slider._process_events({'value_throttled': index})
 
 
 def test_an_array_of_more_than_two_dimensions_has_a_slider_per_other_dimension(
@@ -538,7 +545,7 @@ def test_the_slider_reads_only_the_cut_it_draws(client: Client) -> None:
     outputs.select(record, 'cube')
     time, layer = sliders(outputs)
 
-    time.value = 3
+    drag(time, 3)
     assert len(recording.outputs) == 1  # not until released
     move(time, 3)
     move(layer, 2)

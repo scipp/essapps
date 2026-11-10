@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The specs of workflows, which UIs and backends read, and the bindings that
-the backend calls to compute a spec's requests.
+The specs of workflows, which UIs and the workspace of ``ess.apps`` read, and
+the bindings that the workspace calls to compute a spec's requests.
 
 The package exports the specs, the references to outputs, the markers
 :class:`File` and :data:`Referenced`, and the bindings and their protocols.

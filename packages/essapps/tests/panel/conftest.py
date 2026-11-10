@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Toy specs with each type of field, bound on a backend with clients of one proposal.
+Toy specs with each type of field, bound on a workspace with clients of one proposal.
 
 ``FIND`` outputs a ``BeamCentre``, a plain group, which ``REDUCE`` takes
 typed in or from a record. ``REDUCE`` also takes a group with defaults, a
@@ -29,7 +29,7 @@ from typing import Annotated, Any, Literal
 import pytest
 from pydantic import AwareDatetime, BaseModel, Field, NaiveDatetime
 
-from ess.apps import Backend, Client
+from ess.apps import Client, Workspace
 from ess.apps.testing import FakeFiles, read_file
 from ess.spec import (
     FileRef,
@@ -298,7 +298,7 @@ def run(files: FakeFiles) -> FileRef:
 
 
 @pytest.fixture
-def backend(files: FakeFiles) -> Iterator[Backend]:
+def workspace(files: FakeFiles) -> Iterator[Workspace]:
     bind = [
         function_binding(FIND, find),
         function_binding(REDUCE, reduce),
@@ -307,20 +307,20 @@ def backend(files: FakeFiles) -> Iterator[Backend]:
         function_binding(STACK, stack),
         function_binding(NESTED, nested),
     ]
-    backend = Backend(files, bind)
-    yield backend
-    backend.close()
+    workspace = Workspace(proposal='p1', files=files, bind=bind)
+    yield workspace
+    workspace.close()
 
 
 @pytest.fixture
-def client(backend: Backend) -> Client:
-    return Client(backend, proposal='p1', submitter='anna')
+def client(workspace: Workspace) -> Client:
+    return Client(workspace, submitter='anna')
 
 
 @pytest.fixture
-def other(backend: Backend) -> Client:
+def other(workspace: Workspace) -> Client:
     """Another client of the proposal of ``client``."""
-    return Client(backend, proposal='p1', submitter='bob')
+    return Client(workspace, submitter='bob')
 
 
 @pytest.fixture

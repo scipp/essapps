@@ -21,11 +21,11 @@ If a story asks for it, AiiDA's answer fits [ADR 0004](../adr/0004-history-is-ap
 
 **UUIDs when data leaves the database.** Every node has a per-database integer key and a UUID.
 The docs ask for UUIDs whenever data is shared, and import deduplicates by UUID ([share_data.rst L46, L110][share]).
-Our record IDs are random UUIDs already (`ess.apps.backend`), so `client.publish` can carry them into a SciCat entry unchanged.
+Our record IDs are random UUIDs already (`ess.apps.workspace`), so `client.publish` can carry them into a SciCat entry unchanged.
 
 **Software versions on every process node.** A process stores the versions of aiida-core and its plugin on its node when it starts ([process.py L786-789][version]).
 There, the worker that creates the node also runs it.
-Our backend logs a record before it decides where the request runs, so only the finish can say which versions ran it.
+Our workspace logs a record before it decides where the request runs, so only the finish can say which versions ran it.
 This bears on ADR 0002, Open ("what a finish records besides the status") and on software versions in provenance, which the README promises and the code lacks ([README, Provenance and publication](../README.md#provenance-and-publication)).
 
 **A cache keyed on package versions reset at every upgrade.** Until v2.6 the cache hash included the aiida-core and plugin versions, so "the cache would essentially be reset each time AiiDA or any of the plugin packages would be updated".
@@ -67,12 +67,12 @@ After 5 consecutive failures the job is paused, and `verdi process play` resumes
 Each computer also sets a minimum interval between scheduler polls ([computers.py L73-74][poll]).
 For us, a slow or missing `/ess` mount is the likely transient failure on the service.
 Today it fails the record, and since a failed record counts as handled ([automatic-reduction.md](../automatic-reduction.md), The trigger loop), automatic reduction never reduces that run.
-Whether the backend retries before it fails a record, or marks the failure so a controller may resubmit, belongs to the service design (scipp/essapps#27).
+Whether the workspace retries before it fails a record, or marks the failure so a controller may resubmit, belongs to the service design (scipp/essapps#27).
 
 **Checkpointed workflow state does not survive upgrades.** A WorkChain resumes after a daemon restart because its state is serialised between steps.
 The unreleased version says such checkpoints "cannot be continued after upgrading. Finish or terminate all active processes before upgrading" ([CHANGELOG L11-12][cl-head]).
 The FAQ says to restart the daemon after every code change ([faq.rst L29][faq]).
-Our backend pickles nothing: after a restart it reruns persisted pending records from history ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)).
+Our workspace pickles nothing: after a restart it reruns persisted pending records from history ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)).
 On an upgrade with work in flight, AiiDA's answer is to drain first, the "old instance finishes them" option of ADR 0002, Open, and system story H2.
 Warm workers (scipp/essapps#27) hold imported code as AiiDA's daemon workers do, so a package upgrade must restart them.
 

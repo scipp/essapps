@@ -256,7 +256,7 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     under ``dataType``, as the outputs schema names the type of each output.
     A file is the ``@ref`` object of a file, with the marker's metadata under
     ``metadata``, which say which files to offer: those with each key and value,
-    and a run without a role at a raw file field with a role, which the backend
+    and a run without a role at a raw file field with a role, which the workspace
     accepts with any role. The schemas of the parameter
     ``reduction``, a parameter ``centre`` typed ``BeamCentre |
     Referenced[BeamCentre]``, a file field ``mask`` typed ``MaskFile``, the
@@ -757,7 +757,7 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
     """
     The JSON Schema of the params: that of the spec's request type (see
     :func:`ess.spec.request_types.request_model`), which validates a
-    request. As the backend does, it refuses a field that a model lacks.
+    request. As the workspace does, it refuses a field that a model lacks.
     """
     model = request_types.request_model(spec.params)
     schema = model.model_json_schema()

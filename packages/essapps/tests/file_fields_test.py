@@ -9,7 +9,7 @@ from typing import Any, Self
 import pytest
 from pydantic import BaseModel, Field, model_validator
 
-from ess.apps import Backend, Client, SubmitError, Template, file
+from ess.apps import Client, SubmitError, Template, Workspace, file
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
 from ess.spec import MaskFile, RunFile, WorkflowSpec, function_binding
 
@@ -130,9 +130,9 @@ def client(files: FakeFiles) -> Iterator[Client]:
         function_binding(CHANNELS, _channels),
         function_binding(CHECKED, lambda p: Outputs(total=Total(value=0.0))),
     ]
-    backend = Backend(files, bindings)
-    yield Client(backend, proposal='p1', submitter='anna')
-    backend.close()
+    workspace = Workspace(proposal='p1', files=files, bind=bindings)
+    yield Client(workspace, submitter='anna')
+    workspace.close()
 
 
 def _total(client: Client, record: Any) -> float:

@@ -6,10 +6,9 @@ What the client raises, beyond Python's own errors for a wrong call.
 - :class:`SubmitError`: a request, a template, a push, a freeze, or a
   persist that is refused; it lists each reason as a :class:`FieldError`.
 - :class:`NotReadable`: a record, an output, or an accumulator that exists
-  but cannot be read, such as a record the client released. One that is
-  unknown raises ``KeyError``; both are a ``LookupError``.
+  but cannot be read, such as a record released. One that is unknown raises
+  ``KeyError``; both are a ``LookupError``.
 - :class:`RecordFailed`: a read of a record that failed or was cancelled.
-- :class:`ClientEnded`: a call of a client that has ended.
 
 Each holds only strings, integers, and tuples of these, so that a wire
 format can carry it as it is::
@@ -83,10 +82,10 @@ class SubmitError(ValueError):
 
 class NotReadable(LookupError):
     """
-    A record, an output, or an accumulator that exists, but that the client
-    cannot read: a record it does not keep, or an output not persisted; an
-    output that the store no longer holds or that the workflow did not return;
-    an accumulator it released, that stopped, or that is read through the
+    A record, an output, or an accumulator that exists, but that cannot be
+    read: an output that the workspace does not keep and that is not persisted;
+    an output that the store no longer holds or that the workflow did not
+    return; an accumulator released, that stopped, or that is read through the
     record of its freeze; a state whose plain request would be refused or whose
     driver fails to give outputs. One that does not exist raises ``KeyError``.
     """
@@ -107,7 +106,3 @@ class RecordFailed(Exception):
     def __str__(self) -> str:
         why = f': {self.reason}' if self.reason is not None else ''
         return f'record {self.record} {self.status}{why}'
-
-
-class ClientEnded(Exception):
-    """A call of a client that has ended."""

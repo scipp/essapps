@@ -17,7 +17,7 @@ The field of a value follows from its type, as the table in
 A record's output fits a field if its type, from the record's spec, fits the
 field, and a request of the client may reference it now
 (``client.readable``), so a pending record is offered too. A file is offered for
-a file field as :meth:`ess.apps.Listing.files` says, among those the backend
+a file field as :meth:`ess.apps.Listing.files` says, among those the workspace
 accepts there. A file that the fields are set to, such as one a record names,
 stays picked when the listing no longer has it.
 
@@ -26,8 +26,8 @@ needs is never filled in for the user; so does a list, of rows or of scalars,
 until an element is added or removed, so that a table, which has no default, is
 never given without rows by mistake. A field is left out of the request only if
 it is a choice with no way chosen, which it is only without a default, so the
-backend refuses it as required. A way chosen, or an input, with nothing given
-is not left out, since the backend would fill in the default: the params name
+workspace refuses it as required. A way chosen, or an input, with nothing given
+is not left out, since the workspace would fill in the default: the params name
 it as missing (see :attr:`Fields.params`). An empty text is the value ``''``
 where the field has a default, and nothing given where it has none, since a
 text input cannot tell an empty text from none; an element of a list of texts

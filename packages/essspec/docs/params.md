@@ -2,7 +2,7 @@
 
 A *spec* (`ess.spec.WorkflowSpec`) declares what a workflow takes and what it returns, without the code that computes it.
 Every workflow package writes one spec per workflow.
-The framework, its forms, and its clients read everything they need from the spec's two pydantic models:
+The workspace (`ess.apps.Workspace`, which runs requests), forms, and clients read everything they need from the spec's two pydantic models:
 
 | Model | Holds | A request gives | The workflow gets |
 |---|---|---|---|
@@ -139,7 +139,7 @@ A field typed `Referenced[T]` is filled by an output of another record, such as 
 A field typed `Referenced[sc.DataArray]` would fit every array output, so a picker would list unrelated records; a group's class says what the value is.
 So a workflow that computes an array outputs a group that holds it, such as `ComputedTransmission`.
 `Referenced[A | B]` is refused; a field that takes either is `Referenced[A] | Referenced[B]`.
-The framework does not look inside `T` otherwise, so a field of `T` may be of any type, such as `sc.DataArray`.
+The workspace does not look inside `T` otherwise, so a field of `T` may be of any type, such as `sc.DataArray`.
 
 `Referenced[T]` is `Annotated[T, REFERENCED]`, so pydantic, the binding, and any direct use of the params model see `T`.
 It types a field of the params only: the data of an output are not a reference.
@@ -154,7 +154,7 @@ beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()
 
 A reference fills only a field typed `Referenced[...]`, at any depth, or a member of a union there, such as `specimens[0].transmission`; never a whole list.
 `record.ref(name, key)` names one element of a list or dict output, which fits by the element type.
-`acc.ref(name)` names an output of an accumulator: when the backend accepts the request, it replaces the reference by one to the record of the accumulator's state at that moment.
+A reference never names an accumulator: a request reads an accumulator's outputs through the record that `client.freeze` returns ([accumulators.md](../../../docs/developer/accumulators.md#freeze-release-stop)).
 
 | Output | Field | Fits |
 |---|---|---|
@@ -176,7 +176,7 @@ The JSON form of a reference, and of a file, is an object with the key `@ref`, w
 
 The key `@ref` tells a reference from a value written inline, and a file from a reference; then the tag tells the alternatives of a union apart.
 A string at a file field is refused.
-The record holds each file by the identity that the backend resolved, as in the last line.
+The record holds each file by the identity that the workspace resolved, as in the last line.
 
 ## Files
 
@@ -201,9 +201,9 @@ A run tagged with the wrong role still fills any field of its kind, by `file(run
 A field takes one kind of file, so a file field is in a union only with `Referenced[...]` members and `None`.
 
 A request writes `file(run=611)` or `file(path=...)`.
-The backend resolves it when the request is submitted, checks that the proposal may read the file and that it fits the marker, and records the file's identity.
+The workspace resolves it when the request is submitted, checks that the proposal may read the file and that it fits the marker, and records the file's identity.
 The workflow gets the file's local path, never the identity.
-A program without a backend gives the path directly, `IofQParams(sample=Path('run-611.nxs'), ...)`.
+A program without a workspace gives the path directly, `IofQParams(sample=Path('run-611.nxs'), ...)`.
 
 `File(...)` marks a `Path`, once: a `Path` without `File(...)` is refused, and so is `File(...)` on anything else, such as `Annotated[int, File()]`.
 A file field takes no constraint, such as `MinLen(2)`.
@@ -298,7 +298,7 @@ IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title='I(Q) of summ
 
 A request gives every table, `[]` for one without rows, so a table has no default: no request leaves out a table by mistake.
 Any other list is validated whole, but a table is validated a row at a time, since an accumulator takes a few rows at a time.
-So a table carries only length constraints, such as `Field(min_length=1)`, which the backend checks on all rows, and the element type checks a row.
+So a table carries only length constraints, such as `Field(min_length=1)`, which the workspace checks on all rows, and the element type checks a row.
 The rows of a table are distinct, compared as the record stores them: a file by its identity, a reference by its record and output.
 Two references to equal data are two rows.
 A value that differs per run, such as a motor position, is in the run's file; a value that differs between runs, such as a thickness, makes the runs separate requests.

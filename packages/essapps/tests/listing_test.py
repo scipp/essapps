@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from ess.apps import Backend, Client, ClientId, Listing, local
+from ess.apps import Client, Listing, Workspace, local
 from ess.apps.testing import CountingClient, FakeFiles, read_file
 from ess.spec import File, FileRef, RunFile, WorkflowSpec, function_binding
 
@@ -87,9 +87,9 @@ def run(files: FakeFiles) -> FileRef:
 @pytest.fixture
 def client(files: FakeFiles) -> Iterator[Client]:
     bind = [function_binding(FIND, find), function_binding(REDUCE, reduce)]
-    backend = Backend(files, bind)
-    yield Client(backend, proposal='p1', submitter='anna')
-    backend.close()
+    workspace = Workspace(proposal='p1', files=files, bind=bind)
+    yield Client(workspace, submitter='anna')
+    workspace.close()
 
 
 @pytest.fixture
@@ -180,61 +180,65 @@ def test_a_known_record_that_finished_is_read_again(
 
 
 class CountingMetadata:
-    """Delegates to a backend and logs the files of each ``file_metadata`` call."""
+    """Delegates to a workspace and logs the files of each ``file_metadata`` call."""
 
-    def __init__(self, backend: Backend) -> None:
-        self._backend = backend
+    def __init__(self, workspace: Workspace) -> None:
+        self._workspace = workspace
         self.calls: list[list[FileRef]] = []
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._backend, name)
+        return getattr(self._workspace, name)
 
-    def file_metadata(
-        self, refs: Sequence[FileRef], client_id: ClientId
-    ) -> list[dict[str, Any]]:
+    def file_metadata(self, refs: Sequence[FileRef]) -> list[dict[str, Any]]:
         self.calls.append(list(refs))
-        return self._backend.file_metadata(refs, client_id)
+        return self._workspace.file_metadata(refs)
 
 
 def test_a_listing_reads_the_metadata_of_its_files_in_one_call(
     files: FakeFiles,
 ) -> None:
     runs = [files.measure(n, {'counts': 1.0}) for n in (101, 102, 103)]
-    backend = Backend(files, [function_binding(FIND, find)])
-    counting = CountingMetadata(backend)
-    client = Client(counting, proposal='p1', submitter='anna')
+    workspace = Workspace(
+        proposal='p1', files=files, bind=[function_binding(FIND, find)]
+    )
+    counting = CountingMetadata(workspace)
+    client = Client(counting, submitter='anna')
 
     listed = Listing(client).files(File())
 
     assert list(listed.values()) == runs
     assert counting.calls == [runs]
-    backend.close()
+    workspace.close()
 
 
 def test_a_listing_lists_the_runs_of_several_roles_once(files: FakeFiles) -> None:
     runs = [files.measure(n, {'counts': 1.0}) for n in (101, 102)]
-    backend = Backend(files, [function_binding(FIND, find)])
-    counting = CountingMetadata(backend)
-    client = Client(counting, proposal='p1', submitter='anna')
+    workspace = Workspace(
+        proposal='p1', files=files, bind=[function_binding(FIND, find)]
+    )
+    counting = CountingMetadata(workspace)
+    client = Client(counting, submitter='anna')
     listing = Listing(client)
 
     for role in ('sample', 'background'):
         listing.files(File(role=role))
 
     assert counting.calls == [runs]
-    backend.close()
+    workspace.close()
 
 
 def test_a_role_of_another_kind_selects_what_the_file_holds(files: FakeFiles) -> None:
     beam = files.measure(1, {'counts': 1.0}, kind='calibration', role='direct_beam')
     files.measure(2, {'counts': 1.0}, kind='calibration', role='geometry')
-    backend = Backend(files, [function_binding(FIND, find)])
-    client = Client(backend, proposal='p1', submitter='anna')
+    workspace = Workspace(
+        proposal='p1', files=files, bind=[function_binding(FIND, find)]
+    )
+    client = Client(workspace, submitter='anna')
 
     listed = Listing(client).files(File(kind='calibration', role='direct_beam'))
 
     assert list(listed.values()) == [beam]
-    backend.close()
+    workspace.close()
 
 
 def test_files_of_a_marker_with_a_role_are_those_of_the_role_and_those_without_one(

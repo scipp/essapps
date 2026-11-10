@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The client's records, for a look below the outputs: a table with a row per
+The proposal's records, for a look below the outputs: a table with a row per
 record, and the record selected, as :func:`describe` describes it.
 """
 

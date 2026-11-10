@@ -21,7 +21,7 @@
   <div class="tour" id="tour"></div>
 
   <div class="stage-scroll">
-    <div class="stage" id="stage" role="img" aria-label="Nested boxes: a sciline pipeline inside a binding inside a workflow spec, inside a backend, called by a client that a notebook, app, or trigger loop drives. Below, SciCat and the ESS file system."></div>
+    <div class="stage" id="stage" role="img" aria-label="Nested boxes: a sciline pipeline inside a binding inside a workflow spec, inside a workspace, called by a client that a notebook, app, or trigger loop drives. Below, SciCat and the ESS file system."></div>
   </div>
 
   <div class="legend">
@@ -42,7 +42,7 @@
 <script src="tour.js"></script>
 <script>
 // the level at which each layer appears; one level can have several slides
-const LV = { spec: 2, binding: 3, files: 4, list: 5, labels: 6, backend: 7, client: 8, values: 9, caller: 10, persist: 11 };
+const LV = { spec: 2, binding: 3, files: 4, list: 5, labels: 6, workspace: 7, client: 8, values: 9, caller: 10, persist: 11 };
 const FULL = LV.persist;  // the stack is complete
 
 // ---------- slides: positions in the configuration space, with narration ----------
@@ -73,7 +73,7 @@ IOFQ = WorkflowSpec(name='sans-iofq', version=1, title='I(Q)',
 
 outputs = iofq.compute(params)        # IofQParams -> IofQOutputs` },
   { level: 4, planned: 'no file source exists yet besides the test fake, and Sample.local(path) names the file by its path, not its run',
-    title: 'Files, without a backend',
+    title: 'Files, without a workspace',
     body: `<p>A <em>file source</em> knows which files exist and where they are. It resolves a name, such as <code>file(run=611)</code>, a path, or a SciCat PID, to the file's identity, and gives a local path. Behind it can be SciCat and the ESS file system, a local folder, or files downloaded with Scitacean.</p>
            <p>A script can use it with the spec and the binding alone: find the files, make the params instance, call the binding. The binding reads each file itself; file contents never pass through the file source.</p>`,
     code: `files = ...   # a file source: SciCat, a folder, Scitacean
@@ -84,7 +84,7 @@ outputs = iofq.compute(params)` },
     title: 'Or a form instead of a script',
     body: `<p>The params model is a schema. A form made from it needs no code per workflow: a section per parameter, a file picker for each file model, an input for each scalar field. The form makes the params instance and calls the binding, as the script did.</p>
            <p>This is why the spec exists apart from the pipeline: a caller, script or GUI, knows what a workflow takes without importing sciline.</p>
-           <p>One parameter stays empty. <code>transmission</code> holds a data value, so only a reference to another record's output can fill it, and without a backend there are no records.</p>`,
+           <p>One parameter stays empty. <code>transmission</code> holds a data value, so only a reference to another record's output can fill it, and without a workspace there are no records.</p>`,
     code: `IOFQ.params.model_json_schema()   # what the form is made from
 
 form = Form(IOFQ, files=files)    # hypothetical: no client
@@ -106,25 +106,25 @@ log.append({'spec': IOFQ, 'params': form.params})   # before the call
 kept[entry] = iofq.compute(params)
 
 # a dropdown labels kept[entry] by log[entry]` },
-  { level: 7, title: 'That is a backend',
+  { level: 7, title: 'That is a workspace',
     body: `<p>Keep going, and the form needs more. Drop entries that nobody needs before memory runs out. Show the same entries in a notebook, to a colleague, and to the trigger loop. Reference an output whose call has not finished. Run the same way at DMSC.</p>
-           <p>A log of requests, the values kept while something holds them, the file source, and the bindings: that is a backend, built once for every caller. <code>local()</code> needs nothing that the script does not: pydantic and the standard library.</p>
+           <p>A log of requests, the values kept while something holds them, the file source, and the bindings: that is a workspace, built once for every caller. <code>local()</code> needs nothing that the script does not: pydantic and the standard library.</p>
            <p>It also resolves each file when a request is submitted, so the record names the file itself, and checks that the proposal may read it.</p>`,
     code: `client = local(proposal='p1',
                files=files,           # the same file source
                bind=[iofq])           # a binding per spec` },
-  { level: 8, title: 'A client: one backend, one proposal',
-    body: `<p>Callers touch only the client. <code>submit</code> validates the request, logs it, and returns a record. <code>output</code> reads a value.</p>
-           <p>The backend appends each request to the proposal's history. A record is the request as logged, with every value filled in, defaults included. It holds no output values.</p>
-           <p>Then the <em>call phase</em> starts: the backend makes the params instance from the record's JSON form, with each file's local path and the data each reference names, and calls the binding.</p>`,
+  { level: 8, title: 'A client: one workspace, one proposal',
+    body: `<p>Callers touch only the client. The client is a connection to the workspace and keeps nothing. <code>submit</code> validates the request, logs it, and returns a record. <code>output</code> reads a value.</p>
+           <p>The workspace appends each request to the proposal's history. A record is the request as logged, with every value filled in, defaults included. It holds no output values.</p>
+           <p>Then the <em>call phase</em> starts: the workspace makes the params instance from the record's JSON form, with each file's local path and the data each reference names, and calls the binding.</p>`,
     code: `record = client.submit(IOFQ, params={
     'reduction': Reduction(bins=100),
     'sample': file(run=60339),
     'can': file(run=60338),
     'transmission': t.ref('transmission')})
 client.output(record, 'iofq')` },
-  { level: 9, title: 'Outputs stay in the backend',
-    body: `<p>The binding returns an outputs instance. The backend keeps each value in memory while something holds it, such as the client that submitted the record, until it releases the record.</p>
+  { level: 9, title: 'Outputs stay in the workspace',
+    body: `<p>The binding returns an outputs instance. The workspace keeps each value in memory until a client releases its record, and longer while a pending request still reads it.</p>
            <p><code>client.output</code> reads a kept value; in your process it is the value itself, not a copy. A later request can reference the output instead of a value written inline, and the call phase puts the value into its params.</p>
            <p>History holds none of these values, only requests and what came of them.</p>`,
     code: `t = client.submit(TRANSMISSION, params={
@@ -147,20 +147,20 @@ for run in (60339, 60340, 60341):
 client.wait(records)
 client.output(records[60339], 'iofq')` },
   { level: 11, planned: 'client.publish does not exist yet', title: 'Persist and publish',
-    body: `<p>With <code>persist=</code>, the backend has the store write an output to a file. The store keys it by record ID and output name, so the history names no file.</p>
+    body: `<p>With <code>persist=</code>, the workspace has the store write an output to a file. The store keys it by record ID and output name, so the history names no file.</p>
            <p><code>client.publish</code> makes the output a SciCat dataset. Its metadata holds the provenance, taken from the history: the records that led to the output, the raw datasets they read, and the software versions. The dataset links to the written file, and stays after the proposal's history is dropped.</p>`,
     code: `r = client.submit(IOFQ, params={...}, label='iofq', persist=True)
 
 pid = client.publish(r.ref('iofq'), 'scicat')   # planned` },
   { level: 11, caller: 'app', title: 'Swap the notebook for an app',
-    body: `<p>The Panel app makes a form for each spec the backend runs, from the spec's params schema, and submits through the same client.</p>
+    body: `<p>The Panel app makes a form for each spec the workspace runs, from the spec's params schema, and submits through the same client.</p>
            <p>Only the box on the left changed. The app needs no specs of its own: <code>client.specs()</code> lists them.</p>`,
     code: `app = App(client)          # a Form per spec in client.specs()
 
 app.form.params            # the request the shown form holds
 app.submit()               # client.submit(app.spec, params=...)` },
   { level: 11, placement: 'service', planned: SERVICE, title: 'Swap local() for the service',
-    body: `<p>The backend moves to DMSC, and the client talks HTTP to it. The notebook changes in one line.</p>
+    body: `<p>The workspace moves to DMSC, and the client talks HTTP to it. The notebook changes in one line.</p>
            <p>The record and its outputs do not change: <em>where a request runs</em> is invisible to it. On the service, <code>select=</code> sends only the selected part over the network.</p>`,
     code: `client = connect('https://reduce.example', proposal='p1')
 
@@ -173,7 +173,7 @@ client.output(records[60339], 'iofq', select={'Q': slice(0, 10)})` },
 app = App(client)` },
   { level: 11, caller: 'trigger', placement: 'service', planned: SERVICE, title: 'A trigger loop instead of a person',
     body: `<p>Automatic reduction is one more controller. For each new file that a rule's selector matches, it calls the application's function, which submits what the file needs, persisted.</p>
-           <p>It runs on a server at DMSC, outside the backend. The backend never decides what to run.</p>`,
+           <p>It runs on a server at DMSC, outside the workspace. The workspace never decides what to run.</p>`,
     code: `def stitch(client, run):
     sample = client.files.metadata(run)['sample']
     angles = client.files.list(
@@ -188,7 +188,7 @@ rule = Rule('reflectivity', stitch,
 TriggerLoop(client, rules=[rule]).run()` },
   { level: 11, caller: 'all', placement: 'service', planned: SERVICE, title: 'Many controllers, one history',
     body: `<p>All clients of a proposal share its history. A notebook can reference a transmission that the trigger loop computed, and the app lists that record in its pickers.</p>
-           <p>Another client reads a value only once it is persisted, which the trigger loop does. Provenance follows each reference back to the files.</p>`,
+           <p>Every client of a workspace reads the same values. The trigger loop persists its outputs, so they outlive the workspace. A proposal has one workspace. Whether its users share the values in memory, or the service separates or bounds them per user, is open. Provenance follows each reference back to the files.</p>`,
     code: `# computed by the trigger loop
 t = client.latest('transmission', member='250K')
 record = client.submit(IOFQ, params={
@@ -196,7 +196,7 @@ record = client.submit(IOFQ, params={
 client.provenance(record).records()` },
   { level: 11, binding: 'driver', title: 'Another binding: a driver',
     body: `<p>A <code>DriverBinding</code> wraps a <em>driver</em> instead of a pipeline. Rows of the spec's tables are pushed into a driver, and it gives the outputs of the rows so far. For a request, the binding makes a driver, pushes all rows at once, and reads the outputs.</p>
-           <p>Only the workflow package changed. The backend calls every binding the same way, with a params instance, and gets an outputs instance back.</p>
+           <p>Only the workflow package changed. The workspace calls every binding the same way, with a params instance, and gets an outputs instance back.</p>
            <p>A driver pays off in an <em>accumulator</em>, which adds run 101 to the sum of a hundred runs without reducing the hundred again. Accumulators and stages keep work in memory between requests. This tour shows plain requests only; see <a href="https://github.com/scipp/essapps/blob/main/docs/developer/accumulators.md">Stages and accumulators</a>.</p>`,
     code: `multi = DriverBinding(IOFQ_MULTI, IofQDriver)
 client = local(proposal='p1', files=files, bind=[iofq, multi])
@@ -214,7 +214,7 @@ export = function_binding(EXPORT, export_csv)` },
 const DEFAULT = { level: 11, caller: 'notebook', placement: 'local', binding: 'pipeline' };
 SLIDES.forEach(s => { for (const k of ['caller', 'placement', 'binding']) s[k] ??= DEFAULT[k]; });
 const FIRST_FULL = SLIDES.findIndex(s => s.level === FULL) + 1;  // the step
-const GROUPS = [['Workflow', 0, 3], ['Without a backend', 3, 7], ['Backend', 7, 12], ['Swap caller or placement', 12, 17], ['Other bindings', 17, 19]];
+const GROUPS = [['Workflow', 0, 3], ['Without a workspace', 3, 7], ['Workspace', 7, 12], ['Swap caller or placement', 12, 17], ['Other bindings', 17, 19]];
 
 const NAMES = {
   caller: { notebook: 'Notebook', app: 'Panel app', trigger: 'Trigger loop', all: 'All three' },
@@ -251,8 +251,8 @@ const INNER = {
 const SPEC = { pipeline: 'IOFQ', driver: 'IOFQ_MULTI', function: 'EXPORT' };
 const BINDING = { pipeline: 'PipelineBinding', driver: 'DriverBinding', function: 'function_binding' };
 
-// the form without a backend; its transmission field shows how far the argument has come
-const form = transmission => h('Panel form', 'no backend', `<div class="form-mock">
+// the form without a workspace; its transmission field shows how far the argument has come
+const form = transmission => h('Panel form', 'no workspace', `<div class="form-mock">
     <div class="row"><b>I(Q)</b></div>
     <div class="row">bins <span class="in">100</span></div>
     <div class="row">sample <span class="in">run 60339 ▾</span></div>
@@ -265,7 +265,7 @@ const FORM = {
   [LV.labels]: form('<span class="in">from run 611 ▾</span>'),
 };
 const CALLER = {
-  script: h('Python script', 'no backend', `<pre class="mini">files = ...
+  script: h('Python script', 'no workspace', `<pre class="mini">files = ...
 ref = files.resolve(
   file(run=60339))
 params = IofQParams(...)
@@ -295,8 +295,8 @@ const CALLER_SMALL = [
 
 function layout(cfg, { box, arrow }) {
   const L = cfg.level, multi = cfg.caller === 'all', svc = cfg.placement === 'service';
-  // no backend: a script or a form calls the binding itself
-  const bare = L >= LV.files && L < LV.backend, gui = L > LV.files || cfg.caller === 'app';
+  // no workspace: a script or a form calls the binding itself
+  const bare = L >= LV.files && L < LV.workspace, gui = L > LV.files || cfg.caller === 'app';
   const pk = L < LV.files ? pkgRects(327, 150, 1.2) : pkgRects(712, 110, 0.95);
   const innerR = L === 1 ? [430, 230, 340, 300] : L === LV.spec ? pk.binding : pk.inner;
   const historyR = [552, 274, 132, 72];
@@ -308,10 +308,10 @@ function layout(cfg, { box, arrow }) {
   box('binding', pk.binding, L >= LV.binding, 'container inner wf', h(BINDING[cfg.binding]));
   box('pkg', pk.pkg, L >= LV.binding, 'group wf', h('ess.instruments.loki', svc ? 'specs and bindings, installed on the service' : 'specs and bindings'));
 
-  box('backend', [530, 90, 640, 530], L >= LV.backend, 'container backend fw',
-      h('Backend', svc ? 'the service, at DMSC' : '<span class="mono">local()</span>: in your process'));
-  box('values', [552, 150, 132, 64], L >= LV.list, 'leaf fw', L < LV.backend ? h('outputs', 'kept by the form') : h('values', 'kept while held'));
-  box('history', historyR, L >= LV.labels, 'leaf fw', L < LV.backend ? h('log', 'params of each call') : h('history', 'append-only log'));
+  box('workspace', [530, 90, 640, 530], L >= LV.workspace, 'container workspace fw',
+      h('Workspace', svc ? 'the service, at DMSC' : '<span class="mono">local()</span>: in your process'));
+  box('values', [552, 150, 132, 64], L >= LV.list, 'leaf fw', L < LV.workspace ? h('outputs', 'kept by the form') : h('values', 'kept while held'));
+  box('history', historyR, L >= LV.labels, 'leaf fw', L < LV.workspace ? h('log', 'params of each call') : h('history', 'append-only log'));
   box('files', [580, 520, 132, 72], L >= LV.files, 'leaf fw', h('file source', 'resolves file(run=611)'));
   box('store', [960, 520, 180, 72], L >= LV.persist, 'leaf fw', h('store', 'by record ID and output'));
 
@@ -390,8 +390,8 @@ const ABOUT = {
     all: 'Several controllers share one proposal\'s history, each through its own client.',
   },
   placement: {
-    local: '<code>local()</code> runs the backend in the same Python process.',
-    service: 'The backend runs at DMSC; the client talks HTTP to it. Records and outputs are the same as with <code>local()</code>.',
+    local: '<code>local()</code> runs the workspace in the same Python process.',
+    service: 'The workspace runs at DMSC; the client talks HTTP to it. Records and outputs are the same as with <code>local()</code>.',
   },
   binding: {
     pipeline: 'A <code>PipelineBinding</code> sets the pipeline keys from the params and computes the outputs.',
@@ -429,7 +429,7 @@ function panel(cfg, tour) {
     const i = tour.slideAt({ ...cfg, level: FULL, caller, placement });
     const disabled = caller === 'all' && placement === 'local';
     const on = full && cfg.caller === caller && cfg.placement === placement;
-    return `<td><button class="cell" data-caller="${caller}" data-placement="${placement}" aria-pressed="${on}" ${disabled ? 'disabled title="several clients share a backend on the service only"' : ''}>${i >= 0 ? i + 1 : disabled ? '–' : '·'}</button></td>`;
+    return `<td><button class="cell" data-caller="${caller}" data-placement="${placement}" aria-pressed="${on}" ${disabled ? 'disabled title="controllers in separate processes share a workspace on the service only"' : ''}>${i >= 0 ? i + 1 : disabled ? '–' : '·'}</button></td>`;
   };
   return `
     <h3>Where this step sits</h3>

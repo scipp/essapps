@@ -1,5 +1,5 @@
 """
-The outputs of the client's records, by type: what a scientist picks, to
+The outputs of the proposal's records, by type: what a scientist picks, to
 plot it, to see where it came from, or to remove it.
 
 Each output is to be a group, so that its type says what it is,
@@ -59,7 +59,7 @@ Plots = Mapping[SpecId, Mapping[str, Plot]]
 
 class Outputs:
     """
-    A sidebar with a table of the outputs of the client's records, grouped by
+    A sidebar with a table of the outputs of the proposal's records, grouped by
     type, newest first, and below it the output selected, with a button that
     removes it. Beside the sidebar are its plot, the plots configured for its
     spec, or its provenance graph, as ``views`` picks.

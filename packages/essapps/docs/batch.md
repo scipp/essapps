@@ -87,7 +87,7 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 
 **A result is stale** if the row's cells or the settings differ from those it was submitted with. `Batch` remembers that for the rows it submitted, and works it out only when `state` is given the settings. Requests are compared as given, so writing a default out, or naming a file another way, shows a row as stale: at worst a row is offered for a rerun.
 
-**`reduce` is strict and all-or-nothing.** The rows given are submitted in one call. If any is refused, or still running, none is submitted, and the `SubmitError` names the rows refused. `FieldError.entry` is the row's key and `loc[0]` the column. A reason about the settings appears once, with no key. So `reduce(settings, ready(state))` skips incomplete and running rows, while one invalid value refuses the whole call and names the row. The backend checks values first and references second, so correcting the rows named can bring up more.
+**`reduce` is strict and all-or-nothing.** The rows given are submitted in one call. If any is refused, or still running, none is submitted, and the `SubmitError` names the rows refused. `FieldError.entry` is the row's key and `loc[0]` the column. A reason about the settings appears once, with no key. So `reduce(settings, ready(state))` skips incomplete and running rows, while one invalid value refuses the whole call and names the row. The workspace checks values first and references second, so correcting the rows named can bring up more.
 
 **With `staged=True`** the rows go through a stage, and what they share is computed once. It needs a binding that makes stages. A stage is reused while the settings are the same. Whether a column can vary through a stage is the binding's to decide, and a refusal says so; a column that everything depends on saves nothing.
 
@@ -110,7 +110,7 @@ Pairing is yours to write. The framework knows no technique. If a source raises,
 
 ## When the metadata is wrong or missing
 
-Wrap the file source, and give the wrapper to the backend. Forms, rules, and sources then all see a file as corrected:
+Wrap the file source, and give the wrapper to the workspace. Forms, rules, and sources then all see a file as corrected:
 
 ```python
 files = CorrectedFiles(FolderFiles('/data', table))
@@ -188,8 +188,8 @@ Raise in the fake to make a row fail; hold it back on a `threading.Event` to kee
 
 ## What it does not do
 
-- Keep the table across sessions. A new `Batch` scans again. It finds results by key in its backend, so `local()` per session starts with none, and against a shared backend a value must be persisted for another client to read it.
+- Keep the table across sessions. A new `Batch` scans again. It finds results by key in its workspace, so `local()` per session starts with none, and a result that is not persisted is gone once its workspace closes.
 - Show a stale result after a restart.
 - Read a table from a CSV file. That is one more source.
-- Free the values of replaced results. They stay until the client closes or they are released, unless the batch persists them (`persist=`).
+- Free the values of replaced results. They stay until the workspace closes or they are released, unless the batch persists them (`persist=`).
 - Offer preparatory steps with a **Use** button. A `Referenced[...]` setting offers each record in the settings form.

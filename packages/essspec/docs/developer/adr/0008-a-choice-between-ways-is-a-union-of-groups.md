@@ -25,9 +25,9 @@ Terms from [ADR 0001](0001-minimal-workflow-spec.md) and the developer README:
 - A *table* is a list parameter whose elements an accumulator takes a push at a time; an element of a table is a *row*.
 - A *reference to an output* names an output of a record, such as `finder.ref('centre')`.
 - `Referenced[T]` types a field that a reference to an output fills, with data that fit the group `T`. A reference *fits* the field when the output's class is `T` or a subclass of it. A request writes a field of any other type, inline or as a file. The framework does not look inside `T`, so a group that holds an `sc.DataArray` is a `T`.
-- A *file field* is a field that a file fills, typed `Annotated[Path, File(**metadata)]`, such as `RunFile`, which `ess.spec` provides. A request writes a *file* there as `file(...)`, which the backend resolves when the request is submitted. The params model, and so the binding, holds the file's local path, a `Path`.
+- A *file field* is a field that a file fills, typed `Annotated[Path, File(**metadata)]`, such as `RunFile`, which `ess.spec` provides. A request writes a *file* there as `file(...)`, which the workspace (`ess.apps.Workspace`, which runs requests) resolves when the request is submitted. The params model, and so the binding, holds the file's local path, a `Path`.
 - A *template* is a request with some parameters left open, its *blanks*; the values it gives are its *fixed values*. A *plain request* gives every value.
-- A *stage* is a template that the backend keeps: it computes what does not depend on the blanks once, and the rest at each call.
+- A *stage* is a template that the workspace keeps: it computes what does not depend on the blanks once, and the rest at each call.
 
 Terms of `PipelineBinding`, which computes a spec with a sciline pipeline:
 
@@ -174,7 +174,7 @@ A step whose omission changes what a reader of the output must do with it, such 
 **`PipelineBinding` sets one key per member of a union parameter, chosen by the value's class.**
 A union parameter has a key for each member, the member's class: `binding.keys['beam_centre'] == (GivenCentre, FindCentre)`.
 The binding sets the key of the member nearest to the value's class, the first class of `type(value).__mro__` that is a member, so sciline picks the providers.
-The backend makes each value by the type of its source, so a value written inline is of the alternative its tag names, and the data of a reference are of a referenced member or a subclass of one:
+The workspace makes each value by the type of its source, so a value written inline is of the alternative its tag names, and the data of a reference are of a referenced member or a subclass of one:
 
 ```python
 def find_centre(settings: FindCentre, sample: SampleData) -> GivenCentre: ...
