@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from ess.apps import Backend, Client, Record, RecordFailed, Request, Status, file
+from ess.apps import Client, Record, RecordFailed, Request, Status, Workspace, file
 from ess.apps.log import Event, Log
 from ess.apps.testing import FakeFiles
 from ess.spec import Binding
@@ -136,12 +136,12 @@ def test_cancel_drops_what_is_running(
     assert (raised.value.status, raised.value.reason) == (Status.CANCELLED, None)
 
 
-def test_a_failed_append_stops_the_backend(
+def test_a_failed_append_stops_the_workspace(
     files: FakeFiles, bindings: list[Binding], loading: threading.Event
 ) -> None:
     log = FullDisk()
-    backend = Backend(proposal='p1', files=files, bind=bindings, log=log)
-    client = Client(backend, submitter='anna')
+    workspace = Workspace(proposal='p1', files=files, bind=bindings, log=log)
+    client = Client(workspace, submitter='anna')
     loading.clear()
     record = client.submit(toys.load_request(1))
     log.full = True
@@ -152,15 +152,15 @@ def test_a_failed_append_stops_the_backend(
     with pytest.raises(RuntimeError, match='no space left on device'):
         client.submit(toys.load_request(2))
     with pytest.raises(RuntimeError, match='no space left on device'):
-        backend.close()
+        workspace.close()
 
 
 def test_a_failed_append_wakes_what_waits(
     files: FakeFiles, bindings: list[Binding], loading: threading.Event
 ) -> None:
     log = FullDisk()
-    backend = Backend(proposal='p1', files=files, bind=bindings, log=log)
-    client = Client(backend, submitter='anna')
+    workspace = Workspace(proposal='p1', files=files, bind=bindings, log=log)
+    client = Client(workspace, submitter='anna')
     loading.clear()
     record = client.submit(toys.load_request(1))
     cursor = client.changes().cursor
@@ -176,4 +176,4 @@ def test_a_failed_append_wakes_what_waits(
             waiting.result(timeout=2)
     loading.set()
     with pytest.raises(RuntimeError, match='no space left on device'):
-        backend.close()
+        workspace.close()

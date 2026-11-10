@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The seams of a backend: :class:`BackendProtocol` is what a client calls,
-:class:`FileSource` and :class:`Store` are what a backend calls.
+The seams of a workspace: :class:`WorkspaceProtocol` is what a client calls,
+:class:`FileSource` and :class:`Store` are what a workspace calls.
 
 The protocol holds the rules that a client relies on. Anything that changes
 what happens belongs here, and the client only adapts: it reshapes, wraps IDs
@@ -10,7 +10,7 @@ in objects, and adds shortcuts.
 
 Records and values
 ------------------
-A backend holds the history and the values of one proposal; its clients are
+A workspace holds the history and the values of one proposal; its clients are
 connections to it, and keep nothing.
 
 Records and output values have different lifetimes. A record is small and is
@@ -18,8 +18,8 @@ kept with the proposal's history. History is dropped as a whole once the
 proposal has been idle for days to weeks: no call and no pending record. An
 output value may be large and lives only while a *keeper* keeps it:
 
-- the backend, for a record submitted without persisting its outputs, until the
-  record is released or the backend closes;
+- the workspace, for a record submitted without persisting its outputs, until the
+  record is released or the workspace closes;
 - a pending request that reads it, until the request's workflow has returned;
 - a push, a stage, or an accumulator's template that references it, until the
   binding has taken it, or the push, stage, or accumulator is released, stopped,
@@ -32,8 +32,8 @@ back. Nothing is written to the store unless a submission or a freeze persists
 it, since the framework cannot tell which outputs are worth writing.
 
 A request may reference, and a client may read, only the output values the
-backend keeps, persisted outputs, files, and the current states of its open
-accumulators. Every client of the backend reads the same values. A pending record
+workspace keeps, persisted outputs, files, and the current states of its open
+accumulators. Every client of the workspace reads the same values. A pending record
 passes this rule, so a request is not refused because what it reads is still
 running. It is refused once that record has failed or been cancelled.
 
@@ -43,7 +43,7 @@ reads, this passes along a chain. A running workflow is not interrupted: its
 record is cancelled at once, and its outputs are dropped when it returns.
 
 In the user's process, values live in its memory. A hosted service runs a
-backend for each proposal, limits its memory, and gives it a store.
+workspace for each proposal, limits its memory, and gives it a store.
 ``docs/developer/accumulators.md`` explains stages and accumulators, and
 ``packages/essspec/docs/params.md`` the terms of params.
 """
@@ -79,16 +79,17 @@ class Entry:
     stage: str | None = None
 
 
-class BackendProtocol(Protocol):
+class WorkspaceProtocol(Protocol):
     """
-    What a client calls on a backend of one proposal.
+    What a client calls on a workspace of one proposal.
 
-    Every record and accumulator of the backend's history is of its proposal. A
+    Every record and accumulator of the workspace's history is of its proposal. A
     record or accumulator ID that the history lacks raises ``KeyError``; inside a
     request, template, or push it raises ``SubmitError``, and :meth:`release` leaves
-    it alone. Once the backend closes, a call, also one waiting when it closes,
-    raises ``RuntimeError``. If the backend cannot log, the call that found this
-    raises that error, and it stops: every call then raises ``RuntimeError``.
+    it alone. Once the workspace closes (:meth:`ess.apps.Workspace.close`), a call,
+    also one waiting when it closes, raises ``RuntimeError``. If the workspace
+    cannot log, the call that found this raises that error, and it stops: every call
+    then raises ``RuntimeError``.
 
     A call returns once it is checked and logged, and leaves reading data and
     computing to the workers. Only :meth:`changes`, up to its timeout, and the reads
@@ -103,7 +104,7 @@ class BackendProtocol(Protocol):
     # Specs
 
     def specs(self) -> list[WorkflowSpec[Any, Any]]:
-        """The specs the backend runs, in the order bound."""
+        """The specs the workspace runs, in the order bound."""
         ...
 
     # Requests
@@ -135,7 +136,7 @@ class BackendProtocol(Protocol):
             Who submits, as the records name them.
         persist:
             ``True``, or the names of outputs: the store keeps these outputs instead
-            of the backend, and the other outputs are dropped. Each record completes
+            of the workspace, and the other outputs are dropped. Each record completes
             once they are written, and fails if a write fails.
 
         Returns
@@ -149,7 +150,7 @@ class BackendProtocol(Protocol):
             If a request cannot run: an invalid value, an unknown spec or file, a
             reference at a field that the spec does not mark ``Referenced[...]``, a
             reference that may not be read, or one whose data do not fit its field;
-            or if ``persist`` names an output the spec lacks, or the backend has no
+            or if ``persist`` names an output the spec lacks, or the workspace has no
             store. A reason's ``entry`` is the request's index in ``entries``, or
             ``None`` if the reason is not about one request (see
             :class:`~ess.apps.errors.FieldError`).
@@ -283,7 +284,7 @@ class BackendProtocol(Protocol):
 
     def release(self, ids: Sequence[str]) -> None:
         """
-        Let go of records, stages, and accumulators the backend keeps; others are
+        Let go of records, stages, and accumulators the workspace keeps; others are
         left alone.
 
         A released record stays in history, and its outputs are dropped once nothing
@@ -359,7 +360,7 @@ class BackendProtocol(Protocol):
     ) -> Record:
         """
         The record of the accumulator's state after the pushes logged so far, whose
-        outputs are the driver's, not a copy; the backend keeps it, or with
+        outputs are the driver's, not a copy; the workspace keeps it, or with
         ``persist``, the store (see :meth:`submit`). ``submitter`` is as for
         :meth:`submit`.
 
@@ -410,16 +411,16 @@ class FileSource(Protocol):
     """
     Which files exist, and what they hold.
 
-    A backend has one. It resolves names and finds files through it, and answers
+    A workspace has one. It resolves names and finds files through it, and answers
     through it the queries of its clients: listing files and reading their metadata.
-    A client sees only the files the backend's proposal may read. Tests use a fake
+    A client sees only the files the workspace's proposal may read. Tests use a fake
     (``testing.FakeFiles``).
 
-    The backend, its rules, and the forms tell which files fit a field or a selector
+    The workspace, its rules, and the forms tell which files fit a field or a selector
     only by the metadata the source gives, in :meth:`metadata` and :meth:`list`. A
     source that corrects the metadata of a file, such as the role of a run tagged
     wrongly, corrects them in both, so that each sees the file as corrected.
-    A role is optional, and what the backend does not check (:meth:`Selector.of`).
+    A role is optional, and what the workspace does not check (:meth:`Selector.of`).
     """
 
     def resolve(self, name: FileRef) -> FileRef:
@@ -431,7 +432,7 @@ class FileSource(Protocol):
         A local path to the file, for a workflow to read: a lookup by
         identity that never raises.
 
-        The files are on a network mount, and the backend calls ``path`` for
+        The files are on a network mount, and the workspace calls ``path`` for
         each file of a request when the request is submitted, so that the
         validators of a group that holds a file see its path. So ``path``
         neither stages nor downloads the file, and does not check that it can
@@ -459,7 +460,7 @@ class Store(Protocol):
     """
     Where persisted outputs are written, and read back.
 
-    The backend is given a store; each deployment configures its own, and tests
+    The workspace is given a store; each deployment configures its own, and tests
     use a fake (``testing.FakeStore``). A value is found by the record's ID and
     the output's name, so history names no file. A store reads a value back as
     the workflow returned it. The format of each output type and the layout of

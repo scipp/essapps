@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ess.apps import Backend, Client, Record, Request, file
+from ess.apps import Client, Record, Request, Workspace, file
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows
 from ess.spec import (
     Binding,
@@ -140,15 +140,15 @@ def bindings(
 
 
 @pytest.fixture
-def backend(files: FakeFiles, bindings: list[Binding]) -> Iterator[Backend]:
-    backend = Backend(proposal='p1', files=files, bind=bindings)
-    yield backend
-    backend.close()
+def workspace(files: FakeFiles, bindings: list[Binding]) -> Iterator[Workspace]:
+    workspace = Workspace(proposal='p1', files=files, bind=bindings)
+    yield workspace
+    workspace.close()
 
 
 @pytest.fixture
-def client(backend: Backend) -> Client:
-    return Client(backend, submitter='anna')
+def client(workspace: Workspace) -> Client:
+    return Client(workspace, submitter='anna')
 
 
 @pytest.fixture
@@ -157,9 +157,9 @@ def summing() -> Sum:
 
 
 @pytest.fixture
-def summed_backend(files: FakeFiles, summing: Sum) -> Iterator[Backend]:
-    """A backend that sums TOTAL with ``summing``."""
-    backend = Backend(
+def summed_workspace(files: FakeFiles, summing: Sum) -> Iterator[Workspace]:
+    """A workspace that sums TOTAL with ``summing``."""
+    workspace = Workspace(
         proposal='p1',
         files=files,
         bind=[
@@ -168,14 +168,14 @@ def summed_backend(files: FakeFiles, summing: Sum) -> Iterator[Backend]:
             DriverBinding(TOTAL, summing),
         ],
     )
-    yield backend
-    backend.close()
+    yield workspace
+    workspace.close()
 
 
 @pytest.fixture
-def summed(summed_backend: Backend) -> Client:
-    """A client of ``summed_backend``."""
-    return Client(summed_backend, submitter='anna')
+def summed(summed_workspace: Workspace) -> Client:
+    """A client of ``summed_workspace``."""
+    return Client(summed_workspace, submitter='anna')
 
 
 @pytest.fixture
@@ -198,7 +198,7 @@ def subtracting() -> Subtracting:
 def in_place(
     files: FakeFiles, copying: Copying, subtracting: Subtracting
 ) -> Iterator[Client]:
-    """A client of a backend whose ARRAY_TOTAL and SIDES add arrays in place."""
+    """A client of a workspace whose ARRAY_TOTAL and SIDES add arrays in place."""
     bind = [
         function_binding(ARRAY, array),
         folding(ARRAY_TOTAL, add_counts_in_place),
@@ -206,12 +206,12 @@ def in_place(
         DriverBinding(SIDES, subtracting),
         DriverBinding(BOTH, subtracting),
     ]
-    backend = Backend(proposal='p1', files=files, bind=bind)
-    yield Client(backend, submitter='anna')
+    workspace = Workspace(proposal='p1', files=files, bind=bind)
+    yield Client(workspace, submitter='anna')
     copying.go.set()
     subtracting.go.set()
     subtracting.compute.set()
-    backend.close()
+    workspace.close()
 
 
 @pytest.fixture

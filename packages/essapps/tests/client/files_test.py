@@ -10,16 +10,16 @@ from itertools import islice
 
 import pytest
 
-from ess.apps import Backend, Client, Files, Selector, file
+from ess.apps import Client, Files, Selector, Workspace, file
 from ess.apps.testing import FakeFiles
 from ess.spec import FileRef
 
 
-def test_a_client_sees_only_the_files_of_its_backend_s_proposal(
-    backend: Backend, files: FakeFiles
+def test_a_client_sees_only_the_files_of_its_workspace_s_proposal(
+    workspace: Workspace, files: FakeFiles
 ) -> None:
-    mine = Client(backend, submitter='anna')
-    p2 = Backend(proposal='p2', files=files, bind=[])
+    mine = Client(workspace, submitter='anna')
+    p2 = Workspace(proposal='p2', files=files, bind=[])
     theirs = Client(p2, submitter='eve', on_close=p2.close)
     other = files.measure(4, 4.0, proposal='p2')
     existing = [files.resolve(file(run=n)) for n in (1, 2)]
@@ -38,9 +38,9 @@ def test_a_client_sees_only_the_files_of_its_backend_s_proposal(
 
 
 def test_watch_lists_again_until_a_file_is_new(
-    backend: Backend, files: FakeFiles
+    workspace: Workspace, files: FakeFiles
 ) -> None:
-    client = Client(backend, submitter='anna')
+    client = Client(workspace, submitter='anna')
     watch = client.files.watch(Selector(), interval=0.01)
     list(islice(watch, 2))
     arrives = threading.Timer(0.05, files.measure, args=(5, 5.0))
@@ -53,9 +53,9 @@ def test_watch_lists_again_until_a_file_is_new(
 
 
 def test_metadata_takes_one_or_a_list_of_files(
-    backend: Backend, files: FakeFiles
+    workspace: Workspace, files: FakeFiles
 ) -> None:
-    client = Client(backend, submitter='anna')
+    client = Client(workspace, submitter='anna')
     refs = [files.resolve(file(run=n)) for n in (1, 2)]
 
     assert client.files.metadata(refs[0])['run'] == 1

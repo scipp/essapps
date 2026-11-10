@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The backend's history: an append-only log of what ran, with which params,
+The workspace's history: an append-only log of what ran, with which params,
 and what came of it, for one proposal, which each submission and opening names.
 
 There are four events: a submission, a record that finished, an accumulator
@@ -10,8 +10,8 @@ a freeze, and its write is the record's: the record finishes once the outputs
 are written. A submission that read an accumulator, and a freeze, hold a record of
 the plain request of the state read, as the accumulator and its number of pushes,
 before the records that read it; the views list its request when it is read. The
-backend's views, such as the records by ID, are built by applying the events in
-order, when they are appended and again when a backend starts from an existing log.
+workspace's views, such as the records by ID, are built by applying the events in
+order, when they are appended and again when a workspace starts from an existing log.
 
 An event names only records and accumulators appended before it, or earlier
 in the same submission: a finish names its record, a push its accumulator, a
@@ -21,7 +21,7 @@ records backwards.
 
 Stages and accumulators are not history, and neither are output values or
 anything a binding computed; those have their own lifetime.
-A submission is one event, so a backend that stops half-way through one has
+A submission is one event, so a workspace that stops half-way through one has
 all of it or none of it.
 """
 
@@ -42,7 +42,7 @@ from .records import Params, Request, Status, Template, read_refs
 
 class NewRecord(BaseModel, frozen=True, extra='forbid'):
     """
-    One record of a submission, as the backend accepted it.
+    One record of a submission, as the workspace accepted it.
 
     ``persist`` names the outputs persisted at submission: the record
     finishes once they are written.
@@ -81,7 +81,7 @@ class Submitted(BaseModel, frozen=True, extra='forbid'):
 class Finished(BaseModel, frozen=True, extra='forbid'):
     """
     A record that finished: ``failure`` says why it failed, or why the
-    backend cancelled it. ``omitted`` names the optional outputs that the
+    workspace cancelled it. ``omitted`` names the optional outputs that the
     workflow of a completed record did not return.
     """
 
@@ -94,7 +94,7 @@ class Finished(BaseModel, frozen=True, extra='forbid'):
 
 class Opened(BaseModel, frozen=True, extra='forbid'):
     """
-    An accumulator that opened, with its template as the backend accepted it.
+    An accumulator that opened, with its template as the workspace accepted it.
 
     The template's blanks are the tables that the pushes fill. ``params``
     holds the template's other values, defaults filled in, inline values in

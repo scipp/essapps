@@ -13,7 +13,6 @@ from typing import Any
 import pytest
 
 from ess.apps import (
-    Backend,
     Client,
     NotReadable,
     Record,
@@ -21,6 +20,7 @@ from ess.apps import (
     Status,
     SubmitError,
     Template,
+    Workspace,
     file,
     local,
 )
@@ -779,8 +779,8 @@ def test_a_stopped_driver_is_dropped_before_the_accumulator_is_released(
     assert subtracting.held[0]() is None  # nothing reads it any more
 
 
-def test_closing_the_backend_drops_the_pushes_that_no_read_needs(
-    summed_backend: Backend,
+def test_closing_the_workspace_drops_the_pushes_that_no_read_needs(
+    summed_workspace: Workspace,
     summed: Client,
     summed_loads: list[Record],
     summing: toys.Sum,
@@ -791,13 +791,13 @@ def test_closing_the_backend_drops_the_pushes_that_no_read_needs(
         total.push(parts=[load.ref('value')])
     summing.adding.wait(timeout=5)
     threading.Timer(0.05, summing.go.set).start()  # so that closing can return
-    summed_backend.close()
+    summed_workspace.close()
 
-    assert summing.pushed == 1  # the push being added when the backend closed
+    assert summing.pushed == 1  # the push being added when the workspace closed
 
 
 def test_a_released_accumulator_drops_the_pushes_once_their_reader_is_cancelled(
-    summed_backend: Backend,
+    summed_workspace: Workspace,
     summed: Client,
     summed_loads: list[Record],
     summing: toys.Sum,
@@ -813,7 +813,7 @@ def test_a_released_accumulator_drops_the_pushes_once_their_reader_is_cancelled(
     client.release(read)  # and no longer once it is cancelled
     assert client.status(read) is Status.CANCELLED
     summing.go.set()
-    summed_backend.close()
+    summed_workspace.close()
 
     assert summing.pushed == 1  # the push being added when the read was cancelled
 

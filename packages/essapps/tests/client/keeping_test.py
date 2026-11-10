@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 
 
-"""What the backend keeps and every client reads, and closing."""
+"""What the workspace keeps and every client reads, and closing."""
 
 import copy
 import threading
@@ -11,7 +11,6 @@ import pytest
 
 from ess.apps import (
     Accumulator,
-    Backend,
     Client,
     NotReadable,
     Record,
@@ -19,6 +18,7 @@ from ess.apps import (
     Status,
     SubmitError,
     Template,
+    Workspace,
     local,
 )
 from ess.apps.log import Finished, Log
@@ -104,7 +104,7 @@ def test_a_released_pending_record_that_nothing_reads_is_cancelled(
         client.submit(toys.read_request(load))
 
 
-def test_closing_the_backend_cancels_the_reads_of_its_accumulator(
+def test_closing_the_workspace_cancels_the_reads_of_its_accumulator(
     files: FakeFiles, summing: toys.Sum
 ) -> None:
     log = Log()
@@ -113,8 +113,8 @@ def test_closing_the_backend_cancels_the_reads_of_its_accumulator(
         function_binding(toys.SHIFT, toys.shift),
         DriverBinding(toys.TOTAL, summing),
     ]
-    backend = Backend(proposal='p1', files=files, bind=bind, log=log)
-    client = Client(backend, submitter='anna')
+    workspace = Workspace(proposal='p1', files=files, bind=bind, log=log)
+    client = Client(workspace, submitter='anna')
     load = client.compute(toys.load_request(1))
     summing.go.clear()
     total = toys.total_accumulator(client)
@@ -122,16 +122,16 @@ def test_closing_the_backend_cancels_the_reads_of_its_accumulator(
     shifted = client.submit(toys.read_request(total))
     state = toys.state_record(client, shifted)
     threading.Timer(0.05, summing.go.set).start()
-    backend.close()
+    workspace.close()
 
     finished = {e.record: e.status for e in log if isinstance(e, Finished)}
     assert [finished[state.id], finished[shifted.id]] == [Status.CANCELLED] * 2
 
 
-def test_another_client_reads_and_references_the_records_the_backend_keeps(
-    backend: Backend, client: Client, loading: threading.Event
+def test_another_client_reads_and_references_the_records_the_workspace_keeps(
+    workspace: Workspace, client: Client, loading: threading.Event
 ) -> None:
-    other = Client(backend, submitter='bob')
+    other = Client(workspace, submitter='bob')
     done = client.compute(toys.load_request(1))
     loading.clear()
     pending = client.submit(toys.load_request(2))
@@ -144,9 +144,9 @@ def test_another_client_reads_and_references_the_records_the_backend_keeps(
 
 
 def test_another_client_goes_through_the_stages_and_reads_the_accumulators(
-    backend: Backend, client: Client
+    workspace: Workspace, client: Client
 ) -> None:
-    theirs = Client(backend, submitter='bob')
+    theirs = Client(workspace, submitter='bob')
     load = client.compute(toys.load_request(1))
     stage = toys.stage_shift(client, load)
     total = client.accumulator(Template(toys.TOTAL, blanks=('parts',)))
@@ -187,24 +187,24 @@ def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
         client.output(load, 'nope')
 
 
-def test_another_client_releases_what_the_backend_keeps(
-    backend: Backend, client: Client
+def test_another_client_releases_what_the_workspace_keeps(
+    workspace: Workspace, client: Client
 ) -> None:
     load = client.compute(toys.load_request(1))
-    Client(backend, submitter='bob').release(load)
+    Client(workspace, submitter='bob').release(load)
 
     with pytest.raises(NotReadable, match=f'record {load.id} is not kept'):
         client.output(load, 'value')
 
 
-def test_every_call_of_a_closed_backend_raises(
-    backend: Backend, client: Client
+def test_every_call_of_a_closed_workspace_raises(
+    workspace: Workspace, client: Client
 ) -> None:
     load = client.compute(toys.load_request(1))
     stage = toys.stage_shift(client, load)
     total = client.accumulator(Template(toys.TOTAL, blanks=('parts',)))
     total.push(parts=[load.ref('value')])
-    backend.close()
+    workspace.close()
 
     calls = [
         lambda: client.submit(toys.load_request(1)),
@@ -225,16 +225,16 @@ def test_every_call_of_a_closed_backend_raises(
         lambda: client.files.list(Selector()),
     ]
     for call in calls:
-        with pytest.raises(RuntimeError, match=r'^the backend is closed$'):
+        with pytest.raises(RuntimeError, match=r'^the workspace is closed$'):
             call()
 
 
 def test_closing_a_client_releases_nothing(
-    backend: Backend, loading: threading.Event
+    workspace: Workspace, loading: threading.Event
 ) -> None:
-    other = Client(backend, submitter='bob')
+    other = Client(workspace, submitter='bob')
     loading.clear()
-    with Client(backend, submitter='anna') as client:
+    with Client(workspace, submitter='anna') as client:
         pending = client.submit(toys.load_request(2))
         shifted = client.submit(toys.read_request(pending))
     loading.set()
@@ -243,7 +243,7 @@ def test_closing_a_client_releases_nothing(
     assert other.output(pending, 'value') == toys.Amount(value=2.0)
 
 
-def test_closing_a_local_client_closes_its_backend_once_its_workflows_return(
+def test_closing_a_local_client_closes_its_workspace_once_its_workflows_return(
     files: FakeFiles, loading: threading.Event
 ) -> None:
     started = threading.Event()
@@ -280,9 +280,9 @@ def test_every_output_of_a_record_or_an_accumulator_is_read_without_a_name(
     assert total.refs() == {'value': total.ref('value')}
 
 
-def test_on_close_is_called_by_each_close(backend: Backend) -> None:
+def test_on_close_is_called_by_each_close(workspace: Workspace) -> None:
     closed: list[bool] = []
-    with Client(backend, submitter='anna', on_close=lambda: closed.append(True)) as c:
+    with Client(workspace, submitter='anna', on_close=lambda: closed.append(True)) as c:
         c.close()
 
     assert closed == [True, True]

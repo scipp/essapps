@@ -1,17 +1,17 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What the backend knows, built from its log.
+What the workspace knows, built from its log.
 
 :meth:`Views.apply` is the only way the views change, and what it does
-depends on nothing but the events. A backend that applies its log again
-therefore has the views of the backend that wrote it. The backend answers
+depends on nothing but the events. A workspace that applies its log again
+therefore has the views of the workspace that wrote it. The workspace answers
 every query from the views, and reads the log only when it starts. So the
 views may change between versions, while the events must stay readable as
 long as a log is kept. What is not history, such as stages, accumulators, and
-output values, the backend keeps elsewhere.
+output values, the workspace keeps elsewhere.
 
-A log, and so the views, hold the history of one proposal: the backend's.
+A log, and so the views, hold the history of one proposal: the workspace's.
 """
 
 from __future__ import annotations

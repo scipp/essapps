@@ -1,38 +1,39 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The backend of one proposal checks requests, keeps records, and runs requests.
-It also answers queries about the files of its file source.
+A workspace holds the history and the values of one proposal: it checks
+requests, keeps records, and runs requests. It also answers queries about the
+files of its file source.
 
-The rules that clients see are in :mod:`ess.apps.protocol`, and this backend
+The rules that clients see are in :mod:`ess.apps.protocol`, and this workspace
 implements them in this process. This docstring explains how it does so and how
 its pieces fit.
 
-What the backend knows of history is its log (see ``log.py``): every submission,
+What the workspace knows of history is its log (see ``log.py``): every submission,
 finished record, opened accumulator, and push is appended as one event and then
 applied to its views (see ``views.py``). A change is checked before its event is
-appended, so the log holds only events that apply. A backend given a log that
+appended, so the log holds only events that apply. A workspace given a log that
 already has events applies them first; a log holds the history of one proposal,
 so a log with an event of another proposal is refused. Nothing the earlier
-backend kept survives, so only persisted work goes on (see
-:meth:`Backend._restart`). The log is the backend's only record of history, so
-if an append fails, for example on a full disk, the backend no longer knows its
+workspace kept survives, so only persisted work goes on (see
+:meth:`Workspace._restart`). The log is the workspace's only record of history, so
+if an append fails, for example on a full disk, the workspace no longer knows its
 own state and stops: every call waiting in it, and every later call, raises
 ``RuntimeError`` from the append's error.
 
-The backend keeps the outputs of records, and its stages and accumulators. A
-client is a connection to the backend: it keeps nothing, and every client reads
+The workspace keeps the outputs of records, and its stages and accumulators. A
+client is a connection to the workspace: it keeps nothing, and every client reads
 and references the same values. Output values, stages, accumulators, and what
-waits for what are not history. This backend keeps them in memory, so a backend
-started from an existing log cannot read the outputs of the backend that wrote
+waits for what are not history. This workspace keeps them in memory, so a workspace
+started from an existing log cannot read the outputs of the workspace that wrote
 it.
 
 Keepers and readers
 -------------------
-The backend keeps the outputs of the records it submitted without persisting
+The workspace keeps the outputs of the records it submitted without persisting
 them, until they are released (``_kept``). The pending records, steps of
 accumulators, and stages that have yet to read a value are its readers
-(``_readers``, see ``_Read``). A value is dropped when the backend does not keep
+(``_readers``, see ``_Read``). A value is dropped when the workspace does not keep
 it and no reader is left (``_drop``). A pending record whose outputs nothing
 keeps is cancelled, since they would be dropped the moment they are computed;
 cancelling lets go of what it reads, so this passes along a chain. A workflow
@@ -40,19 +41,19 @@ already running is not interrupted: its record is cancelled at once, and its
 outputs are dropped when it returns. Once a stage has staged, or a step is
 done, what the binding holds is its own.
 
-A persist request made with a submission or a freeze replaces the backend's
+A persist request made with a submission or a freeze replaces the workspace's
 hold: the worker writes the outputs named when the workflow returns, and the
 record finishes once they are written. The store may hold a value that no event
 names, written for a record cancelled meanwhile or by a write that failed
 part-way; nothing reads it.
 
-:meth:`Backend._refusal` decides what may be read, in the request phase, from
-the record's existence, whether the backend keeps it, and what it persists.
+:meth:`Workspace._refusal` decides what may be read, in the request phase, from
+the record's existence, whether the workspace keeps it, and what it persists.
 So whether a call is accepted does not depend on how far other work has run,
 and a pending record is as readable as a completed one. A read takes the
-outputs the backend keeps from memory, and persisted ones from the store, after
+outputs the workspace keeps from memory, and persisted ones from the store, after
 the write; a workflow reads the outputs it references from memory while the
-backend holds them.
+workspace holds them.
 
 A request waits until every record it references has completed, the record
 of an accumulator's state until the accumulator has reached that state, and
@@ -66,11 +67,11 @@ request through ``compute``, a stage through ``make_stage``, and an
 accumulator through ``make_accumulator``.
 
 In the *request phase*, at submission, ``checks.py`` checks what needs no data.
-The backend adds, under its lock, what depends on history and on what it
+The workspace adds, under its lock, what depends on history and on what it
 keeps: each reference is one that may be read, and its data fit the type of its
 field (see :data:`ess.spec.validation.OutputReads`).
 
-In the *call phase*, on a worker, the backend reads the output each reference
+In the *call phase*, on a worker, the workspace reads the output each reference
 names and validates each value, a row of a list on its own, by the params model
 from the JSON form the log holds, with each reference replaced by the data read
 and each file by its local path (see :func:`ess.spec.validation.validated`).
@@ -89,9 +90,9 @@ template's values by name, each read and validated by its own field, and every
 request through the stage runs through the callable the binding returned, with
 the values of the blanks. The record of such a request still names the
 template's values, but these references are provenance only: they are not
-checked against what the backend keeps, waited for, or read, except by a
+checked against what the workspace keeps, waited for, or read, except by a
 restart, which runs the record as its plain request (see
-:meth:`Backend._restart`).
+:meth:`Workspace._restart`).
 
 Accumulators
 ------------
@@ -116,9 +117,9 @@ A read pins the accumulator's state after the pushes logged so far, without
 waiting for a push to be added. A submission that references the accumulator
 logs, before its requests, one record of the plain request of the pinned state,
 as the accumulator and its number of pushes; the requests reference that
-record's outputs. The backend does not keep this record, so only the requests
+record's outputs. The workspace does not keep this record, so only the requests
 of that submission read it. The first read of a state checks the number of rows of each
-blank table against its length constraints, outside the backend's lock.
+blank table against its length constraints, outside the workspace's lock.
 
 The outputs of a state are computed outside the lock, all at once, the first time
 a record of the state or a read of its outputs needs them, and kept until the next
@@ -135,9 +136,9 @@ requests of their submissions, all logged before the push. So no wait goes round
 in a circle.
 
 Releasing an accumulator and freezing it are described at
-:meth:`~ess.apps.protocol.BackendProtocol.release` and
-:meth:`~ess.apps.protocol.BackendProtocol.freeze`, and closing the backend at
-:meth:`Backend.close`.
+:meth:`~ess.apps.protocol.WorkspaceProtocol.release` and
+:meth:`~ess.apps.protocol.WorkspaceProtocol.freeze`, and closing the workspace at
+:meth:`Workspace.close`.
 """
 
 from __future__ import annotations
@@ -185,11 +186,11 @@ from .log import (
     Submitted,
 )
 from .protocol import (
-    BackendProtocol,
     Entry,
     FileSource,
     Selection,
     Store,
+    WorkspaceProtocol,
 )
 from .records import (
     ArrayInfo,
@@ -208,7 +209,7 @@ type Spec = WorkflowSpec[Any, Any]
 
 class _Failure(Exception):
     """
-    A failure in the call phase that the backend words itself, such as a
+    A failure in the call phase that the workspace words itself, such as a
     workflow that returns no instance of its outputs model.
     """
 
@@ -357,7 +358,7 @@ class _Stage:
     staged, has stopped, or is released; it is empty from then on. The first
     call to run stages the binding under ``staging``, so that concurrent calls
     stage it once. ``call``, the callable the binding returned, and
-    ``stopped``, why staging failed, change under the backend's lock. A stage
+    ``stopped``, why staging failed, change under the workspace's lock. A stage
     that has stopped takes no more calls.
     """
 
@@ -376,7 +377,7 @@ class _Stage:
     def read_part(self, request: Request) -> Request:
         """
         The part of a call's ``request`` that the call reads: all of it until
-        the stage has staged, then only the values of its blanks; backend's
+        the stage has staged, then only the values of its blanks; workspace's
         lock held.
         """
         if self.call is None:
@@ -404,7 +405,7 @@ class _Accumulator:
     template's fixed values, until the driver is made, then the rows of each
     push by table. Each comes with the
     outputs of records it reads, which it holds as a reader. ``busy`` says a
-    worker makes the driver or pushes into it, outside the backend's lock.
+    worker makes the driver or pushes into it, outside the workspace's lock.
     ``seen`` holds the rows of each blank table logged so far, by JSON form,
     with their indexes (see :func:`.checks.distinct`).
 
@@ -420,9 +421,9 @@ class _Accumulator:
     logged: the accumulator then takes no more pushes.
 
     :meth:`outputs` computes every output of the current state the first time
-    a reader reads it, and keeps them until :meth:`drop`, which the backend
+    a reader reads it, and keeps them until :meth:`drop`, which the workspace
     calls before a push adds. They are computed under a lock of their own,
-    outside the backend's, so ``driver.outputs`` is called from one thread at a
+    outside the workspace's, so ``driver.outputs`` is called from one thread at a
     time and never while a push adds.
     """
 
@@ -468,7 +469,7 @@ class _Accumulator:
 
     def drop(self) -> None:
         """
-        Drop the outputs computed for the current state; the backend's lock
+        Drop the outputs computed for the current state; the workspace's lock
         held, and no reader left, so none computes.
         """
         self._computed = None
@@ -476,7 +477,7 @@ class _Accumulator:
     def end(self) -> None:
         """
         Drop the driver of an accumulator that takes no more readers, once
-        the last reader of its current state is done; the backend's lock held.
+        the last reader of its current state is done; the workspace's lock held.
         """
         self._computed = None
         if hasattr(self, 'driver'):  # an accumulator that failed to open has none
@@ -506,7 +507,7 @@ could move past the pinned state before its record holds it.
 """
 
 
-class Backend(BackendProtocol):
+class Workspace(WorkspaceProtocol):
     """
     Checks requests, keeps records, and runs requests of one ``proposal`` (see
     the module docstring).
@@ -517,8 +518,8 @@ class Backend(BackendProtocol):
     workflow holds one of them, so other work waits only once every worker is
     busy; submissions are accepted meanwhile. ``log`` holds history, in
     memory if not given, and ``store`` is where persisted outputs are
-    written. A backend started on an existing log needs the store the earlier
-    backend wrote to: without one, the persisted work it goes on with fails,
+    written. A workspace started on an existing log needs the store the earlier
+    workspace wrote to: without one, the persisted work it goes on with fails,
     since it has no store. Raises ``ValueError`` for a log with an event of
     another proposal.
     """
@@ -563,7 +564,7 @@ class Backend(BackendProtocol):
         self._stopped: Exception | None = None  # why an append failed
         self._closed = False
         # Not history
-        # the records whose outputs the backend keeps: those submitted without
+        # the records whose outputs the workspace keeps: those submitted without
         # persisting outputs, until released
         self._kept: set[str] = set()
         self._stages: dict[str, _Stage] = {}  # open, by ID
@@ -595,9 +596,9 @@ class Backend(BackendProtocol):
 
     def close(self) -> None:
         """
-        Release everything the backend keeps, wait until no record is pending
+        Release everything the workspace keeps, wait until no record is pending
         and no accumulator has a step to do, then let go of the workers and the
-        log. Closing again does nothing more. A backend that has stopped lets go
+        log. Closing again does nothing more. A workspace that has stopped lets go
         without waiting, drops the work not yet started, and raises.
 
         Releasing cancels the pending work that persists nothing (see
@@ -607,7 +608,7 @@ class Backend(BackendProtocol):
         """
         with self._changed:
             self._closed = True
-            if self._stopped is None:  # a backend that stopped logs nothing more
+            if self._stopped is None:  # a workspace that stopped logs nothing more
                 self._release([*self._kept, *self._stages, *self._accumulators])
             self._changed.wait_for(
                 lambda: (
@@ -624,8 +625,8 @@ class Backend(BackendProtocol):
 
     def _restart(self) -> None:
         """
-        Decide the records left pending in the log the backend started from;
-        lock held. Nothing the earlier backend kept survived, so only persisted
+        Decide the records left pending in the log the workspace started from;
+        lock held. Nothing the earlier workspace kept survived, so only persisted
         work goes on:
 
         1. A pending record is cancelled unless it persists outputs, or a
@@ -650,10 +651,10 @@ class Backend(BackendProtocol):
         runs: set[str] = set()
         for record_id in pending:
             if record_id not in needed:
-                self._finish(record_id, Status.CANCELLED, 'the backend restarted')
+                self._finish(record_id, Status.CANCELLED, 'the workspace restarted')
             elif (reason := self._unreadable(record_id, runs)) is not None:
                 self._finish(
-                    record_id, Status.FAILED, f'the backend restarted: {reason}'
+                    record_id, Status.FAILED, f'the workspace restarted: {reason}'
                 )
             else:
                 runs.add(record_id)
@@ -697,7 +698,7 @@ class Backend(BackendProtocol):
 
         The caller has checked that the event applies. What is applied is the
         event as the log holds it, as it would be when the log is read again.
-        If the append fails, the backend stops (see the module docstring).
+        If the append fails, the workspace stops (see the module docstring).
         Either way, it wakes what waits, such as :meth:`changes`.
         """
         try:
@@ -710,21 +711,21 @@ class Backend(BackendProtocol):
         self._changed.notify_all()
 
     def _check_stopped(self) -> None:
-        """Raise if the backend has stopped."""
+        """Raise if the workspace has stopped."""
         if self._stopped is not None:
             raise RuntimeError(
-                f'the backend stopped: appending to its log failed: {self._stopped}'
+                f'the workspace stopped: appending to its log failed: {self._stopped}'
             ) from self._stopped
 
     def _check_running(self) -> None:
-        """Raise if the backend has stopped or is closed."""
+        """Raise if the workspace has stopped or is closed."""
         self._check_stopped()
         if self._closed:
-            raise RuntimeError('the backend is closed')
+            raise RuntimeError('the workspace is closed')
 
     def _wait_for(self, predicate: Callable[[], bool]) -> None:
         """
-        Wait until ``predicate`` holds; lock held. Raises if the backend stops
+        Wait until ``predicate`` holds; lock held. Raises if the workspace stops
         or closes.
         """
         self._changed.wait_for(
@@ -742,10 +743,10 @@ class Backend(BackendProtocol):
         persist: bool | Sequence[str] = False,
     ) -> list[Record]:
         """
-        File names are resolved before the backend's lock is taken. The state of
+        File names are resolved before the workspace's lock is taken. The state of
         each accumulator that the requests reference is pinned to the pushes
         logged so far, and its plain request is checked outside the lock (see
-        :meth:`_check_state`). The records are pending, and the backend keeps
+        :meth:`_check_state`). The records are pending, and the workspace keeps
         their outputs, but not those of the records of states. A persist
         request is logged with the submission (see the module docstring).
         """
@@ -797,7 +798,7 @@ class Backend(BackendProtocol):
         to its accumulator name that record's outputs. A freeze logs the
         record of its state alone, with no requests. ``persisted`` names the
         outputs each request persists, and ``persist_states`` those the
-        records of the states persist, as a freeze may; the backend keeps the
+        records of the states persist, as a freeze may; the workspace keeps the
         requests' records that persist none.
         """
         ids = [uuid.uuid4().hex for _ in entries]
@@ -870,7 +871,7 @@ class Backend(BackendProtocol):
             return ()
         if self._store is None:
             raise SubmitError.at(
-                (), 'persisting needs a store, which this backend lacks'
+                (), 'persisting needs a store, which this workspace lacks'
             )
         declared = tuple(self._spec(spec_id).outputs.model_fields)
         if persist is True:
@@ -1030,7 +1031,7 @@ class Backend(BackendProtocol):
 
         This is the read rule. The record must not have failed or been
         cancelled, and a record that has completed must have returned the
-        output. The backend must keep the record, or the request's stage the
+        output. The workspace must keep the record, or the request's stage the
         output, ``also``, and it is read from memory; or the record must
         persist the output, and it is read from the store. A pending record
         passes: whether a request is accepted does not depend on how far what
@@ -1185,7 +1186,7 @@ class Backend(BackendProtocol):
     def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
         """
         The stage's callable; ``make`` stages the binding, outside the
-        backend's lock, if no call has yet.
+        workspace's lock, if no call has yet.
 
         Once staged, the binding holds what it needs, and the stage lets go of
         what its template references. If staging fails, the stage stops, and
@@ -1219,7 +1220,7 @@ class Backend(BackendProtocol):
     def _reader(self, params: Mapping[str, Any]) -> Callable[[OutputRef], Any]:
         """
         What reads the data each reference in ``params`` names: outputs held
-        in memory, or one element of each, taken under the backend's lock
+        in memory, or one element of each, taken under the workspace's lock
         now, and outside it, outputs written and no longer held from the
         store, each once, so that the references to one output give one
         object. The caller reads only what something keeps for it, so an
@@ -1249,13 +1250,13 @@ class Backend(BackendProtocol):
         Needs no lock.
         """
         if self._store is None:
-            raise NotReadable(f'{ref}: the backend has no store')
+            raise NotReadable(f'{ref}: the workspace has no store')
         return _element(self._store.read(ref.record, ref.output), ref)
 
     def _let_go(self, keys: Iterable[_Read]) -> None:
         """
         Count one reader less of each value; lock held. A record's output that
-        no reader is left for is dropped if the backend does not keep it (see
+        no reader is left for is dropped if the workspace does not keep it (see
         :meth:`_drop`), and a state of an accumulator lets the accumulator
         move on.
 
@@ -1298,7 +1299,7 @@ class Backend(BackendProtocol):
     def _drop(self, record_id: str) -> None:
         """
         Drop from memory the record's outputs that nothing keeps: not the
-        backend and no reader (see ``_readers``); lock held. A written output
+        workspace and no reader (see ``_readers``); lock held. A written output
         is read from the store.
 
         A pending record that nothing keeps and that persists nothing is
@@ -1332,7 +1333,7 @@ class Backend(BackendProtocol):
         Complete a record with the outputs its workflow returned, once those
         persisted at its submission were written, or fail it with ``failure``
         if their write failed; lock held. Then drop from memory the outputs
-        that nothing keeps (see :meth:`_drop`): the backend does not keep a
+        that nothing keeps (see :meth:`_drop`): the workspace does not keep a
         record persisting outputs, or one released while it was pending.
 
         Nothing is logged for a record cancelled meanwhile, also if its
@@ -1356,7 +1357,7 @@ class Backend(BackendProtocol):
         """Write the values to the store; why it failed, or ``None``; no lock."""
         store = self._store
         if store is None:  # a log with persist requests, read without one
-            return 'the backend has no store' if values else None
+            return 'the workspace has no store' if values else None
         try:
             for name, value in values.items():
                 store.write(record_id, name, value)
@@ -1422,7 +1423,7 @@ class Backend(BackendProtocol):
             del self._waiting[record_id]
             self._executor.submit(self._run, record_id)
 
-    # What the backend keeps
+    # What the workspace keeps
 
     def release(self, ids: Sequence[str]) -> None:
         """
@@ -1582,7 +1583,7 @@ class Backend(BackendProtocol):
     ) -> Record:
         """
         Freeze the accumulator: the record of the plain request of its state
-        after the pushes logged so far, which the backend keeps; with
+        after the pushes logged so far, which the workspace keeps; with
         ``persist``, the store keeps it instead, as for a submission (see
         :meth:`submit`).
 
@@ -1680,7 +1681,7 @@ class Backend(BackendProtocol):
     def _do_step(self, acc: _Accumulator) -> None:
         """
         Make the accumulator's driver or push into it, as its next step
-        says; on a worker, outside the backend's lock.
+        says; on a worker, outside the workspace's lock.
 
         The values are given by name, each read and validated by its own
         field (see :meth:`_typed`). If the step fails, the accumulator stops,
@@ -1882,7 +1883,7 @@ class Backend(BackendProtocol):
 
     def changes(self, after: int, *, timeout: float = 0.0) -> Changes:
         """
-        Wakes once an event is appended, or the backend closes (see
+        Wakes once an event is appended, or the workspace closes (see
         :meth:`_append`).
         """
         with self._changed:
@@ -2028,7 +2029,7 @@ class Backend(BackendProtocol):
             with self._changed:
                 self._let_go([(acc, upto)])
 
-    # Files, within the backend's proposal
+    # Files, within the workspace's proposal
 
     def files(self, selector: Selector) -> list[FileRef]:
         self._check_running()
@@ -2057,19 +2058,19 @@ def local(
     store: Store | None = None,
 ) -> Client:
     """
-    A client of its own backend in this process, running the workflows bound here.
+    A client of its own workspace in this process, running the workflows bound here.
 
-    ``bind`` lists a binding for each spec the backend runs, such as
+    ``bind`` lists a binding for each spec the workspace runs, such as
     ``[PipelineBinding(IOFQ, ...), DriverBinding(IOFQ_MULTI, ...)]``. Since the
     code runs in this process, a binding may also be of code defined in a
     notebook, such as ``function_binding(IOFQ, iofq)``.
 
-    Closing the client closes the backend (see :meth:`Backend.close`): it
-    releases everything the backend keeps, which cancels the pending work that
+    Closing the client closes the workspace (see :meth:`Workspace.close`): it
+    releases everything the workspace keeps, which cancels the pending work that
     persists nothing, and waits until what is persisted is written. A client that
     is never closed ends with its process. Without a ``store``, persisting is
-    refused. The backend keeps history in memory, so its records end with the
+    refused. The workspace keeps history in memory, so its records end with the
     process.
     """
-    backend = Backend(proposal=proposal, files=files, bind=bind, store=store)
-    return Client(backend, submitter=submitter, on_close=backend.close)
+    workspace = Workspace(proposal=proposal, files=files, bind=bind, store=store)
+    return Client(workspace, submitter=submitter, on_close=workspace.close)

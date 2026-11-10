@@ -13,7 +13,7 @@ import pytest
 import sciline
 from pydantic import BaseModel, Field
 
-from ess.apps import Backend, Client, Status, SubmitError, Template, file
+from ess.apps import Client, Status, SubmitError, Template, Workspace, file
 from ess.apps.testing import FakeFiles, read_file
 from ess.spec import RunFile, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
@@ -127,9 +127,9 @@ def client(
             keys={**FILE_KEYS, 'offsets': (Offsets,), 'total': (Total,)},
         ),
     ]
-    backend = Backend(proposal='p1', files=files, bind=bind)
-    yield Client(backend, submitter='anna')
-    backend.close()
+    workspace = Workspace(proposal='p1', files=files, bind=bind)
+    yield Client(workspace, submitter='anna')
+    workspace.close()
 
 
 def test_a_stage_loads_its_run_once(client: Client, loaded: list[float]) -> None:
@@ -182,8 +182,8 @@ def test_a_field_without_a_key_cannot_be_a_blank(
     binding = PipelineBinding(
         SHIFT, make_pipeline, keys={**FILE_KEYS, 'annotation': (), 'value': (Shifted,)}
     )
-    backend = Backend(proposal='p1', files=files, bind=[binding])
-    client = Client(backend, submitter='anna')
+    workspace = Workspace(proposal='p1', files=files, bind=[binding])
+    client = Client(workspace, submitter='anna')
     annotate = client.stage(
         Template(SHIFT, params={'sample': file(run=1)}, blanks=('annotation',))
     )
@@ -192,4 +192,4 @@ def test_a_field_without_a_key_cannot_be_a_blank(
 
     assert client.status(record) is Status.FAILED
     assert "['annotation']: without a key" in str(client.failure(record))
-    backend.close()
+    workspace.close()

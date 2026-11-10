@@ -4,7 +4,7 @@
 """
 Fixtures of the user stories (docs/developer/user-stories.md), over the toys.
 
-After each story, every record whose outputs the backend still keeps is run
+After each story, every record whose outputs the workspace still keeps is run
 again as its request by a client, and must give the same outputs (``replay``).
 """
 
@@ -17,12 +17,12 @@ from typing import Any
 import pytest
 
 from ess.apps import (
-    Backend,
     Client,
     NotReadable,
     Record,
     SpecId,
     Status,
+    Workspace,
 )
 from ess.apps.log import Log
 from ess.apps.testing import (
@@ -56,17 +56,17 @@ def store() -> FakeStore:
 
 @pytest.fixture
 def history() -> Log:
-    """The history of the backend, in memory, which an upgrade takes over."""
+    """The history of the workspace, in memory, which an upgrade takes over."""
     return Log()
 
 
 @pytest.fixture
-def backends(
+def workspaces(
     files: FakeFiles, store: FakeStore, history: Log
-) -> Iterator[list[Backend]]:
-    """The backend, and those that upgrades started after it; the current one last."""
-    backends = [
-        Backend(
+) -> Iterator[list[Workspace]]:
+    """The workspace, and those that upgrades started after it; the current one last."""
+    workspaces = [
+        Workspace(
             proposal='p1',
             files=files,
             bind=list(TOYS.values()),
@@ -74,9 +74,9 @@ def backends(
             store=store,
         )
     ]
-    yield backends
-    for backend in backends:
-        backend.close()
+    yield workspaces
+    for workspace in workspaces:
+        workspace.close()
 
 
 @pytest.fixture
@@ -90,38 +90,40 @@ def upgrade(
     files: FakeFiles,
     store: FakeStore,
     history: Log,
-    backends: list[Backend],
+    workspaces: list[Workspace],
     clients: list[Client],
 ) -> Callable[..., Client]:
     """
-    A client of a new backend over the same files, history, and store,
+    A client of a new workspace over the same files, history, and store,
     which offers the given toy specs, every one by default; ``connect`` then
-    makes clients of it. The upgrade closes the backend before it, which
+    makes clients of it. The upgrade closes the workspace before it, which
     cancels the work that persists nothing and waits for the rest.
     """
 
     def upgrade(specs: list[WorkflowSpec[Any, Any]] | None = None) -> Client:
-        backends[-1].close()
+        workspaces[-1].close()
         bind = (
             list(TOYS.values())
             if specs is None
             else [TOYS[SpecId.of(s)] for s in specs]
         )
-        backends.append(
-            Backend(proposal='p1', files=files, bind=bind, log=history, store=store)
+        workspaces.append(
+            Workspace(proposal='p1', files=files, bind=bind, log=history, store=store)
         )
-        clients.append(Client(backends[-1], submitter='anna'))
+        clients.append(Client(workspaces[-1], submitter='anna'))
         return clients[-1]
 
     return upgrade
 
 
 @pytest.fixture
-def connect(backends: list[Backend], clients: list[Client]) -> Callable[..., Client]:
-    """A new client of the current backend, of proposal p1."""
+def connect(
+    workspaces: list[Workspace], clients: list[Client]
+) -> Callable[..., Client]:
+    """A new client of the current workspace, of proposal p1."""
 
     def connect(user: str = 'anna') -> Client:
-        clients.append(Client(backends[-1], submitter=user))
+        clients.append(Client(workspaces[-1], submitter=user))
         return clients[-1]
 
     return connect
@@ -156,30 +158,30 @@ def repair(files: FakeFiles) -> Callable[..., None]:
 
 
 @pytest.fixture(autouse=True)
-def replay(backends: list[Backend], clients: list[Client]) -> Iterator[None]:
+def replay(workspaces: list[Workspace], clients: list[Client]) -> Iterator[None]:
     """
-    After the story, a client of the backend that is open runs every completed
-    record whose outputs the backend keeps again as its request, and compares
+    After the story, a client of the workspace that is open runs every completed
+    record whose outputs the workspace keeps again as its request, and compares
     the outputs.
 
     This is a safety net over every story: a record says all that its outputs
-    depend on. A reference to an output the backend does not keep, such as one
+    depend on. A reference to an output the workspace does not keep, such as one
     of the record of an accumulator's state, is replaced by the same output of
     that record run again. No record names an accumulator in a reference:
     each names a record that the provenance finds. It runs before the
-    backends are closed.
+    workspaces are closed.
     """
     yield
     for client in list(clients):
         try:
             records = {r.id: r for r in client.records()}
-        except RuntimeError:  # its backend is closed
+        except RuntimeError:  # its workspace is closed
             continue
         client.wait(list(records.values()))
         for record in records.values():
             client.provenance(record)
         _replay(client, records)
-        return  # every client of the backend reads the same values
+        return  # every client of the workspace reads the same values
 
 
 def _replay(client: Client, records: Mapping[str, Record]) -> None:

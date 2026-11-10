@@ -12,10 +12,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ess.apps import (
     ArrayInfo,
-    Backend,
     Client,
     NotReadable,
     RecordFailed,
+    Workspace,
 )
 from ess.apps.testing import FakeFiles, FakeStore
 from ess.spec import WorkflowSpec, function_binding
@@ -107,7 +107,7 @@ def gate() -> threading.Event:
 
 
 @pytest.fixture
-def backend(tmp_path: Path, gate: threading.Event) -> Iterator[Backend]:
+def workspace(tmp_path: Path, gate: threading.Event) -> Iterator[Workspace]:
     def image(params: Params) -> Outputs:
         gate.wait()
         scale = params.settings.scale
@@ -129,20 +129,20 @@ def backend(tmp_path: Path, gate: threading.Event) -> Iterator[Backend]:
             note=params.settings,
         )
 
-    backend = Backend(
+    workspace = Workspace(
         proposal='p1',
         files=FakeFiles('p1', tmp_path),
         bind=[function_binding(IMAGE, image), function_binding(HELD, held)],
         store=FakeStore(),
     )
-    yield backend
+    yield workspace
     gate.set()  # a test that failed may leave a record pending
-    backend.close()
+    workspace.close()
 
 
 @pytest.fixture
-def client(backend: Backend) -> Client:
-    return Client(backend, submitter='anna')
+def client(workspace: Workspace) -> Client:
+    return Client(workspace, submitter='anna')
 
 
 def test_a_group_is_its_arrays_by_what_they_are_and_its_other_fields_by_value(
@@ -243,9 +243,9 @@ def test_a_value_released_by_the_client_is_not_readable(client: Client) -> None:
 
 
 def test_another_client_describes_a_value_kept_or_persisted(
-    backend: Backend, client: Client
+    workspace: Workspace, client: Client
 ) -> None:
-    other = Client(backend, submitter='bob')
+    other = Client(workspace, submitter='bob')
     kept = other.compute(IMAGE)
     persisted = other.compute(IMAGE, persist=('image',))
 

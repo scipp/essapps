@@ -6,7 +6,7 @@ Rules and the trigger loop: automatic reduction of new files, as described in
 
 What to run for a file belongs to the application, which knows the technique: how
 to pair runs, and which requests one file needs. The trigger loop is a controller
-of a client that never runs in the backend. It finds the new files and hands each
+of a client that never runs in the workspace. It finds the new files and hands each
 to the application's function. Which files a rule has handled comes from the
 records under the rule's label. The loop reads them from the proposal's changes
 (:meth:`~ess.apps.Client.changes`), from the start when it starts, so it holds no
@@ -46,7 +46,7 @@ class Rule:
 
     ``submit`` does not wait for a record or read an output: the loop calls one
     function at a time, and a request can reference a pending record. It persists what
-    it submits: the loop never releases, so the backend should keep nothing for it,
+    it submits: the loop never releases, so the workspace should keep nothing for it,
     and a reference must stay readable after a restart.
     """
 

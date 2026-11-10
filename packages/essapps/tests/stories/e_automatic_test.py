@@ -82,7 +82,7 @@ def test_e2_automatic_reduction_goes_quiet(
         Template(toys.IOFQ, params={'normalization': None}, blanks=('sample',)),
         Selector(role='sample'),
     )
-    upgraded = upgrade(specs=[toys.IOFQ_V2])  # a backend without version 1
+    upgraded = upgrade(specs=[toys.IOFQ_V2])  # a workspace without version 1
     loop = TriggerLoop(upgraded, rules=[rule])
     run = measure(1, [1.0, 1.0], role='sample')
 

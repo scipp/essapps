@@ -16,7 +16,6 @@ import pytest
 from pydantic import BaseModel, Field
 
 from ess.apps import (
-    Backend,
     Client,
     NotReadable,
     Record,
@@ -24,6 +23,7 @@ from ess.apps import (
     Status,
     SubmitError,
     Template,
+    Workspace,
     file,
     local,
 )
@@ -231,21 +231,21 @@ def log() -> Log:
 
 
 @pytest.fixture
-def backend(
+def workspace(
     files: FakeFiles,
     store: GatedStore,
     bind: list[Binding],
     log: Log,
-) -> Iterator[Backend]:
-    backend = Backend(proposal='p1', files=files, bind=bind, store=store, log=log)
-    yield backend
+) -> Iterator[Workspace]:
+    workspace = Workspace(proposal='p1', files=files, bind=bind, store=store, log=log)
+    yield workspace
     store.gate.set()
-    backend.close()
+    workspace.close()
 
 
 @pytest.fixture
-def connect(backend: Backend) -> Callable[[], Client]:
-    return lambda: Client(backend, submitter='anna')
+def connect(workspace: Workspace) -> Callable[[], Client]:
+    return lambda: Client(workspace, submitter='anna')
 
 
 @pytest.fixture
@@ -369,7 +369,7 @@ def test_a_frozen_accumulator_persisted_is_kept_by_the_store(
 
 
 def test_closing_cancels_what_persists_nothing_and_runs_what_persisted_work_reads(
-    backend: Backend,
+    workspace: Workspace,
     client: Client,
     store: GatedStore,
     log: Log,
@@ -380,7 +380,7 @@ def test_closing_cancels_what_persists_nothing_and_runs_what_persisted_work_read
     shifted = client.submit(SHIFT, params={'source': load.ref('value')}, persist=True)
     other = client.submit(LOAD, params=_sample(2))
     threading.Timer(0.05, loading.set).start()
-    backend.close()
+    workspace.close()
 
     finished = {e.record: e.status for e in log if isinstance(e, Finished)}
     assert [finished[r.id] for r in (load, shifted, other)] == [
@@ -455,26 +455,26 @@ def test_references_to_one_persisted_output_read_it_from_the_store_once(
 def start(
     files: FakeFiles, bind: list[Binding], store: GatedStore
 ) -> Iterator[Callable[[Path], Client]]:
-    """A client of a new backend over the log at a path, with the same store."""
-    backends: list[Backend] = []
+    """A client of a new workspace over the log at a path, with the same store."""
+    workspaces: list[Workspace] = []
 
     def start(path: Path) -> Client:
-        backends.append(
-            Backend(proposal='p1', files=files, bind=bind, log=Log(path), store=store)
+        workspaces.append(
+            Workspace(proposal='p1', files=files, bind=bind, log=Log(path), store=store)
         )
-        return Client(backends[-1], submitter='anna')
+        return Client(workspaces[-1], submitter='anna')
 
     yield start
     store.gate.set()
-    for backend in backends:
-        backend.close()
+    for workspace in workspaces:
+        workspace.close()
 
 
 @pytest.fixture
 def restart(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> Callable[[Path], Client]:
-    """A client of a backend over a copy of a log, as if the old one had stopped."""
+    """A client of a workspace over a copy of a log, as if the old one had stopped."""
 
     def restart(path: Path) -> Client:
         copy = tmp_path / uuid.uuid4().hex
@@ -496,7 +496,7 @@ def _referenced(client: Client, record: Record) -> tuple[str, ...]:
     return tuple(accepted)
 
 
-def test_readable_gives_every_output_returned_of_a_record_the_backend_keeps(
+def test_readable_gives_every_output_returned_of_a_record_the_workspace_keeps(
     client: Client,
 ) -> None:
     load = client.compute(LOAD, params=_sample(1))  # returns no note
@@ -598,7 +598,7 @@ def test_a_restart_runs_pending_persisted_work_and_cancels_the_rest(
         Status.CANCELLED,
         Status.COMPLETED,
     ]
-    assert again.failure(alone) == 'the backend restarted'
+    assert again.failure(alone) == 'the workspace restarted'
     assert again.output(total, 'value') == Amount(value=3.0)
 
 
@@ -636,9 +636,9 @@ def test_a_restart_fails_persisted_work_that_reads_what_is_gone(
         Status.COMPLETED,
     ]
     assert again.failure(records[1:4]) == [
-        f'the backend restarted: record {kept.id} output value was not persisted',
-        'the backend restarted: the driver it reads is gone',
-        f'the backend restarted: record {state.id} failed',
+        f'the workspace restarted: record {kept.id} output value was not persisted',
+        'the workspace restarted: the driver it reads is gone',
+        f'the workspace restarted: record {state.id} failed',
     ]
 
 
@@ -668,7 +668,7 @@ def test_a_restart_runs_a_call_through_a_stage_as_its_plain_request(
 
     assert again.wait(calls) == [Status.FAILED, Status.COMPLETED]
     assert again.failure(calls[0]) == (
-        f'the backend restarted: record {kept.id} output value was not persisted'
+        f'the workspace restarted: record {kept.id} output value was not persisted'
     )
     assert again.output(calls[1], 'value') == Amount(value=4.0)
 
@@ -711,7 +711,7 @@ def test_a_pending_record_that_persists_outlives_its_release_and_its_last_reader
     load = client.submit(LOAD, params=_sample(1), persist=True)
     shift = client.submit(SHIFT, params={'source': load.ref('value')})
 
-    client.release(load)  # the store keeps it, not the backend
+    client.release(load)  # the store keeps it, not the workspace
     client.release(shift)  # cancels the reader, which lets go of ``load``
 
     assert client.status(load) is Status.PENDING

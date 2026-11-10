@@ -83,7 +83,7 @@ def _add_grids(total: Grid, part: Grid) -> Grid:
 
 @pytest.fixture
 def grids(files: FakeFiles) -> Iterator[Client]:
-    """A client of a backend with GRID, a 3x2 grid per run, and GRID_TOTAL."""
+    """A client of a workspace with GRID, a 3x2 grid per run, and GRID_TOTAL."""
     bind = [function_binding(GRID, grid), toys.folding(GRID_TOTAL, _add_grids)]
     with local(proposal='p1', files=files, bind=bind) as client:
         yield client

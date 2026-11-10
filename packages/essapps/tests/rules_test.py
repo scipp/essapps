@@ -11,7 +11,6 @@ import pytest
 from pydantic import BaseModel, Field
 
 from ess.apps import (
-    Backend,
     Client,
     Record,
     Rule,
@@ -20,6 +19,7 @@ from ess.apps import (
     SubmitError,
     Template,
     TriggerLoop,
+    Workspace,
     file,
 )
 from ess.apps.testing import CountingClient, FakeFiles, FakeStore, read_file
@@ -128,7 +128,7 @@ def files(tmp_path: Path) -> FakeFiles:
 
 @pytest.fixture
 def client(files: FakeFiles) -> Iterator[Client]:
-    backend = Backend(
+    workspace = Workspace(
         proposal='p1',
         files=files,
         bind=[
@@ -142,8 +142,8 @@ def client(files: FakeFiles) -> Iterator[Client]:
         ],
         store=FakeStore(),
     )
-    yield Client(backend, submitter='anna')
-    backend.close()
+    yield Client(workspace, submitter='anna')
+    workspace.close()
 
 
 def _rule(template: Template, at: str, *, name: str = 'rule', **kw: Any) -> Rule:
@@ -600,7 +600,7 @@ def test_two_rules_with_one_label_in_one_step_submit_each_file_once(
     assert len(client.records(label='loaded')) == 1
 
 
-def test_a_file_at_a_list_parameter_is_refused_by_the_backend(
+def test_a_file_at_a_list_parameter_is_refused_by_the_workspace(
     client: Client, files: FakeFiles
 ) -> None:
     sample = files.measure(1, 2.0, role='sample')

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""The backend's log: what it holds, and a backend started from it."""
+"""The workspace's log: what it holds, and a workspace started from it."""
 
 import json
 import shutil
@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 
 from ess.apps import (
     Accumulator,
-    Backend,
     Client,
     NotReadable,
     Record,
@@ -24,6 +23,7 @@ from ess.apps import (
     Status,
     SubmitError,
     Template,
+    Workspace,
     file,
 )
 from ess.apps.log import (
@@ -151,8 +151,8 @@ def windows() -> list[Any]:
 def start(
     files: FakeFiles, loading: threading.Event, windows: list[Any]
 ) -> Iterator[Callable[[Path], Client]]:
-    """A client of a new backend over the log at a path."""
-    backends: list[Backend] = []
+    """A client of a new workspace over the log at a path."""
+    workspaces: list[Workspace] = []
 
     def load(params: LoadParams) -> ValueOutputs:
         window = params.window
@@ -167,19 +167,21 @@ def start(
             kept_rows(TOTAL, total),
             kept_rows(RUNS, runs),
         ]
-        backends.append(Backend(proposal='p1', files=files, bind=bind, log=Log(path)))
-        return Client(backends[-1], submitter='anna')
+        workspaces.append(
+            Workspace(proposal='p1', files=files, bind=bind, log=Log(path))
+        )
+        return Client(workspaces[-1], submitter='anna')
 
     yield start
-    for backend in backends:
-        backend.close()
+    for workspace in workspaces:
+        workspace.close()
 
 
 @pytest.fixture
 def restart(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> Callable[[Path], Client]:
-    """A client of a backend over a copy of a log, as if the old one had stopped."""
+    """A client of a workspace over a copy of a log, as if the old one had stopped."""
 
     def restart(path: Path) -> Client:
         copy = tmp_path / uuid.uuid4().hex
@@ -223,7 +225,7 @@ def _record(client: Client, record_id: str) -> Record:
     return record
 
 
-def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
+def test_a_workspace_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
     tmp_path: Path,
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
@@ -387,7 +389,7 @@ def test_records_pending_in_the_log_are_cancelled_at_a_restart(
 
     records = [pending, state, read]
     assert again.status(records) == [Status.CANCELLED] * 3  # nothing keeps them
-    assert again.failure(records) == ['the backend restarted'] * 3
+    assert again.failure(records) == ['the workspace restarted'] * 3
     with pytest.raises(SubmitError, match=f'record {pending.id} cancelled'):
         again.submit(TOTAL, params={'part': [pending.ref('value')]})
     with pytest.raises(SubmitError, match=f'accumulator {total.id} is not open'):
@@ -496,7 +498,7 @@ def test_a_log_file_has_one_writer(tmp_path: Path) -> None:
     Log(path).close()  # free once the first has let go
 
 
-def test_a_backend_refuses_a_log_of_another_proposal(
+def test_a_workspace_refuses_a_log_of_another_proposal(
     tmp_path: Path, files: FakeFiles
 ) -> None:
     path = tmp_path / 'log'
@@ -504,7 +506,7 @@ def test_a_backend_refuses_a_log_of_another_proposal(
     _write(path, _submitted('load', request))
 
     with Log(path) as log, pytest.raises(ValueError, match='proposal p1, not p2'):
-        Backend(proposal='p2', files=files, bind=[], log=log)
+        Workspace(proposal='p2', files=files, bind=[], log=log)
 
 
 def test_a_last_line_cut_short_is_dropped(tmp_path: Path, files: FakeFiles) -> None:
@@ -512,7 +514,7 @@ def test_a_last_line_cut_short_is_dropped(tmp_path: Path, files: FakeFiles) -> N
     request = Request(LOAD, params={'sample': files.resolve(file(run=1))})
     _write(path, _submitted('load', request))
     with path.open('ab') as log:
-        log.write(b'{"kind":"finish')  # the backend stopped while writing
+        log.write(b'{"kind":"finish')  # the workspace stopped while writing
 
     _write(path, Finished(record='load', status=Status.COMPLETED))
 

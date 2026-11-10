@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 
 
-"""The backend's checks that no client can reach."""
+"""The workspace's checks that no client can reach."""
 
 from collections.abc import Iterator
 from pathlib import Path
@@ -11,8 +11,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, Field
 
-from ess.apps import Backend, Request, SubmitError, Template, file
-from ess.apps.protocol import BackendProtocol, Entry
+from ess.apps import Request, SubmitError, Template, Workspace, file
+from ess.apps.protocol import Entry, WorkspaceProtocol
 from ess.apps.testing import FakeFiles, StagedFunction, read_file
 from ess.spec import RunFile, WorkflowSpec, function_binding
 
@@ -64,23 +64,23 @@ def scale(params: ScaleParams) -> Value:
 
 
 @pytest.fixture
-def backend(tmp_path: Path) -> Iterator[Backend]:
+def workspace(tmp_path: Path) -> Iterator[Workspace]:
     files = FakeFiles(proposal='p1', directory=tmp_path)
     for n in (1, 2):
         files.measure(n, float(n))
-    backend = Backend(
+    workspace = Workspace(
         proposal='p1',
         files=files,
         bind=[function_binding(LOAD, load), StagedFunction(SCALE, scale)],
     )
-    yield backend
-    backend.close()
+    yield workspace
+    workspace.close()
 
 
 def test_a_request_through_a_stage_must_have_the_stage_s_values(
-    backend: Backend,
+    workspace: Workspace,
 ) -> None:
-    stage, template = backend.open_stage(
+    stage, template = workspace.open_stage(
         Template(SCALE, params={'sample': file(run=1)}, blanks=('scaling',))
     )
     twice = {'scaling': {'factor': 2.0}}
@@ -92,25 +92,25 @@ def test_a_request_through_a_stage_must_have_the_stage_s_values(
     }
     for reason, request in refused.items():
         with pytest.raises(SubmitError, match=reason):
-            backend.submit([Entry(request, stage=stage)], 'anna')
+            workspace.submit([Entry(request, stage=stage)], 'anna')
 
-    (record,) = backend.submit(
+    (record,) = workspace.submit(
         [Entry(template.fill(params=twice), stage=stage)], 'anna'
     )
     assert record.request.params['sample'] == template.params['sample']
 
 
-def test_the_backend_offers_only_the_protocol_and_its_own_close() -> None:
+def test_the_workspace_offers_only_the_protocol_and_its_own_close() -> None:
     def public(cls: type) -> set[str]:
         return {name for name in vars(cls) if not name.startswith('_')}
 
-    assert public(Backend) == public(BackendProtocol) | {'close'}
+    assert public(Workspace) == public(WorkspaceProtocol) | {'close'}
 
 
-def test_a_refused_request_is_named_by_its_index(backend: Backend) -> None:
+def test_a_refused_request_is_named_by_its_index(workspace: Workspace) -> None:
     accepted = Request(LOAD, params={'sample': file(run=1)})
 
     with pytest.raises(SubmitError) as raised:
-        backend.submit([Entry(accepted), Entry(Request(LOAD))], 'anna')
+        workspace.submit([Entry(accepted), Entry(Request(LOAD))], 'anna')
 
     assert {error.entry for error in raised.value.errors} == {1}

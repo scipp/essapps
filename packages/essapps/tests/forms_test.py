@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from ess.apps import Backend, Client, Record, Status, SubmitError, Template
+from ess.apps import Client, Record, Status, SubmitError, Template, Workspace
 from ess.apps import file as file_ref
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
 from ess.spec import (
@@ -306,7 +306,7 @@ def client(tmp_path: Path) -> Iterator[Client]:
     files.measure(1, 1.0)
     files.measure(2, 2.0)
     files.measure(3, 10.0, kind='mask')
-    backend = Backend(
+    workspace = Workspace(
         proposal='p1',
         files=files,
         bind=[
@@ -333,8 +333,8 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(MASKED, masked),
         ],
     )
-    yield Client(backend, submitter='anna')
-    backend.close()
+    yield Client(workspace, submitter='anna')
+    workspace.close()
 
 
 @pytest.fixture
@@ -888,12 +888,12 @@ def test_a_reference_at_a_field_of_a_row_reaches_the_binding_as_its_data(
         given.extend(row.transmission for row in params.samples)
         return Value(value=sum(r.transmission.fraction.value for r in params.samples))
 
-    backend = Backend(
+    workspace = Workspace(
         proposal='p1',
         files=files,
         bind=[function_binding(LOAD, measure), function_binding(SAMPLES, samples)],
     )
-    client = Client(backend, submitter='anna')
+    client = Client(workspace, submitter='anna')
     try:
         loaded = client.compute(LOAD, params={'sample': file_ref(run=1)})
         row = {'run': file_ref(run=1), 'transmission': loaded.ref('transmission')}
@@ -915,4 +915,4 @@ def test_a_reference_at_a_field_of_a_row_reaches_the_binding_as_its_data(
             'not fit MeasuredTransmission'
         )
     finally:
-        backend.close()
+        workspace.close()
