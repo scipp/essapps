@@ -31,22 +31,15 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import yaml
-from pydantic import TypeAdapter
 
 from ..client import Client
 from ..errors import SubmitError
 from ..folder import open_folder, scan_folder
-from ..records import Status, Template
+from ..records import Status
 from . import frames
 from .export import export_table
 from .reduction import file_infos
-from .text import with_latest
-
-
-def load_template(path: Path) -> Template:
-    """The template in a YAML file, which may be JSON, with files as written."""
-    return TypeAdapter(Template).validate_python(yaml.safe_load(path.read_text()))
+from .text import load_template, with_latest
 
 
 def _named(name: str) -> Any:

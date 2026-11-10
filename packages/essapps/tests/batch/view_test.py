@@ -6,19 +6,22 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import panel as pn
 import pytest
 from pydantic import BaseModel
 
-from ess.apps import Client, Listing, Record
-from ess.apps.batch import Batch, CorrectedFiles
+from ess.apps import Client, Listing, Record, Template
+from ess.apps.batch import Batch, CorrectedFiles, cli
+from ess.apps.batch.frames import RESULT, read_table, rows_of, write_table
 from ess.apps.batch.panel import BatchView, RunSheet
 from ess.apps.batch.panel.cells import cell_text
-from ess.apps.batch.panel.demo import build
+from ess.apps.batch.panel.demo import build, open_demo
+from ess.apps.batch.text import write_template
 from ess.apps.panel import App
 from ess.apps.testing import FakeFiles
 
-from .toys import COLUMNS, STAGED, Gate, Measure
+from .toys import COLUMNS, STAGED, Gate, Measure, Params
 
 pn.extension('tabulator')
 
@@ -445,11 +448,138 @@ def test_the_app_shows_its_tabs_first_and_refreshes_them(
     assert results(view)['1'] == 'completed'
 
 
+def demo_view(directory: Path, samples: int = 4) -> BatchView:
+    """The batch tab of the demo on ``directory``; close its client."""
+    view = build(*open_demo(directory, samples)).tabs['Batch']
+    assert isinstance(view, BatchView)
+    return view
+
+
 def test_the_demo_builds_and_reduces(tmp_path: Path) -> None:
-    app = build(tmp_path, samples=4)
-    view = app.tabs['Batch']
+    view = demo_view(tmp_path)
 
-    records = view.reduce_all()
+    with view.batch.client as client:
+        records = view.reduce_all()
+        assert set(client.wait(records).values()) == {'completed'}
 
-    assert set(app.client.wait(records).values()) == {'completed'}
-    app.client.close()
+
+# The files of the command
+
+
+@pytest.fixture
+def reduced(view: BatchView, client: Client) -> BatchView:
+    view.reduce_all()
+    done(view, client)
+    return view
+
+
+def test_rows_loaded_from_a_table_take_the_place_of_the_scan_under_the_edits(
+    view: BatchView, tmp_path: Path
+) -> None:
+    view.batch.rows = view.batch.rows.edit('1', {'thickness': 3.0})
+    path = tmp_path / 'rows.csv'
+    table = {'key': ['1', 'new'], 'sample': ['1', '2'], 'transmission': ['', '']}
+    write_table(pd.DataFrame(table | {'thickness': ['', '']}), path)
+    view.path.value = str(path)
+
+    view.load_rows()
+
+    assert results(view) == {'1': 'incomplete', 'new': 'incomplete'}
+    assert view.batch.rows['1'].values['thickness'] == 3.0
+    assert view.message.object == 'Loaded 2 rows.'
+
+
+def test_a_table_that_lacks_a_column_is_refused_in_the_message(
+    view: BatchView, tmp_path: Path
+) -> None:
+    path = tmp_path / 'rows.csv'
+    write_table(pd.DataFrame({'key': ['a'], 'sample': ['1']}), path)
+    view.path.value = str(path)
+
+    view.load_rows()
+
+    assert 'transmission' in view.message.object
+    assert list(results(view)) == ['1', '2', '3']
+
+
+def test_a_table_saved_has_the_results_and_its_rows_read_back(
+    reduced: BatchView, tmp_path: Path
+) -> None:
+    reduced.path.value = str(tmp_path / 'rows.csv')
+
+    reduced.save_rows()
+
+    table = read_table(tmp_path / 'rows.csv')
+    assert list(table['status']) == ['completed', 'completed', 'incomplete']
+    assert all(table['record'][:2])
+    assert set(RESULT) < set(table.columns)
+    rows = rows_of(table, Params, COLUMNS)
+    assert [(r.key, r.values) for r in rows] == [
+        (r.key, r.values) for r in reduced.batch.rows
+    ]
+
+
+def test_settings_saved_as_a_template_are_loaded_back(
+    view: BatchView, client: Client, tmp_path: Path
+) -> None:
+    saved = view.settings.params
+    view.path.value = str(tmp_path / 'settings.yaml')
+    view.save_settings()
+    view.settings.set({'binning': {'bins': 9}}, Listing(client))
+
+    view.load_settings()
+
+    assert view.settings.params == saved
+    assert view.message.object == 'Loaded the settings.'
+
+
+def test_a_template_with_other_blanks_is_refused_in_the_message(
+    view: BatchView, tmp_path: Path
+) -> None:
+    path = tmp_path / 'settings.yaml'
+    write_template(Template(STAGED, params={'binning': {'bins': 9}}), path)
+    view.path.value = str(path)
+
+    view.load_settings()
+
+    assert 'blanks' in view.message.object
+    assert view.settings.params['binning'] == SETTINGS['binning']
+
+
+def test_export_writes_the_files_of_the_completed_rows_selected(
+    reduced: BatchView, tmp_path: Path
+) -> None:
+    reduced.table.select_keys(['1', '3'])
+    reduced.path.value = str(tmp_path / 'out')
+
+    reduced.export_selected()
+
+    assert sorted(p.name for p in (tmp_path / 'out').iterdir()) == ['1']
+    assert (tmp_path / 'out' / '1' / 'total.h5').is_file()
+
+
+def test_the_command_reduces_what_the_demo_saved_and_the_demo_shows_it(
+    tmp_path: Path,
+) -> None:
+    view = demo_view(tmp_path, samples=3)
+    with view.batch.client:
+        for name, save in (
+            ('rows.csv', view.save_rows),
+            ('s.yaml', view.save_settings),
+        ):
+            view.path.value = str(tmp_path / name)
+            save()
+
+    status = cli.main(
+        [
+            *('-w', str(tmp_path)),
+            *('--bind', 'ess.apps.batch.panel.demo:BINDINGS'),
+            *('reduce', str(tmp_path / 's.yaml'), str(tmp_path / 'rows.csv')),
+            *('--label', 'demo', '-o', str(tmp_path / 'done.csv')),
+        ]
+    )
+
+    assert status == 0
+    view = demo_view(tmp_path)
+    with view.batch.client:
+        assert results(view) == dict.fromkeys(['1', '3', '5'], 'completed')

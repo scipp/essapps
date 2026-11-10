@@ -27,6 +27,9 @@ A file that is written before the records it reads exist names them by label
 (see :func:`with_latest`)::
 
     masks: {'@latest': masks, output: masks}
+
+A template is a YAML file (see :func:`load_template`). :func:`write_template`
+writes each file and reference in its JSON form, which reads back as the same.
 """
 
 from __future__ import annotations
@@ -37,13 +40,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, get_args, get_origin
 
-from pydantic import BaseModel
+import yaml
+from pydantic import BaseModel, TypeAdapter
 from pydantic_core import to_json
 
 from ess.spec import FileRef, field_types
 
 from ..client import Client
 from ..files import file
+from ..records import Template
 
 _KIND = re.compile(r'[a-z]+:')
 
@@ -136,3 +141,20 @@ def with_latest(client: Client, value: Any) -> Any:
         return client.latest(value['@latest'], value.get('member')).ref(value['output'])
     except KeyError as error:
         raise ValueError(f'{dict(value)}: {error.args[0]}') from None
+
+
+def load_template(path: Path) -> Template:
+    """
+    The template in a YAML file, which may be JSON, with files as written.
+    Raises ``ValueError`` if the file is not a template.
+    """
+    try:
+        return TypeAdapter(Template).validate_python(yaml.safe_load(path.read_text()))
+    except yaml.YAMLError as error:
+        raise ValueError(f'{path}: {error}') from None
+
+
+def write_template(template: Template, path: Path) -> None:
+    """Write ``template`` as :func:`load_template` reads it back."""
+    value = TypeAdapter(Template).dump_python(template, mode='json')
+    path.write_text(yaml.safe_dump(value, sort_keys=False))

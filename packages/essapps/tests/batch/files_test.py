@@ -9,8 +9,9 @@ import pytest
 import yaml
 
 from ess.apps import Template
-from ess.apps.batch.cli import load_template, main
+from ess.apps.batch.cli import main
 from ess.apps.batch.frames import read_table
+from ess.apps.batch.text import load_template
 from ess.apps.folder import open_folder
 
 from . import toys

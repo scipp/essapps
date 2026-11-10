@@ -22,7 +22,7 @@ in.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,7 @@ from pydantic import BaseModel
 from ..client import Client
 from ..records import Status, Template
 from .reduction import Batch
+from .state import RowState
 from .table import Row
 from .text import read_cell, with_named_files, write_cell
 
@@ -88,7 +89,8 @@ def rows_of(
 
     ``columns`` are the columns of the batch, parameters of ``model``. An empty
     cell is left out of the row's values. A cell that is not text, as in a table
-    made in a notebook, is its value. Raises ``ValueError`` if the table
+    made in a notebook, is its value. The other columns are info, but for
+    ``key``, which :func:`table_of` writes. Raises ``ValueError`` if the table
     lacks one of ``columns``, so that a misspelt header is not read as info, or
     has a column of another parameter, whose cells no row would use.
     """
@@ -104,26 +106,29 @@ def rows_of(
     for record in table.to_dict('records'):
         cells = {name: cell for name, cell in record.items() if not _empty(cell)}
         values = {c: _value(cells[c]) for c in columns if c in cells}
-        info = {n: str(cell) for n, cell in cells.items() if n not in columns}
+        info = {n: str(c) for n, c in cells.items() if n not in {*columns, 'key'}}
         key = str(_value(record[table.columns[0]]))
         rows.append(Row(key, with_named_files(model, values), info))
     return rows
 
 
-def table_of(rows: Iterable[Row]) -> pd.DataFrame:
+def table_of(rows: Iterable[Row], columns: Sequence[str] = ()) -> pd.DataFrame:
     """
     The table that :func:`rows_of` reads as ``rows``: key, values, then info.
-    Raises ``ValueError`` if a row's info has the name of a value or ``key``,
-    since a table has one column of a name.
+    It has a column for each of ``columns``, also one that no row has a value
+    of. Raises ``ValueError`` if a row's info has the name of a value or
+    ``key``, since a table has one column of a name.
     """
     rows = list(rows)
-    columns = {'key', *(name for row in rows for name in row.values)}
+    names = {'key', *columns, *(name for row in rows for name in row.values)}
     records = []
     for row in rows:
-        if twice := sorted(row.info.keys() & columns):
+        if twice := sorted(row.info.keys() & names):
             raise ValueError(f'{row.key}: info named as a column: {", ".join(twice)}')
         cells = {name: write_cell(value) for name, value in row.values.items()}
-        records.append({'key': row.key, **cells, **row.info})
+        records.append(
+            {'key': row.key, **dict.fromkeys(columns, ''), **cells, **row.info}
+        )
     return pd.DataFrame(records, dtype=str).fillna('')
 
 
@@ -172,7 +177,7 @@ def described(files: pd.DataFrame, run_table: pd.DataFrame) -> pd.DataFrame:
 
 
 RESULT = ('status', 'record', 'failure')
-"""The columns that :func:`reduce_table` adds, or replaces."""
+"""The columns that :func:`reduce_table` and :func:`with_results` add, or replace."""
 
 
 def reduce_table(
@@ -245,11 +250,21 @@ def reduce_table(
         raise
     finally:
         batch.close()
-    states = batch.state()
-    found = [s.record for s in states.values() if s.record is not None]
-    failure = dict(zip((r.id for r in found), client.failure(found), strict=True))
+    return with_results(client, batch.state(), table)
+
+
+def with_results(
+    client: Client, states: Mapping[str, RowState], table: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    ``table`` with the columns of :data:`RESULT`, replaced if it has them: what
+    ``states`` say of the row of each key in its first column. ``status`` is the
+    row's :attr:`~.state.RowState.text`.
+    """
     keys = table[table.columns[0]].astype(str)
     records = [states[key].record for key in keys]
+    found = [r for r in records if r is not None]
+    failure = dict(zip((r.id for r in found), client.failure(found), strict=True))
     return table.drop(columns=list(RESULT), errors='ignore').assign(
         status=[states[key].text for key in keys],
         record=['' if r is None else r.id for r in records],

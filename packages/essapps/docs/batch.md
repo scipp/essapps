@@ -34,7 +34,7 @@ view.scan()
 App(client, plots=PLOTS, tabs={'I(Q)': view}).panel().servable()
 ```
 
-`python -m ess.apps.batch.panel.demo` serves a complete application on fake files and fake workflows.
+`python -m ess.apps.batch.panel.demo [DIRECTORY]` serves a complete application on fake files and fake workflows, with its workspace in a folder (see [The app and the command on one folder](#the-app-and-the-command-on-one-folder)).
 `ess.instruments.loki.batch` holds a source and a `Batch` for the real LoKI workflows, without a view.
 
 The same logic works without widgets, in a notebook or a test:
@@ -200,7 +200,7 @@ exported = export_table(client, done, Path('reduced'))
 
 A cell that is not text is its value, and `None` or `NaN` is an empty cell, so only a table read from a file is all text. To write `None` itself in a cell, as opposed to leaving it empty, write the text `null`.
 
-**The table.** The first column holds the key of each row; it may also be a blank, as `sample` above. A column named as a blank holds its cells. A column of any other name is info, which comes back as it is. Two mistakes are refused: a blank that is no column, such as a misspelt header, and a column named as a parameter that is not a blank, whose cells no row would use. An empty cell takes the parameter's default.
+**The table.** The first column holds the key of each row; it may also be a blank, as `sample` above. A column named as a blank holds its cells. A column of any other name is info, which comes back as it is; a column named `key`, as `frames.table_of` writes the key, is not info. Two mistakes are refused: a blank that is no column, such as a misspelt header, and a column named as a parameter that is not a blank, whose cells no row would use. An empty cell takes the parameter's default.
 
 **A cell** is read as JSON if it is JSON, so `1.5`, `null`, and `{"x": 0, "y": 1}` are values, and anything else is text. Text that is JSON is written in quotes, such as `"12"` for a sample name at a string parameter; a `.csv` file doubles them, `"""12"""`. At a parameter that is a file field, or a list of them, a whole number names a run, `pid:...` a file by its kind, and other text a path, relative to the working directory. A number with a leading zero, such as `0342`, is not JSON, so it is read as a path: write `342`. The same holds for the values of the template's file. A file field inside a group takes the JSON form, `{"@ref": "file", "file": "run:60339"}`. Every file is one that the workspace's file source knows.
 
@@ -274,7 +274,31 @@ One command holds the folder at a time. If a command was killed, the next one fi
 - details of a selected row, with the reason it failed;
 - an editor: select rows, change cells, and **Update selected** writes only the changed cells, to all of them. A cell with something missing is not written and is named. To write a value that equals its default to several rows, choose the column in **Write**;
 - **Bring back removed rows**;
-- a form for a tweak of one row.
+- a form for a tweak of one row;
+- a path, and buttons that load and save the files of the command: **Load rows** and **Save rows** (a table), **Load settings** and **Save settings** (a template), and **Export selected** (a folder).
+
+## The app and the command on one folder
+
+A `BatchView` reads and writes the files of `essapps-batch`, so a person and the command share one workspace folder (`open_folder`). One process holds the folder at a time, so stop the app before the command runs:
+
+```sh
+python -m ess.apps.batch.panel.demo ws     # Save rows: rows.csv, Save settings: settings.yaml
+B="essapps-batch -w ws --bind ess.apps.batch.panel.demo:BINDINGS"
+$B reduce settings.yaml rows.csv --label demo -o done.csv
+python -m ess.apps.batch.panel.demo ws     # the rows show as completed
+```
+
+The command finds the results of the app, and the app those of the command, if both use the batch's label and the same submitter (`open_folder` gives `user`), and the outputs are persisted (`Batch(..., persist=True)`).
+
+| Button | Same as |
+|---|---|
+| **Load rows** | `batch.rows = batch.rows.rescan(frames.rows_of(frames.read_table(path), spec.params, batch.columns))` |
+| **Save rows** | `frames.with_results(client, states, frames.table_of(batch.rows, batch.columns))`, written with `frames.write_table` |
+| **Load settings** | `text.load_template(path)`, refused if of another spec or with other blanks than the columns |
+| **Save settings** | `text.write_template(batch.template(settings), path)` |
+| **Export selected** | `export.export_table` on the completed rows selected |
+
+`reduce` refuses a table with a row that cannot run, so remove the incomplete rows before saving. A table loaded takes the place of a scan, so the edits stay on top, and **Scan files** gives the rows of the files again. The `status` of a saved table is what the view shows, such as `stale` or `not reduced`. `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table. A relative path is relative to the working directory of the app.
 
 `draw(records)` gets the completed results of the rows selected, by key, and returns a Panel object.
 
@@ -313,7 +337,7 @@ Raise in the fake to make a row fail; hold it back on a `threading.Event` to kee
 
 ## What it does not do
 
-- Keep the table across sessions. A new `Batch` scans again. It finds results by key in its workspace, so `local()` per session starts with none, and a result that is not persisted is gone once its workspace closes.
+- Keep the table across sessions, but in a file that a person saves and loads. A new `Batch` scans again. It finds results by key in its workspace, so `local()` per session starts with none, and a result that is not persisted is gone once its workspace closes.
 - Show a stale result after a restart.
 - Free the values of replaced results. They stay until the workspace closes or they are released, unless the batch persists them (`persist=`).
 - Offer preparatory steps with a **Use** button. A `Referenced[...]` setting offers each record in the settings form.

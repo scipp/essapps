@@ -14,20 +14,30 @@ the scan gave them. A cell with something missing is not written, and is named
 in the message. The status of a selected row changes while a person edits
 it, so the editor is loaded again only when the selection or the row's cells
 change. Changes not yet written are lost when the selection changes.
+
+The files are those of the command ``essapps-batch`` (see :mod:`..cli`): a
+table of rows (:mod:`..frames`), a template of the settings (:mod:`..text`),
+and a folder of exported outputs (:mod:`..export`). A table loaded takes the
+place of a scan, so the edits stay on top, and a table saved has the result
+columns of :func:`..frames.with_results`, the status as the table shows it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import panel as pn
 
-from ess.apps import FieldError, Listing, Record, Status, SubmitError
+from ess.apps import FieldError, Listing, Record, SpecId, Status, SubmitError
 from ess.apps.panel import Form, Table, describe
 from ess.spec import field_types
 
-from .. import Batch, Row, RowState, ready, remaining, summary
+from .. import Batch, Row, RowState, frames, ready, remaining, summary
+from ..export import export_table
+from ..text import load_template, with_latest, with_named_files, write_template
 from .cells import cell_text, changed_cells, write_choice
 
 type Draw = Callable[[Mapping[str, Record]], Any]
@@ -120,6 +130,16 @@ class BatchView:
             self._button('Bring back removed rows', self.restore),
         )
         self._tweak_button = self._button('Submit for selected row', self.submit_tweak)
+        self.path = pn.widgets.TextInput(
+            label='File or folder', placeholder='rows.csv, settings.yaml, exported'
+        )
+        self._files = pn.Row(
+            self._button('Load rows', self.load_rows),
+            self._button('Save rows', self.save_rows),
+            self._button('Load settings', self.load_settings),
+            self._button('Save settings', self.save_settings),
+            self._button('Export selected', self.export_selected),
+        )
         self._show()
 
     @staticmethod
@@ -358,6 +378,85 @@ class BatchView:
         self._list_again()
         return record
 
+    # The files of the command
+
+    def load_rows(self) -> None:
+        """Take the rows of the table at :attr:`path` in place of a scan."""
+        batch = self.batch
+        try:
+            table = frames.read_table(Path(self.path.value))
+            rows = frames.rows_of(table, batch.spec.params, batch.columns)
+            batch.rows = batch.rows.rescan(rows)
+        except SubmitError as error:
+            self.message.object = _refused(error.errors)
+        except (OSError, ValueError) as error:
+            self.message.object = f'Cannot load the rows: {error}'
+        else:
+            self.message.object = f'Loaded {len(rows)} rows.'
+        self._list_again()
+
+    def _table(self, rows: Iterable[Row]) -> pd.DataFrame:
+        """``rows`` as a table, with what came of each, as the table shows it."""
+        table = frames.table_of(rows, self.batch.columns)
+        return frames.with_results(self.batch.client, self._states, table)
+
+    def save_rows(self) -> None:
+        """Write the rows as a table to :attr:`path`, by its suffix."""
+        try:
+            frames.write_table(self._table(self.batch.rows), Path(self.path.value))
+        except (OSError, ValueError) as error:
+            self.message.object = f'Cannot save the rows: {error}'
+        else:
+            self.message.object = f'Saved the rows to {self.path.value}.'
+
+    def load_settings(self) -> None:
+        """Show the settings of the template at :attr:`path`."""
+        batch = self.batch
+        try:
+            template = load_template(Path(self.path.value))
+            if template.spec != SpecId.of(batch.spec):
+                raise ValueError(f'it is a template of {template.spec}')
+            if set(template.blanks) != set(batch.columns):
+                raise ValueError(f'its blanks are not {", ".join(batch.columns)}')
+            settings = with_named_files(batch.spec.params, template.params)
+            self.settings.set(with_latest(batch.client, settings), self._listing)
+        except (OSError, ValueError) as error:
+            self.message.object = f'Cannot load the settings: {error}'
+        else:
+            self.message.object = 'Loaded the settings.'
+        self._show()
+
+    def save_settings(self) -> None:
+        """Write the settings as a template to :attr:`path`."""
+        try:
+            template = self.batch.template(self.settings.params)
+            write_template(template, Path(self.path.value))
+        except SubmitError as error:
+            self.message.object = _refused(error.errors)
+        except OSError as error:
+            self.message.object = f'Cannot save the settings: {error}'
+        else:
+            self.message.object = f'Saved the settings to {self.path.value}.'
+
+    def export_selected(self) -> None:
+        """Export the completed rows selected to the folder :attr:`path`."""
+        completed = [
+            self.batch.rows[k]
+            for k in self.table.selected_keys
+            if self._states[k].status is Status.COMPLETED
+        ]
+        if not completed:
+            self.message.object = 'Select rows that completed.'
+            return
+        try:
+            export_table(
+                self.batch.client, self._table(completed), Path(self.path.value)
+            )
+        except (OSError, ValueError) as error:
+            self.message.object = f'Cannot export: {error}'
+            return
+        self.message.object = f'Exported {len(completed)} rows to {self.path.value}.'
+
     def panel(self) -> pn.Column:
         return pn.Column(
             pn.pane.Markdown(f'### {self.batch.spec.title}: settings of all rows'),
@@ -369,6 +468,9 @@ class BatchView:
             self.message,
             self.details,
             self.view,
+            pn.pane.Markdown('### Files, as essapps-batch reads and writes them'),
+            self.path,
+            self._files,
             pn.pane.Markdown('### Edit the rows selected, or add one'),
             self.key,
             self.row.panel(),
