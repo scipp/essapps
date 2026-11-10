@@ -11,10 +11,11 @@
   <script type="module" src="static/app.js"></script>
 </head>
 <body>
+  <div class="offline" id="offline" role="alert" hidden></div>
   <header class="top">
     <h1 id="title">Batch reduction</h1>
     <nav class="views" aria-label="View">
-      <button type="button" data-view="samples" aria-pressed="true">Samples <span class="n" id="n-samples"></span></button>
+      <button type="button" data-view="samples" aria-pressed="true"><span id="word-many">Rows</span> <span class="n" id="n-samples"></span></button>
       <button type="button" data-view="runs" aria-pressed="false">Runs <span class="n" id="n-runs"></span></button>
     </nav>
     <span class="spacer"></span>
@@ -22,7 +23,7 @@
     <div class="menu" id="files">
       <button type="button" class="menu-button" aria-haspopup="true">Files <span class="caret">▾</span></button>
       <div class="menu-items" role="menu" hidden>
-        <div class="menu-heading">Sample table</div>
+        <div class="menu-heading">Table</div>
         <button type="button" data-file="load-table">Load table… <small>CSV, XLSX</small></button>
         <button type="button" data-file="table.csv">Save as CSV</button>
         <button type="button" data-file="table.xlsx">Save as XLSX</button>
@@ -46,13 +47,14 @@
             <button type="button" class="primary" id="reduce"><span class="label">Reduce</span><span class="bar"></span></button>
             <button type="button" class="primary more" id="reduce-more" aria-haspopup="true" aria-label="Other ways to reduce">▾</button>
             <div class="menu-items" role="menu" hidden>
-              <button type="button" data-reduce="all">Reduce all ready <small id="n-ready"></small></button>
+              <button type="button" data-reduce="remaining">Reduce remaining <small id="n-remaining"></small></button>
+              <button type="button" data-reduce="all">Reduce all again <small id="n-again"></small></button>
               <button type="button" data-reduce="selected">Reduce selected <small id="n-selected"></small></button>
             </div>
           </div>
           <button type="button" id="cancel">Cancel</button>
           <span class="spacer"></span>
-          <button type="button" class="quiet" id="rescan" title="Read the runs again and pair them into samples. What you set by hand stays.">↻ Rescan runs</button>
+          <button type="button" class="quiet" id="rescan" title="Read the runs again. What you set by hand stays.">↻ Rescan runs</button>
         </div>
         <div class="chips" id="chips" role="group" aria-label="Show samples that are"></div>
         <div class="message" id="message" hidden>
@@ -61,22 +63,22 @@
         </div>
         <div class="grid" id="rows"></div>
         <div class="table-foot">
-          <button type="button" class="quiet" id="add-row">+ Add sample</button>
+          <button type="button" class="quiet" id="add-row">+ Add</button>
           <form class="add-form" id="add-form" hidden>
-            <input type="text" name="key" placeholder="Name of the new sample" aria-label="Name of the new sample" required>
+            <input type="text" name="key" placeholder="Name" aria-label="Name of the new row" required>
             <button type="submit">Add</button>
             <button type="button" class="quiet" data-cancel>Cancel</button>
           </form>
           <span class="spacer"></span>
           <span id="selection"></span>
           <button type="button" class="quiet" id="remove" hidden>Remove selected</button>
-          <span id="removed" hidden>· <button type="button" class="link" id="restore"></button></span>
+          <button type="button" class="link" id="restore" hidden></button>
         </div>
       </div>
 
       <div class="view" id="view-runs" hidden>
         <div class="toolbar">
-          <p class="hint">Correct what a run was measured for, or which sample it belongs to. The samples are paired again at once. Double-click a cell to edit it.</p>
+          <p class="hint" id="runs-hint">Correct what the files say of a run. The rows are made again at once.</p>
         </div>
         <div class="grid" id="runs"></div>
       </div>
@@ -85,18 +87,25 @@
     <aside class="right">
       <div class="tabs" role="tablist">
         <button type="button" role="tab" data-tab="result" aria-selected="true">Result</button>
-        <button type="button" role="tab" data-tab="settings" aria-selected="false">Settings</button>
-        <button type="button" role="tab" data-tab="row" aria-selected="false">Sample</button>
+        <button type="button" role="tab" data-tab="settings" aria-selected="false">Settings <span class="badge" id="settings-badge" title="The settings are incomplete" hidden>!</span></button>
+        <button type="button" role="tab" data-tab="row" aria-selected="false" id="tab-row-label">Row</button>
       </div>
       <div class="tab" id="tab-result">
-        <div class="plot-head"><span id="plot-title"></span></div>
+        <div class="plot-head">
+          <span id="plot-title"></span>
+          <span class="spacer"></span>
+          <span class="axes" role="group" aria-label="Logarithmic axes">
+            <button type="button" class="small" data-axis="x" aria-pressed="true">log x</button>
+            <button type="button" class="small" data-axis="y" aria-pressed="true">log y</button>
+          </span>
+        </div>
         <div id="plot"></div>
         <div class="empty" id="plot-empty" hidden></div>
         <p class="note" id="plot-note"></p>
         <ul class="not-done" id="not-done"></ul>
       </div>
       <div class="tab" id="tab-settings" hidden>
-        <p class="hint">Shared by every sample. A change marks the results reduced with other settings as outdated.</p>
+        <p class="hint" id="settings-hint">Shared by every row. A change marks the results reduced with other settings as outdated.</p>
         <div class="form" id="settings"></div>
       </div>
       <div class="tab" id="tab-row" hidden></div>

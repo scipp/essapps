@@ -4,7 +4,7 @@
 
 import io
 import zipfile
-from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -13,20 +13,24 @@ import scipp as sc
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
-from ess.apps import Client, Listing, Record
+from ess.apps import Client
 from ess.apps.batch import Batch, CorrectedFiles
-from ess.apps.batch.web import create_app, forms, plots
-from ess.apps.fields import Fields
+from ess.apps.batch.web import Shown, create_app, plots
 from ess.apps.testing import FakeFiles
+from ess.spec import SampleRunFile, WorkflowSpec
 
 from .toys import Gate, Measure
 
-BINS = ['binning', 'Given', 'bins']
-"""The path of the field of the number of bins in the settings form."""
+BINS = ['binning', 'bins']
+"""The path of the number of bins in the settings form."""
 
 
 class Marks(BaseModel):
     role: str | None = None
+
+
+def draw(shown: Sequence[Shown]) -> dict[str, Any]:
+    return {'drawn': [s.key for s in shown], 'colors': [s.color for s in shown]}
 
 
 @pytest.fixture
@@ -35,11 +39,7 @@ def http(batch: Batch, files: CorrectedFiles, sample: Measure) -> TestClient:
     sample(2, 'sds')
     sample(3, 'oil', partner=False)
     batch.scan()
-
-    def draw(records: Mapping[str, Record]) -> dict[str, Any]:
-        return {'drawn': sorted(records)}
-
-    app = create_app(batch, info=('name',), draw=draw, files=files, marks=Marks)
+    app = create_app(batch, name='name', draw=draw, files=files, marks=Marks)
     return TestClient(app)
 
 
@@ -55,12 +55,17 @@ def statuses(http: TestClient) -> dict[str, str]:
     return {key: row['status'] for key, row in rows(http).items()}
 
 
-def reduced(http: TestClient, client: Client) -> None:
-    assert http.post('/api/reduce', json={'which': 'remaining'}).status_code == 200
+def thickness(http: TestClient, keys: list[str], value: Any) -> dict[str, Any]:
+    edit = {'keys': keys, 'column': 'thickness', 'value': value}
+    return http.post('/api/cells', json=edit).json()
+
+
+def reduced(http: TestClient, client: Client, which: str = 'remaining') -> None:
+    assert http.post('/api/reduce', json={'which': which}).status_code == 200
     client.wait(client.records())
 
 
-def test_a_scan_lists_the_rows_with_their_info_and_why_one_is_incomplete(
+def test_a_scan_lists_the_rows_with_their_names_and_why_one_is_incomplete(
     http: TestClient,
 ) -> None:
     shown = rows(http)
@@ -70,62 +75,71 @@ def test_a_scan_lists_the_rows_with_their_info_and_why_one_is_incomplete(
         '2': 'sds',
         '3': 'oil',
     }
-    assert shown['1']['sample:text'] == 'run 1'
+    assert shown['1']['cells']['sample']['text'] == 'run 1'
     assert statuses(http) == {'1': 'ready', '2': 'ready', '3': 'incomplete'}
-    assert shown['3']['problems'] == {'transmission': 'missing'}
+    assert shown['3']['cells']['transmission']['problem'] == 'Transmission is missing'
     assert state(http)['action']['label'] == 'Reduce 2 remaining'
 
 
-def test_a_poll_at_the_same_version_answers_with_the_version_alone(
+def test_a_poll_at_the_same_version_answers_204_but_not_after_a_restart(
     http: TestClient,
 ) -> None:
-    version = state(http)['version']
+    now = state(http)
+    same = {'after': now['version'], 'start': now['start']}
 
-    assert http.get('/api/state', params={'after': version}).json() == {
-        'version': version
-    }
+    assert http.get('/api/state', params=same).status_code == 204
+    restarted = http.get('/api/state', params={**same, 'start': 'other'})
+    assert restarted.json()['version'] == now['version']
 
 
-def test_an_edit_writes_a_cell_and_marks_it_as_set_by_hand(
-    http: TestClient, batch: Batch
+def test_a_poll_sees_a_reduction_finish(
+    http: TestClient, client: Client, gate: Gate
 ) -> None:
-    edit = {'keys': ['1'], 'column': 'thickness', 'value': 3}
+    gate.close()
+    running = http.post('/api/reduce', json={'which': 'remaining'}).json()
+    gate.open()
+    client.wait(client.records())
 
-    assert http.post('/api/cells', json=edit).json() == {'notice': ''}
-    assert batch.rows['1'].values['thickness'] == 3.0
-    assert rows(http)['1']['edited'] == ['thickness']
+    after = {'after': running['version'], 'start': running['start']}
+    finished = http.get('/api/state', params=after).json()
+
+    assert [r['status'] for r in running['rows']][:2] == ['running', 'running']
+    assert [r['status'] for r in finished['rows']][:2] == ['done', 'done']
+
+
+def test_an_action_answers_with_the_state_after_it(http: TestClient) -> None:
+    after = thickness(http, ['1'], 3)
+
+    cell = rows(http)['1']['cells']['thickness']
+    assert after['rows'][0]['cells']['thickness'] == cell
+    assert (cell['text'], cell['edited'], cell['scanned']) == ('3.0', True, '')
 
 
 def test_an_edit_of_several_rows_writes_each_and_says_so(
     http: TestClient, batch: Batch
 ) -> None:
-    edit = {'keys': ['1', '2'], 'column': 'thickness', 'value': 5.0}
-
-    notice = http.post('/api/cells', json=edit).json()['notice']
+    notice = thickness(http, ['1', '2'], 5.0)['notice']
 
     assert [batch.rows[k].values['thickness'] for k in ('1', '2')] == [5.0, 5.0]
-    assert notice == 'Thickness set on 2 samples.'
+    assert notice == 'Thickness set on 2 rows.'
 
 
-def test_a_file_cell_is_set_by_the_label_of_its_option(
-    http: TestClient, fake: FakeFiles
-) -> None:
+def test_a_file_cell_is_set_by_the_label_of_its_option(http: TestClient) -> None:
     column = next(c for c in state(http)['columns'] if c['name'] == 'transmission')
     label = next(o for o in column['editor']['options'] if o.startswith('run 1001'))
 
-    http.post(
-        '/api/cells', json={'keys': ['3'], 'column': 'transmission', 'value': label}
-    )
+    edit = {'keys': ['3'], 'column': 'transmission', 'value': label}
+    http.post('/api/cells', json=edit)
 
     assert statuses(http)['3'] == 'ready'
-    assert rows(http)['3']['transmission:text'] == 'run 1001'
+    assert rows(http)['3']['cells']['transmission']['text'] == 'run 1001'
 
 
-def test_a_cell_set_back_takes_what_the_scan_gave(
+def test_a_cell_set_back_takes_what_the_scan_gave_and_the_others_stay(
     http: TestClient, batch: Batch
 ) -> None:
     scanned = batch.rows['1'].values['transmission']
-    http.post('/api/cells', json={'keys': ['1'], 'column': 'thickness', 'value': 2})
+    thickness(http, ['1'], 2)
     http.post('/api/cells', json={'keys': ['1'], 'column': 'transmission'})
     assert statuses(http)['1'] == 'incomplete'
 
@@ -135,15 +149,48 @@ def test_a_cell_set_back_takes_what_the_scan_gave(
     assert batch.rows['1'].values['thickness'] == 2.0
 
 
-def test_a_refused_reduce_names_the_cell_with_422(http: TestClient) -> None:
-    http.post('/api/cells', json={'keys': ['1'], 'column': 'thickness', 'value': -1})
+@pytest.mark.parametrize(
+    ('request_', 'message'),
+    [
+        (('post', '/api/cells', {'keys': ['9'], 'column': 'thickness'}), 'no row 9'),
+        (('post', '/api/cells', {'keys': ['1'], 'column': 'colour'}), 'no column'),
+        (('get', '/api/row?key=a/b', None), 'no row a/b'),
+        (
+            (
+                'post',
+                '/api/cells',
+                {'keys': ['1'], 'column': 'thickness', 'value': 'x'},
+            ),
+            'Thickness: x is not a number',
+        ),
+    ],
+)
+def test_a_request_that_cannot_be_done_answers_422_with_a_message(
+    http: TestClient, request_: tuple[str, str, Any], message: str
+) -> None:
+    method, url, body = request_
+
+    response = http.request(method, url, json=body)
+
+    assert response.status_code == 422
+    assert message in response.json()['message']
+
+
+def test_a_refused_reduction_answers_422_and_the_state_names_the_cell(
+    http: TestClient,
+) -> None:
+    thickness(http, ['1'], -1)
 
     response = http.post('/api/reduce', json={'which': 'selected', 'keys': ['1']})
 
     assert response.status_code == 422
-    (error,) = response.json()['errors']
-    assert (error['entry'], error['loc'], error['placed']) == ('1', ['thickness'], True)
-    assert 'greater than' in rows(http)['1']['problems']['thickness']
+    assert response.json() == {'message': 'Nothing was reduced: one value is refused.'}
+    shown = state(http)
+    (refused,) = shown['refused']
+    assert refused['text'] == 'water: Thickness must be greater than or equal to 0'
+    assert refused['placed']
+    problem = shown['rows'][0]['cells']['thickness']['problem']
+    assert problem == 'Thickness must be greater than or equal to 0'
 
 
 def test_reduce_then_the_state_shows_the_rows_done(
@@ -153,6 +200,18 @@ def test_reduce_then_the_state_shows_the_rows_done(
 
     assert statuses(http) == {'1': 'done', '2': 'done', '3': 'incomplete'}
     assert state(http)['action']['label'] == 'Nothing left to reduce'
+
+
+def test_reduce_all_reduces_the_rows_done_again(
+    http: TestClient, client: Client
+) -> None:
+    reduced(http, client)
+    first = {k: r['record'] for k, r in rows(http).items()}
+
+    reduced(http, client, which='all')
+
+    again = {k: r['record'] for k, r in rows(http).items()}
+    assert [k for k in first if first[k] != again[k]] == ['1', '2']
 
 
 def test_rows_running_show_progress_and_cancel_shows_as_cancelled(
@@ -167,6 +226,7 @@ def test_rows_running_show_progress_and_cancel_shows_as_cancelled(
     client.wait(client.records())
 
     assert statuses(http) == {'1': 'cancelled', '2': 'cancelled', '3': 'incomplete'}
+    assert state(http)['action']['label'] == 'Retry 2 cancelled'
 
 
 def test_a_changed_setting_makes_the_rows_done_outdated(
@@ -180,25 +240,55 @@ def test_a_changed_setting_makes_the_rows_done_outdated(
     assert state(http)['action']['label'] == 'Reduce 2 outdated'
 
 
+def test_a_failed_row_stays_failed_when_the_settings_change(
+    http: TestClient, client: Client
+) -> None:
+    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 1})
+    reduced(http, client)
+
+    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 2})
+
+    assert statuses(http)['1'] == 'failed'
+    assert rows(http)['1']['reason'] == 'one bin'
+    assert state(http)['action']['label'] == 'Retry 2 failed'
+
+
+def test_incomplete_settings_block_reducing_and_no_result_is_current(
+    http: TestClient, client: Client
+) -> None:
+    reduced(http, client)
+
+    http.post(
+        '/api/settings',
+        json={'path': ['offset'], 'op': 'choose', 'value': 'From a record'},
+    )
+
+    shown = state(http)
+    assert shown['settings_problem'] == 'Offset: choose a record'
+    assert shown['action']['blocked'] == 'Offset: choose a record'
+    assert {r['status'] for r in shown['rows'][:2]} == {'outdated'}
+
+
 def test_a_setting_refused_is_marked_at_its_field(http: TestClient) -> None:
     http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 0})
 
-    response = http.post('/api/reduce', json={'which': 'remaining'})
+    assert http.post('/api/reduce', json={'which': 'remaining'}).status_code == 422
 
-    assert response.status_code == 422
     (binning, *_) = state(http)['settings']
+    assert binning['child']['children'][0]['path'] == BINS
     assert 'greater than' in binning['child']['children'][0]['problem']
 
 
+@pytest.mark.parametrize('suffix', ['csv', 'xlsx'])
 def test_the_table_downloaded_and_uploaded_gives_the_same_rows(
-    http: TestClient, batch: Batch, client: Client
+    http: TestClient, batch: Batch, client: Client, suffix: str
 ) -> None:
-    http.post('/api/cells', json={'keys': ['2'], 'column': 'thickness', 'value': 4})
-    content = http.get('/api/table.csv').content
+    thickness(http, ['2'], 4)
+    content = http.get(f'/api/table.{suffix}').content
     other = Batch(client, batch.spec, columns=batch.columns, label='other')
 
     TestClient(create_app(other)).post(
-        '/api/table', params={'name': 'samples.csv'}, content=content
+        '/api/table', params={'name': f'rows.{suffix}'}, content=content
     )
 
     assert [(r.key, r.values) for r in other.rows] == [
@@ -233,68 +323,88 @@ def test_the_results_of_the_rows_done_download_as_a_zip(
     ]
 
 
-def test_the_plot_draws_the_results_of_the_rows_asked_for(
+def test_the_plot_draws_the_results_of_the_rows_asked_for_in_their_colours(
     http: TestClient, client: Client
 ) -> None:
     reduced(http, client)
+    colors = {k: r['color'] for k, r in rows(http).items()}
 
-    assert http.get('/api/plot', params={'keys': ['2', '3']}).json() == {
-        'figure': {'drawn': ['2']},
-        'note': '',
-    }
-    assert http.get('/api/plot').json()['figure'] == {'drawn': ['1', '2']}
+    figure = http.get('/api/plot', params={'keys': ['2', '3']}).json()['figure']
 
-
-def test_a_row_shows_what_its_result_was_reduced_with_and_why_it_failed(
-    http: TestClient, client: Client
-) -> None:
-    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 1})
-    reduced(http, client)
-    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 2})
-
-    detail = http.get('/api/rows/1').json()
-
-    assert detail['differs'] == ['Binning']
-    assert rows(http)['1']['status'] == 'outdated'
-    http.post('/api/rows/1/use-settings')
-    assert rows(http)['1']['status'] == 'failed'
-    assert 'one bin' in rows(http)['1']['reason']
+    assert figure == {'drawn': ['2'], 'colors': [colors['2']]}
+    assert http.get('/api/plot').json()['figure']['drawn'] == ['1', '2']
 
 
-def test_a_tweak_becomes_the_result_of_its_row(
+def test_a_row_shows_which_settings_its_result_was_reduced_with(
     http: TestClient, client: Client
 ) -> None:
     reduced(http, client)
-    edit = {'path': ['thickness'], 'op': 'set', 'value': 4.0}
+    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 5})
 
-    detail = http.post('/api/rows/1/tweak', json=edit).json()
-    http.post('/api/rows/1/tweak/submit')
+    detail = http.get('/api/row', params={'key': '1'}).json()
+    assert detail['differs'] == ['binning']
+    http.post('/api/row/use-settings', json={'key': '1'})
+
+    assert statuses(http)['1'] == 'done'
+
+
+def test_a_reduction_of_one_row_alone_becomes_its_result(
+    http: TestClient, client: Client
+) -> None:
+    reduced(http, client)
+    edit = {'key': '1', 'path': ['thickness'], 'op': 'set', 'value': 4.0}
+
+    detail = http.post('/api/row/tweak', json=edit).json()
+    http.post('/api/row/tweak/submit', json={'key': '1'})
     client.wait(client.records())
 
-    thickness = next(n for n in detail['tweak'] if n['path'] == ['thickness'])
-    assert thickness['value'] == 4.0
-    assert statuses(http)['1'] == 'done'
+    (field,) = [n for n in detail['tweak'] if n['path'] == ['thickness']]
+    assert field['value'] == 4.0
+    assert (rows(http)['1']['status'], rows(http)['1']['alone']) == ('done', True)
     assert client.latest('scan', '1').request.params['thickness'] == 4.0
 
 
-def test_a_correction_of_a_run_reaches_the_rows(
+def test_a_row_added_by_hand_is_gone_for_good_when_removed(
+    http: TestClient,
+) -> None:
+    http.post('/api/rows/add', json={'key': 'extra'})
+    assert rows(http)['extra']['added']
+
+    after = http.post('/api/rows/remove', json={'keys': ['extra', '2']}).json()
+
+    assert after['notice'] == 'Removed 2 rows. 1 added by hand cannot be brought back.'
+    assert after['removed'] == 1
+    restored = http.post('/api/rows/restore').json()
+    assert [r['key'] for r in restored['rows']] == ['1', '2', '3']
+
+
+def test_a_correction_of_a_run_reaches_the_rows_and_can_be_taken_back(
     http: TestClient, fake: FakeFiles
 ) -> None:
-    run = fake.measure(4, 1.0, role='sample', sample='oil')
+    key = fake.measure(4, 1.0, role='sample', sample='oil').file
     http.post('/api/scan')
-    key = run.file
+    runs = state(http)['runs']
 
-    http.post(
-        '/api/runs/cells',
-        json={'keys': [key], 'column': 'role', 'value': 'transmission'},
-    )
+    edit = {'keys': [key], 'column': 'role', 'value': 'transmission'}
+    http.post('/api/runs/cells', json=edit)
 
     assert statuses(http)['3'] == 'ready'
-    (corrected,) = [r for r in state(http)['runs']['rows'] if r['key'] == key]
-    assert corrected['edited'] == ['role']
+    (cell,) = [
+        r['cells']['role']
+        for r in http.get('/api/runs').json()['rows']
+        if r['key'] == key
+    ]
+    assert (cell['text'], cell['edited'], cell['scanned']) == (
+        'transmission',
+        True,
+        'sample',
+    )
+    assert state(http)['runs'] > runs
+    http.post('/api/runs/cells/revert', json={'keys': [key], 'column': 'role'})
+    assert statuses(http)['3'] == 'incomplete'
 
 
-# The forms without HTTP
+# Forms, on a spec with a list and an optional group
 
 
 class Range(BaseModel):
@@ -305,59 +415,81 @@ class Range(BaseModel):
 class Settings(BaseModel):
     range: Range = Field(default_factory=Range)
     offset: Range | None = None
+    sample: SampleRunFile
+
+
+FORMS = WorkflowSpec(
+    name='forms',
+    version=1,
+    title='Forms',
+    description='A toy of forms.',
+    params=Settings,
+    outputs=BaseModel,
+)
 
 
 @pytest.fixture
-def fields(client: Client) -> Fields:
-    return Fields(Settings, Listing(client))
+def form(client: Client) -> TestClient:
+    batch = Batch(client, FORMS, columns=('sample',), label='forms')
+    return TestClient(create_app(batch))
 
 
-def test_a_form_set_writes_an_input(fields: Fields) -> None:
-    forms.apply(fields, forms.Edit(path=['range', 'Given', 'start'], op='set', value=2))
+def settings(form: TestClient, edit: dict[str, Any]) -> dict[str, Any]:
+    response = form.post('/api/settings', json=edit)
+    assert response.status_code == 200, response.json()
+    return {tuple(n['path']): n for n in response.json()['settings']}
 
-    assert fields.params['range']['start'] == 2.0
+
+def test_a_form_set_writes_an_input_at_the_path_of_its_errors(form: TestClient) -> None:
+    nodes = settings(form, {'path': ['range', 'start'], 'op': 'set', 'value': 2})
+
+    (start, _) = nodes['range',]['child']['children']
+    assert (start['path'], start['value']) == (['range', 'start'], 2.0)
 
 
-def test_a_form_choose_picks_a_way(fields: Fields) -> None:
-    forms.apply(fields, forms.Edit(path=['offset'], op='choose', value='Given'))
+def test_a_form_choose_picks_a_way_of_a_choice(form: TestClient) -> None:
+    nodes = settings(form, {'path': ['offset'], 'op': 'choose', 'value': 'Given'})
 
-    (_, offset) = forms.tree(fields)
+    offset = nodes['offset',]
     assert offset['chosen'] == 'Given'
     assert [w['label'] for w in offset['ways']] == ['Given', 'Not used']
-    assert offset['child']['kind'] == 'group'
+    assert offset['child']['path'] == ['offset']
 
 
 @pytest.mark.parametrize(('op', 'banks'), [('add', [1, 2, None]), ('remove', [1])])
 def test_a_form_adds_and_removes_elements_of_a_list(
-    fields: Fields, op: str, banks: list[int | None]
+    form: TestClient, op: str, banks: list[int | None]
 ) -> None:
-    forms.apply(fields, forms.Edit(path=['range', 'Given', 'banks'], op=op))
+    nodes = settings(form, {'path': ['range', 'banks'], 'op': op})
 
-    (range_, _) = forms.tree(fields)
-    elements = range_['child']['children'][1]['elements']
-    assert [e['value'] for e in elements] == banks
+    (_, elements) = nodes['range',]['child']['children']
+    assert [e['value'] for e in elements['elements']] == banks
 
 
-def test_a_form_edit_at_no_field_is_refused(fields: Fields) -> None:
-    with pytest.raises(KeyError):
-        forms.apply(fields, forms.Edit(path=['range', 'nothing'], op='set', value=1))
+def test_a_form_edit_at_no_field_is_refused(form: TestClient) -> None:
+    edit = {'path': ['range', 'nothing'], 'op': 'set', 'value': 1}
+
+    response = form.post('/api/settings', json=edit)
+
+    assert response.status_code == 422
+    assert response.json() == {'message': "no setting at ['range', 'nothing']"}
 
 
 # The plot
 
 
-def test_a_figure_has_error_bars_from_variances_and_axes_with_units() -> None:
+def test_a_figure_has_error_bars_axes_with_units_and_no_nan() -> None:
     curve = sc.DataArray(
-        sc.array(dims=['Q'], values=[4.0, 1.0], variances=[4.0, 1.0], unit='1/cm'),
+        sc.array(dims=['Q'], values=[4.0, np.nan], variances=[4.0, 1.0], unit='1/cm'),
         coords={'Q': sc.array(dims=['Q'], values=[0.1, 0.2, 0.3], unit='1/angstrom')},
     )
 
-    figure = plots.figure({'water': curve}, y_name='I(Q)')
+    figure = plots.figure([plots.Curve('water', curve, '#000')], quantity='I(Q)')
 
     (trace,) = figure['data']
     assert trace['name'] == 'water'
     assert np.allclose(trace['x'], [0.15, 0.25])
+    assert trace['y'] == [4.0, None]
     assert trace['error_y']['array'] == [2.0, 1.0]
     assert figure['layout']['xaxis']['title']['text'] == 'Q [1/Å]'
     assert figure['layout']['yaxis']['title']['text'] == 'I(Q) [1/cm]'
-    assert figure['layout']['xaxis']['type'] == 'log'

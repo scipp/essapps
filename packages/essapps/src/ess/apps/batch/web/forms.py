@@ -4,26 +4,22 @@
 The fields of :mod:`ess.apps.fields` as JSON for a page, and the edits a page
 sends back.
 
-A form is sent as a list of nodes, one per parameter, each with its children.
-Every node has a ``kind``, a ``label``, a ``path`` that an edit names, and a
-``problem``: what is missing there, or why a submission was refused there::
+A form is sent as a list of :class:`~.models.Node`, one per parameter, each
+with its children and a ``problem``: what is missing there, or why a
+submission was refused there::
 
-    {'kind': 'group', 'label': 'Wavelength', 'path': ['wavelength'], 'children': [
-        {'kind': 'input', 'input': 'float', 'label': 'Start (Å)', 'value': 2.0,
-         'path': ['wavelength', 'start'], 'problem': None, ...}]}
+    Node(kind='group', label='Wavelength', path=['wavelength'], children=[
+        Node(kind='input', input='float', label='From (Å)', value=2.0,
+             path=['wavelength', 'start'])])
 
-The kinds are those of the fields: ``input`` (``input`` is ``float``, ``int``,
-``text``, ``time``, or ``pick``, with ``options`` by label), ``scalars`` (a
-list of inputs), ``group``, ``choice`` (the ``ways``, the way ``chosen``, and
-its node as ``child``), ``nothing``, and ``rows``, which is sent as its
-columns of text, to show but not to edit. A page edits a form by sending
-``{path, op, value}`` (see :func:`apply`), and gets the form again.
+A path is the ``loc`` of an error at that field: names of fields and indices of
+elements, but no way of a choice. So the walk of a path goes into the way
+chosen by itself, and a choice and the field of its way have the same path. A
+page edits a form by sending an :class:`~.models.Edit` (see :func:`apply`), and
+gets the form again.
 
 A picker's value travels as the label of its option, so a page never holds a
-file reference: the server maps a label back to its value. A path has the name
-of a field of a group, the label of a way of a choice, or the index of an
-element of a list, while a ``loc`` of a :class:`~ess.apps.FieldError` has no
-way, so the walk keeps both.
+file reference: the server maps a label back to its value.
 
 A cell of a batch's table is edited with the field of its column
 (:func:`editor`, :func:`read`), so a cell takes what the form would.
@@ -33,9 +29,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel
 from pydantic_core import to_jsonable_python
 
 from ess.spec.refs import Loc
@@ -53,21 +48,7 @@ from ...fields import (
     ScalarField,
     ScalarsField,
 )
-
-
-class Edit(BaseModel):
-    """
-    What a person did to a form: ``set`` an input to ``value``, a label of an
-    option for a picker; ``choose`` the way labelled ``value``; ``add`` or
-    ``remove`` the last element of a list.
-    """
-
-    path: list[str | int]
-    op: Literal['set', 'choose', 'add', 'remove']
-    value: Any = None
-
-
-type Node = dict[str, Any]
+from .models import Edit, Editor, Node, Way
 
 
 def tree(fields: Fields, refused: Iterable[FieldError] = ()) -> list[Node]:
@@ -75,51 +56,47 @@ def tree(fields: Fields, refused: Iterable[FieldError] = ()) -> list[Node]:
     _, missing = fields.held()
     problems = {e.loc: e.msg for e in (*missing, *refused) if e.loc}
     return [
-        _node(field, [name], (name,), fields.titles[name], problems)
+        _node(field, (name,), fields.titles[name], problems)
         for name, field in fields.fields.items()
     ]
 
 
-def _node(
-    field: Field,
-    path: list[str | int],
-    loc: Loc,
-    label: str,
-    problems: Mapping[Loc, str],
-) -> Node:
-    node: Node = {'path': path, 'label': label, 'problem': problems.get(loc)}
+def _node(field: Field, loc: Loc, label: str, problems: Mapping[Loc, str]) -> Node:
+    node = Node(kind='nothing', path=list(loc), label=label, problem=problems.get(loc))
     if isinstance(field, Input):
-        return node | _input(field)
+        return node.model_copy(update=_input(field))
     if isinstance(field, ScalarsField):
         elements = [
-            _node(e, [*path, i], (*loc, i), str(i + 1), problems)
+            _node(e, (*loc, i), str(i + 1), problems)
             for i, e in enumerate(field.elements)
         ]
-        return node | {'kind': 'scalars', 'elements': elements}
+        return node.model_copy(update={'kind': 'scalars', 'elements': elements})
     if isinstance(field, GroupField):
         children = [
-            _node(f, [*path, n], (*loc, n), field.titles[n], problems)
+            _node(f, (*loc, n), field.titles[n], problems)
             for n, f in field.fields.items()
         ]
-        return node | {'kind': 'group', 'children': children}
+        return node.model_copy(update={'kind': 'group', 'children': children})
     if isinstance(field, ChoiceField):
         chosen = field.chosen
         child = (
-            None
-            if chosen is None
-            else _node(field.ways[chosen], [*path, chosen], loc, label, problems)
+            None if chosen is None else _node(field.ways[chosen], loc, label, problems)
         )
-        return node | {
-            'kind': 'choice',
-            'ways': [{'value': w, 'label': _WAYS.get(w, w)} for w in field.offered],
-            'chosen': chosen,
-            'selector': field.selector_visible,
-            'child': child,
-        }
+        return node.model_copy(
+            update={
+                'kind': 'choice',
+                'ways': [Way(value=w, label=_WAYS.get(w, w)) for w in field.offered],
+                'chosen': chosen,
+                'selector': field.selector_visible,
+                'child': child,
+                # The field of the way chosen shows a problem at this path.
+                'problem': node.problem if child is None else None,
+            }
+        )
     if isinstance(field, NothingField):
-        return node | {'kind': 'nothing'}
+        return node
     if isinstance(field, RowsField):
-        return node | {'kind': 'rows', 'columns': field.columns}
+        return node.model_copy(update={'kind': 'rows', 'columns': field.columns})
     raise TypeError(f'no node for {type(field).__name__}')
 
 
@@ -131,7 +108,7 @@ _WAYS = {
 """The ways of a choice as a page labels them; ``None`` reads as no such step."""
 
 
-def _input(field: Input) -> Node:
+def _input(field: Input) -> dict[str, Any]:
     kind = field.kind if isinstance(field, ScalarField) else 'pick'
     if kind == 'pick':
         value: Any = label_of(field)
@@ -155,18 +132,32 @@ def label_of(field: Input) -> str | None:
     return next((k for k, v in field.options.items() if v == field.value), None)
 
 
-def _at(fields: Fields, path: list[str | int]) -> Field:
+def _chosen(field: Field) -> Field:
+    """The field of the way chosen, through choices of choices."""
+    while isinstance(field, ChoiceField):
+        if field.chosen is None:
+            raise KeyError('nothing is chosen there')
+        field = field.ways[field.chosen]
+    return field
+
+
+def _at(fields: Fields, path: list[str | int], *, choice: bool = False) -> Field:
+    """
+    The field at ``path``: through the way chosen of each choice, but the choice
+    itself at the end of the path if ``choice``.
+    """
+    if not path or str(path[0]) not in fields.fields:
+        raise KeyError(f'no setting at {path}')
     field = fields.fields[str(path[0])]
     for step in path[1:]:
-        if isinstance(field, GroupField):
+        field = _chosen(field)
+        if isinstance(field, GroupField) and str(step) in field.fields:
             field = field.fields[str(step)]
-        elif isinstance(field, ChoiceField):
-            field = field.ways[str(step)]
-        elif isinstance(field, ScalarsField):
+        elif isinstance(field, ScalarsField) and 0 <= int(step) < len(field.elements):
             field = field.elements[int(step)]
         else:
-            raise KeyError(f'{path}: no field at {step!r}')
-    return field
+            raise KeyError(f'no setting at {path}')
+    return field if choice and isinstance(field, ChoiceField) else _chosen(field)
 
 
 def apply(fields: Fields, edit: Edit) -> None:
@@ -174,17 +165,17 @@ def apply(fields: Fields, edit: Edit) -> None:
     Give ``fields`` what a person did. Raises ``KeyError`` for a path or a
     label that the form lacks, and ``ValueError`` for a value an input refuses.
     """
-    field = _at(fields, edit.path)
+    field = _at(fields, edit.path, choice=edit.op == 'choose')
     if edit.op == 'set' and isinstance(field, Input):
         field.value = _value(field, edit.value)
     elif edit.op == 'choose' and isinstance(field, ChoiceField):
         if edit.value not in (*field.offered, None):
-            raise KeyError(f'{edit.value!r}: not one of {field.offered}')
+            raise KeyError(f'{edit.value} is not one of {", ".join(field.offered)}')
         field.chosen = edit.value
     elif edit.op in ('add', 'remove') and isinstance(field, ScalarsField):
         getattr(field, edit.op)()
     else:
-        raise KeyError(f'{edit.path}: cannot {edit.op} a {type(field).__name__}')
+        raise KeyError(f'cannot {edit.op} the setting at {edit.path}')
 
 
 def _value(field: Input, sent: Any) -> Any:
@@ -193,13 +184,15 @@ def _value(field: Input, sent: Any) -> Any:
     if kind == 'pick':
         if sent is None:
             return UNSET
+        if sent not in field.options:
+            raise KeyError(f'{sent} is not one of the options')
         return field.options[sent]
     if kind == 'time' and sent:
         return datetime.fromisoformat(sent)
     if kind == 'float' and isinstance(sent, int):
         return float(sent)
     if kind in ('float', 'int') and not isinstance(sent, int | float | None):
-        raise ValueError(f'{field.label}: {sent!r} is not a number')
+        raise ValueError(f'{sent} is not a number')
     return sent
 
 
@@ -218,22 +211,18 @@ def _inner(field: Field) -> tuple[Field, bool]:
     return field, False
 
 
-def editor(field: Field) -> Node | None:
-    """
-    How a cell of the column of ``field`` is edited, or ``None`` if not in a
-    cell: ``{'type': 'select', 'options': [...]}``, ``{'type': 'number'}``, or
-    ``{'type': 'text'}``.
-    """
+def editor(field: Field) -> Editor | None:
+    """How a cell of the column of ``field`` is edited, ``None`` if not in a cell."""
     inner, _ = _inner(field)
     if not isinstance(inner, Input):
         return None
     node = _input(inner)
     if node['input'] == 'pick':
-        return {'type': 'select', 'options': node['options']}
+        return Editor(type='select', options=node['options'])
     if node['input'] in ('float', 'int'):
-        return {'type': 'number', 'step': 1 if node['input'] == 'int' else 'any'}
+        return Editor(type='number')
     if node['input'] == 'text':
-        return {'type': 'text'}
+        return Editor(type='text')
     return None
 
 

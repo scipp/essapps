@@ -31,6 +31,20 @@ def test_reset_forgets_a_correction(fake: FakeFiles, files: CorrectedFiles) -> N
     assert files.list(Selector(role='transmission')) == [run]
 
 
+def test_reset_of_a_field_forgets_its_correction_alone(
+    fake: FakeFiles, files: CorrectedFiles
+) -> None:
+    run = fake.measure(1, 1.0, role='transmission', sample='water')
+    files.correct(run, role='sample', sample='oil')
+
+    files.reset(run, 'role')
+
+    assert files.corrections(run) == {'sample': 'oil'}
+    assert files.metadata(run)['role'] == 'transmission'
+    files.reset(run, 'sample')
+    assert files.corrections(run) == {}
+
+
 def test_a_form_offers_a_file_as_corrected(
     fake: FakeFiles, files: CorrectedFiles, client: Client
 ) -> None:

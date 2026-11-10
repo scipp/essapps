@@ -4,10 +4,12 @@
 The batch page over HTTP: :func:`create_app` serves a :class:`~.server.Server`
 as a JSON API, and the page that uses it.
 
-Each action of the page is a ``POST`` that answers ``{'notice': ...}`` or a
-422 with ``{'message', 'errors'}``, after which the page asks for the state
-again. ``GET /api/state?after=<version>`` answers ``{'version': n}`` alone
-while nothing changed.
+Each action of the page is a ``POST`` that answers with the
+:class:`~.models.State` after it, or a 422 with ``{'message': ...}``; the
+reasons of a refused reduction are in the state. ``GET /api/state`` with the
+``after`` version and the ``start`` the page has answers 204 while nothing
+changed. A row is named by its key in the body or the query, never in the
+path, since a key may hold any character.
 """
 
 from __future__ import annotations
@@ -21,12 +23,23 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from ...errors import SubmitError
 from .. import Batch, CorrectedFiles
+from .models import (
+    Key,
+    Keys,
+    Plot,
+    RowDetail,
+    RowEdit,
+    Runs,
+    State,
+    Words,
+)
 from .server import Draw, Problem, Server
 
 STATIC = Path(__file__).parent / 'static'
 _XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+type Keyed = Annotated[list[str] | None, Query()]
 
 
 def _download(content: bytes, name: str, media: str) -> Response:
@@ -40,6 +53,9 @@ def _download(content: bytes, name: str, media: str) -> Response:
 def create_app(
     batch: Batch,
     *,
+    title: str | None = None,
+    words: Words | None = None,
+    name: str | None = None,
     info: Sequence[str] = (),
     draw: Draw | None = None,
     files: CorrectedFiles | None = None,
@@ -53,66 +69,101 @@ def create_app(
     ``static/vendor``.
     """
     server = Server(
-        batch, info=info, draw=draw, files=files, marks=marks, folder=folder
+        batch,
+        title=title,
+        words=words,
+        name=name,
+        info=info,
+        draw=draw,
+        files=files,
+        marks=marks,
+        folder=folder,
     )
-    app = FastAPI(title=f'{batch.spec.title}: batch')
+    app = FastAPI(title=f'{server.title}: batch')
     app.state.server = server
-
-    @app.exception_handler(SubmitError)
-    def refused(_: Request, error: SubmitError) -> JSONResponse:
-        return JSONResponse(server.refusal(error), status_code=422)
 
     @app.exception_handler(Problem)
     def problem(_: Request, error: Problem) -> JSONResponse:
-        return JSONResponse({'message': str(error), 'errors': []}, status_code=422)
+        return JSONResponse({'message': str(error)}, status_code=422)
 
-    @app.get('/api/state')
-    def state(after: int = 0) -> dict[str, Any]:
-        """The state, or ``{'version': n}`` alone if it is still that of ``after``."""
-        return server.poll(after)
+    @app.get('/api/state', responses={204: {'description': 'Nothing changed.'}})
+    def state(after: int = 0, start: str = '') -> Any:
+        """The state, or 204 if it is that of version ``after`` of ``start``."""
+        current = server.poll(after, start)
+        return Response(status_code=204) if current is None else current
 
-    app.post('/api/scan')(server.scan)
-    app.post('/api/cells')(server.edit)
-    app.post('/api/cells/revert')(server.revert)
-    app.post('/api/rows/remove')(server.remove)
-    app.post('/api/rows/restore')(server.restore)
-    app.post('/api/rows/add')(server.add)
-    app.post('/api/reduce')(server.reduce)
-    app.post('/api/cancel')(server.cancel)
-    app.post('/api/settings')(server.edit_settings)
-    app.get('/api/rows/{key}')(server.row)
-    app.post('/api/rows/{key}/use-settings')(server.use_settings)
-    app.post('/api/rows/{key}/tweak')(server.edit_tweak)
-    app.post('/api/rows/{key}/tweak/submit')(server.submit_tweak)
-    app.post('/api/runs/cells')(server.correct)
-    app.post('/api/runs/cells/revert')(server.revert_run)
+    # Each action answers with the state after it.
+    def action(path: str, method: Any) -> None:
+        app.post(path, response_model=State)(method)
+
+    action('/api/scan', server.scan)
+    action('/api/cells', server.edit)
+    action('/api/cells/revert', server.revert)
+    action('/api/rows/restore', server.restore)
+    action('/api/reduce', server.reduce)
+    action('/api/cancel', server.cancel)
+    action('/api/settings', server.edit_settings)
+    action('/api/runs/cells', server.correct)
+    action('/api/runs/cells/revert', server.revert_run)
+
+    @app.post('/api/rows/remove')
+    def remove(body: Keys) -> State:
+        return server.remove(body.keys)
+
+    @app.post('/api/rows/add')
+    def add(body: Key) -> State:
+        return server.add(body.key)
+
+    @app.post('/api/row/use-settings')
+    def use_settings(body: Key) -> State:
+        """Take the settings of the result of row ``key`` for all rows."""
+        return server.use_settings(body.key)
+
+    @app.post('/api/row/tweak/submit')
+    def submit_tweak(body: Key) -> State:
+        """Reduce row ``key`` alone, with its own form."""
+        return server.submit_tweak(body.key)
+
+    @app.get('/api/row')
+    def row(key: str) -> RowDetail:
+        """What the result of row ``key`` was reduced with, and its own form."""
+        return server.row(key)
+
+    @app.post('/api/row/tweak')
+    def edit_tweak(edit: RowEdit) -> RowDetail:
+        """Edit the form of the reduction of row ``key`` alone."""
+        return server.edit_tweak(edit.key, edit)
+
+    @app.get('/api/runs')
+    def runs() -> Runs:
+        return server.runs()
 
     @app.get('/api/plot')
-    def plot(keys: Annotated[list[str] | None, Query()] = None) -> dict[str, Any]:
+    def plot(keys: Keyed = None) -> Plot:
         return server.plot(keys or [])
 
-    @app.get('/api/table.{suffix}')
+    @app.get('/api/table.{suffix}', response_class=Response)
     def table_file(suffix: Literal['csv', 'xlsx']) -> Response:
         media = 'text/csv' if suffix == 'csv' else _XLSX
-        return _download(server.table_file(f'.{suffix}'), f'samples.{suffix}', media)
+        name = f'{server.words.many}.{suffix}'
+        return _download(server.table_file(f'.{suffix}'), name, media)
 
     @app.post('/api/table')
-    def load_table(name: str, content: Annotated[bytes, Body()]) -> dict[str, Any]:
+    def load_table(name: str, content: Annotated[bytes, Body()]) -> State:
         return server.load_table(name, content)
 
-    @app.get('/api/settings.yaml')
+    @app.get('/api/settings.yaml', response_class=Response)
     def settings_file() -> Response:
         return _download(server.settings_file(), 'settings.yaml', 'application/yaml')
 
     @app.post('/api/settings.yaml')
-    def load_settings(name: str, content: Annotated[bytes, Body()]) -> dict[str, Any]:
+    def load_settings(name: str, content: Annotated[bytes, Body()]) -> State:
         return server.load_settings(name, content)
 
-    @app.get('/api/results.zip')
-    def results_file(keys: Annotated[list[str] | None, Query()] = None) -> Response:
-        return _download(
-            server.results_file(keys or []), 'results.zip', 'application/zip'
-        )
+    @app.get('/api/results.zip', response_class=Response)
+    def results_file(keys: Keyed = None) -> Response:
+        content = server.results_file(keys or [])
+        return _download(content, 'results.zip', 'application/zip')
 
     app.mount('/static', StaticFiles(directory=STATIC), name='static')
 

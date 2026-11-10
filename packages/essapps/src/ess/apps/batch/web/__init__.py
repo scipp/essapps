@@ -7,6 +7,6 @@ the extra ``web``.
 """
 
 from .api import create_app
-from .server import Draw, Server
+from .server import Draw, Server, Shown
 
-__all__ = ['Draw', 'Server', 'create_app']
+__all__ = ['Draw', 'Server', 'Shown', 'create_app']

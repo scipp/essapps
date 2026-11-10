@@ -136,8 +136,17 @@ class RowTable:
         removed = self.removed | {key} if in_scan else self.removed
         return replace(self, added=added, edits=edits, removed=removed)
 
-    def reset(self, key: str) -> RowTable:
-        """Forget the edits of a row, and that it was removed, if it was."""
+    def reset(self, key: str, *columns: str) -> RowTable:
+        """
+        Forget the edits of a row, and that it was removed, if it was. Given
+        ``columns``, forget only the edits of those cells.
+        """
+        if columns:
+            kept = {
+                c: v for c, v in self.edits.get(key, {}).items() if c not in columns
+            }
+            edits = {k: v for k, v in self.edits.items() if k != key}
+            return replace(self, edits={**edits, key: kept} if kept else edits)
         return replace(
             self,
             edits={k: v for k, v in self.edits.items() if k != key},

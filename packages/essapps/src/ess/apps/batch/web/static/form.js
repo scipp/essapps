@@ -35,10 +35,11 @@ function body(node, edit) {
 function field(node, edit) {
   if (node.kind === 'input' || node.kind === 'scalars') {
     const input = node.kind === 'input' ? control(node, edit) : scalars(node, edit);
+    const target = input.matches('input, select') ? input : input.querySelector('input, select');
     return h(
       'div',
       {class: `field${node.problem ? ' bad' : ''}`},
-      h('label', {text: node.label, title: node.description, for: input.id}),
+      h('label', {text: node.label, title: node.description, for: target?.id}),
       input,
       node.problem && h('span', {class: 'problem', text: node.problem}),
     );
@@ -60,7 +61,7 @@ function ways(node, edit) {
         type: 'button',
         role: 'radio',
         'aria-checked': String(way.value === node.chosen),
-        'data-path': JSON.stringify([...node.path, way.value]),
+        'data-path': JSON.stringify([...node.path, `way:${way.value}`]),
         text: way.label,
         onclick: () => edit({path: node.path, op: 'choose', value: way.value}),
       }),
@@ -130,14 +131,15 @@ function rowCount(node) {
 }
 
 // The form as text, for what a result was reduced with: a line per parameter.
+// `differs` names the parameters to mark.
 export function summary(nodes, differs = []) {
   return h(
     'dl',
     {class: 'summary'},
-    nodes.map((node) => [
-      h('dt', {class: differs.includes(node.label) ? 'differs' : null, text: node.label}),
-      h('dd', {class: differs.includes(node.label) ? 'differs' : null, text: text(node) || '—'}),
-    ]),
+    nodes.map((node) => {
+      const mark = differs.includes(node.path[0]) ? 'differs' : null;
+      return [h('dt', {class: mark, text: node.label}), h('dd', {class: mark, text: text(node) || '—'})];
+    }),
   );
 }
 

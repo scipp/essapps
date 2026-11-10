@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from ess.spec import FileRef
@@ -41,6 +43,11 @@ class CorrectedFiles:
         self._source = source
         self._corrections: dict[FileRef, dict[str, Any]] = {}
 
+    @property
+    def source(self) -> FileSource:
+        """The source corrected, to read what a file says without corrections."""
+        return self._source
+
     def correct(self, ref: FileRef, **fields: Any) -> None:
         """Set metadata fields of a file, on top of what the source says."""
         self._corrections = {
@@ -48,9 +55,19 @@ class CorrectedFiles:
             ref: {**self._corrections.get(ref, {}), **fields},
         }
 
-    def reset(self, ref: FileRef) -> None:
-        """Forget the corrections of a file."""
-        self._corrections = {k: v for k, v in self._corrections.items() if k != ref}
+    def corrections(self, ref: FileRef) -> Mapping[str, Any]:
+        """The fields of a file set by :meth:`correct`, empty if none."""
+        return MappingProxyType(self._corrections.get(ref, {}))
+
+    def reset(self, ref: FileRef, *fields: str) -> None:
+        """Forget the corrections of a file, or only those of ``fields``."""
+        kept = {
+            k: v
+            for k, v in self._corrections.get(ref, {}).items()
+            if fields and k not in fields
+        }
+        others = {k: v for k, v in self._corrections.items() if k != ref}
+        self._corrections = {**others, ref: kept} if kept else others
 
     def resolve(self, name: FileRef) -> FileRef:
         return self._source.resolve(name)

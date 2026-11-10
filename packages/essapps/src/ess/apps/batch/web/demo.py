@@ -21,7 +21,7 @@ import argparse
 import json
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -30,7 +30,7 @@ import scipp as sc
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
-from ess.apps import Client, Record
+from ess.apps import Client
 from ess.apps.folder import folder_files, open_folder
 from ess.apps.testing import StagedFunction, read_file
 from ess.spec import (
@@ -43,6 +43,8 @@ from ess.spec import (
 from .. import Batch, CorrectedFiles, FileInfo, Row
 from . import create_app, plots
 from .api import STATIC
+from .models import Words
+from .server import Shown
 
 
 class Wavelength(BaseModel):
@@ -137,7 +139,8 @@ def _reduce(params: Params) -> Outputs:
     q = (edges[:-1] + edges[1:]) / 2
     corrections = params.corrections
     flux = (params.wavelength.stop - params.wavelength.start) * len(corrections.banks)
-    counts = sample['events'] * flux / 40
+    # Few enough counts that the error bars show at high Q.
+    counts = sample['events'] * flux / 80_000
     level = sample['scale'] * _sphere(q, sample['radius']) + sample['incoherent']
     if not corrections.solid_angle:
         level = level * (1 + 8 * q)
@@ -256,13 +259,21 @@ def build(client: Client, files: CorrectedFiles, folder: str = '') -> FastAPI:
     )
     batch.scan()
 
-    def draw(records: Mapping[str, Record]) -> dict[str, object]:
-        names = {r.key: r.info.get('name', r.key) for r in batch.rows}
-        curves = {names.get(k, k): client.output(r, 'iofq') for k, r in records.items()}
-        return plots.figure(curves, y_name='I(Q)')
+    def draw(shown: Sequence[Shown]) -> dict[str, object]:
+        curves = [
+            plots.Curve(s.name, client.output(s.record, 'iofq'), s.color, s.outdated)
+            for s in shown
+        ]
+        return plots.figure(curves, quantity='I(Q)')
 
     return create_app(
-        batch, info=('name',), draw=draw, files=files, marks=Marks, folder=folder
+        batch,
+        words=Words(one='sample', many='samples'),
+        name='name',
+        draw=draw,
+        files=files,
+        marks=Marks,
+        folder=folder,
     )
 
 
