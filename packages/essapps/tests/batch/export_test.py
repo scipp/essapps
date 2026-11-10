@@ -1,0 +1,199 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""The files taken away from a batch: the outputs of a record, and of a table."""
+
+import json
+from collections.abc import Iterator
+from pathlib import Path
+
+import pandas as pd
+import pydantic
+import pytest
+import scipp as sc
+
+from ess.apps import Client, Record, Template, file
+from ess.apps.batch.export import export_table, write_outputs
+from ess.apps.batch.tables import reduce_table
+from ess.apps.folder import open_folder
+from ess.spec import Binding, WorkflowSpec, function_binding
+
+from . import toys
+from .conftest import BAD
+
+
+class Array(pydantic.BaseModel, arbitrary_types_allowed=True):
+    data: sc.DataArray
+
+
+class Curve(pydantic.BaseModel):
+    n: int = 3
+
+
+class Curves(pydantic.BaseModel):
+    iofq: Array
+
+
+class Many(pydantic.BaseModel):
+    curves: list[Array]
+    note: toys.Offset | None = None
+    total: float
+
+
+def _array(n: int) -> Array:
+    x = sc.arange('q', float(n))
+    return Array(data=sc.DataArray(x, coords={'q': x}))
+
+
+def _curves(params: Curve) -> Curves:
+    return Curves(iofq=_array(params.n))
+
+
+def _many(params: Curve) -> Many:
+    return Many(curves=[_array(params.n), _array(params.n + 1)], total=1.5)
+
+
+def _spec(name: str, outputs: type[pydantic.BaseModel]) -> WorkflowSpec:
+    return WorkflowSpec(
+        name=name,
+        version=1,
+        title=name,
+        description='A toy.',
+        params=Curve,
+        outputs=outputs,
+    )
+
+
+CURVES = _spec('curves', Curves)
+MANY = _spec('many', Many)
+
+
+@pytest.fixture
+def client(folder: Path, folder_bindings: list[Binding]) -> Iterator[Client]:
+    """A client that also runs the workflows that output arrays."""
+    bindings = [
+        *folder_bindings,
+        function_binding(CURVES, _curves),
+        function_binding(MANY, _many),
+    ]
+    with open_folder(folder, bindings) as client:
+        yield client
+
+
+def run(client: Client, spec: WorkflowSpec, **params: object) -> Record:
+    record = client.submit(spec, params=params, persist=True)
+    client.wait([record])
+    return record
+
+
+def test_the_record_is_written_with_its_outputs(client: Client, tmp_path: Path) -> None:
+    record = run(client, toys.FIND, sample=file(run=3))
+
+    write_outputs(client, record, tmp_path / 'out')
+
+    written = json.loads((tmp_path / 'out' / '_record.json').read_text())
+    assert written['id'] == record.id
+
+
+def test_outputs_with_a_json_form_are_written_as_json(
+    client: Client, tmp_path: Path
+) -> None:
+    number = run(client, toys.PLAIN, sample=file(run=1), transmission=file(run=2))
+    group = run(client, toys.FIND, sample=file(run=3))
+
+    paths = write_outputs(client, number, tmp_path / 'a')
+    more = write_outputs(client, group, tmp_path / 'b')
+
+    assert json.loads(paths['total'].read_text()) == 1.0
+    assert json.loads(more['offset'].read_text()) == {'value': 3.0}
+    assert (paths['total'].name, more['offset'].name) == ('total.json', 'offset.json')
+
+
+def test_a_group_holding_an_array_is_written_as_hdf5_with_the_array(
+    client: Client, tmp_path: Path
+) -> None:
+    record = run(client, CURVES, n=4)
+
+    paths = write_outputs(client, record, tmp_path / 'out')
+
+    loaded = sc.io.load_hdf5(paths['iofq'])
+    assert paths['iofq'].name == 'iofq.h5'
+    assert isinstance(loaded, sc.DataGroup)
+    assert sc.identical(loaded['data'], _array(4).data)
+
+
+def test_an_output_left_out_and_a_list_of_groups_are_written_without_error(
+    client: Client, tmp_path: Path
+) -> None:
+    record = run(client, MANY, n=2)
+
+    paths = write_outputs(client, record, tmp_path / 'out')
+
+    assert set(paths) == {'curves', 'total'}
+    curves = sc.io.load_hdf5(paths['curves'])
+    assert list(curves) == ['0', '1']
+    assert sc.identical(curves['1']['data'], _array(3).data)
+    assert json.loads(paths['total'].read_text()) == 1.5
+
+
+def test_each_completed_row_is_exported_under_its_key(
+    client: Client, template: Template, table: pd.DataFrame, tmp_path: Path
+) -> None:
+    out = tmp_path / 'export'
+    reduced = reduce_table(client, template, table, label='scan')
+
+    result = export_table(client, reduced, out)
+
+    assert list(result['total']) == [str(out / k / 'total.json') for k in 'ab']
+    assert json.loads((out / 'b' / 'total.json').read_text()) == 1.0
+    assert (out / 'a' / '_record.json').is_file()
+
+
+def test_a_row_that_failed_has_no_folder_and_empty_output_columns(
+    client: Client, template: Template, tmp_path: Path
+) -> None:
+    table = pd.DataFrame(
+        {'name': ['a', 'b'], 'sample': ['1', str(BAD)], 'transmission': ['1001'] * 2}
+    )
+    out = tmp_path / 'export'
+    reduced = reduce_table(client, template, table, label='scan')
+
+    result = export_table(client, reduced, out)
+
+    assert list(result['total']) == [str(out / 'a' / 'total.json'), '']
+    assert sorted(p.name for p in out.iterdir()) == ['a']
+
+
+def test_a_table_without_records_is_refused(client: Client, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match='record'):
+        export_table(client, pd.DataFrame({'key': ['a']}), tmp_path / 'export')
+
+
+@pytest.mark.parametrize('key', ['../a', 'a/b', '', '..'])
+def test_a_key_that_is_not_a_folder_name_is_refused_and_nothing_is_written(
+    client: Client, template: Template, tmp_path: Path, key: str
+) -> None:
+    table = pd.DataFrame({'name': ['ok', key], 'sample': ['1', '2']})
+    table['transmission'] = '1001'
+    reduced = reduce_table(client, template, table, label='scan')
+    out = tmp_path / 'parent' / 'export'
+
+    with pytest.raises(ValueError, match='folder'):
+        export_table(client, reduced, out)
+
+    assert not (tmp_path / 'parent').exists()
+
+
+def test_a_table_exports_the_records_it_names_after_later_reductions(
+    client: Client, template: Template, table: pd.DataFrame, tmp_path: Path
+) -> None:
+    older = reduce_table(client, template, table, label='scan')
+    newer = reduce_table(client, template, older, label='scan')
+
+    export_table(client, older, tmp_path / 'export')
+
+    ids = [
+        json.loads((tmp_path / 'export' / k / '_record.json').read_text())['id']
+        for k in 'ab'
+    ]
+    assert ids == list(older['record'])
+    assert not set(ids) & set(newer['record'])

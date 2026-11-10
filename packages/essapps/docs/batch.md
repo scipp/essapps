@@ -23,13 +23,13 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
             values = {'sample': f.ref}
             if name in partner:
                 values['sample_transmission'] = partner[name]
-            rows.append(Row(str(f.metadata['run']), values, info={'sample': str(name)}))
+            rows.append(Row(str(f.metadata['run']), values, info={'name': str(name)}))
     return rows
 
 client = local(proposal='p1', files=files, bind=BINDINGS)
 batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'),
               label='iofq', source=pair_by_sample, staged=True)
-view = BatchView(batch, info=('sample',), draw=draw_iofq)
+view = BatchView(batch, info=('name',), draw=draw_iofq)
 view.scan()
 App(client, plots=PLOTS, tabs={'I(Q)': view}).panel().servable()
 ```
@@ -60,7 +60,7 @@ batch.cancel()
 - An **edit** is a cell set by hand, by a person or by your code.
 - A row's **result** is the newest record of the client's submitter, with the batch's spec and label, and the row's key as its member. So two `Batch` objects with the same spec and label are one batch: give each batch its own label.
 
-Choose a key that does not change from one scan to the next, such as the run number. Results and edits are found by key. Put the name of the sample in `info`.
+Choose a key that does not change from one scan to the next, such as the run number. Results and edits are found by key. Put the name of the sample in `info`, under a name that is not a column.
 
 ## Rules
 
@@ -140,6 +140,91 @@ for key, record in centres.items():
 
 After a centre failed, this reruns only what is left, and points those rows at the new centre. The field must be typed `Referenced[...]` in the spec.
 
+## From files, and from the command line
+
+A batch can be given as two files: a template, and a table with a row for each sample.
+The command `essapps-batch` reads them (extra `[files]`):
+
+```yaml
+# iofq.yaml: a Template
+spec: {name: loki-iofq, version: 1}
+blanks: [sample, sample_transmission]
+params:
+  can: 60393                               # a run
+  can_transmission: 60392
+  empty_beam: 60392
+  direct_beam: /data/direct-beam.h5        # a path; null for none
+  masks: {'@ref': output, record: ff0386aa..., output: masks}
+  beam_centre: {x: -0.029, y: -0.018, z: 4.116}
+  wavelength: {start: 1.0, stop: 13.0, num_bins: 200}
+  q: {start: 0.01, stop: 0.3, num_bins: 100}
+```
+
+```
+# runs.csv
+sample,sample_transmission,name
+60339,60394,water
+60250,60394,sds
+```
+
+```sh
+B="essapps-batch --bind ess.instruments.loki.bindings:BINDINGS"
+$B reduce iofq.yaml runs.csv --label water-series -o done.csv
+$B export done.csv reduced -o files.csv
+```
+
+```
+# files.csv
+sample,sample_transmission,name,status,record,failure,iofq,transmission
+60339,60394,water,completed,2e35ce83...,,reduced/60339/iofq.h5,reduced/60339/transmission.h5
+60250,60394,sds,failed,bd9864f1...,OSError: ...,,
+```
+
+Each step is a command, and a function for a notebook that takes and returns a pandas `DataFrame`:
+
+| Step | Command | Function |
+|---|---|---|
+| make the table | `rows package.module:source`, or a spreadsheet | `tables.table_of(source(file_infos(client)))` |
+| reduce it | `reduce template table --label ...` | `tables.reduce_table(client, template, table, label=...)` |
+| write the outputs to files | `export table folder` | `export.export_table(client, table, folder)` |
+
+A table is a `.csv`, `.tsv`, or `.xlsx` file.
+
+**The table.** The first column holds the key of each row; it may also be a blank, as `sample` above. A column named as a blank holds its cells. A column of any other name is info, which comes back as it is. Two mistakes are refused: a blank that is no column, such as a misspelt header, and a column named as a parameter that the template fixes, whose cells no row would use. An empty cell takes the parameter's default.
+
+**A cell** is read as JSON if it is JSON, so `1.5`, `null`, and `{"x": 0, "y": 1}` are values, and anything else is text. Text that is JSON is written in quotes, such as `"12"` for a sample name at a string parameter. At a parameter that is a file field, or a list of them, a whole number names a run, `pid:...` a file by its kind, and other text a path, relative to the working directory. The same holds for the values of the template's file. A file field inside a group takes the JSON form, `{"@ref": "file", "file": "run:60339"}`. Every file is one that the workspace's file source knows.
+
+**`reduce`** returns the table with three columns, which it replaces if the table has them: `status`, the ID of the `record`, and `failure`, the reason. So its result can be its next table. With `--remaining` it leaves out the rows whose newest record under the label completed. It compares neither cells nor settings: after changing either, reduce without `--remaining`, or under another label. Ctrl-C cancels the rows that have not started, and waits for those running.
+
+**`export`** writes the outputs of each completed row to `<folder>/<key>/`, and returns the table with a column for each output that holds the path of its file. It finds the outputs by the `record` column, not by the label. A key must be the name of a folder, so one with `/` is refused.
+
+```
+reduced/60339/iofq.h5          what scipp.io.load_hdf5 reads: a DataGroup of the output's fields
+reduced/60339/_record.json     the record: every file and value the outputs came from
+```
+
+An output with a JSON form, such as a beam centre, is `<output>.json`. A format of a technique, such as NXcanSAS, is not written. Once outputs can be published to a catalogue, a column of identifiers takes the place of the paths.
+
+**Exit status.** 0: done, and for `reduce`, every row completed. 2: the command or a row was refused, and nothing ran. 3: a row did not complete. 1: any other error.
+
+**The workspace** of the command is a folder, `--workspace`, the working directory by default (`ess.apps.folder`):
+
+```
+files.csv      file,run,kind,role,...   the table of FolderFiles; a path is relative to the folder
+log.jsonl      history
+store/         every output of every row
+```
+
+It outlives the command, so a template references a record of an earlier command by its ID. A template without blanks is one request, and `reduce` without a table submits it:
+
+```sh
+$B reduce detector.yaml --label detector      # prints key,status,record,failure
+$B reduce masks.yaml --label masks            # masks.yaml names the detector's record
+$B reduce iofq.yaml runs.csv --label water-series
+```
+
+One command holds the folder at a time. If a command was killed, the next one first finishes the rows that were running. The store holds pickles, which only the same versions of the packages read back, and nothing removes them. The metadata in `files.csv` are text.
+
 ## The UI
 
 `BatchView` is a tab for `App`:
@@ -190,6 +275,5 @@ Raise in the fake to make a row fail; hold it back on a `threading.Event` to kee
 
 - Keep the table across sessions. A new `Batch` scans again. It finds results by key in its workspace, so `local()` per session starts with none, and a result that is not persisted is gone once its workspace closes.
 - Show a stale result after a restart.
-- Read a table from a CSV file. That is one more source.
 - Free the values of replaced results. They stay until the workspace closes or they are released, unless the batch persists them (`persist=`).
 - Offer preparatory steps with a **Use** button. A `Referenced[...]` setting offers each record in the settings form.

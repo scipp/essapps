@@ -12,7 +12,7 @@ changes once from pending to finished, is asked of the client.
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal, get_args, get_origin
@@ -198,8 +198,8 @@ class Template:
     """
 
     spec: SpecId
-    params: Params
-    blanks: tuple[str, ...]
+    params: Params = field(default_factory=dict)
+    blanks: tuple[str, ...] = ()
 
     def __init__(
         self,

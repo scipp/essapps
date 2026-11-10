@@ -1,0 +1,150 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""
+A batch from files, as a command::
+
+    essapps-batch -b my.package:BINDINGS reduce iofq.yaml runs.csv -l water -o done.csv
+    essapps-batch -b my.package:BINDINGS export done.csv reduced -o files.csv
+
+``iofq.yaml`` is a :class:`~ess.apps.Template`, and ``runs.csv`` has a row for each
+sample, with a column for each blank (see :mod:`.tables`). Each command is one
+function, for a notebook: :func:`.tables.reduce_table` and
+:func:`.export.export_table`. The workspace is kept in a folder (see
+:mod:`ess.apps.folder`), so a template may reference a record of an earlier
+command by its ID.
+
+The guide is ``packages/essapps/docs/batch.md``.
+
+Exit status: 0 if done, and every row completed; 1 for an error; 2 if the
+command or a row was refused, so that nothing ran; 3 if a row did not complete.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from collections.abc import Sequence
+from importlib import import_module
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+import yaml
+from pydantic import TypeAdapter
+
+from ..client import Client
+from ..errors import SubmitError
+from ..folder import open_folder
+from ..records import Status, Template
+from . import tables
+from .export import export_table
+from .reduction import file_infos
+
+
+def load_template(path: Path) -> Template:
+    """The template in a YAML file, which may be JSON, with files as written."""
+    return TypeAdapter(Template).validate_python(yaml.safe_load(path.read_text()))
+
+
+def _named(name: str) -> Any:
+    """The object that ``package.module:name`` names."""
+    module, _, attribute = name.partition(':')
+    return getattr(import_module(module), attribute)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog='essapps-batch',
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        '-w',
+        '--workspace',
+        type=Path,
+        default=Path(),
+        help='the folder of the workspace, with files.csv (default: here)',
+    )
+    parser.add_argument(
+        '-b', '--bind', help='the bindings to run, a list, as package.module:NAME'
+    )
+    parser.add_argument('--proposal', default='local', help='default: local')
+    commands = parser.add_subparsers(dest='command', required=True)
+    output = argparse.ArgumentParser(add_help=False)
+    output.add_argument('-o', '--output', type=Path, help='default: CSV on stdout')
+
+    reduce = commands.add_parser(
+        'reduce', parents=[output], help='reduce the rows of a table'
+    )
+    reduce.add_argument('template', type=Path, help='a template, YAML')
+    reduce.add_argument(
+        'table',
+        type=Path,
+        nargs='?',
+        help='the rows, .csv, .tsv, or .xlsx; without it, the template is one row',
+    )
+    reduce.add_argument(
+        '-l', '--label', required=True, help='names the batch; each has its own'
+    )
+    reduce.add_argument('--staged', action='store_true', help='run through a stage')
+    reduce.add_argument(
+        '--remaining', action='store_true', help='leave out the rows completed'
+    )
+
+    export = commands.add_parser(
+        'export', parents=[output], help='write the outputs of a reduced table'
+    )
+    export.add_argument('table', type=Path, help='a table that reduce wrote')
+    export.add_argument('directory', type=Path, help='the folder to write to')
+
+    rows = commands.add_parser(
+        'rows', parents=[output], help='make a table from the files'
+    )
+    rows.add_argument('source', help='files to rows, as package.module:name')
+    return parser
+
+
+def _run(client: Client, args: argparse.Namespace) -> pd.DataFrame:
+    if args.command == 'rows':
+        return tables.table_of(_named(args.source)(file_infos(client)))
+    if args.command == 'export':
+        return export_table(client, tables.read_table(args.table), args.directory)
+    table = (
+        pd.DataFrame({'key': [args.label]})
+        if args.table is None
+        else tables.read_table(args.table)
+    )
+    return tables.reduce_table(
+        client,
+        load_template(args.template),
+        table,
+        label=args.label,
+        staged=args.staged,
+        persist=True,
+        remaining=args.remaining,
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the command, and return its exit status (see the module)."""
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.output is not None and args.output.suffix not in tables.SUFFIXES:
+        parser.error(f'{args.output}: a table is one of {", ".join(tables.SUFFIXES)}')
+    bind = [] if args.bind is None else _named(args.bind)
+    with open_folder(args.workspace, bind, proposal=args.proposal) as client:
+        try:
+            result = _run(client, args)
+        except (SubmitError, ValueError) as error:
+            sys.stderr.write(f'{error}\n')
+            return 2
+    if args.output is None:
+        result.to_csv(sys.stdout, index=False)
+    else:
+        tables.write_table(result, args.output)
+    done = args.command != 'reduce' or all(result['status'] == Status.COMPLETED)
+    return 0 if done else 3
+
+
+if __name__ == '__main__':
+    sys.exit(main())

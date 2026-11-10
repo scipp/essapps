@@ -41,6 +41,14 @@ class FileInfo:
     metadata: Mapping[str, Any]
 
 
+def file_infos(client: Client, selector: Selector | None = None) -> list[FileInfo]:
+    """The files ``selector`` matches, raw files if not given, with their metadata."""
+    refs = client.files.list(Selector() if selector is None else selector)
+    return [
+        FileInfo(*pair) for pair in zip(refs, client.files.metadata(refs), strict=True)
+    ]
+
+
 def _running(row: RowState) -> list[FieldError]:
     if row.status is Status.PENDING:
         return [FieldError(row.key, (), 'still running')]
@@ -118,11 +126,7 @@ class Batch:
         """Make rows from the files now; what was set by hand stays."""
         if self.source is None:
             raise ValueError('this batch has no source of rows')
-        files = self.client.files
-        refs = files.list(self._selector)
-        infos = [
-            FileInfo(*pair) for pair in zip(refs, files.metadata(refs), strict=True)
-        ]
+        infos = file_infos(self.client, self._selector)
         self.rows = self.rows.rescan(self.source(infos))
 
     def template(self, settings: Mapping[str, Any]) -> Template:

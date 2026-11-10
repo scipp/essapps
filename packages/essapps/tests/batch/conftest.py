@@ -5,12 +5,14 @@
 from collections.abc import Iterator
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
-from ess.apps import Client, Workspace
+from ess.apps import Client, Template, Workspace
 from ess.apps.batch import Batch, CorrectedFiles
+from ess.apps.folder import open_folder
 from ess.apps.testing import FakeFiles, StagedFunction, read_file
-from ess.spec import FileRef, function_binding
+from ess.spec import Binding, FileRef, function_binding
 
 from . import toys
 
@@ -98,3 +100,71 @@ def batch(client: Client) -> Iterator[Batch]:
     )
     yield batch
     batch.close()
+
+
+# A workspace kept in a folder of toy files, for batches from tables
+
+BAD = 4
+"""The run whose file holds a negative number, which the toy refuses."""
+
+
+def _reduce(params: toys.Params) -> toys.Outputs:
+    value = read_file(params.sample)
+    if value < 0 or params.binning.bins == 1:
+        raise ValueError('refused')
+    offset = 0.0 if params.offset is None else params.offset.value
+    return toys.Outputs(total=value / params.thickness + offset)
+
+
+def _find(params: toys.FindParams) -> toys.FindOutputs:
+    return toys.FindOutputs(offset=toys.Offset(value=read_file(params.sample)))
+
+
+@pytest.fixture
+def folder(tmp_path: Path) -> Path:
+    """Samples 1, 2, 3 holding their numbers, BAD holding -1, and transmissions."""
+    runs = {1: (1, 'sample'), 2: (2, 'sample'), 3: (3, 'sample')}
+    runs |= {BAD: (-1, 'bad'), 1001: (1, 'transmission'), 1002: (1, 'transmission')}
+    lines = ['file,run,role']
+    for run, (content, role) in runs.items():
+        (tmp_path / f'run-{run}.json').write_text(str(content))
+        lines.append(f'run-{run}.json,{run},{role}')
+    (tmp_path / 'files.csv').write_text('\n'.join(lines))
+    return tmp_path
+
+
+@pytest.fixture
+def folder_staged() -> StagedFunction:
+    return StagedFunction(toys.STAGED, _reduce)
+
+
+@pytest.fixture
+def folder_bindings(folder_staged: StagedFunction) -> list[Binding]:
+    return [
+        folder_staged,
+        function_binding(toys.PLAIN, _reduce),
+        function_binding(toys.FIND, _find),
+    ]
+
+
+@pytest.fixture
+def folder_client(folder: Path, folder_bindings: list[Binding]) -> Iterator[Client]:
+    with open_folder(folder, folder_bindings) as client:
+        yield client
+
+
+@pytest.fixture
+def template() -> Template:
+    return Template(
+        toys.PLAIN,
+        params={'thickness': 2.0, 'binning': {'bins': 4}},
+        blanks=['sample', 'transmission'],
+    )
+
+
+@pytest.fixture
+def table() -> pd.DataFrame:
+    return pd.DataFrame(
+        {'name': ['a', 'b'], 'sample': ['1', '2'], 'transmission': ['1001', '1002']},
+        dtype=str,
+    )

@@ -33,12 +33,16 @@ dependencies = [
 
 [project.optional-dependencies]
 panel = ["panel>=1.10", "pandas", "plopp"]
+files = ["essspec[scipp]", "h5py", "openpyxl", "pandas", "pyyaml"]
 test = [
-    "essapps[panel]",
+    "essapps[files,panel]",
     "essspec[scipp,sciline]",
     "pytest>=9.0",
     "pytest-xdist>=3.6",
 ]
+
+[project.scripts]
+essapps-batch = "ess.apps.batch.cli:main"
 
 [project.urls]
 "Bug Tracker" = "https://github.com/scipp/essapps/issues"

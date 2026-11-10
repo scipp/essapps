@@ -42,7 +42,7 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
         values = {'sample': f.ref}
         if name in transmissions:
             values['sample_transmission'] = transmissions[name]
-        info = {} if name is None else {'sample': str(name)}
+        info = {} if name is None else {'name': str(name)}
         rows.append(Row(str(f.metadata.get('run', f.ref.file)), values, info=info))
     return rows
 
