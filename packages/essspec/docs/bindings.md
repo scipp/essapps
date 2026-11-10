@@ -57,7 +57,7 @@ Every value is of its field's type, whether the request gave it inline or by ref
 
 The backend reads the data of each reference, and resolves each file, before it calls the binding.
 `compute` gets every parameter, with the defaults of the model filled in, and so do `make_pipeline` and `make_driver` for the fixed values.
-The params model's model validators have not run; a binding may run them ([params.md, When values are validated](params.md#when-values-are-validated)).
+A check across parameters is the binding's, since the params model has no validators ([params.md, When values are validated](params.md#when-values-are-validated)).
 
 A binding returns an instance of the outputs model.
 An output that the spec declares optional, `X | None`, is left out by being `None`.

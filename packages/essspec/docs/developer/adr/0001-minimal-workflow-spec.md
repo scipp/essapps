@@ -401,9 +401,9 @@ is made, and [params.md](../../params.md) states each with its reason:
   value.
 - A table has no default (see the multi-run spec below), and carries only
   length constraints, such as `Field(min_length=2)`.
-- The params model has no field validators, serializers, or computed
-  fields, and no `default_factory` that takes the other values. It may have
-  model validators, but the framework never calls them.
+- The params model has no decorators, neither validators of any mode nor
+  serializers nor computed fields, no `__init__` of its own, and no
+  `default_factory` that takes the other values.
 
 By convention a parameter is a group, a union of groups, a file field, or a
 list of one. A group is a tab of a form, and the key of a binding
@@ -438,8 +438,8 @@ what the record stores, with the data read in place of each reference to an
 output and the local path in place of each file. A list is validated whole,
 a table a row at a time. A check across parameters, such as a Q range that the
 wavelength band and the detector can reach, is the binding's or the driver's,
-and fails when the request runs. A binding may run the model validators,
-`IofQParams.model_validate(dict(params))`, where it has the whole instance.
+and fails when the request runs. No step validates all parameters together,
+so a spec refuses validators of the params model itself.
 
 A request that leaves out a parameter, or a field of a group, so that it takes
 its default, never skips a correction that a correct reduction needs. The

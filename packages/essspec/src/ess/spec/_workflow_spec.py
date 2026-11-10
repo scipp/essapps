@@ -16,8 +16,9 @@ problems of four checks and raises them together, so that an author sees
 every problem at once:
 
 - :func:`_distinct`: no name is both a parameter and an output.
-- :func:`_params_problems`: the decorators of the params model, then each
-  field of the params model and of each group in it, at any depth
+- :func:`_params_problems`: the decorators and the ``__init__`` of the
+  params model (:func:`_no_decorators`), then each field of the params
+  model and of each group in it, at any depth
   (:func:`_fields_problems`, :func:`_type_problems`,
   :func:`_group_problems`). The ``T`` of each ``Referenced[T]`` is checked
   as an output is (:func:`_referenced_problems`).
@@ -296,26 +297,41 @@ def _decorators(model: type[BaseModel], kinds: Sequence[str]) -> dict[str, list[
     }
 
 
-def _model_validators_only(model: type[BaseModel]) -> list[str]:
+def _no_decorators(model: type[BaseModel]) -> list[str]:
     """
-    Refuse a decorator of the params model itself but a model validator: a
-    field validator, a field or model serializer, or a computed field.
+    Refuse a decorator of the params model, of any kind, and an ``__init__``
+    of its own. The framework validates and stores each parameter alone, and
+    a stage and a driver get the values by name, so it never validates the
+    params model whole and never calls its ``__init__``.
     """
-    kinds = ('validators', 'field_validators', *_SERIALIZERS)
-    if found := _decorators(model, kinds):
-        return [
-            f'{model.__name__}: no decorators but model validators, {found}; '
-            "the check or the JSON form of one value belongs to the value's type"
-        ]
-    return []
+    problems = []
+    if found := _decorators(model, _DECORATORS):
+        problems.append(f'{model.__name__}: no decorators, {found}; {_ALONE}')
+    if model.__init__ is not BaseModel.__init__:
+        problems.append(f'{model.__name__}: no __init__ of its own; {_ALONE}')
+    return problems
+
+
+_ALONE = (
+    'each parameter is validated and stored alone, so a check or the JSON form '
+    "of one value belongs to the value's type, and a check across parameters to "
+    'a group that holds them, or to the workflow'
+)
 
 
 _SERIALIZERS = ('field_serializers', 'model_serializers', 'computed_fields')
+_DECORATORS = (
+    'validators',
+    'field_validators',
+    'root_validators',
+    'model_validators',
+    *_SERIALIZERS,
+)
 
 
 def _params_problems(model: type[BaseModel]) -> list[str]:
     problems = [
-        *_model_validators_only(model),
+        *_no_decorators(model),
         *_fields_problems(model, (model,)),
     ]
     return list(dict.fromkeys(problems))

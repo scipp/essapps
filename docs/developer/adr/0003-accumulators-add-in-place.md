@@ -58,7 +58,7 @@ A push checks each row by the table's element type alone, and that its rows are 
 When a state is first pinned, the backend checks the number of rows of each table by its length constraints, so a table that needs a row has one.
 So a push costs the same however many rows came before it, and a table with a minimum length of two can be filled one row per push.
 Opening an accumulator validates each fixed value by its own field alone.
-The framework never runs a model validator of the params model, on a template, a push, or a state: a driver never gets a whole params instance.
+A driver never gets a whole params instance, so the params model has no validators: `WorkflowSpec` refuses them.
 
 **A failed push stops the accumulator**, since skipping it would make state n differ from the plain request over the first n pushes.
 

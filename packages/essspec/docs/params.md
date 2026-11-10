@@ -334,9 +334,9 @@ So the JSON form of a group is the object of its fields: a field has no alias an
 A group may have field validators and model validators of any mode.
 A value written inline must round-trip through JSON: a validator that changes an already valid value, such as converting millimetres to metres, is refused.
 
+Values that a check compares, such as the start and stop of a range, are fields of one group, which a request always gives whole.
 A check across parameters, such as a Q range the wavelength band can reach, belongs to the workflow and fails when the request runs.
-Since each parameter is validated alone, the params model has no field validators, serializers, or computed fields.
-It may have model validators, but the framework never calls them, since a stage and a driver never get a whole params instance; a binding may, with `IofQParams.model_validate(dict(params))`.
+Since each parameter is validated alone, and a stage and a driver never get a whole params instance, the params model has no decorators, neither validators of any mode nor serializers nor computed fields, and no `__init__` of its own.
 
 ## What `WorkflowSpec` refuses
 
@@ -394,4 +394,4 @@ Params model and groups ([When values are validated](#when-values-are-validated)
 
 - A field has no alias (`alias`, `validation_alias`, `serialization_alias`) and no `exclude` or `exclude_if`.
 - A group has no serializers and no computed fields.
-- The params model has no field validators, serializers, or computed fields.
+- The params model has no decorators (validators of any mode, serializers, computed fields) and no `__init__` of its own.

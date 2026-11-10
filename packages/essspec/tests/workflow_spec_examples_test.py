@@ -250,7 +250,7 @@ def refusal() -> str:
         'Outputs.raw: a Path is in the data of an output; no output holds a file',
         'sample_runs: a table has no default',
         'iofq: a field of both Params and Outputs',
-        "Params: no decorators but model validators, {'field_validators'",
+        "Params: no decorators, {'field_validators'",
         'Outputs.width: an output is a type',
     ],
 )

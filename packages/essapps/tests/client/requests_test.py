@@ -4,10 +4,11 @@
 
 """
 Submitting requests: what is refused, what a record holds of its request,
-model validators, bindings, and specs.
+the validators of a group, bindings, and specs.
 """
 
-from typing import Self
+from collections.abc import Callable, Iterator
+from typing import Any, Self
 
 import pytest
 from pydantic import BaseModel, model_validator
@@ -16,6 +17,7 @@ from ess.apps import (
     Backend,
     Client,
     FieldError,
+    NotReadable,
     Request,
     Selector,
     SpecId,
@@ -25,55 +27,130 @@ from ess.apps import (
     local,
 )
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows
-from ess.spec import Binding, File, RunFile, function_binding
+from ess.spec import Binding, File, Referenced, RunFile, function_binding
 
 from . import toys
 
 
-class Unchecked(toys.StepsParams):
-    """Its model validator always raises, which the framework never calls."""
+class Window(BaseModel):
+    """A group whose model validator compares its fields."""
+
+    start: float = 0.0
+    stop: float = 1.0
 
     @model_validator(mode='after')
-    def _raises(self) -> Self:
-        raise ValueError('a model validator was called')
+    def _not_empty(self) -> Self:
+        if self.stop <= self.start:
+            raise ValueError('an empty window')
+        return self
 
 
-UNCHECKED_PLAIN = toys.make_spec('unchecked-plain', params=Unchecked, tables=('steps',))
+class Around(BaseModel):
+    """A group that holds a reference, whose model validator reads its data."""
+
+    centre: Referenced[toys.Amount]
+
+    @model_validator(mode='after')
+    def _not_negative(self) -> Self:
+        if self.centre.value < 0:
+            raise ValueError('a negative centre')
+        return self
 
 
-UNCHECKED_STAGED = toys.make_spec(
-    'unchecked-staged', params=Unchecked, tables=('steps',)
-)
+class WindowsParams(BaseModel):
+    window: Window = Window()
+    around: Around | None = None
+    windows: list[Window]
 
 
-UNCHECKED_ROWS = toys.make_spec('unchecked-rows', params=Unchecked, tables=('steps',))
+WINDOWS = toys.make_spec('windows', params=WindowsParams, tables=('windows',))
 
 
-def test_the_framework_never_calls_a_model_validator(files: FakeFiles) -> None:
-    def sizes(params: toys.StepsParams) -> toys.Value:
-        return toys.as_value(params.scale.factor * sum(s.size for s in params.steps))
+WINDOWS_ROWS = toys.make_spec('windows-rows', params=WindowsParams, tables=('windows',))
 
+
+def widths(params: WindowsParams) -> toys.Value:
+    return toys.as_value(
+        sum(w.stop - w.start for w in [params.window, *params.windows])
+    )
+
+
+@pytest.fixture
+def windows(files: FakeFiles) -> Iterator[Client]:
+    """A client whose WINDOWS makes stages, and WINDOWS_ROWS accumulators."""
     bind = [
-        function_binding(UNCHECKED_PLAIN, sizes),
-        StagedFunction(UNCHECKED_STAGED, sizes),
-        kept_rows(UNCHECKED_ROWS, sizes),
+        function_binding(toys.LOAD, toys.load_run),
+        StagedFunction(WINDOWS, widths),
+        kept_rows(WINDOWS_ROWS, widths),
     ]
     with local(proposal='p1', files=files, bind=bind) as client:
-        plain = client.compute(UNCHECKED_PLAIN, params={'steps': [toys.Step(size=1.0)]})
-        stage = client.stage(
-            Template(
-                UNCHECKED_STAGED,
-                params={'steps': [toys.Step(size=2.0)]},
-                blanks=('scale',),
-            )
-        )
-        staged = client.compute(stage, params={'scale': {'factor': 2.0}})
-        rows = client.accumulator(Template(UNCHECKED_ROWS, blanks=('steps',)))
-        rows.push(steps=[toys.Step(size=3.0)])
+        yield client
 
-        assert client.output(plain, 'value') == toys.Amount(value=1.0)
-        assert client.output(staged, 'value') == toys.Amount(value=4.0)
-        assert client.output(rows, 'value') == toys.Amount(value=3.0)
+
+EMPTY = {'start': 1.0, 'stop': 0.0}
+
+
+@pytest.mark.parametrize(
+    ('give', 'at'),
+    [
+        (
+            lambda c: c.submit(WINDOWS, params={'window': EMPTY, 'windows': []}),
+            'window',
+        ),
+        (lambda c: c.submit(WINDOWS, params={'windows': [{}, EMPTY]}), r'windows\[1\]'),
+        (
+            lambda c: c.stage(
+                Template(WINDOWS, params={'window': EMPTY}, blanks=('windows',))
+            ),
+            'window',
+        ),
+        (
+            lambda c: c.submit(
+                c.stage(Template(WINDOWS, params={'windows': []}, blanks=('window',))),
+                params={'window': EMPTY},
+            ),
+            'window',
+        ),
+        (
+            lambda c: c.accumulator(
+                Template(WINDOWS_ROWS, params={'window': EMPTY}, blanks=('windows',))
+            ),
+            'window',
+        ),
+        (
+            lambda c: c.accumulator(Template(WINDOWS_ROWS, blanks=('windows',))).push(
+                windows=[EMPTY]
+            ),
+            r'windows\[0\]',
+        ),
+    ],
+    ids=['plain', 'row', 'template', 'stage-call', 'opening', 'push'],
+)
+def test_a_group_s_model_validator_refuses_a_value_written_inline_at_submission(
+    windows: Client, give: Callable[[Client], Any], at: str
+) -> None:
+    with pytest.raises(SubmitError, match=f'^{at}: Value error, an empty window$'):
+        give(windows)
+
+
+def test_a_group_s_model_validator_sees_the_data_read_when_the_request_runs(
+    windows: Client,
+) -> None:
+    negative = windows.compute(toys.load_request(1)).ref('extra')
+    around = {'centre': negative}
+    stage = windows.stage(Template(WINDOWS, params={'windows': []}, blanks=('around',)))
+    acc = windows.accumulator(
+        Template(WINDOWS_ROWS, params={'around': around}, blanks=('windows',))
+    )
+    plain = windows.compute(WINDOWS, params={'around': around, 'windows': []})
+    staged = windows.compute(stage, params={'around': around})
+
+    refused = 'around: Value error, a negative centre'
+    assert windows.failure([plain, staged]) == [refused, refused]
+    with pytest.raises(
+        NotReadable, match=f'^the accumulator stopped: opening failed: {refused}$'
+    ):
+        windows.output(acc, 'value')
 
 
 def test_bind_is_a_list_of_bindings(files: FakeFiles) -> None:

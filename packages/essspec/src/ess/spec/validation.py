@@ -261,9 +261,8 @@ def _single_field_params_model(
     """
     A model of the field ``name`` of ``model`` alone, with its config and
     without the decorators of ``model``: it validates one value by its own
-    field. The params model has no decorators but model validators, which
-    the framework never calls; a check of one value belongs to the value's
-    type.
+    field. The params model has no decorators; a check of one value belongs
+    to the value's type.
 
     With ``table``, the field is a table, validated without its length
     constraints: an accumulator takes a table a few rows at a time, and the
