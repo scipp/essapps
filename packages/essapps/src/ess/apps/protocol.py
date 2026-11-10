@@ -287,7 +287,8 @@ class WorkspaceProtocol(Protocol):
         else keeps them. A released stage takes no more requests, those already made
         through it still run, and it lets go of what its template references if it has
         not staged. A released accumulator takes no more pushes or readers: the pushes
-        up to the last state pinned are still added, and later ones never are.
+        that a read in progress or the record of a freeze needs are still added, and
+        later ones never are.
         """
         ...
 
@@ -315,10 +316,11 @@ class WorkspaceProtocol(Protocol):
 
         Its *state n* is the accumulator after its first n pushes, and has the outputs
         of its plain request: the template with each table filled by the rows of these
-        pushes. A read or a freeze pins a state: the state after the pushes logged so
-        far. Pinning does not wait for them. Adding push n+1 waits until the reads of
-        state n in progress are done, so no reader sees a value change. A request
-        never references an accumulator, only the record of its freeze.
+        pushes. A read or a freeze is of state n, where n is the number of pushes
+        logged when it is called, whether or not they have been added. Adding push n+1
+        waits until the reads of state n in progress are done, so no reader sees a
+        value change. A request never references an accumulator, only the record of its
+        freeze.
 
         The accumulator stops if the binding fails to make the driver, adding a push
         fails, or a record its template or a push references does not complete. Pushes

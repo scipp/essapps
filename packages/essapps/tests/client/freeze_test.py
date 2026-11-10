@@ -184,7 +184,7 @@ def test_a_frozen_driver_is_dropped_once_its_readers_are_done(
     subtracting.compute.clear()
     read = toys.start_in_thread(lambda: client.output(sides, 'difference'))
     subtracting.computing.wait(timeout=5)  # the read holds the state
-    total = client.freeze(sides)  # pins the same state
+    total = client.freeze(sides)  # of the same state
     subtracting.compute.set()
 
     assert toys.listed(read.result(timeout=5)) == [1.0]

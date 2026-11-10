@@ -16,7 +16,7 @@ checked::
     # a stage or an accumulator
     template, fixed, reads = checks.template(template, proposal)
     rows, reads = checks.push(blanks, rows, proposal)
-    refused = checks.state(plain, blanks)                  # at a pin or a read
+    refused = checks.state(plain, blanks)                  # at a read or a freeze
 
 The methods differ in what they hold each value against, since a template and
 a push give only some of the params:

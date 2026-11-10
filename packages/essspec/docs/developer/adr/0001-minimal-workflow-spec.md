@@ -82,8 +82,8 @@ service adopts this spec.
 ### Params: values, files, and references to outputs
 
 A request goes through two phases. The *request phase* is what the client and
-the workspace do with a request before any data is read: validate, log, record,
-pin. The *call phase* starts when the workspace reads data for the binding.
+the workspace do with a request before any data is read: validate, log,
+record. The *call phase* starts when the workspace reads data for the binding.
 
 A request gives each field of the params, at any depth, in one of three
 sources:

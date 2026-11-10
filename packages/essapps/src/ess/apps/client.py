@@ -692,8 +692,8 @@ class Client:
         Where a record, or the current state of an accumulator, came from.
 
         An accumulator's state is the plain request over the rows pushed so
-        far, so its provenance is that of the record of this request. It pins
-        the state, but returns at once, without waiting for the pushes to be
+        far, so its provenance is that of the record of this request. It
+        returns at once, without waiting for the pushes logged so far to be
         added.
         """
         if isinstance(what, Accumulator):

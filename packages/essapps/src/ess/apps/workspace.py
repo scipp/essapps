@@ -112,10 +112,10 @@ dropped, and the record of a freeze of a state it will not reach fails. Its
 driver is dropped once no reader holds its current state, without waiting for
 it to be released.
 
-A read or a freeze pins the accumulator's state after the pushes logged so
-far, without waiting for a push to be added. A request never references an
+A read or a freeze is of the accumulator's state after the pushes logged when
+it is called, whether or not they have been added. A request never references an
 accumulator, only the record of its freeze, so no request holds back a push.
-A freeze logs one record of the plain request of the pinned state, as the
+A freeze logs one record of the plain request of that state, as the
 accumulator and its number of pushes. The first read of a state checks the
 number of rows of each blank table against its length constraints, outside the
 workspace's lock.
@@ -130,8 +130,8 @@ reader may see its outputs change. The readers are the reads in progress, and a
 freeze, while it is checked, and then its record, until it has finished and its
 workflow, if it ran, has returned (see ``_Read``). Every wait is for work that
 came before the waiter: a request waits for records submitted before it, a read
-and the record of a freeze for the pushes logged before their state was pinned,
-and a push for the readers of the state before it, which pinned that state
+and the record of a freeze for the pushes logged before the read or the freeze
+was called, and a push for the readers of the state before it, which were called
 before the push was logged. So no wait goes round in a circle.
 
 Releasing an accumulator and freezing it are described at
@@ -494,7 +494,7 @@ A value that is read: an output by record ID and name, or an accumulator's
 state by its number of pushes. The readers of an output are the pending
 records, steps, and stages that have yet to read it. The readers of a state
 are the reads of the accumulator's outputs in progress, a freeze being
-checked, from the pin until its record is logged and holds the state itself,
+checked, from its call until its record is logged and holds the state itself,
 and the record of the freeze, until it has finished and its workflow, if it
 ran, has returned.
 """
@@ -1332,13 +1332,13 @@ class Workspace(WorkspaceProtocol):
         let go of what they read; lock held. Called at release, and again
         whenever the last reader of one of its states lets go.
 
-        A reader needs the steps up to the state it pinned. The step a worker
+        A reader needs the steps up to the state it reads. The step a worker
         is doing cannot be stopped, so it stays. No record of a freeze waits
         for a dropped step, since a pending one is a reader.
         """
-        pinned = [upto for held, upto in self._readers if held is acc]
+        read = [upto for held, upto in self._readers if held is acc]
         done = -1 if acc.added is None else acc.added  # the opening is step 0
-        needed = max(pinned, default=done) - done
+        needed = max(read, default=done) - done
         dropped = []
         while len(acc.steps) > max(needed, int(acc.busy)):
             dropped.append(acc.steps.pop()[1])
@@ -1464,8 +1464,8 @@ class Workspace(WorkspaceProtocol):
         ``persist``, the store keeps it instead, as for a submission (see
         :meth:`submit`).
 
-        The freeze pins that state as a read does, and its plain request is
-        checked outside the lock, while pushes wait. If it would be refused,
+        The freeze is a reader of that state, as a read is, and its plain
+        request is checked outside the lock, while pushes wait. If it would be refused,
         so is the freeze, and the waiting pushes are logged. Otherwise the
         record is logged, and the accumulator takes no more pushes. The
         record's outputs are those of the driver, computed once and not
@@ -1682,9 +1682,9 @@ class Workspace(WorkspaceProtocol):
         self, accumulator_id: str, *, reader: bool
     ) -> tuple[_Accumulator, int]:
         """
-        The accumulator and its number of pushes logged, its current state
-        pinned as a read pins it; held as a reader holds it if ``reader``,
-        until the caller lets go of it. Raises ``NotReadable`` if the state
+        The accumulator and its number of pushes logged, which name the state
+        a read is of; held as a reader holds it if ``reader``, until the
+        caller lets go of it. Raises ``NotReadable`` if the state
         may not be read (see :meth:`_accumulator`).
         """
         with self._changed:

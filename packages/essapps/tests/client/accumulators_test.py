@@ -482,7 +482,7 @@ def test_a_read_while_a_push_adds_pins_the_state_after_it(
     subtracting.adding.wait(timeout=5)  # the push adds
     read = toys.start_in_thread(lambda: client.output(sides, 'difference'))
     plain = client.provenance(sides).request
-    frozen = client.freeze(sides)  # returns at once, and pins the same state
+    frozen = client.freeze(sides)  # returns at once, of the same state
 
     assert frozen.request == plain
     assert len(plain.params['backgrounds']) == 1
@@ -600,7 +600,7 @@ def test_a_released_accumulator_drops_the_pushes_once_their_reader_is_cancelled(
     total = toys.total_accumulator(client)
     for load in summed_loads:
         total.push(parts=[load.ref('value')])
-    frozen = client.freeze(total)  # pins three pushes
+    frozen = client.freeze(total)  # of the state after three pushes
     summing.adding.wait(timeout=5)
     client.release(total)  # the freeze keeps the pushes
     client.release(frozen)  # and no longer once it is cancelled
