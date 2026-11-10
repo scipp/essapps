@@ -388,3 +388,14 @@ def test_a_reference_to_an_accumulator_inside_a_row_reads_its_state(
     summed = client.compute(toys.TERMS, params={'terms': rows})
 
     assert client.output(summed, 'value') == toys.Amount(value=6.0)
+
+
+def test_every_refused_request_of_a_call_is_named(client: Client) -> None:
+    good = toys.load_request(1)
+    bad = Request(toys.LOAD, params={'sample': file(run=404)})
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit({'good': good, 'a': bad, 'b': bad})
+
+    assert [e.entry for e in raised.value.errors] == ['a', 'b']
+    assert client.records() == []

@@ -5,12 +5,22 @@
 from collections.abc import Callable
 from dataclasses import replace
 from itertools import islice
+from typing import Any
 
 import pytest
 
-from ess.apps import Client, Request, Selector, SubmitError, Template, apply
+from ess.apps import Client, Request, Selector, SubmitError, Template
 
 from . import toys
+
+
+def by_run(
+    template: Template, files: Any, refs: list[Any], field: str = 'run'
+) -> dict[str, Request]:
+    return {
+        str(files.metadata(ref)[field]): template.fill(params={'sample': ref})
+        for ref in refs
+    }
 
 
 def test_d1_temperature_scan(
@@ -29,13 +39,7 @@ def test_d1_temperature_scan(
         params={'reduction': toys.Reduction(bins=1), 'normalization': None},
         blanks=('sample',),
     )
-    requests = apply(
-        template,
-        runs,
-        client.files,
-        at='sample',
-        member_field='temperature',
-    )
+    requests = by_run(template, client.files, runs, field='temperature')
     scan = client.compute(requests, label='scan', persist=True)
 
     assert [
@@ -105,7 +109,7 @@ def test_d3_cancel_and_resubmit(client: Client, measure: toys.Measure) -> None:
         blanks=('sample',),
     )
     first = client.submit(
-        apply(wrong, runs, client.files, at='sample', member_field='run'),
+        by_run(wrong, client.files, runs),
         label='scan',
         persist=True,
     )
@@ -115,7 +119,7 @@ def test_d3_cancel_and_resubmit(client: Client, measure: toys.Measure) -> None:
         params={'reduction': toys.Reduction(threshold=0.5), 'normalization': None},
     )
     second = client.compute(
-        apply(fixed, runs, client.files, at='sample', member_field='run'),
+        by_run(fixed, client.files, runs),
         label='scan',
         persist=True,
     )
@@ -136,7 +140,7 @@ def test_d4_typo_caught_before_500_failures(
         params={'reduction': {'threshold': '2,5'}, 'normalization': None},
         blanks=('sample',),
     )
-    requests = apply(typo, runs, client.files, at='sample', member_field='run')
+    requests = by_run(typo, client.files, runs)
 
     with pytest.raises(SubmitError, match=r'reduction\.threshold'):
         client.submit(requests, label='scan')
@@ -153,20 +157,14 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
     )
     runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
     client.compute(
-        apply(template, runs, client.files, at='sample', member_field='run'),
+        by_run(template, client.files, runs),
         label='scan',
         persist=True,
     )
 
     before = client.records(label='scan')
     runs = [r.request.params['sample'] for r in before]
-    renamed = apply(
-        replace(template, spec=toys.IOFQ_V2),
-        runs,
-        client.files,
-        at='sample',
-        member_field='run',
-    )
+    renamed = by_run(replace(template, spec=toys.IOFQ_V2), client.files, runs)
     with pytest.raises(SubmitError, match=r'reduction\.threshold: Extra inputs'):
         client.submit(renamed, label='scan')
     moved = replace(
@@ -174,7 +172,7 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
         spec=toys.IOFQ_V2,
         params={'reduction': toys.ReductionV2(mask_below=1.5), 'normalization': None},
     )
-    requests = apply(moved, runs, client.files, at='sample', member_field='run')
+    requests = by_run(moved, client.files, runs)
     after = list(client.compute(requests, label='scan', persist=True).values())
 
     assert [

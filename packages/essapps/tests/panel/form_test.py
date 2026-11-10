@@ -107,19 +107,28 @@ SIDES: Spec = WorkflowSpec(
 )
 
 
+def form_of(spec: Spec, client: Client) -> Form:
+    return Form(
+        spec.params,
+        Listing(client),
+        title=spec.title,
+        description=spec.description,
+    )
+
+
 @pytest.fixture
 def form(client: Client, reduce_spec: Spec) -> Form:
-    return Form(reduce_spec, client)
+    return form_of(reduce_spec, client)
 
 
 @pytest.fixture
 def options(client: Client, options_spec: Spec) -> Form:
-    return Form(options_spec, client)
+    return form_of(options_spec, client)
 
 
 @pytest.fixture
 def subtract(client: Client, subtract_spec: Spec) -> Form:
-    return Form(subtract_spec, client)
+    return form_of(subtract_spec, client)
 
 
 def widget(form: Form, label: str) -> Any:
@@ -197,8 +206,10 @@ def missing(form: Form) -> set[tuple[tuple[str | int, ...], str]]:
     return {(e.loc, e.msg) for e in refused.value.errors}
 
 
-def test_params_are_the_defaults_and_what_is_given(form: Form, run: FileRef) -> None:
-    form.set({'run': run, 'sample': {'thickness': 2.0}})
+def test_params_are_the_defaults_and_what_is_given(
+    client: Client, form: Form, run: FileRef
+) -> None:
+    form.set({'run': run, 'sample': {'thickness': 2.0}}, Listing(client))
     assert form.params == {
         'reduction': {'bins': 2, 'norm': 'monitor'},
         'run': run,
@@ -248,14 +259,16 @@ def test_values_of_each_type_round_trip_through_a_record(
         },
         'direct_beam': None,
     }
-    options.set(params)
+    options.set(params, Listing(client))
     record = client.compute(options_spec, params=options.params)
     assert client.failure(record) is None
     assert record.request.params == params
 
 
-def test_a_list_of_scalars_is_a_list_of_inputs(options: Form) -> None:
-    options.set({'settings': {'flag': False, 'count': 1, 'banks': [3, 1]}})
+def test_a_list_of_scalars_is_a_list_of_inputs(client: Client, options: Form) -> None:
+    options.set(
+        {'settings': {'flag': False, 'count': 1, 'banks': [3, 1]}}, Listing(client)
+    )
     assert widget(options, 'Banks [1]').value == 1
     widget(options, 'Remove from Banks').clicks += 1
     assert options.params['settings']['banks'] == [3]
@@ -266,13 +279,15 @@ def test_a_list_of_scalars_is_a_list_of_inputs(options: Form) -> None:
 
 
 def test_a_cleared_input_of_a_value_with_a_default_is_not_given_the_default(
-    form: Form, options: Form, run: FileRef
+    client: Client, form: Form, options: Form, run: FileRef
 ) -> None:
-    form.set({'run': run, 'sample': {'thickness': 2.0}})
+    form.set({'run': run, 'sample': {'thickness': 2.0}}, Listing(client))
     widget(form, 'Bins').value = None
     assert missing(form) == {(('reduction', 'bins'), 'give a value')}
 
-    options.set({'settings': {'flag': False, 'count': 1}, 'direct_beam': None})
+    options.set(
+        {'settings': {'flag': False, 'count': 1}, 'direct_beam': None}, Listing(client)
+    )
     widget(options, 'Name').value = ''  # a cleared text with a default is ''
     assert options.params['settings']['name'] == ''
 
@@ -280,7 +295,7 @@ def test_a_cleared_input_of_a_value_with_a_default_is_not_given_the_default(
 def test_a_choice_without_a_default_starts_unset_and_the_backend_refuses_it(
     client: Client, options: Form, options_spec: Spec
 ) -> None:
-    options.set({'settings': {'flag': False, 'count': 1}})
+    options.set({'settings': {'flag': False, 'count': 1}}, Listing(client))
     assert 'direct_beam' not in options.params
     with pytest.raises(SubmitError) as refused:
         client.submit(options_spec, params=options.params)
@@ -288,10 +303,13 @@ def test_a_choice_without_a_default_starts_unset_and_the_backend_refuses_it(
 
 
 def test_a_file_field_typed_x_or_none_offers_a_file_and_none(
+    client: Client,
     options: Form,
 ) -> None:
     assert options.ways('direct_beam') == ['A file', 'None']
-    options.set({'settings': {'flag': False, 'count': 1}, 'direct_beam': None})
+    options.set(
+        {'settings': {'flag': False, 'count': 1}, 'direct_beam': None}, Listing(client)
+    )
     assert options.params['direct_beam'] is None
 
 
@@ -322,7 +340,7 @@ def test_a_place_written_inline_or_by_reference_without_a_default_starts_unset(
         params=CentreParams,
         outputs=Value,
     )
-    form = Form(spec, client)
+    form = form_of(spec, client)
     assert form.ways('centre') == ['Given', 'From a record']
     assert way(form, 'Centre').value is None
     assert form.params == {}
@@ -336,12 +354,12 @@ def test_a_group_typed_x_or_none_is_given_each_way(
     run: FileRef,
 ) -> None:
     found = client.compute(find_spec, params={'run': run})
-    subtract.refresh()
+    subtract.refresh(Listing(client))
     assert way(subtract, 'Centre').options == ['Given', 'From a record', 'None']
 
     for centre in (None, {'x': 2.0, 'y': 0.0}, found.ref('centre')):
         params = {'background': {'scale': 1.0}, 'centre': centre}
-        subtract.set(params)
+        subtract.set(params, Listing(client))
         assert subtract.params == params
         record = client.compute(subtract_spec, params=subtract.params)
         assert client.failure(record) is None
@@ -352,7 +370,7 @@ def test_a_union_offers_its_alternatives_and_no_record(
     client: Client, form: Form, find_spec: Spec, run: FileRef
 ) -> None:
     client.compute(find_spec, params={'run': run})
-    form.refresh()
+    form.refresh(Listing(client))
     assert form.ways('detector') == ['Front', 'Rear bank']
 
 
@@ -375,7 +393,7 @@ def test_a_union_marked_referenced_offers_one_choice_of_alternatives_and_record(
         outputs=Value,
     )
     found = client.compute(find_spec, params={'run': run})
-    side = Form(spec, client)
+    side = form_of(spec, client)
     assert side.ways('side') == ['Left', 'Right', 'From a record']
 
     way(side, 'Side').value = 'From a record'
@@ -385,9 +403,9 @@ def test_a_union_marked_referenced_offers_one_choice_of_alternatives_and_record(
     assert side.params == {'side': {'kind': 'right'}}
 
 
-def test_set_refuses_a_tag_of_no_alternative(form: Form) -> None:
+def test_set_refuses_a_tag_of_no_alternative(client: Client, form: Form) -> None:
     with pytest.raises(ValueError, match='side: not an alternative'):
-        form.set({'detector': {'kind': 'side'}})
+        form.set({'detector': {'kind': 'side'}}, Listing(client))
 
 
 def test_a_record_is_offered_and_lists_each_fitting_output_while_readable(
@@ -398,16 +416,16 @@ def test_a_record_is_offered_and_lists_each_fitting_output_while_readable(
     assert set(picker(form, 'Beam Centre').options) == nothing
 
     client.compute(reduce_spec, params={'run': run, 'sample': {'thickness': 2.0}})
-    form.refresh()
+    form.refresh(Listing(client))
     assert set(picker(form, 'Beam Centre').options) == nothing  # does not fit
 
     found = client.compute(find_spec, params={'run': run})
-    form.refresh()
+    form.refresh(Listing(client))
     assert form.ways('beam_centre') == ['Given', 'From a record']
     assert found.ref('centre') in picker(form, 'Beam Centre').options.values()
 
     client.release(found)
-    form.refresh()
+    form.refresh(Listing(client))
     assert set(picker(form, 'Beam Centre').options) == nothing
 
 
@@ -415,7 +433,7 @@ def test_the_way_of_a_record_with_no_record_picked_is_not_given_the_default(
     client: Client, form: Form, find_spec: Spec, run: FileRef
 ) -> None:
     client.compute(find_spec, params={'run': run})
-    form.set({'run': run, 'sample': {'thickness': 2.0}})
+    form.set({'run': run, 'sample': {'thickness': 2.0}}, Listing(client))
     way(form, 'Beam Centre').value = 'From a record'
     assert missing(form) == {(('beam_centre',), 'choose a record')}
 
@@ -429,12 +447,13 @@ def test_a_picked_record_that_is_released_is_not_given_the_default(
             'run': run,
             'sample': {'thickness': 2.0},
             'beam_centre': found.ref('centre'),
-        }
+        },
+        Listing(client),
     )
     assert form.params['beam_centre'] == found.ref('centre')
 
     client.release(found)
-    form.refresh()
+    form.refresh(Listing(client))
     assert missing(form) == {(('beam_centre',), 'choose a record')}
 
 
@@ -448,7 +467,8 @@ def test_set_with_a_reference_the_client_may_not_read_picks_no_record(
             'run': run,
             'sample': {'thickness': 2.0},
             'beam_centre': found.ref('centre'),
-        }
+        },
+        Listing(client),
     )
     assert missing(form) == {(('beam_centre',), 'choose a record')}
 
@@ -475,22 +495,22 @@ def test_set_shows_params_as_a_record_holds_them(
         },
     )
     assert client.output(record, 'total').value == 2.0
-    form.set(record.request.params)
+    form.set(record.request.params, Listing(client))
     assert form.params == record.request.params
     assert form.ways('beam_centre') == ['Given', 'From a record']
 
 
 def test_the_file_picker_lists_a_file_measured_after_the_form_was_made(
-    files: FakeFiles, form: Form, run: FileRef
+    client: Client, files: FakeFiles, form: Form, run: FileRef
 ) -> None:
-    form.refresh()
+    form.refresh(Listing(client))
     assert list(picker(form, 'Run').options) == [
         '(choose a file)',
         'run 101 (sample)',
     ]
 
     files.measure(102, {'counts': 1.0, 'x': 0.0}, role='sample')
-    form.refresh()
+    form.refresh(Listing(client))
     assert list(picker(form, 'Run').options) == [
         '(choose a file)',
         'run 101 (sample)',
@@ -499,10 +519,10 @@ def test_the_file_picker_lists_a_file_measured_after_the_form_was_made(
 
 
 def test_a_file_picker_lists_the_files_that_fit_its_marker(
-    files: FakeFiles, form: Form, run: FileRef
+    client: Client, files: FakeFiles, form: Form, run: FileRef
 ) -> None:
     files.measure(201, {'counts': 1.0}, kind='mask')
-    form.refresh()
+    form.refresh(Listing(client))
     assert form.ways('mask') == ['A file', 'None']
     assert list(picker(form, 'Run').options) == [
         '(choose a file)',
@@ -516,15 +536,15 @@ def test_a_file_picker_lists_the_files_that_fit_each_key_of_its_metadata(
 ) -> None:
     files.measure(201, {'counts': 1.0}, kind='mask', instrument='dream')
     files.measure(202, {'counts': 1.0}, kind='mask', instrument='loki')
-    form = Form(LOKI_MASK, client)
+    form = form_of(LOKI_MASK, client)
     assert list(picker(form, 'Mask').options) == ['(choose a file)', 'run 202']
 
 
 def test_a_file_that_does_not_fit_stays_picked_when_set(
-    files: FakeFiles, form: Form, run: FileRef
+    client: Client, files: FakeFiles, form: Form, run: FileRef
 ) -> None:
     mask = files.measure(201, {'counts': 1.0}, kind='mask')
-    form.set({'run': mask, 'sample': {'thickness': 2.0}})
+    form.set({'run': mask, 'sample': {'thickness': 2.0}}, Listing(client))
     assert list(picker(form, 'Run').options) == [
         '(choose a file)',
         'run 101 (sample)',
@@ -534,11 +554,11 @@ def test_a_file_that_does_not_fit_stays_picked_when_set(
 
 
 def test_a_picked_file_that_no_longer_fits_stays_picked(
-    files: FakeFiles, form: Form, run: FileRef
+    client: Client, files: FakeFiles, form: Form, run: FileRef
 ) -> None:
-    form.set({'run': run, 'sample': {'thickness': 2.0}})
+    form.set({'run': run, 'sample': {'thickness': 2.0}}, Listing(client))
     files.correct(run, kind='mask')
-    form.refresh()
+    form.refresh(Listing(client))
     assert list(picker(form, 'Run').options) == ['(choose a file)', str(run)]
     assert form.params['run'] == run
 
@@ -564,7 +584,7 @@ def test_a_file_without_a_run_is_labelled_by_its_identity(
 
 @pytest.fixture
 def times_and_lists(client: Client) -> Form:
-    return Form(TIMES_AND_LISTS, client)
+    return form_of(TIMES_AND_LISTS, client)
 
 
 GIVEN_TIMES = {
@@ -584,10 +604,10 @@ GIVEN_TIMES = {
     ],
 )
 def test_a_time_edited_in_the_browser_keeps_its_zone(
-    times_and_lists: Form, given: str, label: str, edited: str
+    client: Client, times_and_lists: Form, given: str, label: str, edited: str
 ) -> None:
     times = {**GIVEN_TIMES, 'at': given}
-    times_and_lists.set({'times': times, 'lists': {'banks': []}})
+    times_and_lists.set({'times': times, 'lists': {'banks': []}}, Listing(client))
     picker = widget(times_and_lists, label)
     assert shown(picker) == '2026-03-04 05:06:07'
     sent(picker, '2026-03-04 06:06:07')
@@ -595,10 +615,11 @@ def test_a_time_edited_in_the_browser_keeps_its_zone(
 
 
 def test_a_time_unchanged_in_the_browser_keeps_its_fraction_of_a_second(
+    client: Client,
     times_and_lists: Form,
 ) -> None:
     times = {**GIVEN_TIMES, 'at': '2026-03-04T05:06:07.123Z'}
-    times_and_lists.set({'times': times, 'lists': {'banks': []}})
+    times_and_lists.set({'times': times, 'lists': {'banks': []}}, Listing(client))
     sent(widget(times_and_lists, 'At (UTC)'), '2026-03-04 05:06:07')
     assert times_and_lists.params['times'] == {
         **times,
@@ -607,17 +628,20 @@ def test_a_time_unchanged_in_the_browser_keeps_its_fraction_of_a_second(
 
 
 def test_a_time_without_a_value_is_in_the_zone_of_its_type(
+    client: Client,
     times_and_lists: Form,
 ) -> None:
-    times_and_lists.set({'lists': {'banks': []}})
+    times_and_lists.set({'lists': {'banks': []}}, Listing(client))
     sent(widget(times_and_lists, 'At (no time zone)'), '2026-03-04 05:06:07')
     sent(widget(times_and_lists, 'Naive (no time zone)'), '2026-03-04 05:06:07')
     sent(widget(times_and_lists, 'Aware (UTC)'), '2026-03-04 05:06:07')
     assert times_and_lists.params['times'] == GIVEN_TIMES
 
 
-def test_a_list_without_a_default_starts_unset(times_and_lists: Form) -> None:
-    times_and_lists.set({'times': GIVEN_TIMES})
+def test_a_list_without_a_default_starts_unset(
+    client: Client, times_and_lists: Form
+) -> None:
+    times_and_lists.set({'times': GIVEN_TIMES}, Listing(client))
     assert missing(times_and_lists) == {
         (('lists', 'banks'), 'add an element, or remove for none')
     }
@@ -627,17 +651,21 @@ def test_a_list_without_a_default_starts_unset(times_and_lists: Form) -> None:
     assert missing(times_and_lists) == {(('lists', 'banks', 0), 'give a value')}
 
 
-def test_a_list_with_a_default_starts_at_it(times_and_lists: Form) -> None:
-    times_and_lists.set({'times': GIVEN_TIMES, 'lists': {'banks': []}})
+def test_a_list_with_a_default_starts_at_it(
+    client: Client, times_and_lists: Form
+) -> None:
+    times_and_lists.set({'times': GIVEN_TIMES, 'lists': {'banks': []}}, Listing(client))
     assert times_and_lists.params['lists']['angles'] == [1.0, 2.0]
 
 
-def test_an_empty_text_in_a_list_of_texts_is_a_text(times_and_lists: Form) -> None:
+def test_an_empty_text_in_a_list_of_texts_is_a_text(
+    client: Client, times_and_lists: Form
+) -> None:
     params = {
         'times': GIVEN_TIMES,
         'lists': {'banks': [1], 'angles': [1.0], 'names': ['', 'a']},
     }
-    times_and_lists.set(params)
+    times_and_lists.set(params, Listing(client))
     assert times_and_lists.params == params
     widget(times_and_lists, 'Add to Names').clicks += 1
     assert times_and_lists.params['lists']['names'] == ['', 'a', '']
@@ -646,7 +674,7 @@ def test_an_empty_text_in_a_list_of_texts_is_a_text(times_and_lists: Form) -> No
 @pytest.fixture
 def measured(client: Client, files: FakeFiles, run: FileRef) -> Form:
     files.measure(202, {'counts': 1.0}, kind='mask', instrument='loki')
-    return Form(MEASURED, client)
+    return form_of(MEASURED, client)
 
 
 def test_a_file_at_a_field_of_a_group_is_a_picker_and_x_or_none_a_choice(
@@ -665,16 +693,16 @@ def test_a_file_at_a_field_of_a_group_is_a_picker_and_x_or_none_a_choice(
 
 
 def test_a_group_holding_a_file_is_set_as_a_record_holds_it(
-    measured: Form, run: FileRef
+    client: Client, measured: Form, run: FileRef
 ) -> None:
     held = {'run': run.model_dump(by_alias=True), 'thickness': 2.0, 'mask': None}
-    measured.set({'measured': held})
+    measured.set({'measured': held}, Listing(client))
     assert measured.params == {'measured': {'run': run, 'thickness': 2.0, 'mask': None}}
 
 
 @pytest.fixture
 def stack(client: Client, stack_spec: Spec, run: FileRef) -> Form:
-    return Form(stack_spec, client)
+    return form_of(stack_spec, client)
 
 
 def test_a_table_starts_unset_and_a_list_with_a_default_at_it(stack: Form) -> None:
@@ -703,10 +731,10 @@ def test_a_table_without_rows_is_refused_by_its_length(
 
 
 def test_a_row_of_a_file_field_is_a_file_picked_in_the_editor(
-    stack: Form, files: FakeFiles, run: FileRef
+    client: Client, stack: Form, files: FakeFiles, run: FileRef
 ) -> None:
     other = files.measure(102, {'counts': 4.0, 'x': 0.0}, role='sample')
-    stack.refresh()
+    stack.refresh(Listing(client))
     for picked in (run, other):
         picker(stack, 'Runs').value = picked
         click(stack, 'Runs', 'Add as new row')
@@ -736,12 +764,15 @@ def test_a_row_is_added_from_the_editor_only_if_nothing_is_missing(
     assert rows(stack, 'Shots')[1] == {'Run': 'run 101 (sample)', 'Thickness': '3.0'}
 
 
-def test_a_row_selected_is_edited_and_updated(stack: Form, run: FileRef) -> None:
+def test_a_row_selected_is_edited_and_updated(
+    client: Client, stack: Form, run: FileRef
+) -> None:
     stack.set(
         {
             'runs': [run],
             'shots': [{'run': run, 'thickness': 2.0}, {'run': run, 'thickness': 3.0}],
-        }
+        },
+        Listing(client),
     )
     table(stack, 'Shots').selection = [0]
     assert widget_in(stack, 'Shots', 'Thickness').value == 2.0
@@ -752,13 +783,14 @@ def test_a_row_selected_is_edited_and_updated(stack: Form, run: FileRef) -> None
 
 
 def test_the_selection_stays_while_the_editor_holds_changes(
-    stack: Form, run: FileRef
+    client: Client, stack: Form, run: FileRef
 ) -> None:
     stack.set(
         {
             'runs': [run],
             'shots': [{'run': run, 'thickness': 2.0}, {'run': run, 'thickness': 3.0}],
-        }
+        },
+        Listing(client),
     )
     selection = table(stack, 'Shots')
     thickness = widget_in(stack, 'Shots', 'Thickness')
@@ -776,9 +808,11 @@ def test_the_selection_stays_while_the_editor_holds_changes(
 
 
 def test_an_editor_changed_with_no_row_selected_is_refused_until_discarded(
-    stack: Form, run: FileRef
+    client: Client, stack: Form, run: FileRef
 ) -> None:
-    stack.set({'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]})
+    stack.set(
+        {'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]}, Listing(client)
+    )
     thickness = widget_in(stack, 'Shots', 'Thickness')
     empty = thickness.value
     thickness.value = 4.0
@@ -790,8 +824,12 @@ def test_an_editor_changed_with_no_row_selected_is_refused_until_discarded(
     assert [s['thickness'] for s in stack.params['shots']] == [2.0]
 
 
-def test_deselecting_a_row_empties_the_editor(stack: Form, run: FileRef) -> None:
-    stack.set({'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]})
+def test_deselecting_a_row_empties_the_editor(
+    client: Client, stack: Form, run: FileRef
+) -> None:
+    stack.set(
+        {'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]}, Listing(client)
+    )
     thickness = widget_in(stack, 'Shots', 'Thickness')
     empty = thickness.value
     table(stack, 'Shots').selection = [0]
@@ -801,9 +839,11 @@ def test_deselecting_a_row_empties_the_editor(stack: Form, run: FileRef) -> None
 
 
 def test_a_row_edited_may_be_added_as_a_new_row_instead(
-    stack: Form, run: FileRef
+    client: Client, stack: Form, run: FileRef
 ) -> None:
-    stack.set({'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]})
+    stack.set(
+        {'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]}, Listing(client)
+    )
     table(stack, 'Shots').selection = [0]
     widget_in(stack, 'Shots', 'Thickness').value = 4.0
     click(stack, 'Shots', 'Add as new row')
@@ -812,10 +852,10 @@ def test_a_row_edited_may_be_added_as_a_new_row_instead(
 
 
 def test_removing_the_row_selected_removes_the_changes_to_it(
-    stack: Form, run: FileRef
+    client: Client, stack: Form, run: FileRef
 ) -> None:
     shots = [{'run': run, 'thickness': 2.0}, {'run': run, 'thickness': 3.0}]
-    stack.set({'runs': [run], 'shots': shots})
+    stack.set({'runs': [run], 'shots': shots}, Listing(client))
     table(stack, 'Shots').selection = [0]
     widget_in(stack, 'Shots', 'Thickness').value = 4.0
     click(stack, 'Shots', 'Remove')
@@ -823,20 +863,24 @@ def test_removing_the_row_selected_removes_the_changes_to_it(
 
 
 def test_setting_the_form_drops_changes_in_the_editor(
-    stack: Form, run: FileRef
+    client: Client, stack: Form, run: FileRef
 ) -> None:
     params = {'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]}
-    stack.set(params)
+    stack.set(params, Listing(client))
     widget_in(stack, 'Shots', 'Thickness').value = 4.0
-    stack.set(params)
+    stack.set(params, Listing(client))
     assert [s['thickness'] for s in stack.params['shots']] == [2.0]
 
 
-def test_a_refresh_keeps_changes_in_the_editor(stack: Form, run: FileRef) -> None:
-    stack.set({'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]})
+def test_a_refresh_keeps_changes_in_the_editor(
+    client: Client, stack: Form, run: FileRef
+) -> None:
+    stack.set(
+        {'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]}, Listing(client)
+    )
     table(stack, 'Shots').selection = [0]
     widget_in(stack, 'Shots', 'Thickness').value = 4.0
-    stack.refresh()
+    stack.refresh(Listing(client))
     assert widget_in(stack, 'Shots', 'Thickness').value == 4.0
     assert missing(stack) == {(('shots', 0), HOLDS_CHANGES)}
 
@@ -846,10 +890,13 @@ def test_a_record_released_while_its_row_is_selected_is_no_change_in_the_editor(
 ) -> None:
     found = client.compute(find_spec, params={'run': run})
     centre = found.ref('centre')
-    stack.set({'runs': [run], 'shots': [], 'centres': [centre, {'x': 2.0, 'y': 0.0}]})
+    stack.set(
+        {'runs': [run], 'shots': [], 'centres': [centre, {'x': 2.0, 'y': 0.0}]},
+        Listing(client),
+    )
     table(stack, 'Centres').selection = [0]
     client.release(found)
-    stack.refresh()
+    stack.refresh(Listing(client))
     assert stack.params['centres'][0] == centre
     table(stack, 'Centres').selection = [1]
     assert table(stack, 'Centres').selection == [1]
@@ -875,8 +922,8 @@ def test_changes_in_the_editor_of_a_table_in_a_row_are_changes_of_the_row(
         params=OuterParams,
         outputs=Value,
     )
-    form = Form(spec, client)
-    form.set({'outers': [{'inners': [{'x': 1.0}]}, {'inners': []}]})
+    form = form_of(spec, client)
+    form.set({'outers': [{'inners': [{'x': 1.0}]}, {'inners': []}]}, Listing(client))
     outer, inner = section(form, 'Outers').select(pn.widgets.Tabulator)
     outer.selection = [0]
     inner.selection = [0]
@@ -891,27 +938,31 @@ def test_changes_in_the_editor_of_a_table_in_a_row_are_changes_of_the_row(
 
 
 def test_a_row_the_editor_cannot_show_is_kept_when_selected(
-    stack: Form, run: FileRef
+    client: Client, stack: Form, run: FileRef
 ) -> None:
     unread = OutputRef(record='f00d', output='centre')
-    stack.set({'runs': [run], 'shots': [], 'centres': [unread]})
+    stack.set({'runs': [run], 'shots': [], 'centres': [unread]}, Listing(client))
     table(stack, 'Centres').selection = [0]
     assert stack.params['centres'] == [unread]
 
 
 def test_a_row_is_not_updated_while_a_value_is_missing_in_the_editor(
-    stack: Form, run: FileRef
+    client: Client, stack: Form, run: FileRef
 ) -> None:
-    stack.set({'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]})
+    stack.set(
+        {'runs': [run], 'shots': [{'run': run, 'thickness': 2.0}]}, Listing(client)
+    )
     table(stack, 'Shots').selection = [0]
     widget_in(stack, 'Shots', 'Thickness').value = None
     click(stack, 'Shots', 'Update row')
     assert rows(stack, 'Shots') == [{'Run': 'run 101 (sample)', 'Thickness': '2.0'}]
 
 
-def test_remove_removes_the_rows_selected(stack: Form, run: FileRef) -> None:
+def test_remove_removes_the_rows_selected(
+    client: Client, stack: Form, run: FileRef
+) -> None:
     centres = [{'x': float(x), 'y': 0.0} for x in range(3)]
-    stack.set({'runs': [run], 'shots': [], 'centres': centres})
+    stack.set({'runs': [run], 'shots': [], 'centres': centres}, Listing(client))
     table(stack, 'Centres').selection = [0, 2]
     click(stack, 'Centres', 'Remove')
     assert stack.params['centres'] == [centres[1]]
@@ -924,7 +975,7 @@ def test_a_row_may_be_an_output_of_a_record_that_fits(
     with pytest.raises(TypeError, match='centres: not a choice of ways'):
         stack.ways('centres')
     found = client.compute(find_spec, params={'run': run})
-    stack.refresh()
+    stack.refresh(Listing(client))
     way(stack, 'Centres').value = 'From a record'
     picker(stack, 'Centres').value = found.ref('centre')
     click(stack, 'Centres', 'Add as new row')
@@ -952,8 +1003,8 @@ def test_a_row_is_shown_under_the_file_or_the_record_it_is_given_as(
         outputs=Value,
     )
     found = client.compute(find_spec, params={'run': run})
-    form = Form(spec, client)
-    form.set({'runs': [run, found.ref('centre')]})
+    form = form_of(spec, client)
+    form.set({'runs': [run, found.ref('centre')]}, Listing(client))
     label = f'BeamCentre ({found.created.astimezone():%H:%M})'
     assert rows(form, 'Runs') == [
         {'File': 'run 101 (sample)', 'Record': ''},
@@ -966,7 +1017,7 @@ def test_the_editor_offers_no_record_of_a_row_shown_before(
 ) -> None:
     found = client.compute(find_spec, params={'run': run})
     centres = [found.ref('centre'), {'x': 2.0, 'y': 0.0}]
-    stack.set({'runs': [run], 'shots': [], 'centres': centres})
+    stack.set({'runs': [run], 'shots': [], 'centres': centres}, Listing(client))
     way(stack, 'Centres').value = 'From a record'
     click(stack, 'Centres', 'Add as new row')
     click(stack, 'Centres', 'Discard')
@@ -992,13 +1043,13 @@ def test_tables_round_trip_through_a_record(
         },
     )
     assert client.output(record, 'total').value == 6.0 + 4.0 + 2.0 + 1.5 + 2.0
-    stack.set(record.request.params)
+    stack.set(record.request.params, Listing(client))
     assert stack.params == record.request.params
     assert rows(stack, 'Shots') == [{'Run': 'run 102 (sample)', 'Thickness': '2.0'}]
 
 
 def test_a_list_of_a_union_has_a_column_for_the_tag(client: Client) -> None:
-    sides = Form(SIDES, client)
+    sides = form_of(SIDES, client)
     click(sides, 'Sides', 'Add as new row')  # no way chosen: no row
     assert missing(sides) == {(('sides',), 'add a row, or remove for none')}
     for side in ('Right', 'Left'):
@@ -1010,7 +1061,7 @@ def test_a_list_of_a_union_has_a_column_for_the_tag(client: Client) -> None:
 
 @pytest.fixture
 def nested(client: Client, nested_spec: Spec) -> Form:
-    return Form(nested_spec, client)
+    return form_of(nested_spec, client)
 
 
 @pytest.fixture
@@ -1019,7 +1070,7 @@ def found(client: Client, find_spec: Spec, run: FileRef) -> Record:
 
 
 @pytest.fixture
-def filled(nested: Form, found: Record, run: FileRef) -> Form:
+def filled(client: Client, nested: Form, found: Record, run: FileRef) -> Form:
     """The nested form with a value at each field without a default."""
     nested.set(
         {
@@ -1029,7 +1080,8 @@ def filled(nested: Form, found: Record, run: FileRef) -> Form:
                 'window': {'start': 0.5},
                 'centre': found.ref('centre'),
             },
-        }
+        },
+        Listing(client),
     )
     return nested
 
@@ -1089,7 +1141,7 @@ def test_a_record_at_a_field_is_listed_when_the_form_is_refreshed(
     assert way(nested, 'Centre').options == ['From a record']
     assert set(picker(nested, 'Centre').options) == {'(choose a record)'}
     found = client.compute(find_spec, params={'run': run})
-    nested.refresh()
+    nested.refresh(Listing(client))
     picker(nested, 'Centre').value = found.ref('centre')
     assert (('specimen', 'centre'), 'choose a record') not in missing(nested)
 
@@ -1144,5 +1196,87 @@ def test_values_at_any_depth_round_trip_through_a_record(
     }
     record = client.compute(nested_spec, params=params)
     assert client.output(record, 'total').value == 3 * 1.5
-    nested.set(record.request.params)
+    nested.set(record.request.params, Listing(client))
     assert nested.params == record.request.params
+
+
+def test_watch_tells_of_a_changed_input_and_not_of_set_or_refresh(
+    client: Client, reduce_spec: Spec
+) -> None:
+    form = form_of(reduce_spec, client)
+    calls: list[None] = []
+    form.watch(lambda: calls.append(None))
+
+    form.set({'reduction': {'bins': 7}}, Listing(client))
+    form.refresh(Listing(client))
+    assert calls == []
+
+    widget(form, 'Bins').value = 8
+    assert len(calls) == 1
+
+
+def test_watch_tells_of_an_element_added_and_of_its_value(options: Form) -> None:
+    calls: list[None] = []
+    options.watch(lambda: calls.append(None))
+
+    widget(options, 'Add to Banks').clicks += 1
+    assert len(calls) == 1
+
+    widget(options, 'Banks [0]').value = 3
+    assert len(calls) == 2
+
+
+def test_watch_tells_of_a_row_written_and_removed(stack: Form, run: FileRef) -> None:
+    calls: list[None] = []
+    widget_in(stack, 'Shots', 'Run').value = run
+    stack.watch(lambda: calls.append(None))
+
+    click(stack, 'Shots', 'Add as new row')
+    assert calls
+    calls.clear()
+
+    click(stack, 'Shots', 'Remove')
+    assert calls
+
+
+def test_a_form_can_be_limited_to_some_parameters(
+    client: Client, reduce_spec: Spec
+) -> None:
+    fields = ('sample',)
+    settings = [n for n in reduce_spec.params.model_fields if n not in fields]
+
+    row = Form(reduce_spec.params, Listing(client), fields=fields)
+    rest = Form(reduce_spec.params, Listing(client), fields=settings)
+
+    assert set(row.held()[0]) | {e.loc[0] for e in row.held()[1]} == {'sample'}
+    assert 'sample' not in rest.held()[0]
+
+
+def test_a_form_refuses_a_field_the_model_lacks(
+    client: Client, reduce_spec: Spec
+) -> None:
+    with pytest.raises(KeyError, match='nope'):
+        Form(reduce_spec.params, Listing(client), fields=('nope',))
+
+
+def test_a_limited_form_ignores_the_other_parameters_of_a_record(
+    client: Client, reduce_spec: Spec
+) -> None:
+    row = Form(reduce_spec.params, Listing(client), fields=('sample',))
+
+    row.set({'sample': {'thickness': 2.0}, 'run': 'not shown'}, Listing(client))
+
+    assert row.params['sample']['thickness'] == 2.0
+
+
+def test_held_leaves_out_what_has_something_missing(
+    client: Client, reduce_spec: Spec
+) -> None:
+    form = form_of(reduce_spec, client)
+
+    given, missing = form.held()
+
+    assert 'run' not in given
+    assert ('run',) in [e.loc for e in missing]
+    with pytest.raises(SubmitError):
+        form.params

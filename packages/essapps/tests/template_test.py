@@ -234,6 +234,9 @@ def test_a_fill_gives_each_blank_and_no_fixed_value() -> None:
     with pytest.raises(SubmitError, match='fixed by the template') as raised:
         template.fill(params={'scaling': Factor(), 'sample': file(run=1)})
     assert [e.loc for e in raised.value.errors] == [('scaling',)]
+    with pytest.raises(SubmitError, match='not a blank') as raised:
+        template.fill(params={'sample': file(run=1), 'other': 1})
+    assert [e.loc for e in raised.value.errors] == [('other',)]
 
 
 def test_a_call_through_a_stage_without_its_blank_is_refused(client: Client) -> None:

@@ -158,7 +158,7 @@ pid = client.publish(r.ref('iofq'), 'scicat')   # planned` },
     code: `app = App(client)          # a Form per spec in client.specs()
 
 app.form.params            # the request the shown form holds
-app.submit()               # client.submit(app.form.spec, params=...)` },
+app.submit()               # client.submit(app.spec, params=...)` },
   { level: 11, placement: 'service', planned: SERVICE, title: 'Swap local() for the service',
     body: `<p>The backend moves to DMSC, and the client talks HTTP to it. The notebook changes in one line.</p>
            <p>The record and its outputs do not change: <em>where a request runs</em> is invisible to it. On the service, <code>select=</code> sends only the selected part over the network.</p>`,

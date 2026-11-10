@@ -603,7 +603,7 @@ binding = DriverBinding(SUM, RowSum)</code></pre>
       <div class="eyebrow" style="margin-bottom:6px">Needed to read the grid</div>
       <ul class="tight">
         <li><b>Records and references.</b> Every connection between requests is a reference: <code>record.ref('centre')</code>, <code>file(run=611)</code>, or <code>acc.ref('iofq')</code>, which the backend replaces at submission by an output of a record of the state's plain request. A reference to a pending record is valid. The backend waits for it.</li>
-        <li><b>Template</b> is the shared building block: stage, accumulator, batch (<code>apply</code>), and rules all start from one.</li>
+        <li><b>Template</b> is the shared building block: stage, accumulator, batch, and rules all start from one.</li>
         <li><b>Controllers.</b> The backend never decides what to submit or push. A notebook, an app, or the <code>TriggerLoop</code> of rules does.</li>
         <li><b>Where it runs.</b> Both: values in memory while something keeps them, written only when persisted. The service (designed, not built) keeps them under a cap per client; where it holds an accumulator's driver is open. Placement says the results do not differ.</li>
       </ul>

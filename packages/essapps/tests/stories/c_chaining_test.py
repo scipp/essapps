@@ -7,7 +7,7 @@
 import pytest
 import scipp as sc
 
-from ess.apps import Client, Template, apply, file
+from ess.apps import Client, Template, file
 from ess.apps.testing import FakeFiles
 
 from . import toys
@@ -30,7 +30,10 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
         blanks=('sample',),
     )
 
-    requests = apply(template, samples, client.files, at='sample', member_field='run')
+    requests = {
+        str(client.files.metadata(f)['run']): template.fill(params={'sample': f})
+        for f in samples
+    }
     reduced = list(client.compute(requests, label='iofq').values())
 
     assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [

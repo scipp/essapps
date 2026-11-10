@@ -213,3 +213,71 @@ def test_a_stage_needs_a_binding_that_makes_stages(client: Client) -> None:
         client.stage(Template(toys.TOTAL, blanks=('parts',)))
     with pytest.raises(SubmitError, match=r'^total/v1: its binding makes no stages$'):
         client.stage(Template(toys.TOTAL, params={'speed': 1.0}, blanks=('parts',)))
+
+
+def test_several_requests_go_through_a_stage_together(
+    client: Client, shifting: StagedFunction
+) -> None:
+    stage = toys.stage_shift(client, client.submit(toys.load_request(1)))
+
+    records = client.compute(
+        stage,
+        each={
+            'a': {'shift': toys.Shift(offset=0.5)},
+            'b': {'shift': toys.Shift(offset=1.5)},
+        },
+        label='scan',
+    )
+
+    assert [client.output(records[k], 'value') for k in 'ab'] == [
+        toys.Amount(value=v) for v in (1.5, 2.5)
+    ]
+    assert {r.member for r in client.records(label='scan')} == {'a', 'b'}
+    assert shifting.staged == [('shift',)]
+
+
+def test_requests_through_a_stage_come_back_in_the_shape_given(client: Client) -> None:
+    stage = toys.stage_shift(client, client.submit(toys.load_request(1)))
+
+    records = client.compute(stage, each=[{'shift': toys.Shift(offset=0.5)}])
+
+    assert [client.output(r, 'value') for r in records] == [toys.Amount(value=1.5)]
+
+
+def test_requests_through_a_stage_are_all_or_none_and_every_refusal_is_named(
+    client: Client,
+) -> None:
+    stage = toys.stage_shift(client, client.submit(toys.load_request(1)))
+    before = len(client.records())
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(
+            stage,
+            each={
+                'good': {'shift': toys.Shift(offset=0.5)},
+                'typo': {'shift': {'offset': 'x'}},
+                'typo2': {'shift': {'offset': 'y'}},
+            },
+        )
+
+    assert [e.entry for e in raised.value.errors] == ['typo', 'typo2']
+    assert len(client.records()) == before
+
+
+def test_a_request_through_a_stage_without_its_blank_is_named_by_its_key(
+    client: Client,
+) -> None:
+    stage = toys.stage_shift(client, client.submit(toys.load_request(1)))
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(stage, each={'empty': {}})
+
+    assert [(e.entry, e.loc) for e in raised.value.errors] == [('empty', ('shift',))]
+
+
+def test_each_goes_with_a_stage_in_place_of_params(client: Client) -> None:
+    stage = toys.stage_shift(client, client.submit(toys.load_request(1)))
+    with pytest.raises(TypeError, match='each goes with a stage'):
+        client.submit(toys.load_request(1), each=[{}])
+    with pytest.raises(TypeError, match='each goes with a stage'):
+        client.submit(stage, each=[{}], params={})

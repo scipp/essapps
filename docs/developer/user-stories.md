@@ -103,7 +103,7 @@ Besides the calls in README.md, the stories use this one:
 record.request.files()    # the files the request names directly
 ```
 
-The trigger loop belongs to the sub-design for batch and automatic reduction.
+The trigger loop belongs to the sub-design for automatic reduction.
 The stories use two of its calls:
 
 ```python
@@ -295,7 +295,10 @@ for bins, threshold in [(1, 0.0), (4, 0.0), (4, 1.5), (2, 1.5)]:
 final = client.latest('tuning')
 beamtime = Template(final.request.spec, params=final.request.params, blanks=('sample',))
 new = measure(2, [2.0, 1.0, 4.0, 3.0])
-requests = apply(beamtime, [new], client.files, at='sample', member_field='run')
+requests = {
+    str(client.files.metadata(f)['run']): beamtime.fill(params={'sample': f})
+    for f in [new]
+}
 (reduced,) = client.compute(requests, label='iofq-beamtime').values()
 
 assert len(client.records(label='tuning')) == 4
@@ -370,7 +373,10 @@ samples = [measure(2, [2.0, 3.0, 4.0, 5.0], role='sample'),
 template = Template(IOFQ, params={'beam_centre': centre.ref('centre'), 'normalization': None},
                     blanks=('sample',))
 
-requests = apply(template, samples, client.files, at='sample', member_field='run')
+requests = {
+    str(client.files.metadata(f)['run']): template.fill(params={'sample': f})
+    for f in samples
+}
 reduced = list(client.compute(requests, label='iofq').values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [[3.0, 7.0], [7.0, 3.0]]
@@ -453,7 +459,10 @@ temperatures = ['250K', '260K', '270K', '280K', '290K']
 runs = [measure(n, [float(n)] * 4, temperature=t) for n, t in enumerate(temperatures, start=1)]
 corrupt(runs[1])                                                     # 260K
 template = Template(IOFQ, params={'reduction': Reduction(bins=1), 'normalization': None}, blanks=('sample',))
-requests = apply(template, runs, client.files, at='sample', member_field='temperature')
+requests = {
+    str(client.files.metadata(f)['temperature']): template.fill(params={'sample': f})
+    for f in runs
+}
 scan = client.compute(requests, label='scan', persist=True)         # keyed by temperature
 
 assert [client.output(scan[t], 'iofq').values.tolist() for t in ('250K', '270K', '290K')] == [
@@ -464,7 +473,7 @@ assert client.wait(scan) == {
 assert {r.member: r for r in client.records(label='scan')} == scan
 ```
 
-Gap: `member_field`, and labels and members on records, are tentative (README.md open question 3).
+Gap: labels and members on records are tentative (README.md open question 3).
 Later, the result at 250 K is `client.latest('scan', member='250K')`.
 
 ### D2. Overnight cluster batch
@@ -510,12 +519,18 @@ Actor: user of the shared service. Goal: cancel a running batch of 500 with a wr
 runs = [measure(n, [1.0, 1.0, 1.0, 1.0]) for n in range(1, 501)]
 wrong = Template(IOFQ, params={'reduction': Reduction(threshold=20.0), 'normalization': None},
                 blanks=('sample',))
-first = client.submit(apply(wrong, runs, client.files, at='sample', member_field='run'),
-                      label='scan', persist=True)
+wrong_requests = {
+    str(client.files.metadata(f)['run']): wrong.fill(params={'sample': f})
+    for f in runs
+}
+first = client.submit(wrong_requests, label='scan', persist=True)
 client.cancel(first)
 fixed = replace(wrong, params={'reduction': Reduction(threshold=0.5), 'normalization': None})
-second = client.compute(apply(fixed, runs, client.files, at='sample', member_field='run'),
-                        label='scan', persist=True)
+fixed_requests = {
+    str(client.files.metadata(f)['run']): fixed.fill(params={'sample': f})
+    for f in runs
+}
+second = client.compute(fixed_requests, label='scan', persist=True)
 
 assert set(client.wait(first).values()) <= {'completed', 'cancelled'}
 assert [client.output(r, 'iofq').values.tolist() for r in second.values()] == 500 * [[2.0, 2.0]]
@@ -531,7 +546,10 @@ Actor: user filling in a batch form. Goal: a parameter the params model rejects 
 ```python
 runs = [measure(n, [1.0, 1.0]) for n in range(1, 501)]
 typo = Template(IOFQ, params={'reduction': {'threshold': '2,5'}, 'normalization': None}, blanks=('sample',))
-requests = apply(typo, runs, client.files, at='sample', member_field='run')
+requests = {
+    str(client.files.metadata(f)['run']): typo.fill(params={'sample': f})
+    for f in runs
+}
 
 with pytest.raises(SubmitError, match=r'reduction\.threshold'):
     client.submit(requests, label='scan')
@@ -546,17 +564,27 @@ Actor: instrument scientist. Goal: reduce an earlier batch of the proposal again
 template = Template(IOFQ, params={'reduction': Reduction(threshold=1.5), 'normalization': None},
                     blanks=('sample',))
 runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
-client.compute(apply(template, runs, client.files, at='sample', member_field='run'),
-               label='scan', persist=True)
+requests = {
+    str(client.files.metadata(f)['run']): template.fill(params={'sample': f})
+    for f in runs
+}
+client.compute(requests, label='scan', persist=True)
 
 # weeks later, version 2 of the spec is released
 before = client.records(label='scan')
 runs = [r.request.params['sample'] for r in before]
-renamed = apply(replace(template, spec=IOFQ_V2), runs, client.files, at='sample', member_field='run')
+v2 = replace(template, spec=IOFQ_V2)
+renamed = {
+    str(client.files.metadata(f)['run']): v2.fill(params={'sample': f})
+    for f in runs
+}
 with pytest.raises(SubmitError, match=r'reduction\.threshold: Extra inputs'):
     client.submit(renamed, label='scan')
 moved = replace(template, spec=IOFQ_V2, params={'reduction': ReductionV2(mask_below=1.5), 'normalization': None})
-requests = apply(moved, runs, client.files, at='sample', member_field='run')
+requests = {
+    str(client.files.metadata(f)['run']): moved.fill(params={'sample': f})
+    for f in runs
+}
 after = list(client.compute(requests, label='scan', persist=True).values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in (before[0], after[0])] == [
@@ -886,7 +914,7 @@ What the design leaves open or defers, with the stories each item affects.
 - **The service** (sections D and E): designed and not implemented; the format of each persisted output type and the layout of the store are open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 - **Looks that compute** (B4, D7): a selection only indexes; a projection or a thick slice summed waits for the plotting work; README.md open question 4.
 - **Persist at submission** (D1, D2, D3, D6, E1 to E4): whether `persist=` should also keep the values for the client; README.md open question 6.
-- **Labels and members** (D1, D2, and every story that calls `apply`): `member_field`, and labels and members on records, are tentative; README.md open question 3.
+- **Labels and members** (D1, D2): labels and members on records are tentative; README.md open question 3.
 - **Grouping** (system story D7): spreading one accumulator over several nodes needs a merge of two drivers; README.md open question 1.
 - **Recomputing in a record's environment** (F2): deferred.
 - **Publishing** (C2): a published output is a derived dataset in the catalogue, and a workflow reads its file as it reads a run; `publish` and SciCat are not implemented.

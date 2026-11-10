@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A form for a spec's params, generated from its pydantic models, on a client.
+A form for a pydantic model of params, such as a spec's.
 
 The form gives the params as a request does: at each field, at any depth,
 the JSON form of a value, a file, a reference to an output, or ``None``. It
@@ -47,7 +47,8 @@ value is in UTC. The fraction of a second of the value is kept.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime, tzinfo
 from enum import Enum
 from typing import Any, Union, get_args, get_origin
@@ -58,12 +59,11 @@ from pydantic import AwareDatetime, BaseModel
 from pydantic.fields import FieldInfo
 from pydantic_core import to_json, to_jsonable_python
 
-from ess.apps import Client, FieldError, Listing, SubmitError
+from ess.apps import FieldError, Listing, SubmitError
 from ess.spec import (
     File,
     FileRef,
     OutputRef,
-    WorkflowSpec,
     field_types,
 )
 from ess.spec.refs import Loc, as_ref
@@ -83,6 +83,9 @@ field as it starts, at its default or unset.
 type _Missing = list[FieldError]
 """The fields with nothing given, each with what the user is to do."""
 
+type _Changed = Callable[[], None]
+"""Called when the value of a widget may have changed."""
+
 _HOLDS_CHANGES = 'the editor holds changes: add or update a row, or discard them'
 """What a user who changed the editor of a table is to do before going on."""
 
@@ -91,7 +94,8 @@ type _Widget = (
 )
 """
 The widget of a value: ``value(loc, missing)`` gives it as a request writes
-it, ``set`` shows a value, ``refresh`` lists the files and records anew.
+it, ``set`` shows a value, ``refresh`` lists the files and records anew,
+``watch`` calls back when the value changes.
 """
 
 
@@ -212,6 +216,9 @@ class _File:
         self.widget.options = options
         self.widget.value = picked
 
+    def watch(self, changed: _Changed) -> None:
+        self.widget.param.watch(lambda _: changed(), 'value')
+
     def panel(self) -> Any:
         return self.widget
 
@@ -306,6 +313,9 @@ class _Scalar:
     def refresh(self, listing: Listing) -> None:
         pass
 
+    def watch(self, changed: _Changed) -> None:
+        self.widget.param.watch(lambda _: changed(), 'value')
+
     def panel(self) -> Any:
         return self.widget
 
@@ -326,13 +336,18 @@ class _Scalars:
         self._default = default
         self._description = description
         self._elements: list[_Scalar] | None = None  # unset
+        self._changed: _Changed = lambda: None
         self._column = pn.Column(sizing_mode='stretch_width')
         add = pn.widgets.Button(label=f'Add to {label}')
-        add.on_click(lambda _: self._resize(len(self._elements or []) + 1))
+        add.on_click(lambda _: self._click(len(self._elements or []) + 1))
         remove = pn.widgets.Button(label=f'Remove from {label}')
-        remove.on_click(lambda _: self._resize(len(self._elements or []) - 1))
+        remove.on_click(lambda _: self._click(len(self._elements or []) - 1))
         self._panel = pn.Column(self._column, pn.Row(add, remove))
         self.set(UNSET)
+
+    def _click(self, n: int) -> None:
+        self._resize(n)
+        self._changed()
 
     def _resize(self, n: int) -> None:
         """
@@ -342,10 +357,12 @@ class _Scalars:
         elements = self._elements or []
         del elements[n:]
         default = '' if self._type is str else UNSET
-        elements.extend(
-            _Scalar(f'{self._label} [{i}]', self._type, default, self._description)
-            for i in range(len(elements), n)
-        )
+        for i in range(len(elements), n):
+            element = _Scalar(
+                f'{self._label} [{i}]', self._type, default, self._description
+            )
+            element.watch(lambda: self._changed())
+            elements.append(element)
         self._elements = elements
         self._column.objects = [e.panel() for e in elements]
 
@@ -368,6 +385,9 @@ class _Scalars:
 
     def refresh(self, listing: Listing) -> None:
         pass
+
+    def watch(self, changed: _Changed) -> None:
+        self._changed = changed
 
     def panel(self) -> Any:
         return self._panel
@@ -417,6 +437,10 @@ class _Group:
         for field in self._fields.values():
             field.refresh(listing)
 
+    def watch(self, changed: _Changed) -> None:
+        for field in self._fields.values():
+            field.watch(changed)
+
     def panel(self) -> Any:
         return self._panel
 
@@ -444,6 +468,9 @@ class _Record:
     def set(self, value: Any) -> None:
         _pick(self.widget, value)
 
+    def watch(self, changed: _Changed) -> None:
+        self.widget.param.watch(lambda _: changed(), 'value')
+
     def panel(self) -> Any:
         return self.widget
 
@@ -458,6 +485,9 @@ class _Nothing:
         pass
 
     def refresh(self, listing: Listing) -> None:
+        pass
+
+    def watch(self, changed: _Changed) -> None:
         pass
 
     def panel(self) -> Any:
@@ -547,6 +577,11 @@ class _Choice:
                 return label
         raise ValueError(f'{tag[self._tag]}: not an alternative')
 
+    def watch(self, changed: _Changed) -> None:
+        self._selector.param.watch(lambda _: changed(), 'value')
+        for way in self._ways.values():
+            way.watch(changed)
+
     def panel(self) -> Any:
         return self._panel
 
@@ -583,6 +618,7 @@ class _Rows:
         self._default = default
         self._listing = listing
         self._rows: list[Any] | None = None  # unset
+        self._changed: _Changed = lambda: None
         # The selection that the editor shows, which the table's differs from
         # only while it is being restored.
         self._selection: list[int] = []
@@ -695,6 +731,7 @@ class _Rows:
         else:
             rows[i] = value
             self._render()
+        self._changed()
 
     def _remove(self) -> None:
         selected = set(self._selection)
@@ -704,6 +741,7 @@ class _Rows:
             self._table.selection = []
             self._load()
         self._render()
+        self._changed()
 
     def _render(self) -> None:
         """Show the rows in the table, a file or an output by its label."""
@@ -778,31 +816,58 @@ class _Rows:
             self._shown = self._held()
         self._render()
 
+    def watch(self, changed: _Changed) -> None:
+        self._changed = changed
+        self._editor.watch(changed)
+
     def panel(self) -> Any:
         return self._panel
 
 
 class Form:
     """
-    The params of one spec: a widget per parameter, listing what ``client``
-    may give at each field.
+    The params of one pydantic model, such as a spec's ``params``: a widget per
+    parameter, listing what ``listing`` offers at each field.
+
+    ``fields`` limits the form to these parameters. So a template's two parts
+    are one form each, its values and its blanks::
+
+        Form(IOFQ.params, listing, fields=settings)
+        Form(IOFQ.params, listing, fields=('sample', 'sample_transmission'))
+
+    Raises ``KeyError`` for a name that is not a parameter of the model.
     """
 
-    def __init__(self, spec: WorkflowSpec[Any, Any], client: Client) -> None:
-        self.spec = spec
-        self._client = client
-        listing = Listing(client)
-        fields = spec.params.model_fields
+    def __init__(
+        self,
+        model: type[BaseModel],
+        listing: Listing,
+        *,
+        fields: Collection[str] | None = None,
+        title: str = '',
+        description: str = '',
+    ) -> None:
+        self.title = title or model.__name__
+        every = model.model_fields
+        self._every = frozenset(every)
+        if unknown := sorted(set(fields or ()) - self._every):
+            raise KeyError(f'{self.title} has no parameters {unknown}')
+        shown = {n: i for n, i in every.items() if fields is None or n in fields}
         self._params = {
-            name: _field(name, info, listing) for name, info in fields.items()
+            name: _field(name, info, listing) for name, info in shown.items()
         }
+        self._on_change: _Changed | None = None
+        self._loading = False
+        for widget in self._params.values():
+            widget.watch(self._changed)
+        heading = f'**{title}**: {description}' if title else description
         self._panel = pn.Column(
-            pn.pane.Markdown(f'**{spec.title}**: {spec.description}'),
+            pn.pane.Markdown(heading),
             pn.Tabs(
                 *(
                     pn.Column(
                         w.panel(),
-                        name=field_types.title(name, fields[name]),
+                        name=field_types.title(name, shown[name]),
                         sizing_mode='stretch_width',
                     )
                     for name, w in self._params.items()
@@ -813,6 +878,25 @@ class Form:
             ),
             sizing_mode='stretch_width',
         )
+
+    def watch(self, on_change: _Changed) -> None:
+        """
+        Call ``on_change`` when a person changes what the form holds. :meth:`set`
+        and :meth:`refresh` do not call it, whatever they change.
+        """
+        self._on_change = on_change
+
+    def _changed(self) -> None:
+        if self._on_change is not None and not self._loading:
+            self._on_change()
+
+    @contextmanager
+    def _loads(self) -> Iterator[None]:
+        self._loading = True
+        try:
+            yield
+        finally:
+            self._loading = False
 
     @property
     def params(self) -> dict[str, Any]:
@@ -826,25 +910,38 @@ class Form:
             sample: add a row, or remove for none
             sample[1]: the editor holds changes: add or update a row, or discard them
         """
-        missing: _Missing = []
-        given = {n: w.value((n,), missing) for n, w in self._params.items()}
+        given, missing = self.held()
         if missing:
             raise SubmitError(missing)
-        return {n: v for n, v in given.items() if v is not UNSET}
+        return given
 
-    def set(self, params: Mapping[str, Any]) -> None:
+    def held(self) -> tuple[dict[str, Any], list[FieldError]]:
+        """
+        What the form holds: the params given in full, leaving out each with
+        anything missing, and what is missing, as :attr:`params` names it.
+        """
+        missing: _Missing = []
+        given = {n: w.value((n,), missing) for n, w in self._params.items()}
+        incomplete = {e.loc[0] for e in missing if e.loc}
+        return {
+            n: v for n, v in given.items() if v is not UNSET and n not in incomplete
+        }, missing
+
+    def set(self, params: Mapping[str, Any], listing: Listing) -> None:
         """
         Show ``params``, as a record or a request holds them, such as
-        ``record.request.params``; a field left out is as it starts, at its
-        default or unset. A reference that the client may not read now
-        chooses the way of a record, with no record picked; a file that
-        is not listed stays picked.
+        ``record.request.params``, with what ``listing`` offers; a field left
+        out is as it starts, at its default or unset, and a parameter that the
+        form does not show is ignored. A reference that the client may not
+        read now chooses the way of a record, with no record picked; a file
+        that is not listed stays picked.
         """
-        if unknown := set(params) - set(self._params):
-            raise KeyError(f'{self.spec.title} has no parameters {sorted(unknown)}')
-        self.refresh()
-        for name, widget in self._params.items():
-            widget.set(params.get(name, UNSET))
+        if unknown := set(params) - self._every:
+            raise KeyError(f'{self.title} has no parameters {sorted(unknown)}')
+        self.refresh(listing)
+        with self._loads():
+            for name, widget in self._params.items():
+                widget.set(params.get(name, UNSET))
 
     def ways(self, name: str) -> list[str]:
         """
@@ -856,14 +953,11 @@ class Form:
             raise TypeError(f'{name}: not a choice of ways')
         return widget.offered
 
-    def refresh(self, listing: Listing | None = None) -> None:
-        """
-        List the files and the records that fit again, from ``listing``,
-        or from one looked up now.
-        """
-        listing = Listing(self._client) if listing is None else listing
-        for widget in self._params.values():
-            widget.refresh(listing)
+    def refresh(self, listing: Listing) -> None:
+        """List the files and the records that fit again, from ``listing``."""
+        with self._loads():
+            for widget in self._params.values():
+                widget.refresh(listing)
 
     def panel(self) -> Any:
         return self._panel

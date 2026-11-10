@@ -140,8 +140,15 @@ class Listing:
         return self._metadata[ref]
 
     def file_label(self, ref: FileRef) -> str:
-        """The label of a file, as :meth:`files` gives it, without its role."""
-        return _file_label(ref, self._known(ref))
+        """
+        The label of a file, as :meth:`files` gives it, without its role; the
+        reference itself if it is a name, such as ``file(run=1)``, or the file
+        source no longer has it.
+        """
+        try:
+            return _file_label(ref, self._known(ref))
+        except KeyError:
+            return str(ref)
 
     def output_label(self, ref: OutputRef) -> str:
         """The label of an output; the reference if its record is not listed."""

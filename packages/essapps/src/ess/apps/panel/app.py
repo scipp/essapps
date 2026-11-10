@@ -18,24 +18,43 @@ callback of Panel calls it while the app is served. Each time the records are
 listed again, the forms are too, so a field that takes a reference offers each
 new record, pending or not. The changes do not tell that an output was released,
 so after a release the outputs are listed from scratch.
+
+An application adds tabs of its own, shown before these (:class:`Tab`). They are
+listed again wherever the outputs are.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any, Protocol
+
 import panel as pn
 
 from ess.apps import Client, Listing, Record, SubmitError
+from ess.spec import WorkflowSpec
 
 from .form import Form
 from .outputs import Outputs, Plots
 from .records import Records
 
 
+class Tab(Protocol):
+    """
+    A tab that an application adds. It is made up to date with the client; the
+    app calls :meth:`refresh` with each new listing.
+    """
+
+    def refresh(self, listing: Listing) -> None: ...
+
+    def panel(self) -> Any: ...
+
+
 class App:
     """
     A form per spec, a button that submits, and the outputs of the client's
     records. ``plots`` are the plots configured for a spec, as :class:`Outputs`
-    takes them.
+    takes them. ``tabs`` holds the tabs of the application by title, shown before
+    the app's own.
 
     ``forms`` holds the forms by spec title, and ``picker`` picks the one
     shown. ``message`` shows the outcome of the last submission, once its
@@ -43,14 +62,24 @@ class App:
     ``records`` lists the records.
     """
 
-    def __init__(self, client: Client, plots: Plots | None = None) -> None:
+    def __init__(
+        self,
+        client: Client,
+        plots: Plots | None = None,
+        tabs: Mapping[str, Tab] | None = None,
+    ) -> None:
         self.client = client
-        self.forms = {s.title: Form(s, client) for s in client.specs()}
+        self.tabs = dict(tabs or {})
+        self._listing = Listing(client)
+        self._specs = {s.title: s for s in client.specs()}
+        self.forms = {
+            title: Form(s.params, self._listing, title=title, description=s.description)
+            for title, s in self._specs.items()
+        }
         self.picker = pn.widgets.RadioButtonGroup(options=list(self.forms))
         self.button = pn.widgets.Button(label='Submit', color='primary')
         self.button.on_click(lambda _: self.submit())
         self.message = pn.pane.Markdown('', width=320)
-        self._listing = Listing(client)
         self.outputs = Outputs(
             client, self._listing, refresh=self._refresh_all, plots=plots
         )
@@ -67,6 +96,11 @@ class App:
         """The form shown."""
         return self.forms[self.picker.value]
 
+    @property
+    def spec(self) -> WorkflowSpec[Any, Any]:
+        """The spec of the form shown."""
+        return self._specs[self.picker.value]
+
     def _show(self) -> None:
         self._form.objects = [self.form.panel()]
 
@@ -76,7 +110,7 @@ class App:
         it is refused, or if a field of the form has nothing given.
         """
         try:
-            record = self.client.submit(self.form.spec, params=self.form.params)
+            record = self.client.submit(self.spec, params=self.form.params)
         except SubmitError as error:
             self.message.object = 'Refused:\n\n' + '\n'.join(
                 f'- {e}' for e in error.errors
@@ -121,12 +155,15 @@ class App:
         self._listing = listing
         for form in self.forms.values():
             form.refresh(listing)
+        for tab in self.tabs.values():
+            tab.refresh(listing)
         self.outputs.refresh(listing)
         self.records.refresh(listing)
         return listing
 
     def panel(self) -> pn.Tabs:
         return pn.Tabs(
+            *((title, tab.panel()) for title, tab in self.tabs.items()),
             (
                 'Workflows',
                 pn.Column(
