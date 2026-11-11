@@ -224,10 +224,11 @@ def test_a_group_that_holds_a_file_is_written_by_its_fields() -> None:
 
     with pytest.raises(ParamsError) as raised:
         _stored(NamedParams, 'named', {'name': 'mask.xml'}, _named)
-    assert raised.value.errors == (
-        (('named', 'name'), 'Extra inputs are not permitted'),
+    # The order of the errors of one model is pydantic's, and differs between versions.
+    assert sorted(raised.value.errors) == [
         (('named', 'mask'), 'Field required'),
-    )
+        (('named', 'name'), 'Extra inputs are not permitted'),
+    ]
     assert _stored(NamedParams, 'named', {'mask': FILE}, _named) == {
         'mask': FILE.model_dump()
     }

@@ -429,7 +429,7 @@ class IofQDriver:
     def push(self, table: str, rows: Sequence[Any]) -> None:
         stage = self._contribute[table]
         (key,) = single.keys[table]
-        contributions = [stage.apply({key: row}) for row in rows]
+        contributions = [stage.run({key: row}) for row in rows]
         for contribution in contributions:
             old = self._sums.get(table)
             self._sums[table] = (
@@ -442,7 +442,7 @@ class IofQDriver:
         if empty := sorted(self._contribute.keys() - self._sums.keys()):
             raise ValueError(f'no rows in {empty} yet')
         sums = {k: v for parts in self._sums.values() for k, v in parts.items()}
-        return IofQOutputs(iofq=self._finalize.apply(sums)[IofQ])
+        return IofQOutputs(iofq=self._finalize.run(sums)[IofQ])
 
 
 multi = DriverBinding(IOFQ_MULTI, IofQDriver)
