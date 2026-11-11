@@ -146,13 +146,13 @@ class IofQDriver:
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
         key, stage = self._contribute[table]
-        contributions = [stage.apply({key: run}) for run in rows]
+        contributions = [stage.run({key: run}) for run in rows]
         for contribution in contributions:
             for k, part in contribution.items():
                 self._sums[k] = self._sums.get(k, 0) + part
 
     def outputs(self) -> IofQOutputs:
-        return IofQOutputs(iofq=self._finalize.apply(self._sums)[IofQ])
+        return IofQOutputs(iofq=self._finalize.run(self._sums)[IofQ])
 
 
 MULTI = DriverBinding(IOFQ_MULTI, IofQDriver)
