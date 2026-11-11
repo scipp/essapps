@@ -205,11 +205,8 @@ class BatchView:
         if self._tweak_loaded == source:
             return
         self._tweak_loaded = source
-        base = (
-            self._current_settings() or {} if record is None else record.request.params
-        )
-        rest = {k: v for k, v in base.items() if k not in self.batch.columns}
-        self.tweak.set({**rest, **cells}, self._listing)
+        params = self.batch.tweak_params(keys[0], record, self._current_settings())
+        self.tweak.set(params, self._listing)
 
     def _describe(self, keys: list[str]) -> None:
         state = self._states[keys[0]] if len(keys) == 1 else None

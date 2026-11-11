@@ -265,6 +265,20 @@ def test_a_row_is_tweaked_until_it_is_reduced_with_the_settings(
     assert not scanned.state()['1'].tweaked
 
 
+def test_a_tweak_starts_from_the_rows_cells_and_its_result_or_else_the_settings(
+    scanned: Batch, client: Client
+) -> None:
+    cells = scanned.rows['1'].values
+    record = scanned.reduce(SETTINGS, ['1'])['1']
+    client.wait(record)
+    with_cells = {**OTHER_SETTINGS, 'sample': 'ignored', 'thickness': 9.0}
+
+    assert scanned.tweak_params('1', None, with_cells) == {**OTHER_SETTINGS, **cells}
+    given = record.request.params
+    settings = {k: v for k, v in given.items() if k not in scanned.columns}
+    assert scanned.tweak_params('1', record, OTHER_SETTINGS) == {**settings, **cells}
+
+
 @pytest.fixture
 def chain(client: Client, sample: Measure) -> tuple[Batch, Batch]:
     """A batch that finds an offset per sample, and one that reads it per row."""

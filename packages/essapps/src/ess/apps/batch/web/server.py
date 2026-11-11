@@ -681,9 +681,8 @@ class Server:
         if self._tweak_of == source:
             return
         self._tweak_of = source
-        base = (self._settings() or {}) if record is None else record.request.params
-        rest = {k: v for k, v in base.items() if k not in self.batch.columns}
-        self.tweak.set({**rest, **cells}, self._listing)
+        params = self.batch.tweak_params(key, record, self._settings())
+        self.tweak.set(params, self._listing)
 
     @_locked
     def row(self, key: str) -> RowDetail:

@@ -267,6 +267,18 @@ class Batch:
         self._tweaked[key] = self.rows[key].values
         return record
 
+    def tweak_params(
+        self, key: str, record: Record | None, settings: Mapping[str, Any] | None
+    ) -> dict[str, Any]:
+        """
+        The params that a :meth:`tweak` of row ``key`` starts from: its cells,
+        and the other params of ``record``, its result, or of ``settings`` if it
+        has none.
+        """
+        base = (settings or {}) if record is None else record.request.params
+        rest = {k: v for k, v in base.items() if k not in self.columns}
+        return {**rest, **self.rows[key].values}
+
     def cancel(self, keys: Sequence[str] | None = None) -> None:
         """Cancel the results still running, of ``keys`` if given, or of any row."""
         chosen = [r for k, r in self._results().items() if keys is None or k in keys]
