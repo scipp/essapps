@@ -30,6 +30,7 @@ A file that is written before the records it reads exist names them by label
 
 A template is a YAML file (see :func:`load_template`). :func:`write_template`
 writes each file and reference in its JSON form, which reads back as the same.
+:func:`settings_of` reads the settings of a batch from a template.
 """
 
 from __future__ import annotations
@@ -48,7 +49,8 @@ from ess.spec import FileRef, field_types
 
 from ..client import Client
 from ..files import file
-from ..records import Template
+from ..records import SpecId, Template
+from .reduction import Batch
 
 _KIND = re.compile(r'[a-z]+:')
 
@@ -152,6 +154,32 @@ def load_template(path: Path) -> Template:
         return TypeAdapter(Template).validate_python(yaml.safe_load(path.read_text()))
     except yaml.YAMLError as error:
         raise ValueError(f'{path}: {error}') from None
+
+
+def settings_of(batch: Batch, template: Template) -> dict[str, Any]:
+    """
+    The settings of ``batch`` that ``template`` holds, with files named and
+    ``@latest`` read (see :func:`with_named_files` and :func:`with_latest`).
+
+    Raises ``ValueError``, saying why in a person's words, if the template is
+    of another spec, of another version of it, or has other blanks than the
+    columns of the batch, or if a value cannot be read.
+    """
+    theirs, ours = template.spec, SpecId.of(batch.spec)
+    if theirs.name != ours.name:
+        raise ValueError(f'it holds the settings of {theirs.name}, not {ours.name}')
+    if theirs.version != ours.version:
+        raise ValueError(
+            f'it holds the settings of version {theirs.version} of {ours.name}, '
+            f'not of version {ours.version}'
+        )
+    if set(template.blanks) != set(batch.columns):
+        raise ValueError(
+            f'its columns are {", ".join(template.blanks) or "none"}, '
+            f'not {", ".join(batch.columns)}'
+        )
+    settings = with_named_files(batch.spec.params, template.params)
+    return with_latest(batch.client, settings)
 
 
 def write_template(template: Template, path: Path) -> None:

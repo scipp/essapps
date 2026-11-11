@@ -520,7 +520,7 @@ def test_a_template_with_other_blanks_is_refused_in_the_message(
 
     view.load_settings()
 
-    assert 'blanks' in view.message.object
+    assert view.message.object.startswith('Cannot load the settings: its columns')
     assert view.settings.params['binning'] == SETTINGS['binning']
 
 

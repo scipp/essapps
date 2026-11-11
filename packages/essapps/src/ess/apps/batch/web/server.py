@@ -49,11 +49,11 @@ from ...errors import FieldError, SubmitError
 from ...fields import UNSET, Fields
 from ...files import Selector
 from ...listing import Listing
-from ...records import Record, SpecId, Status
+from ...records import Record, Status
 from .. import EMPTY, Batch, CorrectedFiles, RowState, frames, ready, remaining
 from .. import Row as TableRow
 from ..export import export_table
-from ..text import load_template, with_latest, with_named_files, write_template
+from ..text import load_template, settings_of, write_template
 from . import forms, plots
 from .models import (
     Action,
@@ -898,7 +898,6 @@ class Server:
     @_action
     def load_settings(self, name: str, content: bytes) -> str:
         """Show the settings of a YAML template."""
-        batch = self.batch
         cannot = f'Cannot load {name}:'
         with _file('settings.yaml', content) as path:
             try:
@@ -907,18 +906,8 @@ class Server:
                 raise Problem(
                     f'{cannot} it is not a settings file saved from this page.'
                 ) from None
-        ours = SpecId.of(batch.spec).name
-        if template.spec.name != ours:
-            raise Problem(
-                f'{cannot} it holds the settings of {template.spec.name}, not {ours}.'
-            )
-        if template.spec != SpecId.of(batch.spec) or set(template.blanks) != set(
-            batch.columns
-        ):
-            raise Problem(f'{cannot} it was saved by another version of this page.')
         try:
-            settings = with_named_files(batch.spec.params, template.params)
-            self.settings.set(with_latest(batch.client, settings), self._listing)
+            self.settings.set(settings_of(self.batch, template), self._listing)
         except (ValueError, KeyError) as error:
             raise Problem(f'{cannot} {forms.message(_why(error))}.') from None
         self._forget_settings()

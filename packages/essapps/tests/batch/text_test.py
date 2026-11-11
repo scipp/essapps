@@ -8,10 +8,12 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from ess.apps import Client, file
+from ess.apps import Client, SpecId, Template, file
+from ess.apps.batch import Batch
 from ess.apps.batch.text import (
     named_file,
     read_cell,
+    settings_of,
     with_latest,
     with_named_files,
     write_cell,
@@ -204,3 +206,48 @@ def test_a_value_without_latest_comes_back_equal(folder_client: Client) -> None:
     value = {'a': [1, {'b': 'x'}], 'c': None, 'd': 2.5}
 
     assert with_latest(folder_client, value) == value
+
+
+# The settings of a batch
+
+
+def test_the_settings_of_a_template_have_latest_read(
+    batch: Batch, client: Client, sample: toys.Measure
+) -> None:
+    sample(1, 'water')
+    found = _find(client, 1, label='offset')
+    params = {
+        'binning': {'bins': 3},
+        'offset': {'@latest': 'offset', 'output': 'offset'},
+    }
+    template = Template(toys.STAGED, params=params, blanks=toys.COLUMNS)
+
+    assert settings_of(batch, template) == {
+        'binning': {'bins': 3},
+        'offset': found.ref('offset'),
+    }
+
+
+@pytest.mark.parametrize(
+    ('spec', 'blanks', 'message'),
+    [
+        (toys.PLAIN, toys.COLUMNS, 'it holds the settings of plain, not staged'),
+        (
+            SpecId(name='staged', version=2),
+            toys.COLUMNS,
+            'it holds the settings of version 2 of staged, not of version 1',
+        ),
+        (
+            toys.STAGED,
+            ('sample',),
+            'its columns are sample, not sample, transmission, thickness',
+        ),
+        (toys.STAGED, (), 'its columns are none, not sample, transmission'),
+    ],
+    ids=['other-spec', 'other-version', 'other-columns', 'no-columns'],
+)
+def test_a_template_that_does_not_fit_the_batch_is_refused_saying_why(
+    batch: Batch, spec: Any, blanks: tuple[str, ...], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        settings_of(batch, Template(spec, blanks=blanks))

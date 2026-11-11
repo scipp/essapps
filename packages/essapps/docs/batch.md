@@ -294,7 +294,7 @@ The command finds the results of the app, and the app those of the command, if b
 |---|---|
 | **Load rows** | `batch.rows = batch.rows.rescan(frames.rows_of(frames.read_table(path), spec.params, batch.columns))` |
 | **Save rows** | `frames.with_results(client, states, frames.table_of(batch.rows, batch.columns))`, written with `frames.write_table` |
-| **Load settings** | `text.load_template(path)`, refused if of another spec or with other blanks than the columns |
+| **Load settings** | `text.settings_of(batch, text.load_template(path))`, refused if of another spec, another version of it, or with other blanks than the columns |
 | **Save settings** | `text.write_template(batch.template(settings), path)` |
 | **Export selected** | `export.export_table` on the completed rows selected |
 

@@ -32,13 +32,13 @@ from typing import Any
 import pandas as pd
 import panel as pn
 
-from ess.apps import FieldError, Listing, Record, SpecId, Status, SubmitError
+from ess.apps import FieldError, Listing, Record, Status, SubmitError
 from ess.apps.panel import Form, Table, describe
 from ess.spec import field_types
 
 from .. import Batch, Row, RowState, RowTable, frames, ready, remaining, summary
 from ..export import export_table
-from ..text import load_template, with_latest, with_named_files, write_template
+from ..text import load_template, settings_of, write_template
 from .cells import button, cell_texts, changed_cells, write_choice
 
 type Draw = Callable[[Mapping[str, Record]], Any]
@@ -379,15 +379,9 @@ class BatchView:
 
     def load_settings(self) -> None:
         """Show the settings of the template at :attr:`path`."""
-        batch = self.batch
         with self._showing_errors('Cannot load the settings'):
             template = load_template(Path(self.path.value))
-            if template.spec != SpecId.of(batch.spec):
-                raise ValueError(f'it is a template of {template.spec}')
-            if set(template.blanks) != set(batch.columns):
-                raise ValueError(f'its blanks are not {", ".join(batch.columns)}')
-            settings = with_named_files(batch.spec.params, template.params)
-            self.settings.set(with_latest(batch.client, settings), self._listing)
+            self.settings.set(settings_of(self.batch, template), self._listing)
             self.message.object = 'Loaded the settings.'
         self._show()
 
