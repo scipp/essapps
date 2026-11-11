@@ -113,7 +113,6 @@ class Row(BaseModel):
     alone: bool
     record: str | None
     result: Literal['current', 'outdated'] | None
-    color: str
     cells: dict[str, Cell]
 
 
@@ -160,7 +159,8 @@ class State(BaseModel):
     Everything the page shows but the details of one row, the plot, and the
     runs. ``start`` changes when the server starts again, ``version`` with each
     change, and ``runs`` with each change of the runs. ``notice`` says what
-    the action that answers with this state did.
+    the action that answers with this state did. ``loaded`` is the name of
+    the table file whose rows stand in place of a scan, until the next scan.
     """
 
     version: int
@@ -178,6 +178,7 @@ class State(BaseModel):
     settings: list[Node]
     settings_problem: str | None
     refused: list[Refused]
+    loaded: str | None = None
     notice: str = ''
 
 
@@ -207,10 +208,14 @@ class Runs(BaseModel):
 
 
 class Plot(BaseModel):
-    """A Plotly figure of results, or ``None``, and a note of what it shows."""
+    """
+    A Plotly figure of results, or ``None``, a note of what it shows, and the
+    colour of the curve of each row drawn, by key.
+    """
 
     figure: dict[str, Any] | None
     note: str
+    colors: dict[str, str] = {}
 
 
 # Requests

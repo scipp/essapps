@@ -54,7 +54,7 @@
           </div>
           <button type="button" id="cancel">Cancel</button>
           <span class="spacer"></span>
-          <button type="button" class="quiet" id="rescan" title="Read the runs again. What you set by hand stays.">↻ Rescan runs</button>
+          <button type="button" class="quiet" id="rescan">↻ Rescan runs</button>
         </div>
         <div class="chips" id="chips" role="group" aria-label="Show samples that are"></div>
         <div class="message" id="message" hidden>
@@ -78,7 +78,7 @@
 
       <div class="view" id="view-runs" hidden>
         <div class="toolbar">
-          <p class="hint" id="runs-hint">Correct what the files say of a run. The rows are made again at once.</p>
+          <p class="hint" id="runs-hint">Correct the role or sample name of a run. The sample table follows at once.</p>
         </div>
         <div class="grid" id="runs"></div>
       </div>
@@ -99,10 +99,11 @@
             <button type="button" class="small" data-axis="y" aria-pressed="true">log y</button>
           </span>
         </div>
+        <p class="note" id="plot-note"></p>
         <div id="plot"></div>
         <div class="empty" id="plot-empty" hidden></div>
-        <p class="note" id="plot-note"></p>
-        <ul class="not-done" id="not-done"></ul>
+        <div class="legend-summary" id="legend-summary"></div>
+        <ul class="legend" id="legend" aria-label="Legend"></ul>
       </div>
       <div class="tab" id="tab-settings" hidden>
         <p class="hint" id="settings-hint">Shared by every row. A change marks the results reduced with other settings as outdated.</p>

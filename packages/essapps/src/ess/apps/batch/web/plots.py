@@ -7,7 +7,8 @@ no Plotly package is needed in Python.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import itertools
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,9 +31,24 @@ PALETTE = (
 )
 
 
-def color(index: int) -> str:
-    """The colour of the row at ``index``, the same in every figure."""
-    return PALETTE[index % len(PALETTE)]
+def colors(indices: Sequence[int]) -> list[str]:
+    """
+    Distinct colours for the rows at ``indices`` of the table, in one figure.
+    Each row has its own colour of the palette, the same in every figure, but
+    where a row before it in ``indices`` has that colour it takes the first
+    colour free. Past the palette, hues go round in steps of the golden angle.
+    """
+    taken: list[str] = []
+    for index in indices:
+        own = PALETTE[index % len(PALETTE)]
+        free = (c for c in itertools.chain(PALETTE, _hues()) if c not in taken)
+        taken.append(own if own not in taken else next(free))
+    return taken
+
+
+def _hues() -> Iterator[str]:
+    for i in itertools.count():
+        yield f'hsl({(20 + 137.5 * i) % 360:.1f}, 60%, {38 + 14 * (i % 2)}%)'
 
 
 @dataclass(frozen=True)

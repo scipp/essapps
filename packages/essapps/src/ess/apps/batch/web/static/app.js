@@ -21,7 +21,8 @@ const view = {
   ...remembered(),
   plotted: null, // what the plot shows, to fetch it again only on a change
   plots: 0, // the number of the last plot asked for, to drop older answers
-  zoom: 0, // a new value forgets the zoom of the plot
+  zoom: 1, // a new value forgets the zoom of the plot; Plotly ignores 0
+  colors: {}, // the colour of each curve drawn, by key
   detail: '', // what the row tab shows, to draw it again only on a change
   dismissed: '', // the refusal whose message was closed
   runs: 0, // the version of the runs shown
@@ -48,21 +49,30 @@ function remember() {
 }
 
 const words = () => view.state?.words ?? {one: 'row', many: 'rows'};
+const title = (word) => word[0].toUpperCase() + word.slice(1);
 const count = (n) => `${n} ${n === 1 ? words().one : words().many}`;
 
 // Talking to the server
 
-// Send an action and show the state it answers with, or what went wrong.
+// Send an action and show the state it answers with, or what went wrong;
+// whether it was done.
 async function act(url, body) {
-  const response = await post(url, body);
+  let response;
+  try {
+    response = await post(url, body);
+  } catch {
+    showMessage('The server does not answer, so nothing was done. Try again when it is back.');
+    return false;
+  }
   if (response.ok) {
     hideMessage();
     render(response.body);
     if (response.body.notice) toast(response.body.notice);
-    return;
+    return true;
   }
   showMessage(response.body?.message ?? `The server answered ${response.status}.`);
-  await refresh();
+  await refresh().catch(() => {});
+  return false;
 }
 
 async function download(url, name) {
@@ -139,9 +149,17 @@ function render(state) {
   $('n-samples').textContent = state.counts.all;
   renderAction(state.action);
   renderChips(state.counts);
+  if (old?.action.running && !state.action.running) {
+    const ended = ['done', 'failed', 'cancelled'].filter((s) => state.counts[s]).map((s) => `${state.counts[s]} ${s}`);
+    toast(`Reducing ended: ${ended.join(', ')}.`);
+  }
   const updated = rows.update(state.rows);
   if (!old) updated.then(() => rows.select(view.selected));
   if (state.runs !== null && state.runs !== view.runs) loadRuns();
+  const many = state.words.many;
+  $('rescan').title = state.loaded
+    ? `Make the ${many} from the runs in place of the table you loaded, ${state.loaded}. Values set by hand stay.`
+    : `Make the ${many} from the runs again. Values set by hand stay.`;
   $('restore').hidden = state.removed === 0;
   $('restore').textContent = `${state.removed} removed: bring back`;
   renderRefused(state.refused);
@@ -152,12 +170,10 @@ function render(state) {
 
 function build(state) {
   const {one, many} = state.words;
-  const title = (word) => word[0].toUpperCase() + word.slice(1);
   $('word-many').textContent = title(many);
   $('tab-row-label').textContent = title(one);
   $('add-row').textContent = `+ Add ${one}`;
   $('settings-hint').textContent = `Shared by every ${one}. A change marks the results reduced with other settings as outdated.`;
-  const say = (text) => showMessage(text);
   const named = {
     title: 'Name',
     field: 'name',
@@ -168,7 +184,7 @@ function build(state) {
   const info = state.info.map((c) => ({title: c.title, field: `info.${c.name}`, minWidth: 96, headerSort: false}));
   const cells = state.columns;
   rows = new Grid($('rows'), {
-    columns: [named, ...info, ...cellColumns(cells, {revert: (key, column) => act('/api/cells/revert', {keys: [key], column}), say}), statusColumn],
+    columns: [named, ...info, ...cellColumns(cells, {revert: (key, column) => act('/api/cells/revert', {keys: [key], column}), say: showMessage}), statusColumn],
     edits: Object.fromEntries(cells.map((c) => [`cells.${c.name}.value`, c])),
     placeholder: `No ${many}. Rescan the runs, or load a table from the Files menu.`,
     edit: (keys, column, value) => act('/api/cells', {keys, column, value}),
@@ -183,12 +199,26 @@ function build(state) {
       remember();
     },
     sort: view.sort,
-    say,
   });
   rows.filter(view.filter);
   if (state.runs === null) document.querySelector('[data-view="runs"]').hidden = true;
   showPage(state.runs === null ? 'samples' : view.page);
   showTab(view.tab);
+}
+
+// The results of `rows` as a zip, if the person wants outdated ones.
+function downloadResults(rows, name) {
+  const done = rows.filter((row) => row.result);
+  const old = done.filter((row) => row.result === 'outdated').length;
+  const question = `${old} of the ${done.length} results are outdated: the settings or their cells changed since. Download them anyway?`;
+  if (old && !confirm(question)) return;
+  download(`/api/results.zip?${query({keys: done.map((row) => row.key)})}`, name);
+}
+
+// Whether a rescan may go on: it replaces a table loaded, if asked.
+function replacesTable() {
+  const {loaded} = view.state;
+  return !loaded || confirm(`The table you loaded, ${loaded}, is replaced by what the runs give. Values set by hand stay.`);
 }
 
 async function loadRuns() {
@@ -198,19 +228,21 @@ async function loadRuns() {
   view.runs = shown.version;
   $('n-runs').textContent = shown.rows.length;
   if (!runs) {
+    const fields = shown.columns.map((c) => c.title.toLowerCase()).join(' or ');
+    $('runs-hint').textContent = `Correct the ${fields} of a run. The ${words().one} table follows at once.`;
     runs = new Grid($('runs'), {
       columns: [
         {title: 'Run', field: 'file', minWidth: 160, widthGrow: 2},
         ...cellColumns(shown.columns, {
-          revert: (key, column) => act('/api/runs/cells/revert', {keys: [key], column}),
-          say: (text) => showMessage(text),
+          revert: (key, column) => replacesTable() && act('/api/runs/cells/revert', {keys: [key], column}),
+          say: showMessage,
         }),
       ],
       edits: Object.fromEntries(shown.columns.map((c) => [`cells.${c.name}.value`, c])),
       placeholder: 'No runs in this folder.',
-      edit: (keys, column, value) => act('/api/runs/cells', {keys, column, value}),
+      // A correction rescans, so it may replace a table loaded.
+      edit: (keys, column, value) => replacesTable() && act('/api/runs/cells', {keys, column, value}),
       select: () => {},
-      say: (text) => showMessage(text),
     });
   }
   runs.update(shown.rows);
@@ -235,6 +267,7 @@ function renderAction(action) {
     document.querySelector(`[data-reduce="${which}"]`).disabled =
       Boolean(action.blocked) || (which === 'remaining' ? action.remaining : action.again) === 0;
   }
+  $('reduce-more').disabled = Boolean(action.blocked);
   $('settings-badge').hidden = !action.blocked;
 }
 
@@ -295,10 +328,14 @@ function renderSelection() {
   $('remove').hidden = n === 0;
   $('n-selected').textContent = n;
   document.querySelector('[data-reduce="selected"]').disabled = n === 0 || Boolean(view.state.action.blocked);
-  const doneSelected = selectedRows().filter((row) => row.result).length;
-  $('n-results-selected').textContent = doneSelected;
-  $('n-results-all').textContent = done.length;
-  document.querySelector('[data-file="results-selected"]').disabled = doneSelected === 0;
+  const doneSelected = selectedRows().filter((row) => row.result);
+  const said = (rows) => {
+    const old = rows.filter((row) => row.result === 'outdated').length;
+    return old ? `${rows.length}, ${old} outdated` : String(rows.length);
+  };
+  $('n-results-selected').textContent = said(doneSelected);
+  $('n-results-all').textContent = said(done);
+  document.querySelector('[data-file="results-selected"]').disabled = doneSelected.length === 0;
   document.querySelector('[data-file="results-all"]').disabled = done.length === 0;
   renderPlot();
 }
@@ -328,15 +365,17 @@ function axis(given, log) {
 
 async function renderPlot() {
   const chosen = view.selected.length ? selectedRows() : view.state.rows;
-  const drawn = chosen.filter((row) => row.result).map((row) => [row.key, row.record, row.result, row.name, row.color]);
+  const drawn = chosen.filter((row) => row.result).map((row) => [row.key, row.record, row.result, row.name]);
   const what = JSON.stringify([view.selected, drawn, view.log, view.zoom]);
-  renderNotDone();
+  renderLegend();
   if (what === view.plotted) return;
   view.plotted = what;
   const asked = ++view.plots;
   const response = await get(`/api/plot?${query({keys: view.selected})}`);
   if (asked !== view.plots || !response.ok) return;
-  const {figure, note} = response.body;
+  const {figure, note, colors} = response.body;
+  view.colors = colors;
+  renderLegend();
   const quantity = figure?.layout?.meta?.quantity ?? 'Result';
   const n = view.selected.length;
   $('plot-title').textContent = n ? `${quantity} of the ${count(n)} selected` : `${quantity} of the ${words().many} done`;
@@ -349,16 +388,10 @@ async function renderPlot() {
     $('plot-empty').textContent = note;
     return;
   }
-  // The legend goes below the axis title, so that a dozen curves leave the
-  // data visible. Plotly places it in parts of the height of the axes, which
-  // is what the margins and the rows of the legend leave.
-  const box = $('plot');
-  const rows = Math.ceil(figure.data.length / Math.max(1, Math.floor(box.clientWidth / 160)));
-  const axes = Math.max(120, box.clientHeight - 70 - 19 * rows);
   const layout = {
     ...figure.layout,
     ...PLOT_LAYOUT,
-    legend: {orientation: 'h', x: 0, xanchor: 'left', y: -60 / axes, yanchor: 'top', font: {size: 11}},
+    showlegend: false,
     uirevision: view.zoom,
     xaxis: axis(figure.layout.xaxis, view.log.x),
     yaxis: axis(figure.layout.yaxis, view.log.y),
@@ -366,19 +399,32 @@ async function renderPlot() {
   Plotly.react($('plot'), figure.data, layout, PLOT_CONFIG);
 }
 
-// The rows selected that the plot leaves out, and why.
-function renderNotDone() {
-  const missing = selectedRows().filter((row) => row.status !== 'done');
-  $('not-done').replaceChildren(
-    ...missing.map((row) =>
-      h(
+// The legend of the plot, which also says why rows have no curve or an
+// outdated one: a line per row, with the colour of its curve, dashed if
+// outdated, and its status where not done; above it, a count per status.
+function renderLegend() {
+  const shown = view.selected.length ? selectedRows() : view.state.rows.filter((row) => row.key in view.colors);
+  const groups = Map.groupBy(shown.filter((row) => row.status !== 'done'), (row) => row.status);
+  $('legend-summary').replaceChildren(
+    ...[...groups].map(([status, group]) => {
+      const reasons = new Set(group.map((row) => row.reason));
+      const [reason] = reasons;
+      const text = reasons.size === 1 && reason ? `${group.length} ${status}: ${reason}` : `${group.length} ${status}`;
+      return h('span', {text});
+    }),
+  );
+  $('legend').replaceChildren(
+    ...shown.map((row) => {
+      const color = view.colors[row.key];
+      const dashed = row.result === 'outdated' ? ' dashed' : '';
+      return h(
         'li',
-        {},
-        h('span', {class: `pill st-${row.status}`, text: row.status}),
+        {title: [row.name, row.reason].filter(Boolean).join(': ')},
+        h('span', {class: `swatch${color ? dashed : ' none'}`, style: color ? `--color: ${color}` : null}),
         h('span', {class: 'name', text: row.name}),
-        row.reason && h('span', {class: 'why', text: row.reason, title: row.reason}),
-      ),
-    ),
+        row.status !== 'done' && h('span', {class: `pill st-${row.status}`, text: row.status}),
+      );
+    }),
   );
 }
 
@@ -405,13 +451,7 @@ function renderRow(detail) {
   const json = JSON.stringify([detail, row, view.state.columns]);
   if (json === view.detail) return;
   view.detail = json;
-  const editTweak = async (edit) => {
-    const response = await post('/api/row/tweak', {key: row.key, ...edit});
-    if (response.ok) renderRow(response.body);
-    else showMessage(response.body?.message ?? `The server answered ${response.status}.`);
-  };
-  const tweak = h('div', {class: 'form'});
-  renderForm(tweak, detail.tweak, editTweak);
+  const tried = row.status === 'failed' || row.status === 'cancelled';
   const reasonClass = {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info'}[row.status];
   const useSettings = () => {
     const question = `Replace the settings of every ${words().one} with those that ${row.name} was reduced with? The settings you have now are lost unless saved (Files, Save settings).`;
@@ -431,7 +471,7 @@ function renderRow(detail) {
       ? h(
           'section',
           {class: 'reduced-with'},
-          h('h3', {text: `Reduced on ${new Date(detail.created).toLocaleString()} with`}),
+          h('h3', {text: `${tried ? 'Tried' : 'Reduced'} on ${when(detail.created)} with`}),
           detail.differs.length > 0 &&
             h('p', {class: 'hint differs', text: `Differs from the settings now in ${detail.differs.map((n) => settingsNames[n] ?? n).join(', ')}.`}),
           summary(detail.reduced_with, detail.differs),
@@ -439,16 +479,46 @@ function renderRow(detail) {
             h('button', {type: 'button', text: `Use these settings for every ${words().one}`, onclick: useSettings}),
         )
       : h('p', {class: 'hint', text: 'Not reduced yet.'}),
-    h(
-      'details',
-      {class: 'tweak', open: view.tweakOpen, ontoggle: (event) => (view.tweakOpen = event.target.open)},
-      h('summary', {text: `Reduce this ${words().one} alone with other parameters`}),
-      h('p', {class: 'hint', text: `The result becomes the result of ${row.name}. The shared settings stay as they are.`}),
-      tweak,
-      h('button', {type: 'button', class: 'primary', text: `Reduce ${row.name} alone`, onclick: () => act('/api/row/tweak/submit', {key: row.key})}),
-    ),
   ];
-  $('tab-row').replaceChildren(...parts.filter(Boolean));
+  // The form to reduce the row alone is kept while the row stays, and drawn
+  // again in place only when it changed, so that typing in it goes on.
+  const pane = $('tab-row');
+  let info = pane.querySelector('.row-info');
+  let tweak = pane.querySelector('details.tweak');
+  if (!info || tweak?.dataset.key !== row.key) {
+    info = h('div', {class: 'row-info'});
+    tweak = tweakBox(row);
+    pane.replaceChildren(info, tweak);
+  }
+  info.replaceChildren(...parts.filter(Boolean));
+  const form = tweak.querySelector('.form');
+  const tweakJson = JSON.stringify(detail.tweak);
+  if (form.dataset.shown !== tweakJson) {
+    form.dataset.shown = tweakJson;
+    renderForm(form, detail.tweak, async (edit) => {
+      const response = await post('/api/row/tweak', {key: row.key, ...edit});
+      if (response.ok) renderRow(response.body);
+      else showMessage(response.body?.message ?? `The server answered ${response.status}.`);
+    });
+  }
+}
+
+// A time as 2026-11-10 13:11, in the time zone of the browser.
+function when(iso) {
+  const t = new Date(iso);
+  const two = (n) => String(n).padStart(2, '0');
+  return `${t.getFullYear()}-${two(t.getMonth() + 1)}-${two(t.getDate())} ${two(t.getHours())}:${two(t.getMinutes())}`;
+}
+
+function tweakBox(row) {
+  return h(
+    'details',
+    {class: 'tweak', 'data-key': row.key, open: view.tweakOpen, ontoggle: (event) => (view.tweakOpen = event.target.open)},
+    h('summary', {text: `Reduce this ${words().one} alone with other parameters`}),
+    h('p', {class: 'hint', text: `The result becomes the result of ${row.name}. The shared settings stay as they are.`}),
+    h('div', {class: 'form'}),
+    h('button', {type: 'button', class: 'primary', text: `Reduce ${row.name} alone`, onclick: () => act('/api/row/tweak/submit', {key: row.key})}),
+  );
 }
 
 // Wiring
@@ -481,6 +551,10 @@ function showTab(tab) {
 }
 
 function wire() {
+  // Plotly fits the plot to its box only when the window changes size; the
+  // box also changes with the legend below it.
+  const plot = $('plot');
+  new ResizeObserver(() => plot.data && !plot.hidden && Plotly.Plots.resize(plot)).observe(plot);
   $('reduce').onclick = () => act('/api/reduce', {which: 'remaining'});
   $('reduce-more').onclick = () => openMenu($('reduce-split'));
   document.querySelectorAll('[data-reduce]').forEach((item) => {
@@ -490,7 +564,7 @@ function wire() {
     };
   });
   $('cancel').onclick = () => act('/api/cancel');
-  $('rescan').onclick = () => act('/api/scan');
+  $('rescan').onclick = () => replacesTable() && act('/api/scan');
   $('remove').onclick = () => {
     const added = selectedRows().filter((row) => row.added).length;
     const question = `${added} of the ${count(view.selected.length)} selected ${added === 1 ? 'was' : 'were'} added by hand and cannot be brought back. Remove?`;
@@ -515,7 +589,8 @@ function wire() {
   };
   addForm.onsubmit = (event) => {
     event.preventDefault();
-    act('/api/rows/add', {key: addForm.key.value});
+    const key = addForm.key.value.trim();
+    act('/api/rows/add', {key}).then((done) => done && rows.reveal(key));
     closeAdd();
   };
   addForm.querySelector('[data-cancel]').onclick = closeAdd;
@@ -537,7 +612,8 @@ function wire() {
   const files = $('files');
   files.querySelector('.menu-button').onclick = () => openMenu(files);
   const loadTable = () => {
-    const question = `Loading a table replaces the ${words().many} that the runs give by those of the file. What you set by hand stays.`;
+    const {many} = words();
+    const question = `Load a table file? Its ${many} take the place of those the runs give, values set by hand included. ${title(many)} you added by hand stay. Rescan runs to go back.`;
     if (confirm(question)) $('pick-table').click();
   };
   const actions = {
@@ -546,8 +622,8 @@ function wire() {
     'table.csv': () => download('/api/table.csv', `${words().many}.csv`),
     'table.xlsx': () => download('/api/table.xlsx', `${words().many}.xlsx`),
     'settings.yaml': () => download('/api/settings.yaml', 'settings.yaml'),
-    'results-selected': () => download(`/api/results.zip?${query({keys: view.selected})}`, 'results.zip'),
-    'results-all': () => download('/api/results.zip', 'results.zip'),
+    'results-selected': () => downloadResults(selectedRows(), 'results-selected.zip'),
+    'results-all': () => downloadResults(view.state.rows, 'results-all.zip'),
   };
   files.querySelectorAll('[data-file]').forEach((item) => {
     item.onclick = () => {

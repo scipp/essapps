@@ -1,7 +1,8 @@
 // A table of rows by `key`, on Tabulator. The boxes at the left select rows,
 // and nothing else does. A click on a cell that can be edited edits it: the
-// editor opens at what the cell shows, Enter or leaving writes, Escape or a
-// value left as it was writes nothing, Tab writes and goes on. An edit of a
+// editor opens at what the cell holds, Enter or leaving writes, Escape, a
+// value left as it was or an empty cell left empty writes nothing, Tab writes
+// and goes on. An edit of a
 // row that is selected along with others writes that cell to every row
 // selected.
 import {TabulatorFull as Tabulator} from './vendor/tabulator_esm.min.js';
@@ -12,74 +13,132 @@ const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
 // What an empty cell stands for, in words.
 const empty = (column) => (column.default ? `the default, ${column.default}` : 'empty');
 
-// An editor of text or of a number. `say` tells why a value is not taken.
-function inputEditor(column, say) {
-  const number = column.editor.type === 'number';
+// The options of a pick that hold `text`, ignoring case; all for no text.
+const matching = (options, text) =>
+  options.filter((o) => o.toLowerCase().includes(text.trim().toLowerCase()));
+
+// A list of options under an editor of a pick: what is marked is what the
+// editor writes. Typing filters it and marks the first option left.
+class Choices {
+  constructor(options, at, pick) {
+    this.options = options;
+    this.shown = options;
+    this.marked = -1;
+    this.element = h('ul', {class: 'choices', role: 'listbox'});
+    // A press in the list must not take the focus from the editor.
+    this.element.addEventListener('mousedown', (event) => event.preventDefault());
+    const box = at.getBoundingClientRect();
+    const below = window.innerHeight - box.bottom > 200 || box.top < 200;
+    Object.assign(this.element.style, {
+      left: `${box.left}px`,
+      minWidth: `${box.width}px`,
+      ...(below ? {top: `${box.bottom}px`} : {bottom: `${window.innerHeight - box.top}px`}),
+    });
+    this.pick = pick;
+    document.body.append(this.element);
+  }
+
+  // Show the options that hold `text`, or all marking `current`.
+  show(text, current) {
+    this.shown = current === undefined ? matching(this.options, text) : this.options;
+    this.marked = current === undefined ? (text.trim() && this.shown.length ? 0 : -1) : this.shown.indexOf(current);
+    this.element.replaceChildren(
+      ...this.shown.map((o, i) =>
+        h('li', {role: 'option', text: o, 'aria-selected': i === this.marked ? 'true' : null, onclick: () => this.pick(o)}),
+      ),
+    );
+    this.element.children[this.marked]?.scrollIntoView({block: 'nearest'});
+  }
+
+  move(by) {
+    if (!this.shown.length) return;
+    this.marked = Math.min(Math.max(this.marked + by, 0), this.shown.length - 1);
+    this.element.querySelector('[aria-selected]')?.removeAttribute('aria-selected');
+    this.element.children[this.marked].setAttribute('aria-selected', 'true');
+    this.element.children[this.marked].scrollIntoView({block: 'nearest'});
+  }
+
+  get value() {
+    return this.shown[this.marked];
+  }
+
+  remove() {
+    this.element.remove();
+  }
+}
+
+// The editor of a cell, as an input that opens at what the cell holds, all
+// of it selected so that typing replaces it. Enter, Tab or leaving writes;
+// Escape, text left as it was, or an empty cell left empty writes nothing.
+// A pick shows its options below. `say` tells why a value is not taken.
+function cellEditor(column, say) {
+  const {type, options} = column.editor;
   return (cell, onRendered, success, cancel) => {
-    const start = cell.getData().cells[column.name].text || column.default || '';
+    const held = cell.getData().cells[column.name];
+    const start = (type === 'select' ? held.value : held.text) || column.default || '';
     const input = h('input', {
       type: 'text',
       class: 'cell-editor',
       value: start,
-      inputmode: number ? 'decimal' : null,
+      inputmode: type === 'number' ? 'decimal' : null,
       spellcheck: 'false',
+      autocomplete: 'off',
       'aria-label': column.title,
     });
-    onRendered(() => {
-      input.focus();
-      input.select();
-    });
+    let choices = null;
     let open = true;
-    const close = (write) => {
+    const close = (write, picked) => {
       if (!open) return;
       open = false;
       const text = input.value.trim();
-      if (!write || text === start) return cancel();
-      if (text === '') return success(null);
-      if (number && !Number.isFinite(Number(text))) {
+      const value = picked ?? choices?.value;
+      choices?.remove();
+      if (!write) return cancel();
+      if (text === '') return held.value == null ? cancel() : success(null);
+      if (type === 'select') {
+        if (value !== undefined) return value === held.value ? cancel() : success(value);
+        say(`${column.title}: no option matches ${text}, so nothing was written.`);
+        return cancel();
+      }
+      if (text === start) return cancel();
+      if (type === 'number' && !Number.isFinite(Number(text))) {
         say(`${column.title}: ${text} is not a number, so nothing was written.`);
         return cancel();
       }
-      return success(number ? Number(text) : text);
+      return success(type === 'number' ? Number(text) : text);
     };
+    onRendered(() => {
+      if (type === 'select') {
+        choices = new Choices(options, cell.getElement(), (o) => close(true, o));
+        choices.show('', held.value);
+      }
+      // A row edited scrolls into view only if less than half of it shows.
+      const row = cell.getRow().getElement().getBoundingClientRect();
+      const view = cell.getTable().element.querySelector('.tabulator-tableholder').getBoundingClientRect();
+      const shown = Math.min(row.bottom, view.bottom) - Math.max(row.top, view.top);
+      input.focus({preventScroll: shown > row.height / 2});
+      input.select();
+    });
+    input.addEventListener('input', () => choices?.show(input.value));
     input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') close(true);
       if (event.key === 'Escape') close(false);
+      if (choices && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+        event.preventDefault();
+        event.stopPropagation();
+        choices.move(event.key === 'ArrowDown' ? 1 : -1);
+      }
     });
+    // Tab is left to the table, which opens the next cell and so ends this.
     input.addEventListener('blur', () => close(true));
     return input;
   };
 }
 
-function editorOf(column, say) {
-  switch (column.editor?.type) {
-    case 'select':
-      return {
-        editor: 'list',
-        editorParams: {
-          values: column.editor.options,
-          autocomplete: true,
-          freetext: true,
-          allowEmpty: true,
-          listOnEmpty: true,
-          clearable: true,
-        },
-      };
-    case 'number':
-    case 'text':
-      return {editor: inputEditor(column, say)};
-    default:
-      return {editable: false};
-  }
-}
-
-// The option that typed text stands for: itself, or the one option that
-// holds it, ignoring case.
-function option(column, text) {
-  if (!text || column.editor.options.includes(text)) return text;
-  const found = column.editor.options.filter((o) => o.toLowerCase().includes(text.toLowerCase()));
-  return found.length === 1 ? found[0] : undefined;
-}
+const editorOf = (column, say) =>
+  ['select', 'number', 'text'].includes(column.editor?.type)
+    ? {editor: cellEditor(column, say)}
+    : {editable: false};
 
 // What a cell shows: its text, or what empty stands for in grey; marked where
 // it was set by hand, with a button back to what it was, or where it is why
@@ -129,6 +188,7 @@ function cellTooltip(column) {
 export function cellColumns(columns, {revert, say}) {
   return columns.map((column) => ({
     title: column.title,
+    headerTooltip: column.title,
     field: `cells.${column.name}.value`,
     minWidth: 96,
     headerSort: false,
@@ -141,8 +201,9 @@ export function cellColumns(columns, {revert, say}) {
 
 export class Grid {
   // `columns` are Tabulator's; `edits` maps the field of each editable
-  // column to its column as the server sends it.
-  constructor(element, {columns, edits, edit, select, sorted, say, placeholder, sort = []}) {
+  // column to its column as the server sends it. Where `edit` answers false,
+  // or a promise of false, the cell shows its value before again.
+  constructor(element, {columns, edits, edit, select, sorted, placeholder, sort = []}) {
     this.element = element;
     this.onSelect = select;
     this.shown = [];
@@ -153,6 +214,9 @@ export class Grid {
       index: 'key',
       height: '100%',
       layout: 'fitColumns',
+      // Rows drawn all at once: a few hundred are cheap, and the virtual
+      // renderer scrolls a row clicked into view even if it shows nearly all.
+      renderVertical: 'basic',
       selectableRows: 'highlight',
       editTriggerEvent: 'click',
       initialSort: sort,
@@ -170,6 +234,9 @@ export class Grid {
       columns,
     });
     this.built = new Promise((resolve) => this.table.on('tableBuilt', resolve));
+    this.updated = this.built;
+    this.table.on('renderComplete', () => this.fit());
+    this.built.then(() => new ResizeObserver(() => this.fit()).observe(this.table.rowManager.element));
     this.table.on('rowSelectionChanged', () => this.quiet || this.announce());
     this.table.on('dataSorted', (sorters) =>
       sorted?.(sorters.map((s) => ({column: s.field, dir: s.dir}))),
@@ -179,19 +246,22 @@ export class Grid {
       const key = cell.getRow().getData().key;
       const selected = this.selected();
       const keys = selected.length > 1 && selected.includes(key) ? selected : [key];
-      let value = cell.getValue();
-      if (column.editor.type === 'select') {
-        value = option(column, value);
-        if (value === undefined) {
-          say(`${column.title}: no option matches ${cell.getValue()}, so nothing was written.`);
-          cell.restoreOldValue();
-          return this.closed();
-        }
-      }
-      edit(keys, column.name, value === '' ? null : value);
+      Promise.resolve(edit(keys, column.name, cell.getValue())).then((done) => done === false && cell.restoreOldValue());
       this.closed();
     });
     this.table.on('cellEditCancelled', () => this.closed());
+  }
+
+  // Space below the last row, so that the rows scroll by whole rows to
+  // the end, where the top row then shows whole.
+  fit() {
+    const holder = this.table.rowManager.element;
+    const rows = holder.querySelector('.tabulator-table');
+    const height = rows?.querySelector('.tabulator-row')?.offsetHeight;
+    if (!height) return;
+    rows.style.paddingBottom = '0px';
+    const over = rows.offsetHeight - holder.clientHeight;
+    rows.style.paddingBottom = over > 0 ? `${(height - (over % height)) % height}px` : '0px';
   }
 
   selected() {
@@ -215,7 +285,18 @@ export class Grid {
   }
 
   // Show `rows`, keeping the selection, but not while a cell is edited.
-  async update(rows) {
+  update(rows) {
+    this.updated = this.draw(rows);
+    return this.updated;
+  }
+
+  // Scroll to the row of `key`, once shown, if the filter shows it.
+  async reveal(key) {
+    await this.updated;
+    await this.table.scrollToRow(key, 'nearest', false).catch(() => {});
+  }
+
+  async draw(rows) {
     await this.built;
     this.pending = rows;
     if (this.editing()) return;

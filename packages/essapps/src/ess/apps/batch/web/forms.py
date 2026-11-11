@@ -27,6 +27,7 @@ A cell of a batch's table is edited with the field of its column
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
@@ -54,7 +55,8 @@ from .models import Edit, Editor, Node, Way
 def tree(fields: Fields, refused: Iterable[FieldError] = ()) -> list[Node]:
     """The nodes of ``fields``, each with what is missing or ``refused`` there."""
     _, missing = fields.held()
-    problems = {e.loc: e.msg for e in (*missing, *refused) if e.loc}
+    said = {e.loc: message(e.msg) for e in (*missing, *refused) if e.loc}
+    problems = {loc: m[:1].upper() + m[1:] for loc, m in said.items()}
     return [
         _node(field, (name,), fields.titles[name], problems)
         for name, field in fields.fields.items()
@@ -106,6 +108,14 @@ _WAYS = {
     ChoiceField.RECORD: 'From a result',
 }
 """The ways of a choice as a page labels them; ``None`` reads as no such step."""
+
+_MESSAGES = {'choose a file': 'choose a run', 'choose a record': 'choose a result'}
+
+
+def message(text: str) -> str:
+    """A message of a field in the words of :data:`_WAYS` and of a person."""
+    text = _MESSAGES.get(text, text)
+    return re.sub(r"'(.*)' is not of the kind (float|int)", r'\1 is not a number', text)
 
 
 def _input(field: Input) -> dict[str, Any]:

@@ -143,10 +143,16 @@ export function summary(nodes, differs = []) {
   );
 }
 
+// A field with its label: "From 2 Å" for a label "From (Å)" and 2.
+function labelled(node) {
+  const [, label, unit] = node.label.match(/^(.*) \((.+)\)$/) ?? [null, node.label, ''];
+  return [label, text(node), unit].filter(Boolean).join(' ');
+}
+
 function text(node) {
   switch (node.kind) {
     case 'group':
-      return node.children.map((c) => `${c.label} ${text(c)}`).join(' · ');
+      return node.children.map(labelled).join(', ');
     case 'choice': {
       const way = node.ways.find((w) => w.value === node.chosen);
       const inner = node.child ? text(node.child) : '';

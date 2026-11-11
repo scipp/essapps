@@ -65,9 +65,13 @@ def url(batch: Batch, sample: Measure) -> Iterator[str]:
 
 @pytest.fixture
 def page(browser: Any, url: str) -> Iterator[Any]:
-    """The page, loaded; a test fails on any error in the browser's console."""
+    """
+    The page, loaded; a test fails on any error in the browser's console that
+    it does not take from ``page.errors``.
+    """
     page = browser.new_page(viewport={'width': 1440, 'height': 900})
     errors: list[str] = []
+    page.errors = errors
     page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
     page.on('pageerror', lambda e: errors.append(str(e)))
     page.goto(url)
@@ -156,3 +160,86 @@ def test_a_row_is_added_by_typing_its_name(page: Any, batch: Batch) -> None:
 
     page.wait_for_selector('#rows .tabulator-row:has-text("blank")')
     assert 'blank' in batch.rows
+
+
+def test_typing_in_a_run_cell_replaces_what_it_shows(page: Any, batch: Batch) -> None:
+    cell(page, 'water', 'transmission').click()
+    page.keyboard.type('1002')
+    page.keyboard.press('Enter')
+
+    page.wait_for_selector('#rows .tabulator-cell.edited')
+    assert (
+        batch.rows['1'].values['transmission']
+        == (batch.rows['2'].values['transmission'])
+    )
+
+
+def test_an_empty_run_cell_left_writes_nothing_and_tab_goes_on(
+    page: Any, batch: Batch
+) -> None:
+    page.click('#add-row')
+    page.keyboard.type('blank')
+    page.keyboard.press('Enter')
+    page.wait_for_selector('#rows .tabulator-row:has-text("blank")')
+
+    cell(page, 'blank', 'transmission').click()
+    page.click('#title')
+    cell(page, 'blank', 'transmission').click()
+    editor(page).press('Tab')
+
+    focused = 'document.activeElement.closest(".tabulator-cell")'
+    assert page.evaluate(f'{focused}.getAttribute("tabulator-field")') == (
+        'cells.thickness.value'
+    )
+    editor(page).press('Escape')
+    assert 'transmission' not in batch.rows['blank'].values
+    assert batch.rows.edits.get('blank', {}) == {}
+
+
+def test_a_rescan_asks_before_it_replaces_a_table_loaded(
+    page: Any, tmp_path: Path
+) -> None:
+    asked: list[str] = []
+    page.on('dialog', lambda d: (asked.append(d.message), d.accept()))
+    table = tmp_path / 'rows.csv'
+    table.write_bytes(page.request.get(f'{page.url}api/table.csv').body())
+    page.set_input_files('#pick-table', table)
+    page.wait_for_selector('#toast:has-text("Loaded 3")')
+
+    page.click('#rescan')
+
+    page.wait_for_selector('#toast:has-text("Found 3")')
+    assert asked == [
+        'The table you loaded, rows.csv, is replaced by what the runs give. '
+        'Values set by hand stay.'
+    ]
+
+
+def test_the_zoom_stays_when_the_selection_changes(page: Any, client: Client) -> None:
+    page.click('#reduce')
+    client.wait(client.records())
+    page.wait_for_selector('#plot .main-svg')
+    page.evaluate("Plotly.relayout('plot', {'xaxis.range': [0.2, 0.8]})")
+
+    page.locator('#rows .tabulator-row', has_text='sds').locator('input').click()
+
+    page.wait_for_function("document.getElementById('plot').data.length === 1")
+    assert page.evaluate("document.getElementById('plot').layout.xaxis.range") == [
+        0.2,
+        0.8,
+    ]
+
+
+def test_an_edit_the_server_does_not_get_is_taken_back_and_said(
+    page: Any, batch: Batch
+) -> None:
+    page.route('**/api/cells', lambda route: route.abort())
+    cell(page, 'sds', 'thickness').click()
+    editor(page).fill('2.5')
+    editor(page).press('Enter')
+
+    page.wait_for_selector('#message:has-text("The server does not answer")')
+    assert cell(page, 'sds', 'thickness').inner_text() == '1.0'
+    assert batch.rows.edits == {}
+    assert page.errors == ['Failed to load resource: net::ERR_FAILED']
+    page.errors.clear()

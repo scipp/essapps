@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import pytest
 import scipp as sc
+import yaml
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
@@ -193,6 +194,16 @@ def test_a_refused_reduction_answers_422_and_the_state_names_the_cell(
     assert problem == 'Thickness must be greater than or equal to 0'
 
 
+def test_a_refused_value_stays_marked_until_it_is_edited(http: TestClient) -> None:
+    thickness(http, ['1'], -1)
+    http.post('/api/reduce', json={'which': 'selected', 'keys': ['1']})
+
+    thickness(http, ['2'], 3)
+    assert rows(http)['1']['cells']['thickness']['problem']
+    thickness(http, ['1'], 3)
+    assert state(http)['refused'] == []
+
+
 def test_reduce_then_the_state_shows_the_rows_done(
     http: TestClient, client: Client
 ) -> None:
@@ -238,6 +249,7 @@ def test_a_changed_setting_makes_the_rows_done_outdated(
 
     assert statuses(http) == {'1': 'outdated', '2': 'outdated', '3': 'incomplete'}
     assert state(http)['action']['label'] == 'Reduce 2 outdated'
+    assert rows(http)['1']['reason'] == 'Binning changed.'
 
 
 def test_a_failed_row_stays_failed_when_the_settings_change(
@@ -264,8 +276,8 @@ def test_incomplete_settings_block_reducing_and_no_result_is_current(
     )
 
     shown = state(http)
-    assert shown['settings_problem'] == 'Offset: choose a record'
-    assert shown['action']['blocked'] == 'Offset: choose a record'
+    assert shown['settings_problem'] == 'Offset: choose a result'
+    assert shown['action']['blocked'] == 'Offset: choose a result'
     assert {r['status'] for r in shown['rows'][:2]} == {'outdated'}
 
 
@@ -296,6 +308,28 @@ def test_the_table_downloaded_and_uploaded_gives_the_same_rows(
     ]
 
 
+def test_a_table_loaded_replaces_what_was_set_by_hand_until_a_rescan(
+    http: TestClient,
+) -> None:
+    thickness(http, ['1'], 4)
+    content = http.get('/api/table.csv').content
+
+    loaded = http.post('/api/table', params={'name': 'rows.csv'}, content=content)
+
+    assert loaded.json()['loaded'] == 'rows.csv'
+    assert rows(http)['1']['cells']['thickness'] == {
+        'value': 4.0,
+        'text': '4.0',
+        'edited': False,
+        'scanned': '4.0',
+        'problem': None,
+    }
+    scanned = http.post('/api/scan').json()
+    assert scanned['loaded'] is None
+    assert scanned['notice'] == 'Found 3 rows. 1 row changed.'
+    assert rows(http)['1']['cells']['thickness']['text'] == ''
+
+
 def test_the_settings_downloaded_and_uploaded_are_the_same(
     http: TestClient,
 ) -> None:
@@ -306,6 +340,27 @@ def test_the_settings_downloaded_and_uploaded_are_the_same(
 
     (binning, *_) = state(http)['settings']
     assert binning['child']['children'][0]['value'] == 2
+
+
+@pytest.mark.parametrize(
+    ('content', 'message'),
+    [
+        (b'just: [unclosed', 'it is not a settings file saved from this page.'),
+        (b'a,b\n1,2\n', 'it is not a settings file saved from this page.'),
+        (None, 'Bins: two is not a number.'),
+    ],
+)
+def test_a_settings_file_that_cannot_be_loaded_says_why_in_a_sentence(
+    http: TestClient, content: bytes | None, message: str
+) -> None:
+    if content is None:  # a settings file with a value of the wrong kind
+        template = yaml.safe_load(http.get('/api/settings.yaml').content)
+        template['params']['binning']['bins'] = 'two'
+        content = yaml.safe_dump(template).encode()
+
+    response = http.post('/api/settings.yaml', params={'name': 'f'}, content=content)
+
+    assert response.json() == {'message': f'Cannot load f: {message}'}
 
 
 def test_the_results_of_the_rows_done_download_as_a_zip(
@@ -327,12 +382,20 @@ def test_the_plot_draws_the_results_of_the_rows_asked_for_in_their_colours(
     http: TestClient, client: Client
 ) -> None:
     reduced(http, client)
-    colors = {k: r['color'] for k, r in rows(http).items()}
 
-    figure = http.get('/api/plot', params={'keys': ['2', '3']}).json()['figure']
+    plot = http.get('/api/plot', params={'keys': ['2', '3']}).json()
 
-    assert figure == {'drawn': ['2'], 'colors': [colors['2']]}
+    assert plot['figure'] == {'drawn': ['2'], 'colors': [plots.PALETTE[1]]}
+    assert plot['colors'] == {'2': plots.PALETTE[1]}
     assert http.get('/api/plot').json()['figure']['drawn'] == ['1', '2']
+
+
+def test_no_two_curves_of_a_figure_share_a_colour() -> None:
+    n = len(plots.PALETTE)
+    first, second, third = plots.PALETTE[:3]
+
+    assert plots.colors([1, n + 1, 2]) == [second, first, third]
+    assert len(set(plots.colors(range(3 * n)))) == 3 * n
 
 
 def test_a_row_shows_which_settings_its_result_was_reduced_with(
@@ -369,6 +432,8 @@ def test_a_row_added_by_hand_is_gone_for_good_when_removed(
 ) -> None:
     http.post('/api/rows/add', json={'key': 'extra'})
     assert rows(http)['extra']['added']
+    same = http.post('/api/rows/add', json={'key': 'water'})
+    assert same.json() == {'message': 'There is a row named water already.'}
 
     after = http.post('/api/rows/remove', json={'keys': ['extra', '2']}).json()
 
@@ -400,8 +465,12 @@ def test_a_correction_of_a_run_reaches_the_rows_and_can_be_taken_back(
         'sample',
     )
     assert state(http)['runs'] > runs
-    http.post('/api/runs/cells/revert', json={'keys': [key], 'column': 'role'})
+    reverted = http.post(
+        '/api/runs/cells/revert', json={'keys': [key], 'column': 'role'}
+    ).json()
     assert statuses(http)['3'] == 'incomplete'
+    # Run 4 is a sample again: of a row of its own, also named oil.
+    assert reverted['notice'] == '2 rows changed. oil and oil are now incomplete.'
 
 
 # Forms, on a spec with a list and an optional group

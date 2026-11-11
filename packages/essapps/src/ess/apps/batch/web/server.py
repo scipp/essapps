@@ -14,10 +14,10 @@ here and those of the client's records, which the server reads from
 again, so that the same version may be another state.
 
 A reduction refused raises :class:`Problem` and keeps its reasons in the state
-until the next change that succeeds, so that the page marks each at its cell or
-its setting. Any other request that cannot be done raises :class:`Problem` too,
-with what to tell the person. One server serves one batch to one person, and
-takes one request at a time.
+until the value of each is changed or a reduction succeeds, so that the page
+marks each at its cell or its setting. Any other request that cannot be done
+raises :class:`Problem` too, with what to tell the person. One server serves
+one batch to one person, and takes one request at a time.
 
 Statuses are named in a scientist's words: a row that is ``not reduced`` is
 ``ready``, a ``pending`` one ``running``, a ``completed`` one ``done``, and a
@@ -108,6 +108,7 @@ class Problem(Exception):
 
 def _say(title: str, message: str) -> str:
     """A reason at the field ``title``, as a sentence."""
+    message = forms.message(message)
     if message in ('empty', 'missing', 'Field required'):
         return f'{title} is missing'
     if message.startswith('Input should be '):
@@ -152,8 +153,8 @@ def _locked[**P, T](method: Callable[P, T]) -> Callable[P, T]:
 
 def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
     """
-    An action: it changes the version, and forgets the reasons of a refusal if
-    it succeeds. It returns the state with what the action says it did.
+    An action: it changes the version, and returns the state with what the
+    action says it did.
     """
 
     @functools.wraps(method)
@@ -164,7 +165,6 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
                 notice = method(*args, **kwargs)
             finally:
                 server.version += 1
-            server.refused = []
             return server.state(notice=notice or '')
 
     return action
@@ -228,6 +228,7 @@ class Server:
         # The rows whose result was reduced alone, as Batch keeps them too.
         self._alone: set[str] = set()
         self.refused: list[FieldError] = []
+        self.loaded: str | None = None
         self.version = 1
         self.runs_version = 1
         self.start = uuid.uuid4().hex[:8]
@@ -291,8 +292,10 @@ class Server:
         scan = {row.key: row for row in self.batch.rows.scan}
         added = {row.key for row in self.batch.rows.added}
         rows = [
-            self._row(row, i, states[row.key], statuses[row.key], failures, scan, added)
-            for i, row in enumerate(self.batch.rows)
+            self._row(
+                row, settings, states[row.key], statuses[row.key], failures, scan, added
+            )
+            for row in self.batch.rows
         ]
         counts = dict.fromkeys(_ORDER, 0)
         for status in statuses.values():
@@ -334,6 +337,7 @@ class Server:
             ),
             settings_problem=problem,
             refused=[self._refused(e) for e in self.refused],
+            loaded=self.loaded,
             notice=notice,
         )
 
@@ -364,10 +368,27 @@ class Server:
             return to_json(value).decode()
         return 'none' if value is None else str(value)
 
+    def _changed(
+        self, row: TableRow, given: Mapping[str, Any], settings: Mapping[str, Any]
+    ) -> list[str]:
+        """
+        The titles of the cells and ``settings`` that differ from those
+        ``given`` to the reduction of ``row``; the settings count only if it
+        was not reduced alone.
+        """
+        now = {} if row.key in self._alone else dict(settings)
+        now.update({c: v for c, v in row.values.items() if c in self.batch.columns})
+        titles = {**self.settings.titles, **self._cells.titles}
+        return [
+            titles.get(n, n)
+            for n in now
+            if forms.jsonable(given.get(n)) != forms.jsonable(now[n])
+        ]
+
     def _row(
         self,
         row: TableRow,
-        index: int,
+        settings: Mapping[str, Any] | None,
         state: RowState,
         status: str,
         failures: Mapping[str, str],
@@ -387,8 +408,9 @@ class Server:
             reason = failures.get(record.id, '')
         elif problems:
             reason = '; '.join(problems.values())
-        elif status == 'outdated' and state.stale:
-            reason = 'Its cells or the settings changed since it was reduced.'
+        elif status == 'outdated' and state.stale and record is not None:
+            changed = self._changed(row, record.request.params, settings or {})
+            reason = f'{_join(changed)} changed.' if changed else 'Its cells changed.'
         elif status == 'outdated':
             reason = 'The settings are incomplete, so this result may not match them.'
         scanned = scan.get(row.key)
@@ -417,7 +439,6 @@ class Server:
             alone=row.key in self._alone and record is not None,
             record=None if record is None else record.id,
             result=result,
-            color=plots.color(index),
             cells=cells,
         )
 
@@ -488,15 +509,46 @@ class Server:
 
     @_action
     def scan(self) -> str:
-        """Make the rows from the files again; what was set by hand stays."""
+        """
+        Make the rows from the files again, in place of a table loaded; what
+        was set by hand stays.
+        """
         self.runs_version += 1
-        try:
-            self.batch.scan()
-        except SubmitError as error:
-            raise Problem('; '.join(map(str, error.errors))) from None
-        except Exception as error:  # a source is code of the application
-            raise Problem(f'The scan failed: {error}') from None
-        return f'Found {self.words.count(len(self.batch.rows))}.'
+
+        def scan() -> None:
+            try:
+                self.batch.scan()
+            except SubmitError as error:
+                raise Problem('; '.join(map(str, error.errors))) from None
+            except Exception as error:  # a source is code of the application
+                raise Problem(f'The scan failed: {error}') from None
+
+        changes = self._scanned(scan)
+        return f'Found {self.words.count(len(self.batch.rows))}. {changes}'.strip()
+
+    def _incomplete(self) -> set[str]:
+        return {k for k, s in self._states().items() if s.problems}
+
+    def _scanned(self, scan: Callable[[], None]) -> str:
+        """
+        Call ``scan``, which makes the rows again, and say how many rows
+        changed and which it left incomplete.
+        """
+        before = {r.key: dict(r.values) for r in self.batch.rows}
+        incomplete = self._incomplete()
+        scan()
+        self.loaded = None
+        changed = sum(before.get(r.key) != dict(r.values) for r in self.batch.rows)
+        new = self._incomplete() - incomplete
+        names = [self._named(r) for r in self.batch.rows if r.key in new]
+        said = [f'{self.words.count(changed)} changed.' if changed else '']
+        if len(names) == 1:
+            said.append(f'{names[0]} is now incomplete.')
+        elif len(names) in (2, 3):
+            said.append(f'{_join(names)} are now incomplete.')
+        elif names:
+            said.append(f'{self.words.count(len(names))} are now incomplete.')
+        return ' '.join(filter(None, said))
 
     def _read(self, fields: Fields, edit: CellEdit) -> Any:
         if edit.column not in fields.fields:
@@ -515,6 +567,7 @@ class Server:
             self._row_of(key)
             rows = rows.edit(key, {edit.column: EMPTY if value is UNSET else value})
         self.batch.rows = rows
+        self._forget(edit.keys, edit.column)
         if len(edit.keys) < 2:
             return ''
         title = self._cells.titles[edit.column]
@@ -528,6 +581,23 @@ class Server:
             self._row_of(key)
             rows = rows.reset(key, cells.column)
         self.batch.rows = rows
+        self._forget(cells.keys, cells.column)
+
+    def _forget(self, keys: Sequence[str], column: str) -> None:
+        """Forget the reasons of a refusal at ``column`` of rows ``keys``."""
+        self.refused = [
+            e
+            for e in self.refused
+            if not (e.entry in keys and e.loc and str(e.loc[0]) == column)
+        ]
+
+    def _forget_settings(self, path: Sequence[str | int] = ()) -> None:
+        """Forget the reasons of a refusal at the setting of ``path``, or all."""
+        self.refused = [
+            e
+            for e in self.refused
+            if e.entry or (path and tuple(e.loc[:1]) != tuple(path[:1]))
+        ]
 
     @_action
     def remove(self, keys: Sequence[str]) -> str:
@@ -556,6 +626,8 @@ class Server:
         key = key.strip()
         if not key:
             raise Problem(f'Give the new {self.words.one} a name.')
+        if any(self._named(row) == key for row in self.batch.rows):
+            raise Problem(f'There is a {self.words.one} named {key} already.')
         try:
             self.batch.rows = self.batch.rows.add(TableRow(key, {}, {}))
         except SubmitError as error:
@@ -579,9 +651,9 @@ class Server:
             }[request.which]()
             records = self.batch.reduce(settings, keys)
         except SubmitError as error:
-            # The state keeps the reasons until the next change that succeeds.
             self.refused = list(error.errors)
             raise _Refusal(self.refused) from None
+        self.refused = []
         self._alone -= records.keys()
         self._relist()
         n = len(records)
@@ -600,6 +672,7 @@ class Server:
             forms.apply(self.settings, edit)
         except (KeyError, ValueError) as error:
             raise Problem(_why(error)) from None
+        self._forget_settings(edit.path)
 
     @_action
     def use_settings(self, key: str) -> str:
@@ -609,7 +682,8 @@ class Server:
         if record is None:
             raise Problem(f'{name} has no result.')
         self.settings.set(record.request.params, self._listing)
-        return f'The settings are those of the result of {name} now.'
+        self._forget_settings()
+        return f'All {self.words.many} now use the settings {name} was reduced with.'
 
     # One row
 
@@ -687,7 +761,7 @@ class Server:
         done = {k: r for k, r in rows.items() if r.result is not None}
         many = self.words.many
         if keys:
-            chosen = [done[k] for k in keys if k in done]
+            chosen = [r for k, r in done.items() if k in keys]
             note = '' if chosen else f'None of the {many} selected has a result.'
         else:
             chosen = list(done.values())[:_DRAWN]
@@ -696,19 +770,23 @@ class Server:
             )
             if len(done) > _DRAWN:
                 note = f'The first {_DRAWN} of {len(done)}. Select {many} to choose.'
-        if any(r.result == 'outdated' for r in chosen):
-            note = f'{note} Dashed curves are outdated.'.strip()
         if not chosen or self._draw is None:
             return Plot(figure=None, note=note)
         ids = [r.record for r in chosen if r.record is not None]
         records = {r.id: r for r in self.batch.client.records(ids=ids)}
+        order = {k: i for i, k in enumerate(rows)}
+        colors = plots.colors([order[r.key] for r in chosen])
         shown = [
-            Shown(r.key, r.name, records[r.record], r.result == 'outdated', r.color)
-            for r in chosen
+            Shown(r.key, r.name, records[r.record], r.result == 'outdated', c)
+            for r, c in zip(chosen, colors, strict=True)
             if r.record is not None
         ]
         try:
-            return Plot(figure=self._draw(shown), note=note)
+            return Plot(
+                figure=self._draw(shown),
+                note=note,
+                colors={s.key: s.color for s in shown},
+            )
         except Exception as error:  # a drawing is code of the application
             return Plot(figure=None, note=f'Cannot draw: {error}')
 
@@ -748,14 +826,21 @@ class Server:
             rows=rows,
         )
 
-    def _rescan(self) -> None:
-        """Show the runs as corrected now, and the rows made from them."""
+    def _rescan(self) -> str:
+        """
+        Show the runs as corrected now, and the rows made from them; say what
+        changed.
+        """
         self.runs_version += 1
         self._relist()
-        try:
-            self.batch.scan()
-        except Exception as error:  # a source is code of the application
-            raise Problem(f'Corrected, but the scan failed: {error}') from None
+
+        def scan() -> None:
+            try:
+                self.batch.scan()
+            except Exception as error:  # a source is code of the application
+                raise Problem(f'Corrected, but the scan failed: {error}') from None
+
+        return self._scanned(scan)
 
     @_action
     def correct(self, edit: CellEdit) -> str:
@@ -765,17 +850,18 @@ class Server:
         for key in edit.keys:
             fields = {edit.column: None if value is UNSET else value}
             files.correct(FileRef(file=key), **fields)
-        self._rescan()
+        changes = self._rescan()
         n = len(edit.keys)
-        return f'{marks.titles[edit.column]} corrected on {n} run{"s" * (n > 1)}.'
+        title = marks.titles[edit.column]
+        return f'{title} corrected on {n} run{"s" * (n > 1)}. {changes}'.strip()
 
     @_action
-    def revert_run(self, cells: Cells) -> None:
+    def revert_run(self, cells: Cells) -> str:
         """Take a field of runs back to what the files say."""
         _, files = self._marked()
         for key in cells.keys:
             files.reset(FileRef(file=key), cells.column)
-        self._rescan()
+        return self._rescan()
 
     # Files
 
@@ -793,17 +879,24 @@ class Server:
 
     @_action
     def load_table(self, name: str, content: bytes) -> str:
-        """Take the rows of a table file in place of a scan, under the edits."""
+        """
+        Take the rows of a table file in place of a scan, and forget what was
+        set by hand on them, so that they show what the file says.
+        """
         batch = self.batch
         with _file(name, content) as path:
             try:
                 table = frames.read_table(path)
                 rows = frames.rows_of(table, batch.spec.params, batch.columns)
-                batch.rows = batch.rows.rescan(rows)
             except SubmitError as error:
                 raise Problem('; '.join(map(str, error.errors))) from None
             except (OSError, ValueError, KeyError) as error:
                 raise Problem(f'Cannot load {name}: {_why(error)}') from None
+        loaded = batch.rows.rescan(rows)
+        for row in rows:
+            loaded = loaded.reset(row.key, *batch.columns)
+        batch.rows = loaded
+        self.loaded = name
         self._relist()
         return f'Loaded {self.words.count(len(rows))} from {name}.'
 
@@ -822,17 +915,29 @@ class Server:
     def load_settings(self, name: str, content: bytes) -> str:
         """Show the settings of a YAML template."""
         batch = self.batch
+        cannot = f'Cannot load {name}:'
         with _file('settings.yaml', content) as path:
             try:
                 template = load_template(path)
-                if template.spec != SpecId.of(batch.spec):
-                    raise ValueError(f'it holds settings of {template.spec.name}')
-                if set(template.blanks) != set(batch.columns):
-                    raise ValueError(f'its blanks are not {", ".join(batch.columns)}')
-                settings = with_named_files(batch.spec.params, template.params)
-                self.settings.set(with_latest(batch.client, settings), self._listing)
-            except (OSError, ValueError, KeyError) as error:
-                raise Problem(f'Cannot load {name}: {_why(error)}') from None
+            except (OSError, ValueError):
+                raise Problem(
+                    f'{cannot} it is not a settings file saved from this page.'
+                ) from None
+        ours = SpecId.of(batch.spec).name
+        if template.spec.name != ours:
+            raise Problem(
+                f'{cannot} it holds the settings of {template.spec.name}, not {ours}.'
+            )
+        if template.spec != SpecId.of(batch.spec) or set(template.blanks) != set(
+            batch.columns
+        ):
+            raise Problem(f'{cannot} it was saved by another version of this page.')
+        try:
+            settings = with_named_files(batch.spec.params, template.params)
+            self.settings.set(with_latest(batch.client, settings), self._listing)
+        except (ValueError, KeyError) as error:
+            raise Problem(f'{cannot} {forms.message(_why(error))}.') from None
+        self._forget_settings()
         return f'Loaded the settings of {name}.'
 
     @_locked
@@ -866,6 +971,11 @@ class _Refusal(Problem):
             'Nothing was reduced: '
             + ('one value is refused.' if n == 1 else f'{n} values are refused.')
         )
+
+
+def _join(words: Sequence[str]) -> str:
+    """``['a', 'b', 'c']`` as ``'a, b and c'``."""
+    return ' and '.join([', '.join(words[:-1]), words[-1]] if len(words) > 1 else words)
 
 
 def _progress(states: Mapping[str, RowState]) -> tuple[int, int] | None:
