@@ -34,6 +34,23 @@ def tutorial_centre() -> BeamCentre:
 
 
 @pytest.fixture(scope='session')
+def tutorial_dir() -> Path:
+    """The folder of the tutorial runs that the tests of a folder of files use."""
+    runs = (
+        data.loki_tutorial_sample_run_60339,
+        data.loki_tutorial_sample_run_60250,
+        data.loki_tutorial_agbeh_sample_run,  # 60387
+        data.loki_tutorial_agbeh_transmission_run,  # 60386
+        data.loki_tutorial_sample_transmission_run,  # 60394
+        data.loki_tutorial_background_run_60393,
+        data.loki_tutorial_run_60392,
+    )
+    folders = {Path(download()).parent for download in runs}
+    assert len(folders) == 1
+    return folders.pop()
+
+
+@pytest.fixture(scope='session')
 def sample() -> Path:
     return Path(data.loki_tutorial_sample_run_60339())
 
