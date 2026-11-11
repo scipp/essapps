@@ -37,6 +37,7 @@ sciline = [
 ]
 test = [
     "essspec[scipp,sciline]",
+    "jsonschema",  # the schema tests skip without it
     "pytest>=9.0",
     "pytest-xdist>=3.6",
 ]
