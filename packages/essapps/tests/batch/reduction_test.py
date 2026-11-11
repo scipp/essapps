@@ -253,6 +253,18 @@ def test_a_tweak_is_the_rows_result_and_not_stale(
     assert remaining(scanned.state(SETTINGS)) == ['2']
 
 
+def test_a_row_is_tweaked_until_it_is_reduced_with_the_settings(
+    scanned: Batch, client: Client
+) -> None:
+    client.wait(scanned.tweak('1', {**OTHER_SETTINGS, **scanned.rows['1'].values}))
+    tweaked = {k: s.tweaked for k, s in scanned.state().items()}
+
+    client.wait(scanned.reduce(SETTINGS, ['1']))
+
+    assert tweaked == {'1': True, '2': False}
+    assert not scanned.state()['1'].tweaked
+
+
 @pytest.fixture
 def chain(client: Client, sample: Measure) -> tuple[Batch, Batch]:
     """A batch that finds an offset per sample, and one that reads it per row."""

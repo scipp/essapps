@@ -223,8 +223,6 @@ class Server:
         self.tweak = Fields(model, listing)
         self._tweak_of: tuple[str, Any, str | None] | None = None
         self._marks = None if marks is None or files is None else Fields(marks, listing)
-        # The rows whose result was reduced alone, as Batch keeps them too.
-        self._alone: set[str] = set()
         self.refused: list[FieldError] = []
         self.loaded: str | None = None
         self.version = 1
@@ -251,11 +249,7 @@ class Server:
     def _status(self, state: RowState, settings_ok: bool) -> str:
         if state.status in _ENDED and not state.problems:
             return str(state.status)
-        if (
-            not settings_ok
-            and state.status is Status.COMPLETED
-            and state.key not in self._alone
-        ):
+        if not settings_ok and state.status is Status.COMPLETED and not state.tweaked:
             return 'outdated'
         return _STATUS.get(state.text, state.text)
 
@@ -356,14 +350,18 @@ class Server:
         return '' if value is UNSET else self._listing.text(value)
 
     def _changed(
-        self, row: TableRow, given: Mapping[str, Any], settings: Mapping[str, Any]
+        self,
+        row: TableRow,
+        given: Mapping[str, Any],
+        settings: Mapping[str, Any],
+        tweaked: bool,
     ) -> list[str]:
         """
         The titles of the cells and ``settings`` that differ from those
         ``given`` to the reduction of ``row``; the settings count only if it
-        was not reduced alone.
+        was not ``tweaked``, reduced alone.
         """
-        now = {} if row.key in self._alone else dict(settings)
+        now = {} if tweaked else dict(settings)
         now.update({c: v for c, v in row.values.items() if c in self.batch.columns})
         titles = {**self.settings.titles, **self._cells.titles}
         return [
@@ -396,7 +394,9 @@ class Server:
         elif problems:
             reason = '; '.join(problems.values())
         elif status == 'outdated' and state.stale and record is not None:
-            changed = self._changed(row, record.request.params, settings or {})
+            changed = self._changed(
+                row, record.request.params, settings or {}, state.tweaked
+            )
             reason = f'{_join(changed)} changed.' if changed else 'Its cells changed.'
         elif status == 'outdated':
             reason = 'The settings are incomplete, so this result may not match them.'
@@ -423,7 +423,7 @@ class Server:
             status=status,
             reason=reason,
             added=row.key in added,
-            alone=row.key in self._alone and record is not None,
+            alone=state.tweaked and record is not None,
             record=None if record is None else record.id,
             result=result,
             cells=cells,
@@ -641,7 +641,6 @@ class Server:
             self.refused = list(error.errors)
             raise _Refusal(self.refused) from None
         self.refused = []
-        self._alone -= records.keys()
         self._relist()
         n = len(records)
         return f'Reducing {self.words.count(n)}.' if n else ''
@@ -732,7 +731,6 @@ class Server:
             self.batch.tweak(key, self.tweak.params)
         except SubmitError as error:
             raise Problem('; '.join(map(str, error.errors))) from None
-        self._alone.add(key)
         self._relist()
         return f'Reducing {self._named(self.batch.rows[key])} alone.'
 

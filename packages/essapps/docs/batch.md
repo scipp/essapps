@@ -91,7 +91,7 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 
 **With `staged=True`** the rows go through a stage, and what they share is computed once. It needs a binding that makes stages. A stage is reused while the settings are the same. Whether a column can vary through a stage is the binding's to decide, and a refusal says so; a column that everything depends on saves nothing.
 
-**One row with other settings.** `tweak(key, params)` submits one request with all of its parameters, which becomes the row's result. It is stale only if the row's cells change after that. If a parameter differs for many rows, make it a column.
+**One row with other settings.** `tweak(key, params)` submits one request with all of its parameters, which becomes the row's result. It is stale only if the row's cells change after that, and its state is `tweaked` until `reduce` submits the row with the settings. If a parameter differs for many rows, make it a column.
 
 ## Writing a source
 

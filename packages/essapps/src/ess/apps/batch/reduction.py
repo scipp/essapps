@@ -154,7 +154,13 @@ class Batch:
         status = self._status([*found.values(), *upstream])
         stale = set() if settings is None else self._stale(settings)
         return state.row_states(
-            self.rows, self.spec.params, self.columns, found, status, stale
+            self.rows,
+            self.spec.params,
+            self.columns,
+            found,
+            status,
+            stale,
+            self._tweaked.keys(),
         )
 
     def _results(self) -> dict[str, Record]:
