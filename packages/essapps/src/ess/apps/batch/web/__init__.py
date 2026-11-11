@@ -27,10 +27,8 @@ Limits:
   same state.
 - Edits, settings and corrections live in memory and are lost when the server
   stops. Results stay, since the folder holds them.
-- ``Server._text`` repeats ``cell_text`` of :mod:`ess.apps.batch.panel.cells`,
-  and the server tracks rows reduced alone in its own set because
-  :class:`~ess.apps.batch.Batch` does not tell. Both belong in
-  :mod:`ess.apps.batch` once a second interface is kept.
+- The server tracks rows reduced alone in its own set because
+  :class:`~ess.apps.batch.Batch` does not tell.
 - The browser tests in ``tests/batch/web_browser_test.py`` skip without
   Playwright, ``/usr/bin/chromium`` and the fetched libraries. They do not
   cover loading an XLSX table, an edit of several rows in the Runs view, or

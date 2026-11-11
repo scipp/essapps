@@ -42,10 +42,8 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
-from pydantic_core import to_json
 
-from ess.spec import FileRef, OutputRef
-from ess.spec.refs import as_ref
+from ess.spec import FileRef
 
 from ...errors import FieldError, SubmitError
 from ...fields import UNSET, Fields
@@ -354,19 +352,8 @@ class Server:
         }
 
     def _text(self, value: Any) -> str:
-        """What a cell shows: a file or an output by its label."""
-        if value is UNSET:
-            return ''
-        ref = as_ref(value)
-        if isinstance(ref, OutputRef):
-            return self._listing.output_label(ref)
-        if isinstance(ref, FileRef):
-            return self._listing.file_label(ref)
-        if isinstance(value, list):
-            return ', '.join(self._text(v) for v in value)
-        if isinstance(value, dict):
-            return to_json(value).decode()
-        return 'none' if value is None else str(value)
+        """What a cell shows (:meth:`Listing.text`); nothing if it is unset."""
+        return '' if value is UNSET else self._listing.text(value)
 
     def _changed(
         self, row: TableRow, given: Mapping[str, Any], settings: Mapping[str, Any]

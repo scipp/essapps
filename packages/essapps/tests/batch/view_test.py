@@ -15,7 +15,6 @@ from ess.apps import Client, Listing, Record, Template
 from ess.apps.batch import Batch, CorrectedFiles, cli
 from ess.apps.batch.frames import RESULT, read_table, rows_of, write_table
 from ess.apps.batch.panel import BatchView, RunSheet
-from ess.apps.batch.panel.cells import cell_text
 from ess.apps.batch.panel.demo import build, open_demo
 from ess.apps.batch.panel.view import Draw
 from ess.apps.batch.text import write_template
@@ -381,19 +380,6 @@ def test_a_scan_offers_new_files_in_the_editor(
 
     pickers = view.row.panel().select(pn.widgets.Select)
     assert any(run in picker.values for picker in pickers)
-
-
-@pytest.mark.parametrize(
-    ('value', 'text'),
-    [
-        ([1, 2], '1, 2'),
-        ({'x': 1}, '{"x":1}'),
-        (None, 'none'),
-        (2.5, '2.5'),
-    ],
-)
-def test_the_text_of_a_cell(value: Any, text: str, client: Client) -> None:
-    assert cell_text(value, Listing(client)) == text
 
 
 class Marks(BaseModel):

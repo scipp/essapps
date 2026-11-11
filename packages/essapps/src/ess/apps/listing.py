@@ -8,8 +8,10 @@ from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 
+from pydantic_core import to_json
+
 from ess.spec import File, FileRef, OutputRef, field_types
-from ess.spec.refs import iter_refs
+from ess.spec.refs import as_ref, iter_refs
 
 from .client import Client
 from .files import Selector
@@ -153,6 +155,23 @@ class Listing:
     def output_label(self, ref: OutputRef) -> str:
         """The label of an output; the reference if its record is not listed."""
         return self._output_labels.get(ref, str(ref))
+
+    def text(self, value: Any) -> str:
+        """
+        What a table shows for a value: a file or an output by its label, a
+        list as its items' texts joined by commas, a dict as JSON, and ``None``
+        as ``none``.
+        """
+        ref = as_ref(value)
+        if isinstance(ref, OutputRef):
+            return self.output_label(ref)
+        if isinstance(ref, FileRef):
+            return self.file_label(ref)
+        if isinstance(value, list):
+            return ', '.join(self.text(item) for item in value)
+        if isinstance(value, dict):
+            return to_json(value).decode()
+        return 'none' if value is None else str(value)
 
     def fitting(self, tp: Any) -> dict[str, OutputRef]:
         """The outputs a request may reference that fit ``tp``, newest first."""

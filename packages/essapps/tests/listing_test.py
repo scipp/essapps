@@ -255,3 +255,20 @@ def test_files_of_a_marker_with_a_role_are_those_of_the_role_and_those_without_o
         'run 302 (transmission)',
         'run 303',
     ]
+
+
+@pytest.mark.parametrize(
+    ('value', 'text'),
+    [
+        ([1, 2], '1, 2'),
+        ({'x': 1}, '{"x":1}'),
+        (None, 'none'),
+        (2.5, '2.5'),
+    ],
+)
+def test_the_text_of_a_value(value: Any, text: str, client: Client) -> None:
+    assert Listing(client).text(value) == text
+
+
+def test_the_text_of_files_is_their_labels(client: Client, run: FileRef) -> None:
+    assert Listing(client).text([run, run]) == 'run 101, run 101'
