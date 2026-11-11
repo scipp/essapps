@@ -34,6 +34,7 @@ dependencies = [
 [project.optional-dependencies]
 loki = [
     "esssans>=26.10.0",
+    "ipywidgets",  # ess.loki imports it (bank_viewer) but esssans does not declare it
     "essspec[sciline]",
     "scippnexus>=25.06.0",
 ]
@@ -43,6 +44,7 @@ loki-app = [
 ]
 test = [
     "essinstruments[loki-app]",
+    "pooch>=1.5",  # downloads the data files of ess.loki.data
     "pytest>=9.0",
     "pytest-xdist>=3.6",
 ]
