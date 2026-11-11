@@ -6,19 +6,23 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import panel as pn
 import pytest
 from pydantic import BaseModel
 
-from ess.apps import Client, Listing, Record
-from ess.apps.batch import Batch, CorrectedFiles
+from ess.apps import Client, Listing, Record, Template
+from ess.apps.batch import Batch, CorrectedFiles, cli
+from ess.apps.batch.frames import RESULT, read_table, rows_of, write_table
 from ess.apps.batch.panel import BatchView, RunSheet
 from ess.apps.batch.panel.cells import cell_text
-from ess.apps.batch.panel.demo import build
+from ess.apps.batch.panel.demo import build, open_demo
+from ess.apps.batch.panel.view import Draw
+from ess.apps.batch.text import write_template
 from ess.apps.panel import App
 from ess.apps.testing import FakeFiles
 
-from .toys import COLUMNS, STAGED, Gate, Measure
+from .toys import COLUMNS, STAGED, Gate, Measure, Params
 
 pn.extension('tabulator')
 
@@ -34,20 +38,37 @@ def results(view: BatchView) -> dict[str, str]:
     return {k: row['Result'] for k, row in rows_shown(view).items()}
 
 
+def view_of(batch: Batch, draw: Draw | None = None) -> BatchView:
+    """A view of ``batch`` after a scan, with :data:`SETTINGS`."""
+    view = BatchView(batch, info=('name',), draw=draw)
+    view.scan()
+    view.settings.set(SETTINGS, Listing(batch.client))
+    return view
+
+
 @pytest.fixture
-def view(batch: Batch, client: Client, sample: Measure) -> BatchView:
+def measured(sample: Measure) -> None:
+    """Rows 1 and 2 with a transmission run, row 3 without one."""
     sample(1, 'water')
     sample(2, 'sds')
     sample(3, 'oil', partner=False)
-    view = BatchView(batch, info=('name',))
-    view.scan()
-    view.settings.set(SETTINGS, Listing(client))
-    return view
+
+
+@pytest.fixture
+def view(batch: Batch, measured: None) -> BatchView:
+    return view_of(batch)
 
 
 def done(view: BatchView, client: Client) -> None:
     client.wait(client.records(label=view.batch.label))
     view.refresh(Listing(client))
+
+
+@pytest.fixture
+def reduced(view: BatchView, client: Client) -> BatchView:
+    view.reduce_all()
+    done(view, client)
+    return view
 
 
 def test_a_scan_shows_the_rows_with_their_info_and_labels(view: BatchView) -> None:
@@ -72,11 +93,8 @@ def test_reduce_all_runs_the_ready_rows_and_says_so(
 
 
 def test_settings_refused_are_named_in_the_message(
-    batch: Batch, client: Client, sample: Measure
+    view: BatchView, client: Client
 ) -> None:
-    sample(1, 'water')
-    view = BatchView(batch)
-    view.scan()
     view.settings.set({'binning': {'bins': 0}}, Listing(client))
 
     assert view.reduce_all() == {}
@@ -178,7 +196,7 @@ def test_undoing_the_edits_of_a_row(view: BatchView, client: Client) -> None:
     assert 'thickness' not in view.batch.rows['1'].values
 
 
-def test_adding_a_row_by_name(view: BatchView, client: Client) -> None:
+def test_adding_a_row_by_name(view: BatchView) -> None:
     view.key.value = 'mine'
     view.add()
 
@@ -211,19 +229,15 @@ def test_a_failed_row_says_why_when_selected(view: BatchView, client: Client) ->
 
 
 def test_draw_gets_only_completed_results_of_the_selection(
-    batch: Batch, client: Client, sample: Measure
+    batch: Batch, client: Client, measured: None
 ) -> None:
-    sample(1, 'water')
-    sample(2, 'sds')
     drawn: list[list[str]] = []
 
     def draw(records: Mapping[str, Record]) -> Any:
         drawn.append(sorted(records))
         return pn.pane.Markdown('drawn')
 
-    view = BatchView(batch, draw=draw)
-    view.scan()
-    view.settings.set(SETTINGS, Listing(client))
+    view = view_of(batch, draw)
     view.table.select_keys(['2'])
     view.reduce_selected()
     done(view, client)
@@ -234,31 +248,29 @@ def test_draw_gets_only_completed_results_of_the_selection(
 
 
 def test_use_settings_shows_those_of_the_selected_result(
-    view: BatchView, client: Client
+    reduced: BatchView, client: Client
 ) -> None:
-    view.reduce_all()
-    done(view, client)
-    view.settings.set({'binning': {'bins': 9}}, Listing(client))
+    reduced.settings.set({'binning': {'bins': 9}}, Listing(client))
 
-    view.table.select_keys(['1'])
-    view.use_settings()
+    reduced.table.select_keys(['1'])
+    reduced.use_settings()
 
-    assert view.settings.params['binning'] == {'bins': 2}
+    assert reduced.settings.params['binning'] == {'bins': 2}
 
 
-def test_a_tweak_becomes_the_result_of_its_row(view: BatchView, client: Client) -> None:
-    view.reduce_all()
-    done(view, client)
-    view.table.select_keys(['1'])
-    params = dict(view.tweak.params)
+def test_a_tweak_becomes_the_result_of_its_row(
+    reduced: BatchView, client: Client
+) -> None:
+    reduced.table.select_keys(['1'])
+    params = dict(reduced.tweak.params)
     params['thickness'] = 4.0
-    view.tweak.set(params, Listing(client))
+    reduced.tweak.set(params, Listing(client))
 
-    record = view.submit_tweak()
-    done(view, client)
+    record = reduced.submit_tweak()
+    done(reduced, client)
 
-    assert view.batch.state()['1'].record == record
-    assert results(view)['1'] == 'completed'
+    assert reduced.batch.state()['1'].record == record
+    assert results(reduced)['1'] == 'completed'
 
 
 def test_a_cell_with_something_missing_is_kept_and_named(
@@ -278,7 +290,7 @@ def test_a_cell_with_something_missing_is_kept_and_named(
 
 
 def test_a_column_chosen_is_written_to_all_selected_even_at_its_default(
-    view: BatchView, client: Client
+    view: BatchView,
 ) -> None:
     view.batch.rows = view.batch.rows.edit('1', {'thickness': 2.0}).edit(
         '2', {'thickness': 3.0}
@@ -293,15 +305,10 @@ def test_a_column_chosen_is_written_to_all_selected_even_at_its_default(
     assert view.write.value == ''
 
 
-def test_changing_a_setting_shows_the_results_as_stale(
-    view: BatchView, client: Client
-) -> None:
-    view.reduce_all()
-    done(view, client)
+def test_changing_a_setting_shows_the_results_as_stale(reduced: BatchView) -> None:
+    reduced.settings.panel().select(pn.widgets.IntInput)[0].value = 3
 
-    view.settings.panel().select(pn.widgets.IntInput)[0].value = 3
-
-    assert results(view) == {'1': 'stale', '2': 'stale', '3': 'incomplete'}
+    assert results(reduced) == {'1': 'stale', '2': 'stale', '3': 'incomplete'}
 
 
 def test_nothing_changed_says_so(view: BatchView) -> None:
@@ -339,9 +346,7 @@ def test_a_row_the_editor_cannot_show_still_says_why(view: BatchView) -> None:
     assert 'not a column' in view.details.object
 
 
-def test_a_source_that_raises_says_so_in_the_message(
-    client: Client, sample: Measure
-) -> None:
+def test_a_source_that_raises_says_so_in_the_message(client: Client) -> None:
     def broken(_: Any) -> list[Any]:
         raise KeyError('sample')
 
@@ -354,15 +359,12 @@ def test_a_source_that_raises_says_so_in_the_message(
 
 
 def test_a_drawing_that_raises_says_so_in_its_place(
-    batch: Batch, client: Client, sample: Measure
+    batch: Batch, client: Client, measured: None
 ) -> None:
     def draw(_: Any) -> Any:
         raise RuntimeError('released')
 
-    sample(1, 'water')
-    view = BatchView(batch, draw=draw)
-    view.scan()
-    view.settings.set(SETTINGS, Listing(client))
+    view = view_of(batch, draw)
     view.table.select_keys(['1'])
     view.reduce_selected()
     done(view, client)
@@ -445,11 +447,131 @@ def test_the_app_shows_its_tabs_first_and_refreshes_them(
     assert results(view)['1'] == 'completed'
 
 
+def demo_view(directory: Path, samples: int = 4) -> BatchView:
+    """The batch tab of the demo on ``directory``; close its client."""
+    view = build(*open_demo(directory, samples)).tabs['Batch']
+    assert isinstance(view, BatchView)
+    return view
+
+
 def test_the_demo_builds_and_reduces(tmp_path: Path) -> None:
-    app = build(tmp_path, samples=4)
-    view = app.tabs['Batch']
+    view = demo_view(tmp_path)
 
-    records = view.reduce_all()
+    with view.batch.client as client:
+        records = view.reduce_all()
+        assert set(client.wait(records).values()) == {'completed'}
 
-    assert set(app.client.wait(records).values()) == {'completed'}
-    app.client.close()
+
+# The files of the command
+
+
+def test_rows_loaded_from_a_table_take_the_place_of_the_scan_under_the_edits(
+    view: BatchView, tmp_path: Path
+) -> None:
+    view.batch.rows = view.batch.rows.edit('1', {'thickness': 3.0})
+    path = tmp_path / 'rows.csv'
+    table = {'key': ['1', 'new'], 'sample': ['1', '2'], 'transmission': ['', '']}
+    write_table(pd.DataFrame(table | {'thickness': ['', '']}), path)
+    view.path.value = str(path)
+
+    view.load_rows()
+
+    assert results(view) == {'1': 'incomplete', 'new': 'incomplete'}
+    assert view.batch.rows['1'].values['thickness'] == 3.0
+    assert view.message.object == 'Loaded 2 rows.'
+
+
+def test_a_table_that_lacks_a_column_is_refused_in_the_message(
+    view: BatchView, tmp_path: Path
+) -> None:
+    path = tmp_path / 'rows.csv'
+    write_table(pd.DataFrame({'key': ['a'], 'sample': ['1']}), path)
+    view.path.value = str(path)
+
+    view.load_rows()
+
+    assert 'transmission' in view.message.object
+    assert list(results(view)) == ['1', '2', '3']
+
+
+def test_a_table_saved_has_the_results_and_its_rows_read_back(
+    reduced: BatchView, tmp_path: Path
+) -> None:
+    reduced.path.value = str(tmp_path / 'rows.csv')
+
+    reduced.save_rows()
+
+    table = read_table(tmp_path / 'rows.csv')
+    assert list(table['status']) == ['completed', 'completed', 'incomplete']
+    assert all(table['record'][:2])
+    assert set(RESULT) < set(table.columns)
+    rows = rows_of(table, Params, COLUMNS)
+    assert [(r.key, r.values) for r in rows] == [
+        (r.key, r.values) for r in reduced.batch.rows
+    ]
+
+
+def test_settings_saved_as_a_template_are_loaded_back(
+    view: BatchView, client: Client, tmp_path: Path
+) -> None:
+    saved = view.settings.params
+    view.path.value = str(tmp_path / 'settings.yaml')
+    view.save_settings()
+    view.settings.set({'binning': {'bins': 9}}, Listing(client))
+
+    view.load_settings()
+
+    assert view.settings.params == saved
+    assert view.message.object == 'Loaded the settings.'
+
+
+def test_a_template_with_other_blanks_is_refused_in_the_message(
+    view: BatchView, tmp_path: Path
+) -> None:
+    path = tmp_path / 'settings.yaml'
+    write_template(Template(STAGED, params={'binning': {'bins': 9}}), path)
+    view.path.value = str(path)
+
+    view.load_settings()
+
+    assert 'blanks' in view.message.object
+    assert view.settings.params['binning'] == SETTINGS['binning']
+
+
+def test_export_writes_the_files_of_the_completed_rows_selected(
+    reduced: BatchView, tmp_path: Path
+) -> None:
+    reduced.table.select_keys(['1', '3'])
+    reduced.path.value = str(tmp_path / 'out')
+
+    reduced.export_selected()
+
+    assert sorted(p.name for p in (tmp_path / 'out').iterdir()) == ['1']
+    assert (tmp_path / 'out' / '1' / 'total.h5').is_file()
+
+
+def test_the_command_reduces_what_the_demo_saved_and_the_demo_shows_it(
+    tmp_path: Path,
+) -> None:
+    view = demo_view(tmp_path, samples=3)
+    with view.batch.client:
+        for name, save in (
+            ('rows.csv', view.save_rows),
+            ('s.yaml', view.save_settings),
+        ):
+            view.path.value = str(tmp_path / name)
+            save()
+
+    status = cli.main(
+        [
+            *('-w', str(tmp_path)),
+            *('--bind', 'ess.apps.batch.panel.demo:BINDINGS'),
+            *('reduce', str(tmp_path / 's.yaml'), str(tmp_path / 'rows.csv')),
+            *('--label', 'demo', '-o', str(tmp_path / 'done.csv')),
+        ]
+    )
+
+    assert status == 0
+    view = demo_view(tmp_path)
+    with view.batch.client:
+        assert results(view) == dict.fromkeys(['1', '3', '5'], 'completed')

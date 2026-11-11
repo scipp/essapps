@@ -3,14 +3,29 @@
 """
 A batch application on fake files and fake workflows, for working on the UI.
 
-``python -m ess.apps.batch.panel.demo`` serves it. Reductions take a moment, so
-rows show as pending. One bin fails every reduction, a thickness of zero fails
-one row, and a thickness below zero is refused. Everything but the workflows
-and the files is real, so a change here shows what an application gets.
+``python -m ess.apps.batch.panel.demo [DIRECTORY]`` serves it on a workspace
+kept in ``DIRECTORY`` (see :mod:`ess.apps.folder`), a new temporary folder if
+not given. The first start writes the fake files and ``files.csv`` there, and a
+later start reuses them, with the records of earlier starts. While the app is
+not running, the command works on the same folder with :data:`BINDINGS`::
+
+    B="essapps-batch -w DIRECTORY --bind ess.apps.batch.panel.demo:BINDINGS"
+    $B reduce settings.yaml rows.csv --label demo -o done.csv
+
+Reductions take a moment, so rows show as pending. One bin fails every
+reduction, a thickness of zero fails one row, and a thickness below zero is
+refused. Everything but the workflows and the files is real, so a change here
+shows what an application gets.
+
+One process holds a folder, so one client serves every session, and each
+session has a batch of its own. The corrections of the run sheet are shared by
+the sessions, and end with the process.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
@@ -20,9 +35,10 @@ from typing import Annotated, Literal
 import panel as pn
 from pydantic import BaseModel, Field
 
-from ess.apps import Record, local
+from ess.apps import Client, Record
+from ess.apps.folder import folder_files, open_folder
 from ess.apps.panel import App
-from ess.apps.testing import FakeFiles, StagedFunction, read_file
+from ess.apps.testing import StagedFunction, read_file
 from ess.spec import RunFile, WorkflowSpec
 
 from .. import Batch, CorrectedFiles, FileInfo, Row
@@ -68,6 +84,10 @@ def _reduce(params: Params) -> Outputs:
     return Outputs(total=read_file(params.sample) / params.thickness)
 
 
+BINDINGS = [StagedFunction(DEMO, _reduce)]
+"""The bindings of the demo's workspace, for the command."""
+
+
 def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
     """A row per sample run, with the transmission run of the same sample."""
     transmission = {
@@ -87,16 +107,33 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
     return rows
 
 
-def build(directory: Path, samples: int = 20) -> App:
-    """The application over ``samples`` samples, whose files go in ``directory``."""
-    fake = FakeFiles('demo', directory)
+def _measure(directory: Path, samples: int) -> None:
+    """Write the files of ``samples`` samples and ``files.csv``, unless there."""
+    if (directory / 'files.csv').exists():
+        return
+    lines = ['file,run,role,sample']
     for i in range(samples):
-        name = f'sample-{i}'
-        fake.measure(2 * i + 1, float(i + 1), role='sample', sample=name)
+        runs = [(2 * i + 1, i + 1.0, 'sample')]
         if i % 7 != 3:  # some samples have no transmission run yet
-            fake.measure(2 * i + 2, 1.0, role='transmission', sample=name)
-    files = CorrectedFiles(fake)
-    client = local(proposal='demo', files=files, bind=[StagedFunction(DEMO, _reduce)])
+            runs.append((2 * i + 2, 1.0, 'transmission'))
+        for run, content, role in runs:
+            (directory / f'run-{run}.json').write_text(json.dumps(content))
+            lines.append(f'run-{run}.json,{run},{role},sample-{i}')
+    (directory / 'files.csv').write_text('\n'.join(lines) + '\n')
+
+
+def open_demo(directory: Path, samples: int = 20) -> tuple[Client, CorrectedFiles]:
+    """
+    A client of the demo's workspace in ``directory``, with ``samples`` samples
+    on the first start, and the file source that the run sheet corrects.
+    """
+    _measure(directory, samples)
+    files = CorrectedFiles(folder_files(directory))
+    return open_folder(directory, BINDINGS, files=files), files
+
+
+def build(client: Client, files: CorrectedFiles) -> App:
+    """The application of one session, on what :func:`open_demo` returns."""
     batch = Batch(
         client,
         DEMO,
@@ -104,6 +141,7 @@ def build(directory: Path, samples: int = 20) -> App:
         label='demo',
         source=pair_by_sample,
         staged=True,
+        persist=True,
     )
 
     def draw(records: Mapping[str, Record]) -> pn.pane.Markdown:
@@ -117,9 +155,16 @@ def build(directory: Path, samples: int = 20) -> App:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description='Serve the batch demo.')
+    parser.add_argument('directory', type=Path, nargs='?', help='the workspace')
+    directory = parser.parse_args().directory
+    if directory is None:
+        directory = Path(tempfile.mkdtemp(prefix='essapps-batch-demo-'))
+    directory.mkdir(parents=True, exist_ok=True)
     pn.extension('tabulator')
-    directory = tempfile.mkdtemp(prefix='essapps-batch-demo-')
-    pn.serve(lambda: build(Path(directory)).panel(), port=5006, show=False)
+    client, files = open_demo(directory)
+    with client:
+        pn.serve(lambda: build(client, files).panel(), port=5006, show=False)
 
 
 if __name__ == '__main__':

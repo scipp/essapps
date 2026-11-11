@@ -8,8 +8,8 @@ A batch from files, as a command::
     essapps-batch -b my.package:BINDINGS export done.csv reduced -o exported.csv
 
 ``iofq.yaml`` is a :class:`~ess.apps.Template`, and ``runs.csv`` has a row for each
-sample, with a column for each blank (see :mod:`.tables`). Each command is one
-function, for a notebook: :func:`.tables.reduce_table` and
+sample, with a column for each blank (see :mod:`.frames`). Each command is one
+function, for a notebook: :func:`.frames.reduce_table` and
 :func:`.export.export_table`. The workspace is kept in a folder (see
 :mod:`ess.apps.folder`), so a template may reference a record of an earlier
 command, by its ID or by its label (see :func:`.text.with_latest`).
@@ -31,22 +31,15 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import yaml
-from pydantic import TypeAdapter
 
 from ..client import Client
 from ..errors import SubmitError
 from ..folder import open_folder, scan_folder
-from ..records import Status, Template
-from . import tables
+from ..records import Status
+from . import frames
 from .export import export_table
 from .reduction import file_infos
-from .text import with_latest
-
-
-def load_template(path: Path) -> Template:
-    """The template in a YAML file, which may be JSON, with files as written."""
-    return TypeAdapter(Template).validate_python(yaml.safe_load(path.read_text()))
+from .text import load_template, with_latest
 
 
 def _named(name: str) -> Any:
@@ -121,16 +114,16 @@ def _parser() -> argparse.ArgumentParser:
 
 def _run(client: Client, args: argparse.Namespace) -> pd.DataFrame:
     if args.command == 'rows':
-        return tables.table_of(_named(args.source)(file_infos(client)))
+        return frames.table_of(_named(args.source)(file_infos(client)))
     if args.command == 'export':
-        return export_table(client, tables.read_table(args.table), args.directory)
+        return export_table(client, frames.read_table(args.table), args.directory)
     table = (
         pd.DataFrame({'key': [args.label]})
         if args.table is None
-        else tables.read_table(args.table)
+        else frames.read_table(args.table)
     )
     template = load_template(args.template)
-    return tables.reduce_table(
+    return frames.reduce_table(
         client,
         replace(template, params=with_latest(client, template.params)),
         table,
@@ -145,15 +138,15 @@ def _write(table: pd.DataFrame, path: Path | None) -> None:
     if path is None:
         table.to_csv(sys.stdout, index=False)
     else:
-        tables.write_table(table, path)
+        frames.write_table(table, path)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the command, and return its exit status (see the module)."""
     parser = _parser()
     args = parser.parse_args(argv)
-    if args.output is not None and args.output.suffix not in tables.SUFFIXES:
-        parser.error(f'{args.output}: a table is one of {", ".join(tables.SUFFIXES)}')
+    if args.output is not None and args.output.suffix not in frames.SUFFIXES:
+        parser.error(f'{args.output}: a table is one of {", ".join(frames.SUFFIXES)}')
     if args.command == 'files':
         by_hand = args.run_table is None
         if by_hand and args.output is not None and args.output.exists():
@@ -162,7 +155,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             rows = scan_folder(args.workspace, _named(args.read))
             files = pd.DataFrame(rows, dtype=str).fillna('')
             if not by_hand:
-                files = tables.described(files, tables.read_table(args.run_table))
+                files = frames.described(files, frames.read_table(args.run_table))
         except ValueError as error:
             sys.stderr.write(f'{error}\n')
             return 2

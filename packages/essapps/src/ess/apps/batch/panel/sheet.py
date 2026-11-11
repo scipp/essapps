@@ -21,7 +21,7 @@ from ess.apps.panel import Form, Table
 from ess.spec import FileRef, field_types
 
 from .. import CorrectedFiles
-from .cells import cell_text, changed_cells, write_choice
+from .cells import button, cell_texts, changed_cells, write_choice
 
 
 class RunSheet:
@@ -54,14 +54,13 @@ class RunSheet:
         self.table = Table[FileRef](
             ['File', *self._titles.values()], self._selected, selectable=True
         )
-        apply = pn.widgets.Button(label='Correct selected', color='primary')
-        apply.on_click(lambda _: self.correct())
-        reset = pn.widgets.Button(label='Undo corrections of selected')
-        reset.on_click(lambda _: self.reset())
-        relist = pn.widgets.Button(label='List files')
-        relist.on_click(lambda _: self.list_files())
         self.write = write_choice(self._titles)
-        self._buttons = pn.Row(relist, self.write, apply, reset)
+        self._buttons = pn.Row(
+            button('List files', self.list_files),
+            self.write,
+            button('Correct selected', self.correct, 'primary'),
+            button('Undo corrections of selected', self.reset),
+        )
         self.list_files()
 
     def refresh(self, listing: Listing) -> None:
@@ -77,12 +76,7 @@ class RunSheet:
             {
                 ref: {
                     'File': self._listing.file_label(ref),
-                    **{
-                        title: cell_text(metadata[n], self._listing)
-                        if n in metadata
-                        else ''
-                        for n, title in self._titles.items()
-                    },
+                    **cell_texts(metadata, self._titles, self._listing),
                 }
                 for ref, metadata in self._metadata.items()
             }

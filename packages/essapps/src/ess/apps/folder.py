@@ -35,6 +35,7 @@ from . import hdf5
 from .client import Client
 from .files import FolderFiles
 from .log import Log
+from .protocol import FileSource
 from .workspace import Workspace
 
 
@@ -111,10 +112,22 @@ def scan_folder(
     return rows
 
 
+def folder_files(directory: Path) -> FolderFiles:
+    """
+    The files that ``files.csv`` in ``directory`` lists. A path in it is
+    relative to ``directory``, and an empty cell is metadata that the file
+    lacks. Raises ``FileNotFoundError`` without ``files.csv``.
+    """
+    with (directory / 'files.csv').open(newline='') as f:
+        table = [{k: v for k, v in row.items() if v != ''} for row in csv.DictReader(f)]
+    return FolderFiles(directory, table)
+
+
 def open_folder(
     directory: Path,
     bind: Sequence[Binding],
     *,
+    files: FileSource | None = None,
     proposal: str = 'local',
     submitter: str = 'user',
 ) -> Client:
@@ -123,15 +136,15 @@ def open_folder(
     workflows of ``bind`` in this process. Closing the client closes the
     workspace.
 
-    A path in ``files.csv`` is relative to ``directory``, and an empty cell is
-    metadata that the file lacks. Raises ``FileNotFoundError`` without
-    ``files.csv``, and ``RuntimeError`` if another process holds the folder.
+    ``files`` is the file source, :func:`folder_files` if not given. Give a
+    wrapper of that, such as :class:`~ess.apps.batch.CorrectedFiles`, to
+    correct what ``files.csv`` says while the client is open. Raises
+    ``FileNotFoundError`` without ``files.csv``, and ``RuntimeError`` if another
+    process holds the folder.
     """
-    with (directory / 'files.csv').open(newline='') as f:
-        table = [{k: v for k, v in row.items() if v != ''} for row in csv.DictReader(f)]
     workspace = Workspace(
         proposal=proposal,
-        files=FolderFiles(directory, table),
+        files=folder_files(directory) if files is None else files,
         bind=bind,
         log=Log(directory / 'log.jsonl'),
         store=FolderStore(directory / 'store'),
