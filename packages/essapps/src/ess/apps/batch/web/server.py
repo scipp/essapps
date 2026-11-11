@@ -849,16 +849,11 @@ class Server:
 
     # Files
 
-    def _table(self, keys: Sequence[str] | None = None) -> Any:
-        rows = [r for r in self.batch.rows if keys is None or r.key in keys]
-        table = frames.table_of(rows, self.batch.columns)
-        return frames.with_results(self.batch.client, self._states(), table)
-
     @_locked
     def table_file(self, suffix: str) -> bytes:
         """The rows as a table file, ``.csv`` or ``.xlsx``."""
         with _file(f'{self.words.many}{suffix}') as path:
-            frames.write_table(self._table(), path)
+            frames.write_table(frames.batch_table(self.batch, self._states()), path)
             return path.read_bytes()
 
     @_action
@@ -926,7 +921,8 @@ class Server:
             raise Problem(f'None of these {self.words.many} has a result.')
         buffer = io.BytesIO()
         with _file('results') as folder:
-            exported = export_table(self.batch.client, self._table(done), folder)
+            table = frames.batch_table(self.batch, states, done)
+            exported = export_table(self.batch.client, table, folder)
             frames.write_table(exported, folder / 'results.csv')
             with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
                 for path in sorted(folder.rglob('*')):

@@ -19,7 +19,7 @@ The files are those of the command ``essapps-batch`` (see :mod:`..cli`): a
 table of rows (:mod:`..frames`), a template of the settings (:mod:`..text`),
 and a folder of exported outputs (:mod:`..export`). A table loaded takes the
 place of a scan, so the edits stay on top, and a table saved has the result
-columns of :func:`..frames.with_results`, the status as the table shows it.
+columns of :func:`..frames.batch_table`, the status as the table shows it.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 import panel as pn
 
 from ess.apps import FieldError, Listing, Record, Status, SubmitError
@@ -366,15 +365,12 @@ class BatchView:
             self.message.object = f'Loaded {len(rows)} rows.'
         self._list_again()
 
-    def _table(self, rows: Iterable[Row]) -> pd.DataFrame:
-        """``rows`` as a table, with what came of each, as the table shows it."""
-        table = frames.table_of(rows, self.batch.columns)
-        return frames.with_results(self.batch.client, self._states, table)
-
     def save_rows(self) -> None:
         """Write the rows as a table to :attr:`path`, by its suffix."""
         with self._showing_errors('Cannot save the rows'):
-            frames.write_table(self._table(self.batch.rows), Path(self.path.value))
+            frames.write_table(
+                frames.batch_table(self.batch, self._states), Path(self.path.value)
+            )
             self.message.object = f'Saved the rows to {self.path.value}.'
 
     def load_settings(self) -> None:
@@ -395,7 +391,7 @@ class BatchView:
     def export_selected(self) -> None:
         """Export the completed rows selected to the folder :attr:`path`."""
         completed = [
-            self.batch.rows[k]
+            k
             for k in self.table.selected_keys
             if self._states[k].status is Status.COMPLETED
         ]
@@ -404,7 +400,8 @@ class BatchView:
             return
         folder = self.path.value
         with self._showing_errors('Cannot export'):
-            export_table(self.batch.client, self._table(completed), Path(folder))
+            table = frames.batch_table(self.batch, self._states, completed)
+            export_table(self.batch.client, table, Path(folder))
             self.message.object = f'Exported {len(completed)} rows to {folder}.'
 
     def panel(self) -> pn.Column:
