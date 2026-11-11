@@ -61,7 +61,7 @@ def test_other_runs_make_no_row() -> None:
 
 
 @pytest.fixture
-def client(sample: Path, mask_file: Path, direct_beam: Path) -> Iterator[Client]:
+def client(tutorial_dir: Path, mask_file: Path, direct_beam: Path) -> Iterator[Client]:
     def run(number: int, **metadata: object) -> dict[str, object]:
         return {'file': f'{number}-2022-02-28_2215.nxs', 'run': number, **metadata}
 
@@ -74,7 +74,7 @@ def client(sample: Path, mask_file: Path, direct_beam: Path) -> Iterator[Client]
         {'file': mask_file.name, 'kind': 'mask'},
         {'file': direct_beam.name, 'kind': 'calibration', 'role': 'direct_beam'},
     ]
-    files = FolderFiles(sample.parent, table)
+    files = FolderFiles(tutorial_dir, table)
     with local(proposal='p1', files=files, bind=BINDINGS) as client:
         yield client
 

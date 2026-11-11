@@ -301,4 +301,4 @@ class _Cut:
         self._stage = sciline.Stage(pipeline, outputs=outputs, inputs=inputs)
 
     def __call__(self, values: Mapping[Key, Any]) -> dict[Key, Any]:
-        return self._stage.apply({k: values[k] for k in self._inputs})
+        return self._stage.run({k: values[k] for k in self._inputs})

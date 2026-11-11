@@ -24,7 +24,7 @@ from ess.apps import Client, FolderFiles, Record, SubmitError, Template, file, l
 
 
 @pytest.fixture
-def client(sample: Path, mask_file: Path, direct_beam: Path) -> Iterator[Client]:
+def client(tutorial_dir: Path, mask_file: Path, direct_beam: Path) -> Iterator[Client]:
     table = [
         {'file': '60339-2022-02-28_2215.nxs', 'run': 60339, 'role': 'sample'},
         {'file': '60250-2022-02-28_2215.nxs', 'run': 60250, 'role': 'sample'},
@@ -35,7 +35,7 @@ def client(sample: Path, mask_file: Path, direct_beam: Path) -> Iterator[Client]
         {'file': mask_file.name, 'kind': 'mask'},
         {'file': direct_beam.name, 'kind': 'calibration', 'role': 'direct_beam'},
     ]
-    files = FolderFiles(sample.parent, table)
+    files = FolderFiles(tutorial_dir, table)
     with local(proposal='p1', files=files, bind=BINDINGS) as client:
         yield client
 

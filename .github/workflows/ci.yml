@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # setuptools_scm reads versions from tags
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: packages/*/pyproject.toml
+      - run: pip install -e packages/essspec[test] -e packages/essapps[test] -e packages/essinstruments[test]
+      - run: python -m pytest -n auto
+        working-directory: packages/essspec
+      - run: python -m pytest -n auto
+        working-directory: packages/essapps
+      - run: python -m pytest -n auto
+        working-directory: packages/essinstruments
+
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pre-commit
+      - run: pre-commit run --all-files --show-diff-on-failure
