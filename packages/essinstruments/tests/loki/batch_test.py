@@ -32,7 +32,7 @@ def test_a_sample_run_pairs_with_the_last_transmission_run_of_its_sample() -> No
     assert [(r.key, r.values['sample_transmission'].file) for r in rows] == [
         ('1', 'uuid:3')
     ]
-    assert rows[0].info == {'sample': 'water'}
+    assert rows[0].info == {'name': 'water'}
 
 
 def test_a_sample_measured_twice_has_two_rows() -> None:

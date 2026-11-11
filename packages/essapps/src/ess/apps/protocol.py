@@ -477,9 +477,11 @@ class Store(Protocol):
         """
         ...
 
-    def read(self, record: str, output: str) -> Any:
+    def read(self, record: str, output: str, tp: Any) -> Any:
         """
-        The value of an output that was written. Raises ``LookupError`` if the
+        The value of an output that was written. ``tp`` is the type that the
+        spec declares for the output, by which a store whose format holds no
+        types makes the value. Raises ``LookupError`` if the
         store no longer holds it, for example once dropped to free disk space:
         a client's read of it then raises ``NotReadable``, as for a value that
         nothing keeps, and a request that reads it fails.

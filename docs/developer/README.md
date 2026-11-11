@@ -1,6 +1,6 @@
 # ESS data-reduction framework
 
-**Status: the local workspace, the workspace in the user's process that `local()` makes, implements this design, including freeze, `select=`, and persist to a fake store. Not implemented: the service, `client.publish`, and software versions in provenance. The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
+**Status: the local workspace, the workspace in the user's process that `local()` makes, implements this design, including freeze, `select=`, and persist to a fake store or to scipp HDF5 files in a folder (`ess.apps.folder`). Not implemented: the service, `client.publish`, and software versions in provenance. The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
 
 This page gives an overview of the framework: its components, what each promises the others, and the ideas that client code is built from.
 The details live one level down:
@@ -118,6 +118,7 @@ for run in client.files.watch(Selector(scan='17')): ...   # existing ones first,
 ```
 
 **Store.** The *store* keeps persisted outputs outside the workspace's memory, also after the workspace has closed ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
+It reads a value back by the type that the spec declares for the output, so a workspace reads the persisted outputs of the specs it runs.
 
 **Controller.** The workspace does not decide what to run.
 A *controller* is client code that decides over time what to submit, push, and release, such as a notebook, an app's UI, or the trigger loop of automatic reduction.

@@ -157,11 +157,11 @@ class GatedStore(FakeStore):
         assert self.gate.wait(timeout=5), 'a test left the gate closed'
         super().write(record, output, value)
 
-    def read(self, record: str, output: str) -> Any:
+    def read(self, record: str, output: str, tp: Any) -> Any:
         if (record, output) in self.forgotten:
             raise KeyError((record, output))
         self.reads.append((record, output))
-        return super().read(record, output)
+        return super().read(record, output, tp)
 
 
 @pytest.fixture

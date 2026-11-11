@@ -23,13 +23,13 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
             values = {'sample': f.ref}
             if name in partner:
                 values['sample_transmission'] = partner[name]
-            rows.append(Row(str(f.metadata['run']), values, info={'sample': str(name)}))
+            rows.append(Row(str(f.metadata['run']), values, info={'name': str(name)}))
     return rows
 
 client = local(proposal='p1', files=files, bind=BINDINGS)
 batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'),
               label='iofq', source=pair_by_sample, staged=True)
-view = BatchView(batch, info=('sample',), draw=draw_iofq)
+view = BatchView(batch, info=('name',), draw=draw_iofq)
 view.scan()
 App(client, plots=PLOTS, tabs={'I(Q)': view}).panel().servable()
 ```
@@ -60,7 +60,7 @@ batch.cancel()
 - An **edit** is a cell set by hand, by a person or by your code.
 - A row's **result** is the newest record of the client's submitter, with the batch's spec and label, and the row's key as its member. So two `Batch` objects with the same spec and label are one batch: give each batch its own label.
 
-Choose a key that does not change from one scan to the next, such as the run number. Results and edits are found by key. Put the name of the sample in `info`.
+Choose a key that does not change from one scan to the next, such as the run number. Results and edits are found by key. Put the name of the sample in `info`, under a name that is not a column.
 
 ## Rules
 
@@ -140,6 +140,131 @@ for key, record in centres.items():
 
 After a centre failed, this reruns only what is left, and points those rows at the new centre. The field must be typed `Referenced[...]` in the spec.
 
+## From files, and from the command line
+
+A batch can be given as two files: a template, and a table with a row for each sample.
+The command `essapps-batch` reads them (extra `[files]`):
+
+```yaml
+# iofq.yaml: a Template
+spec: {name: loki-iofq, version: 1}
+blanks: [sample, sample_transmission]
+params:
+  can: 60393                               # a run
+  can_transmission: 60392
+  empty_beam: 60392
+  direct_beam: /data/direct-beam.h5        # a path; null for none
+  masks: {'@latest': masks, output: masks}  # the newest record labelled masks
+  beam_centre: {x: -0.029, y: -0.018, z: 4.116}
+  wavelength: {start: 1.0, stop: 13.0, num_bins: 200}
+  q: {start: 0.01, stop: 0.3, num_bins: 100}
+```
+
+```
+# runs.csv
+sample,sample_transmission,name
+60339,60394,water
+60250,60394,sds
+```
+
+```sh
+B="essapps-batch --bind ess.instruments.loki.bindings:BINDINGS"
+$B reduce iofq.yaml runs.csv --label water-series -o done.csv
+$B export done.csv reduced -o exported.csv
+```
+
+```
+# exported.csv
+sample,sample_transmission,name,status,record,failure,iofq,transmission
+60339,60394,water,completed,2e35ce83...,,reduced/60339/iofq.h5,reduced/60339/transmission.h5
+60250,60394,sds,failed,bd9864f1...,OSError: ...,,
+```
+
+Each step is a command, and a function for a notebook that takes and returns a pandas `DataFrame`:
+
+| Step | Command | Function |
+|---|---|---|
+| list the files | `files package.module:read --with runs` | `tables.described(pd.DataFrame(scan_folder(folder, read)), runs)` |
+| make the table | `rows package.module:source`, or a spreadsheet | `tables.table_of(source(batch.file_infos(client)))` |
+| reduce it | `reduce template table --label ...` | `tables.reduce_table(client, template, table, label=...)` |
+| write the outputs to files | `export table folder` | `export.export_table(client, table, folder)` |
+
+A table is a `.csv`, `.tsv`, or `.xlsx` file.
+
+In a notebook, the table is a `DataFrame` and the template a `Template`, and no file is needed. [loki-batch.ipynb](../../essinstruments/docs/loki-batch.ipynb) runs every step on LoKI's data:
+
+```python
+done = tables.reduce_table(client, template, table, label='water-series')
+exported = export_table(client, done, Path('reduced'))
+```
+
+A cell that is not text is its value, and `None` or `NaN` is an empty cell, so only a table read from a file is all text. To write `None` itself in a cell, as opposed to leaving it empty, write the text `null`.
+
+**The table.** The first column holds the key of each row; it may also be a blank, as `sample` above. A column named as a blank holds its cells. A column of any other name is info, which comes back as it is. Two mistakes are refused: a blank that is no column, such as a misspelt header, and a column named as a parameter that is not a blank, whose cells no row would use. An empty cell takes the parameter's default.
+
+**A cell** is read as JSON if it is JSON, so `1.5`, `null`, and `{"x": 0, "y": 1}` are values, and anything else is text. Text that is JSON is written in quotes, such as `"12"` for a sample name at a string parameter; a `.csv` file doubles them, `"""12"""`. At a parameter that is a file field, or a list of them, a whole number names a run, `pid:...` a file by its kind, and other text a path, relative to the working directory. A number with a leading zero, such as `0342`, is not JSON, so it is read as a path: write `342`. The same holds for the values of the template's file. A file field inside a group takes the JSON form, `{"@ref": "file", "file": "run:60339"}`. Every file is one that the workspace's file source knows.
+
+**`reduce`** returns the table with three columns, which it replaces if the table has them: `status`, the ID of the `record`, and `failure`, the reason. So its result can be its next table. With `--remaining` it leaves out the rows whose newest record under the label completed. It compares neither cells nor settings: after changing either, reduce without `--remaining`, or under another label. The `status` of a row is `completed`, `failed`, or `cancelled`.
+
+Ctrl-C cancels every row that has not completed, those running among them, and the command ends with a `KeyboardInterrupt` once the workflows that were running return. It writes no table; reduce again with `--remaining`.
+
+**`export`** writes the outputs of each completed row to `<folder>/<key>/`, and returns the table with a column for each output that holds the path of its file. It finds the outputs by the `record` column, not by the label. A key must be the name of a folder, so one with `/` is refused.
+
+```
+reduced/60339/iofq.h5          what scipp.io.load_hdf5 reads: a DataGroup of the output's fields
+reduced/60339/_record.json     the record: every file and value the outputs came from
+```
+
+These files are a placeholder (`ess.apps.hdf5` states the format). A format of a technique, such as NXcanSAS, is not written. If the folder is inside the workspace, a later `files` lists what was exported.
+
+**Exit status.** 0: done, and for `reduce`, every row completed. 2: the command or a row was refused, and nothing ran. 3: a row did not complete. 1: any other error. Every command but `files` opens the workspace, and needs `--bind`.
+
+**The workspace** of the command is a folder, `--workspace`, the working directory by default (`ess.apps.folder`). It holds one input, which you write, and what the commands keep:
+
+```
+files.csv      input: the raw files, masks, and calibrations that a request may name
+log.jsonl      history
+store/         every output of every row, <record>/<output>.h5
+```
+
+`files.csv` is the table of `FolderFiles`, a stand-in for a catalogue: a row per file with its path, relative to the folder, and its metadata as text. A run number in a template or a table is looked up here.
+
+```
+file,run,kind,role
+raw/60339.nxs,60339,raw,sample
+masks/mask.xml,,mask,
+```
+
+`files` writes it from the files in the folder and, with `--with`, a table that says what each run is:
+
+```sh
+essapps-batch files ess.instruments.loki.files:read_metadata --with runs.xlsx -o files.csv
+```
+
+```
+# runs.xlsx: a row per run, kept by a person
+run,role,sample
+60339,sample,water
+60394,transmission,water
+,direct_beam,          <- with a column file: a file that is no run
+```
+
+`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. A file that cannot be read is left out, with a warning. Two files of one run are refused.
+
+A file says its kind, its run, and perhaps its sample, but not what a run is for. A row source that pairs runs reads the `role`, and a field such as the direct beam requires it. The run table gives it (`tables.described`): a row describes the file of its `run`, or the file at its `file` if it has no run. A run of the table that has no file in the folder is ignored, so the table may cover more than the folder holds. A file that no row describes keeps what it says of itself, and where both have a column, a cell of the run table that is not empty wins. Two rows for one run are refused. Without `--with`, the roles are typed into `files.csv`, so `files` then refuses to write over a table that exists.
+
+The workspace outlives the command, so a template references a record of an earlier command. A template without blanks is one request, and `reduce` without a table submits it:
+
+```sh
+$B reduce detector.yaml --label detector      # prints key,status,record,failure
+$B reduce masks.yaml --label masks            # detector: {'@latest': detector, output: detector}
+$B reduce iofq.yaml runs.csv --label water-series
+```
+
+`{'@latest': label, output: name}` is read when the command starts, as the output of the newest record under the label, of `member` if given, whoever submitted it. It is for a template, not for a cell of a table. The record of each row holds the ID that it was read as. A reference by ID is `{'@ref': output, record: ..., output: ...}`.
+
+One command holds the folder at a time. If a command was killed, the next one first finishes the rows that were running, so reduce again with `--remaining`. A workspace reads a persisted output by the type that its spec declares, so only one that runs the spec reads it. Nothing removes the files of the store.
+
 ## The UI
 
 `BatchView` is a tab for `App`:
@@ -190,6 +315,5 @@ Raise in the fake to make a row fail; hold it back on a `threading.Event` to kee
 
 - Keep the table across sessions. A new `Batch` scans again. It finds results by key in its workspace, so `local()` per session starts with none, and a result that is not persisted is gone once its workspace closes.
 - Show a stale result after a restart.
-- Read a table from a CSV file. That is one more source.
 - Free the values of replaced results. They stay until the workspace closes or they are released, unless the batch persists them (`persist=`).
 - Offer preparatory steps with a **Use** button. A `Referenced[...]` setting offers each record in the settings form.

@@ -1150,7 +1150,18 @@ class Workspace(WorkspaceProtocol):
         """
         if self._store is None:
             raise NotReadable(f'{ref}: the workspace has no store')
-        return _element(self._store.read(ref.record, ref.output), ref)
+        spec_id = self._views.records.spec(ref.record)
+        if (binding := self._bindings.get(spec_id)) is None:
+            raise NotReadable(
+                f'{ref}: the workspace does not run {spec_id}, which says what '
+                'the output is'
+            )
+        tp = binding.spec.outputs.model_fields[ref.output].annotation
+        try:
+            value = self._store.read(ref.record, ref.output, tp)
+        except LookupError as error:
+            raise NotReadable(f'{ref}: the store no longer holds it') from error
+        return _element(value, ref)
 
     def _let_go(self, keys: Iterable[_Read]) -> None:
         """
@@ -1864,12 +1875,7 @@ class Workspace(WorkspaceProtocol):
             # from memory if kept, else from the store
             values = {n: self._outputs[(record_id, n)] for n in names if kept}
         if not kept:
-            try:
-                values = {n: self._stored(record.ref(n)) for n in names}
-            except LookupError as error:  # the store no longer holds it
-                raise NotReadable(
-                    f'record {record_id}: the store no longer holds an output'
-                ) from error
+            values = {n: self._stored(record.ref(n)) for n in names}
         return values
 
     def _check_select(self, spec_id: SpecId, names: Sequence[str] | None) -> None:

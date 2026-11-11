@@ -27,7 +27,7 @@ from .log import (
     Pushed,
     Submitted,
 )
-from .records import Changes, Record, Request, Status
+from .records import Changes, Record, Request, SpecId, Status
 
 
 class _Records(Mapping[str, Record]):
@@ -52,6 +52,13 @@ class _Records(Mapping[str, Record]):
         """The names of a record's outputs, without listing its request."""
         held = self._held[record_id]
         return held.outputs if isinstance(held, Record) else held[0].outputs
+
+    def spec(self, record_id: str) -> SpecId:
+        """The spec of a record, without listing its request."""
+        held = self._held[record_id]
+        if isinstance(held, Record):
+            return held.spec
+        return self._views.accumulators[held[0].accumulator].template.spec
 
     def __getitem__(self, record_id: str) -> Record:
         held = self._held[record_id]

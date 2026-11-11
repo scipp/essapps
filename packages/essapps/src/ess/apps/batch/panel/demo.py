@@ -83,7 +83,7 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
         values = {'sample': f.ref}
         if name in transmission:
             values['transmission'] = transmission[name]
-        rows.append(Row(str(f.metadata['run']), values, info={'sample': str(name)}))
+        rows.append(Row(str(f.metadata['run']), values, info={'name': str(name)}))
     return rows
 
 
@@ -110,7 +110,7 @@ def build(directory: Path, samples: int = 20) -> App:
         lines = [f'{k}: {client.output(r, "total")}' for k, r in records.items()]
         return pn.pane.Markdown('\n\n'.join(lines))
 
-    view = BatchView(batch, info=('sample',), draw=draw)
+    view = BatchView(batch, info=('name',), draw=draw)
     view.scan()
     sheet = RunSheet(files, client, Marks, then=view.scan)
     return App(client, tabs={'Batch': view, 'Runs': sheet})
