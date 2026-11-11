@@ -22,7 +22,12 @@ jobs:
           cache: pip
           cache-dependency-path: packages/*/pyproject.toml
       - run: pip install -e packages/essspec[test] -e packages/essapps[test] -e packages/essinstruments[test]
-      - run: python -m pytest packages -n auto
+      - run: python -m pytest -n auto
+        working-directory: packages/essspec
+      - run: python -m pytest -n auto
+        working-directory: packages/essapps
+      - run: python -m pytest -n auto
+        working-directory: packages/essinstruments
 
   pre-commit:
     runs-on: ubuntu-latest
