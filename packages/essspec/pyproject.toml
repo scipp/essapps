@@ -32,10 +32,12 @@ dependencies = ["pydantic>=2.10"]
 scipp = ["scipp>=26.3.1"]
 sciline = [
     # sciline.Stage (ADR 0003 of scipp/sciline) is not released yet; only ess.spec.pipeline imports it.
-    "sciline @ git+https://github.com/scipp/sciline.git@map-reduce-outside-the-graph",
+    # A commit is pinned because the API on the branch still changes.
+    "sciline @ git+https://github.com/scipp/sciline.git@2a522a08bed92d243d32d820e49c7ac5c651542f",
 ]
 test = [
     "essspec[scipp,sciline]",
+    "jsonschema",  # the schema tests skip without it
     "pytest>=9.0",
     "pytest-xdist>=3.6",
 ]

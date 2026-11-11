@@ -33,7 +33,7 @@ class Session:
 
 
 @pytest.fixture
-def tutorial(sample: Path, mask_file: Path, direct_beam: Path) -> FolderFiles:
+def tutorial(tutorial_dir: Path, mask_file: Path, direct_beam: Path) -> FolderFiles:
     def run(number: int, role: str | None = None) -> dict[str, object]:
         row = {'file': f'{number}-2022-02-28_2215.nxs', 'run': number}
         return row if role is None else row | {'role': role}
@@ -47,7 +47,7 @@ def tutorial(sample: Path, mask_file: Path, direct_beam: Path) -> FolderFiles:
         {'file': mask_file.name, 'kind': 'mask'},
         {'file': direct_beam.name, 'kind': 'calibration', 'role': 'direct_beam'},
     ]
-    return FolderFiles(sample.parent, table)
+    return FolderFiles(tutorial_dir, table)
 
 
 @pytest.fixture
