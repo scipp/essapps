@@ -1160,7 +1160,9 @@ class Workspace(WorkspaceProtocol):
         try:
             value = self._store.read(ref.record, ref.output, tp)
         except LookupError as error:
-            raise NotReadable(f'{ref}: the store no longer holds it') from error
+            raise NotReadable(
+                f'{ref}: the store no longer holds it: {error}'
+            ) from error
         return _element(value, ref)
 
     def _let_go(self, keys: Iterable[_Read]) -> None:

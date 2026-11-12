@@ -482,7 +482,9 @@ class Store(Protocol):
         The value of an output that was written. ``tp`` is the type that the
         spec declares for the output, by which a store whose format holds no
         types makes the value. Raises ``LookupError`` if the
-        store no longer holds it, for example once dropped to free disk space:
+        store no longer holds it, for example once dropped to free disk space,
+        or holds a value that does not fit ``tp``, written under other outputs
+        of the spec:
         a client's read of it then raises ``NotReadable``, as for a value that
         nothing keeps, and a request that reads it fails.
         """

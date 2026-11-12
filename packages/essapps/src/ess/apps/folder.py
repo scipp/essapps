@@ -8,7 +8,8 @@ The folder holds what a workspace needs to go on after its process ended::
 
     files.csv     the table of FolderFiles: file, run, kind, role, ...
                   (written by hand, or started with scan_folder)
-    log.jsonl     history (see ess.apps.log)
+    log.jsonl     history: a header naming the format of the log and of
+                  the store, then one event per line (see ess.apps.log)
     store/        persisted outputs, <record>/<output>.h5
 
 So a command that runs and ends, and the next one, are clients of one workspace:
@@ -62,7 +63,10 @@ class FolderStore:
         path = self.path(record, output)
         if not path.is_file():
             raise LookupError(f'the store holds no {output} of {record}')
-        return hdf5.read(tp, path)
+        try:
+            return hdf5.read(tp, path)
+        except ValueError as error:  # written under other outputs of the spec
+            raise LookupError(str(error)) from None
 
 
 _OWN = ('files.csv', 'log.jsonl', 'store')
