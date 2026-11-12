@@ -39,6 +39,7 @@ test = [
     "essapps[files,panel,web]",
     "httpx",
     "essspec[scipp,sciline]",
+    "playwright",
     "pytest>=9.0",
     "pytest-xdist>=3.6",
 ]
