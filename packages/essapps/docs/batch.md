@@ -316,6 +316,8 @@ Any object with `refresh(listing)` and `panel()` can be a tab (`ess.apps.panel.T
 
 `ess.apps` and `ess.apps.panel` import nothing from `ess.apps.batch`, and `ess.apps.batch` imports no widget library. `ess.apps.batch.panel` holds the widgets. A test enforces this.
 
+`ess.apps.batch.web` shows the same batch as a web page without Panel: a FastAPI server and plain JavaScript. It is experimental and the candidate for a hosted interface. Its module docstring describes how to run it and its limits.
+
 ## Testing an application
 
 | What | How |

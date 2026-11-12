@@ -22,6 +22,10 @@ jobs:
           cache: pip
           cache-dependency-path: packages/*/pyproject.toml
       - run: pip install -e packages/essspec[test] -e packages/essapps[test] -e packages/essinstruments[test]
+      # The browser tests of the batch web page need Chromium and the page's
+      # JavaScript libraries; they fail rather than skip when CI is set.
+      - run: python -m playwright install chromium
+      - run: sh packages/essapps/src/ess/apps/batch/web/static/vendor.sh
       - run: python -m pytest -n auto
         working-directory: packages/essspec
       - run: python -m pytest -n auto

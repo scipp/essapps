@@ -5,9 +5,9 @@ A batch as a web page, without Panel: a JSON API in FastAPI (:mod:`.api`) over
 the state that :mod:`.server` holds, and one page of plain JavaScript in
 ``static/``. It needs the extra ``web``.
 
-This is a spike. It exists to compare a plain web application with
-:mod:`ess.apps.batch.panel` as the technology of a hosted interface; nothing
-depends on it. Run the demo with::
+It shows the same batch as :mod:`ess.apps.batch.panel` and is the candidate
+for a hosted interface. It is experimental: the limits below hold, and
+nothing depends on it. Run the demo with::
 
     sh packages/essapps/src/ess/apps/batch/web/static/vendor.sh
     python -m ess.apps.batch.web.demo [DIRECTORY] --port 8000
@@ -32,9 +32,9 @@ Limits:
   :class:`~ess.apps.batch.Batch` does not tell. Both belong in
   :mod:`ess.apps.batch` once a second interface is kept.
 - The browser tests in ``tests/batch/web_browser_test.py`` skip without
-  Playwright, ``/usr/bin/chromium`` and the fetched libraries. They do not
-  cover loading an XLSX table, an edit of several rows in the Runs view, or
-  the messages for a wrong settings file.
+  Playwright, a Chromium and the fetched libraries, and fail instead in CI,
+  which installs all three. They do not cover loading an XLSX table, an edit
+  of several rows in the Runs view, or the messages for a wrong settings file.
 """
 
 from .api import create_app

@@ -2,19 +2,26 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 The batch page in Chromium: what requests alone cannot show, such as editing
-by a click and a selection that stays put while the page polls. Skipped without
-Playwright, Chromium at ``/usr/bin/chromium``, or the page's libraries (see
-``static/vendor.sh``).
+by a click and a selection that stays put while the page polls.
+
+The tests need Playwright, a Chromium, and the page's libraries (see
+``static/vendor.sh``). They use the Chromium that ``playwright install chromium``
+downloads, or else ``chromium`` on the ``PATH``. Without one of the three they
+skip, except where the environment variable ``CI`` is set (GitHub Actions sets
+it): there they fail, so that a broken install step cannot turn them off.
 """
 
+import os
+import shutil
 import socket
 import threading
 import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
+import uvicorn
 
 from ess.apps import Client
 from ess.apps.batch import Batch
@@ -23,11 +30,19 @@ from ess.apps.batch.web.api import STATIC
 
 from .toys import Gate, Measure
 
-sync_api = pytest.importorskip('playwright.sync_api')
-uvicorn = pytest.importorskip('uvicorn')
-CHROMIUM = Path('/usr/bin/chromium')
-if not CHROMIUM.exists() or not (STATIC / 'vendor').is_dir():
-    pytest.skip('needs Chromium and the libraries of the page', allow_module_level=True)
+
+def unavailable(reason: str) -> NoReturn:
+    if os.environ.get('CI'):
+        pytest.fail(reason, pytrace=False)
+    pytest.skip(reason, allow_module_level=True)
+
+
+try:
+    from playwright import sync_api
+except ImportError:
+    unavailable('needs Playwright')
+if not (STATIC / 'vendor').is_dir():
+    unavailable(f'needs the libraries of the page: sh {STATIC / "vendor.sh"}')
 
 
 def draw(shown: Sequence[Shown]) -> dict[str, Any]:
@@ -37,7 +52,11 @@ def draw(shown: Sequence[Shown]) -> dict[str, Any]:
 @pytest.fixture(scope='module')
 def browser() -> Iterator[Any]:
     with sync_api.sync_playwright() as playwright:
-        browser = playwright.chromium.launch(executable_path=str(CHROMIUM))
+        bundled = playwright.chromium.executable_path
+        chromium = bundled if Path(bundled).exists() else shutil.which('chromium')
+        if chromium is None:
+            unavailable('needs Chromium: playwright install chromium')
+        browser = playwright.chromium.launch(executable_path=chromium)
         yield browser
         browser.close()
 
