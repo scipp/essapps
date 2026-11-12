@@ -20,7 +20,10 @@ these, and read back by the type that the spec declares for the output::
 A value that has no such form is refused with ``TypeError`` when it is written:
 a date, a tuple, ``None`` in a list, an object of any other class, and a
 ``DataGroup`` that holds one of these. A group is read back with the fields
-that were written, not validated again, as an instance of the declared type.
+that were written, not validated again, as an instance of the declared type:
+a field the file lacks is ``None`` if the type is optional, else its default.
+A file that lacks a required field, or holds a value an enum lacks, was written
+under other outputs of the spec, and reading it raises ``ValueError``.
 """
 
 from __future__ import annotations
@@ -77,13 +80,17 @@ def _typed(tp: Any, data: Any) -> Any:
     """``data`` of a file as the value of type ``tp`` that was written."""
     tp, _ = field_types.optional(tp)
     if _is(tp, BaseModel):
-        # not validated again: the workflow returned a valid value
-        return tp.model_construct(
-            **{
-                name: _typed(info.annotation, data[name]) if name in data else None
-                for name, info in tp.model_fields.items()
-            }
-        )
+        fields: dict[str, Any] = {}
+        for name, info in tp.model_fields.items():
+            if name in data:
+                fields[name] = _typed(info.annotation, data[name])
+            elif field_types.optional(info.annotation)[1]:
+                fields[name] = None  # left out when written
+            elif info.is_required():
+                raise ValueError(f'field {name!r} of {tp.__name__} is missing')
+        # Not validated again: the workflow returned a valid value, and a
+        # validator need not give the same value when it runs on its own result.
+        return tp.model_construct(**fields)
     if _is(tp, Enum):
         return tp(data)
     if get_origin(tp) is list:
@@ -103,8 +110,17 @@ def write(value: Any, path: Path) -> None:
 
 
 def read(tp: Any, path: Path) -> Any:
-    """The value of type ``tp`` that :func:`write` wrote to ``path``."""
+    """
+    The value of type ``tp`` that :func:`write` wrote to ``path``. Raises
+    ``ValueError`` if the file holds no value of ``tp``, as the module says.
+    """
     data = sc.io.load_hdf5(path)
     plain_type, _ = field_types.optional(tp)
     alone = plain_type in _ALONE_TYPES or _is(plain_type, Enum)
-    return _typed(tp, data[_ALONE] if alone else data)
+    try:
+        return _typed(tp, data[_ALONE] if alone else data)
+    except ValueError as error:
+        raise ValueError(
+            f'{path} holds no valid {getattr(tp, "__name__", tp)}: {error}. '
+            "The spec's outputs changed since the value was written."
+        ) from None

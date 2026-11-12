@@ -12,7 +12,7 @@ import scipp as sc
 from ess.apps import Client, NotReadable, file
 from ess.apps.folder import FolderStore, open_folder, scan_folder
 from ess.apps.testing import read_file
-from ess.spec import Binding, WorkflowSpec, function_binding
+from ess.spec import Binding, Referenced, WorkflowSpec, function_binding
 
 from .batch import toys
 
@@ -154,6 +154,75 @@ def test_a_request_of_a_second_session_references_a_persisted_output(
         )
         second.wait([total])
         assert second.output(total, 'total') == 4.0
+
+
+class Centre(pydantic.BaseModel):
+    x: float
+
+
+class Centred(pydantic.BaseModel):
+    centre: Centre
+
+
+class CentreWithZ(pydantic.BaseModel):
+    """``Centre`` after a field was added, the spec's version unchanged."""
+
+    x: float
+    z: float
+
+
+class CentredWithZ(pydantic.BaseModel):
+    centre: CentreWithZ
+
+
+class UseParams(pydantic.BaseModel):
+    centre: Referenced[CentreWithZ]
+
+
+def _centre_spec(outputs: type[pydantic.BaseModel]) -> WorkflowSpec:
+    return WorkflowSpec(
+        name='centre',
+        version=1,
+        title='Centre',
+        description='A toy.',
+        params=NoParams,
+        outputs=outputs,
+    )
+
+
+USE = WorkflowSpec(
+    name='use',
+    version=1,
+    title='Use',
+    description='A toy.',
+    params=UseParams,
+    outputs=toys.Outputs,
+)
+
+
+def test_an_output_persisted_before_its_spec_gained_a_field_is_not_read(
+    folder: Path,
+) -> None:
+    old = _centre_spec(Centred)
+    with open_folder(
+        folder, [function_binding(old, lambda _: Centred(centre=Centre(x=1.0)))]
+    ) as first:
+        record = first.submit(old, params={}, persist=True)
+        first.wait([record])
+
+    changed = _centre_spec(CentredWithZ)
+    bindings = [
+        function_binding(changed, lambda _: None),
+        function_binding(USE, lambda params: toys.Outputs(total=params.centre.z)),
+    ]
+    message = "field 'z' of CentreWithZ is missing. The spec's outputs changed"
+    with open_folder(folder, bindings) as second:
+        (record,) = second.records(ids=[record.id])
+        with pytest.raises(ValueError, match=message):
+            second.output(record, 'centre')
+        use = second.submit(USE, params={'centre': record.ref('centre')})
+        second.wait([use])
+        assert message in second.failure(use)
 
 
 def test_a_folder_held_by_a_client_cannot_be_opened_again(
