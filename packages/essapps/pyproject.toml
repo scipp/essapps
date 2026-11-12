@@ -34,9 +34,12 @@ dependencies = [
 [project.optional-dependencies]
 panel = ["panel>=1.10", "pandas", "plopp"]
 files = ["essspec[scipp]", "h5py", "openpyxl", "pandas", "pyyaml"]
+web = ["essapps[files]", "fastapi", "uvicorn"]
 test = [
-    "essapps[files,panel]",
+    "essapps[files,panel,web]",
+    "httpx",
     "essspec[scipp,sciline]",
+    "playwright",
     "pytest>=9.0",
     "pytest-xdist>=3.6",
 ]
@@ -71,6 +74,8 @@ filterwarnings = [
   # Panel 1.10's Tabulator calls DataFrame.reset_index(inplace=True), which
   # pandas 3.1 deprecates.
   "ignore:The inplace keyword in DataFrame.reset_index",
+  # Starlette 1.10's test client asks for httpx2 in place of httpx.
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated",
 ]
 
 [tool.mypy]

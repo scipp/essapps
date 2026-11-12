@@ -78,6 +78,15 @@ def test_reset_forgets_the_edits_and_the_removal(table: RowTable) -> None:
     assert cells(reset) == cells(table)
 
 
+def test_reset_of_a_cell_forgets_its_edit_alone(table: RowTable) -> None:
+    edited = table.edit('a', {'x': 10, 'y': 20})
+
+    reset = edited.reset('a', 'x')
+
+    assert reset['a'].values == {'x': 1, 'y': 20}
+    assert reset.reset('a', 'y').edits == {}
+
+
 def test_removing_a_row_added_forgets_it(table: RowTable) -> None:
     added = table.add(Row('c', {'x': 7})).edit('c', {'x': 8})
 

@@ -75,7 +75,7 @@ t = t.rescan([Row('a', {'x': 99, 'y': 98}), Row('b', {'x': 3}), Row('c', {'x': 5
 # c: new
 ```
 
-A row added by hand stays. An edited row that a scan no longer gives is not shown, and comes back with its edits if a later scan gives it. `reset(key)` forgets a row's edits and that it was removed. `EMPTY` clears a cell whatever the scan gives. None of this is stored: a new session starts from a new scan.
+A row added by hand stays. An edited row that a scan no longer gives is not shown, and comes back with its edits if a later scan gives it. `reset(key)` forgets a row's edits and that it was removed; `reset(key, column)` forgets the edit of one cell. `EMPTY` clears a cell whatever the scan gives. None of this is stored: a new session starts from a new scan.
 
 **A row is ready if it is complete and not running.** Each column with no default has a value, no cell reads a record that failed or was cancelled, and its result is not running. An empty cell of a column with a default takes the default. Whether a value is valid, such as a thickness below zero, is checked at submission.
 
@@ -315,6 +315,8 @@ Any object with `refresh(listing)` and `panel()` can be a tab (`ess.apps.panel.T
 | the logic and the widgets | the methods of `Batch` and `RowTable` | the view only places widgets and connects events |
 
 `ess.apps` and `ess.apps.panel` import nothing from `ess.apps.batch`, and `ess.apps.batch` imports no widget library. `ess.apps.batch.panel` holds the widgets. A test enforces this.
+
+`ess.apps.batch.web` shows the same batch as a web page without Panel: a FastAPI server and plain JavaScript. It is experimental and the candidate for a hosted interface. Its module docstring describes how to run it and its limits.
 
 ## Testing an application
 
