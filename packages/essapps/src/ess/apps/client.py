@@ -514,14 +514,24 @@ class Client:
         The status of each record once all have finished; a failure is not raised. If
         the workspace closes meanwhile, raises ``RuntimeError``.
         """
-        while True:
-            # The position comes first, so that no finish after it is missed.
-            position = self._position
-            statuses = [s.status for s in self._statuses(records)]
-            if Status.PENDING not in statuses:
-                return statuses
+        ids = [r.id for r in records]
+        # The position comes first, so that no finish after it is missed.
+        position = self._position
+        current = self._workspace.status(ids)
+        statuses = {i: s.status for i, s in zip(ids, current, strict=True)}
+        pending = {i for i, s in statuses.items() if s is Status.PENDING}
+        while pending:
             changes = self._workspace.changes(position, timeout=_WAIT)
-            self._position = changes.cursor
+            position = self._position = changes.cursor
+            # Only the records that changed are asked again, so that waiting for
+            # many records costs time in proportion to their changes.
+            if changed := [i for i in changes.records if i in pending]:
+                current = self._workspace.status(changed)
+                for i, s in zip(changed, current, strict=True):
+                    statuses[i] = s.status
+                    if s.status is not Status.PENDING:
+                        pending.remove(i)
+        return [statuses[i] for i in ids]
 
     @_shaped
     def failure(self, records: list[Record]) -> list[str | None]:
