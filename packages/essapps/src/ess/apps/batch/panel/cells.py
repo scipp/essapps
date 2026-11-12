@@ -15,33 +15,19 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 import panel as pn
-from pydantic_core import to_json
 
 from ess.apps import Listing
-from ess.spec import FileRef, OutputRef
-from ess.spec.refs import as_ref
-
-
-def cell_text(value: Any, listing: Listing) -> str:
-    """What a table shows for a cell: a file or an output by its label."""
-    ref = as_ref(value)
-    if isinstance(ref, OutputRef):
-        return listing.output_label(ref)
-    if isinstance(ref, FileRef):
-        return listing.file_label(ref)
-    if isinstance(value, list):
-        return ', '.join(cell_text(item, listing) for item in value)
-    if isinstance(value, dict):
-        return to_json(value).decode()
-    return 'none' if value is None else str(value)
 
 
 def cell_texts(
     values: Mapping[str, Any], titles: Mapping[str, str], listing: Listing
 ) -> dict[str, str]:
-    """The text of each field of ``titles`` by its title, empty if not in ``values``."""
+    """
+    The text of each field of ``titles`` by its title (:meth:`Listing.text`),
+    empty if not in ``values``.
+    """
     return {
-        title: cell_text(values[name], listing) if name in values else ''
+        title: listing.text(values[name]) if name in values else ''
         for name, title in titles.items()
     }
 

@@ -177,7 +177,10 @@ def described(files: pd.DataFrame, run_table: pd.DataFrame) -> pd.DataFrame:
 
 
 RESULT = ('status', 'record', 'failure')
-"""The columns that :func:`reduce_table` and :func:`with_results` add, or replace."""
+"""
+The columns that :func:`reduce_table`, :func:`batch_table`, and
+:func:`with_results` add, or replace.
+"""
 
 
 def reduce_table(
@@ -251,6 +254,18 @@ def reduce_table(
     finally:
         batch.close()
     return with_results(client, batch.state(), table)
+
+
+def batch_table(
+    batch: Batch, states: Mapping[str, RowState], keys: Sequence[str] | None = None
+) -> pd.DataFrame:
+    """
+    The rows of ``batch``, or those of ``keys`` in that order, as
+    :func:`table_of` gives them with a column for each column of the batch, and
+    what ``states`` say of each (:func:`with_results`).
+    """
+    rows = batch.rows if keys is None else [batch.rows[key] for key in keys]
+    return with_results(batch.client, states, table_of(rows, batch.columns))
 
 
 def with_results(

@@ -42,20 +42,18 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
-from pydantic_core import to_json
 
-from ess.spec import FileRef, OutputRef
-from ess.spec.refs import as_ref
+from ess.spec import FileRef
 
 from ...errors import FieldError, SubmitError
 from ...fields import UNSET, Fields
 from ...files import Selector
 from ...listing import Listing
-from ...records import Record, SpecId, Status
+from ...records import Record, Status
 from .. import EMPTY, Batch, CorrectedFiles, RowState, frames, ready, remaining
 from .. import Row as TableRow
 from ..export import export_table
-from ..text import load_template, with_latest, with_named_files, write_template
+from ..text import load_template, settings_of, write_template
 from . import forms, plots
 from .models import (
     Action,
@@ -225,8 +223,6 @@ class Server:
         self.tweak = Fields(model, listing)
         self._tweak_of: tuple[str, Any, str | None] | None = None
         self._marks = None if marks is None or files is None else Fields(marks, listing)
-        # The rows whose result was reduced alone, as Batch keeps them too.
-        self._alone: set[str] = set()
         self.refused: list[FieldError] = []
         self.loaded: str | None = None
         self.version = 1
@@ -253,11 +249,7 @@ class Server:
     def _status(self, state: RowState, settings_ok: bool) -> str:
         if state.status in _ENDED and not state.problems:
             return str(state.status)
-        if (
-            not settings_ok
-            and state.status is Status.COMPLETED
-            and state.key not in self._alone
-        ):
+        if not settings_ok and state.status is Status.COMPLETED and not state.tweaked:
             return 'outdated'
         return _STATUS.get(state.text, state.text)
 
@@ -354,29 +346,22 @@ class Server:
         }
 
     def _text(self, value: Any) -> str:
-        """What a cell shows: a file or an output by its label."""
-        if value is UNSET:
-            return ''
-        ref = as_ref(value)
-        if isinstance(ref, OutputRef):
-            return self._listing.output_label(ref)
-        if isinstance(ref, FileRef):
-            return self._listing.file_label(ref)
-        if isinstance(value, list):
-            return ', '.join(self._text(v) for v in value)
-        if isinstance(value, dict):
-            return to_json(value).decode()
-        return 'none' if value is None else str(value)
+        """What a cell shows (:meth:`Listing.text`); nothing if it is unset."""
+        return '' if value is UNSET else self._listing.text(value)
 
     def _changed(
-        self, row: TableRow, given: Mapping[str, Any], settings: Mapping[str, Any]
+        self,
+        row: TableRow,
+        given: Mapping[str, Any],
+        settings: Mapping[str, Any],
+        tweaked: bool,
     ) -> list[str]:
         """
         The titles of the cells and ``settings`` that differ from those
         ``given`` to the reduction of ``row``; the settings count only if it
-        was not reduced alone.
+        was not ``tweaked``, reduced alone.
         """
-        now = {} if row.key in self._alone else dict(settings)
+        now = {} if tweaked else dict(settings)
         now.update({c: v for c, v in row.values.items() if c in self.batch.columns})
         titles = {**self.settings.titles, **self._cells.titles}
         return [
@@ -409,7 +394,9 @@ class Server:
         elif problems:
             reason = '; '.join(problems.values())
         elif status == 'outdated' and state.stale and record is not None:
-            changed = self._changed(row, record.request.params, settings or {})
+            changed = self._changed(
+                row, record.request.params, settings or {}, state.tweaked
+            )
             reason = f'{_join(changed)} changed.' if changed else 'Its cells changed.'
         elif status == 'outdated':
             reason = 'The settings are incomplete, so this result may not match them.'
@@ -436,7 +423,7 @@ class Server:
             status=status,
             reason=reason,
             added=row.key in added,
-            alone=row.key in self._alone and record is not None,
+            alone=state.tweaked and record is not None,
             record=None if record is None else record.id,
             result=result,
             cells=cells,
@@ -654,7 +641,6 @@ class Server:
             self.refused = list(error.errors)
             raise _Refusal(self.refused) from None
         self.refused = []
-        self._alone -= records.keys()
         self._relist()
         n = len(records)
         return f'Reducing {self.words.count(n)}.' if n else ''
@@ -695,9 +681,8 @@ class Server:
         if self._tweak_of == source:
             return
         self._tweak_of = source
-        base = (self._settings() or {}) if record is None else record.request.params
-        rest = {k: v for k, v in base.items() if k not in self.batch.columns}
-        self.tweak.set({**rest, **cells}, self._listing)
+        params = self.batch.tweak_params(key, record, self._settings())
+        self.tweak.set(params, self._listing)
 
     @_locked
     def row(self, key: str) -> RowDetail:
@@ -745,7 +730,6 @@ class Server:
             self.batch.tweak(key, self.tweak.params)
         except SubmitError as error:
             raise Problem('; '.join(map(str, error.errors))) from None
-        self._alone.add(key)
         self._relist()
         return f'Reducing {self._named(self.batch.rows[key])} alone.'
 
@@ -865,16 +849,11 @@ class Server:
 
     # Files
 
-    def _table(self, keys: Sequence[str] | None = None) -> Any:
-        rows = [r for r in self.batch.rows if keys is None or r.key in keys]
-        table = frames.table_of(rows, self.batch.columns)
-        return frames.with_results(self.batch.client, self._states(), table)
-
     @_locked
     def table_file(self, suffix: str) -> bytes:
         """The rows as a table file, ``.csv`` or ``.xlsx``."""
         with _file(f'{self.words.many}{suffix}') as path:
-            frames.write_table(self._table(), path)
+            frames.write_table(frames.batch_table(self.batch, self._states()), path)
             return path.read_bytes()
 
     @_action
@@ -914,7 +893,6 @@ class Server:
     @_action
     def load_settings(self, name: str, content: bytes) -> str:
         """Show the settings of a YAML template."""
-        batch = self.batch
         cannot = f'Cannot load {name}:'
         with _file('settings.yaml', content) as path:
             try:
@@ -923,18 +901,8 @@ class Server:
                 raise Problem(
                     f'{cannot} it is not a settings file saved from this page.'
                 ) from None
-        ours = SpecId.of(batch.spec).name
-        if template.spec.name != ours:
-            raise Problem(
-                f'{cannot} it holds the settings of {template.spec.name}, not {ours}.'
-            )
-        if template.spec != SpecId.of(batch.spec) or set(template.blanks) != set(
-            batch.columns
-        ):
-            raise Problem(f'{cannot} it was saved by another version of this page.')
         try:
-            settings = with_named_files(batch.spec.params, template.params)
-            self.settings.set(with_latest(batch.client, settings), self._listing)
+            self.settings.set(settings_of(self.batch, template), self._listing)
         except (ValueError, KeyError) as error:
             raise Problem(f'{cannot} {forms.message(_why(error))}.') from None
         self._forget_settings()
@@ -953,7 +921,8 @@ class Server:
             raise Problem(f'None of these {self.words.many} has a result.')
         buffer = io.BytesIO()
         with _file('results') as folder:
-            exported = export_table(self.batch.client, self._table(done), folder)
+            table = frames.batch_table(self.batch, states, done)
+            exported = export_table(self.batch.client, table, folder)
             frames.write_table(exported, folder / 'results.csv')
             with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
                 for path in sorted(folder.rglob('*')):

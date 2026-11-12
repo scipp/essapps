@@ -91,7 +91,7 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 
 **With `staged=True`** the rows go through a stage, and what they share is computed once. It needs a binding that makes stages. A stage is reused while the settings are the same. Whether a column can vary through a stage is the binding's to decide, and a refusal says so; a column that everything depends on saves nothing.
 
-**One row with other settings.** `tweak(key, params)` submits one request with all of its parameters, which becomes the row's result. It is stale only if the row's cells change after that. If a parameter differs for many rows, make it a column.
+**One row with other settings.** `tweak(key, params)` submits one request with all of its parameters, which becomes the row's result. It is stale only if the row's cells change after that, and its state is `tweaked` until `reduce` submits the row with the settings. `tweak_params(key, state.record, settings)` gives the params that a form for a tweak starts from: the row's cells, and the other parameters of its result, or the settings if it has none. If a parameter differs for many rows, make it a column.
 
 ## Writing a source
 
@@ -293,10 +293,10 @@ The command finds the results of the app, and the app those of the command, if b
 | Button | Same as |
 |---|---|
 | **Load rows** | `batch.rows = batch.rows.rescan(frames.rows_of(frames.read_table(path), spec.params, batch.columns))` |
-| **Save rows** | `frames.with_results(client, states, frames.table_of(batch.rows, batch.columns))`, written with `frames.write_table` |
-| **Load settings** | `text.load_template(path)`, refused if of another spec or with other blanks than the columns |
+| **Save rows** | `frames.batch_table(batch, states)`, written with `frames.write_table` |
+| **Load settings** | `text.settings_of(batch, text.load_template(path))`, refused if of another spec, another version of it, or with other blanks than the columns |
 | **Save settings** | `text.write_template(batch.template(settings), path)` |
-| **Export selected** | `export.export_table` on the completed rows selected |
+| **Export selected** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows selected |
 
 `reduce` refuses a table with a row that cannot run, so remove the incomplete rows before saving. A table loaded takes the place of a scan, so the edits stay on top, and **Scan files** gives the rows of the files again. The `status` of a saved table is what the view shows, such as `stale` or `not reduced`. `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table. A relative path is relative to the working directory of the app.
 

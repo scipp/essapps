@@ -34,7 +34,10 @@ class RowState:
 
     ``record`` is the row's result, if it has one, and ``status`` its status.
     ``problems`` say why the row cannot be reduced now. ``stale`` is true if
-    the row or the settings differ from those of its result.
+    the row or the settings differ from those of its result. ``tweaked`` is
+    true if the batch last submitted the row by :meth:`~.reduction.Batch.tweak`,
+    with parameters of its own, so that its result does not follow the
+    settings.
     """
 
     key: str
@@ -42,6 +45,7 @@ class RowState:
     status: Status | None = None
     problems: tuple[FieldError, ...] = ()
     stale: bool = False
+    tweaked: bool = False
 
     @property
     def text(self) -> str:
@@ -116,11 +120,13 @@ def row_states(
     found: Mapping[str, Record],
     status: Mapping[str, Status],
     stale: AbstractSet[str] = frozenset(),
+    tweaked: AbstractSet[str] = frozenset(),
 ) -> dict[str, RowState]:
     """
     The state of each row. ``found`` holds their results by key, ``status`` the
     status of those and of the records their cells reference, by record ID,
-    and ``stale`` the keys that differ from their results.
+    ``stale`` the keys that differ from their results, and ``tweaked`` the keys
+    last submitted by a tweak.
     """
     states = {}
     for row in rows:
@@ -131,6 +137,7 @@ def row_states(
             status=None if record is None else status[record.id],
             problems=problems(row, model, columns, status),
             stale=row.key in stale,
+            tweaked=row.key in tweaked,
         )
     return states
 

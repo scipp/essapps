@@ -154,7 +154,13 @@ class Batch:
         status = self._status([*found.values(), *upstream])
         stale = set() if settings is None else self._stale(settings)
         return state.row_states(
-            self.rows, self.spec.params, self.columns, found, status, stale
+            self.rows,
+            self.spec.params,
+            self.columns,
+            found,
+            status,
+            stale,
+            self._tweaked.keys(),
         )
 
     def _results(self) -> dict[str, Record]:
@@ -260,6 +266,18 @@ class Batch:
         )
         self._tweaked[key] = self.rows[key].values
         return record
+
+    def tweak_params(
+        self, key: str, record: Record | None, settings: Mapping[str, Any] | None
+    ) -> dict[str, Any]:
+        """
+        The params that a :meth:`tweak` of row ``key`` starts from: its cells,
+        and the other params of ``record``, its result, or of ``settings`` if it
+        has none.
+        """
+        base = (settings or {}) if record is None else record.request.params
+        rest = {k: v for k, v in base.items() if k not in self.columns}
+        return {**rest, **self.rows[key].values}
 
     def cancel(self, keys: Sequence[str] | None = None) -> None:
         """Cancel the results still running, of ``keys`` if given, or of any row."""

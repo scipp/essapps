@@ -19,7 +19,7 @@ The files are those of the command ``essapps-batch`` (see :mod:`..cli`): a
 table of rows (:mod:`..frames`), a template of the settings (:mod:`..text`),
 and a folder of exported outputs (:mod:`..export`). A table loaded takes the
 place of a scan, so the edits stay on top, and a table saved has the result
-columns of :func:`..frames.with_results`, the status as the table shows it.
+columns of :func:`..frames.batch_table`, the status as the table shows it.
 """
 
 from __future__ import annotations
@@ -29,16 +29,15 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 import panel as pn
 
-from ess.apps import FieldError, Listing, Record, SpecId, Status, SubmitError
+from ess.apps import FieldError, Listing, Record, Status, SubmitError
 from ess.apps.panel import Form, Table, describe
 from ess.spec import field_types
 
 from .. import Batch, Row, RowState, RowTable, frames, ready, remaining, summary
 from ..export import export_table
-from ..text import load_template, with_latest, with_named_files, write_template
+from ..text import load_template, settings_of, write_template
 from .cells import button, cell_texts, changed_cells, write_choice
 
 type Draw = Callable[[Mapping[str, Record]], Any]
@@ -205,11 +204,8 @@ class BatchView:
         if self._tweak_loaded == source:
             return
         self._tweak_loaded = source
-        base = (
-            self._current_settings() or {} if record is None else record.request.params
-        )
-        rest = {k: v for k, v in base.items() if k not in self.batch.columns}
-        self.tweak.set({**rest, **cells}, self._listing)
+        params = self.batch.tweak_params(keys[0], record, self._current_settings())
+        self.tweak.set(params, self._listing)
 
     def _describe(self, keys: list[str]) -> None:
         state = self._states[keys[0]] if len(keys) == 1 else None
@@ -369,28 +365,19 @@ class BatchView:
             self.message.object = f'Loaded {len(rows)} rows.'
         self._list_again()
 
-    def _table(self, rows: Iterable[Row]) -> pd.DataFrame:
-        """``rows`` as a table, with what came of each, as the table shows it."""
-        table = frames.table_of(rows, self.batch.columns)
-        return frames.with_results(self.batch.client, self._states, table)
-
     def save_rows(self) -> None:
         """Write the rows as a table to :attr:`path`, by its suffix."""
         with self._showing_errors('Cannot save the rows'):
-            frames.write_table(self._table(self.batch.rows), Path(self.path.value))
+            frames.write_table(
+                frames.batch_table(self.batch, self._states), Path(self.path.value)
+            )
             self.message.object = f'Saved the rows to {self.path.value}.'
 
     def load_settings(self) -> None:
         """Show the settings of the template at :attr:`path`."""
-        batch = self.batch
         with self._showing_errors('Cannot load the settings'):
             template = load_template(Path(self.path.value))
-            if template.spec != SpecId.of(batch.spec):
-                raise ValueError(f'it is a template of {template.spec}')
-            if set(template.blanks) != set(batch.columns):
-                raise ValueError(f'its blanks are not {", ".join(batch.columns)}')
-            settings = with_named_files(batch.spec.params, template.params)
-            self.settings.set(with_latest(batch.client, settings), self._listing)
+            self.settings.set(settings_of(self.batch, template), self._listing)
             self.message.object = 'Loaded the settings.'
         self._show()
 
@@ -404,7 +391,7 @@ class BatchView:
     def export_selected(self) -> None:
         """Export the completed rows selected to the folder :attr:`path`."""
         completed = [
-            self.batch.rows[k]
+            k
             for k in self.table.selected_keys
             if self._states[k].status is Status.COMPLETED
         ]
@@ -413,7 +400,8 @@ class BatchView:
             return
         folder = self.path.value
         with self._showing_errors('Cannot export'):
-            export_table(self.batch.client, self._table(completed), Path(folder))
+            table = frames.batch_table(self.batch, self._states, completed)
+            export_table(self.batch.client, table, Path(folder))
             self.message.object = f'Exported {len(completed)} rows to {folder}.'
 
     def panel(self) -> pn.Column:

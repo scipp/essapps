@@ -10,8 +10,10 @@ import pydantic
 import pytest
 
 from ess.apps import Client, SubmitError, Template, file
-from ess.apps.batch import Row
+from ess.apps.batch import Batch, Row
 from ess.apps.batch.frames import (
+    RESULT,
+    batch_table,
     described,
     read_table,
     reduce_table,
@@ -146,6 +148,21 @@ def test_a_table_of_an_unknown_suffix_is_refused(
 ) -> None:
     with pytest.raises(ValueError, match='table'):
         function(tmp_path / 'table.json')  # type: ignore[operator]
+
+
+def test_a_batch_table_has_the_rows_of_keys_in_order_with_their_results(
+    batch: Batch, client: Client, sample: toys.Measure
+) -> None:
+    sample(1, 'water')
+    sample(2, 'sds')
+    batch.scan()
+    client.wait(batch.reduce({}, ['1']))
+
+    table = batch_table(batch, batch.state(), ['2', '1'])
+
+    assert list(table.columns) == ['key', *toys.COLUMNS, 'name', *RESULT]
+    assert list(table['key']) == ['2', '1']
+    assert list(table['status']) == ['not reduced', 'completed']
 
 
 # Reducing a table
