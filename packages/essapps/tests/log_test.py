@@ -495,13 +495,15 @@ def test_a_new_log_file_starts_with_a_header_naming_its_format(
     ]
 
 
-def test_a_log_file_reopened_reads_its_events(tmp_path: Path) -> None:
+def test_a_header_cut_short_is_completed_and_opens_an_empty_log(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / 'log'
-    events = [Finished(record='r1', status=Status.COMPLETED)]
-    _write(path, *events)
+    path.write_text(json.dumps({'format': FORMAT})[:5])
 
     with Log(path) as log:
-        assert list(log) == events
+        assert list(log) == []
+    assert path.read_text() == json.dumps({'format': FORMAT}) + '\n'
 
 
 def test_a_log_file_of_another_format_is_refused(tmp_path: Path) -> None:
@@ -512,6 +514,40 @@ def test_a_log_file_of_another_format_is_refused(tmp_path: Path) -> None:
     for read in (Log.read, Log):
         with pytest.raises(ValueError, match=message):
             read(path)
+
+
+@pytest.mark.parametrize('found', [True, float(FORMAT)])
+def test_a_header_naming_the_format_other_than_as_an_integer_is_refused(
+    tmp_path: Path, found: Any
+) -> None:
+    path = tmp_path / 'log'
+    path.write_text(json.dumps({'format': found}) + '\n')
+
+    with pytest.raises(ValueError, match='this version reads format'):
+        Log(path)
+
+
+def test_a_refused_log_file_with_a_last_line_cut_short_is_left_unchanged(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'log'
+    content = json.dumps({'format': FORMAT + 1}).encode() + b'\n{"kind":"fin'
+    path.write_bytes(content)
+
+    with pytest.raises(ValueError, match=f'is a log of format {FORMAT + 1}'):
+        Log(path)
+    assert path.read_bytes() == content
+
+
+def test_a_file_without_a_newline_that_is_not_a_log_is_refused_unchanged(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'log'
+    path.write_bytes(b'some text')
+
+    with pytest.raises(ValueError, match='is not a log'):
+        Log(path)
+    assert path.read_bytes() == b'some text'
 
 
 def test_a_log_file_without_a_header_is_refused(tmp_path: Path) -> None:
