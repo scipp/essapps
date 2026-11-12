@@ -326,14 +326,15 @@ def test_rows_pending_after_a_restart_finish_and_are_not_submitted_again(
     with open_folder(folder, folder_bindings) as first:
         done = reduce_table(first, template, table, label='scan', persist=True)
     log = folder / 'log.jsonl'
-    lines = log.read_bytes().splitlines(keepends=True)
+    header, *lines = log.read_bytes().splitlines(keepends=True)
     events = Log.read(log)
     assert len(lines) == len(events)
     unfinished = [
         ln for ln, e in zip(lines, events, strict=True) if type(e) is not Finished
     ]
     assert len(unfinished) < len(lines)
-    log.write_bytes(b''.join(unfinished))  # as if the process had been killed
+    # as if the process had been killed
+    log.write_bytes(b''.join([header, *unfinished]))
 
     with open_folder(folder, folder_bindings) as second:
         result = reduce_table(

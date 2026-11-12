@@ -18,6 +18,10 @@ names its record, a push its accumulator, a record the records it reads, and
 the record of a freeze its accumulator. Applying the events in order relies on
 this, and so does a restart, which walks the pending records backwards.
 
+A log file starts with a header line that names its format, such as
+``{"format": 1}``, and holds one event per line after it. A log reads only
+files of its own format, :data:`FORMAT`.
+
 Stages and accumulators are not history, and neither are output values or
 anything a binding computed; those have their own lifetime.
 A submission is one event, so a workspace that stops half-way through one has
@@ -27,6 +31,7 @@ all of it or none of it.
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 from collections.abc import Iterator
 from datetime import datetime
@@ -129,13 +134,38 @@ Event = Annotated[
 ]
 _event: TypeAdapter[Event] = TypeAdapter(Event)
 
+# The format of a log file, named by its first line. Bumped on any change to
+# the events or to the files of the store (ess.apps.hdf5), since stored values
+# are found through the log.
+FORMAT = 1
+_HEADER = json.dumps({'format': FORMAT}).encode() + b'\n'
+
+
+def _format(line: bytes) -> Any:
+    """The format a header line names, or None if the line is no header."""
+    try:
+        header = json.loads(line)
+    except ValueError:
+        return None
+    if isinstance(header, dict) and header.keys() == {'format'}:
+        return header['format']
+    return None
+
 
 def _events(path: Path, lines: list[bytes]) -> list[Event]:
     """
-    The events of ``lines`` of the log file ``path``. Raises ``ValueError``
-    naming the first line that is not an event of this format, such as one
+    The events of ``lines`` of the log file ``path``, the first line being the
+    header. Raises ``ValueError`` if the header is not the one of this format,
+    or naming the first line that is not an event of this format, such as one
     with a field an event lacks, which validating would drop silently.
     """
+    if not lines:
+        return []
+    if (found := _format(lines[0])) != FORMAT:
+        found_text = 'no format' if found is None else f'format {found}'
+        raise ValueError(
+            f'{path} is a log of {found_text}; this version reads format {FORMAT}'
+        )
 
     def read(number: int, line: bytes) -> Event:
         try:
@@ -146,7 +176,7 @@ def _events(path: Path, lines: list[bytes]) -> list[Event]:
                 f'{path}, line {number}: not an event of a log of this format: {error}'
             ) from None
 
-    return [read(number, line) for number, line in enumerate(lines, start=1)]
+    return [read(number, line) for number, line in enumerate(lines[1:], start=2)]
 
 
 def _complete_lines(data: bytes) -> list[bytes]:
@@ -185,10 +215,13 @@ class Log:
     Events in the order they were appended.
 
     Without a path the log lives in memory. With a path it is a file of one
-    JSON event per line, and the log holds the file until :meth:`close`: a
-    second log on the same file, in this process or another, is refused, so
-    a file has one writer. The operating system lets go of the file when the
-    process ends, so a log opened after a crash takes it over. The events
+    JSON event per line, after a first line that names the format of the file,
+    ``{"format": FORMAT}``, written when the file is created. A file whose
+    first line is not the header of :data:`FORMAT` raises ``ValueError``.
+    The log holds the file until :meth:`close`: a second log on the same
+    file, in this process or another, is refused, so a file has one writer.
+    The operating system lets go of the file when the process ends, so a log
+    opened after a crash takes it over. The events
     already in the file are read first. A last line cut short, by a crash
     while it was written, is dropped; any other line that is not an event of
     this format raises ``ValueError``. A write that fails, for example on a
@@ -205,6 +238,9 @@ class Log:
                 file.seek(0)
                 lines = _complete_lines(file.readall())
                 file.truncate(sum(map(len, lines)))
+                if not lines:
+                    _append_line(file, _HEADER)
+                    lines = [_HEADER]
                 self._events = _events(path, lines)
             except BaseException:
                 file.close()

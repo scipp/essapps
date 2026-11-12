@@ -27,6 +27,7 @@ from ess.apps import (
     file,
 )
 from ess.apps.log import (
+    FORMAT,
     Event,
     Finished,
     Log,
@@ -355,7 +356,7 @@ def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) ->
     ]
     _write(tmp_path / 'log', *events)
 
-    submitted, pushed = (tmp_path / 'log').read_text().splitlines()
+    _, submitted, pushed = (tmp_path / 'log').read_text().splitlines()
     assert '"sample":{"@ref":"file","file":"uuid:run-1"}' in submitted
     assert '{"@ref":"output","record":"r1","output":"values","key":"0"}' in pushed
     assert Log.read(tmp_path / 'log') == events
@@ -484,6 +485,46 @@ def test_a_write_that_fails_leaves_the_log_as_it_was(
     assert [type(e) for e in Log.read(path)] == [Submitted, Finished]
 
 
+def test_a_new_log_file_starts_with_a_header_naming_its_format(
+    tmp_path: Path,
+) -> None:
+    Log(tmp_path / 'log').close()
+
+    assert (tmp_path / 'log').read_text().splitlines() == [
+        json.dumps({'format': FORMAT})
+    ]
+
+
+def test_a_log_file_reopened_reads_its_events(tmp_path: Path) -> None:
+    path = tmp_path / 'log'
+    events = [Finished(record='r1', status=Status.COMPLETED)]
+    _write(path, *events)
+
+    with Log(path) as log:
+        assert list(log) == events
+
+
+def test_a_log_file_of_another_format_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / 'log'
+    path.write_text(json.dumps({'format': FORMAT + 1}) + '\n')
+
+    message = f'is a log of format {FORMAT + 1}; this version reads format {FORMAT}'
+    for read in (Log.read, Log):
+        with pytest.raises(ValueError, match=message):
+            read(path)
+
+
+def test_a_log_file_without_a_header_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / 'log'
+    finished = Finished(record='r1', status=Status.COMPLETED)
+    path.write_text(finished.model_dump_json() + '\n')
+
+    message = f'is a log of no format; this version reads format {FORMAT}'
+    for read in (Log.read, Log):
+        with pytest.raises(ValueError, match=message):
+            read(path)
+
+
 def test_a_log_file_has_one_writer(tmp_path: Path) -> None:
     path = tmp_path / 'log'
     with Log(path), pytest.raises(RuntimeError, match='held by another log'):
@@ -585,10 +626,10 @@ def test_a_line_with_a_field_an_event_lacks_is_refused_naming_the_line(
 ) -> None:
     path = tmp_path / 'log'
     finished = Finished(record='r0', status=Status.COMPLETED).model_dump_json()
-    path.write_text(f'{finished}\n{json.dumps(event)}\n')
+    path.write_text(f'{{"format": {FORMAT}}}\n{finished}\n{json.dumps(event)}\n')
 
     for read in (Log.read, Log):
         with pytest.raises(
-            ValueError, match=r'log, line 2: not an event of a log of this format'
+            ValueError, match=r'log, line 3: not an event of a log of this format'
         ):
             read(path)
