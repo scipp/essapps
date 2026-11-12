@@ -21,7 +21,8 @@ A value that has no such form is refused with ``TypeError`` when it is written:
 a date, a tuple, ``None`` in a list, an object of any other class, and a
 ``DataGroup`` that holds one of these. A group is read back with the fields
 that were written, not validated again, as an instance of the declared type:
-a field the file lacks is ``None`` if the type is optional, else its default.
+a field the file lacks is ``None`` if ``None`` is a value of its type (an
+optional type, ``Any``, or ``object``), else its default.
 A file that lacks a required field, or holds a value an enum lacks, was written
 under other outputs of the spec, and reading it raises ``ValueError``.
 """
@@ -76,6 +77,11 @@ def _is(tp: Any, base: type) -> bool:
     return isinstance(tp, type) and issubclass(tp, base)
 
 
+def _takes_none(tp: Any) -> bool:
+    """Whether ``None`` is a value of type ``tp``."""
+    return tp is Any or tp is object or field_types.optional(tp)[1]
+
+
 def _typed(tp: Any, data: Any) -> Any:
     """``data`` of a file as the value of type ``tp`` that was written."""
     tp, _ = field_types.optional(tp)
@@ -84,7 +90,7 @@ def _typed(tp: Any, data: Any) -> Any:
         for name, info in tp.model_fields.items():
             if name in data:
                 fields[name] = _typed(info.annotation, data[name])
-            elif field_types.optional(info.annotation)[1]:
+            elif _takes_none(info.annotation):
                 fields[name] = None  # left out when written
             elif info.is_required():
                 raise ValueError(f'field {name!r} of {tp.__name__} is missing')

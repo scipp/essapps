@@ -63,7 +63,10 @@ class FolderStore:
         path = self.path(record, output)
         if not path.is_file():
             raise LookupError(f'the store holds no {output} of {record}')
-        return hdf5.read(tp, path)
+        try:
+            return hdf5.read(tp, path)
+        except ValueError as error:  # written under other outputs of the spec
+            raise LookupError(str(error)) from None
 
 
 _OWN = ('files.csv', 'log.jsonl', 'store')

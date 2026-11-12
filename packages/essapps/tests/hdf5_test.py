@@ -173,6 +173,21 @@ def test_a_group_that_lacks_a_required_field_is_refused_naming_file_type_and_fie
     assert 'outputs changed since the value was written' in str(error.value)
 
 
+class Anything(pydantic.BaseModel):
+    a: float
+    any: Any
+    obj: object
+
+
+def test_a_required_field_of_any_type_that_holds_none_is_read_back_as_none(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'out.h5'
+    hdf5.write(Anything(a=1.0, any=None, obj=None), path)
+
+    assert hdf5.read(Anything, path) == Anything(a=1.0, any=None, obj=None)
+
+
 def test_a_group_is_a_data_group_of_its_fields_without_those_that_are_none(
     tmp_path: Path,
 ) -> None:

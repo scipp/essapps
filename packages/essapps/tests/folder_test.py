@@ -218,7 +218,7 @@ def test_an_output_persisted_before_its_spec_gained_a_field_is_not_read(
     message = "field 'z' of CentreWithZ is missing. The spec's outputs changed"
     with open_folder(folder, bindings) as second:
         (record,) = second.records(ids=[record.id])
-        with pytest.raises(ValueError, match=message):
+        with pytest.raises(NotReadable, match=message):
             second.output(record, 'centre')
         use = second.submit(USE, params={'centre': record.ref('centre')})
         second.wait([use])
