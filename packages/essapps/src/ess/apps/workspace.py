@@ -10,16 +10,17 @@ implements them in this process. This docstring explains how it does so and how
 its pieces fit.
 
 What the workspace knows of history is its log (see ``log.py``): every submission,
-finished record, opened accumulator, and push is appended as one event and then
-applied to its views (see ``views.py``). A change is checked before its event is
-appended, so the log holds only events that apply. A workspace given a log that
-already has events applies them first; a log holds the history of one proposal,
-so a log with an event of another proposal is refused. Nothing the earlier
-workspace kept survives, so only persisted work goes on (see
-:meth:`Workspace._restart`). The log is the workspace's only record of history, so
-if an append fails, for example on a full disk, the workspace no longer knows its
-own state and stops: every call waiting in it, and every later call, raises
-``RuntimeError`` from the append's error.
+started and finished record, opened accumulator, and push is appended as one
+event and then applied to its views (see ``views.py``). A change is checked
+before its event is appended, so the log holds only events that apply. A
+workspace given a log that already has events applies them first; a log holds
+the history of one proposal, so a log with an event of another proposal is
+refused. Nothing the earlier workspace kept survives, so only persisted work
+that had not started goes on (see :meth:`Workspace._restart`). The log is the
+workspace's only record of history, so if an append fails, for example on a
+full disk, the workspace no longer knows its own state and stops: every call
+waiting in it, and every later call, raises ``RuntimeError`` from the append's
+error.
 
 The workspace keeps the outputs of records, and its stages and accumulators. A
 client is a connection to the workspace: it keeps nothing, and every client reads
@@ -185,6 +186,7 @@ from .log import (
     NewStateRecord,
     Opened,
     Pushed,
+    Started,
     Submitted,
 )
 from .protocol import (
@@ -637,17 +639,21 @@ class Workspace(WorkspaceProtocol):
         lock held. Nothing the earlier workspace kept survived, so only persisted
         work goes on:
 
-        1. A pending record is cancelled unless it persists outputs, or a
-           pending record that persists outputs reads it, directly or through
-           other pending records.
-        2. Otherwise it runs if each value it reads is a file, is written,
+        1. A pending record fails if it started: the workspace ended while it
+           ran, perhaps because of it, as an out-of-memory kill does, so
+           running it again could end the process again. A person submits its
+           request again to run it.
+        2. Otherwise it is cancelled unless it persists outputs, or a pending
+           record that persists outputs reads it, directly or through other
+           pending records.
+        3. Otherwise it runs if each value it reads is a file, is written,
            or is an output of a pending record that runs, and fails if not.
            The record of a freeze fails, since the driver it reads is gone.
            A call through a stage runs as its plain request, since the stage
            is gone, so it reads the values of the stage's template too.
 
-        A record that had written its persisted outputs, but
-        not finished, runs again, and its writes replace what the store holds.
+        So a record that runs at a restart had not started, and has written
+        nothing.
         """
         views = self._views
         pending = [i for i in views.records if i not in views.finished]
@@ -658,7 +664,11 @@ class Workspace(WorkspaceProtocol):
                 needed.update(ref.record for ref in upstream)
         runs: set[str] = set()
         for record_id in pending:
-            if record_id not in needed:
+            if record_id in views.started:
+                self._finish(
+                    record_id, Status.FAILED, 'the workspace ended while it ran'
+                )
+            elif record_id not in needed:
                 self._finish(record_id, Status.CANCELLED, 'the workspace restarted')
             elif (reason := self._unreadable(record_id, runs)) is not None:
                 self._finish(
@@ -997,6 +1007,8 @@ class Workspace(WorkspaceProtocol):
         """
         Run a record's workflow, holding the values it reads until it returns,
         and write the outputs persisted at its submission before it completes.
+        The record's start is logged before anything is read, so that a
+        restart fails a record that was running when the workspace ended.
 
         It holds them even once the record is cancelled, since the workflow
         still reads them, and lets go of them before the write. The record of
@@ -1006,6 +1018,7 @@ class Workspace(WorkspaceProtocol):
         with self._changed:
             if record_id in self._views.finished:
                 return
+            self._append(Started(record=record_id))
             record = self._views.records[record_id]
             stage = self._stage_of.get(record_id)
             state = self._state_of.get(record_id)

@@ -25,6 +25,7 @@ from .log import (
     NewStateRecord,
     Opened,
     Pushed,
+    Started,
     Submitted,
 )
 from .records import Changes, Record, Request, SpecId, Status
@@ -86,21 +87,23 @@ class Views:
     The records, labels, accumulators, and pushes that the events describe.
 
     ``finished`` holds the event that finished a record; a record without one
-    is pending. ``states`` holds the accumulator and number of pushes of each
-    record of a freeze. ``accumulators`` holds the event that opened each
-    accumulator, and ``pushes`` its pushes in order, each rows of its tables.
+    is pending. ``started`` names the records whose work began. ``states`` holds
+    the accumulator and number of pushes of each record of a freeze.
+    ``accumulators`` holds the event that opened each accumulator, and
+    ``pushes`` its pushes in order, each rows of its tables.
 
     ``persisted`` names the outputs each record persists; their write is the
     record's: pending while it is, done once it completes.
 
     ``feed`` holds the ID of a record each time an event submits or finishes
     it, in the order of the events. A position in it is a
-    cursor of :meth:`changes`. Opening an accumulator and pushing to it are not in
-    the feed.
+    cursor of :meth:`changes`. Starting a record, opening an accumulator, and
+    pushing to it are not in the feed.
     """
 
     def __init__(self) -> None:
         self.records = _Records(self)
+        self.started: set[str] = set()
         self.finished: dict[str, Finished] = {}
         self.labels: dict[str, list[str]] = {}
         self.states: dict[str, tuple[str, int]] = {}
@@ -115,6 +118,8 @@ class Views:
                 for new in event.records:
                     self._add(new, event)
                     self.feed.append(new.id)
+            case Started():
+                self.started.add(event.record)
             case Finished():
                 self.feed.append(event.record)
                 self.finished[event.record] = event

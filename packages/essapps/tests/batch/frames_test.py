@@ -22,7 +22,7 @@ from ess.apps.batch.frames import (
     write_table,
 )
 from ess.apps.folder import open_folder
-from ess.apps.log import Finished, Log
+from ess.apps.log import Finished, Log, Started
 from ess.apps.testing import StagedFunction
 from ess.spec import Binding, WorkflowSpec, function_binding
 
@@ -329,12 +329,14 @@ def test_rows_pending_after_a_restart_finish_and_are_not_submitted_again(
     header, *lines = log.read_bytes().splitlines(keepends=True)
     events = Log.read(log)
     assert len(lines) == len(events)
-    unfinished = [
-        ln for ln, e in zip(lines, events, strict=True) if type(e) is not Finished
+    unstarted = [
+        ln
+        for ln, e in zip(lines, events, strict=True)
+        if not isinstance(e, Started | Finished)
     ]
-    assert len(unfinished) < len(lines)
-    # as if the process had been killed
-    log.write_bytes(b''.join([header, *unfinished]))
+    assert len(unstarted) < len(lines)
+    # as if the process had been killed before the records started
+    log.write_bytes(b''.join([header, *unstarted]))
 
     with open_folder(folder, folder_bindings) as second:
         result = reduce_table(

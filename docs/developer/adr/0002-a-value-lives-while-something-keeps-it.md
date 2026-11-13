@@ -64,8 +64,9 @@ History and the store survive.
 The values the workspace kept in memory do not.
 Each pending record is
 
-- cancelled, unless a persist request names it, or a record named by a persist request reads it, directly or through other pending records;
-- run, if every value it reads is a file, is written, or comes from a pending record that runs;
+- failed, if it had started: the workspace ended while it ran, perhaps because of it, as an out-of-memory kill does, so running it again could end the process again;
+- otherwise cancelled, unless a persist request names it, or a record named by a persist request reads it, directly or through other pending records;
+- otherwise run, if every value it reads is a file, is written, or comes from a pending record that runs;
 - failed otherwise, as the record of a freeze is, since its driver is gone.
 
 ## Alternatives considered
@@ -106,4 +107,4 @@ To be designed with the service (scipp/essapps#27):
 - What a finish records besides the status, such as the software environment.
 - When values are dropped from the store before history (system story H1), and by whom.
 - The file format of each output type, and the layout of the store in a proposal's area.
-- An upgrade while persisted records run. If the old instance finishes them, the new version waits, for hours after an overnight batch, since only one workspace writes a proposal's history. If the new instance runs them again, the time they had run is lost. Either way, the upgrade closes every workspace of the old instance.
+- An upgrade while persisted records run. An orderly stop of the old instance waits for its running records, so the new version waits, for hours after an overnight batch, since only one workspace writes a proposal's history. If the old instance is killed instead, its running records fail at the new instance's start, and a person or the application submits them again, so the time they had run is lost. Either way, the upgrade closes every workspace of the old instance.

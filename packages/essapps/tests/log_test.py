@@ -35,6 +35,7 @@ from ess.apps.log import (
     NewStateRecord,
     Opened,
     Pushed,
+    Started,
     Submitted,
 )
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
@@ -149,8 +150,17 @@ def windows() -> list[Any]:
 
 
 @pytest.fixture
+def entered() -> threading.Event:
+    """Set each time LOAD's workflow is entered."""
+    return threading.Event()
+
+
+@pytest.fixture
 def start(
-    files: FakeFiles, loading: threading.Event, windows: list[Any]
+    files: FakeFiles,
+    loading: threading.Event,
+    windows: list[Any],
+    entered: threading.Event,
 ) -> Iterator[Callable[[Path], Client]]:
     """A client of a new workspace over the log at a path."""
     workspaces: list[Workspace] = []
@@ -158,6 +168,7 @@ def start(
     def load(params: LoadParams) -> ValueOutputs:
         window = params.window
         windows.append(window)
+        entered.set()
         loading.wait(timeout=5)
         value = read_file(params.sample) * (window.stop - window.start)
         return ValueOutputs(value=Amount(value=value))
@@ -277,7 +288,7 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_freeze_as_a_r
     frozen = client.freeze(total)
 
     events = Log.read(tmp_path / 'log')
-    assert events[6:10] == [
+    assert events[9:13] == [
         Opened(
             accumulator=total.id,
             proposal='p1',
@@ -292,7 +303,7 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_freeze_as_a_r
             for load in loads
         ),
     ]
-    assert events[10].records == (
+    assert events[13].records == (
         NewStateRecord(
             id=frozen.id, accumulator=total.id, pushes=3, outputs=('value',)
         ),
@@ -362,30 +373,41 @@ def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) ->
     assert Log.read(tmp_path / 'log') == events
 
 
-def test_records_pending_in_the_log_are_cancelled_at_a_restart(
+def test_records_pending_in_the_log_are_cancelled_or_failed_at_a_restart(
     tmp_path: Path,
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
     loading: threading.Event,
+    entered: threading.Event,
 ) -> None:
     first = start(tmp_path / 'log')
     done = first.compute(LOAD, params=_sample(1))
     loading.clear()
-    pending = first.submit(LOAD, params=_sample(2))
+    entered.clear()
+    running = first.submit(LOAD, params=_sample(2))
     total = _total(first)
     total.push(part=[done.ref('value')])
-    total.push(part=[pending.ref('value')])  # waits for ``pending``
+    total.push(part=[running.ref('value')])  # waits for ``running``
     frozen = first.freeze(total)
     read = first.submit(TOTAL, params={'part': [frozen.ref('value')]})
+    assert entered.wait(timeout=5)  # ``running`` started
 
     again = restart(tmp_path / 'log')
     loading.set()
 
-    records = [pending, frozen, read]
-    assert again.status(records) == [Status.CANCELLED] * 3  # nothing keeps them
-    assert again.failure(records) == ['the workspace restarted'] * 3
-    with pytest.raises(SubmitError, match=f'record {pending.id} cancelled'):
-        again.submit(TOTAL, params={'part': [pending.ref('value')]})
+    records = [running, frozen, read]
+    assert again.status(records) == [
+        Status.FAILED,  # it started
+        Status.CANCELLED,  # nothing keeps them
+        Status.CANCELLED,
+    ]
+    assert again.failure(records) == [
+        'the workspace ended while it ran',
+        'the workspace restarted',
+        'the workspace restarted',
+    ]
+    with pytest.raises(SubmitError, match=f'record {running.id} failed'):
+        again.submit(TOTAL, params={'part': [running.ref('value')]})
     with pytest.raises(NotReadable, match=f'accumulator {total.id} is not open'):
         again.output(total)  # the accumulator did not survive
 
@@ -418,7 +440,7 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
         total.push(part=[load.ref('value')])
 
 
-def test_the_log_holds_submissions_finished_records_accumulators_and_pushes_only(
+def test_the_log_holds_submissions_starts_finishes_accumulators_and_pushes_only(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
@@ -430,6 +452,7 @@ def test_the_log_holds_submissions_finished_records_accumulators_and_pushes_only
     assert [type(e) for e in Log.read(tmp_path / 'log')] == [
         Opened,
         Submitted,
+        Started,
         Finished,
         Pushed,
     ]
@@ -506,11 +529,12 @@ def test_a_header_cut_short_is_completed_and_opens_an_empty_log(
     assert path.read_text() == json.dumps({'format': FORMAT}) + '\n'
 
 
-def test_a_log_file_of_another_format_is_refused(tmp_path: Path) -> None:
+@pytest.mark.parametrize('found', [FORMAT - 1, FORMAT + 1])
+def test_a_log_file_of_another_format_is_refused(tmp_path: Path, found: int) -> None:
     path = tmp_path / 'log'
-    path.write_text(json.dumps({'format': FORMAT + 1}) + '\n')
+    path.write_text(json.dumps({'format': found}) + '\n')
 
-    message = f'is a log of format {FORMAT + 1}; this version reads format {FORMAT}'
+    message = f'is a log of format {found}; this version reads format {FORMAT}'
     for read in (Log.read, Log):
         with pytest.raises(ValueError, match=message):
             read(path)

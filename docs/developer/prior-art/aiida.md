@@ -72,8 +72,8 @@ Whether the workspace retries before it fails a record, or marks the failure so 
 **Checkpointed workflow state does not survive upgrades.** A WorkChain resumes after a daemon restart because its state is serialised between steps.
 The unreleased version says such checkpoints "cannot be continued after upgrading. Finish or terminate all active processes before upgrading" ([CHANGELOG L11-12][cl-head]).
 The FAQ says to restart the daemon after every code change ([faq.rst L29][faq]).
-Our workspace pickles nothing: after a restart it reruns persisted pending records from history ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)).
-On an upgrade with work in flight, AiiDA's answer is to drain first, the "old instance finishes them" option of ADR 0002, Open, and system story H2.
+Our workspace pickles nothing: after a restart it runs again, from history, the persisted pending records that had not started ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)).
+On an upgrade with work in flight, AiiDA's answer is to drain first, the orderly stop of ADR 0002, Open, and system story H2.
 Warm workers (scipp/essapps#27) hold imported code as AiiDA's daemon workers do, so a package upgrade must restart them.
 
 **A broker queue drifted from the database.** v1.0 made RabbitMQ mandatory for process control.
