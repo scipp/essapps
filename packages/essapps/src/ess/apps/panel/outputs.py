@@ -160,10 +160,10 @@ class Outputs:
         completed, and keeps its fields to draw.
         """
         listing = self._listing
-        info = listing.specs[record.id].outputs.model_fields[name]
+        spec = listing.specs.get(record.id)
         status = listing.status[record.id]
         lines = [f'### {listing.output_label(record.ref(name))}: {status}']
-        if about := _about(info):
+        if spec is not None and (about := _about(spec.outputs.model_fields[name])):
             lines.append(about)
         lines.append(f'**Record** {listing.labels[record.id]}')
         if status is Status.FAILED:
@@ -234,7 +234,10 @@ class Outputs:
         dimensions gets a slider for each but the last two.
         """
         label = self._listing.output_label(record.ref(name))
-        group = self._listing.is_group(record, name)
+        if record.id in self._listing.specs:
+            group = self._listing.is_group(record, name)
+        else:  # read as stored: a DataGroup is described by field
+            group = set(self._fields) != {name}
         arrays = {
             (f'{label} {n}' if group else label): (n if group else None, info)
             for n, info in self._fields.items()

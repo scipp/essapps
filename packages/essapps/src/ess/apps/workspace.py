@@ -884,10 +884,6 @@ class Workspace(WorkspaceProtocol):
         spec_id = entry.request.spec
         try:
             self._spec(spec_id)  # an unknown spec is refused as such
-            if entry.digest not in (None, self._digests[spec_id]):
-                raise SubmitError.at(
-                    (), f'made with other models of {spec_id} than those bound'
-                )
             checks = self._checks[spec_id]
             return checks.request(entry.request, self._proposal)
         except SubmitError as error:
@@ -1837,7 +1833,6 @@ class Workspace(WorkspaceProtocol):
                     name
                     for name in self._record(record_id).outputs
                     if self._refusal((record_id, name)) is None
-                    and self._other(record_id) is None
                 )
                 for record_id in ids
             ]

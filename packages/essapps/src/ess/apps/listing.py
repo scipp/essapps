@@ -33,8 +33,11 @@ class Listing:
     in memory, so a label that depends on the other records needs no read.
     ``specs`` holds the spec bound under the name and version of each record's
     spec, by the record's id, if one is; ``status`` holds its status, and
-    ``readable`` the names of its outputs that a request may reference, none
-    of a record of another spec than the one bound.
+    ``readable`` the names of its outputs that may be read
+    (:meth:`~ess.apps.Client.readable`). The outputs offered to reference are
+    the readable ones of records whose spec has a binding. An output of a record
+    of another spec under a bound name and version is offered by the bound
+    type, and :meth:`~ess.apps.Client.submit` refuses a request referencing it.
 
     It stands in for two queries the client lacks (scipp/essapps#95). The
     client lists no records by the type of their outputs (gap 1), so
@@ -88,6 +91,7 @@ class Listing:
                 self.specs[record.id].outputs.model_fields[name].annotation,
             )
             for record in reversed(self.records)
+            if record.id in self.specs
             for name in self.readable[record.id]
         ]
 

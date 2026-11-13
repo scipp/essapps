@@ -81,16 +81,12 @@ class Entry:
 
     ``label`` names a sequence of records, and ``member`` one part of it; neither
     changes the result. ``stage`` names the stage the request goes through, if any.
-    ``digest`` is that of the spec the request was made with, if the caller
-    passed the spec (:attr:`ess.spec.WorkflowSpec.digest`), not only its
-    :class:`~ess.apps.SpecId`.
     """
 
     request: Request
     label: str | None = None
     member: str | None = None
     stage: str | None = None
-    digest: str | None = None
 
 
 class WorkspaceProtocol(Protocol):
@@ -157,7 +153,6 @@ class WorkspaceProtocol(Protocol):
         ------
         SubmitError
             If a request cannot run: an invalid value, an unknown spec or file, a
-            spec whose digest is not the bound one's (:attr:`Entry.digest`), a
             reference at a field that the spec does not mark ``Referenced[...]``, a
             reference that may not be read, to an accumulator, to an output of a
             record of another spec than the one bound, whose type cannot be checked,
@@ -294,9 +289,10 @@ class WorkspaceProtocol(Protocol):
 
     def readable(self, ids: Sequence[str]) -> list[tuple[str, ...]]:
         """
-        The outputs of each record that a request may reference now, in declared
-        order; none of a record of another spec, whose outputs a client may still
-        read. Waits for nothing and reads no value.
+        The outputs of each record that may be read now, in declared order: that
+        :meth:`outputs` gives once the record has completed, and that a request
+        may reference, but for an output of a record of another spec than the one
+        bound, which :meth:`submit` refuses. Waits for nothing and reads no value.
         """
         ...
 

@@ -417,9 +417,6 @@ class Client:
         what:
             A spec (or its ``SpecId``) with ``params``; a :class:`Stage` with the
             values of its blanks in ``params``; or requests, one, a list, or a dict.
-            A spec whose models differ from those of the spec bound under its name
-            and version is refused (:attr:`ess.spec.WorkflowSpec.digest`); a request,
-            like a ``SpecId``, names only the name and version.
             An accumulator is not submitted: a request reads the record of its
             :meth:`freeze`.
         params:
@@ -463,7 +460,6 @@ class Client:
         stage = None
         if each is not None and (params is not None or not isinstance(what, Stage)):
             raise TypeError('each goes with a stage, in place of params')
-        digest = what.digest if isinstance(what, WorkflowSpec) else None
         if isinstance(what, WorkflowSpec | SpecId):
             what = Request(what, params=params)
         elif isinstance(what, Stage):
@@ -488,7 +484,7 @@ class Client:
         else:
             members = [member] * len(_items(what))
         entries = [
-            Entry(request, label=label, member=m, stage=stage, digest=digest)
+            Entry(request, label=label, member=m, stage=stage)
             for request, m in zip(_items(what), members, strict=True)
         ]
         names = _names(what)
@@ -651,8 +647,8 @@ class Client:
     @_shaped
     def readable(self, records: list[Record]) -> list[tuple[str, ...]]:
         """
-        The outputs of each record, by name, that a plain submission may reference
-        now. A picker of records calls it at each refresh::
+        The outputs of each record, by name, that may be read now. A picker of
+        records calls it at each refresh::
 
             for record, names in zip(records, client.readable(records)):
                 ...  # offer record.ref(name) for each name

@@ -21,12 +21,10 @@ from ess.apps import (
     SpecId,
     Status,
     SubmitError,
-    local,
 )
 from ess.apps.batch import Batch, Row
 from ess.apps.folder import open_folder
 from ess.apps.log import Finished, Log, Started, Submitted
-from ess.apps.testing import FakeFiles
 from ess.spec import Binding, Referenced, WorkflowSpec, function_binding
 
 COUNTS = sc.DataArray(sc.arange('q', 4.0), coords={'q': sc.arange('q', 5.0)})
@@ -185,6 +183,7 @@ def test_a_request_referencing_an_output_of_a_record_of_another_spec_is_refused(
     other: Client, written: str
 ) -> None:
     record = _record(other, written)
+    assert other.readable(record) == ('centre',)
 
     with pytest.raises(SubmitError) as refused:
         other.submit(USE, params={'centre': record.ref('centre')})
@@ -195,14 +194,14 @@ def test_a_request_referencing_an_output_of_a_record_of_another_spec_is_refused(
     assert 'another spec than the one bound' in error.msg
 
 
-def test_a_record_of_another_spec_is_listed_and_has_no_output_to_reference(
+def test_a_record_of_another_spec_is_listed_and_its_output_is_readable(
     other: Client, written: str
 ) -> None:
     record = _record(other, written)
 
     assert other.latest('c') == record
     assert other.status(record) is Status.COMPLETED
-    assert other.readable(record) == ()
+    assert other.readable(record) == ('centre',)
     assert other.provenance(record).records() == []
 
 
@@ -301,17 +300,6 @@ def test_the_changes_after_a_restart_with_another_spec_are_those_before(
 
     with open_folder(folder, another) as client:
         assert client.changes() == before
-
-
-def test_a_spec_passed_with_other_models_than_those_bound_is_refused(
-    tmp_path: Path,
-) -> None:
-    client = local(proposal='p1', files=FakeFiles('p1', tmp_path), bind=[WRITTEN[0]])
-
-    with pytest.raises(SubmitError, match='other models of centre/v1 than those'):
-        client.submit(_centre(FoundRenamed), params={})
-    record = client.compute(_centre(title='Retitled'), params={})
-    assert client.status(record) is Status.COMPLETED
 
 
 @pytest.fixture
