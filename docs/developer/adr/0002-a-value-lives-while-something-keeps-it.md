@@ -10,7 +10,7 @@ History holds records, not values ([ADR 0004](0004-history-is-append-only-lists.
 Values take memory, so something must decide when they go, and which are written.
 
 - **Two deployments.** Interactive work runs in the user's process (`local()`), on a VISA desktop or a laptop, and ending the process frees everything. The service runs batch and automatic reduction, and work spread over a cluster, for hours or days. The service must bound leaks and peak memory by design, not rely on users freeing memory ([users](../../requirements/users.md)).
-- **Unattended work.** The trigger loop submits through one client and never releases anything. A batch client closes, and users read its outputs the next morning.
+- **Unattended work.** The automatic reduction submits through one client and never releases anything. A batch client closes, and users read its outputs the next morning.
 - **Several connections.** A user works on one proposal through several clients at once, such as a notebook next to an app, or a web page and the same page reloaded.
 - **Writing costs.** A batch of 500 would write story S3's masked counts, an output meant for inspecting a reduction, once per record, 500 times. A volume that a web UI only shows cuts of (B4) is hundreds of GB. The framework cannot tell intermediate from final outputs.
 
@@ -43,7 +43,7 @@ So whether it is refused depends only on what the workspace keeps, not on how fa
 
 **Nothing is written unless persisted**, since the framework cannot tell which outputs are worth writing (Context).
 A client chooses per output, with `persist=` at submission or at `client.freeze`.
-The store is then the only keeper, as batch reduction and the trigger loop need.
+The store is then the only keeper, as batch reduction and automatic reduction need.
 A failed write fails the record, so a controller sees it like any other failed record.
 The store keys a value by record ID and output name, so a record holds no file name and a write changes no record.
 A persisted output stays readable after an upgrade removes its record's spec version, since the record stays in history, and is read as plain scipp data ([ADR 0009](0009-a-record-of-another-spec-stays-readable.md)).

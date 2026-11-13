@@ -21,7 +21,7 @@
   <div class="tour" id="tour"></div>
 
   <div class="stage-scroll">
-    <div class="stage" id="stage" role="img" aria-label="Nested boxes: a sciline pipeline inside a binding inside a workflow spec, inside a workspace, called by a client that a notebook, app, or trigger loop drives. Below, SciCat and the ESS file system."></div>
+    <div class="stage" id="stage" role="img" aria-label="Nested boxes: a sciline pipeline inside a binding inside a workflow spec, inside a workspace, called by a client that a notebook, app, or automatic reduction drives. Below, SciCat and the ESS file system."></div>
   </div>
 
   <div class="legend">
@@ -107,7 +107,7 @@ kept[entry] = iofq.compute(params)
 
 # a dropdown labels kept[entry] by log[entry]` },
   { level: 7, title: 'That is a workspace',
-    body: `<p>Keep going, and the form needs more. Drop entries that nobody needs before memory runs out. Show the same entries in a notebook, to a colleague, and to the trigger loop. Reference an output whose call has not finished. Run the same way at DMSC.</p>
+    body: `<p>Keep going, and the form needs more. Drop entries that nobody needs before memory runs out. Show the same entries in a notebook, to a colleague, and to the automatic reduction. Reference an output whose call has not finished. Run the same way at DMSC.</p>
            <p>A log of requests, the values kept while something holds them, the file source, and the bindings: that is a workspace, built once for every caller. <code>local()</code> needs nothing that the script does not: pydantic and the standard library.</p>
            <p>It also resolves each file when a request is submitted, so the record names the file itself, and checks that the proposal may read it.</p>`,
     code: `client = local(proposal='p1',
@@ -171,25 +171,24 @@ client.output(records[60339], 'iofq', select={'Q': slice(0, 10)})` },
            <p>This is why the slides are a walk through a small grid, not a single line: see the panel on the right.</p>`,
     code: `client = connect('https://reduce.example', proposal='p1')
 app = App(client)` },
-  { level: 11, caller: 'trigger', placement: 'service', planned: SERVICE, title: 'A trigger loop instead of a person',
-    body: `<p>Automatic reduction is one more controller. For each new file that a rule's selector matches, it calls the application's function, which submits what the file needs, persisted.</p>
+  { level: 11, caller: 'trigger', placement: 'service', planned: SERVICE, title: 'A loop instead of a person',
+    body: `<p>Automatic reduction is one more controller. It scans a batch as files arrive, and reduces each row that holds a new file at its trigger column, persisted. The application's source says which files make a row.</p>
            <p>It runs on a server at DMSC, outside the workspace. The workspace never decides what to run.</p>`,
-    code: `def stitch(client, run):
-    sample = client.files.metadata(run)['sample']
-    angles = client.files.list(
-        Selector(role='sample', sample=sample))
-    return client.submit(
-        STITCH, params={'runs': angles, 'reference': file(run=500)},
-        label='reflectivity', member=sample, persist=True)
+    code: `def angles(files):
+    runs = {}
+    for f in sorted(files, key=lambda f: f.metadata['run']):
+        runs.setdefault(f.metadata['sample'], []).append(f.ref)
+    return [Row(s, {'runs': refs}) for s, refs in runs.items()]
 
-rule = Rule('reflectivity', stitch,
-            selector=Selector(role='sample'),
-            at='runs', label='reflectivity')
-TriggerLoop(client, rules=[rule]).run()` },
+batch = Batch(client, STITCH, columns=('runs',),
+              label='reflectivity', source=angles,
+              selector=Selector(role='sample'), persist=True)
+run([Automatic(batch, at='runs',
+               settings=lambda: {'reference': file(run=500)})])` },
   { level: 11, caller: 'all', placement: 'service', planned: SERVICE, title: 'Many controllers, one history',
-    body: `<p>All clients of a proposal share its history. A notebook can reference a transmission that the trigger loop computed, and the app lists that record in its pickers.</p>
-           <p>Every client of a workspace reads the same values. The trigger loop persists its outputs, so they outlive the workspace. A proposal has one workspace. Whether its users share the values in memory, or the service separates or bounds them per user, is open. Provenance follows each reference back to the files.</p>`,
-    code: `# computed by the trigger loop
+    body: `<p>All clients of a proposal share its history. A notebook can reference a transmission that the automatic reduction computed, and the app lists that record in its pickers.</p>
+           <p>Every client of a workspace reads the same values. The automatic reduction persists its outputs, so they outlive the workspace. A proposal has one workspace. Whether its users share the values in memory, or the service separates or bounds them per user, is open. Provenance follows each reference back to the files.</p>`,
+    code: `# computed by the automatic reduction
 t = client.latest('transmission', member='250K')
 record = client.submit(IOFQ, params={
     ..., 'transmission': t.ref('transmission')})
@@ -217,7 +216,7 @@ const FIRST_FULL = SLIDES.findIndex(s => s.level === FULL) + 1;  // the step
 const GROUPS = [['Workflow', 0, 3], ['Without a workspace', 3, 7], ['Workspace', 7, 12], ['Swap caller or placement', 12, 17], ['Other bindings', 17, 19]];
 
 const NAMES = {
-  caller: { notebook: 'Notebook', app: 'Panel app', trigger: 'Trigger loop', all: 'All three' },
+  caller: { notebook: 'Notebook', app: 'Panel app', trigger: 'Automatic reduction', all: 'All three' },
   placement: { local: 'local()', service: 'service' },
   binding: { pipeline: 'Pipeline', driver: 'Driver', function: 'Function' },
 };
@@ -282,15 +281,15 @@ client.output(r[60339],
     <div class="row">sample <span class="in">run 60339 ▾</span></div>
     <div class="row">transmission <span class="in">record ▾</span></div>
     <div class="btn">Submit</div></div>`),
-  trigger: h('Trigger loop', 'automatic reduction', `<pre class="mini">for each new file:
-  fill the template
-  submit(label=...,
-         persist=True)</pre>`),
+  trigger: h('Automatic reduction', 'a batch, stepped', `<pre class="mini">at each step:
+  scan the files
+  reduce each row with
+  a new file</pre>`),
 };
 const CALLER_SMALL = [
   h('Jupyter notebook', '', '<pre class="mini">client.submit(IOFQ, ...)</pre>'),
   h('Panel app', '', '<pre class="mini">App(client)</pre>'),
-  h('Trigger loop', '', '<pre class="mini">TriggerLoop(client, ...)</pre>'),
+  h('Automatic reduction', '', '<pre class="mini">run([Automatic(batch, ...)])</pre>'),
 ];
 
 function layout(cfg, { box, arrow }) {
@@ -386,7 +385,7 @@ const ABOUT = {
   caller: {
     notebook: 'A notebook submits requests and reads outputs through the client.',
     app: 'The Panel app makes a form per spec from its params schema and submits through the client.',
-    trigger: 'The trigger loop fills a template for each new file a rule matches, and submits it under the rule\'s label.',
+    trigger: 'The loop of automatic reduction scans a batch, and submits each row with a new file at its trigger column under the batch\'s label.',
     all: 'Several controllers share one proposal\'s history, each through its own client.',
   },
   placement: {
@@ -405,8 +404,8 @@ const CODE = {
   caller: {
     notebook: `record = client.submit(SPEC, params={...})\nclient.output(record, ...)`,
     app: 'app = App(client)',
-    trigger: 'TriggerLoop(client, rules=[rule]).run()',
-    all: '# each in its own process, with its own client\nclient.submit(SPEC, params={...})\nApp(client)\nTriggerLoop(client, rules=[rule]).run()',
+    trigger: 'run([Automatic(batch, at=..., settings=...)])',
+    all: '# each in its own process, with its own client\nclient.submit(SPEC, params={...})\nApp(client)\nrun([Automatic(batch, ...)])',
   },
 };
 

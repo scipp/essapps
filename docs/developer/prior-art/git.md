@@ -63,9 +63,9 @@ The catalogue entry survives the proposal's history for the same reason a pushed
 **Names need a namespace.**
 Git keeps branches, tags, and remote branches under separate prefixes (`refs/heads/`, `refs/tags/`, `refs/remotes/`), resolves a short name by a fixed order of rules, and warns when it is ambiguous ([revisions L27-L33][revname], `core.warnAmbiguousRefs`, true by default, [config/core L407-L409][warn]).
 Here, a label is one free string per proposal.
-A rule owns its label by convention only: a record a notebook submits under it stops the rule from reducing the files that record names ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
+The automatic reduction owns its label by convention only: a record a notebook submits under it, with a row's key as its member, stops the loop from reducing that row's file ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)).
 Labels are tentative ([open question 3](../README.md#open-questions)).
-If they stay, separate the names of rules from the names people choose before the first users, since renaming names that records already carry is costly.
+If they stay, separate the labels of the automatic reduction from the labels people choose before the first users, since renaming names that records already carry is costly.
 
 **The interface leaked the model.**
 Perez De Rosso and Jackson trace git's usability problems to its concepts, such as the staging area and detached HEAD, not to its commands ([Onward! 2013][wwg]).
@@ -76,9 +76,9 @@ The first-release application ([requirements, Goal](../../requirements/README.md
 **Automation belongs next to the versioned content, and its status on a server.**
 Git hooks live in `$GIT_DIR/hooks`, outside the tracked tree ([gitrepository-layout L170-L178][hooks]), so a clone does not carry them.
 CI services read their configuration from a tracked file, show the status of each run to anyone with access, and leave re-running failed jobs to a person, with the same commit as the first run ([GitHub docs][rerun]).
-The trigger loop matches the last point: a failed record counts as handled, and running it again is the user's decision ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
-It differs on the second: a rule's status lives in the `TriggerLoop` object, which an operator in another process cannot read ([#24][i24]).
-A rule is an application's function ([#33][i33]), so such a server lists the names and statuses of its rules, not what they submit.
+The automatic reduction matches the last point: a failed record counts as a row reduced, and running it again is the user's decision ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)).
+It differs on the second: why a row did not run lives in the `Automatic` object, which an operator in another process cannot read ([#24][i24]).
+A source of rows is an application's function ([#33][i33]), so such a server lists the batches and the states of their rows, not how the rows are made.
 
 **Where git's model does not apply.**
 Git merges histories by text.
@@ -89,9 +89,9 @@ Git is distributed with no single writer; here one process writes a proposal's h
 
 - Order under a label by the order logged, or by a link to the previous record; never by time.
 - References to identities, never to names that move.
-- Separate namespaces for rules' labels and people's labels, if labels stay.
+- Separate namespaces for the labels of the automatic reduction and people's labels, if labels stay.
 - A hash and size per persisted output, when the store's layout is designed.
-- Rule status kept where other processes can read it.
+- Why a row of the automatic reduction did not run, kept where other processes can read it.
 
 ## Do not borrow
 

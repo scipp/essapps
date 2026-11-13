@@ -9,8 +9,8 @@ import pytest
 
 from ess.apps import Client, Status, SubmitError, file, local
 from ess.apps.batch import Batch, CorrectedFiles, FileInfo, Row, ready, remaining
-from ess.apps.testing import FakeStore, StagedFunction
-from ess.spec import function_binding
+from ess.apps.testing import CountingClient, FakeStore, StagedFunction
+from ess.spec import OutputRef, function_binding
 
 from .toys import COLUMNS, FIND, PLAIN, STAGED, Gate, Measure, Outputs, pair
 
@@ -42,6 +42,27 @@ def test_rows_are_reduced_and_found_by_their_key(
     state = scanned.state()
     assert state['1'].record == records['1']
     assert state['1'].status is Status.COMPLETED
+
+
+def test_the_state_of_chosen_rows_asks_the_status_of_their_records_only(
+    client: Client, sample: Measure
+) -> None:
+    counting = CountingClient(client)
+    batch = Batch(
+        counting,  # type: ignore[arg-type]
+        STAGED,
+        columns=COLUMNS,
+        label='scan',
+        source=pair,
+    )
+    sample(1, 'water')
+    sample(2, 'sds')
+    batch.scan()
+    client.wait(batch.reduce(SETTINGS, ['1']))
+    counting.reads.clear()
+
+    assert list(batch.state(keys=['2'])) == ['2']
+    assert counting.reads['status'] == 0
 
 
 def test_columns_must_be_parameters(client: Client) -> None:
@@ -328,16 +349,32 @@ def test_a_cell_reading_a_failed_record_stops_only_its_row(
     assert ready(reduce.state()) == ['1']
 
 
-def test_results_of_another_submitter_are_not_a_rows_result(
+def test_an_unknown_record_in_a_cell_touches_only_its_row(
+    chain: tuple[Batch, Batch], client: Client
+) -> None:
+    _, reduce = chain
+    failed = reduce.reduce({'binning': {'bins': 1}}, ['1'])
+    client.wait(failed)
+    reduce.rows = reduce.rows.edit(
+        '1', {'offset': OutputRef(record='nope', output='x')}
+    )
+    reduce.rows = reduce.rows.edit('2', {'offset': failed['1'].ref('total')})
+
+    whole, chosen = reduce.state()['2'], reduce.state(keys=['2'])['2']
+
+    assert [e.msg for e in whole.problems] == ['the record it reads is failed']
+    assert chosen.problems == whole.problems
+
+
+def test_a_record_of_another_submitter_is_a_rows_result(
     scanned: Batch, client: Client, other: Client
 ) -> None:
     client.wait(scanned.reduce(SETTINGS, ['1']))
-    mine = scanned.state()['1'].record
     row = {k: scanned.rows['1'].values[k] for k in ('sample', 'transmission')}
 
-    other.compute(STAGED, params={**row, **SETTINGS}, label='scan', member='1')
+    theirs = other.compute(STAGED, params={**row, **SETTINGS}, label='scan', member='1')
 
-    assert scanned.state()['1'].record == mine
+    assert scanned.state()['1'].record == theirs
 
 
 def test_persisting_goes_with_the_batch(files: CorrectedFiles, sample: Measure) -> None:

@@ -135,3 +135,10 @@ def test_a_row_added_takes_no_edit_left_from_a_row_gone() -> None:
     orphan = RowTable().rescan([Row('a', {'x': 1})]).edit('a', {'x': 9}).rescan([])
 
     assert orphan.add(Row('a', {'x': 5, 'y': 7}))['a'].values == {'x': 5, 'y': 7}
+
+
+def test_a_row_given_with_empty_has_that_cell_empty() -> None:
+    t = RowTable().rescan([Row('a', {'x': EMPTY, 'y': 1})]).add(Row('b', {'x': EMPTY}))
+
+    assert t['a'].values == {'y': 1}
+    assert t['b'].values == {}

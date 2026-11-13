@@ -153,7 +153,7 @@ a { color: var(--stage); }
   <div><dt>state n</dt><dd>An accumulator after its first n pushes. Not a record: <code>client.output</code> copies it, and <code>client.freeze</code> makes the logged state a record of its plain request.</dd></div>
   <div><dt>logged state</dt><dd>State n for the n pushes logged so far, whether or not they have been added. A read is of the logged state when it is called, a freeze once no other freeze of the accumulator is being checked.</dd></div>
   <div><dt>driver</dt><dd>The object behind an accumulator, with <code>push(table, rows)</code> and <code>outputs()</code>. The workflow package writes it, e.g. to sum a numerator and a denominator.</dd></div>
-  <div><dt>controller</dt><dd>Client code that decides what to submit, push, and release: a notebook, an app, the trigger loop.</dd></div>
+  <div><dt>controller</dt><dd>Client code that decides what to submit, push, and release: a notebook, an app, the loop of automatic reduction.</dd></div>
 </dl>
 
 <!-- ───────────── slide 1: the board ───────────── -->
@@ -604,8 +604,8 @@ binding = DriverBinding(SUM, RowSum)</code></pre>
       <div class="eyebrow" style="margin-bottom:6px">Needed to read the grid</div>
       <ul class="tight">
         <li><b>Records and references.</b> Every connection between requests is a reference: <code>record.ref('centre')</code> or <code>file(run=611)</code>. A reference never names an accumulator, only the record of its freeze. A reference to a pending record is valid. The workspace waits for it.</li>
-        <li><b>Template</b> is the shared building block: stage, accumulator, batch, and rules all start from one.</li>
-        <li><b>Controllers.</b> The workspace never decides what to submit or push. A notebook, an app, or the <code>TriggerLoop</code> of rules does.</li>
+        <li><b>Template</b> is the shared building block: stage, accumulator, and batch, the automatic reduction among them, all start from one.</li>
+        <li><b>Controllers.</b> The workspace never decides what to submit or push. A notebook, an app, or the loop of automatic reduction (<code>ess.apps.batch.auto</code>) does.</li>
         <li><b>Where it runs.</b> Both: values in memory while something keeps them, written only when persisted. The service (designed, not built) runs one workspace for each proposal. Whether the users of a proposal share its values in memory, or the service separates or bounds them per user, is open. So are how it bounds a workspace's memory, and where it holds an accumulator's driver. Placement says the results do not differ.</li>
       </ul>
     </div>
@@ -615,7 +615,7 @@ binding = DriverBinding(SUM, RowSum)</code></pre>
         <li>Files and the file source (<code>client.files</code>, selectors, <code>watch</code>)</li>
         <li>Labels and members (tentative)</li>
         <li>Status, failure, cancel, <code>as_completed</code></li>
-        <li>Rules</li>
+        <li>Automatic reduction</li>
         <li>Provenance and publication</li>
         <li>Release and lifetimes of values</li>
       </ul>

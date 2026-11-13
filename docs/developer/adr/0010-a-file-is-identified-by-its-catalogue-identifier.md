@@ -9,7 +9,7 @@
 A person names a file as `file(run=60339)`, and the file source resolves the name to the file's *identity*, which the record keeps and provenance lists.
 With paths as identities:
 
-- A moved folder changes every identity, so a trigger loop reduces its runs again.
+- A moved folder changes every identity, so the automatic reduction reduces its runs again.
 - The same run seen through two file sources has two identities.
 
 The catalogue is SciCat.
@@ -40,7 +40,7 @@ A person still writes `file(run=60339)`.
 - A moved folder, and a second file source, give a raw file the same identity.
 - Provenance lists raw files as the catalogue names them.
 - A file source reads the identifier from a raw file, or gets it from the catalogue.
-- A file first listed without its catalogue identifier and later with it changes identity: a trigger loop reduces it again, and the records made before name an identity the file source no longer knows.
+- A file first listed without its catalogue identifier and later with it changes identity: the automatic reduction reduces it again, and the records made before name an identity the file source no longer knows.
 - Identities are in the log, so changing them changes the log's format ([ADR 0004](0004-history-is-append-only-lists.md#decision)).
 
 ## Open
