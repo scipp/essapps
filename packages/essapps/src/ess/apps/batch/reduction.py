@@ -143,18 +143,24 @@ class Batch:
             for c in self.columns
         }
 
-    def state(self, settings: Mapping[str, Any] | None = None) -> dict[str, RowState]:
+    def state(
+        self,
+        settings: Mapping[str, Any] | None = None,
+        keys: Sequence[str] | None = None,
+    ) -> dict[str, RowState]:
         """
-        Where each row stands now, read from the client. With ``settings``,
-        also which rows are stale. A result that came from :meth:`tweak` is
-        stale only if the row's cells have changed since.
+        Where each row stands now, read from the client, or the rows of
+        ``keys`` if given. With ``settings``, also which rows are stale. A
+        result that came from :meth:`tweak` is stale only if the row's cells
+        have changed since.
         """
-        found = self._results()
-        upstream = self._records_read()
+        rows = list(self.rows) if keys is None else [self.rows[k] for k in keys]
+        found = self._results(keys)
+        upstream = self._records_read(rows)
         status = self._status([*found.values(), *upstream])
-        stale = set() if settings is None else self._stale(settings)
+        stale = set() if settings is None else self._stale(settings, rows)
         return state.row_states(
-            self.rows,
+            rows,
             self.spec.params,
             self.columns,
             found,
@@ -163,13 +169,17 @@ class Batch:
             self._tweaked.keys(),
         )
 
-    def _results(self) -> dict[str, Record]:
+    def _results(self, keys: Sequence[str] | None = None) -> dict[str, Record]:
+        """The result of each row, or of the rows of ``keys`` if given."""
         records = self.client.records(label=self.label)
-        return state.results(records, SpecId.of(self.spec), self.client.submitter)
+        if keys is not None:
+            chosen = set(keys)
+            records = [r for r in records if r.member in chosen]
+        return state.results(records, SpecId.of(self.spec))
 
-    def _records_read(self) -> list[Record]:
-        """The records that cells reference, if the client knows them all."""
-        ids = sorted(state.references(self.rows))
+    def _records_read(self, rows: list[Row]) -> list[Record]:
+        """The records that ``rows`` reference, if the client knows them all."""
+        ids = sorted(state.references(rows))
         try:
             return self.client.records(ids=ids) if ids else []
         except KeyError:  # the workspace refuses such a cell at submission
@@ -179,9 +189,9 @@ class Batch:
         statuses = self.client.status(records)
         return {r.id: s for r, s in zip(records, statuses, strict=True)}
 
-    def _stale(self, settings: Mapping[str, Any]) -> set[str]:
+    def _stale(self, settings: Mapping[str, Any], rows: list[Row]) -> set[str]:
         template = self.template(settings)
-        return {row.key for row in self.rows if self._differs(row, template)}
+        return {row.key for row in rows if self._differs(row, template)}
 
     def _differs(self, row: Row, template: Template) -> bool:
         if row.key in self._tweaked:
@@ -202,7 +212,7 @@ class Batch:
         it by key and the cell by column. A reason about the settings is named
         once, without a key.
         """
-        states = self.state()
+        states = self.state(keys=keys)
         rows = [self.rows[key] for key in keys]
         refused = [e for k in keys for e in (*states[k].problems, *_running(states[k]))]
         if refused:
@@ -258,7 +268,7 @@ class Batch:
         only if the cells change after this. Raises ``SubmitError`` if the row
         is still running.
         """
-        if running := _running(self.state()[key]):
+        if running := _running(self.state(keys=[key])[key]):
             raise SubmitError(running)
         request = Request(self.spec, params=params)
         record = self.client.submit(
@@ -281,7 +291,7 @@ class Batch:
 
     def cancel(self, keys: Sequence[str] | None = None) -> None:
         """Cancel the results still running, of ``keys`` if given, or of any row."""
-        chosen = [r for k, r in self._results().items() if keys is None or k in keys]
+        chosen = list(self._results(keys).values())
         status = self._status(chosen)
         self.client.cancel([r for r in chosen if status[r.id] is Status.PENDING])
 

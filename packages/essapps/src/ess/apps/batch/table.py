@@ -67,16 +67,17 @@ class RowTable:
 
     @cached_property
     def _rows(self) -> dict[str, Row]:
-        by_hand = {row.key for row in self.added}
-        shown = [r for r in self.scan if r.key not in self.removed | by_hand]
-        return {
-            row.key: replace(row, values=self._with_edits(row))
-            for row in (*shown, *self.added)
-        }
+        hidden = self.removed | {row.key for row in self.added}
+        shown = [r for r in self.scan if r.key not in hidden]
+        return {row.key: self._with_edits(row) for row in (*shown, *self.added)}
 
-    def _with_edits(self, row: Row) -> dict[str, Any]:
-        cells = {**row.values, **self.edits.get(row.key, {})}
-        return {column: v for column, v in cells.items() if v is not EMPTY}
+    def _with_edits(self, row: Row) -> Row:
+        if (edits := self.edits.get(row.key)) is None:
+            return row
+        cells = {**row.values, **edits}
+        return replace(
+            row, values={column: v for column, v in cells.items() if v is not EMPTY}
+        )
 
     def __iter__(self) -> Iterator[Row]:
         return iter(self._rows.values())
