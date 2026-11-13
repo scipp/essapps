@@ -167,7 +167,7 @@ loop.refused      # why each such row did not run, by key: {'60339': '60339: sam
 run([loop])       # steps forever, once a second
 ```
 
-`at` is the *trigger column*, of a file or a list of files, each as `FileInfo.ref` gives it. `settings` is called at each step, so a change applies to the rows not reduced yet.
+`at` is the *trigger column*, of a file or a list of files, each as `FileInfo.ref` gives it. A cell there that names a file another way, such as `file(run=1)`, which the workspace resolves, would never count as held, and its row would be reduced at every step. So once the record of a row does not hold the files of its cell, `step` raises `ValueError`, naming the row, and so does every later step, before it submits anything, until the cell changes. `settings` is called at each step, so a change applies to the rows not reduced yet.
 
 **A row runs if its cell at `at` holds a file that no record under the label, with the row's key, holds at `at`.** Any record counts: failed, cancelled, of any spec, and of any submitter. So automatic reduction differs from a person's reduce:
 

@@ -169,7 +169,7 @@ A cut-off that a person sets on purpose, "only the files since Tuesday", is a se
     ```
 
   A class with state that the author writes, `add(file) -> changed rows`, is not offered. It would have to give the same rows for any order of arrival, a role corrected later, a file that arrives again, and a restart, which a function over the files gives without effort.
-- **A cell at `at` that names a file.** Files are compared by identity, as `FileInfo.ref` gives it. A source that writes `file(run=1)` at `at` makes a row that no record holds, since the record holds the identity, so the row runs at every step. Comparing them needs the file source's `resolve`, which a client cannot reach.
+- **A cell at `at` that names a file.** Files are compared by identity, as `FileInfo.ref` gives it, and a client has no call that resolves a file name such as `file(run=1)`. So the loop cannot accept such a cell: once a record does not hold the files of its row's cell, the loop refuses the cell by stopping, and raises at every step until the cell changes.
 - **Starting a new label at a given run.** A loop on a new label consumes from the first file. Starting it at a run needs a range in `Selector`, which matches equal values only.
 - **Old rows reduced again for a new spec version.** One more term of the predicate, from the spec of each row's result (ADR 0009): `runs(row, held) or result.spec != spec`.
 - **The files held at `at`, by key, for a page.** A page reads `Batch.state`, which counts the results of the batch's spec only. After a new version of the spec, a page shows the old rows as not reduced, while the loop holds them.

@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from ess.apps import Client
+from ess.apps import Client, file
 from ess.apps.batch import Batch, FileInfo, Row
 from ess.apps.batch.auto import Automatic
 from ess.apps.testing import CountingClient, FakeFiles
@@ -407,3 +407,22 @@ def test_two_loops_on_one_label_submit_a_file_once(
 
     assert list(first.step()) == ['1']
     assert second.step() == {}
+
+
+def test_a_cell_that_names_a_file_stops_the_loop_at_every_step(
+    client: Client, sample: Measure
+) -> None:
+    def by_run(files: Sequence[FileInfo]) -> list[Row]:
+        return [
+            replace(row, values={**row.values, 'sample': file(run=int(row.key))})
+            for row in pair(files)
+        ]
+
+    batch = Batch(client, PLAIN, columns=COLUMNS, label='scan', source=by_run)
+    auto = Automatic(batch, at='sample', settings=lambda: SETTINGS)
+    sample(1, 'water')
+
+    for _ in range(2):
+        with pytest.raises(ValueError, match=r"^row '1': its record does not hold"):
+            auto.step()
+    assert len(client.records(label='scan')) == 1

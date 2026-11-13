@@ -74,6 +74,8 @@ class Automatic:
         # The identity strings, which are equal only if their files are.
         self._held: dict[str, set[str]] = {}
         self._refused: dict[str, tuple[Row, str]] = {}
+        # Rows whose record did not hold their cell at `at`, as they were then.
+        self._unheld: dict[str, tuple[Row, str]] = {}
         self._settings: Mapping[str, Any] | None = None
 
     @property
@@ -86,6 +88,15 @@ class Automatic:
         Scan, and reduce the rows with a new file at ``at``; their records by
         key. A row that cannot run, or whose request is refused, does not hold
         back the others, and :attr:`refused` says why.
+
+        Raises
+        ------
+        ValueError
+            If the record of a row does not hold the files of the row's cell
+            at ``at``, such as a cell that names a file by ``file(run=...)``,
+            which the workspace resolves: the next step would submit the row
+            again, so the loop stops. Each later step raises too, before it
+            submits anything, until that cell changes.
         """
         batch = self.batch
         changes = batch.client.changes(after=self._cursor)
@@ -113,7 +124,28 @@ class Automatic:
             if row.key not in self._refused
             and _new(row.values.get(self.at), self._held.get(row.key, set()))
         ]
-        return self._reduce(settings, todo)
+        self._unheld = {
+            key: (row, why)
+            for key, (row, why) in self._unheld.items()
+            if key in rows and rows[key] == row
+        }
+        if stuck := [why for key, (_, why) in self._unheld.items() if key in todo]:
+            raise ValueError('\n'.join(stuck))
+        records = self._reduce(settings, todo)
+        self._check(records)
+        return records
+
+    def _check(self, records: Mapping[str, Record]) -> None:
+        """Raise if a record does not hold the files of its row's cell at ``at``."""
+        rows = self.batch.rows
+        unheld = {}
+        for key, record in records.items():
+            cell = _cell_files(rows[key].values.get(self.at))
+            if missing := cell - _files_at(record.request.params, self.at):
+                unheld[key] = (rows[key], _unheld(key, self.at, missing))
+        if unheld:
+            self._unheld |= unheld
+            raise ValueError('\n'.join(why for _, why in unheld.values()))
 
     def _reduce(
         self, settings: Mapping[str, Any], keys: list[str]
@@ -156,6 +188,25 @@ def _new(cell: Any, held: set[str]) -> bool:
     if isinstance(cell, list):
         return any(isinstance(f, FileRef) and f.file not in held for f in cell)
     return False
+
+
+def _cell_files(cell: Any) -> set[str]:
+    """The identities of the files of a cell: a file, or a list of files."""
+    if isinstance(cell, FileRef):
+        return {cell.file}
+    if isinstance(cell, list):
+        return {f.file for f in cell if isinstance(f, FileRef)}
+    return set()
+
+
+def _unheld(key: str, at: str, missing: set[str]) -> str:
+    return (
+        f'row {key!r}: its record does not hold {", ".join(sorted(missing))} at '
+        f'{at!r}. A cell at the trigger column holds the identity of each file, '
+        'as FileInfo.ref gives it. A name such as file(run=1) is resolved by the '
+        'workspace, so no record would count as holding it, and the row would be '
+        'reduced at every step.'
+    )
 
 
 def _files_at(params: Mapping[str, Any], at: str) -> set[str]:
