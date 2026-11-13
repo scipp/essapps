@@ -1,6 +1,6 @@
 # ESS data-reduction framework
 
-**Status: `ess.apps.Workspace`, which `local()` and `open_folder()` make in the caller's process, implements this design, including freeze, `select=`, and persist to a fake store or to scipp HDF5 files in a folder (`ess.apps.folder`). A record of another spec than the one bound reads as stored scipp data ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)). Not implemented: a hosted workspace reached with `connect()`, `client.publish`, software versions in provenance, and catalogue identifiers as file identities ([ADR 0010](adr/0010-a-file-is-identified-by-its-catalogue-identifier.md)). The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
+**Status: `ess.apps.Workspace`, which `local()` and `open_folder()` make in the caller's process, implements this design, including freeze, `select=`, and persist to a fake store or to scipp HDF5 files in a folder (`ess.apps.folder`). A record of another spec than the one bound reads as stored scipp data ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)). A file is identified by its catalogue identifier, or else by its path ([ADR 0010](adr/0010-a-file-is-identified-by-its-catalogue-identifier.md)). Not implemented: a hosted workspace reached with `connect()`, `client.publish`, and software versions in provenance. The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
 
 This page gives an overview of the framework: its components, what each promises the others, and the ideas that client code is built from.
 The details live one level down:
@@ -113,6 +113,7 @@ It keeps nothing: every client of a workspace reads, references, and releases th
 Every call that starts work returns once the workspace has *logged* it in its history; the work happens later.
 
 **File source.** The workspace finds files, and their metadata, through its *file source*, which is given when the workspace is made.
+At submission it resolves a name, such as `file(run=60339)`, to the file's *identity*, which the record holds: `pid:20.500.12269/<uuid>` for a file the catalogue lists, and else its path, `path:masks/main.xml` relative to the workspace's folder if the file is in it ([ADR 0010](adr/0010-a-file-is-identified-by-its-catalogue-identifier.md)).
 A client sees only the files the workspace's proposal may read:
 
 ```python

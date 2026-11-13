@@ -1,6 +1,6 @@
 # ADR 0009: A record names its spec by name, version, and digest, and a record of another spec stays readable
 
-- Status: accepted, implemented (`ess.apps.workspace`, log format 3), but for what Open names.
+- Status: accepted, implemented (`ess.apps.workspace`, with a new format of the log), but for what Open names.
 - Deciders: Simon
 - Date: 2026-11-13
 

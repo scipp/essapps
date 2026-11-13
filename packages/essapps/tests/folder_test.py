@@ -5,14 +5,17 @@
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+import pandas as pd
 import pydantic
 import pytest
 import scipp as sc
 
-from ess.apps import Client, file
+from ess.apps import Client, Record, Rule, Selector, TriggerLoop, file
+from ess.apps.batch import Batch, FileInfo, Row
+from ess.apps.batch.frames import batch_table
 from ess.apps.folder import FolderStore, open_folder, scan_folder
 from ess.apps.testing import read_file
-from ess.spec import Binding, WorkflowSpec, function_binding
+from ess.spec import Binding, FileRef, WorkflowSpec, function_binding
 
 from .batch import toys
 
@@ -50,13 +53,18 @@ def _plain(params: toys.Params) -> toys.Outputs:
 
 @pytest.fixture
 def folder(tmp_path: Path) -> Path:
-    """A folder of runs 1 to 3, each holding its number."""
-    lines = ['file,run,role']
+    """
+    A folder of runs 1 to 3, each holding its number; the catalogue lists run 3.
+    """
+    folder = tmp_path / 'workspace'
+    folder.mkdir()
+    lines = ['file,run,role,pid']
     for run in (1, 2, 3):
-        (tmp_path / f'run-{run}.json').write_text(str(run))
-        lines.append(f'run-{run}.json,{run},sample')
-    (tmp_path / 'files.csv').write_text('\n'.join(lines))
-    return tmp_path
+        (folder / f'run-{run}.json').write_text(str(run))
+        pid = '20.500.12269/abc' if run == 3 else ''
+        lines.append(f'run-{run}.json,{run},sample,{pid}')
+    (folder / 'files.csv').write_text('\n'.join(lines))
+    return folder
 
 
 @pytest.fixture
@@ -142,6 +150,54 @@ def test_a_request_of_a_second_session_references_a_persisted_output(
         )
         second.wait([total])
         assert second.output(total, 'total') == 4.0
+
+
+def _find_each(client: Client, ref: FileRef) -> Record:
+    """Find the offset of a run, as the member of its run under ``found``."""
+    (metadata,) = client.files.metadata([ref])
+    return client.submit(
+        toys.FIND,
+        params={'sample': ref},
+        label='found',
+        member=metadata['run'],
+        persist=True,
+    )
+
+
+def _found(client: Client) -> pd.DataFrame:
+    """The batch of a row per run, with its result under ``found``, as a table."""
+
+    def rows(files: Sequence[FileInfo]) -> list[Row]:
+        return [Row(f.metadata['run'], {'sample': f.ref}) for f in files]
+
+    batch = Batch(client, toys.FIND, columns=['sample'], label='found', source=rows)
+    batch.scan()
+    return batch_table(batch, batch.state())
+
+
+def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_them(
+    folder: Path, bindings: list[Binding]
+) -> None:
+    rule = Rule('find', _find_each, selector=Selector(), label='found', at='sample')
+    with open_folder(folder, bindings) as first:
+        found = TriggerLoop(first, [rule]).step()
+        first.wait(found)
+        table = _found(first)
+    files = [r.request.params['sample'] for r in found]
+    assert files == [
+        FileRef(file='path:run-1.json'),
+        FileRef(file='path:run-2.json'),
+        FileRef(file='pid:20.500.12269/abc'),
+    ]
+
+    with open_folder(folder.rename(folder.with_name('moved')), bindings) as second:
+        assert second.files.list(Selector()) == files
+        assert [second.output(r, 'offset').value for r in found] == [1, 2, 3]
+        assert TriggerLoop(second, [rule]).step() == []
+        assert _found(second).equals(table)
+        again = second.submit(found[0].request)
+        second.wait([again])
+        assert second.output(again, 'offset').value == 1
 
 
 def test_a_folder_held_by_a_client_cannot_be_opened_again(

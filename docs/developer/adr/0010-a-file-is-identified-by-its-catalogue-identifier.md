@@ -1,6 +1,6 @@
 # ADR 0010: A file is identified by its catalogue identifier, or else by its path
 
-- Status: accepted, not implemented. On `main`, `FolderFiles` gives every file the identity `path:<absolute path>`.
+- Status: accepted, implemented (`ess.apps.FolderFiles`, and LoKI's `read_metadata`, which forms the identifier from a raw file), but for what Open names. No file source asks the catalogue: `FolderFiles` takes a file's `pid` from its table.
 - Deciders: Simon
 - Date: 2026-11-13
 
@@ -40,8 +40,10 @@ A person still writes `file(run=60339)`.
 - A moved folder, and a second file source, give a raw file the same identity.
 - Provenance lists raw files as the catalogue names them.
 - A file source reads the identifier from a raw file, or gets it from the catalogue.
+- A file first listed without its catalogue identifier and later with it changes identity: a trigger loop reduces it again, and the records made before name an identity the file source no longer knows.
 - Identities are in the log, so changing them changes the log's format ([ADR 0004](0004-history-is-append-only-lists.md#decision)).
 
 ## Open
 
 - Whether every raw file in user operation carries the identifier, and whether a file the catalogue lists can still be unreadable. To be asked of the teams that run the file writer and the catalogue.
+- A catalogue dataset that holds several files cannot be represented, since two rows with one `pid` are refused. Raw files have one file per dataset.

@@ -171,10 +171,11 @@ def validate_request_value(
 def _paths_as_files(value: Any) -> Any:
     """
     ``value``, plain data, with each ``Path`` in it the file named by that
-    path, ``file(path=...)`` (see :meth:`~ess.spec.refs.FileRef.at`).
+    path, ``file(path=...)`` (see :meth:`~ess.spec.refs.FileRef.at`). A
+    relative path is relative to the working directory.
     """
     if isinstance(value, PurePath):
-        return FileRef.at(value).model_dump(by_alias=True)
+        return FileRef.at(Path(value).absolute()).model_dump(by_alias=True)
     if isinstance(value, dict):
         return {k: _paths_as_files(v) for k, v in value.items()}
     if isinstance(value, list | tuple):
