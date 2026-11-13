@@ -72,6 +72,7 @@ The web page (`ess.apps.batch.web`) is experimental and runs as a demo.
 An instrument has one stream of new files, so it has one automatic reduction.
 The process holds a workspace for each proposal that has new files.
 It runs with no page open, and users find its results through SciCat, not by connecting to it.
+For the first release, the same process may run on a VISA machine ([requirements](../requirements/users.md)).
 A scientist who needs a variant of the automatic reduction runs a batch.
 Of this deployment, only the loop exists (`TriggerLoop`, [automatic-reduction.md](automatic-reduction.md)).
 

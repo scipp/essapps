@@ -146,7 +146,7 @@ In each deployment of the first release, one Python process holds the applicatio
 |---|---|---|
 | notebook | the notebook's, on a VISA machine or a laptop | in memory, or in a folder |
 | technique application with a batch page | one per folder, started by a user on a VISA machine | in the folder |
-| automatic reduction | one per instrument, on a DMSC server | one per proposal, on disk |
+| automatic reduction | one per instrument, on a DMSC server, or on a VISA machine for the first release | one per proposal, on disk |
 
 Only (a) lies between two processes, when a browser draws the screen; bindings run on 4 threads of the workspace's process.
 A screen never calls a workspace: what it shows is computed in Python next to the data, and the HTTP interface of a page belongs to that page.
