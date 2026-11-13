@@ -150,8 +150,17 @@ def windows() -> list[Any]:
 
 
 @pytest.fixture
+def entered() -> threading.Event:
+    """Set each time LOAD's workflow is entered."""
+    return threading.Event()
+
+
+@pytest.fixture
 def start(
-    files: FakeFiles, loading: threading.Event, windows: list[Any]
+    files: FakeFiles,
+    loading: threading.Event,
+    windows: list[Any],
+    entered: threading.Event,
 ) -> Iterator[Callable[[Path], Client]]:
     """A client of a new workspace over the log at a path."""
     workspaces: list[Workspace] = []
@@ -159,6 +168,7 @@ def start(
     def load(params: LoadParams) -> ValueOutputs:
         window = params.window
         windows.append(window)
+        entered.set()
         loading.wait(timeout=5)
         value = read_file(params.sample) * (window.stop - window.start)
         return ValueOutputs(value=Amount(value=value))
@@ -363,30 +373,41 @@ def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) ->
     assert Log.read(tmp_path / 'log') == events
 
 
-def test_records_pending_in_the_log_are_cancelled_at_a_restart(
+def test_records_pending_in_the_log_are_cancelled_or_failed_at_a_restart(
     tmp_path: Path,
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
     loading: threading.Event,
+    entered: threading.Event,
 ) -> None:
     first = start(tmp_path / 'log')
     done = first.compute(LOAD, params=_sample(1))
     loading.clear()
-    pending = first.submit(LOAD, params=_sample(2))
+    entered.clear()
+    running = first.submit(LOAD, params=_sample(2))
     total = _total(first)
     total.push(part=[done.ref('value')])
-    total.push(part=[pending.ref('value')])  # waits for ``pending``
+    total.push(part=[running.ref('value')])  # waits for ``running``
     frozen = first.freeze(total)
     read = first.submit(TOTAL, params={'part': [frozen.ref('value')]})
+    assert entered.wait(timeout=5)  # ``running`` started
 
     again = restart(tmp_path / 'log')
     loading.set()
 
-    records = [pending, frozen, read]
-    assert again.status(records) == [Status.CANCELLED] * 3  # nothing keeps them
-    assert again.failure(records) == ['the workspace restarted'] * 3
-    with pytest.raises(SubmitError, match=f'record {pending.id} cancelled'):
-        again.submit(TOTAL, params={'part': [pending.ref('value')]})
+    records = [running, frozen, read]
+    assert again.status(records) == [
+        Status.FAILED,  # it started
+        Status.CANCELLED,  # nothing keeps them
+        Status.CANCELLED,
+    ]
+    assert again.failure(records) == [
+        'the workspace ended while it ran',
+        'the workspace restarted',
+        'the workspace restarted',
+    ]
+    with pytest.raises(SubmitError, match=f'record {running.id} failed'):
+        again.submit(TOTAL, params={'part': [running.ref('value')]})
     with pytest.raises(NotReadable, match=f'accumulator {total.id} is not open'):
         again.output(total)  # the accumulator did not survive
 

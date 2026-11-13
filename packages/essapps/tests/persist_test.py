@@ -193,6 +193,12 @@ def loaded() -> list[float]:
 
 
 @pytest.fixture
+def entered() -> threading.Event:
+    """Set each time LOAD's workflow is entered, once it has read its run."""
+    return threading.Event()
+
+
+@pytest.fixture
 def boxes() -> list[weakref.ref[Box]]:
     """A weak reference to each value that BOX returned."""
     return []
@@ -200,11 +206,15 @@ def boxes() -> list[weakref.ref[Box]]:
 
 @pytest.fixture
 def bind(
-    loading: threading.Event, loaded: list[float], boxes: list[weakref.ref[Box]]
+    loading: threading.Event,
+    loaded: list[float],
+    entered: threading.Event,
+    boxes: list[weakref.ref[Box]],
 ) -> list[Binding]:
     def load(params: RunParams) -> Loaded:
         run = read_file(params.sample)
         loaded.append(run)
+        entered.set()
         loading.wait(timeout=5)
         return Loaded(value=Amount(value=run), extra=Amount(value=-run))
 
@@ -596,31 +606,40 @@ def test_readable_gives_nothing_of_a_record_that_failed_or_was_cancelled(
     loading.set()
 
 
-def test_a_restart_runs_unstarted_persisted_work_and_cancels_the_rest(
+def test_a_restart_fails_started_work_runs_persisted_work_and_cancels_the_rest(
     tmp_path: Path,
     start: Callable[..., Client],
     restart: Callable[[Path], Client],
     loading: threading.Event,
+    entered: threading.Event,
 ) -> None:
     first = start(tmp_path / 'log', workers=1)
     done = first.compute(LOAD, params=_sample(2), persist=('value',))
     loading.clear()
+    entered.clear()
     # read by nothing persisted; holds the only worker, so the rest wait for it
-    alone = first.submit(LOAD, params=_sample(2))
+    running = first.submit(LOAD, params=_sample(2))
+    alone = first.submit(LOAD, params=_sample(2))  # read by nothing persisted
     load = first.submit(LOAD, params=_sample(1))  # read by persisted work
     total = first.submit(
         TOTAL, params={'part': [load.ref('value'), done.ref('value')]}, persist=True
     )
+    assert entered.wait(timeout=5)  # ``running`` started
 
     again = restart(tmp_path / 'log')
     loading.set()
 
-    assert again.wait([load, alone, total]) == [
-        Status.COMPLETED,
+    records = [running, alone, load, total]
+    assert again.wait(records) == [
+        Status.FAILED,
         Status.CANCELLED,
         Status.COMPLETED,
+        Status.COMPLETED,
     ]
-    assert again.failure(alone) == 'the workspace restarted'
+    assert again.failure(records[:2]) == [
+        'the workspace ended while it ran',
+        'the workspace restarted',
+    ]
     assert again.output(total, 'value') == Amount(value=3.0)
 
 
@@ -702,24 +721,26 @@ def test_a_restart_fails_a_record_that_was_running_and_does_not_run_it_again(
     tmp_path: Path,
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
-    store: GatedStore,
+    loading: threading.Event,
+    entered: threading.Event,
     loaded: list[float],
 ) -> None:
     first = start(tmp_path / 'log')
-    store.gate.clear()
+    loading.clear()
     load = first.submit(LOAD, params=_sample(1), persist=True)
     shift = first.submit(SHIFT, params={'source': load.ref('value')}, persist=True)
-    assert store.entered.wait(timeout=5)  # ``load`` runs, and ``shift`` waits for it
+    assert entered.wait(timeout=5)  # ``load`` is in its workflow, ``shift`` waits
 
     again = restart(tmp_path / 'log')
 
     assert again.status([load, shift]) == [Status.FAILED, Status.FAILED]
     assert again.failure([load, shift]) == [
-        'the process ended while it ran',
+        'the workspace ended while it ran',
         f'the workspace restarted: record {load.id} failed',
     ]
     again.close()  # once every record it runs has finished
     assert loaded == [1.0]  # by the first workspace only
+    loading.set()
 
 
 def test_a_read_of_a_persisted_output_waits_for_its_write_and_no_other_does(

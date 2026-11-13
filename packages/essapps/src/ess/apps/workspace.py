@@ -636,13 +636,13 @@ class Workspace(WorkspaceProtocol):
         lock held. Nothing the earlier workspace kept survived, so only persisted
         work goes on:
 
-        1. A pending record is cancelled unless it persists outputs, or a
-           pending record that persists outputs reads it, directly or through
-           other pending records.
-        2. Otherwise it fails if it started: the process ended while it ran,
-           perhaps because of it, as an out-of-memory kill does, so running it
-           again could end the process again. A person submits its request
-           again to run it.
+        1. A pending record fails if it started: the workspace ended while it
+           ran, perhaps because of it, as an out-of-memory kill does, so
+           running it again could end the process again. A person submits its
+           request again to run it.
+        2. Otherwise it is cancelled unless it persists outputs, or a pending
+           record that persists outputs reads it, directly or through other
+           pending records.
         3. Otherwise it runs if each value it reads is a file, is written,
            or is an output of a pending record that runs, and fails if not.
            The record of a freeze fails, since the driver it reads is gone.
@@ -661,10 +661,12 @@ class Workspace(WorkspaceProtocol):
                 needed.update(ref.record for ref in upstream)
         runs: set[str] = set()
         for record_id in pending:
-            if record_id not in needed:
+            if record_id in views.started:
+                self._finish(
+                    record_id, Status.FAILED, 'the workspace ended while it ran'
+                )
+            elif record_id not in needed:
                 self._finish(record_id, Status.CANCELLED, 'the workspace restarted')
-            elif record_id in views.started:
-                self._finish(record_id, Status.FAILED, 'the process ended while it ran')
             elif (reason := self._unreadable(record_id, runs)) is not None:
                 self._finish(
                     record_id, Status.FAILED, f'the workspace restarted: {reason}'
@@ -1003,7 +1005,7 @@ class Workspace(WorkspaceProtocol):
         Run a record's workflow, holding the values it reads until it returns,
         and write the outputs persisted at its submission before it completes.
         The record's start is logged before anything is read, so that a
-        restart fails a record whose process ended while it ran.
+        restart fails a record that was running when the workspace ended.
 
         It holds them even once the record is cancelled, since the workflow
         still reads them, and lets go of them before the write. The record of
