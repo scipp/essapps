@@ -23,13 +23,16 @@ def describe(client: Client, listing: Listing, record: Record) -> str:
     A record in Markdown: its status, spec, who submitted it and when, its
     outputs, what its request names, its params, and why it failed.
     """
-    spec = listing.specs[record.id]
+    spec = listing.specs.get(record.id)
     status = listing.status[record.id]
     created = record.created.astimezone()
     outputs = (listing.output_label(record.ref(n)) for n in record.outputs)
+    named = f'`{record.spec}`'
     lines = [
         f'### {listing.labels[record.id]}: {status}',
-        f'**Spec** {spec.title} (`{record.spec}`): {spec.description}',
+        f'**Spec** {named}, not bound'
+        if spec is None
+        else f'**Spec** {spec.title} ({named}): {spec.description}',
         f'**Submitted** by {record.submitter} at {created:%Y-%m-%d %H:%M:%S}',
         '**Outputs** ' + ', '.join(outputs),
     ]

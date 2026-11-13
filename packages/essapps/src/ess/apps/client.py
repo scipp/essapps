@@ -417,6 +417,9 @@ class Client:
         what:
             A spec (or its ``SpecId``) with ``params``; a :class:`Stage` with the
             values of its blanks in ``params``; or requests, one, a list, or a dict.
+            A spec whose models differ from those of the spec bound under its name
+            and version is refused (:attr:`ess.spec.WorkflowSpec.digest`); a request,
+            like a ``SpecId``, names only the name and version.
             An accumulator is not submitted: a request reads the record of its
             :meth:`freeze`.
         params:
@@ -451,14 +454,16 @@ class Client:
         SubmitError
             If a request cannot run: an invalid value, an unknown spec or file, a
             reference at a field that the spec does not mark ``Referenced[...]``, a
-            reference that may not be read, or one whose data do not fit its
-            field. No request of the call is submitted. Each of its ``errors`` names
+            reference that may not be read, one to an output of a record of another
+            spec than the one bound, or one whose data do not fit its field. No
+            request of the call is submitted. Each of its ``errors`` names
             the field at fault by its position and the request by its key or index
             (see :class:`~ess.apps.errors.FieldError`).
         """
         stage = None
         if each is not None and (params is not None or not isinstance(what, Stage)):
             raise TypeError('each goes with a stage, in place of params')
+        digest = what.digest if isinstance(what, WorkflowSpec) else None
         if isinstance(what, WorkflowSpec | SpecId):
             what = Request(what, params=params)
         elif isinstance(what, Stage):
@@ -483,7 +488,7 @@ class Client:
         else:
             members = [member] * len(_items(what))
         entries = [
-            Entry(request, label=label, member=m, stage=stage)
+            Entry(request, label=label, member=m, stage=stage, digest=digest)
             for request, m in zip(_items(what), members, strict=True)
         ]
         names = _names(what)

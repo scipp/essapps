@@ -292,6 +292,7 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_freeze_as_a_r
         Opened(
             accumulator=total.id,
             proposal='p1',
+            specs={'total/v1': TOTAL.digest},
             template=Template(TOTAL, blanks=('part',)),
             params={'weight': None, 'part': []},
         ),

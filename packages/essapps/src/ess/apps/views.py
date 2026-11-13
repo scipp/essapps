@@ -25,6 +25,7 @@ from .log import (
     NewStateRecord,
     Opened,
     Pushed,
+    SpecDigests,
     Started,
     Submitted,
 )
@@ -95,6 +96,10 @@ class Views:
     ``persisted`` names the outputs each record persists; their write is the
     record's: pending while it is, done once it completes.
 
+    ``spec_digests`` holds the digest last logged for each spec by name and
+    version, as the log keys it, and ``digests`` the digest of each record's
+    spec: the one last logged for it before the record.
+
     ``feed`` holds the ID of a record each time an event submits or finishes
     it, in the order of the events. A position in it is a
     cursor of :meth:`changes`. Starting a record, opening an accumulator, and
@@ -110,11 +115,14 @@ class Views:
         self.accumulators: dict[str, Opened] = {}
         self.pushes: dict[str, list[Pushed]] = {}  # by accumulator ID
         self.persisted: dict[str, tuple[str, ...]] = {}
+        self.spec_digests: SpecDigests = {}
+        self.digests: dict[str, str] = {}  # by record ID
         self.feed: list[str] = []
 
     def apply(self, event: Event) -> None:
         match event:
             case Submitted():
+                self.spec_digests.update(event.specs)
                 for new in event.records:
                     self._add(new, event)
                     self.feed.append(new.id)
@@ -124,6 +132,7 @@ class Views:
                 self.feed.append(event.record)
                 self.finished[event.record] = event
             case Opened():
+                self.spec_digests.update(event.specs)
                 self.accumulators[event.accumulator] = event
             case Pushed():
                 self.pushes.setdefault(event.accumulator, []).append(event)
@@ -147,8 +156,19 @@ class Views:
             )
             if new.label is not None:
                 self.labels.setdefault(new.label, []).append(new.id)
+        self.digests[new.id] = self.spec_digests[str(self.records.spec(new.id))]
         if new.persist:
             self.persisted[new.id] = new.persist
+
+    def unlogged(self, digests: Mapping[SpecId, str]) -> SpecDigests:
+        """
+        The ``digests`` of specs that an event naming them carries: those the
+        log does not hold under the spec's name and version, or holds with
+        another digest.
+        """
+        return {
+            str(s): d for s, d in digests.items() if self.spec_digests.get(str(s)) != d
+        }
 
     def plain(self, accumulator_id: str, pushes: int) -> Request:
         """

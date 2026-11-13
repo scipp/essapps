@@ -1,6 +1,6 @@
 # ADR 0009: A record names its spec by name, version, and digest, and a record of another spec stays readable
 
-- Status: accepted, not implemented. On `main`, an output of a record whose spec has no binding raises `NotReadable`, and a stored group is read into the bound outputs class if no required field is missing.
+- Status: accepted, implemented (`ess.apps.workspace`, log format 3). Left open: only `client.submit(spec, params=...)` checks the digest of a spec passed, since `Request(spec)` and `Template(spec)` keep its name and version alone; and how a batch shows a row of another spec (Open).
 - Deciders: Simon
 - Date: 2026-11-13
 

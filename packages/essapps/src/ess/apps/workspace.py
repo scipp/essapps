@@ -60,6 +60,19 @@ A request waits until every record it references has completed, the record
 of a freeze until the accumulator has reached its state, and an accumulator's
 steps as described below. This is the only scheduling there is.
 
+Records of another spec
+-----------------------
+The log holds the digest of each record's spec (see ``log.py``). A record is
+of the bound spec if a binding has its spec's name, version, and digest, and
+otherwise of another spec (:meth:`Workspace._other`). Every record that this
+workspace logs is of the bound spec, so a record of another spec comes from
+the log it started from, and none of its values is in memory. Its persisted
+outputs are read from the store as stored, without a type, so ``select=`` and
+``describe`` take them as plain scipp data. Its outputs are not readable to a
+request: a reference to one is refused, since its type cannot be checked, and
+at a restart a pending record of another spec fails, as does one that reads
+an output of one.
+
 Request and call phase
 ----------------------
 A request runs through its spec's binding (see ``ess.spec.binding``): a plain
@@ -186,6 +199,7 @@ from .log import (
     NewStateRecord,
     Opened,
     Pushed,
+    SpecDigests,
     Started,
     Submitted,
 )
@@ -281,10 +295,12 @@ def _selected(value: Any, select: Selection) -> Any:
     dimension it lacks, or an index out of range, raises what the slice
     raises. Of a group, each dimension slices the array fields that have
     it, as ``sc.DataGroup`` slices its items, and every other field is
-    copied whole, a group in it too. Unlike a ``sc.DataGroup``, a group
-    refuses a dimension that no array field has, with ``ValueError``.
+    copied whole, a group in it too. A group is a pydantic model, or a
+    mapping, such as the ``sc.DataGroup`` of an output read as stored.
+    Unlike a ``sc.DataGroup``, a group refuses a dimension that no array
+    field has, with ``ValueError``.
     """
-    if not isinstance(value, BaseModel):
+    if not isinstance(value, BaseModel | Mapping):
         for dim, index in select.items():
             value = value[dim, index]
         return value.copy()
@@ -299,7 +315,9 @@ def _selected(value: Any, select: Selection) -> Any:
             )
         fields |= sliced
     # A deep copy of a slice copies the slice only.
-    return value.model_copy(update=copy.deepcopy(fields))
+    if isinstance(value, BaseModel):
+        return value.model_copy(update=copy.deepcopy(fields))
+    return type(value)(copy.deepcopy(fields))
 
 
 def _info(value: Any) -> Any:
@@ -541,6 +559,7 @@ class Workspace(WorkspaceProtocol):
         self._files = files
         self._store = store
         self._bindings: dict[SpecId, Binding] = {}
+        self._digests: dict[SpecId, str] = {}
         self._checks: dict[SpecId, Checks] = {}
         if isinstance(bind, Mapping):
             raise TypeError('bind is a list of bindings, each of which names its spec')
@@ -553,6 +572,7 @@ class Workspace(WorkspaceProtocol):
             if (spec_id := SpecId.of(binding.spec)) in self._bindings:
                 raise ValueError(f'two specs are bound as {spec_id}')
             self._bindings[spec_id] = binding
+            self._digests[spec_id] = binding.spec.digest
             self._checks[spec_id] = Checks(binding.spec, files)
         self._log = Log() if log is None else log
         for event in self._log:
@@ -646,8 +666,9 @@ class Workspace(WorkspaceProtocol):
         2. Otherwise it is cancelled unless it persists outputs, or a pending
            record that persists outputs reads it, directly or through other
            pending records.
-        3. Otherwise it runs if each value it reads is a file, is written,
-           or is an output of a pending record that runs, and fails if not.
+        3. Otherwise it runs if it is of the bound spec, and each value it
+           reads is a file, is written, or is an output of a pending record
+           that runs, and of the bound spec; it fails if not.
            The record of a freeze fails, since the driver it reads is gone.
            A call through a stage runs as its plain request, since the stage
            is gone, so it reads the values of the stage's template too.
@@ -688,8 +709,12 @@ class Workspace(WorkspaceProtocol):
         views = self._views
         if record_id in views.states:
             return 'the driver it reads is gone'
+        if (other := self._other(record_id)) is not None:
+            return f'its spec is not bound: {other}'
         for ref in views.records[record_id].request.upstream():
             where = f'record {ref.record} output {ref.output}'
+            if (other := self._other(ref.record)) is not None:
+                return f'{where}: the spec of its record is not bound: {other}'
             if ref.record in runs:
                 continue
             if (status := views.status(ref.record)) is not Status.COMPLETED:
@@ -703,6 +728,19 @@ class Workspace(WorkspaceProtocol):
     def specs(self) -> list[Spec]:
         self._check_running()
         return [binding.spec for binding in self._bindings.values()]
+
+    def _other(self, record_id: str) -> str | None:
+        """
+        Why a record is of another spec than the one bound, or ``None`` if it
+        is of the bound spec: one with the name, version, and digest of the
+        record's (see the module docstring). Needs no lock.
+        """
+        spec_id = self._views.records.spec(record_id)
+        if spec_id not in self._digests:
+            return f'{spec_id} has no binding'
+        if self._digests[spec_id] != self._views.digests[record_id]:
+            return f"{spec_id} is bound with other models than the record's"
+        return None
 
     def _spec(self, spec_id: SpecId) -> Spec:
         try:
@@ -782,6 +820,7 @@ class Workspace(WorkspaceProtocol):
                     time=datetime.now(UTC),
                     proposal=self._proposal,
                     submitter=submitter,
+                    specs=self._unlogged(r.spec for r in requests),
                     records=tuple(
                         NewRecord(
                             id=record_id,
@@ -805,6 +844,10 @@ class Workspace(WorkspaceProtocol):
                     self._stage_of[record_id] = self._stages[entry.stage]
                 self._schedule(record_id)
             return [self._views.records[i] for i in ids]
+
+    def _unlogged(self, spec_ids: Iterable[SpecId]) -> SpecDigests:
+        """The digests an event naming the bound ``spec_ids`` carries; lock held."""
+        return self._views.unlogged({s: self._digests[s] for s in spec_ids})
 
     def _output_names(self, spec_id: SpecId) -> tuple[str, ...]:
         """The names of the outputs the spec declares; needs no lock."""
@@ -838,9 +881,14 @@ class Workspace(WorkspaceProtocol):
         request phase, but for the records it reads, and the references to
         outputs in it (see :meth:`_check_reads`); needs no lock.
         """
+        spec_id = entry.request.spec
         try:
-            self._spec(entry.request.spec)  # an unknown spec is refused as such
-            checks = self._checks[entry.request.spec]
+            self._spec(spec_id)  # an unknown spec is refused as such
+            if entry.digest not in (None, self._digests[spec_id]):
+                raise SubmitError.at(
+                    (), f'made with other models of {spec_id} than those bound'
+                )
+            checks = self._checks[spec_id]
             return checks.request(entry.request, self._proposal)
         except SubmitError as error:
             raise _refused(index, error) from None
@@ -916,7 +964,8 @@ class Workspace(WorkspaceProtocol):
     ) -> SpecId:
         """
         The spec of a record a request may read; lock held. The record's
-        output must be one that may be referenced (see :meth:`_refusal`).
+        output must be one that may be referenced (see :meth:`_refusal`), and
+        the record of the bound spec, by which the output's type is checked.
 
         An accumulator is refused: a reader of its state would hold back its
         next push until the reader's workflow has returned, so a request reads
@@ -943,6 +992,12 @@ class Workspace(WorkspaceProtocol):
             raise SubmitError.at(loc, f'unknown record or accumulator {ref.record}')
         if (why := self._refusal((ref.record, ref.output), also)) is not None:
             raise SubmitError.at(loc, why)
+        if (other := self._other(ref.record)) is not None:
+            raise SubmitError.at(
+                loc,
+                f"the output's type cannot be checked: record {ref.record} is of "
+                f'another spec than the one bound: {other}',
+            )
         return record.spec
 
     def _refusal(
@@ -1161,18 +1216,16 @@ class Workspace(WorkspaceProtocol):
 
     def _stored(self, ref: OutputRef) -> Any:
         """
-        The written value of an output, or its element if ``ref`` has a key.
-        Needs no lock.
+        The written value of an output, or its element if ``ref`` has a key:
+        of the type the bound spec declares, or as stored for a record of
+        another spec. Needs no lock.
         """
         if self._store is None:
             raise NotReadable(f'{ref}: the workspace has no store')
-        spec_id = self._views.records.spec(ref.record)
-        if (binding := self._bindings.get(spec_id)) is None:
-            raise NotReadable(
-                f'{ref}: the workspace does not run {spec_id}, which says what '
-                'the output is'
-            )
-        tp = binding.spec.outputs.model_fields[ref.output].annotation
+        tp = None
+        if self._other(ref.record) is None:
+            spec = self._bindings[self._views.records.spec(ref.record)].spec
+            tp = spec.outputs.model_fields[ref.output].annotation
         try:
             value = self._store.read(ref.record, ref.output, tp)
         except LookupError as error:
@@ -1450,6 +1503,7 @@ class Workspace(WorkspaceProtocol):
                 Opened(
                     accumulator=accumulator_id,
                     proposal=self._proposal,
+                    specs=self._unlogged([spec_id]),
                     template=stored,
                     params={**fixed, **empty},
                 )
@@ -1541,6 +1595,7 @@ class Workspace(WorkspaceProtocol):
                         time=datetime.now(UTC),
                         proposal=self._proposal,
                         submitter=submitter,
+                        specs=self._unlogged([acc.template.spec]),
                         records=(
                             NewStateRecord(
                                 id=record_id,
@@ -1782,6 +1837,7 @@ class Workspace(WorkspaceProtocol):
                     name
                     for name in self._record(record_id).outputs
                     if self._refusal((record_id, name)) is None
+                    and self._other(record_id) is None
                 )
                 for record_id in ids
             ]
@@ -1841,7 +1897,10 @@ class Workspace(WorkspaceProtocol):
     def describe(self, record_id: str, name: str) -> dict[str, Any]:
         value = self._read(record_id, [name], select=None)[name]
         info = _info(value)
-        return info if isinstance(value, BaseModel) else {name: info}
+        # read as stored, a group is a DataGroup: a mapping
+        stored = self._other(record_id) is not None
+        group = isinstance(value, BaseModel) or (stored and isinstance(value, Mapping))
+        return info if group else {name: info}
 
     def _read(
         self,
@@ -1859,7 +1918,8 @@ class Workspace(WorkspaceProtocol):
             self._check_running()
             record = self._record(record_id)
             if select is not None:
-                self._check_select(record.spec, names)
+                typed = self._other(record_id) is None
+                self._check_select(record.spec if typed else None, names)
 
             wanted = record.outputs if names is None else names
             for name in wanted:
@@ -1896,14 +1956,20 @@ class Workspace(WorkspaceProtocol):
             values = {n: self._stored(record.ref(n)) for n in names}
         return values
 
-    def _check_select(self, spec_id: SpecId, names: Sequence[str] | None) -> None:
+    def _check_select(
+        self, spec_id: SpecId | None, names: Sequence[str] | None
+    ) -> None:
         """
-        Refuse a selection unless it names outputs, each declared as an array
-        or as a group with an array field; needs no lock. A selection names
-        the dimensions of the outputs it reads, so it reads only outputs named.
+        Refuse a selection unless it names outputs, each declared by
+        ``spec_id`` as an array or as a group with an array field; needs no
+        lock. A selection names the dimensions of the outputs it reads, so it
+        reads only outputs named. ``spec_id`` is ``None`` for a record of
+        another spec, whose outputs read as stored are checked by slicing.
         """
         if names is None:
             raise ValueError('select= needs the name of an output')
+        if spec_id is None:
+            return
         declared = self._bindings[spec_id].spec.outputs.model_fields
         for name in (n for n in names if n in declared):  # others raise when read
             if not field_types.has_array(declared[name].annotation):

@@ -5,7 +5,8 @@ An output as a scipp HDF5 file, which ``scipp.io.load_hdf5`` reads. It needs
 scipp and h5py.
 
 scipp writes arrays, ``DataGroup``, numbers, and text. So a value is written as
-these, and read back by the type that the spec declares for the output::
+these, and read back by the type that the spec declares for the output, or
+without a type as the file holds it::
 
     as the workflow returned it          in the file
     ---------------------------          -----------
@@ -107,20 +108,29 @@ def _typed(tp: Any, data: Any) -> Any:
     return data
 
 
-def write(value: Any, path: Path) -> None:
-    """Write ``value`` to ``path``, as the module says."""
+def stored(value: Any) -> Any:
+    """``value`` as :func:`write` writes it, and :func:`read` without a type reads."""
     plain = _plain(value)
     if not isinstance(plain, (*_ARRAYS, sc.DataGroup)):
         plain = sc.DataGroup({_ALONE: plain})
-    sc.io.save_hdf5(plain, path)
+    return plain
 
 
-def read(tp: Any, path: Path) -> Any:
+def write(value: Any, path: Path) -> None:
+    """Write ``value`` to ``path``, as the module says."""
+    sc.io.save_hdf5(stored(value), path)
+
+
+def read(tp: Any | None, path: Path) -> Any:
     """
-    The value of type ``tp`` that :func:`write` wrote to ``path``. Raises
-    ``ValueError`` if the file holds no value of ``tp``, as the module says.
+    The value of type ``tp`` that :func:`write` wrote to ``path``, or, if
+    ``tp`` is ``None``, the file's data as scipp reads it, as the module's
+    table says. Raises ``ValueError`` if the file holds no value of ``tp``, as
+    the module says.
     """
     data = sc.io.load_hdf5(path)
+    if tp is None:
+        return data
     plain_type, _ = field_types.optional(tp)
     alone = plain_type in _ALONE_TYPES or _is(plain_type, Enum)
     try:

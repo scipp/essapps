@@ -43,6 +43,15 @@ no keeper finishes as cancelled. Since a cancelled request keeps nothing it
 reads, this passes along a chain. A running workflow is not interrupted: its
 record is cancelled at once, and its outputs are dropped when it returns.
 
+A record names its spec by name, version, and digest
+(:attr:`ess.spec.WorkflowSpec.digest`). It is *of the bound spec* if the
+workspace has a binding of the same three, and otherwise *of another spec*:
+the version was bumped, the models changed, or no binding is given. A record of
+another spec stays in history, and a client reads its persisted outputs as
+stored, in scipp's types, without the classes that made them. A request may not
+reference them, since their types cannot be checked
+(``docs/developer/adr/0009-a-record-of-another-spec-stays-readable.md``).
+
 In the user's process, values live in its memory. A hosted service runs a
 workspace for each proposal, limits its memory, and gives it a store.
 ``docs/developer/accumulators.md`` explains stages and accumulators, and
@@ -72,12 +81,16 @@ class Entry:
 
     ``label`` names a sequence of records, and ``member`` one part of it; neither
     changes the result. ``stage`` names the stage the request goes through, if any.
+    ``digest`` is that of the spec the request was made with, if the caller
+    passed the spec (:attr:`ess.spec.WorkflowSpec.digest`), not only its
+    :class:`~ess.apps.SpecId`.
     """
 
     request: Request
     label: str | None = None
     member: str | None = None
     stage: str | None = None
+    digest: str | None = None
 
 
 class WorkspaceProtocol(Protocol):
@@ -144,10 +157,13 @@ class WorkspaceProtocol(Protocol):
         ------
         SubmitError
             If a request cannot run: an invalid value, an unknown spec or file, a
+            spec whose digest is not the bound one's (:attr:`Entry.digest`), a
             reference at a field that the spec does not mark ``Referenced[...]``, a
-            reference that may not be read, to an accumulator, or one whose data do
-            not fit its field; or if ``persist`` names an output the spec lacks, or
-            the workspace has no store. A reason's ``entry`` is the request's index in
+            reference that may not be read, to an accumulator, to an output of a
+            record of another spec than the one bound, whose type cannot be checked,
+            or one whose data do not fit its field; or if ``persist`` names an
+            output the spec lacks, or the workspace has no store. A reason's
+            ``entry`` is the request's index in
             ``entries``, or ``None`` if the reason is not about one request (see
             :class:`~ess.apps.errors.FieldError`).
         """
@@ -230,7 +246,9 @@ class WorkspaceProtocol(Protocol):
         is read from the store.
 
         A value is the one the workflow returned, not a copy, unless ``select`` is
-        given: the caller must not change it.
+        given: the caller must not change it. An output of a record of another spec
+        is read as stored (see :meth:`Store.read`): a scipp array, or a
+        ``scipp.DataGroup`` by field name.
 
         Parameters
         ----------
@@ -243,7 +261,8 @@ class WorkspaceProtocol(Protocol):
             Copies only this part of each output. It needs ``names``, and each output
             must be declared as an array or a group with an array field. Of a group, it
             picks that part of each array field with the dimension, as ``sc.DataGroup``
-            slices its items, and copies the other fields whole.
+            slices its items, and copies the other fields whole. An output read as
+            stored is checked by slicing it, a ``DataGroup`` as a group.
 
         Raises
         ------
@@ -265,8 +284,9 @@ class WorkspaceProtocol(Protocol):
 
     def describe(self, record_id: str, name: str) -> dict[str, Any]:
         """
-        What an output is, without its data. A group gives its fields by name, any
-        other output gives ``{name: info}``. An array of at least one dimension is an
+        What an output is, without its data. A group, and a ``DataGroup`` read as
+        stored, give their fields by name, any other output gives ``{name: info}``.
+        An array of at least one dimension is an
         :class:`~ess.apps.ArrayInfo`, a group or a dict is a dict, a list is a list of
         these, and anything else is a copy. Reads and raises as :meth:`outputs` does.
         """
@@ -275,7 +295,8 @@ class WorkspaceProtocol(Protocol):
     def readable(self, ids: Sequence[str]) -> list[tuple[str, ...]]:
         """
         The outputs of each record that a request may reference now, in declared
-        order. Waits for nothing and reads no value.
+        order; none of a record of another spec, whose outputs a client may still
+        read. Waits for nothing and reads no value.
         """
         ...
 
@@ -463,25 +484,32 @@ class Store(Protocol):
     The workspace is given a store; each deployment configures its own, and tests
     use a fake (``testing.FakeStore``). A value is found by the record's ID and
     the output's name, so history names no file. A store reads a value back as
-    the workflow returned it. The format of each output type and the layout of
-    the store are its own. A store may hold values that no history names, such
-    as those of a record cancelled while it was written; nothing reads them, and
-    they go with the proposal's area.
+    the workflow returned it, given the type its spec declares, or as stored,
+    in scipp's types, without one. The format of each output type and the
+    layout of the store are its own. A store may hold values that no history
+    names, such as those of a record cancelled while it was written; nothing
+    reads them, and they go with the proposal's area.
     """
 
     def write(self, record: str, output: str, value: Any) -> None:
         """Write the value of an output; raises if it cannot."""
         ...
 
-    def read(self, record: str, output: str, tp: Any) -> Any:
+    def read(self, record: str, output: str, tp: Any | None) -> Any:
         """
-        The value of an output that was written. ``tp`` is the type that the
-        spec declares for the output, by which a store whose format holds no
-        types makes the value. Raises ``LookupError`` if the
-        store no longer holds it, for example once dropped to free disk space,
-        or holds a value that does not fit ``tp``, written under other outputs
-        of the spec:
-        a client's read of it then raises ``NotReadable``, as for a value that
-        nothing keeps, and a request that reads it fails.
+        The value of an output that was written.
+
+        ``tp`` is the type that the spec declares for the output, by which a
+        store whose format holds no types makes the value. ``None`` reads the
+        value as stored: an array, or a ``scipp.DataGroup`` by field name, of
+        a group or of anything else (see :mod:`ess.apps.hdf5`). The workspace
+        reads so an output of a record of another spec than the one bound,
+        whose classes it lacks.
+
+        Raises ``LookupError`` if the store no longer holds it, for example
+        once dropped to free disk space, or holds a value that does not fit
+        ``tp``, written under other outputs of the spec: a client's read of it
+        then raises ``NotReadable``, as for a value that nothing keeps, and a
+        request that reads it fails.
         """
         ...

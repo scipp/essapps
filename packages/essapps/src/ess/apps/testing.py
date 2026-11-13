@@ -178,8 +178,9 @@ class FakeStore:
     A store held in memory.
 
     It keeps a copy of each value written and returns a copy of it, as a
-    store that writes files reads back a new value each time. ``fill`` makes
-    every write fail, as a full disk does, until ``free``.
+    store that writes files reads back a new value each time; read without a
+    type, as :mod:`ess.apps.hdf5` stores it, which needs scipp. ``fill``
+    makes every write fail, as a full disk does, until ``free``.
     """
 
     def __init__(self) -> None:
@@ -199,9 +200,14 @@ class FakeStore:
         with self._lock:
             self._values[(record, output)] = copy.deepcopy(value)
 
-    def read(self, record: str, output: str, tp: Any) -> Any:
+    def read(self, record: str, output: str, tp: Any | None) -> Any:
         with self._lock:
-            return copy.deepcopy(self._values[(record, output)])
+            value = copy.deepcopy(self._values[(record, output)])
+        if tp is None:
+            from . import hdf5  # only here, since it needs scipp
+
+            return hdf5.stored(value)
+        return value
 
     def __contains__(self, key: tuple[str, str]) -> bool:
         with self._lock:
