@@ -85,6 +85,10 @@ def _base_workflow() -> sciline.Pipeline:
 
     Requests must not change it, but change a copy, see :func:`_workflow`.
     """
+    # sciline inserts each generic key as a node of a networkx graph, about 1000
+    # here, and rebuilds the graph at each assignment. Sharing one workflow is only
+    # worth it while that holds: measure the constructor when sciline handles
+    # generics another way, and build a workflow per request if it is cheap.
     return LokiAtLarmorWorkflow()
 
 
