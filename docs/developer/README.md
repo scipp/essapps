@@ -13,6 +13,7 @@ The details live one level down:
 | how to write a binding: a function, a sciline pipeline, or a driver | [packages/essspec/docs/bindings.md](../../packages/essspec/docs/bindings.md) |
 | stages, accumulators, and their symmetries | [accumulators.md](accumulators.md) |
 | automatic reduction | [automatic-reduction.md](automatic-reduction.md) |
+| which process holds what, and how a value passes from one workspace to another | [deployments.md](deployments.md) |
 | how to build an application that reduces many samples | [packages/essapps/docs/batch.md](../../packages/essapps/docs/batch.md) |
 | the rules behind each call: what is kept and readable, when a call returns, what it raises | [`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py) |
 | the shapes and shortcuts of the client | the docstrings of `ess.apps.client` |
@@ -105,7 +106,7 @@ Both run the workflows bound in the call, which may be code defined in a noteboo
 With `local`, the records end with the process.
 With `open_folder`, a later process continues from the folder's history and reads its persisted outputs; one workspace holds a folder at a time.
 The workspace decides when and where a request runs, and the caller's code does not depend on it.
-A *hosted workspace*, which clients in other processes would reach with `connect(url, proposal=...)`, is not implemented, and no deployment of the first release needs one ([Deployments](#deployments), scipp/essapps#27).
+A *hosted workspace*, which clients in other processes would reach with `connect(url, proposal=...)`, is not implemented, and no deployment of the first release needs one ([deployments.md](deployments.md), scipp/essapps#27).
 
 **Client.** A *client* is one connection to one workspace.
 It keeps nothing: every client of a workspace reads, references, and releases the same values.
@@ -135,98 +136,23 @@ for run in client.files.watch(Selector(role='transmission')):
 ## Deployments
 
 An *application* is a program that holds a client: a controller, and a *screen* if a person uses it.
-In each deployment of the first release, one Python process holds the application, its client, and the workspace:
+In each deployment of the first release, one Python process holds the application, its client, and the workspace ([deployments.md](deployments.md)):
 
 ```
  screen ──(a)──▶ application ──(b)──▶ workspace ──(c)──▶ binding
 ```
 
-| Boundary | Interface | Between two processes? |
+| Deployment | The process | The workspace's history |
 |---|---|---|
-| (a) screen to application | the application's own: HTTP for a web page, the channel of the widget library for widgets | yes, when a browser draws the screen |
-| (b) application to workspace | the client | no |
-| (c) workspace to binding | `Binding`, `Driver` | no: 4 threads of the same process |
+| notebook | the notebook's, on a VISA machine or a laptop | in memory, or in a folder |
+| technique application with a batch page | one per folder, started by a user on a VISA machine | in the folder |
+| automatic reduction | one per instrument, on a DMSC server | one per proposal, on disk |
 
-A screen never calls a workspace.
-What a screen shows is computed in Python next to the data, and only the result is sent to the screen: a plot function returns a figure, and a form is built from the spec's params model.
-So the client is an interface for Python code, and the HTTP interface of a page belongs to that page.
+Only (a) lies between two processes, when a browser draws the screen; bindings run on 4 threads of the workspace's process.
+A screen never calls a workspace: what it shows is computed in Python next to the data, and the HTTP interface of a page belongs to that page.
 
-**Notebook.** One process, on a VISA machine or a laptop, holds the cells, the client, and the workspace.
-An application of widgets in a notebook is the same case: its controller runs in the notebook's process, and the browser only draws the widgets.
-This deployment is implemented.
-
-**Technique application with a batch page.**
-
-```
- browser                     VISA machine, one process per folder
- ┌─────────────┐   HTTP      ┌───────────────────────────────────────────────┐
- │ page:       │ ──────────▶ │ web server     rows, edits, settings (memory) │
- │ selection,  │  the page's │ batch logic, Client                           │
- │ filter, tab │  own API    │ Workspace      open_folder(directory)         │
- └─────────────┘             │   4 threads run the bindings                  │
-                             └───────────────────────────────────────────────┘
-                               folder: files.csv  log.jsonl  store/<record>/<output>.h5
-```
-
-The page holds only what it shows, and every rule is in the Python process.
-The command `essapps-batch` opens the same folder when the application is not running.
-Two users of one proposal have two folders.
-The batch logic (`ess.apps.batch`), the command, a view in Panel, and the batch of LoKI (`ess.instruments.loki.batch`) are implemented.
-The web page (`ess.apps.batch.web`) is experimental and runs as a demo.
-
-**Automatic reduction.**
-
-```
- DMSC server, one process per instrument
- ┌──────────────────────────────────────────────────────────────────┐
- │ loop: for each new file, submit what the file needs              │
- │ page to configure the reduction                                  │
- │ configuration: per instrument, adjusted per proposal             │
- │ a Client and a Workspace per proposal: history and store on disk │
- │   threads run the bindings                                       │
- └──────────────────────────────────────────────────────────────────┘
-      │ reads new raw files                │ writes result files, creates
-      ▼ through a file source              ▼ derived datasets in SciCat
-```
-
-An instrument has one stream of new files, so it has one automatic reduction.
-The process holds a workspace for each proposal that has new files.
-It runs with no page open, and users find its results through SciCat, not by connecting to it.
-A scientist who needs a variant of the automatic reduction runs a batch.
-Of this deployment, only the loop exists (`TriggerLoop`, see [Automatic reduction](#automatic-reduction)).
-
-### One proposal, several histories
-
-A workspace holds one proposal.
-A proposal has several workspaces, each with its own history: one in the automatic reduction, and one for each folder or notebook of a user.
-
-```
- automatic reduction        user A's batch folder        user B's notebook
-   history 1                  history 2                    history 3
-       └───────────── a value passes only as a file ───────────┘
-```
-
-A reference names a record of the same history.
-So a batch of user A cannot reference the beam centre that the automatic reduction computed, and two users of a proposal do not see each other's records.
-A value reaches another history as a file:
-
-```
- record's output ──▶ written ──▶ named ──▶ published
-                                               │
- record in another history ◀── loaded ◀── listed
-```
-
-| Step | What happens |
-|---|---|
-| written | a writer turns an output of a type into a file of a format, such as NXcanSAS for a SANS curve |
-| named | the file gets a folder and a name |
-| published | a derived dataset is created in SciCat, with its input datasets and software |
-| listed | a file source lists the file with a kind, such as `mask` |
-| loaded | a spec reads the file and gives the value as an output |
-
-The inputs that instrument scientists prepare for later proposals, such as masks and calibrations, take the same path.
-Parts of the path exist: a writer for HDF5 (`ess.apps.batch.export`), a file source that lists such files (`ess.instruments.loki.files`), and a spec that loads mask files (`MASKS`).
-No value takes the whole path yet, and the path has no design (open question 11).
+A proposal has several workspaces, each with its own history, and a reference names a record of the same history.
+So a value passes from one workspace to another as a file.
 
 ## Requests and records
 
@@ -360,7 +286,7 @@ pid = client.publish(result.ref('iofq'), 'scicat')     # not implemented: the ou
 Provenance lists the record's request, every record that supplied a value by reference, directly or through other records, the files they used, and the software versions.
 It stops at files.
 Publishing puts an output in a catalogue with its provenance, where it stays after the workspace's history is dropped.
-It is one step of the path a value takes from one history to another ([One proposal, several histories](#one-proposal-several-histories)).
+It is one step of the path a value takes from one history to another ([deployments.md](deployments.md#one-proposal-several-histories)).
 
 ## Left to the system
 
@@ -385,5 +311,5 @@ Not visible in the code of notebooks, applications, or workflow packages:
 8. **A hosted workspace.** With `connect()`, the users of a proposal would share one workspace and one history. Open are whether its users share the values in memory, or it separates or bounds them per user, how it bounds the memory of a workspace, and when it closes a workspace that is idle ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), scipp/essapps#27).
 9. **Reaching stages and accumulators.** No client call lists the stages and accumulators of a workspace or reopens one by its ID, and they are not in the changes. So a second client of a workspace reads every value the workspace keeps, but reaches a stage or an accumulator of the first client only if it is handed the object. Whether the client lists them, or reopens one by its ID, is open.
 10. **Where bindings run.** Bindings run on threads of the application's process, so a reduction shares the interpreter lock, the memory, and a crash with the application. If a process boundary is needed, it goes at (c), between the workspace and worker processes, since a value then moves to the workspace once and the application reads it many times. Which requests run in a worker, and whether a stage or a driver can, is open (scipp/essapps#184).
-11. **The path of a value between histories.** Writing, naming, publishing, listing, and loading a file ([One proposal, several histories](#one-proposal-several-histories)) are one design, which does not exist yet (scipp/essapps#184, #152, #176).
+11. **The path of a value between histories.** Writing, naming, publishing, listing, and loading a file ([deployments.md](deployments.md#one-proposal-several-histories)) are one design, which does not exist yet (scipp/essapps#184, #152, #176).
 12. **The automatic reduction as a process.** How it routes each new file to the workspace of its proposal, when it opens and closes those workspaces, and where its configuration is kept, which must outlive a restart and be editable while the process runs (scipp/essapps#151).

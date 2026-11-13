@@ -83,7 +83,7 @@ Fixtures: `client` is a client for proposal `p1`.
 In the notebook stories it is `local(proposal='p1', files=files, bind=...)`, a client of a *local workspace*, the workspace in the user's process that `local()` makes ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 In the batch and automatic stories, sections D and E, it is `connect(url, proposal='p1')`, a client of the service at `url` ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)), which is designed and not implemented.
 The service is a hosted workspace, which the users of a proposal share.
-No deployment of the first release has one ([README, Deployments](README.md#deployments)): a batch application and the automatic reduction each hold their own workspace.
+No deployment of the first release has one ([deployments.md](deployments.md)): a batch application and the automatic reduction each hold their own workspace.
 There, a second client such as `user = connect()` in E1 and E4 is a client in the same process, and a user in another process reads the results as files.
 A client made the next day, as in D2, is `open_folder` on the same folder.
 Logging in as another user, `user=` in G5, has no counterpart.
@@ -916,7 +916,7 @@ The provenance of the sum reaches that record.
 What the design leaves open or defers, with the stories each item affects.
 
 - **Removing a file** (system story A4): deferred, together with whether the outputs derived from it go too.
-- **The service** (sections D and E): designed and not implemented, and not part of a deployment of the first release ([README, Deployments](README.md#deployments)); the format of each persisted output type, the layout of the store, and how the service bounds and ends its workspaces are open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md); README.md open question 8).
+- **The service** (sections D and E): designed and not implemented, and not part of a deployment of the first release ([deployments.md](deployments.md)); the format of each persisted output type, the layout of the store, and how the service bounds and ends its workspaces are open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md); README.md open question 8).
 - **Looks that compute** (B4, D7): a selection only indexes; a projection or a thick slice summed waits for the plotting work; README.md open question 4.
 - **Persist at submission** (D1, D2, D3, D6, E1 to E4): whether `persist=` should also keep the values in the workspace; README.md open question 6.
 - **Labels and members** (D1, D2): labels and members on records are tentative; README.md open question 3.

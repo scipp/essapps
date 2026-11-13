@@ -4,7 +4,7 @@ These stories check what the system must provide beyond the API of [README.md](R
 Each has an actor, a goal, and the property to check.
 Where a story shares a goal with an API story in [user-stories.md](user-stories.md), it has the same identifier.
 How the workspace keeps history and values is described in its docstrings (`ess.apps.workspace`).
-Stories that name *the service* describe a hosted workspace, which the users of a proposal share. No deployment of the first release has one ([README, Deployments](README.md#deployments)).
+Stories that name *the service* describe a hosted workspace, which the users of a proposal share. No deployment of the first release has one ([deployments.md](deployments.md)).
 
 ## S. Small stories
 
