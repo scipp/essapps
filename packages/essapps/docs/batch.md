@@ -140,7 +140,7 @@ for key, record in centres.items():
 
 After a centre failed, this reruns only what is left, and points those rows at the new centre. The field must be typed `Referenced[...]` in the spec.
 
-An edit is lost when the session ends. A source that reads the other batch's state makes the same cells at every scan, which the automatic reduction needs:
+An edit is lost when the session ends. A source that reads the other batch's state makes the same cells at every scan, which automatic reduction needs:
 
 ```python
 def with_centre(files: Sequence[FileInfo]) -> list[Row]:
@@ -154,34 +154,36 @@ Scan `find` before a batch with this source, so that its rows see the newest cen
 
 ## Automatic reduction
 
-`Automatic` reduces a batch as its files arrive. It needs a source, and the batch should persist what it submits, since nothing releases its records:
+Automatic reduction reduces a batch as its files arrive. Its *loop*, an `Automatic`, needs a batch with a source, which should persist what it submits, since nothing releases its records:
 
 ```python
 from ess.apps.batch.auto import Automatic, run
 
 batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'), label='auto/iofq',
               source=pair_by_sample, staged=True, persist=True)
-auto = Automatic(batch, at='sample', settings=lambda: settings)
-auto.step()       # scans, and reduces the rows with a new file at `sample`; their records by key
-auto.refused      # why each such row did not run, by key: {'60339': '60339: sample_transmission: empty'}
-run([auto])       # steps forever, once a second
+loop = Automatic(batch, at='sample', settings=lambda: settings)
+loop.step()       # scans, and reduces the rows with a new file at `sample`; their records by key
+loop.refused      # why each such row did not run, by key: {'60339': '60339: sample_transmission: empty'}
+run([loop])       # steps forever, once a second
 ```
 
-`at` is the *trigger column*, of a file or a list of files. `settings` is called at each step, so a change applies to the rows not reduced yet.
+`at` is the *trigger column*, of a file or a list of files, each as `FileInfo.ref` gives it. `settings` is called at each step, so a change applies to the rows not reduced yet.
 
-**A row runs if its cell at `at` holds a file that no record under the label, with the row's key, holds at `at`.** Any record counts, failed, cancelled, of any version of the spec, and of any submitter. So the automatic reduction differs from a person's reduce:
+**A row runs if its cell at `at` holds a file that no record under the label, with the row's key, holds at `at`.** Any record counts: failed, cancelled, of any spec, and of any submitter. So automatic reduction differs from a person's reduce:
 
 | A row runs if | no result | failed or cancelled | a setting or another cell changed | a new file at the trigger column |
 |---|---|---|---|---|
 | the page, "reduce remaining" | yes | yes | yes (stale) | yes |
 | `essapps-batch reduce --remaining` | yes | yes | no | no |
-| automatic | yes | no | no | yes |
+| the loop | yes | no | no | yes |
 
-A row that cannot run, such as one without its transmission run, or whose request is refused, does not hold back the others, and `refused` says why. A reason that names no row, about the settings, refuses every row. A row that waits is looked at again when its cells change, a row still running when its record finishes, and a refused row also when the settings change.
+Which rows are reduced is defined by the records under the label and by nothing else. So a loop on a batch with a new label reduces from the first file, and a person's record under the loop's label counts as a row reduced: give the loop a label of its own. A row whose key changes from one scan to the next, such as a key made from a sample name that a correction changed, is a new row, and is reduced again under its new key; so choose a key that does not change, such as the run number ([Terms](#terms)).
 
-The loop reads the records from the proposal's changes, from the start when an `Automatic` is made, so a restart needs nothing on disk and reduces no row again. Give the automatic reduction its own label: a person's record under it counts as a row reduced.
+A row that cannot run, such as one without its transmission run, or whose request is refused, does not hold back the others, and `refused` says why. A reason that names no row, about the settings, refuses every row. A row that waits is tried again when its cells change, a row still running when its record finishes, and a refused row also when its records or the settings change.
 
-In a chain, step the batch that is read first: `run([Automatic(find, ...), Automatic(iofq, ...)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design and what is open.
+The loop reads the records from the proposal's changes, from the start when it is made, so a restart needs nothing on disk and reduces no row again. A step that raises, in the settings, the source, or a submission, loses nothing: the next step tries again.
+
+In a chain, step the loop of the batch that is read first: `run([Automatic(find, ...), Automatic(iofq, ...)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
 
 ## From files, and from the command line
 
@@ -292,7 +294,7 @@ run,role,sample
 ,direct_beam,          <- with a column file: a file that is no run
 ```
 
-`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. A file that cannot be read is left out, with a warning. Two files of one run are refused. Running `files` again after files gained a `pid` changes their identity: the automatic reduction reduces them again, and earlier records name files the folder no longer knows.
+`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. A file that cannot be read is left out, with a warning. Two files of one run are refused. Running `files` again after files gained a `pid` changes their identity: the loop of automatic reduction reduces them again, and earlier records name files the folder no longer knows.
 
 A file says its kind, its run, and perhaps its sample, but not what a run is for. A row source that pairs runs reads the `role`, and a field such as the direct beam requires it. The run table gives it (`frames.described`): a row describes the file of its `run`, or the file at its `file` if it has no run. A run of the table that has no file in the folder is ignored, so the table may cover more than the folder holds. A file that no row describes keeps what it says of itself, and where both have a column, a cell of the run table that is not empty wins. Two rows for one run are refused. Without `--with`, the roles are typed into `files.csv`, so `files` then refuses to write over a table that exists.
 
