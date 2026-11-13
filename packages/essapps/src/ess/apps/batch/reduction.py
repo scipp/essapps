@@ -156,7 +156,7 @@ class Batch:
         """
         rows = list(self.rows) if keys is None else [self.rows[k] for k in keys]
         found = self._results(keys)
-        upstream = self._records_read(rows)
+        upstream = self._known(sorted(state.references(rows)))
         status = self._status([*found.values(), *upstream])
         stale = set() if settings is None else self._stale(settings, rows)
         return state.row_states(
@@ -177,13 +177,18 @@ class Batch:
             records = [r for r in records if r.member in chosen]
         return state.results(records, SpecId.of(self.spec))
 
-    def _records_read(self, rows: list[Row]) -> list[Record]:
-        """The records that ``rows`` reference, if the client knows them all."""
-        ids = sorted(state.references(rows))
+    def _known(self, ids: list[str]) -> list[Record]:
+        """
+        The records of ``ids`` that the client knows. If one is unknown, the
+        others are read one by one, so that it touches only the rows that
+        reference it, whose submission it refuses.
+        """
         try:
             return self.client.records(ids=ids) if ids else []
-        except KeyError:  # the workspace refuses such a cell at submission
-            return []
+        except KeyError:
+            if len(ids) == 1:
+                return []
+            return [r for i in ids for r in self._known([i])]
 
     def _status(self, records: list[Record]) -> dict[str, Status]:
         statuses = self.client.status(records)

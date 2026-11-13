@@ -46,6 +46,14 @@ class SeriesParams(BaseModel):
     runs: list[RunFile] = Field(min_length=1)
 
 
+class Group(BaseModel):
+    run: RunFile
+
+
+class GroupedParams(BaseModel):
+    group: Group
+
+
 STAGED = WorkflowSpec(
     name='staged',
     version=1,
@@ -78,6 +86,14 @@ SERIES = WorkflowSpec(
     params=SeriesParams,
     outputs=Outputs,
     tables=('runs',),
+)
+GROUPED = WorkflowSpec(
+    name='grouped',
+    version=1,
+    title='Grouped',
+    description='A toy whose run is inside a group.',
+    params=GroupedParams,
+    outputs=Outputs,
 )
 COLUMNS = ('sample', 'transmission', 'thickness')
 

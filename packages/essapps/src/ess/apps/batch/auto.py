@@ -4,14 +4,18 @@
 Automatic reduction: a batch reduced as its files arrive. The guide is the
 section "Automatic reduction" of ``packages/essapps/docs/batch.md``.
 
-Which files the records of a row hold at the trigger column is read from the
-proposal's changes (:meth:`~ess.apps.Client.changes`), from the start when an
-:class:`Automatic` is made, so a restart needs nothing on disk. What a step
-keeps besides, the rows and the settings of the last step, only spares it
-work. A step looks at the rows whose cells changed, whose records changed, and,
-if the settings changed, the rows that were refused. It costs the scan of all
-files, and the state and submission of the rows it looks at, which
-:meth:`Batch.state <ess.apps.batch.Batch.state>` works out for those rows only.
+Which files the records of each key hold at the trigger column is read from
+the proposal's changes (:meth:`~ess.apps.Client.changes`), from the start when
+an :class:`Automatic` is made, so a restart needs nothing on disk. Every step
+works out from these files which rows run, so a step that raises, in the
+changes, the settings, the source, or a submission, loses nothing: the next
+step tries again. Besides, a step keeps only the rows that were refused, as
+they were then, and the settings: a refused row is tried again once its cells,
+its records, or the settings change.
+
+A step costs the scan of all files and a check of each row's cell at the
+trigger column. The state of the rows it submits reads every record under the
+batch's label, though it works out the status of those rows only.
 """
 
 from __future__ import annotations
@@ -61,15 +65,20 @@ class Automatic:
     ) -> None:
         if at not in batch.columns:
             raise KeyError(f'{at!r} is not a column of the batch')
+        if batch.source is None:
+            raise ValueError('this batch has no source of rows')
         self.batch = batch
         self.at = at
         self.settings = settings
-        self.refused: dict[str, str] = {}
-        """Why each row with a new file at ``at`` did not run, by key."""
         self._cursor = 0
         self._held: dict[str, set[FileRef]] = {}
-        self._rows: dict[str, Row] = {}
+        self._refused: dict[str, tuple[Row, str]] = {}
         self._settings: Mapping[str, Any] | None = None
+
+    @property
+    def refused(self) -> dict[str, str]:
+        """Why each row with a new file at ``at`` did not run, by key."""
+        return {key: why for key, (_, why) in self._refused.items()}
 
     def step(self) -> dict[str, Record]:
         """
@@ -79,30 +88,29 @@ class Automatic:
         """
         batch = self.batch
         changes = batch.client.changes(after=self._cursor)
-        self._cursor = changes.cursor
-        touched: set[str] = set()
         for record in batch.client.records(ids=changes.records):
             if record.label == batch.label and record.member is not None:
                 held = self._held.setdefault(record.member, set())
                 held |= _files_at(record.request.params, self.at)
-                touched.add(record.member)
-        batch.scan()
-        rows = {row.key: row for row in batch.rows}
+                self._refused.pop(record.member, None)
+        self._cursor = changes.cursor
         settings = self.settings()
-        look_at = {k for k, row in rows.items() if self._rows.get(k) != row}
-        look_at |= touched & rows.keys()
         if settings != self._settings:
-            look_at |= self.refused.keys() & rows.keys()
-        # A copy, so that settings changed in place count as changed.
-        self._rows, self._settings = rows, copy.deepcopy(settings)
-        self.refused = {
-            k: why for k, why in self.refused.items() if k in rows and k not in look_at
+            self._refused.clear()
+            # A copy, so that settings changed in place count as changed.
+            self._settings = copy.deepcopy(settings)
+        batch.scan()
+        rows = batch.rows
+        self._refused = {
+            key: (row, why)
+            for key, (row, why) in self._refused.items()
+            if key in rows and rows[key] == row
         }
         todo = [
-            k
-            for k in rows  # in the order of the rows
-            if k in look_at
-            and _files_at(rows[k].values, self.at) - self._held.get(k, set())
+            row.key
+            for row in rows
+            if row.key not in self._refused
+            and _new(row.values.get(self.at), self._held.get(row.key, set()))
         ]
         return self._reduce(settings, todo)
 
@@ -116,13 +124,17 @@ class Automatic:
             except SubmitError as error:  # noqa: PERF203
                 named = set(keys).intersection(e.entry for e in error.errors)
                 if not named:
-                    self.refused |= dict.fromkeys(keys, str(error))
+                    self._refuse(keys, str(error))
                     return {}
                 for key in named:
                     errors = [e for e in error.errors if e.entry == key]
-                    self.refused[key] = str(SubmitError(errors))
+                    self._refuse([key], str(SubmitError(errors)))
                 keys = [k for k in keys if k not in named]
         return {}
+
+    def _refuse(self, keys: list[str], why: str) -> None:
+        rows = self.batch.rows
+        self._refused |= {key: (rows[key], why) for key in keys}
 
 
 def run(autos: Sequence[Automatic], interval: float = 1.0) -> None:
@@ -136,8 +148,20 @@ def run(autos: Sequence[Automatic], interval: float = 1.0) -> None:
         time.sleep(interval)
 
 
+def _new(cell: Any, held: set[FileRef]) -> bool:
+    """Whether ``cell`` is a file, or a list with a file, that ``held`` lacks."""
+    if isinstance(cell, FileRef):
+        return cell not in held
+    if isinstance(cell, list):
+        return any(isinstance(f, FileRef) and f not in held for f in cell)
+    return False
+
+
 def _files_at(params: Mapping[str, Any], at: str) -> set[FileRef]:
-    """The files at the parameter ``at``: its value, or each element of its list."""
+    """
+    The files at the parameter ``at`` of a request: its value, or each element
+    of its list, as a file or its plain form.
+    """
     return {
         ref
         for loc, ref in iter_refs({at: params.get(at)})

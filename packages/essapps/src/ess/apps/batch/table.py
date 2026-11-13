@@ -72,9 +72,10 @@ class RowTable:
         return {row.key: self._with_edits(row) for row in (*shown, *self.added)}
 
     def _with_edits(self, row: Row) -> Row:
-        if (edits := self.edits.get(row.key)) is None:
+        edits = self.edits.get(row.key)
+        if edits is None and not any(v is EMPTY for v in row.values.values()):
             return row
-        cells = {**row.values, **edits}
+        cells = {**row.values, **(edits or {})}
         return replace(
             row, values={column: v for column, v in cells.items() if v is not EMPTY}
         )

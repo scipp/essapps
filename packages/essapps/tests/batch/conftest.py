@@ -66,8 +66,13 @@ def workspace(
     plain = function_binding(toys.PLAIN, staged_binding.function)
     find = function_binding(toys.FIND, _find)
     series = function_binding(toys.SERIES, _series(gate))
+    grouped = function_binding(
+        toys.GROUPED, lambda p: toys.Outputs(total=read_file(p.group.run))
+    )
     workspace = Workspace(
-        proposal='p1', files=files, bind=[staged_binding, plain, find, series]
+        proposal='p1',
+        files=files,
+        bind=[staged_binding, plain, find, series, grouped],
     )
     yield workspace
     workspace.close()

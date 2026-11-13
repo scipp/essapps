@@ -11,9 +11,19 @@ import pytest
 from ess.apps import Client
 from ess.apps.batch import Batch, FileInfo, Row
 from ess.apps.batch.auto import Automatic
-from ess.apps.testing import FakeFiles
+from ess.apps.testing import CountingClient, FakeFiles
 
-from .toys import COLUMNS, FIND, PLAIN, SERIES, STAGED, Gate, Measure, pair
+from .toys import (
+    COLUMNS,
+    FIND,
+    GROUPED,
+    PLAIN,
+    SERIES,
+    STAGED,
+    Gate,
+    Measure,
+    pair,
+)
 
 SETTINGS: dict[str, Any] = {'binning': {'bins': 2}}
 
@@ -54,6 +64,13 @@ def test_each_new_row_is_reduced_once(
 def test_the_trigger_column_must_be_a_column(batch: Batch) -> None:
     with pytest.raises(KeyError, match='offset'):
         Automatic(batch, at='offset', settings=dict)
+
+
+def test_the_batch_must_have_a_source(client: Client) -> None:
+    batch = Batch(client, PLAIN, columns=COLUMNS, label='scan')
+
+    with pytest.raises(ValueError, match='no source'):
+        Automatic(batch, at='sample', settings=dict)
 
 
 def test_a_row_whose_record_failed_is_not_reduced_again(
@@ -232,3 +249,161 @@ def test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before(
     assert reduced['1'].request.params['offset'] == found['1'].ref('offset')
     assert client.wait(reduced['1']) == 'completed'
     assert client.output(reduced['1'], 'total') == 2.0
+
+
+class Flaky:
+    """A client whose next ``fail`` submissions raise, as a lost connection does."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+        self.fail = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    def submit(self, *args: Any, **kwargs: Any) -> Any:
+        if self.fail:
+            self.fail -= 1
+            raise ConnectionError('lost')
+        return self._client.submit(*args, **kwargs)
+
+
+def test_a_row_whose_submission_raised_runs_at_the_next_step(
+    client: Client, sample: Measure
+) -> None:
+    flaky = Flaky(client)
+    batch = Batch(
+        flaky,  # type: ignore[arg-type]
+        PLAIN,
+        columns=COLUMNS,
+        label='scan',
+        source=pair,
+    )
+    auto = Automatic(batch, at='sample', settings=lambda: SETTINGS)
+    sample(1, 'water')
+    flaky.fail = 1
+    with pytest.raises(ConnectionError):
+        auto.step()
+
+    assert list(auto.step()) == ['1']
+    assert auto.step() == {}
+
+
+class Raising:
+    """Calls ``function``, or raises while ``on`` is set."""
+
+    def __init__(self, function: Any) -> None:
+        self.function = function
+        self.on = False
+
+    def __call__(self, *args: Any) -> Any:
+        if self.on:
+            raise RuntimeError('unreadable')
+        return self.function(*args)
+
+
+@pytest.mark.parametrize('raising', ['settings', 'source'])
+def test_a_step_that_raises_as_a_running_record_finishes_loses_nothing(
+    client: Client, fake: FakeFiles, gate: Gate, raising: str
+) -> None:
+    settings, source = Raising(dict), Raising(_angles)
+    batch = Batch(client, SERIES, columns=('runs',), label='series', source=source)
+    auto = Automatic(batch, at='runs', settings=settings)
+    gate.close()
+    fake.measure(1, 1.0, sample='si')
+    first = auto.step()
+    fake.measure(2, 2.0, sample='si')
+    assert auto.step() == {}  # still running
+    gate.open()
+    client.wait(first)
+
+    (settings if raising == 'settings' else source).on = True
+    with pytest.raises(RuntimeError):
+        auto.step()
+    settings.on = source.on = False
+
+    (record,) = auto.step().values()
+    assert len(record.request.params['runs']) == 2
+
+
+def test_a_record_holding_the_file_at_another_parameter_does_not_count(
+    auto: Automatic, client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    run = sample(1, 'water')
+    other = fake.measure(5000, 1.0, role='transmission', sample='other')
+    params = {'sample': other, 'transmission': run, **SETTINGS}
+    client.wait(client.submit(PLAIN, params=params, label='scan', member='1'))
+
+    assert list(auto.step()) == ['1']
+
+
+def test_a_file_inside_a_group_at_the_trigger_column_does_not_count(
+    client: Client, fake: FakeFiles
+) -> None:
+    def grouped(files: Sequence[FileInfo]) -> list[Row]:
+        return [Row(str(f.metadata['run']), {'group': {'run': f.ref}}) for f in files]
+
+    batch = Batch(client, GROUPED, columns=('group',), label='g', source=grouped)
+    auto = Automatic(batch, at='group', settings=dict)
+    fake.measure(1, 1.0)
+
+    assert auto.step() == {}
+    assert auto.refused == {}
+
+
+def test_a_record_of_another_spec_with_the_rows_key_counts(
+    auto: Automatic, client: Client, sample: Measure
+) -> None:
+    run = sample(1, 'water')
+    client.wait(client.submit(FIND, params={'sample': run}, label='scan', member='1'))
+
+    assert auto.step() == {}
+
+
+def test_settings_changed_in_place_count_as_changed(
+    batch: Batch, sample: Measure
+) -> None:
+    settings = {'binning': {'bins': 0}}
+    auto = Automatic(batch, at='sample', settings=lambda: settings)
+    sample(1, 'water')
+    assert auto.step() == {}
+
+    settings['binning']['bins'] = 2
+
+    assert list(auto.step()) == ['1']
+
+
+def test_an_idle_step_reads_no_records(client: Client, sample: Measure) -> None:
+    counting = CountingClient(client)
+    batch = Batch(
+        counting,  # type: ignore[arg-type]
+        PLAIN,
+        columns=COLUMNS,
+        label='scan',
+        source=pair,
+    )
+    auto = Automatic(batch, at='sample', settings=lambda: SETTINGS)
+    sample(1, 'water')
+    client.wait(auto.step())
+    auto.step()  # reads the record that finished
+    counting.reads.clear()
+
+    assert auto.step() == {}
+    assert sum(counting.reads.values()) == 0
+
+
+def test_two_loops_on_one_label_submit_a_file_once(
+    client: Client, sample: Measure
+) -> None:
+    first, second = (
+        Automatic(
+            Batch(client, PLAIN, columns=COLUMNS, label='scan', source=pair),
+            at='sample',
+            settings=lambda: SETTINGS,
+        )
+        for _ in range(2)
+    )
+    sample(1, 'water')
+
+    assert list(first.step()) == ['1']
+    assert second.step() == {}

@@ -10,7 +10,7 @@ import pytest
 from ess.apps import Client, Status, SubmitError, file, local
 from ess.apps.batch import Batch, CorrectedFiles, FileInfo, Row, ready, remaining
 from ess.apps.testing import CountingClient, FakeStore, StagedFunction
-from ess.spec import function_binding
+from ess.spec import OutputRef, function_binding
 
 from .toys import COLUMNS, FIND, PLAIN, STAGED, Gate, Measure, Outputs, pair
 
@@ -44,7 +44,7 @@ def test_rows_are_reduced_and_found_by_their_key(
     assert state['1'].status is Status.COMPLETED
 
 
-def test_the_state_of_chosen_rows_reads_only_their_records(
+def test_the_state_of_chosen_rows_asks_the_status_of_their_records_only(
     client: Client, sample: Measure
 ) -> None:
     counting = CountingClient(client)
@@ -347,6 +347,23 @@ def test_a_cell_reading_a_failed_record_stops_only_its_row(
     reduce.rows = reduce.rows.edit('2', {'offset': failed['1'].ref('total')})
 
     assert ready(reduce.state()) == ['1']
+
+
+def test_an_unknown_record_in_a_cell_touches_only_its_row(
+    chain: tuple[Batch, Batch], client: Client
+) -> None:
+    _, reduce = chain
+    failed = reduce.reduce({'binning': {'bins': 1}}, ['1'])
+    client.wait(failed)
+    reduce.rows = reduce.rows.edit(
+        '1', {'offset': OutputRef(record='nope', output='x')}
+    )
+    reduce.rows = reduce.rows.edit('2', {'offset': failed['1'].ref('total')})
+
+    whole, chosen = reduce.state()['2'], reduce.state(keys=['2'])['2']
+
+    assert [e.msg for e in whole.problems] == ['the record it reads is failed']
+    assert chosen.problems == whole.problems
 
 
 def test_a_record_of_another_submitter_is_a_rows_result(
