@@ -433,3 +433,35 @@ def test_digests_fail_for_a_spec_the_file_lacks_and_say_how_to_add_it(
         'or write the file with ess.spec.testing.write_digests',
     ):
         check_digests([SUB, SUB_MULTI], path)
+
+
+def test_digests_fail_for_an_entry_of_no_spec_and_say_to_remove_it(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'digests.json'
+    write_digests([SUB, SUB_MULTI], path)
+    message = (
+        f'sub-multi/v1 in {path} is of no spec given: remove it if the spec is gone'
+    )
+    with pytest.raises(AssertionError, match=f'^{re.escape(message)}$'):
+        check_digests([SUB], path)
+
+
+def test_digests_fail_when_no_spec_is_given(tmp_path: Path) -> None:
+    path = tmp_path / 'digests.json'
+    write_digests([SUB], path)
+    with pytest.raises(AssertionError, match=r'sub/v1 .* is of no spec given'):
+        check_digests([], path)
+
+
+@pytest.mark.parametrize('function', [check_digests, write_digests])
+def test_digests_refuse_two_specs_of_the_same_name_and_version(
+    tmp_path: Path, function: Callable[..., None]
+) -> None:
+    other = _spec(
+        'sub', params=SubMultiParams, outputs=SubOutputs, tables=('sample', 'can')
+    )
+    with pytest.raises(
+        ValueError, match=r'^sub/v1: two specs of the same name and version$'
+    ):
+        function([SUB, other], tmp_path / 'digests.json')

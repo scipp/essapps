@@ -330,7 +330,7 @@ A validator raises `ValueError` for a value it does not take; any other exceptio
 pydantic tries the members of a union in order, so a validator of a member written inline, such as a `model_validator(mode='before')` of `GivenCentre`, also sees a reference to an output, and refuses it with `ValueError`.
 
 The record stores a value written inline in JSON form, and the workflow gets it validated from that form.
-So the JSON form of a group is the object of its fields: a field has no alias and no `exclude`, and a group has no serializers and no computed fields.
+So the JSON form of a group is the object of its fields: a field has no alias, no `exclude`, and no serializer in its type, such as `Annotated[float, PlainSerializer(...)]`, and a group has no serializers and no computed fields.
 A group may have field validators and model validators of any mode.
 A value written inline must round-trip through JSON: a validator that changes an already valid value, such as converting millimetres to metres, is refused.
 
@@ -350,8 +350,27 @@ It tells a record made with other models under the same name and version from on
 | a field made required or optional | a constraint, such as `Field(gt=0)`, or a validator |
 | the values of a `Literal` or an enum | the order of fields, or of the members of a union |
 | the metadata of a `File(...)` marker | the name or module of a group's class |
+| the `extra` setting of a group | the names of an enum's members, or an enum replaced by a `Literal` of its values |
+| the root type of a `RootModel` | |
+| the module or name of a class that is not a group | |
 
-A group is described by its fields, and any other class, such as `sc.DataArray`, by its name.
+A type is described so:
+
+```python
+class Centre(BaseModel):            # a group: by its fields, and by `extra` unless default
+    x: float                        # a builtin, a time, Path, a scipp type: by its name
+    unit: Literal['mm', 'm']        # a Literal or an enum: by its values, {'values': ['m', 'mm']}
+
+class Masks(RootModel[dict[str, sc.Variable]]): ...   # by its root type, dict[str, Variable]
+
+class Shapes(RootModel[list[Polygon]]): ...  # any other class, such as Polygon: by module and name, 'mypackage.shapes.Polygon'
+```
+
+Changing a file field's metadata, including the role of a raw file, changes the digest.
+`Referenced[T]` is described by the fields of `T`, since a reference is checked by class when it is used: `T` replaced by another class with the same fields keeps the digest, and a reference made with the old class is refused when it is checked.
+Requiredness counts, although a record stores its params with the defaults filled in, since a parameter that becomes required breaks callers.
+Serialization settings of a group's `model_config` other than `extra`, such as `ser_json_inf_nan`, are not covered.
+A type that is not resolved, such as a forward reference before `model_rebuild()`, has no digest: `spec.digest` raises, naming the field.
 The digest does not see a change of what the workflow computes, so the version stays the author's statement of any change a consumer can observe.
 
 A package keeps the digests of its specs in a file and checks them in its tests, so that a model changed without a new version fails there:
@@ -363,7 +382,8 @@ check_digests([IOFQ, BEAM_CENTRE], Path(__file__).with_name('spec_digests.json')
 write_digests([IOFQ, BEAM_CENTRE], path)  # once, to make the file: {"sans-iofq/v1": "9f2c...", ...}
 ```
 
-The check names each spec whose digest differs from the file's, and each spec the file lacks, with the entry the file needs.
+The check names each spec whose digest differs from the file's, each spec the file lacks, with the entry the file needs, and each entry of the file that no spec given has.
+The file holds the given specs and nothing else, so a test that finds no specs fails.
 A changed interface gets a new version; the file is updated under the same version only for a change that is meant to keep it, knowing that records of the old models are then of another spec.
 
 ## What `WorkflowSpec` refuses
@@ -422,4 +442,5 @@ Params model and groups ([When values are validated](#when-values-are-validated)
 
 - A field has no alias (`alias`, `validation_alias`, `serialization_alias`) and no `exclude` or `exclude_if`.
 - A group has no serializers and no computed fields.
+- A field's type has no serializer written with `Annotated`, such as `PlainSerializer` or `WrapSerializer`.
 - The params model has no decorators (validators of any mode, serializers, computed fields) and no `__init__` of its own.
