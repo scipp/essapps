@@ -35,6 +35,7 @@ from ess.apps.log import (
     NewStateRecord,
     Opened,
     Pushed,
+    Started,
     Submitted,
 )
 from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
@@ -277,7 +278,7 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_freeze_as_a_r
     frozen = client.freeze(total)
 
     events = Log.read(tmp_path / 'log')
-    assert events[6:10] == [
+    assert events[9:13] == [
         Opened(
             accumulator=total.id,
             proposal='p1',
@@ -292,7 +293,7 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_freeze_as_a_r
             for load in loads
         ),
     ]
-    assert events[10].records == (
+    assert events[13].records == (
         NewStateRecord(
             id=frozen.id, accumulator=total.id, pushes=3, outputs=('value',)
         ),
@@ -418,7 +419,7 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
         total.push(part=[load.ref('value')])
 
 
-def test_the_log_holds_submissions_finished_records_accumulators_and_pushes_only(
+def test_the_log_holds_submissions_starts_finishes_accumulators_and_pushes_only(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
@@ -430,6 +431,7 @@ def test_the_log_holds_submissions_finished_records_accumulators_and_pushes_only
     assert [type(e) for e in Log.read(tmp_path / 'log')] == [
         Opened,
         Submitted,
+        Started,
         Finished,
         Pushed,
     ]
@@ -506,11 +508,12 @@ def test_a_header_cut_short_is_completed_and_opens_an_empty_log(
     assert path.read_text() == json.dumps({'format': FORMAT}) + '\n'
 
 
-def test_a_log_file_of_another_format_is_refused(tmp_path: Path) -> None:
+@pytest.mark.parametrize('found', [FORMAT - 1, FORMAT + 1])
+def test_a_log_file_of_another_format_is_refused(tmp_path: Path, found: int) -> None:
     path = tmp_path / 'log'
-    path.write_text(json.dumps({'format': FORMAT + 1}) + '\n')
+    path.write_text(json.dumps({'format': found}) + '\n')
 
-    message = f'is a log of format {FORMAT + 1}; this version reads format {FORMAT}'
+    message = f'is a log of format {found}; this version reads format {FORMAT}'
     for read in (Log.read, Log):
         with pytest.raises(ValueError, match=message):
             read(path)
@@ -597,6 +600,19 @@ def test_a_last_line_cut_short_is_dropped(tmp_path: Path, files: FakeFiles) -> N
     _write(path, Finished(record='load', status=Status.COMPLETED))
 
     assert [type(e) for e in Log.read(path)] == [Submitted, Finished]
+
+
+def test_a_record_that_finished_without_starting_is_read_as_finished(
+    tmp_path: Path, files: FakeFiles, start: Callable[[Path], Client]
+) -> None:
+    request = Request(LOAD, params={'sample': files.resolve(file(run=1))})
+    cancelled = Finished(record='load', status=Status.CANCELLED, failure='released')
+    _write(tmp_path / 'log', _submitted('load', request), cancelled)
+
+    client = start(tmp_path / 'log')
+
+    assert client.status(_record(client, 'load')) is Status.CANCELLED
+    assert client.failure(_record(client, 'load')) == 'released'
 
 
 def test_a_line_that_is_not_an_event_is_refused(

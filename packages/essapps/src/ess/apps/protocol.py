@@ -472,8 +472,7 @@ class Store(Protocol):
     def write(self, record: str, output: str, value: Any) -> None:
         """
         Write the value of an output; raises if it cannot. A write replaces
-        a value written before under the same names, as a record run again
-        after a restart writes its outputs again.
+        a value written before under the same names.
         """
         ...
 

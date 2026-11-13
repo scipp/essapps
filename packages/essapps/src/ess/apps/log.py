@@ -4,22 +4,25 @@
 The workspace's history: an append-only log of what ran, with which params,
 and what came of it, for one proposal, which each submission and opening names.
 
-There are four events: a submission, a record that finished, an accumulator
-that opened, and a push into one. A persist request is part of a submission or
-a freeze, and its write is the record's: the record finishes once the outputs
-are written. A freeze is a submission of one record of the plain request of the
-state frozen, as the accumulator and its number of pushes; the views list its
-request when it is read. The workspace's views, such as the records by ID, are
-built by applying the events in order, when they are appended and again when a
-workspace starts from an existing log.
+There are five events: a submission, a record that started, a record that
+finished, an accumulator that opened, and a push into one. A record starts when
+a worker begins its work, once what it reads is there, so a record that started
+and did not finish was running when its workspace ended. A persist request is
+part of a submission or a freeze, and its write is the record's: the record
+finishes once the outputs are written. A freeze is a submission of one record of
+the plain request of the state frozen, as the accumulator and its number of
+pushes; the views list its request when it is read. The workspace's views,
+such as the records by ID, are built by applying the events in order, when they
+are appended and again when a workspace starts from an existing log.
 
-An event names only records and accumulators appended before it: a finish
-names its record, a push its accumulator, a record the records it reads, and
-the record of a freeze its accumulator. Applying the events in order relies on
-this, and so does a restart, which walks the pending records backwards.
+An event names only records and accumulators appended before it: a start and
+a finish name their record, a push its accumulator, a record the records it
+reads, and the record of a freeze its accumulator. Applying the events in order
+relies on this, and so does a restart, which walks the pending records
+backwards.
 
 A log file starts with a header line that names its format, such as
-``{"format": 1}``, and holds one event per line after it. A log reads only
+``{"format": 2}``, and holds one event per line after it. A log reads only
 files of its own format, :data:`FORMAT`, and leaves a file it refuses as it was.
 
 Stages and accumulators are not history, and neither are output values or
@@ -83,6 +86,13 @@ class Submitted(BaseModel, frozen=True, extra='forbid'):
     records: tuple[NewRecord | NewStateRecord, ...]
 
 
+class Started(BaseModel, frozen=True, extra='forbid'):
+    """A record whose work began on a worker: what it reads was there."""
+
+    kind: Literal['started'] = 'started'
+    record: str
+
+
 class Finished(BaseModel, frozen=True, extra='forbid'):
     """
     A record that finished: ``failure`` says why it failed, or why the
@@ -129,7 +139,7 @@ class Pushed(BaseModel, frozen=True, extra='forbid'):
 
 
 Event = Annotated[
-    Submitted | Finished | Opened | Pushed,
+    Submitted | Started | Finished | Opened | Pushed,
     Field(discriminator='kind'),
 ]
 _event: TypeAdapter[Event] = TypeAdapter(Event)
@@ -137,7 +147,7 @@ _event: TypeAdapter[Event] = TypeAdapter(Event)
 # The format of a log file, named by its first line. Bumped on any change to
 # the events or to the files of the store (ess.apps.hdf5), since stored values
 # are found through the log.
-FORMAT = 1
+FORMAT = 2
 _HEADER = json.dumps({'format': FORMAT}).encode() + b'\n'
 
 
