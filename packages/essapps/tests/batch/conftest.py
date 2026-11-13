@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The toy reduction of ``toys`` on a real in-process workspace."""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pandas as pd
@@ -22,6 +22,14 @@ def _find(params: toys.FindParams) -> toys.FindOutputs:
     if value < 0:
         raise ValueError('nothing to find')
     return toys.FindOutputs(offset=toys.Offset(value=value))
+
+
+def _series(gate: toys.Gate) -> Callable[[toys.SeriesParams], toys.Outputs]:
+    def series(params: toys.SeriesParams) -> toys.Outputs:
+        gate.wait()
+        return toys.Outputs(total=sum(read_file(run) for run in params.runs))
+
+    return series
 
 
 @pytest.fixture
@@ -53,12 +61,13 @@ def staged_binding(gate: toys.Gate) -> StagedFunction:
 
 @pytest.fixture
 def workspace(
-    files: CorrectedFiles, staged_binding: StagedFunction
+    files: CorrectedFiles, staged_binding: StagedFunction, gate: toys.Gate
 ) -> Iterator[Workspace]:
     plain = function_binding(toys.PLAIN, staged_binding.function)
     find = function_binding(toys.FIND, _find)
+    series = function_binding(toys.SERIES, _series(gate))
     workspace = Workspace(
-        proposal='p1', files=files, bind=[staged_binding, plain, find]
+        proposal='p1', files=files, bind=[staged_binding, plain, find, series]
     )
     yield workspace
     workspace.close()

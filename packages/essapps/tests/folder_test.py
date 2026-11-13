@@ -10,8 +10,9 @@ import pydantic
 import pytest
 import scipp as sc
 
-from ess.apps import Client, Record, Rule, Selector, TriggerLoop, file
+from ess.apps import Client, Selector, file
 from ess.apps.batch import Batch, FileInfo, Row
+from ess.apps.batch.auto import Automatic
 from ess.apps.batch.frames import batch_table
 from ess.apps.folder import FolderStore, open_folder, scan_folder
 from ess.apps.testing import read_file
@@ -152,25 +153,19 @@ def test_a_request_of_a_second_session_references_a_persisted_output(
         assert second.output(total, 'total') == 4.0
 
 
-def _find_each(client: Client, ref: FileRef) -> Record:
-    """Find the offset of a run, as the member of its run under ``found``."""
-    (metadata,) = client.files.metadata([ref])
-    return client.submit(
-        toys.FIND,
-        params={'sample': ref},
-        label='found',
-        member=metadata['run'],
-        persist=True,
-    )
-
-
-def _found(client: Client) -> pd.DataFrame:
-    """The batch of a row per run, with its result under ``found``, as a table."""
+def _found(client: Client) -> Batch:
+    """A row per run, whose offset is found under the label ``found``."""
 
     def rows(files: Sequence[FileInfo]) -> list[Row]:
         return [Row(f.metadata['run'], {'sample': f.ref}) for f in files]
 
-    batch = Batch(client, toys.FIND, columns=['sample'], label='found', source=rows)
+    return Batch(
+        client, toys.FIND, columns=['sample'], label='found', source=rows, persist=True
+    )
+
+
+def _table(client: Client) -> pd.DataFrame:
+    batch = _found(client)
     batch.scan()
     return batch_table(batch, batch.state())
 
@@ -178,11 +173,12 @@ def _found(client: Client) -> pd.DataFrame:
 def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_them(
     folder: Path, bindings: list[Binding]
 ) -> None:
-    rule = Rule('find', _find_each, selector=Selector(), label='found', at='sample')
     with open_folder(folder, bindings) as first:
-        found = TriggerLoop(first, [rule]).step()
+        found = list(
+            Automatic(_found(first), at='sample', settings=dict).step().values()
+        )
         first.wait(found)
-        table = _found(first)
+        table = _table(first)
     files = [r.request.params['sample'] for r in found]
     assert files == [
         FileRef(file='path:run-1.json'),
@@ -193,8 +189,8 @@ def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_t
     with open_folder(folder.rename(folder.with_name('moved')), bindings) as second:
         assert second.files.list(Selector()) == files
         assert [second.output(r, 'offset').value for r in found] == [1, 2, 3]
-        assert TriggerLoop(second, [rule]).step() == []
-        assert _found(second).equals(table)
+        assert Automatic(_found(second), at='sample', settings=dict).step() == {}
+        assert _table(second).equals(table)
         again = second.submit(found[0].request)
         second.wait([again])
         assert second.output(again, 'offset').value == 1

@@ -42,6 +42,10 @@ class FindOutputs(BaseModel):
     offset: Offset
 
 
+class SeriesParams(BaseModel):
+    runs: list[RunFile] = Field(min_length=1)
+
+
 STAGED = WorkflowSpec(
     name='staged',
     version=1,
@@ -65,6 +69,15 @@ FIND = WorkflowSpec(
     description='A toy.',
     params=FindParams,
     outputs=FindOutputs,
+)
+SERIES = WorkflowSpec(
+    name='series',
+    version=1,
+    title='Series',
+    description='A toy that sums a list of runs.',
+    params=SeriesParams,
+    outputs=Outputs,
+    tables=('runs',),
 )
 COLUMNS = ('sample', 'transmission', 'thickness')
 
