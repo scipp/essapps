@@ -71,7 +71,8 @@ class Automatic:
         self.at = at
         self.settings = settings
         self._cursor = 0
-        self._held: dict[str, set[FileRef]] = {}
+        # The identity strings, which are equal only if their files are.
+        self._held: dict[str, set[str]] = {}
         self._refused: dict[str, tuple[Row, str]] = {}
         self._settings: Mapping[str, Any] | None = None
 
@@ -148,22 +149,22 @@ def run(autos: Sequence[Automatic], interval: float = 1.0) -> None:
         time.sleep(interval)
 
 
-def _new(cell: Any, held: set[FileRef]) -> bool:
+def _new(cell: Any, held: set[str]) -> bool:
     """Whether ``cell`` is a file, or a list with a file, that ``held`` lacks."""
     if isinstance(cell, FileRef):
-        return cell not in held
+        return cell.file not in held
     if isinstance(cell, list):
-        return any(isinstance(f, FileRef) and f not in held for f in cell)
+        return any(isinstance(f, FileRef) and f.file not in held for f in cell)
     return False
 
 
-def _files_at(params: Mapping[str, Any], at: str) -> set[FileRef]:
+def _files_at(params: Mapping[str, Any], at: str) -> set[str]:
     """
-    The files at the parameter ``at`` of a request: its value, or each element
-    of its list, as a file or its plain form.
+    The identities of the files at the parameter ``at`` of a request: its
+    value, or each element of its list, as a file or its plain form.
     """
     return {
-        ref
+        ref.file
         for loc, ref in iter_refs({at: params.get(at)})
         if isinstance(ref, FileRef)
         and (len(loc) == 1 or (len(loc) == 2 and isinstance(loc[1], int)))
