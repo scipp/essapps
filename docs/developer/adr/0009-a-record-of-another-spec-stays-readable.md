@@ -26,6 +26,7 @@ What must reach another workspace, or outlive the history, is published.
 ## Decision
 
 Callers write `SpecId(name, version)` or pass the spec.
+A request made with a spec whose digest differs from that of the spec bound under the same name and version is refused at submission.
 
 The *digest* of a spec covers the name, type, and requiredness of every field of its params and outputs models, including the fields of groups inside them.
 Titles, descriptions, and defaults are not part of it.
