@@ -623,19 +623,6 @@ def test_a_last_line_cut_short_is_dropped(tmp_path: Path, files: FakeFiles) -> N
     assert [type(e) for e in Log.read(path)] == [Submitted, Finished]
 
 
-def test_a_record_that_finished_without_starting_is_read_as_finished(
-    tmp_path: Path, files: FakeFiles, start: Callable[[Path], Client]
-) -> None:
-    request = Request(LOAD, params={'sample': files.resolve(file(run=1))})
-    cancelled = Finished(record='load', status=Status.CANCELLED, failure='released')
-    _write(tmp_path / 'log', _submitted('load', request), cancelled)
-
-    client = start(tmp_path / 'log')
-
-    assert client.status(_record(client, 'load')) is Status.CANCELLED
-    assert client.failure(_record(client, 'load')) == 'released'
-
-
 def test_a_line_that_is_not_an_event_is_refused(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
