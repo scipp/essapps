@@ -462,14 +462,16 @@ class FileSource(Protocol):
         A file the catalogue lists is identified by its catalogue identifier,
         ``pid:20.500.12269/<uuid>``, the same in every file source that knows
         the file. Any other file is identified by its path (see
-        :class:`~.files.FolderFiles`).
+        :class:`~.files.FolderFiles`). An identity is not a path: only
+        :meth:`path` gives the path of a file.
         """
         ...
 
     def path(self, ref: FileRef) -> Path:
         """
         A local path to the file, for a workflow to read: a lookup by
-        identity that never raises.
+        identity. Raises ``KeyError`` for an identity the source does not know,
+        such as one a record holds of a file moved or given a ``pid`` since.
 
         The files are on a network mount, and the workspace calls ``path`` for
         each file of a request when the request is submitted, so that the

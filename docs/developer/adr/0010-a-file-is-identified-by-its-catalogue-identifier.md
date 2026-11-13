@@ -40,8 +40,10 @@ A person still writes `file(run=60339)`.
 - A moved folder, and a second file source, give a raw file the same identity.
 - Provenance lists raw files as the catalogue names them.
 - A file source reads the identifier from a raw file, or gets it from the catalogue.
+- A file first listed without its catalogue identifier and later with it changes identity: a trigger loop reduces it again, and the records made before name an identity the file source no longer knows.
 - Identities are in the log, so changing them changes the log's format ([ADR 0004](0004-history-is-append-only-lists.md#decision)).
 
 ## Open
 
 - Whether every raw file in user operation carries the identifier, and whether a file the catalogue lists can still be unreadable. To be asked of the teams that run the file writer and the catalogue.
+- A catalogue dataset that holds several files cannot be represented, since two rows with one `pid` are refused. Raw files have one file per dataset.

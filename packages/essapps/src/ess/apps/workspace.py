@@ -168,6 +168,7 @@ from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -1145,12 +1146,23 @@ class Workspace(WorkspaceProtocol):
         driver takes them by name.
         """
         spec = self._bindings[spec_id].spec
-        paths = validation.local_paths(values, self._files.path)
+        paths = validation.local_paths(values, self._path)
         context = {'read': self._reader(values), 'paths': paths}
         return {
             n: validation.validated(spec.params, n, v, n in spec.tables, context)
             for n, v in values.items()
         }
+
+    def _path(self, ref: FileRef) -> Path:
+        """
+        The local path of a file; no lock. A record may hold the identity of a
+        file the source no longer knows, moved or given a ``pid`` since the
+        record was made, which fails the record.
+        """
+        try:
+            return self._files.path(ref)
+        except KeyError:
+            raise _Failure(f'the file source does not know the file {ref}') from None
 
     def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
         """

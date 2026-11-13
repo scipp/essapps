@@ -35,6 +35,10 @@ def file(
         file(path='/home/user/data/run1.h5')
         file(pid='20.500.12269/vanadium')
 
+    A relative path is relative to the working directory, and is made absolute
+    here. A path relative to the workspace's folder is written only as the
+    identity a record holds, ``FileRef(file='path:masks/main.xml')``.
+
     A string where a file field is expected is refused: write ``file(path=...)``.
     The record holds no metadata; read it with :meth:`ess.apps.Files.metadata`.
     """
@@ -43,7 +47,9 @@ def file(
     if len(named) != 1:
         raise ValueError(f'name a file by exactly one of {list(given)}')
     ((kind, value),) = named.items()
-    return FileRef.at(value) if kind == 'path' else FileRef(file=f'{kind}:{value}')
+    if kind == 'path':
+        return FileRef.at(Path(value).absolute())
+    return FileRef(file=f'{kind}:{value}')
 
 
 class Selector:
@@ -119,9 +125,10 @@ class FolderFiles:
         ], root='/data/test')
 
     A file with a ``pid``, one the catalogue lists, is identified by it, written
-    in full, so every source that lists the file gives it one identity. Any
-    other file is identified by its path: relative to ``root`` if it is inside
-    it, and absolute if not or without ``root``::
+    in full, ``<prefix>/<suffix>``, so every source that lists the file gives it
+    one identity. Any other file is identified by its real path, with symbolic
+    links resolved: relative to the real path of ``root`` if it is inside it,
+    and absolute if not or without ``root``::
 
         pid:20.500.12269/<uuid>     a row with pid 20.500.12269/<uuid>
         path:masks/main.xml         a file inside root
@@ -129,15 +136,16 @@ class FolderFiles:
 
     ``root`` is the folder of a workspace (see :func:`ess.apps.folder.folder_files`),
     so that moving the folder keeps the identity of each file in it. A file is
-    named by its identity, its ``run``, its ``pid``, or its path, absolute or
-    relative to ``root``.
+    named by its identity, its ``run``, its ``pid``, or its absolute path, also
+    one through a symbolic link.
 
     Raises
     ------
     FileNotFoundError
         If the folder lacks a file of the table.
     ValueError
-        If two rows name one file, or give one run or one PID.
+        If two rows name one file, give one run or one PID, or a PID is not
+        written in full.
     """
 
     def __init__(
@@ -147,13 +155,13 @@ class FolderFiles:
         *,
         root: Path | str | None = None,
     ) -> None:
-        root = None if root is None else Path(os.path.abspath(root))
+        root = None if root is None else Path(os.path.realpath(root))
         self._paths: dict[FileRef, Path] = {}
         self._metadata: dict[FileRef, dict[str, Any]] = {}
         self._names: dict[FileRef, FileRef] = {}
         for row in table:
             metadata = dict(row)
-            path = Path(os.path.abspath(Path(directory, metadata.pop('file'))))
+            path = Path(os.path.realpath(Path(directory, metadata.pop('file'))))
             if not path.is_file():
                 raise FileNotFoundError(path)
             if FileRef.at(path) in self._names:
@@ -163,6 +171,12 @@ class FolderFiles:
             else:
                 local = FileRef.at(path)
             pid = metadata.get('pid')
+            if pid is not None and not _written_in_full(str(pid)):
+                raise ValueError(
+                    f'the pid {pid!r} of {path} is not written in full: a catalogue '
+                    'identifier is written with its prefix, such as '
+                    '20.500.12269/<uuid>'
+                )
             ref = local if pid is None else FileRef(file=f'pid:{pid}')
             names = {ref, local, FileRef.at(path)}
             if 'run' in metadata:
@@ -175,13 +189,31 @@ class FolderFiles:
             self._metadata[ref] = metadata
 
     def resolve(self, name: FileRef) -> FileRef:
+        kind, _, value = name.file.partition(':')
+        if kind == 'path' and os.path.isabs(value):
+            name = FileRef.at(os.path.realpath(value))
         return self._names[name]
 
     def path(self, ref: FileRef) -> Path:
-        return self._paths[ref]
+        return self._paths[self._known(ref)]
 
     def metadata(self, ref: FileRef) -> dict[str, Any]:
-        return dict(self._metadata[ref])
+        return dict(self._metadata[self._known(ref)])
+
+    def _known(self, ref: FileRef) -> FileRef:
+        """
+        ``ref``, if it is the identity of a file of the table. A record may hold
+        one that is not, of a file moved or given a ``pid`` since it was made.
+        """
+        if ref not in self._paths:
+            raise KeyError(f'the file source does not know the file {ref.file}')
+        return ref
 
     def list(self, selector: Selector) -> list[FileRef]:
         return [r for r, m in self._metadata.items() if selector.matches(m)]
+
+
+def _written_in_full(pid: str) -> bool:
+    """Whether ``pid`` has the form ``<prefix>/<suffix>`` of a catalogue identifier."""
+    prefix, slash, suffix = pid.partition('/')
+    return bool(prefix and slash and suffix)

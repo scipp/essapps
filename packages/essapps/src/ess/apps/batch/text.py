@@ -88,7 +88,7 @@ def named_file(name: Any) -> Any:
         return name
     if _KIND.match(name):
         return FileRef(file=name)
-    return file(path=Path(name).absolute())
+    return file(path=name)
 
 
 def _takes_files(annotation: Any, metadata: tuple[Any, ...]) -> bool:
