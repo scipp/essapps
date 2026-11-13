@@ -36,7 +36,7 @@ The code is the text of the shell command or of the rule's Python block, so a co
 For us: provenance lists software versions ([README, Provenance and publication](../README.md#provenance-and-publication)), not yet implemented, and what a finish records is open ([ADR 0002, Open](../adr/0002-a-value-lives-while-something-keeps-it.md#open)).
 Package names and versions, as Snakemake's list holds, is a grain that cosmetic edits do not change.
 The metadata format is at version 7, and each rerun check skips records written before the version that first stored its field reliably ([persistence](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/persistence/__init__.py#L588-L622)).
-That is one way to keep old event formats readable as long as the log is kept ([ADR 0004](../adr/0004-history-is-append-only-lists.md#consequences)).
+That is one way to read old formats. A log here reads only files of its own format ([ADR 0004](../adr/0004-history-is-append-only-lists.md#decision)).
 
 **Outputs are deleted on failure; logs survive, but only what the author redirects into them.**
 Snakemake deletes a failed job's outputs, so a half-written file is never taken for a result.

@@ -46,7 +46,14 @@ A client chooses per output, with `persist=` at submission or at `client.freeze`
 The store is then the only keeper, as batch reduction and the trigger loop need.
 A failed write fails the record, so a controller sees it like any other failed record.
 The store keys a value by record ID and output name, so a record holds no file name and a write changes no record.
-A persisted output stays readable after an upgrade removes its record's spec version, since the record stays in history.
+A persisted output stays readable after an upgrade removes its record's spec version, since the record stays in history, and is read as plain scipp data ([ADR 0009](0009-a-record-of-another-spec-stays-readable.md)).
+
+**A workspace reads and writes persisted outputs through `Store`**, by record, output name, and type.
+A file format belongs to each stored value, so a store may hold several.
+A value's file format must let one array be read without the others, and the sizes, unit, and coordinates without the data, since `client.describe` reads no array and `select=` reads a part.
+scipp's HDF5 layout does.
+`Store` reads a value whole.
+Reading a part is added with the first output that needs it.
 
 **The same rules hold in the user's process and on the service.** What differs:
 
@@ -75,6 +82,7 @@ Each pending record is
 - **One workspace for many proposals.** The core would separate the history, values, and files of each proposal, and check every call against them. A service gets the separation between proposals by running one workspace per proposal instead.
 - **Record objects keep values, as dask futures do.** `client.records()`, `client.latest()`, and provenance each return a new object for the same record, so no single object could own the value. A dict of records (D2, kept for the morning check) would keep every value, and so would Jupyter's `Out[n]`.
 - **Persisting a kept record later (`client.persist`).** A person could keep a result after seeing it without computing it again. No story or application needs it. A write that ends after its record has finished has no record to fail, so its failure would need a channel of its own, such as an error raised when the workspace closes. It needs two more kinds of event in history. It can be added when a story needs it.
+- **Running a started record again once after a restart.** A reduction that exhausts memory would end the process a second time, and history would have to count the attempts.
 - **Keep only on request (`keep=True`).** The flag must be given at submission, since a value dropped when its request finishes cannot be kept later without a race. Forgetting it shows only when a later `client.output` or reference is refused.
 - **Views first, and a record made only at persist.** A read returns a view, a handle without a record. It needs a second handle type, records of upstream views that have no values, which a later `persist` cannot complete, and the states of accumulators kept inside views. A record is one entry in history, so making it lazily saves nothing worth that.
 - **Sessions or nested scopes.** A session reopened by name is lost when the workspace restarts, and needs names and an expiry. A scope is a `with` block, which a notebook cannot hold across cells.
