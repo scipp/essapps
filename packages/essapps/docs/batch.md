@@ -58,7 +58,7 @@ batch.cancel()
 - A **row** has a **key**, a value per column, and read-only **info** to show with it. A cell can hold anything a request can: a file, a reference to an output, a number, a list of runs.
 - A **source** is your function from files to rows. A **scan** calls it.
 - An **edit** is a cell set by hand, by a person or by your code.
-- A row's **result** is the newest record of the client's submitter, with the batch's spec and label, and the row's key as its member. So two `Batch` objects with the same spec and label are one batch: give each batch its own label.
+- A row's **result** is the newest record with the batch's spec and label, and the row's key as its member, whoever submitted it. So two `Batch` objects with the same spec and label are one batch: give each batch its own label.
 
 Choose a key that does not change from one scan to the next, such as the run number. Results and edits are found by key. Put the name of the sample in `info`, under a name that is not a column.
 
@@ -95,7 +95,7 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 
 ## Writing a source
 
-A source takes `FileInfo(ref, metadata)` for each file, and returns `Row`s. It calls nothing, so test it on plain data:
+A source takes `FileInfo(ref, metadata)` for each file, and returns `Row`s. It calls nothing but, in a chain, the `state` of another batch ([Chains](#chains)), so test it on plain data:
 
 ```python
 def test_a_sample_run_pairs_with_its_transmission_run():
@@ -110,7 +110,7 @@ Pairing is yours to write. The framework knows no technique. If a source raises,
 
 ## When the metadata is wrong or missing
 
-Wrap the file source, and give the wrapper to the workspace. Forms, rules, and sources then all see a file as corrected:
+Wrap the file source, and give the wrapper to the workspace. Forms and sources then all see a file as corrected:
 
 ```python
 files = CorrectedFiles(FolderFiles('/data', table))
@@ -139,6 +139,49 @@ for key, record in centres.items():
 ```
 
 After a centre failed, this reruns only what is left, and points those rows at the new centre. The field must be typed `Referenced[...]` in the spec.
+
+An edit is lost when the session ends. A source that reads the other batch's state makes the same cells at every scan, which the automatic reduction needs:
+
+```python
+def with_centre(files: Sequence[FileInfo]) -> list[Row]:
+    found = {k: s.record for k, s in find.state().items() if s.record}
+    return [replace(row, values={**row.values, 'beam_centre': found[row.key].ref('centre')})
+            if row.key in found else row
+            for row in pair_by_sample(files)]
+```
+
+Scan `find` before a batch with this source, so that its rows see the newest centres.
+
+## Automatic reduction
+
+`Automatic` reduces a batch as its files arrive. It needs a source, and the batch should persist what it submits, since nothing releases its records:
+
+```python
+from ess.apps.batch.auto import Automatic, run
+
+batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'), label='auto/iofq',
+              source=pair_by_sample, staged=True, persist=True)
+auto = Automatic(batch, at='sample', settings=lambda: settings)
+auto.step()       # scans, and reduces the rows with a new file at `sample`; their records by key
+auto.refused      # why each such row did not run, by key: {'60339': '60339: sample_transmission: empty'}
+run([auto])       # steps forever, once a second
+```
+
+`at` is the *trigger column*, of a file or a list of files. `settings` is called at each step, so a change applies to the rows not reduced yet.
+
+**A row runs if its cell at `at` holds a file that no record under the label, with the row's key, holds at `at`.** Any record counts, failed, cancelled, of any version of the spec, and of any submitter. So the automatic reduction differs from a person's reduce:
+
+| A row runs if | no result | failed or cancelled | a setting or another cell changed | a new file at the trigger column |
+|---|---|---|---|---|
+| the page, "reduce remaining" | yes | yes | yes (stale) | yes |
+| `essapps-batch reduce --remaining` | yes | yes | no | no |
+| automatic | yes | no | no | yes |
+
+A row that cannot run, such as one without its transmission run, or whose request is refused, does not hold back the others, and `refused` says why. A reason that names no row, about the settings, refuses every row. A row that waits is looked at again when its cells change, a row still running when its record finishes, and a refused row also when the settings change.
+
+The loop reads the records from the proposal's changes, from the start when an `Automatic` is made, so a restart needs nothing on disk and reduces no row again. Give the automatic reduction its own label: a person's record under it counts as a row reduced.
+
+In a chain, step the batch that is read first: `run([Automatic(find, ...), Automatic(iofq, ...)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design and what is open.
 
 ## From files, and from the command line
 
@@ -249,7 +292,7 @@ run,role,sample
 ,direct_beam,          <- with a column file: a file that is no run
 ```
 
-`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. A file that cannot be read is left out, with a warning. Two files of one run are refused. Running `files` again after files gained a `pid` changes their identity: a trigger loop reduces them again, and earlier records name files the folder no longer knows.
+`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. A file that cannot be read is left out, with a warning. Two files of one run are refused. Running `files` again after files gained a `pid` changes their identity: the automatic reduction reduces them again, and earlier records name files the folder no longer knows.
 
 A file says its kind, its run, and perhaps its sample, but not what a run is for. A row source that pairs runs reads the `role`, and a field such as the direct beam requires it. The run table gives it (`frames.described`): a row describes the file of its `run`, or the file at its `file` if it has no run. A run of the table that has no file in the folder is ignored, so the table may cover more than the folder holds. A file that no row describes keeps what it says of itself, and where both have a column, a cell of the run table that is not empty wins. Two rows for one run are refused. Without `--with`, the roles are typed into `files.csv`, so `files` then refuses to write over a table that exists.
 
@@ -288,7 +331,7 @@ $B reduce settings.yaml rows.csv --label demo -o done.csv
 python -m ess.apps.batch.panel.demo ws     # the rows show as completed
 ```
 
-The command finds the results of the app, and the app those of the command, if both use the batch's label and the same submitter (`open_folder` gives `user`), and the outputs are persisted (`Batch(..., persist=True)`).
+The command finds the results of the app, and the app those of the command, if both use the batch's label, and the outputs are persisted (`Batch(..., persist=True)`).
 
 | Button | Same as |
 |---|---|

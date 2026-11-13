@@ -59,14 +59,14 @@ AiiDA's export default is what `client.provenance` and `client.publish` do: ever
 `BaseRestartWorkChain` keys handlers on exit codes and retries up to `max_iterations` (default 5), then aborts or pauses for a person ([workchains_restart.rst L76-115][restart]).
 Our records end `completed`, `failed`, or `cancelled`, and `client.failure` returns a message ([README, Requests and records](../README.md#requests-and-records)).
 `failed` covers a workflow that raised, an unreadable file, and a failed write.
-If rules move into applications (scipp/essapps#33), the application decides retries, and today it can only match on a message.
+The automatic reduction does not retry a failed record; an application that retries one (scipp/essapps#33) can today only match on a message.
 AiiDA's split is the minimum it would need: the workflow reported a failure, the workflow code raised, or the framework could not run it.
 
 **Transient infrastructure failures pause instead of failing.** A transport task (upload, submit, poll, retrieve) that raises is rescheduled at growing intervals.
 After 5 consecutive failures the job is paused, and `verdi process play` resumes it from the failed task ([calculations/concepts.rst L176-200][backoff]).
 Each computer also sets a minimum interval between scheduler polls ([computers.py L73-74][poll]).
 For us, a slow or missing `/ess` mount is the likely transient failure on the service.
-Today it fails the record, and since a failed record counts as handled ([automatic-reduction.md](../automatic-reduction.md), The trigger loop), automatic reduction never reduces that run.
+Today it fails the record, and since a failed record counts as a row reduced ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)), automatic reduction never reduces that run again.
 Whether the workspace retries before it fails a record, or marks the failure so a controller may resubmit, belongs to the service design (scipp/essapps#27).
 
 **Checkpointed workflow state does not survive upgrades.** A WorkChain resumes after a daemon restart because its state is serialised between steps.

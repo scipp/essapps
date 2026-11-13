@@ -33,7 +33,7 @@ The interface's documentation says so ([ISIS Reflectometry.rst L646-L650](https:
 In 2024, on ISIS's analysis machines (IDAaaS), the journal began to list runs seconds before their files reached the data cache, so autoprocessing failed those rows and never came back to them ([mantid#36860](https://github.com/mantidproject/mantid/issues/36860)).
 Retrying failed rows at each poll was considered and rejected as confusing for users.
 The fix lists only runs found in the data cache's index ([mantid#37449](https://github.com/mantidproject/mantid/pull/37449)), together with slower polling ([mantid#36895](https://github.com/mantidproject/mantid/pull/36895)).
-For us: the trigger loop makes the same choice, a failed record counts as handled ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
+For us: the automatic reduction makes the same choice, a failed record counts as a row reduced ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)).
 So the file source must list a run's file only once it is complete; otherwise the first reduction fails and the file is never reduced again without a person.
 This bears on the Open question of how long after the file writer finishes the catalogue lists a run ([data](../../requirements/data.md#open)).
 
@@ -65,7 +65,7 @@ Either change resets the group, so it is stitched again ([Group.cpp L195-L205](h
 FIA's INTER rule attaches every file in the run's directory with the same title prefix to the new run's job ([inter_rules.py L32-L44](https://github.com/fiaisis/run-detection/blob/881dacdc3c07d5ee1cbf12d49843d5a8fe7fe397/rundetection/rules/inter_rules.py#L32-L44)), but FIA's INTER script only raises "script not implemented" ([INTER/reduce.py](https://github.com/fiaisis/autoreduction-scripts/blob/de9e1bfd96e67a6b216d7ecd8e8e3f0b868a7b5b/INTER/reduce.py)).
 For TOSCA, OSIRIS and IRIS, a rule walks back over consecutive run numbers with similar titles and adds a summed job per arrival ([common_rules.py L69-L127](https://github.com/fiaisis/run-detection/blob/881dacdc3c07d5ee1cbf12d49843d5a8fe7fe397/rundetection/rules/common_rules.py#L69-L127)).
 For SANS, a scatter run looks for its transmission run by title and a transmission run for its scatter run, so whichever arrives last starts the job ([sans_rules.py L275-L315](https://github.com/fiaisis/run-detection/blob/881dacdc3c07d5ee1cbf12d49843d5a8fe7fe397/rundetection/rules/sans_rules.py#L275-L315)).
-For us: a rule's function can reduce every run of the series at each arrival, as FIA's INTER rule would ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
+For us: a row whose trigger column is a list holds every run of the series so far, and is reduced again at each arrival, as FIA's INTER rule would ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)).
 Mantid's cost per arrival is one row reduction plus one stitch; with our core that is one record per angle and a stitch request that references the persisted per-angle outputs.
 Whether ESS automatic reduction should stitch as angles arrive is Open ([reflectometry](../../requirements/reflectometry.md#open)).
 
@@ -79,7 +79,7 @@ For us: a record never changes, and a changed template affects only requests mad
 
 **Exclusions carry a reason.**
 A user can type an exclude reason next to a run in the search results; excluded runs are not transferred to the table, and the reasons save with the batch ([QtSearchModel.cpp L180-L181](https://github.com/mantidproject/mantid/blob/0a137707b24563d2e5d690951651fcee052ce635/qt/scientific_interfaces/ISISReflectometry/GUI/Runs/QtSearchModel.cpp#L180-L181), [RunsPresenter.cpp L492](https://github.com/mantidproject/mantid/blob/0a137707b24563d2e5d690951651fcee052ce635/qt/scientific_interfaces/ISISReflectometry/GUI/Runs/RunsPresenter.cpp#L492)).
-For us: the trigger loop has no exclusions; under scipp/essapps#33 they would be configuration of the application's rule.
+For us: a person marks a file `exclude=True` (`CorrectedFiles`), and a source of rows that reads it leaves the file out; no reason is kept.
 
 **Provenance is a script, not a structured request.**
 The reflectometry interface removed its notebook export in Mantid 4.1 "as this was not used and not useful" ([release notes](https://github.com/mantidproject/mantid/blob/0a137707b24563d2e5d690951651fcee052ce635/docs/source/release/v4.1.0/reflectometry.rst?plain=1#L164)); since 6.10 the ORSO output file embeds the reduction script ([release notes](https://github.com/mantidproject/mantid/blob/0a137707b24563d2e5d690951651fcee052ce635/docs/source/release/v6.10.0/reflectometry.rst?plain=1#L13)).
@@ -89,14 +89,14 @@ For us: the record holds the request; the container image is a precedent for sof
 
 **A rule edited in place rewrote history.**
 In ISIS autoreduction, a run pointed at the database row of values that filled it ([records.py L170-L188](https://github.com/autoreduction/queue-processor/blob/4eab9dea17df1fe599a5fcf23a77ea1e2554de2e/autoreduce_qp/model/database/records.py#L170-L188)), and editing the values "from run N onward" overwrote that row ([configure_new_runs.py L49-L60](https://github.com/autoreduction/frontend/blob/917b665c06c91d9bfc3733c89fcbf74fa0937413/autoreduce_frontend/reduction_viewer/views/configure_new_runs.py#L49-L60)), so old runs then showed values they never used.
-For us: a record holds every parameter value and does not name the rule or template it came from ([automatic-reduction.md](../automatic-reduction.md#rules)).
+For us: a record holds every parameter value and does not name the batch or template it came from ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)).
 
 **FIA keeps rules as code and their configuration as data.**
 Each instrument has a JSON *specification* in FIA's database; each key names a Python rule class, and its value configures it ([specifications.py](https://github.com/fiaisis/run-detection/blob/881dacdc3c07d5ee1cbf12d49843d5a8fe7fe397/rundetection/specifications.py), [models.py L136](https://github.com/fiaisis/FIA-API/blob/9707aa094c4e4a9c96f31142e8777f2e0c430273/fia_api/core/models.py#L136)).
 An API call replaces the specification ([instrument_specs.py L38-L46](https://github.com/fiaisis/FIA-API/blob/9707aa094c4e4a9c96f31142e8777f2e0c430273/fia_api/routers/instrument_specs.py#L38-L46)), and run detection fetches it from the API.
 FIA has working scripts for ENGIN-X, GEM, IMAT, INES, IRIS, LOQ, MARI, OSIRIS, SANS2D, TOSCA and VESUVIO; those for the reflectometers INTER, POLREF and SURF are placeholders ([autoreduction-scripts](https://github.com/fiaisis/autoreduction-scripts/tree/de9e1bfd96e67a6b216d7ecd8e8e3f0b868a7b5b)).
 It learns of new runs from each instrument's last-run file, not from the catalogue, and after a restart it submits the runs between the last one it recorded and the current one ([lastrun_file_monitor.py L263](https://github.com/fiaisis/file-watcher/blob/bb9101322fc485b15cc16e448e705ec42f614ac0/file_watcher/lastrun_file_monitor.py#L263)).
-For us: this is the shape scipp/essapps#33 proposes, rule functions in the application with their configuration as data, and one answer to its Open question: FIA stores the configuration behind an API so that it changes without a deployment.
+For us: this is the shape scipp/essapps#33 proposes, the source of rows in the application with its settings as data, and one answer to its Open question: FIA stores the configuration behind an API so that it changes without a deployment.
 
 ## Borrow
 

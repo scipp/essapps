@@ -478,8 +478,8 @@ class FileSource(Protocol):
         validators of a group that holds a file see its path. So ``path``
         neither stages nor downloads the file, and does not check that it can
         be read: a file that cannot be read fails the workflow that reads it,
-        so that one unreadable file fails its own record, not a batch or a
-        rule's submission that holds it.
+        so that one unreadable file fails its own record, not a batch that
+        holds it.
         """
         ...
 

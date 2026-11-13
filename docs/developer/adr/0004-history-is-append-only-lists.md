@@ -13,7 +13,7 @@ So history only grows until it is dropped.
 
 The stories need four things from history:
 
-- Records outlive the process of the workspace (B6, H2, H3). The trigger loop knows which files a rule has handled only from the records under the rule's label.
+- Records outlive the process of the workspace (B6, H2, H3). The automatic reduction knows which rows it has reduced only from the records under the batch's label.
 - A submission is stored whole or not at all.
 - The order of the records under a label, and of the pushes into an accumulator, is kept.
 - Persisted values are found again.
@@ -52,15 +52,15 @@ History is five lists, each only appended to:
 
 - **History defined as one event log, with records and labels as views**, indexes rebuilt from the log. The lists hold the same history. The log adds one order across all lists, and outside storage only the change feed needs an order, of the records alone. It would tie a hosted workspace to a log.
 - **A history held without a person kept as long as the proposal.** That may be forever, a second record of what ran next to SciCat.
-- **Each record dropped by age, keeping the older records that a kept record reads.** The trigger loop would reduce again every file whose records were dropped. It would need a memory of its own, such as a set of handled files per rule.
-- **A proposal's history dropped a fixed time after its last record.** A trigger loop that sees no new file for that long loses its rule's records and then reduces every file again. A client still in use would lose the records it reads.
+- **Each record dropped by age, keeping the older records that a kept record reads.** The automatic reduction would reduce again every row whose records were dropped. It would need a memory of its own, such as a set of reduced files per batch.
+- **A proposal's history dropped a fixed time after its last record.** An automatic reduction that sees no new file for that long loses its records and then reduces every row again. A client still in use would lose the records it reads.
 - **The record of a freeze stored with every row, in storage that shares repeated rows.** Sharing saves bytes, but every layer above the store still handles each row twice, once in its push and once in the record.
 - **Output values kept with their records.** This stores one output per state, and makes a catalogue of outputs next to SciCat, which is a non-goal.
 
 ## Consequences
 
 - Dropping a proposal's history leaves no dangling reference. No other proposal reads its records (system story G5), and an idle proposal gets no call and has no pending record.
-- A running trigger loop calls its client while it waits for changes, so its proposal is not idle. A loop started for a proposal whose history was dropped reduces its files again.
+- A running automatic reduction calls its client at each step, so its proposal is not idle. A loop started for a proposal whose history was dropped reduces its rows again.
 - A proposal that is never idle, such as one whose automatic reduction runs all year, keeps all its history.
 - A client whose process ended makes no call, so it does not keep its proposal from being idle.
 - A workspace that restarts does not know when its proposal was last called, so it counts idle time from its start.
