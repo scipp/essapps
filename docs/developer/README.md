@@ -1,6 +1,6 @@
 # ESS data-reduction framework
 
-**Status: `ess.apps.Workspace`, which `local()` and `open_folder()` make in the caller's process, implements this design, including freeze, `select=`, and persist to a fake store or to scipp HDF5 files in a folder (`ess.apps.folder`). Not implemented: a hosted workspace reached with `connect()`, `client.publish`, and software versions in provenance. The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
+**Status: `ess.apps.Workspace`, which `local()` and `open_folder()` make in the caller's process, implements this design, including freeze, `select=`, and persist to a fake store or to scipp HDF5 files in a folder (`ess.apps.folder`). Not implemented: a hosted workspace reached with `connect()`, `client.publish`, software versions in provenance, spec digests ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)), and catalogue identifiers as file identities ([ADR 0010](adr/0010-a-file-is-identified-by-its-catalogue-identifier.md)). The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
 
 This page gives an overview of the framework: its components, what each promises the others, and the ideas that client code is built from.
 The details live one level down:
@@ -122,6 +122,7 @@ for run in client.files.watch(Selector(scan='17')): ...   # existing ones first,
 
 **Store.** The *store* keeps persisted outputs outside the workspace's memory, also after the workspace has closed ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
 It reads a value back by the type that the spec declares for the output, so a workspace reads the persisted outputs of the specs it runs.
+An output of a record of another spec, such as an older version, is read as plain scipp data ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)).
 
 **Controller.** The workspace does not decide what to run.
 A *controller* is client code that decides over time what to submit, push, and release, such as the cells of a notebook, the callbacks of an application's screen, or the trigger loop of automatic reduction.
@@ -293,7 +294,7 @@ It is one step of the path a value takes from one history to another ([deploymen
 Not visible in the code of notebooks, applications, or workflow packages:
 
 - how history and outputs are stored, moved, and dropped
-- how a run number or path becomes a file identity
+- how a file source finds the file that a run number or path names, though provenance shows the identity it gives the file ([ADR 0010](adr/0010-a-file-is-identified-by-its-catalogue-identifier.md))
 - when and where a request runs, and where a stage or a driver lives
 - the format of persisted outputs and the store's layout
 - how a process that runs unattended bounds the memory of a workspace, and when it closes an idle one (open questions 8 and 12)
