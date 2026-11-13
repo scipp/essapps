@@ -46,7 +46,8 @@ Physics terms such as Q, I(Q), or S(Q, E) are not explained.
 - **ess packages**: the reduction workflows in the scipp/ess repository (esssans, essreflectometry, ...), built with sciline (a workflow library) on scipp (labelled arrays); **plopp** is the team's plotting library.
 - **VISA**: ESS remote desktops (virtual machines) with JupyterLab, created by a user for a proposal.
 - **DMSC**: the ESS Data Management and Scientific Computing division; it runs the cluster and the data services, and the team that builds this framework belongs to it.
-- **Batch-reduction service** and **automatic-reduction service**: long-running programs on DMSC servers that reduce data for many users; DMSC keeps them running, and users and instrument scientists configure them ([users](users.md)).
+- **Automatic-reduction service**: a long-running program on a DMSC server that reduces the new runs of an instrument; DMSC keeps it running, and instrument scientists and users configure it ([users](users.md)).
+- **Batch-reduction service**: the program that reduces a batch of runs for a user. An application that the user starts on a VISA machine serves as well as a long-running program on DMSC servers for many users. *Simon, 2026-11-13*
 - **ISIS**, **SNS**, **PSI**: neutron sources in the UK, the USA, and Switzerland; Amor (PSI) and Larmor, Sans2d, Zoom, Offspec (ISIS) were used to prototype ess code.
 - **Mantid**: the reduction software used at ISIS and SNS.
 - **Slurm**: the job scheduler of the DMSC cluster.
