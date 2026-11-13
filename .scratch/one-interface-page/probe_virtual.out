@@ -1,0 +1,4 @@
+virtual  N=300     initial       40 ms  replaceData       53 ms scroll [6625, 6624]  addData     48 ms scroll [20000, 6650]  updateData    33 ms  heap 4 MB
+virtual  N=3000    initial       42 ms  replaceData       78 ms scroll [20000, 19992]  addData     67 ms scroll [20000, 20008]  updateData    33 ms  heap 7 MB
+virtual  N=10000   initial       50 ms  replaceData      114 ms scroll [20000, 19992]  addData     67 ms scroll [20000, 20008]  updateData    33 ms  heap 15 MB
+virtual  N=100000  initial      175 ms  replaceData      343 ms scroll [20000, 19992]  addData    117 ms scroll [20000, 20008]  updateData    33 ms  heap 92 MB

@@ -1,0 +1,17 @@
+N=300     fill (scan, submit, wait)                0.2 s
+N=300       of the JSON: columns (pickers of files) 0.03 MB; rows 0.14 MB
+N=300     Server.state()                           168 ms, JSON 0.17 MB
+N=300       of it Batch.state(settings)            8 ms
+N=300     Server.plot([])                          169 ms
+N=300     Server.row(key)                          20 ms
+N=300     loop step, nothing new                   2 ms
+N=300     GET /api/state over HTTP                 268 ms, 0.17 MB
+forms.cell patched: a dict from value to option in place of a linear search
+N=300     fill (scan, submit, wait)                0.2 s
+N=300       of the JSON: columns (pickers of files) 0.03 MB; rows 0.14 MB
+N=300     Server.state()                           14 ms, JSON 0.17 MB
+N=300       of it Batch.state(settings)            8 ms
+N=300     Server.plot([])                          15 ms
+N=300     Server.row(key)                          20 ms
+N=300     loop step, nothing new                   2 ms
+N=300     GET /api/state over HTTP                 41 ms, 0.17 MB

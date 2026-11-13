@@ -1,0 +1,36 @@
+forms.cell patched: a dict from value to option in place of a linear search
+N=1000    fill (scan, submit, wait)                0.8 s
+N=1000      of the JSON: columns (pickers of files) 0.10 MB; rows 0.48 MB
+N=1000    Server.state()                           44 ms, JSON 0.58 MB
+N=1000      of it Batch.state(settings)            26 ms
+N=1000    Server.plot([])                          44 ms
+N=1000    Server.row(key)                          58 ms
+N=1000    loop step, nothing new                   5 ms
+N=1000    GET /api/state over HTTP                 125 ms, 0.58 MB
+N=1000    page open to all rows drawn              1.7 s
+N=1000    browser busy over 3 s, nothing new       67 ms
+N=1000    one new row #0: shown after              3.0 s; browser busy 1727 ms (longest 1665); states received 1 of 0.58 MB
+N=1000    one new row #1: shown after              2.7 s; browser busy 1587 ms (longest 1528); states received 1 of 0.58 MB
+N=1000    one new row #2: shown after              2.7 s; browser busy 1613 ms (longest 1552); states received 1 of 0.58 MB
+N=1000    scroll to the middle, two frames         65 ms
+N=1000    JS heap                                  12 MB
+N=1000    loop steps while the page was open       20 steps, mean 22 ms, max 67 ms
+N=1000    loop errors                              []
+forms.cell patched: a dict from value to option in place of a linear search
+N=3000    fill (scan, submit, wait)                2.5 s
+N=3000      of the JSON: columns (pickers of files) 0.29 MB; rows 1.45 MB
+N=3000    Server.state()                           139 ms, JSON 1.75 MB
+N=3000      of it Batch.state(settings)            75 ms
+N=3000    Server.plot([])                          180 ms
+N=3000    Server.row(key)                          177 ms
+N=3000    loop step, nothing new                   16 ms
+N=3000    GET /api/state over HTTP                 204 ms, 1.75 MB
+N=3000    page open to all rows drawn              9.2 s
+N=3000    browser busy over 3 s, nothing new       80 ms
+N=3000    one new row #0: shown after              10.9 s; browser busy 9581 ms (longest 9322); states received 1 of 1.75 MB
+N=3000    one new row #1: shown after              11.2 s; browser busy 9844 ms (longest 9638); states received 1 of 1.75 MB
+N=3000    one new row #2: shown after              10.8 s; browser busy 9572 ms (longest 9315); states received 2 of 3.50 MB
+N=3000    scroll to the middle, two frames         53 ms
+N=3000    JS heap                                  45 MB
+N=3000    loop steps while the page was open       50 steps, mean 60 ms, max 159 ms
+N=3000    loop errors                              []

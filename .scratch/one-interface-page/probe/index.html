@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="vendor/tabulator.min.css">
+<style>html, body { height: 100%; margin: 0 } #t { height: 600px }</style>
+</head>
+<body>
+<div id="t"></div>
+<script type="module">
+// Probe: what Tabulator costs at N rows for the ways a page could show one
+// new row: replaceData (what tables.js does when the keys change), addData,
+// updateData of one row; with the renderer tables.js uses ('basic') and the
+// virtual one. Rows look like those of the batch page.
+import {TabulatorFull as Tabulator} from './vendor/tabulator_esm.min.js';
+
+const row = (i) => ({
+  key: String(i), name: `s${i}`,
+  cells: {sample: {text: `run ${i}`}, transmission: {text: `run ${i + 1000000}`}, thickness: {text: '1.0'}},
+  status: 'done',
+});
+const cell = (name) => (c) => c.getData().cells[name].text;
+const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+window.probe = async (n, renderer) => {
+  document.getElementById('t').replaceChildren();
+  const el = document.createElement('div');
+  el.style.height = '600px';
+  document.getElementById('t').append(el);
+  const table = new Tabulator(el, {
+    index: 'key', height: '100%', layout: 'fitColumns', renderVertical: renderer,
+    columns: [
+      {title: 'Name', field: 'name'},
+      ...['sample', 'transmission', 'thickness'].map((c) => ({title: c, field: `cells.${c}.text`, formatter: cell(c)})),
+      {title: 'Status', field: 'status'},
+    ],
+  });
+  await new Promise((r) => table.on('tableBuilt', r));
+  const rows = Array.from({length: n}, (_, i) => row(i));
+  const out = {};
+  let t0 = performance.now();
+  await table.setData(rows); await frame();
+  out.initial = performance.now() - t0;
+  const holder = el.querySelector('.tabulator-tableholder');
+  holder.scrollTop = 20000; await frame();
+  const before = holder.scrollTop;
+  t0 = performance.now();
+  await table.replaceData([...rows, row(n)]); await frame();
+  out.replace = performance.now() - t0;
+  out.replaceScroll = [before, holder.scrollTop];
+  holder.scrollTop = 20000; await frame();
+  t0 = performance.now();
+  await table.addData([row(n + 1)]); await frame();
+  out.add = performance.now() - t0;
+  out.addScroll = [20000, holder.scrollTop];
+  t0 = performance.now();
+  await table.updateData([{...row(5), status: 'failed'}]); await frame();
+  out.update = performance.now() - t0;
+  out.heapMB = (performance.memory?.usedJSHeapSize ?? 0) / 1e6;
+  table.destroy();
+  return out;
+};
+window.ready = true;
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+127.0.0.1 - - [13/Nov/2026 12:43:02] "GET /index.html HTTP/1.1" 200 -
+127.0.0.1 - - [13/Nov/2026 12:43:02] "GET /vendor/tabulator.min.css HTTP/1.1" 200 -
+127.0.0.1 - - [13/Nov/2026 12:43:02] "GET /vendor/tabulator_esm.min.js HTTP/1.1" 200 -
+127.0.0.1 - - [13/Nov/2026 12:43:02] code 404, message File not found
+127.0.0.1 - - [13/Nov/2026 12:43:02] "GET /favicon.ico HTTP/1.1" 404 -
+basic    N=300     initial      191 ms  replaceData      233 ms scroll [6625, 0]  addData     88 ms scroll [20000, 0]  updateData    29 ms  heap 4 MB
+basic    N=3000    initial     7414 ms  replaceData     8210 ms scroll [20000, 0]  addData    502 ms scroll [20000, 0]  updateData    45 ms  heap 22 MB
+basic    N=10000   initial   102157 ms  replaceData   108000 ms scroll [20000, 0]  addData   2188 ms scroll [20000, 0]  updateData   141 ms  heap 47 MB
+basic    N=100000  not run (10 000 took long already)
+virtual  N=300     initial       30 ms  replaceData       55 ms scroll [6625, 6624]  addData     31 ms scroll [20000, 6650]  updateData    34 ms  heap 51 MB
+virtual  N=3000    initial       36 ms  replaceData       67 ms scroll [20000, 19992]  addData     66 ms scroll [20000, 20008]  updateData    34 ms  heap 62 MB
+virtual  N=10000   initial       54 ms  replaceData       78 ms scroll [20000, 19992]  addData     66 ms scroll [20000, 20008]  updateData    34 ms  heap 68 MB
+virtual  N=100000  initial      247 ms  replaceData      280 ms scroll [20000, 19992]  addData    116 ms scroll [20000, 20008]  updateData    17 ms  heap 104 MB

@@ -1,0 +1,59 @@
+N=1000    fill (scan, submit, wait)                0.9 s
+N=1000      of the JSON: columns (pickers of files) 0.10 MB; rows 0.48 MB
+N=1000    Server.state()                           1739 ms, JSON 0.58 MB
+N=1000      of it Batch.state(settings)            25 ms
+N=1000    Server.plot([])                          1744 ms
+N=1000    Server.row(key)                          64 ms
+N=1000    loop step, nothing new                   5 ms
+N=1000    GET /api/state over HTTP                 1791 ms, 0.58 MB
+N=1000    page open to all rows drawn              3.4 s
+N=1000    browser busy over 3 s, nothing new       84 ms
+N=1000    one new row #0: shown after              4.1 s; browser busy 1661 ms (longest 1589); states received 1 of 0.58 MB
+N=1000    one new row #1: shown after              4.4 s; browser busy 1592 ms (longest 1530); states received 1 of 0.58 MB
+N=1000    one new row #2: shown after              4.4 s; browser busy 1635 ms (longest 1566); states received 1 of 0.58 MB
+N=1000    scroll to the middle, two frames         57 ms
+N=1000    JS heap                                  20 MB
+N=1000    loop steps while the page was open       17 steps, mean 550 ms, max 1559 ms
+N=1000    loop errors                              []
+forms.cell patched: a dict from value to option in place of a linear search
+N=1000    fill (scan, submit, wait)                0.9 s
+Traceback (most recent call last):
+  File "/workspace/essapps/.scratch/one-interface-page/scale.py", line 70, in <module>
+    st = srv.state()
+         ^^^^^^^^^^^
+  File "/workspace/essapps/packages/essapps/src/ess/apps/batch/web/server.py", line 147, in locked
+    return method(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/essapps/packages/essapps/src/ess/apps/batch/web/server.py", line 287, in state
+    self._row(
+  File "/workspace/essapps/packages/essapps/src/ess/apps/batch/web/server.py", line 406, in _row
+    value=forms.cell(self._cells.fields[c], row.values.get(c, UNSET)),
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/essapps/.scratch/one-interface-page/scale.py", line 39, in cell
+    reverse = {json.dumps(forms.jsonable(v), sort_keys=True): k for k, v in options.items()}
+                          ^^^^^^^^^^^^^^^^^
+  File "/workspace/essapps/packages/essapps/src/ess/apps/batch/web/forms.py", line 276, in jsonable
+    return to_jsonable_python(value, by_alias=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+pydantic_core._pydantic_core.PydanticSerializationError: Unable to serialize unknown type: <class 'ess.apps.fields._Unset'>
+forms.cell patched: a dict from value to option in place of a linear search
+N=3000    fill (scan, submit, wait)                2.5 s
+Traceback (most recent call last):
+  File "/workspace/essapps/.scratch/one-interface-page/scale.py", line 70, in <module>
+    st = srv.state()
+         ^^^^^^^^^^^
+  File "/workspace/essapps/packages/essapps/src/ess/apps/batch/web/server.py", line 147, in locked
+    return method(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/essapps/packages/essapps/src/ess/apps/batch/web/server.py", line 287, in state
+    self._row(
+  File "/workspace/essapps/packages/essapps/src/ess/apps/batch/web/server.py", line 406, in _row
+    value=forms.cell(self._cells.fields[c], row.values.get(c, UNSET)),
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/essapps/.scratch/one-interface-page/scale.py", line 39, in cell
+    reverse = {json.dumps(forms.jsonable(v), sort_keys=True): k for k, v in options.items()}
+                          ^^^^^^^^^^^^^^^^^
+  File "/workspace/essapps/packages/essapps/src/ess/apps/batch/web/forms.py", line 276, in jsonable
+    return to_jsonable_python(value, by_alias=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+pydantic_core._pydantic_core.PydanticSerializationError: Unable to serialize unknown type: <class 'ess.apps.fields._Unset'>
