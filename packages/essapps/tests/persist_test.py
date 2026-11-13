@@ -231,13 +231,22 @@ def log() -> Log:
 
 
 @pytest.fixture
+def workers() -> int:
+    """The workspace's threads; a test that needs requests to run at once sets more."""
+    return 1
+
+
+@pytest.fixture
 def workspace(
     files: FakeFiles,
     store: GatedStore,
     bind: list[Binding],
     log: Log,
+    workers: int,
 ) -> Iterator[Workspace]:
-    workspace = Workspace(proposal='p1', files=files, bind=bind, store=store, log=log)
+    workspace = Workspace(
+        proposal='p1', files=files, bind=bind, workers=workers, store=store, log=log
+    )
     yield workspace
     store.gate.set()
     workspace.close()
@@ -455,12 +464,22 @@ def test_references_to_one_persisted_output_read_it_from_the_store_once(
 def start(
     files: FakeFiles, bind: list[Binding], store: GatedStore
 ) -> Iterator[Callable[[Path], Client]]:
-    """A client of a new workspace over the log at a path, with the same store."""
+    """
+    A client of a new workspace over the log at a path, with the same store, and
+    with ``workers`` threads.
+    """
     workspaces: list[Workspace] = []
 
-    def start(path: Path) -> Client:
+    def start(path: Path, workers: int = 1) -> Client:
         workspaces.append(
-            Workspace(proposal='p1', files=files, bind=bind, log=Log(path), store=store)
+            Workspace(
+                proposal='p1',
+                files=files,
+                bind=bind,
+                workers=workers,
+                log=Log(path),
+                store=store,
+            )
         )
         return Client(workspaces[-1], submitter='anna')
 
@@ -646,11 +665,12 @@ def test_a_restart_fails_persisted_work_that_reads_what_is_gone(
 
 def test_a_restart_runs_a_call_through_a_stage_as_its_plain_request(
     tmp_path: Path,
-    start: Callable[[Path], Client],
+    start: Callable[..., Client],
     restart: Callable[[Path], Client],
     loading: threading.Event,
 ) -> None:
-    first = start(tmp_path / 'log')
+    # a second thread runs the stage while the first waits in LOAD
+    first = start(tmp_path / 'log', workers=2)
     kept = first.compute(LOAD, params=_sample(1))
     stored = first.compute(LOAD, params=_sample(2), persist=('value',))
     loading.clear()
@@ -732,6 +752,7 @@ def test_reading_every_output_gives_those_persisted(
     assert connect().output(load) == expected
 
 
+@pytest.mark.parametrize('workers', [2])  # SHIFT runs while LOAD waits
 def test_a_persisted_value_is_read_from_the_store_while_a_reader_holds_it(
     client: Client,
     connect: Callable[[], Client],
