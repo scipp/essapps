@@ -12,7 +12,7 @@ sample run.
 """
 
 from collections.abc import Mapping
-from functools import reduce
+from functools import cache, reduce
 from operator import or_
 from pathlib import Path
 from typing import Any
@@ -79,9 +79,27 @@ _ANGLE_RANGES = 'angle ranges'
 """The name of the mask of the angle ranges of a record."""
 
 
+@cache
+def _base_workflow() -> sciline.Pipeline:
+    """The workflow of esssans, built once per process since that takes about 0.7 s.
+
+    Requests must not change it, but change a copy, see :func:`_workflow`.
+    """
+    # sciline inserts each generic key as a node of a networkx graph, about 1000
+    # here, and rebuilds the graph at each assignment. Sharing one workflow is only
+    # worth it while that holds: measure the constructor when sciline handles
+    # generics another way, and build a workflow per request if it is cheap.
+    return LokiAtLarmorWorkflow()
+
+
+def _workflow() -> sciline.Pipeline:
+    """A copy of the workflow of esssans, for one request to change."""
+    return _base_workflow().copy()
+
+
 def _run_workflow(run: Path) -> sciline.Pipeline:
     """The workflow of the detector of one run, with no beam-centre correction."""
-    workflow = LokiAtLarmorWorkflow()
+    workflow = _workflow()
     workflow[Filename[SampleRun]] = str(run)
     workflow[BeamCenter] = _NO_CORRECTION
     return workflow
@@ -111,7 +129,7 @@ def compute_masks(params: MasksParams) -> MasksOutputs:
         raise ValueError(f'mask files with the same name: {sorted(names)}')
     masks: dict[str, sc.Variable] = {}
     if params.mask_files:
-        workflow = LokiAtLarmorWorkflow()
+        workflow = _workflow()
         workflow[DetectorIDs] = params.detector.counts.coords['detector_number']
         # esssans names each mask by the path of its file, which differs by host.
         by_path = sans.with_pixel_mask_filenames(
@@ -126,7 +144,7 @@ def find_beam_centre(params: BeamCentreParams) -> BeamCentreOutputs:
     # The finder raises its cutoff until pixels are left, so without any it never ends.
     if not counts.sum().value > 0:
         raise ValueError('no counts outside the masks to find a beam centre from')
-    workflow = LokiAtLarmorWorkflow()
+    workflow = _workflow()
     workflow[Position[snx.NXsample, SampleRun]] = counts.coords['sample_position']
     workflow[Position[snx.NXsource, SampleRun]] = counts.coords['source_position']
     # The finder sums the dimensions that the positions lack, and else expects events.
@@ -205,7 +223,7 @@ def _transmission(
 
 
 def _iofq_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
-    pipeline = LokiAtLarmorWorkflow()
+    pipeline = _workflow()
     for provider in (
         _detector_masks,
         _beam_center,
