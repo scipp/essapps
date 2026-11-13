@@ -2,10 +2,17 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
+from ess.instruments.loki import specs
 from ess.instruments.loki.specs import AngleRange, BeamCentre
 from pydantic import ValidationError
+
+from ess.spec import WorkflowSpec
+from ess.spec.testing import check_digests
+
+DIGESTS = Path(__file__).with_name('spec_digests.json')
 
 
 def test_specs_load_without_the_workflow_package() -> None:
@@ -16,6 +23,12 @@ def test_specs_load_without_the_workflow_package() -> None:
     )
     result = subprocess.run([sys.executable, '-c', code], check=False)  # noqa: S603
     assert result.returncode == 0
+
+
+def test_each_spec_has_the_digest_kept_for_its_version() -> None:
+    check_digests(
+        [s for s in vars(specs).values() if isinstance(s, WorkflowSpec)], DIGESTS
+    )
 
 
 @pytest.mark.parametrize('z', [0.0, -1.0])

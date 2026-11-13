@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Checks of the symmetries that a workflow author promises, for a package's tests.
+Checks of what a workflow author promises, for a package's tests.
 
+:func:`check_digests` checks that a spec whose interface changed has a new
+version; ``packages/essspec/docs/params.md`` (The digest of a spec) shows how
+a package uses it. The other checks are of the symmetries of a binding;
 ``packages/essspec/docs/bindings.md`` (Testing the symmetries) shows how a
 package uses them.
 
@@ -17,8 +20,10 @@ the call.
 from __future__ import annotations
 
 import copy
+import json
 import math
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -29,6 +34,72 @@ from .binding import Binding, Driver, StageBinding, fixed_values
 
 Rows = Sequence[Any]
 """A table's rows, as a push gives them."""
+
+
+def check_digests(specs: Iterable[WorkflowSpec[Any, Any]], path: Path) -> None:
+    """
+    Raise ``AssertionError`` unless the file at ``path`` keeps the digest of
+    each spec under the spec's name and version, and nothing else.
+
+    A digest changes when the stored form of the params or the outputs
+    changes (see :attr:`~ess.spec.WorkflowSpec.digest`). A record made with
+    the old models is then of another spec than the one bound under the same
+    name and version, so such a change comes with a new version. The file is
+    JSON, ``{"loki-iofq/v1": "9f2c..."}``, kept in the package and written by
+    :func:`write_digests`. The message names each spec whose digest differs,
+    each spec the file lacks, with the entry that the file would need, and
+    each entry of the file that no spec has, so that a test that finds no
+    specs fails.
+
+    Raises
+    ------
+    ValueError
+        If two specs have the same name and version.
+    """
+    digests = _digests(specs)
+    kept = json.loads(path.read_text()) if path.exists() else {}
+    problems = []
+    for key, digest in digests.items():
+        entry = f'"{key}": "{digest}"'
+        if key not in kept:
+            problems.append(
+                f'{key} is not in {path}: add {entry}, or write the file with '
+                'ess.spec.testing.write_digests'
+            )
+        elif kept[key] != digest:
+            problems.append(
+                f'the interface of {key} changed: give the spec a new version, or '
+                f'update {path} to {entry} if the change is meant to keep the version'
+            )
+    problems.extend(
+        f'{key} in {path} is of no spec given: remove it if the spec is gone'
+        for key in sorted(kept.keys() - digests.keys())
+    )
+    if problems:
+        raise AssertionError('; '.join(problems))
+
+
+def write_digests(specs: Iterable[WorkflowSpec[Any, Any]], path: Path) -> None:
+    """
+    Write the digest of each spec to ``path``, as :func:`check_digests` reads it.
+
+    Raises
+    ------
+    ValueError
+        If two specs have the same name and version.
+    """
+    path.write_text(json.dumps(dict(sorted(_digests(specs).items())), indent=2) + '\n')
+
+
+def _digests(specs: Iterable[WorkflowSpec[Any, Any]]) -> dict[str, str]:
+    """The digest of each spec by its key in a file of digests, ``name/vN``."""
+    digests: dict[str, str] = {}
+    for spec in specs:
+        key = f'{spec.name}/v{spec.version}'
+        if key in digests:
+            raise ValueError(f'{key}: two specs of the same name and version')
+        digests[key] = spec.digest
+    return digests
 
 
 def check_one_row(

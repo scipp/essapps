@@ -16,7 +16,9 @@ from pydantic import (
     BaseModel,
     Field,
     NaiveDatetime,
+    PlainSerializer,
     RootModel,
+    WrapSerializer,
     computed_field,
     field_serializer,
     field_validator,
@@ -151,6 +153,10 @@ class SerializedReduction(BaseModel):
     @field_serializer('bins')
     def _bins(self, bins: int) -> str:
         return str(bins)
+
+
+InMilli = Annotated[float, PlainSerializer(lambda v: v * 1000, return_type=float)]
+Wrapped = Annotated[int, WrapSerializer(lambda v, handler: handler(v))]
 
 
 class SerializedParams(BaseModel):
@@ -1287,6 +1293,22 @@ class TestModelRules:
                 {'params': model('P', reduction=(SerializedReduction, ...))},
                 r"P.reduction: SerializedReduction: no serializers or computed "
                 r"fields, {'field_serializers': \['_bins'\]}",
+            ),
+            *(
+                ({'params': model('P', **fields)}, f"{where}: no serializers, {found}")
+                for fields, where, found in (
+                    ({'bins': (InMilli, ...)}, 'P.bins', r"\['PlainSerializer'\]"),
+                    (
+                        {'bins': (list[InMilli] | None, None)},
+                        'P.bins',
+                        r"\['PlainSerializer'\]",
+                    ),
+                    (
+                        {'run': (model('Run', bins=(Wrapped, ...)), ...)},
+                        'P.run: Run.bins',
+                        r"\['WrapSerializer'\]",
+                    ),
+                )
             ),
             (
                 {

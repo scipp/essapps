@@ -48,12 +48,17 @@ Two forms
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Sequence
+from enum import Enum
 from pathlib import Path, PurePath
 from types import NoneType, UnionType
 from typing import (
     Annotated,
     Any,
+    ForwardRef,
+    Literal,
     Self,
     TypeAliasType,
     Union,
@@ -66,6 +71,9 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PlainSerializer,
+    RootModel,
+    WrapSerializer,
     model_validator,
 )
 from pydantic.fields import FieldInfo
@@ -159,7 +167,8 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
     version:
         Version of the workflow interface, at least 1. Increase it on any
         change that a consumer can observe: the params, the outputs, or what
-        the workflow computes.
+        the workflow computes. :attr:`digest` detects a change of the models
+        under one version.
     title:
         Display title of the workflow, not empty.
     description:
@@ -217,6 +226,64 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         if problems:
             raise ValueError(f'{self.name}: {"; ".join(problems)}')
         return self
+
+    @property
+    def digest(self) -> str:
+        """
+        A short hex string that changes when the stored form of the params or
+        the outputs changes, so that a record of the spec can tell whether the
+        spec it was made with had the models of this one.
+
+        It covers the name, type, and requiredness of each field of the params
+        and outputs models, and of each group inside them, at any depth.
+        Requiredness counts although a record stores its params with the
+        defaults filled in, since a parameter that becomes required breaks
+        callers. A type is described so:
+
+        - a group, a pydantic model that is not a ``RootModel``, by its fields
+          and by its ``extra`` setting unless that is the default, not by its
+          class name or module, so that a group may be renamed or moved;
+        - a ``RootModel`` by the type of its root;
+        - a ``Literal`` and an enum by their values, which the stored form
+          holds, so that the two are the same and an enum member may be
+          renamed;
+        - ``Referenced[T]`` as a reference to ``T`` and its fields, and a file
+          field by the metadata of its ``File(...)`` marker, the role of a raw
+          file included, which decide which files fit;
+        - a union by its members, a list, a dict, or a tuple by its type
+          arguments, in order;
+        - a builtin, such as ``float`` or ``list``, a time, ``Path``, and a
+          scipp type, such as ``DataArray``, by its name;
+        - any other class by its module and qualified name, such as
+          ``mypackage.masks.MaskSet``, so that moving or renaming it changes
+          the digest.
+
+        The order of fields, and of the members of a union, does not count.
+        A reference is checked by class when it is used, so ``T`` replaced by
+        another class of the same fields keeps the digest, and a reference
+        made with the old class is refused when it is checked.
+
+        Titles, descriptions, defaults, constraints such as ``Field(gt=0)``,
+        validators, discriminators, and the spec's name and version are not
+        part of it: they do not change the stored form of a value. Settings
+        of a group's ``model_config`` that change its JSON form, other than
+        ``extra``, such as ``ser_json_inf_nan``, are not covered. The digest
+        does not see a change of what the workflow computes, so the version
+        stays the author's statement of any change a consumer can observe.
+        ``ess.spec.testing.check_digests`` checks that a changed digest comes
+        with a new version.
+
+        Raises
+        ------
+        ValueError
+            If the type of a field is not resolved, such as a forward
+            reference before ``model_rebuild()``, or is not made of classes.
+        """
+        interface = {
+            'params': _interface(self.params, ()),
+            'outputs': _interface(self.outputs, ()),
+        }
+        return hashlib.sha256(_canonical(interface).encode()).hexdigest()[:16]
 
     def serialize(self) -> SerializedWorkflowSpec:
         """
@@ -344,7 +411,8 @@ def _fields_problems(
     The problems of each field of ``model``, the params model or a group,
     inside the groups ``stack``, the params model first. Each field is typed
     as :func:`_type_problems` checks, has no alias, is not excluded from the
-    JSON form, and has a default that is a value (see
+    JSON form, has no serializer in its type (see
+    :func:`_annotated_serializers`), and has a default that is a value (see
     :func:`_default_problem`).
     """
     kind = 'a parameter' if len(stack) == 1 else 'a field of a group'
@@ -361,6 +429,9 @@ def _fields_problems(
             )
             continue
         metadata = field_types.field_metadata(field)
+        if found := _annotated_serializers(field.annotation, metadata):
+            problems.append(f'{where}: no serializers, {found}')
+            continue
         if found := _type_problems(field.annotation, metadata, stack):
             problems.extend(f'{where}: {problem}' for problem in found)
         elif field.default_factory_takes_validated_data:
@@ -368,6 +439,25 @@ def _fields_problems(
         elif not field.is_required() and (problem := _default_problem(model, name)):
             problems.append(f'{where}: {problem}')
     return problems
+
+
+def _annotated_serializers(annotation: Any, metadata: tuple[Any, ...]) -> list[str]:
+    """
+    The serializers written with ``Annotated``, such as ``PlainSerializer``,
+    in ``metadata`` or in ``annotation``, not inside a class in it: each makes
+    the JSON form of a value differ from that of its type, as a decorator
+    serializer of a group does.
+    """
+    found = [type(m).__name__ for m in metadata if isinstance(m, _SERIALIZER_MARKERS)]
+    if get_origin(annotation) is Annotated:
+        inner = get_args(annotation)[0]
+        return [*found, *_annotated_serializers(inner, annotation.__metadata__)]
+    for arg in get_args(annotation):
+        found.extend(_annotated_serializers(arg, ()))
+    return found
+
+
+_SERIALIZER_MARKERS = (PlainSerializer, WrapSerializer)
 
 
 def _type_problems(
@@ -804,3 +894,93 @@ def _output_type_schema(annotation: Any) -> dict[str, Any]:
     else:
         schema = {'type': 'object', 'additionalProperties': _output_type_schema(item)}
     return {'anyOf': [schema, {'type': 'null'}]} if is_optional else schema
+
+
+def _interface(model: type[BaseModel], stack: tuple[type[BaseModel], ...]) -> Any:
+    """
+    The name, type, and requiredness of each field of ``model``, a group
+    inside the groups ``stack``, as plain data for :attr:`WorkflowSpec.digest`.
+
+    Raises
+    ------
+    ValueError
+        If the type of a field cannot be described, naming the field.
+    """
+    if model in stack:
+        # A group that contains itself, which only an output may hold: how far up.
+        return {'recursive': len(stack) - stack.index(model)}
+    described = {}
+    for name, info in model.model_fields.items():
+        try:
+            tp = _type_interface(field_types.field_type(info), (*stack, model))
+        except _Undescribed as error:
+            raise ValueError(
+                f'{model.__name__}.{name}: {error}; the digest describes a field '
+                'by its type, so each type in it is a class, resolved'
+            ) from None
+        described[name] = {'type': tp, 'required': info.is_required()}
+    return described
+
+
+class _Undescribed(Exception):
+    """A type that :func:`_type_interface` cannot describe."""
+
+
+_SHORT_NAMED = (Path, *field_types.TIMES)
+"""
+Classes outside ``builtins`` and scipp described by their name alone, which no
+other class of a spec takes.
+"""
+
+
+def _type_interface(tp: Any, stack: tuple[type[BaseModel], ...]) -> Any:
+    """The type ``tp`` as plain data, by the rules of :attr:`WorkflowSpec.digest`."""
+    origin, args = get_origin(tp), get_args(tp)
+    if origin is Annotated:
+        if REFERENCED in tp.__metadata__:
+            return {'referenced': _type_interface(args[0], stack)}
+        if (marker := field_types.file_marker(args[0], *tp.__metadata__)) is not None:
+            return {'file': marker.metadata}
+        return _type_interface(args[0], stack)
+    if origin in (Union, UnionType):
+        members = (_type_interface(arg, stack) for arg in args)
+        return {'union': sorted(members, key=_canonical)}
+    # A Literal and an enum of the same values store the same JSON.
+    if origin is Literal:
+        values = [v.value if isinstance(v, Enum) else v for v in args]
+        return {'values': sorted(values, key=_canonical)}
+    if isinstance(tp, type) and issubclass(tp, Enum):
+        return {'values': sorted((m.value for m in tp), key=_canonical)}
+    if field_types.is_group(tp):
+        group = {'group': _interface(tp, stack)}
+        if (extra := tp.model_config.get('extra')) not in (None, 'ignore'):
+            group['extra'] = extra
+        return group
+    if isinstance(tp, type) and issubclass(tp, RootModel):
+        root = tp.model_fields['root']
+        return {'root': _type_interface(field_types.field_type(root), stack)}
+    if origin is not None:
+        return {_class_name(origin): [_type_interface(a, stack) for a in args]}
+    if tp is Ellipsis:
+        return '...'
+    if isinstance(tp, ForwardRef | str):
+        raise _Undescribed(f'{tp!r} is not resolved; call model_rebuild() first')
+    if not isinstance(tp, type):
+        raise _Undescribed(f'{tp!r} is not a class')
+    return _class_name(tp)
+
+
+def _class_name(cls: type) -> str:
+    """
+    The name of ``cls`` in a digest: its name alone for a builtin, a time,
+    ``Path``, or a scipp type, else its module and qualified name.
+    """
+    module = cls.__module__.partition('.')[0]
+    if cls in _SHORT_NAMED or module in ('builtins', 'scipp'):
+        return field_types.type_name(cls)
+    return f'{cls.__module__}.{cls.__qualname__}'
+
+
+def _canonical(data: Any) -> str:
+    """The JSON form of ``data``, the same for equal data in any process."""
+    return json.dumps(data, sort_keys=True, separators=(',', ':'))
