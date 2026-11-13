@@ -250,13 +250,22 @@ def log() -> Log:
 
 
 @pytest.fixture
+def workers() -> int:
+    """The workspace's threads; a test that needs requests to run at once sets more."""
+    return 1
+
+
+@pytest.fixture
 def workspace(
     files: FakeFiles,
     store: GatedStore,
     bind: list[Binding],
     log: Log,
+    workers: int,
 ) -> Iterator[Workspace]:
-    workspace = Workspace(proposal='p1', files=files, bind=bind, store=store, log=log)
+    workspace = Workspace(
+        proposal='p1', files=files, bind=bind, workers=workers, store=store, log=log
+    )
     yield workspace
     store.gate.set()
     workspace.close()
@@ -480,7 +489,7 @@ def start(
     """
     workspaces: list[Workspace] = []
 
-    def start(path: Path, workers: int = 4) -> Client:
+    def start(path: Path, workers: int = 1) -> Client:
         workspace = Workspace(
             proposal='p1',
             files=files,
@@ -785,6 +794,7 @@ def test_reading_every_output_gives_those_persisted(
     assert connect().output(load) == expected
 
 
+@pytest.mark.parametrize('workers', [2])  # SHIFT runs while LOAD waits
 def test_a_persisted_value_is_read_from_the_store_while_a_reader_holds_it(
     client: Client,
     connect: Callable[[], Client],

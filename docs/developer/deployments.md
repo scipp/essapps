@@ -12,7 +12,7 @@ In each deployment of the first release, one Python process holds the applicatio
 |---|---|---|
 | (a) screen to application | the application's own: HTTP for a web page, the channel of the widget library for widgets | yes, when a browser draws the screen |
 | (b) application to workspace | the client | no |
-| (c) workspace to binding | `Binding`, `Driver` | no: 4 threads of the same process |
+| (c) workspace to binding | `Binding`, `Driver` | no: threads of the same process, one by default |
 
 A screen never calls a workspace.
 What a screen shows is computed in Python next to the data, and only the result is sent to the screen: a plot function returns a figure, and a form is built from the spec's params model.
@@ -27,7 +27,7 @@ So the client is an interface for Python code, and the HTTP interface of a page 
  │ Client                                        │
  │ Workspace      local(...): history in memory  │
  │                open_folder(directory): folder │
- │   4 threads run the bindings                  │
+ │   1 thread runs the bindings                  │
  └───────────────────────────────────────────────┘
 ```
 
@@ -43,7 +43,7 @@ This deployment is implemented.
  │ page:       │ ──────────▶ │ web server     rows, edits, settings (memory) │
  │ selection,  │  the page's │ batch logic, Client                           │
  │ filter, tab │  own API    │ Workspace      open_folder(directory)         │
- └─────────────┘             │   4 threads run the bindings                  │
+ └─────────────┘             │   1 thread runs the bindings                  │
                              └───────────────────────────────────────────────┘
                                folder: files.csv  log.jsonl  store/<record>/<output>.h5
 ```

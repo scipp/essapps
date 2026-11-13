@@ -134,6 +134,7 @@ def open_folder(
     files: FileSource | None = None,
     proposal: str = 'local',
     submitter: str = 'user',
+    workers: int = 1,
 ) -> Client:
     """
     A client of the workspace kept in ``directory`` (see the module), running the
@@ -144,12 +145,14 @@ def open_folder(
     wrapper of that, such as :class:`~ess.apps.batch.CorrectedFiles`, to
     correct what ``files.csv`` says while the client is open. Raises
     ``FileNotFoundError`` without ``files.csv``, and ``RuntimeError`` if another
-    process holds the folder.
+    process holds the folder. ``workers`` is the number of threads that run
+    requests (see :class:`~ess.apps.Workspace`).
     """
     workspace = Workspace(
         proposal=proposal,
         files=folder_files(directory) if files is None else files,
         bind=bind,
+        workers=workers,
         log=Log(directory / 'log.jsonl'),
         store=FolderStore(directory / 'store'),
     )

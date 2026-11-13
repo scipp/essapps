@@ -7,13 +7,23 @@
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import pytest
 
-from ess.apps import Client, Record, RecordFailed, Request, Status, Workspace, file
+from ess.apps import (
+    Client,
+    Record,
+    RecordFailed,
+    Request,
+    Status,
+    Workspace,
+    file,
+    local,
+)
 from ess.apps.log import Event, Log
 from ess.apps.testing import FakeFiles
-from ess.spec import Binding
+from ess.spec import Binding, function_binding
 
 from . import toys
 
@@ -109,6 +119,35 @@ def test_a_workflow_that_returns_no_outputs_instance_fails(client: Client) -> No
     assert client.failure(untyped) == (
         'the workflow of untyped/v1 returned dict, not Value'
     )
+
+
+@pytest.mark.parametrize(('given', 'at_once'), [({}, 1), ({'workers': 2}, 2)])
+def test_a_workspace_runs_as_many_requests_at_once_as_it_has_workers(
+    files: FakeFiles, given: dict[str, Any], at_once: int
+) -> None:
+    started = 0
+    running = 0
+    most = 0
+    changed = threading.Condition()
+
+    def load(params: toys.Sample) -> toys.LoadOutputs:
+        nonlocal started, running, most
+        with changed:
+            started += 1
+            running += 1
+            most = max(most, running)
+            changed.notify_all()
+            # waits for the other request, which starts only on another thread
+            changed.wait_for(lambda: started == 2, timeout=0.5)
+        with changed:
+            running -= 1
+        return toys.load_run(params)
+
+    bind = [function_binding(toys.LOAD, load)]
+    with local(proposal='p1', files=files, bind=bind, **given) as client:
+        client.compute([toys.load_request(1), toys.load_request(2)])
+
+    assert most == at_once
 
 
 def test_cancel_ends_what_has_not_started(

@@ -515,7 +515,10 @@ class Workspace(WorkspaceProtocol):
     spec it runs; each binding names its spec. Workflows, the steps of
     accumulators, and writes share ``workers`` threads. A long step or
     workflow holds one of them, so other work waits only once every worker is
-    busy; submissions are accepted meanwhile. ``log`` holds history, in
+    busy; submissions are accepted meanwhile. The default is one thread: a
+    workflow that is parallel inside gains nothing from more, and the peak
+    memory grows with each request run at once. The best number depends on the
+    instrument, so an application may set it. ``log`` holds history, in
     memory if not given, and ``store`` is where persisted outputs are
     written. A workspace started on an existing log needs the store the earlier
     workspace wrote to: without one, the persisted work it goes on with fails,
@@ -530,7 +533,7 @@ class Workspace(WorkspaceProtocol):
         proposal: str,
         files: FileSource,
         bind: Sequence[Binding],
-        workers: int = 4,
+        workers: int = 1,
         log: Log | None = None,
         store: Store | None = None,
     ) -> None:
@@ -1975,6 +1978,7 @@ def local(
     bind: Sequence[Binding],
     submitter: str = 'user',
     store: Store | None = None,
+    workers: int = 1,
 ) -> Client:
     """
     A client of its own workspace in this process, running the workflows bound here.
@@ -1989,7 +1993,10 @@ def local(
     persists nothing, and waits until what is persisted is written. A client that
     is never closed ends with its process. Without a ``store``, persisting is
     refused. The workspace keeps history in memory, so its records end with the
-    process.
+    process. ``workers`` is the number of threads that run requests (see
+    :class:`Workspace`).
     """
-    workspace = Workspace(proposal=proposal, files=files, bind=bind, store=store)
+    workspace = Workspace(
+        proposal=proposal, files=files, bind=bind, workers=workers, store=store
+    )
     return Client(workspace, submitter=submitter, on_close=workspace.close)
