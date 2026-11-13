@@ -33,7 +33,7 @@ A record stores its params with defaults filled in, so a changed default does no
 The digest cannot see a change of what a workflow computes.
 The version remains the author's statement of any change a consumer can observe: the params, the outputs, or what the workflow computes (`WorkflowSpec`).
 
-Every event that names a spec, a submission or the opening of an accumulator, carries the digest of each spec it names that the log does not hold yet under that name and version, or holds with another digest.
+Every submission, a freeze's included, carries the digest of each spec its records name that the log does not hold yet under that name and version, or holds with another digest.
 The digest of a record's spec is the last one logged for its name and version before the record.
 A submission, abridged:
 
@@ -43,15 +43,16 @@ A submission, abridged:
 
 A record is *of the bound spec* if the workspace has a binding with the same name, version, and digest.
 Otherwise it is *of another spec*: the version was bumped, the models changed, or no binding is given.
+`client.bound(records)` tells an application which records are of the bound spec.
 A record of another spec stays in the history, and is readable without the classes that made it:
 
 | Of a record of another spec | What a client gets |
 |---|---|
 | its request | name and version, and the params as the stored dict, with files and references |
-| an output | the stored scipp data: a `DataArray`, or a `DataGroup` by field name |
+| an output | the stored scipp data (`Store.read`): a `DataArray` as it is, a group as a `DataGroup` by field name, a number as `DataGroup({'value': 0.5})`, a list as a `DataGroup` with keys `'0'`, `'1'`, ... |
 | `describe` and `select=` | work on that data |
 | a new request that references its output | refused at submission with `SubmitError`, since the output's type cannot be checked |
-| a restart while it is pending | it fails with a reason that says its spec is not bound, and so does a pending record that reads an output of it |
+| a restart while it is pending | the restart rules of [ADR 0002](0002-a-value-lives-while-something-keeps-it.md) come first: it is cancelled if it persists nothing and no pending record that persists reads it, and it fails if it had started. If it would run, it fails with a reason that says its spec is not bound, and so does a pending record that would run and reads an output of it |
 
 A technique package's tests compare each spec's digest with one kept in the package, so a change of a model without a new version fails in the author's CI (`ess.spec.testing`).
 

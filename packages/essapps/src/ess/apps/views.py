@@ -132,7 +132,6 @@ class Views:
                 self.feed.append(event.record)
                 self.finished[event.record] = event
             case Opened():
-                self.spec_digests.update(event.specs)
                 self.accumulators[event.accumulator] = event
             case Pushed():
                 self.pushes.setdefault(event.accumulator, []).append(event)
@@ -156,7 +155,13 @@ class Views:
             )
             if new.label is not None:
                 self.labels.setdefault(new.label, []).append(new.id)
-        self.digests[new.id] = self.spec_digests[str(self.records.spec(new.id))]
+        spec = str(self.records.spec(new.id))
+        if spec not in self.spec_digests:
+            raise ValueError(
+                f'the submission of record {new.id} names spec {spec}, of which '
+                'the log holds no digest'
+            )
+        self.digests[new.id] = self.spec_digests[spec]
         if new.persist:
             self.persisted[new.id] = new.persist
 

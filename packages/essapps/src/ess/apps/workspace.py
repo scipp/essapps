@@ -64,7 +64,8 @@ Records of another spec
 -----------------------
 The log holds the digest of each record's spec (see ``log.py``). A record is
 of the bound spec if a binding has its spec's name, version, and digest, and
-otherwise of another spec (:meth:`Workspace._other`). Every record that this
+otherwise of another spec (:meth:`Workspace._other`, which
+:meth:`Workspace.bound` answers to a client). Every record that this
 workspace logs is of the bound spec, so a record of another spec comes from
 the log it started from, and none of its values is in memory. Its persisted
 outputs are read from the store as stored, without a type, so ``select=`` and
@@ -575,16 +576,20 @@ class Workspace(WorkspaceProtocol):
             self._digests[spec_id] = binding.spec.digest
             self._checks[spec_id] = Checks(binding.spec, files)
         self._log = Log() if log is None else log
-        for event in self._log:
-            if isinstance(event, Submitted | Opened) and event.proposal != proposal:
-                self._log.close()  # the workspace owns its log
-                raise ValueError(
-                    f'the log holds history of proposal {event.proposal}, '
-                    f'not {proposal}'
-                )
+        self._views = Views()
+        try:
+            for event in self._log:
+                if isinstance(event, Submitted | Opened) and event.proposal != proposal:
+                    raise ValueError(
+                        f'the log holds history of proposal {event.proposal}, '
+                        f'not {proposal}'
+                    )
+                self._views.apply(event)
+        except ValueError:
+            self._log.close()  # the workspace owns its log
+            raise
         self._executor = ThreadPoolExecutor(max_workers=workers)
         self._changed = threading.Condition()
-        self._views = Views()
         self._stopped: Exception | None = None  # why an append failed
         self._closed = False
         # Not history
@@ -611,8 +616,6 @@ class Workspace(WorkspaceProtocol):
         self._unread_values: deque[_Read] = deque()
         self._letting_go = False
         with self._changed:
-            for event in self._log:
-                self._views.apply(event)
             self._restart()
 
     def close(self) -> None:
@@ -1499,7 +1502,6 @@ class Workspace(WorkspaceProtocol):
                 Opened(
                     accumulator=accumulator_id,
                     proposal=self._proposal,
-                    specs=self._unlogged([spec_id]),
                     template=stored,
                     params={**fixed, **empty},
                 )
@@ -1825,6 +1827,11 @@ class Workspace(WorkspaceProtocol):
                 self._record(record_id)
                 self._finish(record_id, Status.CANCELLED)
 
+    def bound(self, ids: Sequence[str]) -> list[bool]:
+        with self._changed:
+            self._check_running()
+            return [self._other(self._record(i).id) is None for i in ids]
+
     def readable(self, ids: Sequence[str]) -> list[tuple[str, ...]]:
         with self._changed:
             self._check_running()
@@ -1892,7 +1899,7 @@ class Workspace(WorkspaceProtocol):
     def describe(self, record_id: str, name: str) -> dict[str, Any]:
         value = self._read(record_id, [name], select=None)[name]
         info = _info(value)
-        # read as stored, a group is a DataGroup: a mapping
+        # read as stored, any output but an array is a DataGroup: a mapping
         stored = self._other(record_id) is not None
         group = isinstance(value, BaseModel) or (stored and isinstance(value, Mapping))
         return info if group else {name: info}

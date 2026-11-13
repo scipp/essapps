@@ -130,7 +130,12 @@ def test_a_refresh_after_one_change_reads_only_that_record(
 
     app.refresh()
 
-    assert dict(counting.reads) == {'records': 1, 'status': 1, 'readable': 1}
+    assert dict(counting.reads) == {
+        'records': 1,
+        'status': 1,
+        'readable': 1,
+        'bound': 1,
+    }
 
 
 def test_a_released_output_is_no_longer_offered(

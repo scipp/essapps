@@ -30,7 +30,7 @@ def describe(client: Client, listing: Listing, record: Record) -> str:
     named = f'`{record.spec}`'
     lines = [
         f'### {listing.labels[record.id]}: {status}',
-        f'**Spec** {named}, not bound'
+        f'**Spec** {named}, another spec than the one bound'
         if spec is None
         else f'**Spec** {spec.title} ({named}): {spec.description}',
         f'**Submitted** by {record.submitter} at {created:%Y-%m-%d %H:%M:%S}',

@@ -6,6 +6,7 @@ bindings and opened with another. Its request and its persisted outputs stay
 readable as stored, and a request may not reference its outputs.
 """
 
+import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -21,10 +22,12 @@ from ess.apps import (
     SpecId,
     Status,
     SubmitError,
+    Template,
 )
 from ess.apps.batch import Batch, Row
 from ess.apps.folder import open_folder
 from ess.apps.log import Finished, Log, Started, Submitted
+from ess.apps.testing import kept_rows
 from ess.spec import Binding, Referenced, WorkflowSpec, function_binding
 
 COUNTS = sc.DataArray(sc.arange('q', 4.0), coords={'q': sc.arange('q', 5.0)})
@@ -50,6 +53,12 @@ class Renamed(pydantic.BaseModel, arbitrary_types_allowed=True):
 
 class FoundRenamed(pydantic.BaseModel):
     centre: Renamed
+
+
+class Moved(pydantic.BaseModel):
+    """``Found`` after its output ``centre`` was renamed, under the same version."""
+
+    middle: Centre
 
 
 class Bins(pydantic.BaseModel):
@@ -96,6 +105,10 @@ def _find_renamed(params: Bins) -> FoundRenamed:
     return FoundRenamed(centre=Renamed(x_mm=500.0, y=0.25, counts=COUNTS))
 
 
+def _find_moved(params: Bins) -> Moved:
+    return Moved(middle=Centre(x=0.5, y=0.25, counts=COUNTS))
+
+
 def _use(params: UseParams) -> Total:
     return Total(total=params.centre.x)
 
@@ -103,6 +116,7 @@ def _use(params: UseParams) -> Total:
 WRITTEN = [function_binding(CENTRE, _find), function_binding(USE, _use)]
 OTHERS: dict[str, list[Binding]] = {
     'renamed': [function_binding(_centre(FoundRenamed), _find_renamed)],
+    'moved': [function_binding(_centre(Moved), _find_moved)],
     'bumped': [function_binding(_centre(version=2), _find)],
     'unbound': [],
 }
@@ -202,7 +216,22 @@ def test_a_record_of_another_spec_is_listed_and_its_output_is_readable(
     assert other.latest('c') == record
     assert other.status(record) is Status.COMPLETED
     assert other.readable(record) == ('centre',)
+    assert other.bound(record) is False
     assert other.provenance(record).records() == []
+
+
+def test_a_listing_shows_a_record_of_another_spec_by_its_spec_and_output_names(
+    other: Client, written: str
+) -> None:
+    record = _record(other, written)
+    at = f'{record.created.astimezone():%H:%M}'
+
+    listing = Listing(other)
+
+    assert record.id not in listing.specs
+    assert listing.labels[record.id] == f'centre/v1 ({at})'
+    assert listing.output_label(record.ref('centre')) == f'centre ({at})'
+    assert listing.fitting(Centre) == {}
 
 
 def test_a_spec_whose_title_and_description_changed_stays_the_bound_spec(
@@ -216,6 +245,7 @@ def test_a_spec_whose_title_and_description_changed_stays_the_bound_spec(
 
         assert isinstance(client.output(record, 'centre'), Centre)
         assert client.readable(record) == ('centre',)
+        assert client.bound(record) is True
         use = client.compute(USE, params={'centre': record.ref('centre')})
         assert client.output(use, 'total') == 0.5
 
@@ -288,6 +318,53 @@ def test_a_digest_is_logged_with_the_first_record_of_its_spec_and_when_it_change
         {'centre/v1': renamed.digest},
         {'centre/v1': CENTRE.digest},
     ]
+
+
+class Parts(pydantic.BaseModel):
+    parts: list[float]
+
+
+class Sum(pydantic.BaseModel):
+    total: float
+
+
+SUM = WorkflowSpec(
+    name='sum',
+    version=1,
+    title='Sum',
+    description='A toy.',
+    params=Parts,
+    outputs=Sum,
+    tables=('parts',),
+)
+
+
+def test_a_freeze_is_of_the_bound_spec_that_its_accumulator_was_opened_with(
+    folder: Path,
+) -> None:
+    bind = [kept_rows(SUM, lambda p: Sum(total=sum(p.parts)))]
+    with open_folder(folder, bind) as client:
+        accumulator = client.accumulator(Template(SUM, blanks=('parts',)))
+        accumulator.push(parts=[1.0, 2.0])
+        frozen = client.freeze(accumulator, persist=True)
+        client.wait(frozen)
+
+    with open_folder(folder, bind) as client:
+        assert client.bound(frozen) is True
+        assert client.output(frozen, 'total') == 3.0  # a float, not as stored
+
+
+def test_a_log_whose_submission_names_a_spec_without_a_digest_is_refused(
+    folder: Path, written: str
+) -> None:
+    log = folder / 'log.jsonl'
+    header, submitted, *rest = log.read_text().splitlines(keepends=True)
+    event = json.loads(submitted)
+    event['specs'] = {}
+    log.write_text(''.join([header, json.dumps(event) + '\n', *rest]))
+
+    with pytest.raises(ValueError, match=f'record {written} names spec centre/v1'):
+        open_folder(folder, WRITTEN)
 
 
 def test_the_changes_after_a_restart_with_another_spec_are_those_before(

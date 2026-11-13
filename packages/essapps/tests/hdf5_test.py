@@ -154,7 +154,7 @@ def test_a_group_is_read_back_with_the_value_written_not_validated_again(
 
 
 class FloatsAndMore(pydantic.BaseModel):
-    """``Floats`` after the outputs of its spec gained a field."""
+    """``Floats`` with a field more, which a file of ``Floats`` lacks."""
 
     a: float
     b: float
@@ -170,7 +170,7 @@ def test_a_group_that_lacks_a_required_field_is_refused_naming_file_type_and_fie
     with pytest.raises(ValueError, match="field 'c' of FloatsAndMore") as error:
         hdf5.read(FloatsAndMore, path)
     assert str(path) in str(error.value)
-    assert 'outputs changed since the value was written' in str(error.value)
+    assert 'changed or damaged outside the workspace' in str(error.value)
 
 
 class Anything(pydantic.BaseModel):

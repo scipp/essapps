@@ -119,7 +119,7 @@ class CountingClient:
     """
     Delegates to a client and counts the records its calls read: ``reads``
     holds the number of records that :meth:`records` returned and that
-    :meth:`status` and :meth:`readable` were asked for.
+    :meth:`status`, :meth:`readable`, and :meth:`bound` were asked for.
     """
 
     def __init__(self, client: Client) -> None:
@@ -141,6 +141,10 @@ class CountingClient:
     def readable(self, records: list[Record]) -> Any:
         self.reads['readable'] += len(records)
         return self._client.readable(records)
+
+    def bound(self, records: list[Record]) -> Any:
+        self.reads['bound'] += len(records)
+        return self._client.bound(records)
 
 
 class RecordingClient:

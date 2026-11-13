@@ -21,12 +21,13 @@ reads, and the record of a freeze its accumulator. Applying the events in order
 relies on this, and so does a restart, which walks the pending records
 backwards.
 
-A submission and an opening name specs by name and version. Each carries, in
-``specs``, the digest (:attr:`ess.spec.WorkflowSpec.digest`) of each spec it
+A submission names the specs of its records by name and version. It carries,
+in ``specs``, the digest (:attr:`ess.spec.WorkflowSpec.digest`) of each spec it
 names that the log does not hold yet under that name and version, or holds with
 another digest, keyed as ``"iofq/v1"``. So the digest of a record's spec is the
 last one logged for its name and version before the record, and a log holds a
-digest for every spec it names. What the digest covers is part of the format.
+digest for the spec of every record. What the digest covers is part of the
+format.
 
 A log file starts with a header line that names its format, such as
 ``{"format": 3}``, and holds one event per line after it. A log reads only
@@ -134,13 +135,12 @@ class Opened(BaseModel, frozen=True, extra='forbid'):
     with the other values, and with the rows pushed they
     give the plain request of a state. ``template`` holds the values as the
     client gave them, names resolved, which the client gets back, as it does a
-    stage's template. ``specs`` is as a submission's.
+    stage's template.
     """
 
     kind: Literal['opened'] = 'opened'
     accumulator: str
     proposal: str
-    specs: SpecDigests = Field(default_factory=dict)
     template: Template
     params: Params
 

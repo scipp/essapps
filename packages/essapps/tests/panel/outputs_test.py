@@ -21,6 +21,7 @@ import scipp as sc
 from pydantic import BaseModel, ConfigDict, Field
 
 from ess.apps import Client, Listing, Record, SpecId, Status, local
+from ess.apps.folder import open_folder
 from ess.apps.panel import App, Outputs, Records
 from ess.apps.panel.records import describe
 from ess.apps.plotting import Plot
@@ -753,6 +754,87 @@ def test_a_configured_plot_cannot_take_the_name_of_a_view_of_every_record() -> N
     plots = {SpecId.of(CURVE): {'Plot': Plot(explode)}}
     with pytest.raises(ValueError, match="curve/v1: \\['Plot'\\]"):
         Outputs(None, None, plots=plots)  # type: ignore[arg-type]
+
+
+class Block(BaseModel):
+    """``CubeOutputs`` after ``volume`` was renamed, under the same version."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    cube: Cube
+    block: sc.DataArray
+
+
+def block(params: CubeParams) -> Block:
+    outputs = cube(params)
+    return Block(cube=outputs.cube, block=outputs.volume)
+
+
+@pytest.fixture
+def stored_cube(tmp_path: Path) -> Iterator[tuple[Client, Record]]:
+    """
+    A client of a folder with a persisted record of ``CUBE``, opened again with
+    other outputs bound under the same version: a record of another spec.
+    """
+    (tmp_path / 'files.csv').write_text('file,run\n')
+    with open_folder(tmp_path, [function_binding(CUBE, cube)]) as client:
+        record = client.compute(CUBE, persist=True)
+    renamed = WorkflowSpec(**{**dict(CUBE), 'outputs': Block})
+    with open_folder(tmp_path, [function_binding(renamed, block)]) as client:
+        yield client, record
+
+
+def test_a_record_of_another_spec_lists_its_outputs_by_name(
+    stored_cube: tuple[Client, Record],
+) -> None:
+    client, record = stored_cube
+    plots = {SpecId.of(CUBE): {'Counts': Plot(explode)}}
+
+    listing = Listing(client)
+    outputs = Outputs(client, listing, plots=plots)
+
+    spec = '**Spec** `cube/v1`, another spec than the one bound'
+    assert spec in describe(client, listing, record)
+    assert rows(outputs) == [
+        ('cube', f'cube ({at(record)})', 'completed'),
+        ('volume', f'volume ({at(record)})', 'completed'),
+    ]
+    outputs.select(record, 'cube')
+    assert outputs.views.options == ['Plot', 'Provenance']  # no configured plot
+    outputs.panel()  # builds, with the warnings of Panel as errors
+
+
+def test_a_group_of_a_record_of_another_spec_is_drawn_from_the_stored_data(
+    stored_cube: tuple[Client, Record],
+) -> None:
+    client, record = stored_cube
+    outputs = Outputs(client, Listing(client))
+
+    outputs.select(record, 'cube')
+
+    assert outputs.detail.object.startswith(f'### cube ({at(record)}): completed')
+    assert 'array (time: 4, layer: 3, y: 5, x: 6) [counts]' in outputs.detail.object
+    plain, with_sliders = outputs.view.objects
+    assert isinstance(plain, pn.pane.Matplotlib)  # the profile
+    assert isinstance(with_sliders, pn.Column)  # the counts
+    move(sliders(outputs)[0], 3)
+    title, (low, _) = cut(outputs, 0)
+    assert title.endswith('counts (time=3, layer=0)')
+    assert low == position(time=3)
+
+
+def test_an_array_of_a_record_of_another_spec_is_drawn_from_the_stored_data(
+    stored_cube: tuple[Client, Record],
+) -> None:
+    client, record = stored_cube
+    outputs = Outputs(client, Listing(client))
+
+    outputs.select(record, 'volume')
+
+    assert '- volume: array (layer: 3, y: 5, x: 6) [counts]' in outputs.detail.object
+    move(sliders(outputs)[0], 2)
+    _, (low, _) = cut(outputs, 0)
+    assert low == position(layer=2)
 
 
 def test_the_app_passes_its_plots_to_the_outputs(client: Client, file: FileRef) -> None:

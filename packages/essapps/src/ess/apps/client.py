@@ -657,6 +657,23 @@ class Client:
         """
         return self._workspace.readable([r.id for r in records])
 
+    @_shaped
+    def bound(self, records: list[Record]) -> list[bool]:
+        """
+        Whether each record is of the bound spec: the workspace has a binding
+        with the same name, version, and digest as the record's spec. The
+        outputs of any other record are read as stored data and cannot be
+        referenced
+        (``docs/developer/adr/0009-a-record-of-another-spec-stays-readable.md``).
+        A view asks for the spec of a bound record only::
+
+            for record, bound in zip(records, client.bound(records)):
+                spec = client.spec(record.spec) if bound else None
+
+        See :meth:`~ess.apps.protocol.WorkspaceProtocol.bound`.
+        """
+        return self._workspace.bound([r.id for r in records])
+
     def records(
         self, *, label: str | None = None, ids: Sequence[str] | None = None
     ) -> list[Record]:

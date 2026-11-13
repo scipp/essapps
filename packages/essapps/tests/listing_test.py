@@ -176,7 +176,12 @@ def test_a_known_record_that_finished_is_read_again(
         listing = Listing(counting, previous=previous)  # type: ignore[arg-type]
 
         assert same(listing, Listing(client))
-        assert dict(counting.reads) == {'records': 1, 'status': 1, 'readable': 1}
+        assert dict(counting.reads) == {
+            'records': 1,
+            'status': 1,
+            'readable': 1,
+            'bound': 1,
+        }
 
 
 class CountingMetadata:

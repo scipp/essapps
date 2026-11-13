@@ -4,19 +4,10 @@
 An output as a scipp HDF5 file, which ``scipp.io.load_hdf5`` reads. It needs
 scipp and h5py.
 
-scipp writes arrays, ``DataGroup``, numbers, and text. So a value is written as
-these, and read back by the type that the spec declares for the output, or
-without a type as the file holds it::
-
-    as the workflow returned it          in the file
-    ---------------------------          -----------
-    a scipp array                        the array
-    a group (a pydantic model)           a DataGroup of its fields
-    dict[str, X]                         a DataGroup of its items
-    list[X]                              a DataGroup by index, '0', '1', ...
-    None, as a field or an item          left out
-    a member of an enum                  its value
-    a number, text, or a bool alone      a DataGroup with the key 'value'
+scipp writes arrays, ``DataGroup``, numbers, and text. So a file holds a value
+in its form as stored, which :meth:`ess.apps.protocol.Store.read` tables, and a
+value is read back by the type that the spec declares for the output, or
+without a type as the file holds it.
 
 A value that has no such form is refused with ``TypeError`` when it is written:
 a date, a tuple, ``None`` in a list, an object of any other class, and a
@@ -24,8 +15,9 @@ a date, a tuple, ``None`` in a list, an object of any other class, and a
 that were written, not validated again, as an instance of the declared type:
 a field the file lacks is ``None`` if ``None`` is a value of its type (an
 optional type, ``Any``, or ``object``), else its default.
-A file that lacks a required field, or holds a value an enum lacks, was written
-under other outputs of the spec, and reading it raises ``ValueError``.
+A file that lacks a required field, or holds a value an enum lacks, holds no
+value of the declared type, as a file changed or damaged outside the workspace
+would, and reading it raises ``ValueError``.
 """
 
 from __future__ import annotations
@@ -138,5 +130,5 @@ def read(tp: Any | None, path: Path) -> Any:
     except ValueError as error:
         raise ValueError(
             f'{path} holds no valid {getattr(tp, "__name__", tp)}: {error}. '
-            "The spec's outputs changed since the value was written."
+            'It may have been changed or damaged outside the workspace.'
         ) from None

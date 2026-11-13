@@ -242,8 +242,9 @@ class WorkspaceProtocol(Protocol):
 
         A value is the one the workflow returned, not a copy, unless ``select`` is
         given: the caller must not change it. An output of a record of another spec
-        is read as stored (see :meth:`Store.read`): a scipp array, or a
-        ``scipp.DataGroup`` by field name.
+        (see :meth:`bound`) is read as stored (see :meth:`Store.read`): a scipp
+        array as it is, and any other value as a ``scipp.DataGroup``, such as
+        ``DataGroup({'value': 0.5})`` of a number.
 
         Parameters
         ----------
@@ -279,11 +280,24 @@ class WorkspaceProtocol(Protocol):
 
     def describe(self, record_id: str, name: str) -> dict[str, Any]:
         """
-        What an output is, without its data. A group, and a ``DataGroup`` read as
-        stored, give their fields by name, any other output gives ``{name: info}``.
-        An array of at least one dimension is an
+        What an output is, without its data. A group gives its fields by name, any
+        other output gives ``{name: info}``. An output of a record of another spec
+        is read as stored, so any output but an array gives the keys of its
+        ``DataGroup``, such as ``{'value': 0.5}`` of a number, or ``{'0': ...,
+        '1': ...}`` of a list. An array of at least one dimension is an
         :class:`~ess.apps.ArrayInfo`, a group or a dict is a dict, a list is a list of
         these, and anything else is a copy. Reads and raises as :meth:`outputs` does.
+        """
+        ...
+
+    def bound(self, ids: Sequence[str]) -> list[bool]:
+        """
+        Whether each record is of the bound spec: the workspace has a binding
+        with the same name, version, and digest as the record's spec. The
+        outputs of any other record are read as stored data, and a request may
+        not reference them
+        (``docs/developer/adr/0009-a-record-of-another-spec-stays-readable.md``).
+        Waits for nothing and reads no value.
         """
         ...
 
@@ -292,7 +306,8 @@ class WorkspaceProtocol(Protocol):
         The outputs of each record that may be read now, in declared order: that
         :meth:`outputs` gives once the record has completed, and that a request
         may reference, but for an output of a record of another spec than the one
-        bound, which :meth:`submit` refuses. Waits for nothing and reads no value.
+        bound (see :meth:`bound`), which :meth:`submit` refuses. Waits for nothing
+        and reads no value.
         """
         ...
 
@@ -497,15 +512,26 @@ class Store(Protocol):
 
         ``tp`` is the type that the spec declares for the output, by which a
         store whose format holds no types makes the value. ``None`` reads the
-        value as stored: an array, or a ``scipp.DataGroup`` by field name, of
-        a group or of anything else (see :mod:`ess.apps.hdf5`). The workspace
-        reads so an output of a record of another spec than the one bound,
-        whose classes it lacks.
+        value as stored, in scipp's types. The workspace reads so an output of
+        a record of another spec than the one bound, whose classes it lacks.
+        Every store gives this form of a value as stored::
+
+            as the workflow returned it          as stored
+            ---------------------------          ---------
+            a scipp array                        the array
+            a group (a pydantic model)           a DataGroup of its fields
+            dict[str, X]                         a DataGroup of its items
+            list[X]                              a DataGroup by index, '0', '1', ...
+            None, as a field or an item          left out
+            a member of an enum                  its value
+            a number, text, or a bool alone      DataGroup({'value': ...})
+
+        with a value inside a ``DataGroup`` in the same form.
 
         Raises ``LookupError`` if the store no longer holds it, for example
         once dropped to free disk space, or holds a value that does not fit
-        ``tp``, written under other outputs of the spec: a client's read of it
-        then raises ``NotReadable``, as for a value that nothing keeps, and a
-        request that reads it fails.
+        ``tp``, as a file changed or damaged outside the workspace would: a
+        client's read of it then raises ``NotReadable``, as for a value that
+        nothing keeps, and a request that reads it fails.
         """
         ...

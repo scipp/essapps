@@ -65,7 +65,7 @@ class FolderStore:
             raise LookupError(f'the store holds no {output} of {record}')
         try:
             return hdf5.read(tp, path)
-        except ValueError as error:  # written under other outputs of the spec
+        except ValueError as error:  # does not fit tp
             raise LookupError(str(error)) from None
 
 

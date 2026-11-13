@@ -124,7 +124,7 @@ for run in client.files.watch(Selector(scan='17')): ...   # existing ones first,
 It reads a value back by the type that the spec declares for the output, or as stored, in scipp's types, without one.
 A record names its spec by name, version, and digest, the digest of the spec's models, which the history logs.
 An output of a record of the bound spec, one the workspace runs with the same three, is read by its declared type.
-An output of a record of another spec, such as an older version or the same version with changed models, is read as stored, a `DataArray` or a `DataGroup` by field name, and a new request may not reference it ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)).
+An output of a record of another spec, such as an older version or the same version with changed models, is read as stored, an array as it is and anything else as a `DataGroup`, and a new request may not reference it ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)).
 
 **Controller.** The workspace does not decide what to run.
 A *controller* is client code that decides over time what to submit, push, and release, such as the cells of a notebook, the callbacks of an application's screen, or the trigger loop of automatic reduction.
@@ -246,6 +246,7 @@ A workspace that starts from its history log gives the same changes at the same 
 Accumulators and pushes are not in the feed.
 Neither is `client.release`, nor any other way for a value to go away: the history does not hold lifetimes, and another client may release a value that this client shows.
 So a client that shows outputs asks `client.readable` for the records it shows, and a read can still raise `NotReadable`.
+It asks `client.bound(records)` which records are of the bound spec, since only their outputs have the classes of `client.spec(record.spec)` ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)).
 
 ## Stages and accumulators
 

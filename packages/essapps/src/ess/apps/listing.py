@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping
-from contextlib import suppress
 from typing import Any
 
 from pydantic_core import to_json
@@ -16,7 +15,7 @@ from ess.spec.refs import as_ref, iter_refs
 
 from .client import Client
 from .files import Selector
-from .records import Record, Status
+from .records import Record, SpecId, Status
 
 
 class Listing:
@@ -31,13 +30,12 @@ class Listing:
     rest from ``previous``, which stays as it is. The records are oldest
     first. Labels and the outputs offered are worked out from all the records
     in memory, so a label that depends on the other records needs no read.
-    ``specs`` holds the spec bound under the name and version of each record's
-    spec, by the record's id, if one is; ``status`` holds its status, and
-    ``readable`` the names of its outputs that may be read
-    (:meth:`~ess.apps.Client.readable`). The outputs offered to reference are
-    the readable ones of records whose spec has a binding. An output of a record
-    of another spec under a bound name and version is offered by the bound
-    type, and :meth:`~ess.apps.Client.submit` refuses a request referencing it.
+    ``specs`` holds the spec of each record of the bound spec
+    (:meth:`~ess.apps.Client.bound`) by the record's id, ``status`` the status
+    of each record, and ``readable`` the names of its outputs that may be read
+    (:meth:`~ess.apps.Client.readable`). A record of another spec has no
+    entry in ``specs``: it is labelled by its spec's name and version, its
+    outputs by their names, and none of them is offered to reference.
 
     It stands in for two queries the client lacks (scipp/essapps#95). The
     client lists no records by the type of their outputs (gap 1), so
@@ -62,16 +60,16 @@ class Listing:
         old = [] if previous is None else previous.records
         known = {r.id for r in old}
         self.records = old + [r for r in changed if r.id not in known]
-        held = {} if previous is None else previous.specs
-        specs = {r.spec: held[r.id] for r in old if r.id in held}
-        for spec in {r.spec for r in changed} - specs.keys():
-            with suppress(KeyError):  # no binding
-                specs[spec] = client.spec(spec)
-        self.specs = {r.id: specs[r.spec] for r in self.records if r.spec in specs}
+        specs = {SpecId.of(spec): spec for spec in client.specs()}
+        self.specs = {} if previous is None else dict(previous.specs)
         self.status = {} if previous is None else dict(previous.status)
         self.readable = {} if previous is None else dict(previous.readable)
         statuses = client.status(changed)
         readable = client.readable(changed)
+        bound = client.bound(changed)
+        self.specs |= {
+            r.id: specs[r.spec] for r, b in zip(changed, bound, strict=True) if b
+        }
         self.status |= {r.id: s for r, s in zip(changed, statuses, strict=True)}
         self.readable |= {r.id: n for r, n in zip(changed, readable, strict=True)}
         self.labels = _labels(
@@ -101,14 +99,17 @@ class Listing:
         return [r for r in self.records if self.status[r.id] is Status.PENDING]
 
     def title(self, record: Record) -> str:
-        """The title of a record's spec, or its name and version if not bound."""
+        """
+        The title of a record's spec; its name and version, ``centre/v1``, if
+        the record is of another spec.
+        """
         spec = self.specs.get(record.id)
         return str(record.spec) if spec is None else spec.title
 
     def type_name(self, record: Record, name: str) -> str:
         """
         The name of the type of an output, without ``| None``; the output's
-        name if its record's spec is not bound.
+        name if its record is of another spec.
         """
         if (spec := self.specs.get(record.id)) is None:
             return name
@@ -116,7 +117,11 @@ class Listing:
         return field_types.type_name(field_types.value_type(info.annotation))
 
     def is_group(self, record: Record, name: str) -> bool:
-        """Whether an output is a group, which ``describe`` gives by field."""
+        """
+        Whether an output of a record of the bound spec is a group, which
+        ``describe`` gives by field. Raises ``KeyError`` for a record of another
+        spec: only its stored value says whether it is a ``DataGroup``.
+        """
         info = self.specs[record.id].outputs.model_fields[name]
         return field_types.is_group(field_types.value_type(info.annotation))
 
