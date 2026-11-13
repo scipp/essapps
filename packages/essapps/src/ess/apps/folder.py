@@ -6,7 +6,7 @@ and h5py.
 
 The folder holds what a workspace needs to go on after its process ended::
 
-    files.csv     the table of FolderFiles: file, run, kind, role, ...
+    files.csv     the table of FolderFiles: file, run, pid, kind, role, ...
                   (written by hand, or started with scan_folder)
     log.jsonl     history: a header naming the format of the log and of
                   the store, then one event per line (see ess.apps.log)
@@ -120,11 +120,14 @@ def folder_files(directory: Path) -> FolderFiles:
     """
     The files that ``files.csv`` in ``directory`` lists. A path in it is
     relative to ``directory``, and an empty cell is metadata that the file
-    lacks. Raises ``FileNotFoundError`` without ``files.csv``.
+    lacks. A file in ``directory`` without ``pid`` is identified by its path
+    relative to it, so moving the folder keeps every identity (see
+    :class:`~ess.apps.FolderFiles`). Raises ``FileNotFoundError`` without
+    ``files.csv``.
     """
     with (directory / 'files.csv').open(newline='') as f:
         table = [{k: v for k, v in row.items() if v != ''} for row in csv.DictReader(f)]
-    return FolderFiles(directory, table)
+    return FolderFiles(directory, table, root=directory)
 
 
 def open_folder(

@@ -16,9 +16,10 @@ a request can::
 A file has no JSON form that a person would write, so at a parameter that is a
 file field, or a list of them, a file is named by text (see :func:`named_file`)::
 
-    60339               the run 60339
-    /data/mask.xml      a path
-    pid:20.500/abc      anything else by its kind, as ``FileRef.file`` holds it
+    60339                   the run 60339
+    /data/mask.xml          a path
+    pid:20.500.12269/abc    anything else by its kind, as ``FileRef.file`` holds it
+    path:masks/mask.xml     a file of the workspace's folder, by its identity
 
 Only a parameter is read this way, not a file field inside a group, which takes
 the JSON form of a file, as the record holds it.

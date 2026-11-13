@@ -456,7 +456,14 @@ class FileSource(Protocol):
     """
 
     def resolve(self, name: FileRef) -> FileRef:
-        """The identity of the named file; raises ``KeyError`` if unknown."""
+        """
+        The identity of the named file; raises ``KeyError`` if unknown.
+
+        A file the catalogue lists is identified by its catalogue identifier,
+        ``pid:20.500.12269/<uuid>``, the same in every file source that knows
+        the file. Any other file is identified by its path (see
+        :class:`~.files.FolderFiles`).
+        """
         ...
 
     def path(self, ref: FileRef) -> Path:

@@ -1,6 +1,6 @@
 # ADR 0010: A file is identified by its catalogue identifier, or else by its path
 
-- Status: accepted, not implemented. On `main`, `FolderFiles` gives every file the identity `path:<absolute path>`.
+- Status: accepted, implemented (`ess.apps.FolderFiles`, and LoKI's `read_metadata`, which forms the identifier from a raw file), but for what Open names. No file source asks the catalogue: `FolderFiles` takes a file's `pid` from its table.
 - Deciders: Simon
 - Date: 2026-11-13
 

@@ -32,7 +32,8 @@ def write_outputs(client: Client, record: Record, directory: Path) -> dict[str, 
     """
     Write each output that a completed ``record`` returned to ``directory``, and
     the record itself, which names the files and the values they were computed
-    from::
+    from. It names a file by its identity: its catalogue identifier, or its
+    path, relative to the workspace's folder if the file is in it::
 
         iofq.h5            what scipp.io.load_hdf5 reads (see ess.apps.hdf5)
         _record.json       the record

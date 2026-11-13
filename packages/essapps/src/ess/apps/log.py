@@ -30,7 +30,7 @@ digest for the spec of every record. What the digest covers is part of the
 format.
 
 A log file starts with a header line that names its format, such as
-``{"format": 3}``, and holds one event per line after it. A log reads only
+``{"format": 4}``, and holds one event per line after it. A log reads only
 files of its own format, :data:`FORMAT`, and leaves a file it refuses as it was.
 
 Stages and accumulators are not history, and neither are output values or
@@ -163,9 +163,10 @@ Event = Annotated[
 _event: TypeAdapter[Event] = TypeAdapter(Event)
 
 # The format of a log file, named by its first line. Bumped on any change to
-# the events, to what a spec's digest covers, or to the files of the store
-# (ess.apps.hdf5), since stored values are found through the log.
-FORMAT = 3
+# the events, to the identities of files that requests hold (ADR 0010), to
+# what a spec's digest covers, or to the files of the store (ess.apps.hdf5),
+# since stored values are found through the log.
+FORMAT = 4
 _HEADER = json.dumps({'format': FORMAT}).encode() + b'\n'
 
 
