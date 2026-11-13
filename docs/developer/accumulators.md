@@ -13,7 +13,7 @@ Both make records that are identical to the records of plain requests with the s
 The workspace keeps a stage or an accumulator until a client releases it or the workspace closes.
 Every client that holds a stage or an accumulator may call through it, push into it, and read it.
 No client call lists them or reopens one by its ID, and they are not in the changes.
-So a second connection, such as a reloaded web page, reaches the stages and accumulators of the first only if it is handed them ([README, open question 9](README.md#open-questions)).
+So a second client of a workspace reaches the stages and accumulators of the first only if it is handed them ([README, open question 9](README.md#open-questions)).
 Making one over a binding that does not serve it is refused.
 [ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md) and [ADR 0003](adr/0003-accumulators-add-in-place.md) give the reasons; [bindings.md](../../packages/essspec/docs/bindings.md) gives the binding's side of the contract.
 

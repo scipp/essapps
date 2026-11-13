@@ -42,7 +42,8 @@ Results go to SciCat and must say what produced them, but the framework must not
 
 - A configured reduction workflow is applied to every new run. *Simon, 2026-09-04*
 - Reducing a growing series again at every new run, such as all angles of one sample so far, must be possible, but not as the only behaviour. *Simon, 2026-09-28*
-- Batch and automatic reduction, and large work spread over the cluster, run as services, so leaks and peak memory must be bounded by how the services work, not by users freeing memory. *Simon, 2026-10-02*
+- Automatic reduction, and large work spread over the cluster, run as services. Batch reduction runs as a service or as an application that a user starts on a VISA machine. In each, leaks and peak memory must be bounded by how the program works, not by users freeing memory. *Simon, 2026-10-02 and 2026-11-13*
+- For a first release, automatic reduction may also run as an application on a VISA machine. *Simon, 2026-11-13*
 
 ### Provenance and the catalogue
 

@@ -71,7 +71,7 @@ def stitch(client: Client, run: FileRef) -> Record:
 ```
 
 The label belongs to the rule: any record under it counts, whoever submitted it and whether or not it failed.
-A record that a notebook submits under a rule's label stops the rule from reducing the files it names, so manual work uses labels of its own.
+A record that another client of the workspace submits under a rule's label stops the rule from reducing the files it names, so manual work uses labels of its own.
 A failed record counts so that the loop does not retry a failed file, which could fail again at every step; running it again is the user's decision (D2).
 
 A file whose function raises `LookupError` or `ValueError`, or whose request is refused with `SubmitError`, is skipped: the rule goes on with its other new files, and its status names each skipped file and why.
