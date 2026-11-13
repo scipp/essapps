@@ -263,7 +263,7 @@ $B reduce iofq.yaml runs.csv --label water-series
 
 `{'@latest': label, output: name}` is read when the command starts, as the output of the newest record under the label, of `member` if given, whoever submitted it. It is for a template, not for a cell of a table. The record of each row holds the ID that it was read as. A reference by ID is `{'@ref': output, record: ..., output: ...}`.
 
-One command holds the folder at a time. If a command was killed, the next one first finishes the rows that had not started. A row that was running fails, since its workflow may have been what ended the process. Reduce again with `--remaining` to submit every row that has not completed, the failed ones included. A workspace reads a persisted output by the type that its spec declares, so only one that runs the spec reads it. Nothing removes the files of the store.
+One command holds the folder at a time. If a command was killed, the next one first finishes the rows that had not started, but fails those of a spec it does not bind with the same version and models. A row that was running fails, since its workflow may have been what ended the process. Reduce again with `--remaining` to submit every row that has not completed, the failed ones included. A command that binds another version of a spec, or the same version with changed models, reads the old results as plain scipp data, and shows the rows of another version as not reduced. Nothing removes the files of the store.
 
 ## The UI
 

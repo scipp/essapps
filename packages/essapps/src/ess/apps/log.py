@@ -21,8 +21,16 @@ reads, and the record of a freeze its accumulator. Applying the events in order
 relies on this, and so does a restart, which walks the pending records
 backwards.
 
+A submission names the specs of its records by name and version. It carries,
+in ``specs``, the digest (:attr:`ess.spec.WorkflowSpec.digest`) of each spec it
+names that the log does not hold yet under that name and version, or holds with
+another digest, keyed as ``"iofq/v1"``. So the digest of a record's spec is the
+last one logged for its name and version before the record, and a log holds a
+digest for the spec of every record. What the digest covers is part of the
+format.
+
 A log file starts with a header line that names its format, such as
-``{"format": 2}``, and holds one event per line after it. A log reads only
+``{"format": 3}``, and holds one event per line after it. A log reads only
 files of its own format, :data:`FORMAT`, and leaves a file it refuses as it was.
 
 Stages and accumulators are not history, and neither are output values or
@@ -78,11 +86,21 @@ class NewStateRecord(BaseModel, frozen=True, extra='forbid'):
     persist: tuple[str, ...] = ()
 
 
+SpecDigests = dict[str, str]
+"""The digests of specs by name and version, ``{"iofq/v1": "9f2c..."}``."""
+
+
 class Submitted(BaseModel, frozen=True, extra='forbid'):
+    """
+    A submission or a freeze; ``specs`` holds the digests that the log does
+    not hold yet of the specs its records name (see the module docstring).
+    """
+
     kind: Literal['submitted'] = 'submitted'
     time: datetime
     proposal: str
     submitter: str
+    specs: SpecDigests = Field(default_factory=dict)
     records: tuple[NewRecord | NewStateRecord, ...]
 
 
@@ -145,9 +163,9 @@ Event = Annotated[
 _event: TypeAdapter[Event] = TypeAdapter(Event)
 
 # The format of a log file, named by its first line. Bumped on any change to
-# the events or to the files of the store (ess.apps.hdf5), since stored values
-# are found through the log.
-FORMAT = 2
+# the events, to what a spec's digest covers, or to the files of the store
+# (ess.apps.hdf5), since stored values are found through the log.
+FORMAT = 3
 _HEADER = json.dumps({'format': FORMAT}).encode() + b'\n'
 
 

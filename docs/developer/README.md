@@ -1,6 +1,6 @@
 # ESS data-reduction framework
 
-**Status: `ess.apps.Workspace`, which `local()` and `open_folder()` make in the caller's process, implements this design, including freeze, `select=`, and persist to a fake store or to scipp HDF5 files in a folder (`ess.apps.folder`). Not implemented: a hosted workspace reached with `connect()`, `client.publish`, software versions in provenance, spec digests ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)), and catalogue identifiers as file identities ([ADR 0010](adr/0010-a-file-is-identified-by-its-catalogue-identifier.md)). The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
+**Status: `ess.apps.Workspace`, which `local()` and `open_folder()` make in the caller's process, implements this design, including freeze, `select=`, and persist to a fake store or to scipp HDF5 files in a folder (`ess.apps.folder`). A record of another spec than the one bound reads as stored scipp data ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)). Not implemented: a hosted workspace reached with `connect()`, `client.publish`, software versions in provenance, and catalogue identifiers as file identities ([ADR 0010](adr/0010-a-file-is-identified-by-its-catalogue-identifier.md)). The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
 
 This page gives an overview of the framework: its components, what each promises the others, and the ideas that client code is built from.
 The details live one level down:
@@ -121,8 +121,10 @@ for run in client.files.watch(Selector(scan='17')): ...   # existing ones first,
 ```
 
 **Store.** The *store* keeps persisted outputs outside the workspace's memory, also after the workspace has closed ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
-It reads a value back by the type that the spec declares for the output, so a workspace reads the persisted outputs of the specs it runs.
-An output of a record of another spec, such as an older version, is read as plain scipp data ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)).
+It reads a value back by the type that the spec declares for the output, or as stored, in scipp's types, without one.
+A record names its spec by name, version, and digest, the digest of the spec's models, which the history logs.
+An output of a record of the bound spec, one the workspace runs with the same three, is read by its declared type.
+An output of a record of another spec, such as an older version or the same version with changed models, is read as stored, an array as it is and anything else as a `DataGroup`, and a new request may not reference it ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)).
 
 **Controller.** The workspace does not decide what to run.
 A *controller* is client code that decides over time what to submit, push, and release, such as the cells of a notebook, the callbacks of an application's screen, or the trigger loop of automatic reduction.
@@ -244,6 +246,7 @@ A workspace that starts from its history log gives the same changes at the same 
 Accumulators and pushes are not in the feed.
 Neither is `client.release`, nor any other way for a value to go away: the history does not hold lifetimes, and another client may release a value that this client shows.
 So a client that shows outputs asks `client.readable` for the records it shows, and a read can still raise `NotReadable`.
+It asks `client.bound(records)` which records are of the bound spec, since only their outputs have the classes of `client.spec(record.spec)` ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)).
 
 ## Stages and accumulators
 

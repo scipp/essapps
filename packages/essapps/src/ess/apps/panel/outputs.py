@@ -19,6 +19,9 @@ records pending and where a failure started.
 The output selected is shown with its plot, a plot a workflow package
 configured for its spec, or its provenance graph, as picked; the pick stays as
 other outputs are selected, unless the record's spec has no plot of that name.
+A record of another spec than the one bound (:meth:`~ess.apps.Client.bound`)
+is listed by its outputs' names, offers no configured plot, and its outputs
+are read and drawn as stored scipp data.
 The plot has a figure per array field of an output, drawn with plopp, once its
 record has completed. A field of one or two dimensions is read with the output
 and drawn whole. A field of more dimensions has a slider for each dimension but
@@ -40,6 +43,7 @@ from typing import Any
 
 import panel as pn
 import plopp as pp
+import scipp as sc
 from plopp.core.typing import FigureLike as Figure
 from pydantic.fields import FieldInfo
 
@@ -160,10 +164,10 @@ class Outputs:
         completed, and keeps its fields to draw.
         """
         listing = self._listing
-        info = listing.specs[record.id].outputs.model_fields[name]
+        spec = listing.specs.get(record.id)
         status = listing.status[record.id]
         lines = [f'### {listing.output_label(record.ref(name))}: {status}']
-        if about := _about(info):
+        if spec is not None and (about := _about(spec.outputs.model_fields[name])):
             lines.append(about)
         lines.append(f'**Record** {listing.labels[record.id]}')
         if status is Status.FAILED:
@@ -182,7 +186,9 @@ class Outputs:
         Offer the plots configured for the record's spec between the plot and
         the provenance graph; pick the plot if the pick is not offered.
         """
-        options = [_PLOT, *self._plots.get(record.spec, {}), _PROVENANCE]
+        bound = record.id in self._listing.specs
+        configured = self._plots.get(record.spec, {}) if bound else {}
+        options = [_PLOT, *configured, _PROVENANCE]
         value = self.views.value if self.views.value in options else _PLOT
         self._offering = True  # the caller shows the view
         try:
@@ -234,7 +240,10 @@ class Outputs:
         dimensions gets a slider for each but the last two.
         """
         label = self._listing.output_label(record.ref(name))
-        group = self._listing.is_group(record, name)
+        if record.id in self._listing.specs:
+            group = self._listing.is_group(record, name)
+        else:  # read as stored, only the value tells: a DataGroup is given by key
+            group = set(self._fields) != {name}
         arrays = {
             (f'{label} {n}' if group else label): (n if group else None, info)
             for n, info in self._fields.items()
@@ -318,8 +327,13 @@ class _Cut:
 
 
 def _field(value: Any, field: str | None) -> Any:
-    """The array ``field`` of a group, or the array itself if no field is named."""
-    return value if field is None else getattr(value, field)
+    """
+    The array ``field`` of a group, or of a ``DataGroup`` read as stored; the
+    array itself if no field is named.
+    """
+    if field is None:
+        return value
+    return value[field] if isinstance(value, sc.DataGroup) else getattr(value, field)
 
 
 def _about(info: FieldInfo) -> str | None:

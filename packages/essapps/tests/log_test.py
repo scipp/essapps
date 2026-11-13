@@ -308,6 +308,7 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_freeze_as_a_r
             id=frozen.id, accumulator=total.id, pushes=3, outputs=('value',)
         ),
     )
+    assert events[13].specs == {'total/v1': TOTAL.digest}  # first named by Opened
     assert frozen.request == Request(
         TOTAL,
         params={

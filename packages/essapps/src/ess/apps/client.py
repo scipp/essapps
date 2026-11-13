@@ -451,8 +451,9 @@ class Client:
         SubmitError
             If a request cannot run: an invalid value, an unknown spec or file, a
             reference at a field that the spec does not mark ``Referenced[...]``, a
-            reference that may not be read, or one whose data do not fit its
-            field. No request of the call is submitted. Each of its ``errors`` names
+            reference that may not be read, one to an output of a record of another
+            spec than the one bound, or one whose data do not fit its field. No
+            request of the call is submitted. Each of its ``errors`` names
             the field at fault by its position and the request by its key or index
             (see :class:`~ess.apps.errors.FieldError`).
         """
@@ -646,8 +647,8 @@ class Client:
     @_shaped
     def readable(self, records: list[Record]) -> list[tuple[str, ...]]:
         """
-        The outputs of each record, by name, that a plain submission may reference
-        now. A picker of records calls it at each refresh::
+        The outputs of each record, by name, that may be read now. A picker of
+        records calls it at each refresh::
 
             for record, names in zip(records, client.readable(records)):
                 ...  # offer record.ref(name) for each name
@@ -655,6 +656,23 @@ class Client:
         See :meth:`~ess.apps.protocol.WorkspaceProtocol.readable`.
         """
         return self._workspace.readable([r.id for r in records])
+
+    @_shaped
+    def bound(self, records: list[Record]) -> list[bool]:
+        """
+        Whether each record is of the bound spec: the workspace has a binding
+        with the same name, version, and digest as the record's spec. The
+        outputs of any other record are read as stored data and cannot be
+        referenced
+        (``docs/developer/adr/0009-a-record-of-another-spec-stays-readable.md``).
+        A view asks for the spec of a bound record only::
+
+            for record, bound in zip(records, client.bound(records)):
+                spec = client.spec(record.spec) if bound else None
+
+        See :meth:`~ess.apps.protocol.WorkspaceProtocol.bound`.
+        """
+        return self._workspace.bound([r.id for r in records])
 
     def records(
         self, *, label: str | None = None, ids: Sequence[str] | None = None

@@ -59,13 +59,13 @@ class FolderStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         hdf5.write(value, path)
 
-    def read(self, record: str, output: str, tp: Any) -> Any:
+    def read(self, record: str, output: str, tp: Any | None) -> Any:
         path = self.path(record, output)
         if not path.is_file():
             raise LookupError(f'the store holds no {output} of {record}')
         try:
             return hdf5.read(tp, path)
-        except ValueError as error:  # written under other outputs of the spec
+        except ValueError as error:  # does not fit tp
             raise LookupError(str(error)) from None
 
 
