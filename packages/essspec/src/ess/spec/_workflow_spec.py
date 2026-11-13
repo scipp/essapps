@@ -48,12 +48,16 @@ Two forms
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Sequence
+from enum import Enum
 from pathlib import Path, PurePath
 from types import NoneType, UnionType
 from typing import (
     Annotated,
     Any,
+    Literal,
     Self,
     TypeAliasType,
     Union,
@@ -159,7 +163,8 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
     version:
         Version of the workflow interface, at least 1. Increase it on any
         change that a consumer can observe: the params, the outputs, or what
-        the workflow computes.
+        the workflow computes. :attr:`digest` detects a change of the models
+        under one version.
     title:
         Display title of the workflow, not empty.
     description:
@@ -217,6 +222,42 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         if problems:
             raise ValueError(f'{self.name}: {"; ".join(problems)}')
         return self
+
+    @property
+    def digest(self) -> str:
+        """
+        A short hex string that changes when the stored form of the params or
+        the outputs changes, so that a record of the spec can tell whether the
+        spec it was made with had the models of this one.
+
+        It covers the name, type, and requiredness of each field of the params
+        and outputs models, and of each group inside them, at any depth:
+
+        - a group, a pydantic model, by its fields, not by its class name or
+          module, so that a class may be renamed or moved;
+        - the order of fields, and of the members of a union, does not count;
+        - a ``Literal`` by its values, and an enum by the values of its
+          members, which the stored form holds;
+        - ``Referenced[T]`` as a reference to ``T``, and a file field by the
+          metadata of its ``File(...)`` marker, which decide which files fit;
+        - a list, a dict, or a tuple by its type arguments, in order;
+        - any other type by its ``__name__``, such as ``float`` or
+          ``DataArray``, not by its module.
+
+        Titles, descriptions, defaults, constraints such as ``Field(gt=0)``,
+        validators, discriminators, and the spec's name and version are not
+        part of it: they do not change the stored form of a value, and a
+        record stores its params with the defaults filled in. The digest does
+        not see a change of what the workflow computes, so the version stays
+        the author's statement of any change a consumer can observe.
+        ``ess.spec.testing.check_digests`` checks that a changed digest comes
+        with a new version.
+        """
+        interface = {
+            'params': _interface(self.params, ()),
+            'outputs': _interface(self.outputs, ()),
+        }
+        return hashlib.sha256(_canonical(interface).encode()).hexdigest()[:16]
 
     def serialize(self) -> SerializedWorkflowSpec:
         """
@@ -804,3 +845,51 @@ def _output_type_schema(annotation: Any) -> dict[str, Any]:
     else:
         schema = {'type': 'object', 'additionalProperties': _output_type_schema(item)}
     return {'anyOf': [schema, {'type': 'null'}]} if is_optional else schema
+
+
+def _interface(model: type[BaseModel], stack: tuple[type[BaseModel], ...]) -> Any:
+    """
+    The name, type, and requiredness of each field of ``model``, a group
+    inside the groups ``stack``, as plain data for :attr:`WorkflowSpec.digest`.
+    """
+    if model in stack:
+        # A group that contains itself, which only an output may hold: how far up.
+        return {'recursive': len(stack) - stack.index(model)}
+    return {
+        name: {
+            'type': _type_interface(field_types.field_type(info), (*stack, model)),
+            'required': info.is_required(),
+        }
+        for name, info in model.model_fields.items()
+    }
+
+
+def _type_interface(tp: Any, stack: tuple[type[BaseModel], ...]) -> Any:
+    """The type ``tp`` as plain data, by the rules of :attr:`WorkflowSpec.digest`."""
+    origin, args = get_origin(tp), get_args(tp)
+    if origin is Annotated:
+        if REFERENCED in tp.__metadata__:
+            return {'referenced': _type_interface(args[0], stack)}
+        if (marker := field_types.file_marker(args[0], *tp.__metadata__)) is not None:
+            return {'file': marker.metadata}
+        return _type_interface(args[0], stack)
+    if origin in (Union, UnionType):
+        members = (_type_interface(arg, stack) for arg in args)
+        return {'union': sorted(members, key=_canonical)}
+    if origin is Literal:
+        values = (v.value if isinstance(v, Enum) else v for v in args)
+        return {'literal': sorted(map(_canonical, values))}
+    if isinstance(tp, type) and issubclass(tp, Enum):
+        return {'enum': sorted(_canonical(member.value) for member in tp)}
+    if field_types.is_group(tp):
+        return {'group': _interface(tp, stack)}
+    if origin is not None:
+        return {
+            field_types.type_name(origin): [_type_interface(a, stack) for a in args]
+        }
+    return field_types.type_name(tp)
+
+
+def _canonical(data: Any) -> str:
+    """The JSON form of ``data``, the same for equal data in any process."""
+    return json.dumps(data, sort_keys=True, separators=(',', ':'))

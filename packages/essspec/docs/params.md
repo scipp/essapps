@@ -338,6 +338,34 @@ Values that a check compares, such as the start and stop of a range, are fields 
 A check across parameters, such as a Q range the wavelength band can reach, belongs to the workflow and fails when the request runs.
 Since each parameter is validated alone, and a stage and a driver never get a whole params instance, the params model has no decorators, neither validators of any mode nor serializers nor computed fields, and no `__init__` of its own.
 
+## The digest of a spec
+
+`spec.digest` is a short hex string computed from the name, type, and requiredness of each field of the params and outputs models, and of each group inside them, at any depth.
+It tells a record made with other models under the same name and version from one of the bound spec ([ADR 0009](../../../docs/developer/adr/0009-a-record-of-another-spec-stays-readable.md)).
+
+| Changes the digest | Does not |
+|---|---|
+| a field renamed, added, or removed | a title, a description, a docstring |
+| a field's type, such as `float` to `int`, `X` to `X \| None`, `X` to `Referenced[X]` | a default |
+| a field made required or optional | a constraint, such as `Field(gt=0)`, or a validator |
+| the values of a `Literal` or an enum | the order of fields, or of the members of a union |
+| the metadata of a `File(...)` marker | the name or module of a group's class |
+
+A group is described by its fields, and any other class, such as `sc.DataArray`, by its name.
+The digest does not see a change of what the workflow computes, so the version stays the author's statement of any change a consumer can observe.
+
+A package keeps the digests of its specs in a file and checks them in its tests, so that a model changed without a new version fails there:
+
+```python
+from ess.spec.testing import check_digests, write_digests
+
+check_digests([IOFQ, BEAM_CENTRE], Path(__file__).with_name('spec_digests.json'))
+write_digests([IOFQ, BEAM_CENTRE], path)  # once, to make the file: {"sans-iofq/v1": "9f2c...", ...}
+```
+
+The check names each spec whose digest differs from the file's, and each spec the file lacks, with the entry the file needs.
+A changed interface gets a new version; the file is updated under the same version only for a change that is meant to keep it, knowing that records of the old models are then of another spec.
+
 ## What `WorkflowSpec` refuses
 
 Making a spec raises `pydantic.ValidationError`, which lists each problem with the model and field it concerns.

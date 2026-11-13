@@ -2,15 +2,18 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 Each check passes for a binding or driver that keeps its symmetry and fails
-for one with a bug that breaks it.
+for one with a bug that breaks it. The check of digests passes for the specs
+whose digests a file keeps, and fails for a spec changed under its version.
 
 The toy spec ``SUB`` takes a sample and a can run and gives
 ``diff = factor * (sample.counts - can.counts)``; ``SUB_MULTI`` sums the
 counts of the rows of each table.
 """
 
+import re
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -25,8 +28,10 @@ from ess.spec.testing import (
     assert_close,
     check_arrival_and_order,
     check_caching,
+    check_digests,
     check_one_row,
     one_row,
+    write_digests,
 )
 
 
@@ -387,3 +392,44 @@ def test_caching_fails_for_a_call_whose_output_shares_a_mask_with_a_value() -> N
         check_caching(
             Calls(DATA, masked), {'data': Measured(array=data)}, [{'scale': Scale()}]
         )
+
+
+class ScaleInPercent(BaseModel):
+    percent: float = 100.0
+
+
+def test_digests_pass_for_the_specs_they_were_written_for(tmp_path: Path) -> None:
+    write_digests([SUB, SUB_MULTI], tmp_path / 'digests.json')
+    check_digests([SUB, SUB_MULTI], tmp_path / 'digests.json')
+
+
+def test_digests_fail_for_a_spec_whose_interface_changed_under_its_version(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'digests.json'
+    write_digests([SUB], path)
+
+    class Changed(SubParams):
+        scale: ScaleInPercent = Field(default_factory=ScaleInPercent)  # type: ignore[assignment]
+
+    changed = _spec('sub', params=Changed, outputs=SubOutputs)
+    message = (
+        'the interface of sub/v1 changed: give the spec a new version, or update '
+        f'{path} to "sub/v1": "{changed.digest}" if the change is meant to keep '
+        'the version'
+    )
+    with pytest.raises(AssertionError, match=f'^{re.escape(message)}$'):
+        check_digests([changed], path)
+
+
+def test_digests_fail_for_a_spec_the_file_lacks_and_say_how_to_add_it(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'digests.json'
+    write_digests([SUB], path)
+    with pytest.raises(
+        AssertionError,
+        match=f'sub-multi/v1 is not in .*: add "sub-multi/v1": "{SUB_MULTI.digest}", '
+        'or write the file with ess.spec.testing.write_digests',
+    ):
+        check_digests([SUB, SUB_MULTI], path)
