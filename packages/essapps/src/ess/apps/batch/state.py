@@ -203,6 +203,23 @@ def remaining(states: Mapping[str, RowState]) -> list[str]:
     ]
 
 
+def arrived(states: Mapping[str, RowState], at: Collection[str]) -> list[str]:
+    """
+    The ready rows with no result, or whose request differs from their result's
+    at a column of ``at``: the rule of automatic reduction. ``changed`` is read,
+    so ``states`` must be read with settings.
+
+    A failed or cancelled result counts as any other, so such a row is given
+    again only for a change at ``at``. With ``at=set()``, no row with a result
+    is given.
+    """
+    return [
+        k
+        for k in ready(states)
+        if states[k].record is None or not states[k].changed.isdisjoint(at)
+    ]
+
+
 def summary(states: Mapping[str, RowState]) -> dict[str, int]:
     """The number of rows of each :attr:`RowState.text`, sorted by it."""
     return dict(sorted(Counter(s.text for s in states.values()).items()))
