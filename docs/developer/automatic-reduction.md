@@ -136,7 +136,7 @@ The numbers below are measured against that scale.
 A step lists every file, runs the source over all of them, and checks each row's cell at `at` against `held`.
 That is linear in the number of files.
 To submit the rows that run, the batch finds the result of each of those rows among the records it keeps, the newest of each key under the label, read from the proposal's changes, and asks for the status of those rows only.
-A loop that is made reads every record of the proposal once, and a batch every record under its label once.
+A loop that is made reads every record of the proposal once. A batch reads every record under its label once, at its first state, and at each later state the records that the proposal's changes name since, under any label.
 
 | Files reduced | 3 000 | 30 000 | 100 000 |
 |---|---|---|---|

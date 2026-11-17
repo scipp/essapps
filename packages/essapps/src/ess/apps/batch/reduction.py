@@ -190,6 +190,8 @@ class Batch:
             raise ValueError('this batch has no source of rows')
         infos = file_infos(self.client, self._selector)
         self.rows = self.rows.rescan(self.source(infos))
+        # A file that gained a catalogue identifier is resolved to it from now
+        # on, by any of its names, its old identity among them.
         self._resolved.clear()
         return infos
 
