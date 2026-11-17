@@ -18,6 +18,7 @@ from ess.apps import Client
 from ess.apps.batch import Batch, CorrectedFiles
 from ess.apps.batch.web import Server, create_app
 from ess.apps.batch.web.models import CellEdit, Edit, Reduce, State
+from ess.apps.batch.web.server import Problem
 from ess.apps.testing import FakeFiles
 
 from .toys import Gate, Measure
@@ -275,6 +276,23 @@ def option(server: Server, column: str, run: int) -> str:
     (shown,) = (c for c in server.state().columns if c.name == column)
     assert shown.editor is not None
     return next(o for o in shown.editor.options if o.startswith(f'run {run}'))
+
+
+def test_a_refusal_of_a_running_row_is_said_once_and_not_kept(
+    server: Server, client: Client, sample: Measure, gate: Gate
+) -> None:
+    sample(1, 'water')
+    gate.close()
+    server.follow(True)
+    request = Reduce(which='selected', keys=['1'])
+
+    with pytest.raises(Problem, match=r'Nothing was reduced: .*still running'):
+        server.reduce(request)
+    gate.open()
+    after = done(server, client)
+
+    assert statuses(after) == {'water': 'done'}
+    assert after.refused == []
 
 
 def test_an_edit_at_a_column_of_at_is_reduced_at_once_while_following(

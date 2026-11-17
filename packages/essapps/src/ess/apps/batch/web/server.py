@@ -28,9 +28,10 @@ which the server reads from ``client.changes`` at each poll. ``start`` tells a
 page that the server started again, so that the same version may be another
 state.
 
-A reduction refused raises :class:`Problem` and keeps its reasons in the state
-until the value of each is changed or a reduction succeeds, so that the page
-marks each at its cell or its setting. Any other request that cannot be done
+A reduction refused raises :class:`Problem`. It says the reasons that no cell
+or setting shows. The others stay in the state until the value of each is
+changed or a reduction succeeds, so that the page marks each at its cell or its
+setting. Any other request that cannot be done
 raises :class:`Problem` too, with what to tell the person. One server serves
 one batch to one person, and takes one request at a time.
 
@@ -659,7 +660,6 @@ class Server:
             loc=list(error.loc),
             message=error.msg,
             text=text,
-            placed=self._placed(error),
         )
 
     # The rows
@@ -828,8 +828,11 @@ class Server:
             )
             records = self.batch.reduce(keys)
         except SubmitError as error:
-            self.refused = list(error.errors)
-            raise _Refusal(self.refused) from None
+            self.refused = [e for e in error.errors if self._placed(e)]
+            unplaced = [e for e in error.errors if e not in self.refused]
+            raise _Refusal(
+                [self._refused(e).text for e in unplaced], len(self.refused)
+            ) from None
         self.refused = []
         self._relist()
         n = len(records)
@@ -1248,14 +1251,19 @@ class Server:
 
 
 class _Refusal(Problem):
-    """A reduction refused; its reasons are in the state."""
+    """
+    A reduction refused. It says the reasons that no cell or setting shows,
+    such as a row still running; those that one shows are in the state.
+    """
 
-    def __init__(self, errors: Sequence[FieldError]) -> None:
-        n = len(errors)
-        super().__init__(
-            'Nothing was reduced: '
-            + ('one value is refused.' if n == 1 else f'{n} values are refused.')
-        )
+    def __init__(self, said: list[str], placed: int) -> None:
+        if placed:
+            said.append(
+                'one value is refused.'
+                if placed == 1
+                else f'{placed} values are refused.'
+            )
+        super().__init__(f'Nothing was reduced: {"; ".join(said)}')
 
 
 def _join(words: Sequence[str]) -> str:

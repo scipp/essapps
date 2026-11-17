@@ -225,7 +225,6 @@ def test_a_refused_reduction_answers_422_and_the_state_names_the_cell(
     shown = state(http)
     (refused,) = shown['refused']
     assert refused['text'] == 'water: Thickness must be greater than or equal to 0'
-    assert refused['placed']
     problem = shown['rows'][0]['cells']['thickness']['problem']
     assert problem == 'Thickness must be greater than or equal to 0'
 
