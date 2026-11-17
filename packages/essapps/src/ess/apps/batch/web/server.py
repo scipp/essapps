@@ -151,6 +151,8 @@ _STATUS = {
 }
 _ORDER = ('ready', 'running', 'done', 'outdated', 'failed', 'cancelled', 'incomplete')
 _ENDED = (Status.FAILED, Status.CANCELLED)
+_BY_HAND = ('ready', 'outdated')
+"""The statuses of a row that Follow would reduce, were it not changed by hand."""
 _DRAWN = 12
 """How many results the plot shows when no row is selected."""
 
@@ -573,6 +575,8 @@ class Server:
             reason = self._outdated(state)
         elif status == 'outdated':
             reason = 'The settings cannot be used, so this result may not match them.'
+        if self.following and state.changed_by_hand and status in _BY_HAND:
+            reason = f'{reason} Changed by hand: Follow leaves it to you.'.lstrip()
         scanned = scan.get(row.key)
         cells = {
             c: Cell(

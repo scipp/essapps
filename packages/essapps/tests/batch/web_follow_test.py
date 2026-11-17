@@ -355,6 +355,22 @@ def test_follow_leaves_a_row_changed_by_hand_to_the_person(
     )
 
 
+@pytest.mark.parametrize('following', [True, False])
+def test_a_row_set_by_hand_says_that_follow_leaves_it_to_the_person(
+    server: Server, sample: Measure, following: bool
+) -> None:
+    sample(1, 'water')
+    server.scan()
+    server.edit(CellEdit(keys=['1'], column='thickness', value=2.0))
+
+    shown = server.follow(following)
+
+    (row,) = shown.rows
+    assert row.status == 'ready'
+    assert row.reason == ('Changed by hand: Follow leaves it to you.' * following)
+    assert shown.action.label == 'Reduce 1 remaining'
+
+
 def test_a_row_a_person_reduced_after_an_edit_follows_the_files_again(
     server: Server, client: Client, sample: Measure, fake: FakeFiles
 ) -> None:
@@ -395,7 +411,7 @@ def test_an_edit_not_reduced_leaves_its_row_to_the_person_when_a_file_arrives(
     assert ids(client) == before
     assert (row.status, row.reason) == (
         'outdated',
-        'Transmission and Thickness changed.',
+        'Transmission and Thickness changed. Changed by hand: Follow leaves it to you.',
     )
 
 
