@@ -498,6 +498,28 @@ def test_the_file_picker_lists_a_file_measured_after_the_form_was_made(
     ]
 
 
+def test_a_picker_labels_the_options_it_holds_now(
+    client: Client, files: FakeFiles, form: Fields, run: FileRef
+) -> None:
+    form.refresh(Listing(client))
+    run_picker = picker(form, 'Run')
+    other = files.measure(102, {'counts': 1.0, 'x': 0.0}, role='sample')
+    assert run_picker.label_of(run) == 'run 101 (sample)'
+    assert run_picker.label_of(other) is None
+
+    form.refresh(Listing(client))
+    assert run_picker.label_of(other) == 'run 102 (sample)'
+    assert run_picker.label_of([]) is None  # unhashable: no option equals it
+
+
+def test_a_picker_labels_equal_option_values_by_the_first(
+    client: Client, form: Fields, run: FileRef
+) -> None:
+    run_picker = picker(form, 'Run')
+    run_picker.options = {'a': run, 'b': run}
+    assert run_picker.label_of(run) == 'a'
+
+
 def test_a_file_picker_lists_the_files_that_fit_its_marker(
     client: Client, files: FakeFiles, form: Fields, run: FileRef
 ) -> None:

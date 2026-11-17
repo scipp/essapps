@@ -139,7 +139,7 @@ def label_of(field: Input) -> str | None:
     """The label of the option a picker holds, ``None`` if it holds none."""
     if field.value is UNSET:
         return None
-    return next((k for k, v in field.options.items() if v == field.value), None)
+    return field.label_of(field.value)
 
 
 def _chosen(field: Field) -> Field:
@@ -246,7 +246,7 @@ def cell(field: Field, value: Any) -> Any:
         return None
     if not inner.options:
         return value
-    return next((k for k, v in inner.options.items() if v == value), None)
+    return inner.label_of(value)
 
 
 def read(field: Field, sent: Any) -> Any:

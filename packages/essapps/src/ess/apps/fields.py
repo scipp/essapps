@@ -120,8 +120,30 @@ class Input(Field):
     def __init__(self, label: str = '') -> None:
         super().__init__()
         self.label = label
-        self.options: dict[str, Any] = {}
+        self.options = {}
         self._value: Any = UNSET
+
+    @property
+    def options(self) -> dict[str, Any]:
+        """The options by label. Assign a new dict to change them."""
+        return self._options
+
+    @options.setter
+    def options(self, options: dict[str, Any]) -> None:
+        # Option values are hashable (references, enum members, plain scalars),
+        # and ``==`` agrees with ``hash`` for them, so a lookup by value finds
+        # what a search with ``==`` finds. The first of equal values wins.
+        self._options = options
+        self._labels: dict[Any, str] = {}
+        for label, value in options.items():
+            self._labels.setdefault(value, label)
+
+    def label_of(self, value: Any) -> str | None:
+        """The label of the first option equal to ``value``, ``None`` if none is."""
+        try:
+            return self._labels.get(value)
+        except TypeError:  # unhashable, so equal to no option
+            return None
 
     @property
     def value(self) -> Any:
