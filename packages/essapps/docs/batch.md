@@ -178,31 +178,42 @@ batch.reduce(settings, remaining(batch.state(settings)))   # then one cycle
 
 "Apply to new" runs no cycle. The rows reduced before read `outdated`, with the setting in `changed`, and `arrived` does not pick them, since a setting is not in `at`. "Apply to all" runs the cycle once with a person's rule. No list of settings over time is stored: each record holds the settings it was made with.
 
-**The status of a row** is `RowState.text`. It is derived from the state at each read and stored nowhere:
+**The status of a row** is a function of two stored things: the row's request, which follows from the files and the definition, and the status of its newest record, which the workspace stores. The batch stores no status of a row. A stored one would be a copy that every writer has to keep right, from every process.
+
+```python
+def text(row):                                       # RowState.text
+    if row.status is PENDING: return 'pending'       # row.status: the status of the newest record
+    if row.problems:          return 'incomplete'    # a cell is empty, refused, or reads a failed record
+    if row.status is None:    return 'not reduced'   # no record
+    if row.outdated:          return 'outdated'      # the request differs from the record's
+    return str(row.status)                           # 'completed', 'failed', 'cancelled'
+```
+
+So the diagram has no memory of its own. Each arrow is a write to a stored table by the writer of that table:
 
 ```mermaid
 stateDiagram-v2
     state "not reduced" as none
+    state "failed or cancelled" as failed
     [*] --> incomplete
     [*] --> none
     incomplete --> none : its cells are filled
-    none --> pending : reduce
+    none --> pending : a record is written
     pending --> completed
     pending --> failed
-    pending --> cancelled
-    completed --> outdated : its request changes
-    failed --> pending : a person
-    cancelled --> pending : a person
-    outdated --> pending : reduce
-    note left of incomplete
-        A cell is empty, refused,
-        or reads a failed record.
-        Shown in place of every
-        status but pending.
-    end note
+    completed --> outdated : the request changes
+    outdated --> completed : the change is undone
+    outdated --> pending : a record is written
+    failed --> pending : a record is written
 ```
 
-An arrow labelled "reduce" is taken by both rules. `arrived` takes the one from `outdated` only for a change at a column of `at`. An arrow labelled "a person" is taken by `remaining` only. An edit that is undone turns `outdated` back into `completed`, since nothing remembers the status.
+| Arrow | Writer | Stored table |
+|---|---|---|
+| its cells are filled, the request changes, the change is undone | a person, or the instrument | corrections, edits, settings, or files |
+| a record is written | the workspace | records |
+| from pending, without a label: the record finishes | the workspace | records |
+
+The workspace writes a record when the cycle submits the row. `arrived` submits a row that is `not reduced`, or `outdated` at a column of `at`. `remaining` submits also a failed or cancelled row, and every `outdated` one. A row with a problem reads `incomplete` whatever its record says, unless the record is pending.
 
 **Not in this picture:**
 
