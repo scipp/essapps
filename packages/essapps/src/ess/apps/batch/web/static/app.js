@@ -344,6 +344,10 @@ function renderSettings(state) {
   $('draft').classList.toggle('changed', changed);
   const said = problem ? ` ${problem}.` : '';
   $('draft-state').textContent = changed ? `Changed, not applied yet.${said}` : said.trim() || 'These settings are in force.';
+  // The file holds the batch's settings, so it waits for Apply or Discard.
+  const download = document.querySelector('[data-file="settings.yaml"]');
+  download.disabled = changed;
+  download.title = changed ? `${action.blocked} first.` : '';
   renderForm($('settings'), state.settings, (edit) => act('/api/settings', edit));
 }
 

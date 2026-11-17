@@ -17,8 +17,8 @@ the form only; :meth:`Server.apply_settings` writes it to the batch, and is
 refused while something is missing; :meth:`Server.discard_settings` shows the
 batch's settings again. "Load settings" and "Use the settings of this row" fill
 the form, all or none. While the form holds a change, a reduction by a person
-is refused, so that nothing is reduced with settings other than those shown;
-"Download settings" gives the batch's settings. Settings that the form cannot
+and a download of the settings are refused, so that nothing is reduced or
+saved with settings other than those shown. Settings that the form cannot
 show, such as those kept for another version of the spec, are named in the
 state's ``settings_problem`` and kept until Apply. The server writes the
 batch's settings only at Apply: the form does not show an assignment by code
@@ -1223,7 +1223,9 @@ class Server:
     @_locked
     def settings_file(self) -> bytes:
         """The batch's settings as a YAML template."""
-        if missing := self._shown[1]:
+        if unapplied := self._unapplied():
+            raise Problem(f'{unapplied} first.')
+        if missing := self.settings.held()[1]:
             raise Problem(f'Fill in the settings first: {SubmitError(missing)}')
         with _file('settings.yaml') as path:
             write_template(self.batch.template(), path)
