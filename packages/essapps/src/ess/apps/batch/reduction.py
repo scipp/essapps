@@ -79,12 +79,17 @@ _NONE = object()
 
 
 def _kept(name: str, value: Any) -> tuple[str, type, Any] | None:
-    """The key a resolved value is kept by, ``None`` for one that cannot be a key."""
+    """
+    The key a resolved value is kept by, ``None`` for one that cannot be a key.
+    A list is kept by its elements, each with its type, as a value is, so that
+    ``1`` and ``1.0``, or a list and a tuple, do not share an entry.
+    """
+    key = tuple((type(v), v) for v in value) if isinstance(value, list) else value
     try:
-        hash(value)
+        hash(key)
     except TypeError:
         return None
-    return (name, type(value), value)
+    return (name, type(value), key)
 
 
 def _running(row: RowState) -> list[FieldError]:
@@ -322,9 +327,9 @@ class Batch:
         since a parameter resolves the same whatever the others are. A kept
         value differs from one resolved now only for a file that gained a
         catalogue identifier since, which keeps its old identity until the
-        scan, as ``resolve`` allows. A value that cannot be a key, such as a
-        list, is resolved each time. A refusal is not kept, so that a file that
-        arrives later is found.
+        scan, as ``resolve`` allows. A list is kept by its elements; a value
+        that cannot be a key, such as a dict, is resolved each time. A refusal
+        is not kept, so that a file that arrives later is found.
         """
         fields = self.spec.params.model_fields
         cells: dict[str, dict[str, Any]] = {}
