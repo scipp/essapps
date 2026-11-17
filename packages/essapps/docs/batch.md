@@ -86,6 +86,8 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 | `ready(states)` | every row that can run now |
 | `remaining(states)` | ready rows with no result, a failed or cancelled one, or an outdated one |
 | `arrived(states, at)` | ready rows with no result, or whose request differs from their result's at a column of `at` ([Automatic reduction](#automatic-reduction)) |
+| `earlier_settings(states, columns)` | ready rows whose completed result differs from their request only at settings, not at a column, and of the same spec; no tweak |
+| `left_to_reduce(states, columns)` | the rows of `remaining` but those of `earlier_settings` |
 | `summary(states)` | the number of rows in each state |
 
 **A row's state is read from its result.** `state()` compares each row's request, its cells with the settings, with the request of its result, and says where they differ:
@@ -266,15 +268,18 @@ def arrived(state, at):                      # ess.apps.batch.arrived
 | `s1'` | row 1, `[s1, s1']`, `[t1]` | row 1, `[s1, s1']`, `[t1]` | nothing: row 1 reads `outdated` |
 | `t1'` | row 1, `[s1, s1']`, `[t1, t1']` | nothing: row 1 reads `outdated` | nothing |
 
-So the loop and a person's "reduce remaining" differ:
+So the loop, the page's buttons, and the command differ:
 
 | A row is reduced if it has | no result | a failed or cancelled result | a result, and a setting changed | a result, and a cell changed at `at` | a result, and a cell changed at another column |
 |---|---|---|---|---|---|
-| the page, "reduce remaining" | yes | yes | yes, but for a tweak | yes | yes |
-| `essapps-batch reduce --remaining` | yes | yes | yes | yes | yes |
-| the loop | yes | no | no | yes | no |
+| the page, "Reduce" (`left_to_reduce`) | yes | yes | no | yes | yes |
+| the page, "Apply to all" (`earlier_settings`) | no | no | yes, but for a tweak | no | no |
+| `essapps-batch reduce --remaining` (`remaining`) | yes | yes | yes, but for a tweak | yes | yes |
+| the loop (`arrived`) | yes | no | no | yes | no |
 
-A tweak is `outdated` only where a column changed ([Rules](#rules)), so the page leaves a tweaked row whose settings changed. A failed or cancelled result counts as any other, so a row whose reduction fails is not reduced at every step. A changed setting reduces no row again: the rows reduced before read `outdated`, with the setting in `changed`. A row that the loop leaves `outdated` is reduced by a person, through the loop's batch ([one label, one batch](#one-label-one-batch)).
+On the page, a change of settings applies to rows not reduced yet, and to all only when a person says so. The command is given its settings at each call, so it applies them to all.
+
+A tweak is `outdated` only where a column changed ([Rules](#rules)), so neither the page nor the command reduces a tweaked row whose settings changed. A failed or cancelled result counts as any other, so a row whose reduction fails is not reduced at every step. A changed setting reduces no row again: the rows reduced before keep their results, with the setting in `changed`, and the page marks them as reduced with earlier settings. A person reduces them through the loop's batch, with "Apply to all" on the page ([one label, one batch](#one-label-one-batch)).
 
 A row whose result is running is not ready, and the loop does not submit it again. At the first step after its record finishes, it is reduced if a file arrived meanwhile at a column of `at`.
 
@@ -284,7 +289,7 @@ A result of another spec, such as an older version, stays the row's result ([Rul
 
 A row whose key changes from one scan to the next, such as a key made from a sample name that a correction changed, is a new row, and is reduced again under its new key; so choose a key that does not change, such as the run number ([Terms](#terms)).
 
-In a chain, step the loop of the batch that is read first: `run([Automatic(find, ...), Automatic(iofq, ...)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
+The batch page holds a loop of its own: its switch "Follow" steps it on the page's batch ([The UI](#the-ui)). In a chain, step the loop of the batch that is read first: `run([Automatic(find, ...), Automatic(iofq, ...)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
 
 ### One label, one batch
 
@@ -435,6 +440,7 @@ One command holds the folder at a time. If a command was killed, the next one fi
 ## The UI
 
 [The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows a batch in a browser: how to run it, its layers, and its limits.
+A change of its settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Apply to all** in the settings reduces those rows again, after a confirmation that names how many. Given the columns `at`, the page offers a switch **Follow**: a step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, in the page's own process and batch.
 
 `BatchView` is a tab for `App`:
 
@@ -511,6 +517,6 @@ Raise in the fake to make a row fail; hold it back on a `threading.Event` to kee
 
 - Keep a result that is not persisted. A `Batch` finds results by key in its workspace, so `local()` per session starts with none, and a result that is not persisted is gone once its workspace closes.
 - Merge two writers of one definition, or lock it. Two `Batch` objects on one label each write their whole table of edits, so a change made through the other since is lost ([Where the definition is kept](#where-the-definition-is-kept)).
-- Keep a tweak across sessions. After a restart a tweaked row reads `outdated` where the tweak differs from the settings, and "reduce remaining" reduces it again with the settings.
+- Keep a tweak across sessions. After a restart a tweak is read as a result reduced with the settings: where it differs from them only at settings, the web page marks it "earlier settings", and its **Apply to all** or the command reduces it again.
 - Free the values of replaced results. They stay until the workspace closes or they are released, unless the batch persists them (`persist=`).
 - Offer preparatory steps with a **Use** button. A `Referenced[...]` setting offers each record in the settings form.
