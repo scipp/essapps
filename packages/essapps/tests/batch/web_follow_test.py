@@ -476,17 +476,31 @@ def test_a_tick_that_waited_for_the_request_that_stops_following_does_nothing(
     assert client.records() == []
 
 
-@pytest.mark.parametrize('following', [True, False])
-def test_a_tweak_at_a_column_of_at_says_that_follow_reduces_it_again(
-    server: Server, client: Client, sample: Measure, gate: Gate, following: bool
+@pytest.mark.parametrize(
+    ('following', 'by_hand', 'again'),
+    [(True, False, True), (False, False, False), (True, True, False)],
+    ids=['following', 'not following', 'set by hand'],
+)
+def test_a_tweak_at_a_column_of_at_says_whether_follow_reduces_it_again(
+    server: Server,
+    client: Client,
+    sample: Measure,
+    gate: Gate,
+    following: bool,
+    by_hand: bool,
+    again: bool,
 ) -> None:
     sample(1, 'water')
     sample(2, 'oil')
     server.follow(True)
     done(server, client)
     server.follow(following)
+    scanned = option(server, 'transmission', 1001)
     other = option(server, 'transmission', 1002)
-    server.edit_tweak('1', Edit(path=['transmission'], op='set', value=other))
+    if by_hand:
+        server.edit(CellEdit(keys=['1'], column='transmission', value=other))
+    tweak = scanned if by_hand else other
+    server.edit_tweak('1', Edit(path=['transmission'], op='set', value=tweak))
 
     gate.close()
     notice = server.submit_tweak('1').notice
@@ -495,7 +509,7 @@ def test_a_tweak_at_a_column_of_at_says_that_follow_reduces_it_again(
     assert notice == (
         'Reducing water alone. Its Transmission differs from its cells, so Follow'
         ' reduces it again with its cells once this is done.'
-        if following
+        if again
         else 'Reducing water alone.'
     )
 

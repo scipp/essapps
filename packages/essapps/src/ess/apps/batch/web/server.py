@@ -80,7 +80,7 @@ import zipfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -99,6 +99,8 @@ from .. import (
     CorrectedFiles,
     NotKept,
     RowState,
+    arrived,
+    compared,
     earlier_settings,
     frames,
     left_to_reduce,
@@ -1038,13 +1040,20 @@ class Server:
         self._relist()
         name = self._named(self.batch.rows[key])
         notice = f'Reducing {name} alone.'
-        if self.loop is not None and self.following:
-            # Follow reduces the row again where its cells differ at `at`.
-            if changed := self._changed(self._states([key])[0][key], self.loop.at):
-                notice += (
-                    f' Its {changed} differs from its cells, so Follow reduces it'
-                    ' again with its cells once this is done.'
-                )
+        state = self._states([key])[0][key]
+        # Once the tweak is done, Follow gives the row as for any result.
+        done = {key: replace(state, status=Status.COMPLETED)}
+        if (
+            self.following
+            and self.loop
+            and compared(done)
+            and arrived(done, self.loop.at)
+        ):
+            changed = self._changed(state, self.loop.at)
+            notice += (
+                f' Its {changed} differs from its cells, so Follow reduces it'
+                ' again with its cells once this is done.'
+            )
         return notice
 
     # The result
