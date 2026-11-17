@@ -17,7 +17,6 @@ from ess.apps.batch import (
     left_to_reduce,
     ready,
     refused_again,
-    remaining,
     status_texts,
 )
 from ess.apps.batch.state import differs, results, row_states
@@ -98,11 +97,11 @@ def test_a_cell_reading_a_pending_record_is_ready() -> None:
 def test_what_is_left_to_do_by_status(status: Status, left: bool) -> None:
     found = states([Row('a', {'sample': 'x'})], record('1', 'a'), **{'1': status})
 
-    assert remaining(found) == (['a'] if left else [])
+    assert left_to_reduce(found, COLUMNS) == (['a'] if left else [])
 
 
 def test_a_row_without_a_result_is_left_to_do() -> None:
-    assert remaining(states([Row('a', {'sample': 'x'})])) == ['a']
+    assert left_to_reduce(states([Row('a', {'sample': 'x'})]), COLUMNS) == ['a']
 
 
 @pytest.mark.parametrize(
@@ -120,7 +119,7 @@ def test_an_outdated_row_is_left_to_do_and_shown_as_outdated(
         **outdated,
     )
 
-    assert remaining(found) == ['a']
+    assert left_to_reduce(found, COLUMNS) == ['a']
     assert found['a'].text == 'outdated'
 
 
@@ -140,7 +139,7 @@ def test_a_failed_or_cancelled_row_reads_so_when_its_request_changed(
         **outdated,
     )
 
-    assert remaining(found) == ['a']
+    assert left_to_reduce(found, COLUMNS) == ['a']
     assert found['a'].text == str(status)
 
 
@@ -162,7 +161,7 @@ def test_a_tweak_is_outdated_only_where_a_column_changed(
 
     assert found['a'].changed == changed
     assert found['a'].outdated is outdated
-    assert (remaining(found) == ['a']) is outdated
+    assert (left_to_reduce(found, COLUMNS) == ['a']) is outdated
 
 
 @pytest.mark.parametrize(
@@ -196,7 +195,6 @@ def test_a_result_that_differs_only_at_settings_is_not_left_to_reduce(
 
     assert earlier_settings(found, COLUMNS) == (['a'] if earlier else [])
     assert left_to_reduce(found, COLUMNS) == (['a'] if left else [])
-    assert (remaining(found) == ['a']) is (earlier or left)
 
 
 def test_a_row_that_cannot_run_is_not_one_of_earlier_settings() -> None:
@@ -355,7 +353,7 @@ def test_a_refused_value_is_a_problem_of_its_row() -> None:
     )
 
     assert found['a'].problems == (reason,)
-    assert remaining(found) == []
+    assert left_to_reduce(found, COLUMNS) == []
 
 
 def test_the_result_of_a_row_is_its_newest_record_of_any_spec() -> None:
@@ -399,7 +397,6 @@ def test_a_completed_row_not_compared_reads_outdated_but_a_tweak_reads_completed
 @pytest.mark.parametrize(
     'rule',
     [
-        remaining,
         lambda s: arrived(s, {'sample'}),
         lambda s: earlier_settings(s, COLUMNS),
         lambda s: left_to_reduce(s, COLUMNS),

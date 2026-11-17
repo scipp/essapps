@@ -20,7 +20,7 @@ parameters are its own (:func:`row_states`)::
     changed == {'binning', 'thickness'}  # outdated, a tweak too
 
 A value refused when resolved is a problem of the row, not a change: the row
-cannot run with it, and a change would offer it to :func:`remaining`.
+cannot run with it, and a change would offer it to :func:`left_to_reduce`.
 
 A row is *changed by hand* (:attr:`RowState.changed_by_hand`) if a person, or
 code, set a cell of it and that cell is not yet reduced: the row has no result,
@@ -257,20 +257,6 @@ def ready(states: Mapping[str, RowState]) -> list[str]:
     ]
 
 
-def remaining(states: Mapping[str, RowState]) -> list[str]:
-    """
-    The ready rows with no result, one that failed or was cancelled, or one
-    that is outdated. Raises ``ValueError`` if a row was not compared with its
-    result (:attr:`RowState.changed` is ``None``).
-    """
-    _compared(states)
-    return [
-        k
-        for k in ready(states)
-        if states[k].status is None or states[k].status in _RERUN or states[k].outdated
-    ]
-
-
 def earlier_settings(
     states: Mapping[str, RowState], columns: Collection[str]
 ) -> list[str]:
@@ -300,13 +286,21 @@ def left_to_reduce(
     states: Mapping[str, RowState], columns: Collection[str]
 ) -> list[str]:
     """
-    The rows of :func:`remaining` but those of :func:`earlier_settings`: a
-    change of settings applies to rows not reduced yet, and a change of a
-    cell, or of the spec, to its row. Raises ``ValueError`` for a row that was
-    not compared.
+    The ready rows with no result, one that failed or was cancelled, or one
+    that is outdated, but those of :func:`earlier_settings`: a change of
+    settings applies to rows not reduced yet, and a change of a cell, or of the
+    spec, to its row. Raises ``ValueError`` for a row that was not compared.
     """
+    _compared(states)
     earlier = set(earlier_settings(states, columns))
-    return [k for k in remaining(states) if k not in earlier]
+    return [
+        k
+        for k in ready(states)
+        if k not in earlier
+        and (
+            states[k].status is None or states[k].status in _RERUN or states[k].outdated
+        )
+    ]
 
 
 def arrived(states: Mapping[str, RowState], at: Collection[str]) -> list[str]:

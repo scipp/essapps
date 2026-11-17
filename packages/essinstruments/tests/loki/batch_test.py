@@ -11,7 +11,7 @@ from ess.instruments.loki.bindings import BINDINGS
 from ess.instruments.loki.specs import CALIBRATED_DETECTOR, MASKS, BeamCentre
 
 from ess.apps import Client, FolderFiles, file, local
-from ess.apps.batch import FileInfo, ready, remaining
+from ess.apps.batch import FileInfo, left_to_reduce, ready
 from ess.spec import FileRef
 
 
@@ -127,5 +127,5 @@ def test_a_batch_of_iofq_over_real_workflows(
 
     assert client.wait(records) == {'60250': 'completed', '60339': 'completed'}
     assert client.output(records['60250'], 'iofq').intensity.sizes == {'Q': 100}
-    assert remaining(batch.state()) == []
+    assert left_to_reduce(batch.state(), batch.columns) == []
     batch.close()
