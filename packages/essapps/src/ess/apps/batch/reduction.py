@@ -61,7 +61,8 @@ from ..client import Client, Stage
 from ..errors import FieldError, SubmitError
 from ..files import Selector
 from ..records import Record, Request, SpecId, Status, Template
-from . import state
+from . import definition, state
+from .definition import DefinitionStore
 from .state import RowState
 from .table import Row, RowTable
 
@@ -146,13 +147,20 @@ class Batch:
     persist:
         As :meth:`~ess.apps.Client.submit` takes it.
     settings:
-        The settings that the batch starts with, such as the technique's
-        defaults; none if not given, so each parameter takes its default.
+        The settings that the batch starts with if ``store`` holds none, such
+        as the technique's defaults; none if not given, so each parameter
+        takes its default.
+    store:
+        Keeps the edits and the settings of the label
+        (:mod:`~.definition`): read here, and written at each change. Without
+        it, they are kept in memory only.
 
     Raises
     ------
     KeyError
         If a column is not a parameter of the spec.
+    ValueError
+        If ``store`` holds edits that cannot be read, naming the row.
     """
 
     def __init__(
@@ -167,6 +175,7 @@ class Batch:
         staged: bool = False,
         persist: bool | Sequence[str] = False,
         settings: Mapping[str, Any] | None = None,
+        store: DefinitionStore | None = None,
     ) -> None:
         fields = spec.params.model_fields
         if unknown := sorted(set(columns) - fields.keys()):
@@ -177,9 +186,11 @@ class Batch:
         self.settings_fields = tuple(n for n in fields if n not in columns)
         self.label = label
         self.source = source
-        self.rows = RowTable()
-        self._settings: dict[str, Any] = {}
-        self.settings = {} if settings is None else settings
+        self._store = store
+        self._rows = RowTable()
+        self._settings = copy.deepcopy(dict(settings or {}))
+        if store is not None:
+            self._load(store)
         self._selector = Selector() if selector is None else selector
         self._staged = staged
         self._persist = persist
@@ -193,6 +204,36 @@ class Batch:
         self._unbound: set[str] = set()
         # A cell's value as a record holds it, by its column and value as given.
         self._resolved: dict[tuple[str, Any], Any] = {}
+
+    def _load(self, store: DefinitionStore) -> None:
+        """Take the edits and the settings that ``store`` holds, if any."""
+        if (edits := store.load(definition.edits_key(self.label))) is not None:
+            try:
+                self._rows = definition.edits_of(edits)
+            except ValueError as error:
+                raise ValueError(
+                    f'the edits of {self.label} in {store}: {error}'
+                ) from None
+        if (settings := store.load(definition.settings_key(self.label))) is not None:
+            self._settings = definition.settings_of(settings)
+
+    @property
+    def rows(self) -> RowTable:
+        """
+        The rows: those of the last scan, with what was set by hand on top. An
+        assignment that changes what was set by hand is written to the store.
+        """
+        return self._rows
+
+    @rows.setter
+    def rows(self, rows: RowTable) -> None:
+        def by_hand(t: RowTable) -> tuple[Any, ...]:
+            return (t.added, t.edits, t.removed)
+
+        if self._store is not None and by_hand(rows) != by_hand(self._rows):
+            key = definition.edits_key(self.label)
+            self._store.save(key, definition.edits_data(rows))
+        self._rows = rows
 
     def scan(self) -> list[FileInfo]:
         """
@@ -227,7 +268,12 @@ class Batch:
 
     @settings.setter
     def settings(self, settings: Mapping[str, Any]) -> None:
-        self._settings = copy.deepcopy(dict(settings))
+        settings = copy.deepcopy(dict(settings))
+        if self._store is not None:
+            template = Template(self.spec, params=settings, blanks=self.columns)
+            key = definition.settings_key(self.label)
+            self._store.save(key, definition.settings_data(template))
+        self._settings = settings
 
     def template(self) -> Template:
         """The template of the settings, with the columns as its blanks."""

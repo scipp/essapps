@@ -5,6 +5,7 @@
 import io
 import zipfile
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -16,7 +17,8 @@ from pydantic import BaseModel, Field
 
 from ess.apps import Client, local
 from ess.apps.batch import Batch, CorrectedFiles
-from ess.apps.batch.web import Shown, create_app, plots
+from ess.apps.batch.definition import settings_key
+from ess.apps.batch.web import Shown, create_app, demo, plots
 from ess.apps.testing import CountingClient, FakeFiles
 from ess.spec import SampleRunFile, WorkflowSpec, function_binding
 
@@ -400,26 +402,73 @@ def test_the_table_downloaded_and_uploaded_gives_the_same_rows(
     ]
 
 
-def test_a_table_loaded_replaces_what_was_set_by_hand_until_a_rescan(
+def test_a_table_loaded_is_set_by_hand_and_stays_after_a_rescan(
     http: TestClient,
 ) -> None:
-    thickness(http, ['1'], 4)
     content = http.get('/api/table.csv').content
+    thickness(http, ['1'], 4)
 
     loaded = http.post('/api/table', params={'name': 'rows.csv'}, content=content)
+    http.post('/api/scan')
 
-    assert loaded.json()['loaded'] == 'rows.csv'
+    assert loaded.json()['notice'] == 'Loaded 3 rows from rows.csv.'
     assert rows(http)['1']['cells']['thickness'] == {
-        'value': 4.0,
-        'text': '4.0',
-        'edited': False,
-        'scanned': '4.0',
+        'value': None,
+        'text': '',
+        'edited': True,
+        'scanned': '',
         'problem': None,
     }
-    scanned = http.post('/api/scan').json()
-    assert scanned['loaded'] is None
-    assert scanned['notice'] == 'Found 3 rows. 1 row changed.'
-    assert rows(http)['1']['cells']['thickness']['text'] == ''
+    assert not rows(http)['2']['cells']['thickness']['edited']
+
+
+def test_a_page_on_settings_kept_for_another_version_starts_and_names_them(
+    tmp_path: Path,
+) -> None:
+    client, files, store = demo.open_demo(tmp_path)
+    kept = {'spec': {'name': 'demo-iofq', 'version': 1}, 'params': {'gone': 1}}
+    store.save(settings_key('demo-iofq'), kept)
+
+    with client:
+        shown = state(TestClient(demo.build(client, files, store)))
+
+    assert shown['settings_problem'] == 'gone: not a parameter of demo-iofq'
+
+
+def test_what_a_person_set_on_the_page_is_there_when_it_is_served_again(
+    tmp_path: Path,
+) -> None:
+    def served() -> tuple[Client, TestClient]:
+        client, files, store = demo.open_demo(tmp_path)
+        return client, TestClient(demo.build(client, files, store))
+
+    client, page = served()
+    with client:
+        run = page.get('/api/runs').json()['rows'][1]['key']
+        page.post(
+            '/api/cells', json={'keys': ['60302'], 'column': 'thickness', 'value': 2.5}
+        )
+        page.post(
+            '/api/settings',
+            json={'path': ['wavelength', 'start'], 'op': 'set', 'value': 3},
+        )
+        page.post(
+            '/api/runs/cells',
+            json={'keys': [run], 'column': 'sample', 'value': 'moved'},
+        )
+        before = state(page)
+        runs = page.get('/api/runs').json()
+
+    client, page = served()
+    with client:
+        after = state(page)
+        assert page.get('/api/runs').json()['rows'] == runs['rows']
+    wavelength = {tuple(n['path']): n for n in after['settings']}['wavelength',]
+    assert wavelength['child']['children'][0]['value'] == 3.0
+    assert runs['rows'][1]['cells']['sample']['edited']
+    assert after['rows'] == before['rows']
+    assert after['settings'] == before['settings']
+    assert {r['key']: r for r in after['rows']}['60302']['cells']['thickness']['edited']
 
 
 def test_the_settings_downloaded_and_uploaded_are_the_same(

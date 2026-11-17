@@ -14,6 +14,11 @@ function, for a notebook: :func:`.frames.reduce_table` and
 :mod:`ess.apps.folder`), so a template may reference a record of an earlier
 command, by its ID or by its label (see :func:`.text.with_latest`).
 
+The files of the folder are read with the corrections that an application
+keeps there (:mod:`.definition`), so ``rows`` pairs runs as the application
+does. A batch of ``reduce`` is its template and its table: the edits and
+settings that an application keeps under the same label are not read.
+
 The guide is ``packages/essapps/docs/batch.md``.
 
 Exit status: 0 if done, and every row completed; 1 for an error; 2 if the
@@ -34,9 +39,11 @@ import pandas as pd
 
 from ..client import Client
 from ..errors import SubmitError
-from ..folder import open_folder, scan_folder
+from ..folder import folder_files, open_folder, scan_folder
 from ..records import Status
 from . import frames
+from .corrections import CorrectedFiles
+from .definition import FolderDefinitions
 from .export import export_table
 from .reduction import file_infos
 from .text import load_template, with_latest
@@ -165,7 +172,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         # a workspace goes on with pending records, which need their bindings
         parser.error('--bind is required: the bindings of the workspace')
     bind = _named(args.bind)
-    with open_folder(args.workspace, bind, proposal=args.proposal) as client:
+    store = FolderDefinitions(args.workspace)
+    files = CorrectedFiles(folder_files(args.workspace), store=store)
+    with open_folder(
+        args.workspace, bind, files=files, proposal=args.proposal
+    ) as client:
         try:
             result = _run(client, args)
         except (SubmitError, ValueError) as error:

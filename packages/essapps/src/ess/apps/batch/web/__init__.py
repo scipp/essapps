@@ -25,8 +25,10 @@ Limits:
 
 - One server process serves one batch to one user. Two open pages edit the
   same state.
-- Edits, settings and corrections live in memory and are lost when the server
-  stops. Results stay, since the folder holds them.
+- Edits, settings and corrections are kept by the store that the batch and
+  the file source are given (:mod:`..definition`), as the demo gives them
+  the folder's; without one, they are lost when the server stops. Results
+  stay, since the folder holds them.
 - The browser tests in ``tests/batch/web_browser_test.py`` skip without
   Playwright, a Chromium and the fetched libraries, and fail instead in CI,
   which installs all three. They do not cover loading an XLSX table, an edit

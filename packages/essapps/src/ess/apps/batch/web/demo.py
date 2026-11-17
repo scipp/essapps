@@ -8,7 +8,8 @@ working on the page.
 ``http://localhost:N``, with the workspace kept in ``DIRECTORY`` (see
 :mod:`ess.apps.folder`), a new temporary folder if not given. The first start
 writes the fake runs and ``files.csv`` there; a later start reuses them, with
-the results of earlier starts.
+the results of earlier starts, and the edits, settings, and corrections kept
+in ``definitions/`` (:mod:`..definition`).
 
 Each sample run holds the size of its particles, so samples differ visibly, and
 the curve depends on the settings. Three samples have no transmission run, one
@@ -40,7 +41,7 @@ from ess.spec import (
     WorkflowSpec,
 )
 
-from .. import Batch, CorrectedFiles, FileInfo, Row
+from .. import Batch, CorrectedFiles, FileInfo, FolderDefinitions, Row
 from . import create_app, plots
 from .api import STATIC
 from .models import Words
@@ -239,14 +240,25 @@ def _measure(directory: Path) -> None:
     (directory / 'files.csv').write_text('\n'.join(lines) + '\n')
 
 
-def open_demo(directory: Path) -> tuple[Client, CorrectedFiles]:
-    """A client of the demo's workspace in ``directory``, and its file source."""
+def open_demo(
+    directory: Path,
+) -> tuple[Client, CorrectedFiles, FolderDefinitions]:
+    """
+    A client of the demo's workspace in ``directory``, its file source, and the
+    store of the definition.
+    """
     _measure(directory)
-    files = CorrectedFiles(folder_files(directory))
-    return open_folder(directory, BINDINGS, files=files), files
+    store = FolderDefinitions(directory)
+    files = CorrectedFiles(folder_files(directory), store=store)
+    return open_folder(directory, BINDINGS, files=files), files, store
 
 
-def build(client: Client, files: CorrectedFiles, folder: str = '') -> FastAPI:
+def build(
+    client: Client,
+    files: CorrectedFiles,
+    store: FolderDefinitions,
+    folder: str = '',
+) -> FastAPI:
     """The application on what :func:`open_demo` returns, scanned."""
     batch = Batch(
         client,
@@ -256,6 +268,7 @@ def build(client: Client, files: CorrectedFiles, folder: str = '') -> FastAPI:
         source=pair_by_sample,
         staged=True,
         persist=True,
+        store=store,
     )
     batch.scan()
 
@@ -290,9 +303,9 @@ def main() -> None:
     if directory is None:
         directory = Path(tempfile.mkdtemp(prefix='essapps-web-demo-'))
     directory.mkdir(parents=True, exist_ok=True)
-    client, files = open_demo(directory)
+    client, files, store = open_demo(directory)
     with client:
-        app = build(client, files, folder=directory.name)
+        app = build(client, files, store, folder=directory.name)
         uvicorn.run(app, host='localhost', port=args.port)
 
 

@@ -11,6 +11,9 @@ The folder holds what a workspace needs to go on after its process ended::
     log.jsonl     history: a header naming the format of the log and of
                   the store, then one event per line (see ess.apps.log)
     store/        persisted outputs, <record>/<output>.h5
+    definitions/  what a person made of the batches on the folder: the
+                  corrections of files, and the edits and settings of each
+                  label (see ess.apps.batch.definition)
 
 So a command that runs and ends, and the next one, are clients of one workspace:
 the second reads the records of the first, and references their outputs if they
@@ -69,7 +72,7 @@ class FolderStore:
             raise LookupError(str(error)) from None
 
 
-_OWN = ('files.csv', 'log.jsonl', 'store')
+_OWN = ('files.csv', 'log.jsonl', 'store', 'definitions')
 """What the workspace keeps in its folder, which no request names."""
 
 

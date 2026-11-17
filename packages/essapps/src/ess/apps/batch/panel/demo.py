@@ -18,8 +18,10 @@ refused. Everything but the workflows and the files is real, so a change here
 shows what an application gets.
 
 One process holds a folder, so one client serves every session, and each
-session has a batch of its own. The corrections of the run sheet are shared by
-the sessions, and end with the process.
+session has a batch of its own. The edits and settings of the batch, and the
+corrections of the run sheet, are kept in the folder (:mod:`..definition`), so
+a session, and a later start, begins with them. Two sessions open at once each
+write what they hold, and the last write wins.
 """
 
 from __future__ import annotations
@@ -41,7 +43,7 @@ from ess.apps.panel import App
 from ess.apps.testing import StagedFunction, read_file
 from ess.spec import RunFile, WorkflowSpec
 
-from .. import Batch, CorrectedFiles, FileInfo, Row
+from .. import Batch, CorrectedFiles, FileInfo, FolderDefinitions, Row
 from . import BatchView, RunSheet
 
 
@@ -122,17 +124,21 @@ def _measure(directory: Path, samples: int) -> None:
     (directory / 'files.csv').write_text('\n'.join(lines) + '\n')
 
 
-def open_demo(directory: Path, samples: int = 20) -> tuple[Client, CorrectedFiles]:
+def open_demo(
+    directory: Path, samples: int = 20
+) -> tuple[Client, CorrectedFiles, FolderDefinitions]:
     """
     A client of the demo's workspace in ``directory``, with ``samples`` samples
-    on the first start, and the file source that the run sheet corrects.
+    on the first start, the file source that the run sheet corrects, and the
+    store of the definition.
     """
     _measure(directory, samples)
-    files = CorrectedFiles(folder_files(directory))
-    return open_folder(directory, BINDINGS, files=files), files
+    store = FolderDefinitions(directory)
+    files = CorrectedFiles(folder_files(directory), store=store)
+    return open_folder(directory, BINDINGS, files=files), files, store
 
 
-def build(client: Client, files: CorrectedFiles) -> App:
+def build(client: Client, files: CorrectedFiles, store: FolderDefinitions) -> App:
     """The application of one session, on what :func:`open_demo` returns."""
     batch = Batch(
         client,
@@ -142,6 +148,7 @@ def build(client: Client, files: CorrectedFiles) -> App:
         source=pair_by_sample,
         staged=True,
         persist=True,
+        store=store,
     )
 
     def draw(records: Mapping[str, Record]) -> pn.pane.Markdown:
@@ -162,9 +169,9 @@ def main() -> None:
         directory = Path(tempfile.mkdtemp(prefix='essapps-batch-demo-'))
     directory.mkdir(parents=True, exist_ok=True)
     pn.extension('tabulator')
-    client, files = open_demo(directory)
+    client, files, store = open_demo(directory)
     with client:
-        pn.serve(lambda: build(client, files).panel(), port=5006, show=False)
+        pn.serve(lambda: build(client, files, store).panel(), port=5006, show=False)
 
 
 if __name__ == '__main__':

@@ -159,8 +159,7 @@ class State(BaseModel):
     Everything the page shows but the details of one row, the plot, and the
     runs. ``start`` changes when the server starts again, ``version`` with each
     change, and ``runs`` with each change of the runs. ``notice`` says what
-    the action that answers with this state did. ``loaded`` is the name of
-    the table file whose rows stand in place of a scan, until the next scan.
+    the action that answers with this state did.
     """
 
     version: int
@@ -178,7 +177,6 @@ class State(BaseModel):
     settings: list[Node]
     settings_problem: str | None
     refused: list[Refused]
-    loaded: str | None = None
     notice: str = ''
 
 

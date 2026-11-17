@@ -13,6 +13,8 @@ from ess.spec import FileRef
 
 from ..files import Selector
 from ..protocol import FileSource
+from . import definition
+from .definition import DefinitionStore
 
 
 class _Every(Selector):
@@ -37,23 +39,38 @@ class CorrectedFiles:
     metadata, so the source must select through :meth:`Selector.matches`, as
     those that read a folder or a table do. A name such as ``file(run=1)`` is
     resolved by ``source``, so a correction of ``run`` does not rename a file.
+
+    ``store`` keeps the corrections (:mod:`~.definition`): they are read here,
+    and written at each change. Without it, they are kept in memory only. A
+    correction of a file that ``source`` no longer lists stays, unused, and
+    applies again if the file is listed again.
     """
 
-    def __init__(self, source: FileSource) -> None:
+    def __init__(
+        self, source: FileSource, *, store: DefinitionStore | None = None
+    ) -> None:
         self._source = source
+        self._store = store
         self._corrections: dict[FileRef, dict[str, Any]] = {}
+        if store is not None and (data := store.load(definition.CORRECTIONS)):
+            self._corrections = definition.corrections_of(data)
 
     @property
     def source(self) -> FileSource:
         """The source corrected, to read what a file says without corrections."""
         return self._source
 
+    def _write(self, corrections: dict[FileRef, dict[str, Any]]) -> None:
+        if self._store is not None:
+            data = definition.corrections_data(corrections)
+            self._store.save(definition.CORRECTIONS, data)
+        self._corrections = corrections
+
     def correct(self, ref: FileRef, **fields: Any) -> None:
         """Set metadata fields of a file, on top of what the source says."""
-        self._corrections = {
-            **self._corrections,
-            ref: {**self._corrections.get(ref, {}), **fields},
-        }
+        self._write(
+            {**self._corrections, ref: {**self._corrections.get(ref, {}), **fields}}
+        )
 
     def corrections(self, ref: FileRef) -> Mapping[str, Any]:
         """The fields of a file set by :meth:`correct`, empty if none."""
@@ -67,7 +84,7 @@ class CorrectedFiles:
             if fields and k not in fields
         }
         others = {k: v for k, v in self._corrections.items() if k != ref}
-        self._corrections = {**others, ref: kept} if kept else others
+        self._write({**others, ref: kept} if kept else others)
 
     def resolve(self, name: FileRef) -> FileRef:
         return self._source.resolve(name)

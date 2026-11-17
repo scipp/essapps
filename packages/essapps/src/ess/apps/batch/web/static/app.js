@@ -157,9 +157,7 @@ function render(state) {
   if (!old) updated.then(() => rows.select(view.selected));
   if (state.runs !== null && state.runs !== view.runs) loadRuns();
   const many = state.words.many;
-  $('rescan').title = state.loaded
-    ? `Make the ${many} from the runs in place of the table you loaded, ${state.loaded}. Values set by hand stay.`
-    : `Make the ${many} from the runs again. Values set by hand stay.`;
+  $('rescan').title = `Make the ${many} from the runs again. Values set by hand stay.`;
   $('restore').hidden = state.removed === 0;
   $('restore').textContent = `${state.removed} removed: bring back`;
   renderRefused(state.refused);
@@ -215,12 +213,6 @@ function downloadResults(rows, name) {
   download(`/api/results.zip?${query({keys: done.map((row) => row.key)})}`, name);
 }
 
-// Whether a rescan may go on: it replaces a table loaded, if asked.
-function replacesTable() {
-  const {loaded} = view.state;
-  return !loaded || confirm(`The table you loaded, ${loaded}, is replaced by what the runs give. Values set by hand stay.`);
-}
-
 async function loadRuns() {
   const response = await get('/api/runs');
   if (!response.ok) return;
@@ -234,14 +226,13 @@ async function loadRuns() {
       columns: [
         {title: 'Run', field: 'file', minWidth: 160, widthGrow: 2},
         ...cellColumns(shown.columns, {
-          revert: (key, column) => replacesTable() && act('/api/runs/cells/revert', {keys: [key], column}),
+          revert: (key, column) => act('/api/runs/cells/revert', {keys: [key], column}),
           say: showMessage,
         }),
       ],
       edits: Object.fromEntries(shown.columns.map((c) => [`cells.${c.name}.value`, c])),
       placeholder: 'No runs in this folder.',
-      // A correction rescans, so it may replace a table loaded.
-      edit: (keys, column, value) => replacesTable() && act('/api/runs/cells', {keys, column, value}),
+      edit: (keys, column, value) => act('/api/runs/cells', {keys, column, value}),
       select: () => {},
     });
   }
@@ -454,7 +445,7 @@ function renderRow(detail) {
   const tried = row.status === 'failed' || row.status === 'cancelled';
   const reasonClass = {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info'}[row.status];
   const useSettings = () => {
-    const question = `Replace the settings of every ${words().one} with those that ${row.name} was reduced with? The settings you have now are lost unless saved (Files, Save settings).`;
+    const question = `Replace the settings of every ${words().one} with those that ${row.name} was reduced with? To keep a copy of the settings you have now, download them first (Files, Download settings).`;
     if (confirm(question)) act('/api/row/use-settings', {key: row.key});
   };
   const settingsNames = Object.fromEntries(view.state.settings.map((n) => [n.path[0], n.label]));
@@ -564,7 +555,7 @@ function wire() {
     };
   });
   $('cancel').onclick = () => act('/api/cancel');
-  $('rescan').onclick = () => replacesTable() && act('/api/scan');
+  $('rescan').onclick = () => act('/api/scan');
   $('remove').onclick = () => {
     const added = selectedRows().filter((row) => row.added).length;
     const question = `${added} of the ${count(view.selected.length)} selected ${added === 1 ? 'was' : 'were'} added by hand and cannot be brought back. Remove?`;
@@ -613,7 +604,7 @@ function wire() {
   files.querySelector('.menu-button').onclick = () => openMenu(files);
   const loadTable = () => {
     const {many} = words();
-    const question = `Load a table file? Its ${many} take the place of those the runs give, values set by hand included. ${title(many)} you added by hand stay. Rescan runs to go back.`;
+    const question = `Load a table file? Its cells are set by hand on the ${many} of the same name, and its other ${many} are added. ${title(many)} that it does not have stay.`;
     if (confirm(question)) $('pick-table').click();
   };
   const actions = {

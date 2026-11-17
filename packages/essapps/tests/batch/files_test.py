@@ -8,11 +8,12 @@ import pandas as pd
 import pytest
 import yaml
 
-from ess.apps import Template
+from ess.apps import Template, file
+from ess.apps.batch import CorrectedFiles, FolderDefinitions
 from ess.apps.batch.cli import main
 from ess.apps.batch.frames import read_table
 from ess.apps.batch.text import load_template
-from ess.apps.folder import open_folder
+from ess.apps.folder import folder_files, open_folder
 
 from . import toys
 from .conftest import BAD
@@ -309,6 +310,18 @@ def test_the_rows_that_main_makes_from_the_files_are_a_table_to_reduce(
     assert code == 0
     assert list(result['key']) == ['1', '2', '3']
     assert list(result['status']) == ['completed'] * 3
+
+
+def test_the_rows_that_main_makes_read_the_corrections_kept_in_the_folder(
+    command: list[str], folder: Path
+) -> None:
+    files = CorrectedFiles(folder_files(folder), store=FolderDefinitions(folder))
+    files.correct(files.resolve(file(run=BAD)), role='sample')
+    runs = folder / 'runs.csv'
+
+    assert main([*command, 'rows', 'cli_toys_batch_files:pair', '-o', str(runs)]) == 0
+
+    assert list(read_table(runs)['key']) == ['1', '2', '3', str(BAD)]
 
 
 def test_main_runs_with_the_proposal_of_the_files(

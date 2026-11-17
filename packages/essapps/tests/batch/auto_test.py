@@ -10,7 +10,15 @@ from typing import Any
 import pytest
 
 from ess.apps import Client, file
-from ess.apps.batch import Batch, CorrectedFiles, FileInfo, Row, RowSource
+from ess.apps.batch import (
+    Batch,
+    CorrectedFiles,
+    DefinitionStore,
+    FileInfo,
+    FolderDefinitions,
+    Row,
+    RowSource,
+)
 from ess.apps.batch.auto import Automatic
 from ess.apps.folder import open_folder
 from ess.apps.testing import FakeFiles
@@ -36,9 +44,13 @@ def loop(batch: Batch) -> Automatic:
     return Automatic(batch, at={'sample'})
 
 
-def _loop(client: Any, source: RowSource = pair) -> Automatic:
+def _loop(
+    client: Any, source: RowSource = pair, store: DefinitionStore | None = None
+) -> Automatic:
     """A loop on ``client``, which may be a fake that wraps a client."""
-    batch = Batch(client, PLAIN, columns=COLUMNS, label='scan', source=source)
+    batch = Batch(
+        client, PLAIN, columns=COLUMNS, label='scan', source=source, store=store
+    )
     return Automatic(batch, at={'sample'})
 
 
@@ -383,7 +395,7 @@ def test_a_record_of_another_batch_on_the_label_is_replaced_if_it_differs_at_at(
     assert record.request.params['sample'] == run
 
 
-def test_after_a_restart_a_row_edited_at_at_is_reduced_again_as_the_source_gives_it(
+def test_without_a_store_a_row_edited_at_at_is_reduced_again_after_a_restart(
     client: Client, sample: Measure, fake: FakeFiles
 ) -> None:
     run = sample(1, 'water')
@@ -398,6 +410,23 @@ def test_after_a_restart_a_row_edited_at_at_is_reduced_again_as_the_source_gives
 
     assert edited.request.params['sample'] == other
     assert record.request.params['sample'] == run
+
+
+def test_with_a_store_a_row_edited_at_at_keeps_its_edit_after_a_restart(
+    client: Client, sample: Measure, fake: FakeFiles, tmp_path: Path
+) -> None:
+    store = FolderDefinitions(tmp_path)
+    sample(1, 'water')
+    other = fake.measure(77, 7.0, role='sample', sample='other')
+    loop = _loop(client, store=store)
+    client.wait(loop.step())
+    loop.batch.rows = loop.batch.rows.edit('1', {'sample': other})
+    client.wait(loop.step())
+
+    restarted = _loop(client, store=store)
+
+    assert restarted.step() == {}
+    assert restarted.batch.rows['1'].values['sample'] == other
 
 
 def test_a_row_whose_key_changes_is_reduced_under_its_new_key(

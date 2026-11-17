@@ -451,7 +451,7 @@ def test_the_demo_builds_and_reduces(tmp_path: Path) -> None:
 # The files of the command
 
 
-def test_rows_loaded_from_a_table_take_the_place_of_the_scan_under_the_edits(
+def test_rows_loaded_from_a_table_are_set_by_hand_over_the_edits(
     view: BatchView, tmp_path: Path
 ) -> None:
     view.batch.rows = view.batch.rows.edit('1', {'thickness': 3.0})
@@ -462,8 +462,13 @@ def test_rows_loaded_from_a_table_take_the_place_of_the_scan_under_the_edits(
 
     view.load_rows()
 
-    assert results(view) == {'1': 'incomplete', 'new': 'incomplete'}
-    assert view.batch.rows['1'].values['thickness'] == 3.0
+    assert results(view) == {
+        '1': 'incomplete',
+        '2': 'not reduced',
+        '3': 'incomplete',
+        'new': 'incomplete',
+    }
+    assert 'thickness' not in view.batch.rows['1'].values
     assert view.message.object == 'Loaded 2 rows.'
 
 
@@ -485,7 +490,7 @@ def test_a_table_saved_has_the_results_and_its_rows_read_back(
 ) -> None:
     reduced.path.value = str(tmp_path / 'rows.csv')
 
-    reduced.save_rows()
+    reduced.export_rows()
 
     table = read_table(tmp_path / 'rows.csv')
     assert list(table['status']) == ['completed', 'completed', 'incomplete']
@@ -502,7 +507,7 @@ def test_settings_saved_as_a_template_are_loaded_back(
 ) -> None:
     saved = view.settings.params
     view.path.value = str(tmp_path / 'settings.yaml')
-    view.save_settings()
+    view.export_settings()
     view.settings.set({'binning': {'bins': 9}}, Listing(client))
 
     view.load_settings()
@@ -542,8 +547,8 @@ def test_the_command_reduces_what_the_demo_saved_and_the_demo_shows_it(
     view = demo_view(tmp_path, samples=3)
     with view.batch.client:
         for name, save in (
-            ('rows.csv', view.save_rows),
-            ('s.yaml', view.save_settings),
+            ('rows.csv', view.export_rows),
+            ('s.yaml', view.export_settings),
         ):
             view.path.value = str(tmp_path / name)
             save()

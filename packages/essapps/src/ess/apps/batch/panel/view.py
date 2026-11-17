@@ -9,7 +9,7 @@ the row form are one :class:`~ess.apps.panel.Form` with complementary fields, th
 values and the blanks of the batch's template.
 
 The settings form shows the batch's settings. It writes them to the batch at
-each change that leaves nothing missing, and before a reduction or a save,
+each change that leaves nothing missing, and before a reduction or an export,
 which it refuses while something is missing; meanwhile the batch keeps the
 settings it had.
 
@@ -22,9 +22,11 @@ change. Changes not yet written are lost when the selection changes.
 
 The files are those of the command ``essapps-batch`` (see :mod:`..cli`): a
 table of rows (:mod:`..frames`), a template of the settings (:mod:`..text`),
-and a folder of exported outputs (:mod:`..export`). A table loaded takes the
-place of a scan, so the edits stay on top, and a table saved has the result
-columns of :func:`..frames.batch_table`, the status as the table shows it.
+and a folder of exported outputs (:mod:`..export`). A table loaded is set by
+hand (:meth:`~ess.apps.batch.RowTable.put`), and a table exported has the
+result columns of :func:`..frames.batch_table`, the status as the table shows
+it. These files are for the command and for a person: what the batch keeps
+over a restart is kept by its store (:mod:`..definition`).
 """
 
 from __future__ import annotations
@@ -92,7 +94,10 @@ class BatchView:
         self._drawn: tuple[tuple[str, str], ...] = ()
         model, listing = batch.spec.params, self._listing
         self.settings = Form(model, listing, fields=batch.settings_fields)
-        self.settings.set(batch.settings, listing)
+        # Settings kept for another version of the spec may not fit the form;
+        # the batch keeps them, and its state refuses them until replaced.
+        with suppress(KeyError, ValueError):
+            self.settings.set(batch.settings, listing)
         self.settings.watch(self._settings_changed)
         self.row = Form(model, listing, fields=batch.columns)
         self.tweak = Form(model, listing)
@@ -134,9 +139,9 @@ class BatchView:
         )
         self._files = pn.Row(
             button('Load rows', self.load_rows),
-            button('Save rows', self.save_rows),
+            button('Export rows', self.export_rows),
             button('Load settings', self.load_settings),
-            button('Save settings', self.save_settings),
+            button('Export settings', self.export_settings),
             button('Export selected', self.export_selected),
         )
         self._show()
@@ -373,22 +378,22 @@ class BatchView:
     # The files of the command
 
     def load_rows(self) -> None:
-        """Take the rows of the table at :attr:`path` in place of a scan."""
+        """Set the rows of the table at :attr:`path` by hand."""
         batch = self.batch
         with self._showing_errors('Cannot load the rows'):
             table = frames.read_table(Path(self.path.value))
             rows = frames.rows_of(table, batch.spec.params, batch.columns)
-            batch.rows = batch.rows.rescan(rows)
+            batch.rows = batch.rows.put(rows, batch.columns)
             self.message.object = f'Loaded {len(rows)} rows.'
         self._list_again()
 
-    def save_rows(self) -> None:
+    def export_rows(self) -> None:
         """Write the rows as a table to :attr:`path`, by its suffix."""
-        with self._showing_errors('Cannot save the rows'):
+        with self._showing_errors('Cannot export the rows'):
             frames.write_table(
                 frames.batch_table(self.batch, self._states), Path(self.path.value)
             )
-            self.message.object = f'Saved the rows to {self.path.value}.'
+            self.message.object = f'Wrote the rows to {self.path.value}.'
 
     def load_settings(self) -> None:
         """Show the settings of the template at :attr:`path`."""
@@ -398,12 +403,12 @@ class BatchView:
             self.message.object = 'Loaded the settings.'
         self._settings_changed()
 
-    def save_settings(self) -> None:
+    def export_settings(self) -> None:
         """Write the settings as a template to :attr:`path`."""
-        with self._showing_errors('Cannot save the settings'):
+        with self._showing_errors('Cannot export the settings'):
             self._write_settings()
             write_template(self.batch.template(), Path(self.path.value))
-            self.message.object = f'Saved the settings to {self.path.value}.'
+            self.message.object = f'Wrote the settings to {self.path.value}.'
 
     def export_selected(self) -> None:
         """Export the completed rows selected to the folder :attr:`path`."""

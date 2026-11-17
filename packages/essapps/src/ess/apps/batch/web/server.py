@@ -6,9 +6,10 @@ What the batch page does, without HTTP: :class:`Server`. :mod:`.api` serves it.
 The server holds everything a person changes: the
 :class:`~ess.apps.batch.Batch` with its rows and settings, the form of the
 settings, the form of a reduction of one row alone, and the corrections of
-runs. The form of the settings writes them to the batch at each change that
-leaves nothing missing; while something is missing, the batch keeps the
-settings it had, and nothing is reduced or saved.
+runs. The batch and the corrections keep their part in their store, if given
+one (:mod:`..definition`). The form of the settings writes them to the batch
+at each change that leaves nothing missing; while something is missing, the
+batch keeps the settings it had, and nothing is reduced or downloaded.
 
 The page holds only what it shows: the selection, the filter, the tab. Each
 action returns the :class:`~.models.State` after it, and the page polls the
@@ -42,7 +43,7 @@ import threading
 import uuid
 import zipfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -225,13 +226,15 @@ class Server:
         self._listing = Listing(batch.client)
         model, listing = batch.spec.params, self._listing
         self.settings = Fields(model, listing, fields=batch.settings_fields)
-        self.settings.set(batch.settings, listing)
+        # Settings kept for another version of the spec may not fit the form;
+        # the batch keeps them, and its state refuses them until replaced.
+        with suppress(KeyError, ValueError):
+            self.settings.set(batch.settings, listing)
         self._cells = Fields(model, listing, fields=batch.columns)
         self.tweak = Fields(model, listing)
         self._tweak_of: tuple[str, Any, str | None] | None = None
         self._marks = None if marks is None or files is None else Fields(marks, listing)
         self.refused: list[FieldError] = []
-        self.loaded: str | None = None
         self.version = 1
         # Equal to the rows of the batch at the last change of the version.
         self._rows = batch.rows
@@ -354,7 +357,6 @@ class Server:
             ),
             settings_problem=problem,
             refused=[self._refused(e) for e in self.refused],
-            loaded=self.loaded,
             notice=notice,
         )
 
@@ -510,10 +512,7 @@ class Server:
 
     @_action
     def scan(self) -> str:
-        """
-        Make the rows from the files again, in place of a table loaded; what
-        was set by hand stays.
-        """
+        """Make the rows from the files again; what was set by hand stays."""
         self.runs_version += 1
 
         def scan() -> None:
@@ -543,7 +542,6 @@ class Server:
             # New rows may name files that the listing lacks, and a correction
             # of runs changes what it offers, even if the scan then fails.
             self._relist()
-        self.loaded = None
         changed = sum(before.get(r.key) != dict(r.values) for r in self.batch.rows)
         new = self._incomplete() - incomplete
         names = [self._named(r) for r in self.batch.rows if r.key in new]
@@ -892,23 +890,19 @@ class Server:
     @_action
     def load_table(self, name: str, content: bytes) -> str:
         """
-        Take the rows of a table file in place of a scan, and forget what was
-        set by hand on them, so that they show what the file says.
+        Set the rows of a table file by hand (:meth:`RowTable.put`), so that
+        they show what the file says, and stay so after a scan.
         """
         batch = self.batch
         with _file(name, content) as path:
             try:
                 table = frames.read_table(path)
                 rows = frames.rows_of(table, batch.spec.params, batch.columns)
+                batch.rows = batch.rows.put(rows, batch.columns)
             except SubmitError as error:
                 raise Problem('; '.join(map(str, error.errors))) from None
             except (OSError, ValueError, KeyError) as error:
                 raise Problem(f'Cannot load {name}: {_why(error)}') from None
-        loaded = batch.rows.rescan(rows)
-        for row in rows:
-            loaded = loaded.reset(row.key, *batch.columns)
-        batch.rows = loaded
-        self.loaded = name
         self._relist()
         return f'Loaded {self.words.count(len(rows))} from {name}.'
 
