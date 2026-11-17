@@ -149,6 +149,10 @@ class Listing:
                     self._files[marker][_file_label(ref, fields) + role] = ref
         return self._files[marker]
 
+    def listed(self, selector: Selector) -> dict[FileRef, dict[str, Any]]:
+        """The files of ``selector``, with their metadata, looked up once."""
+        return {ref: self._metadata[ref] for ref in self._list(selector)}
+
     def _list(self, selector: Selector) -> list[FileRef]:
         """The files of ``selector``, looked up once, and their metadata in one call."""
         if (key := repr(selector)) not in self._listed:

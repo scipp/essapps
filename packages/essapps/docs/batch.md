@@ -86,6 +86,10 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 | `ready(states)` | every row that can run now |
 | `remaining(states)` | ready rows with no result, a failed or cancelled one, or an outdated one |
 | `arrived(states, at)` | ready rows with no result, or whose request differs from their result's at a column of `at` ([Automatic reduction](#automatic-reduction)) |
+| `earlier_settings(states, columns)` | ready rows whose completed result differs from their request only at settings, not at a column, and of the same spec; no tweak |
+| `left_to_reduce(states, columns)` | the rows of `remaining` but those of `earlier_settings` |
+| `refused_again(states, at, refused)` | of the reasons `refused` by row, those of the rows of `arrived`: why the next step of a loop will be refused again |
+| `status_texts(states, columns)` | the status of each row as a table shows it: `completed, earlier settings` for a row of `earlier_settings` |
 | `summary(states)` | the number of rows in each state |
 
 **A row's state is read from its result.** `state()` compares each row's request, its cells with the settings, with the request of its result, and says where they differ:
@@ -266,15 +270,18 @@ def arrived(state, at):                      # ess.apps.batch.arrived
 | `s1'` | row 1, `[s1, s1']`, `[t1]` | row 1, `[s1, s1']`, `[t1]` | nothing: row 1 reads `outdated` |
 | `t1'` | row 1, `[s1, s1']`, `[t1, t1']` | nothing: row 1 reads `outdated` | nothing |
 
-So the loop and a person's "reduce remaining" differ:
+So the loop, the page's buttons, and the command differ:
 
 | A row is reduced if it has | no result | a failed or cancelled result | a result, and a setting changed | a result, and a cell changed at `at` | a result, and a cell changed at another column |
 |---|---|---|---|---|---|
-| the page, "reduce remaining" | yes | yes | yes, but for a tweak | yes | yes |
-| `essapps-batch reduce --remaining` | yes | yes | yes | yes | yes |
-| the loop | yes | no | no | yes | no |
+| the page, "Reduce", and `BatchView`, "Reduce remaining" (`left_to_reduce`) | yes | yes | no | yes | yes |
+| the page, "Apply to all", and `BatchView`, "Apply settings to all" (`earlier_settings`) | no | no | yes, but for a tweak | no | no |
+| `essapps-batch reduce --remaining` (`remaining`) | yes | yes | yes, but for a tweak | yes | yes |
+| the loop (`arrived`) | yes | no | no | yes | no |
 
-A tweak is `outdated` only where a column changed ([Rules](#rules)), so the page leaves a tweaked row whose settings changed. A failed or cancelled result counts as any other, so a row whose reduction fails is not reduced at every step. A changed setting reduces no row again: the rows reduced before read `outdated`, with the setting in `changed`. A row that the loop leaves `outdated` is reduced by a person, through the loop's batch ([one label, one batch](#one-label-one-batch)).
+On the page, a change of settings applies to rows not reduced yet, and to all only when a person says so. The command is given its settings at each call, so it applies them to all.
+
+A tweak is `outdated` only where a column changed ([Rules](#rules)), so neither the page nor the command reduces a tweaked row whose settings changed. A failed or cancelled result counts as any other, so a row whose reduction fails is not reduced at every step. A changed setting reduces no row again: the rows reduced before keep their results, with the setting in `changed`, and the page marks them as reduced with earlier settings. A person reduces them through the loop's batch, with "Apply to all" on the page ([one label, one batch](#one-label-one-batch)).
 
 A row whose result is running is not ready, and the loop does not submit it again. At the first step after its record finishes, it is reduced if a file arrived meanwhile at a column of `at`.
 
@@ -284,7 +291,7 @@ A result of another spec, such as an older version, stays the row's result ([Rul
 
 A row whose key changes from one scan to the next, such as a key made from a sample name that a correction changed, is a new row, and is reduced again under its new key; so choose a key that does not change, such as the run number ([Terms](#terms)).
 
-In a chain, step the loop of the batch that is read first: `run([Automatic(find, ...), Automatic(iofq, ...)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
+The batch page holds a loop of its own: its switch "Follow" steps it on the page's batch ([The UI](#the-ui)). In a chain, step the loop of the batch that is read first: `run([Automatic(find, ...), Automatic(iofq, ...)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
 
 ### One label, one batch
 
@@ -435,11 +442,12 @@ One command holds the folder at a time. If a command was killed, the next one fi
 ## The UI
 
 [The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows a batch in a browser: how to run it, its layers, and its limits.
+A change of its settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Apply to all** in the settings reduces those rows again, after a confirmation that names how many. Given the columns `at`, the page offers a switch **Follow**: a step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, in the page's own process and batch. It reduces by the rule of **Reduce**, so nothing while the settings form misses something, and each action of a person is followed at once by a step's reduction. Whether the page follows belongs to its process, not to the definition: a restart starts with `--follow` or without.
 
 `BatchView` is a tab for `App`:
 
 - the settings form, which writes the batch's settings at each change that leaves nothing missing, the table of rows with a filter by state, and a count of each state;
-- buttons to scan, reduce all, reduce remaining, reduce selected, cancel, and show the settings of a selected result;
+- buttons to scan, reduce all, reduce remaining, reduce selected, cancel, and show the settings of a selected result. As on the web page, a change of settings applies to the rows not reduced yet: **Reduce remaining** leaves the rows reduced with earlier settings (`left_to_reduce`), which the table marks so, and **Apply settings to all** reduces them again (`earlier_settings`);
 - details of a selected row, with the reason it failed;
 - an editor: select rows, change cells, and **Update selected** writes only the changed cells, to all of them. A cell with something missing is not written and is named. To write a value that equals its default to several rows, choose the column in **Write**;
 - **Bring back removed rows**;
@@ -468,7 +476,7 @@ python -m ess.apps.batch.panel.demo ws     # the rows show as completed
 | **Write settings** | `text.write_template(batch.template(), path)` |
 | **Export selected** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows selected |
 
-`reduce` refuses a table with a row that cannot run, so remove the incomplete rows before writing it. A table loaded is set by hand: each cell that differs from the row shown is an edit, a row the batch removed is brought back, and a row the batch does not show is added, so it stays after **Scan files**, and the definitions keep it. The `status` of a table written is what the view shows, such as `outdated` or `not reduced`. `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table. A relative path is relative to the working directory of the app.
+`reduce` refuses a table with a row that cannot run, so remove the incomplete rows before writing it. A table loaded is set by hand: each cell that differs from the row shown is an edit, a row the batch removed is brought back, and a row the batch does not show is added, so it stays after **Scan files**, and the definitions keep it. The `status` of a table written is what the view shows, such as `outdated`, `not reduced`, or `completed, earlier settings` (`status_texts`); the downloads of the web page write the same. `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table. A relative path is relative to the working directory of the app.
 
 `draw(records)` gets the completed results of the rows selected, by key, and returns a Panel object.
 
@@ -511,6 +519,6 @@ Raise in the fake to make a row fail; hold it back on a `threading.Event` to kee
 
 - Keep a result that is not persisted. A `Batch` finds results by key in its workspace, so `local()` per session starts with none, and a result that is not persisted is gone once its workspace closes.
 - Merge two writers of one definition, or lock it. Two `Batch` objects on one label each write their whole table of edits, so a change made through the other since is lost ([Where the definition is kept](#where-the-definition-is-kept)).
-- Keep a tweak across sessions. After a restart a tweaked row reads `outdated` where the tweak differs from the settings, and "reduce remaining" reduces it again with the settings.
+- Keep a tweak across sessions. After a restart a tweak is read as a result reduced with the settings: where it differs from them only at settings, the web page marks it "earlier settings", and its **Apply to all** or the command reduces it again.
 - Free the values of replaced results. They stay until the workspace closes or they are released, unless the batch persists them (`persist=`).
 - Offer preparatory steps with a **Use** button. A `Referenced[...]` setting offers each record in the settings form.

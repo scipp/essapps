@@ -161,6 +161,7 @@ function render(state) {
   $('restore').hidden = state.removed === 0;
   $('restore').textContent = `${state.removed} removed: bring back`;
   renderRefused(state.refused);
+  renderFollow(state.follow);
   renderSettings(state);
   renderSelection();
   if (view.tab === 'row') loadRow();
@@ -171,7 +172,7 @@ function build(state) {
   $('word-many').textContent = title(many);
   $('tab-row-label').textContent = title(one);
   $('add-row').textContent = `+ Add ${one}`;
-  $('settings-hint').textContent = `Shared by every ${one}. A change marks the results reduced with other settings as outdated.`;
+  $('settings-hint').textContent = `Shared by every ${one}. A change applies to the ${many} not reduced yet, once nothing is missing.`;
   const named = {
     title: 'Name',
     field: 'name',
@@ -300,8 +301,29 @@ function renderRefused(refused) {
   showMessage('Nothing was reduced.', refused.map((e) => e.text), key);
 }
 
+// The switch of Follow, and why its last step failed, if it did.
+function renderFollow(follow) {
+  $('follow').hidden = !follow;
+  $('follow-status').hidden = !follow?.on;
+  if (!follow) return;
+  const {many} = words();
+  $('follow').querySelector('input').checked = follow.on;
+  $('follow').title = `Every ${follow.interval} s, rescan the runs and reduce the ${many} that are new or whose ${follow.at.join(' or ')} changed.`;
+  const status = $('follow-status');
+  status.classList.toggle('bad', Boolean(follow.failure));
+  status.textContent = follow.failure
+    ? `Last step failed: ${follow.failure}`
+    : `Following, every ${follow.interval} s`;
+  status.title = status.textContent;
+}
+
 let shownSettings = '';
 function renderSettings(state) {
+  const {action} = state;
+  $('apply').hidden = action.earlier === 0;
+  $('apply-all').textContent = `Apply to all (${count(action.earlier)})`;
+  $('apply-all').disabled = Boolean(action.blocked);
+  $('apply-hint').textContent = `Reduces the ${words().many} reduced with earlier settings again.`;
   const json = JSON.stringify(state.settings);
   if (json === shownSettings) return;
   shownSettings = json;
@@ -443,7 +465,7 @@ function renderRow(detail) {
   if (json === view.detail) return;
   view.detail = json;
   const tried = row.status === 'failed' || row.status === 'cancelled';
-  const reasonClass = {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info'}[row.status];
+  const reasonClass = row.earlier ? 'info' : {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info'}[row.status];
   const useSettings = () => {
     const question = `Replace the settings of every ${words().one} with those that ${row.name} was reduced with? To keep a copy of the settings you have now, download them first (Files, Download settings).`;
     if (confirm(question)) act('/api/row/use-settings', {key: row.key});
@@ -559,6 +581,12 @@ function wire() {
     };
   });
   $('cancel').onclick = () => act('/api/cancel');
+  $('follow').querySelector('input').onchange = (event) => act('/api/follow', {on: event.target.checked});
+  $('apply-all').onclick = () => {
+    const n = view.state.action.earlier;
+    const question = `Reduce the ${count(n)} reduced with earlier settings again, with the settings now?`;
+    if (confirm(question)) act('/api/reduce', {which: 'earlier'});
+  };
   $('rescan').onclick = () => act('/api/scan');
   $('remove').onclick = () => {
     const added = selectedRows().filter((row) => row.added).length;

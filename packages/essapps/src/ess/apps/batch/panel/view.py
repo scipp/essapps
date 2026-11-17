@@ -37,6 +37,7 @@ what the batch keeps over a restart is kept by its definitions
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -48,7 +49,18 @@ from ess.apps import FieldError, Listing, Record, Status, SubmitError
 from ess.apps.panel import Form, Table, describe
 from ess.spec import field_types
 
-from .. import Batch, Row, RowState, RowTable, frames, ready, remaining, summary
+from .. import (
+    EARLIER,
+    Batch,
+    Row,
+    RowState,
+    RowTable,
+    earlier_settings,
+    frames,
+    left_to_reduce,
+    ready,
+    status_texts,
+)
 from ..export import export_table
 from ..text import load_template, settings_of, write_template
 from .cells import button, cell_texts, changed_cells, write_choice
@@ -94,6 +106,7 @@ class BatchView:
         self._draw = draw
         self._listing = Listing(batch.client)
         self._states: dict[str, RowState] = {}
+        self._texts: dict[str, str] = {}
         self._loaded: tuple[tuple[str, ...], list[Any]] | None = None
         self._tweak_loaded: tuple[str, Any, str | None] | None = None
         self._shown: dict[str, Any] = {}
@@ -125,6 +138,7 @@ class BatchView:
             *([] if batch.source is None else [button('Scan files', self.scan)]),
             button('Reduce all', self.reduce_all, 'primary'),
             button('Reduce remaining', self.reduce_remaining, 'primary'),
+            button('Apply settings to all', self.apply_to_all),
             button('Reduce selected', self.reduce_selected),
             button('Cancel running', self.cancel),
             button('Use settings of selected', self.use_settings),
@@ -221,14 +235,17 @@ class BatchView:
             refused = _refused(error.errors)
             self.message.object = '\n\n'.join(filter(None, [unfit, refused]))
             self._states = self.batch.results()
-        counts = summary(self._states)
-        self.summary.object = ', '.join(f'{n} {text}' for text, n in counts.items())
+        self._texts = status_texts(self._states, self.batch.columns)
+        counts = Counter(self._text(key) for key in self._states)
+        self.summary.object = ', '.join(
+            f'{n} {text}' for text, n in sorted(counts.items())
+        )
         chosen = self.filter.value
         self.table.set(
             {
                 row.key: self._cells(row)
                 for row in self.batch.rows
-                if chosen == _ALL or self._states[row.key].text == chosen
+                if chosen == _ALL or self._text(row.key) == chosen
             }
         )
         self._selected()
@@ -236,7 +253,11 @@ class BatchView:
     def _cells(self, row: Row) -> dict[str, str]:
         cells = cell_texts(row.values, self._titles, self._listing)
         info = {name: row.info.get(name, '') for name in self._info}
-        return {'Row': row.key, **info, **cells, _RESULT: self._states[row.key].text}
+        return {'Row': row.key, **info, **cells, _RESULT: self._texts[row.key]}
+
+    def _text(self, key: str) -> str:
+        """The status of a row without its mark, as the filter and the counts read."""
+        return self._texts[key].removesuffix(f', {EARLIER}')
 
     def _selected(self) -> None:
         keys = [k for k in self.table.selected_keys if k in self.batch.rows]
@@ -346,8 +367,19 @@ class BatchView:
         return self._reduce(lambda: ready(self.batch.state()))
 
     def reduce_remaining(self) -> dict[str, Record]:
-        """Submit the rows with no result, a failed one, or an outdated one."""
-        return self._reduce(lambda: remaining(self.batch.state()))
+        """
+        Submit the rows with no result, a failed one, or an outdated one, but
+        not those reduced with earlier settings (:func:`left_to_reduce`).
+        """
+        return self._reduce(
+            lambda: left_to_reduce(self.batch.state(), self.batch.columns)
+        )
+
+    def apply_to_all(self) -> dict[str, Record]:
+        """Submit the rows reduced with earlier settings (:func:`earlier_settings`)."""
+        return self._reduce(
+            lambda: earlier_settings(self.batch.state(), self.batch.columns)
+        )
 
     def reduce_selected(self) -> dict[str, Record]:
         """Submit the rows selected."""

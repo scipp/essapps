@@ -36,10 +36,28 @@ one batch to one person, and takes one request at a time.
 
 Statuses are named in a scientist's words: a row that is ``not reduced`` is
 ``ready``, a ``pending`` one ``running``, and a ``completed`` one ``done``;
-``incomplete`` and ``outdated`` keep their names. A failed or cancelled row
-stays so when the settings change, since it needs reducing either way. While
-the settings are incomplete, or the workflow refuses them, no result can be
-said to be current, so a done row is outdated.
+``incomplete`` and ``outdated`` keep their names. A change of settings applies
+to rows not reduced yet: a done row whose result differs from its request only
+at settings (:func:`~ess.apps.batch.earlier_settings`) stays ``done``, marked
+as reduced with earlier settings, and "Reduce" leaves it
+(:func:`~ess.apps.batch.left_to_reduce`) until a person applies the settings to
+all. A failed or cancelled row stays so when the settings change, since it
+needs reducing either way. While the form of the settings misses something,
+the rows read as with the batch's settings. While the workflow refuses the
+batch's settings, no result can be said to be current, so a done row is
+outdated.
+
+Given the columns ``at``, the server offers to follow the files: while
+:attr:`Server.following`, a timer calls :meth:`Server.step` every
+``interval`` seconds, which runs the scan of "Rescan runs" and reduces the
+rows that :func:`~ess.apps.batch.arrived` gives (:mod:`ess.apps.batch.auto`),
+under the lock of every request. It reduces by the rule of "Reduce": nothing
+while the form of the settings misses something. Whatever a step raises is
+said in the state, and the next step runs all the same. Each action is
+followed at once by the second half of a step, the reduction, so that what
+the page shows of Follow is never older than the last action. Whether the
+server follows belongs to its process, not to the definition: a server starts
+with ``follow``. :func:`~.api.create_app` owns the timer.
 """
 
 from __future__ import annotations
@@ -51,7 +69,8 @@ import tempfile
 import threading
 import uuid
 import zipfile
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,8 +85,19 @@ from ...fields import UNSET, Fields
 from ...files import Selector
 from ...listing import Listing
 from ...records import Record, Status
-from .. import EMPTY, Batch, CorrectedFiles, RowState, frames, ready, remaining
+from .. import (
+    EMPTY,
+    Batch,
+    CorrectedFiles,
+    RowState,
+    earlier_settings,
+    frames,
+    left_to_reduce,
+    ready,
+    refused_again,
+)
 from .. import Row as TableRow
+from ..auto import Automatic
 from ..export import export_table
 from ..text import load_template, settings_of, write_template
 from . import forms, plots
@@ -78,6 +108,7 @@ from .models import (
     Cells,
     Column,
     Edit,
+    Follow,
     Plot,
     Reduce,
     Refused,
@@ -177,6 +208,7 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
             server._show_settings()
             try:
                 notice = method(*args, **kwargs)
+                server._follow_now()
             except OSError as error:  # the definitions could not keep a change
                 server._settings_shown = None  # the form shows the batch's again
                 raise Problem(f'The change was not kept: {error}') from None
@@ -212,6 +244,14 @@ class Server:
         The fields of a run that a person corrects, as a pydantic model.
     folder:
         What the header names as the place of the data, such as a folder.
+    at:
+        The columns at which a change of a row's cells makes Follow reduce the
+        row again (:class:`~ess.apps.batch.auto.Automatic`); without them, the
+        page does not offer to follow. The batch needs a source.
+    follow:
+        Whether to follow from the start.
+    interval:
+        The seconds between two steps of Follow.
     """
 
     def __init__(
@@ -226,7 +266,12 @@ class Server:
         files: CorrectedFiles | None = None,
         marks: type[BaseModel] | None = None,
         folder: str = '',
+        at: AbstractSet[str] | None = None,
+        follow: bool = False,
+        interval: float = 5.0,
     ) -> None:
+        if follow and at is None:
+            raise ValueError('to follow from the start, give the columns at')
         self.lock = threading.RLock()
         self.batch = batch
         self.title = title or batch.spec.title
@@ -251,15 +296,35 @@ class Server:
         # Equal to the rows of the batch at the last change of the version.
         self._rows = batch.rows
         self.runs_version = 1
+        # The runs as listed at the last change of the runs' version.
+        self._runs = self._runs_seen()
         self.start = uuid.uuid4().hex[:8]
+        self.loop = None if at is None else Automatic(batch, at=at)
+        self.following = follow
+        self.interval = interval
+        # Why Follow did not reduce each row at its last reduction, by key.
+        self.waiting: dict[str, str] = {}
+        self.step_failure: str | None = None
 
     # Reading
 
     def _relist(self) -> None:
         self._listing = Listing(self.batch.client, previous=self._listing)
+        self._refresh()
+
+    def _refresh(self) -> None:
         for fields in (self.settings, self._cells, self.tweak, self._marks):
             if fields is not None:
                 fields.refresh(self._listing)
+
+    def _runs_seen(self) -> dict[FileRef, dict[str, Any]]:
+        """The runs that the Runs view lists, with their metadata."""
+        return {} if self._marks is None else self._listing.listed(Selector())
+
+    def _new_runs(self) -> None:
+        """A new version of the runs, which the Runs view then asks for."""
+        self._runs = self._runs_seen()
+        self.runs_version += 1
 
     def _show_settings(self) -> None:
         """
@@ -291,21 +356,27 @@ class Server:
         self, keys: Sequence[str] | None = None
     ) -> tuple[dict[str, RowState], tuple[FieldError, ...]]:
         """
-        The state of the rows of ``keys``, or of all; and, if the settings are
-        incomplete or refused, the reasons, and the rows with their results
+        The state of the rows of ``keys``, or of all, with the batch's settings;
+        and, if those are refused, the reasons, and the rows with their results
         only (:meth:`~ess.apps.batch.Batch.results`).
         """
         try:
-            self._complete()
             return self.batch.state(keys), ()
         except SubmitError as error:
             return self.batch.results(keys), error.errors
 
-    def _status(self, state: RowState, settings_ok: bool) -> str:
+    def _status(self, state: RowState, earlier: bool, refused: bool) -> str:
+        """
+        The status of a row in words (see the module). A done row with its
+        result only, as while the settings are refused, reads ``outdated``
+        (:attr:`RowState.text`).
+        """
+        if refused:
+            return 'incomplete'
         if state.status in _ENDED and not state.problems:
             return str(state.status)
-        if not settings_ok and state.status is Status.COMPLETED and not state.tweaked:
-            return 'outdated'
+        if earlier:
+            return 'done'
         return _STATUS.get(state.text, state.text)
 
     @_locked
@@ -338,20 +409,39 @@ class Server:
         """Everything the page shows but a row's details, the plot, and the runs."""
         self._show_settings()
         states, unusable = self._states()
-        statuses = {k: self._status(s, not unusable) for k, s in states.items()}
+        # With the settings refused, the rows are not compared with them.
+        earlier = (
+            set() if unusable else set(earlier_settings(states, self.batch.columns))
+        )
+        refused = (
+            refused_again(states, self.loop.at, self.waiting)
+            if self.loop is not None and self.following
+            else {}
+        )
+        statuses = {
+            k: self._status(s, k in earlier, k in refused) for k, s in states.items()
+        }
         failures = self._failures(states)
         scan = {row.key: row for row in self.batch.rows.scan}
         added = {row.key for row in self.batch.rows.added}
         rows = [
-            self._row(row, states[row.key], statuses[row.key], failures, scan, added)
+            self._row(
+                row,
+                states[row.key],
+                statuses[row.key],
+                row.key in earlier,
+                refused.get(row.key, ''),
+                failures,
+                scan,
+                added,
+            )
             for row in self.batch.rows
         ]
         counts = dict.fromkeys(_ORDER, 0)
         for status in statuses.values():
             counts[status] += 1
-        said = [
-            _say(self._setting_title(e), e.msg) if e.loc else e.msg for e in unusable
-        ]
+        missing = self.settings.held()[1]
+        said = [self._said([*missing, *unusable])] if missing or unusable else []
         if self._unfit:
             said.insert(0, f'Settings that this form cannot show: {_join(self._unfit)}')
         problem = '; '.join(said) or None
@@ -381,13 +471,31 @@ class Server:
             rows=rows,
             counts={'all': len(states), **counts},
             removed=len(scan.keys() & self.batch.rows.removed),
-            action=self._primary(states, statuses, problem),
+            action=self._primary(states, statuses, problem, len(earlier)),
             settings=forms.tree(
-                self.settings, [e for e in (*unusable, *self.refused) if not e.entry]
+                self.settings,
+                [e for e in (*missing, *unusable, *self.refused) if not e.entry],
             ),
             settings_problem=problem,
             refused=[self._refused(e) for e in self.refused],
+            follow=self._follow(),
             notice=notice,
+        )
+
+    def _said(self, errors: Sequence[FieldError]) -> str:
+        """Errors of the settings in words, each with its setting's title."""
+        return '; '.join(
+            _say(self._setting_title(e), e.msg) if e.loc else e.msg for e in errors
+        )
+
+    def _follow(self) -> Follow | None:
+        if self.loop is None:
+            return None
+        return Follow(
+            on=self.following,
+            interval=self.interval,
+            at=sorted(self._cells.titles[c] for c in self.loop.at),
+            failure=self.step_failure,
         )
 
     def _failures(self, states: Mapping[str, RowState]) -> dict[str, str]:
@@ -408,23 +516,29 @@ class Server:
 
     def _outdated(self, state: RowState) -> str:
         """Why the result of a row is outdated: what changed since."""
-        titles = {**self.settings.titles, **self._cells.titles}
         # a tweak is outdated by its cells only; its settings are its own
         names = (
             self.batch.columns if state.tweaked else self.batch.spec.params.model_fields
         )
         said = []
-        if changed := [titles.get(n, n) for n in names if n in (state.changed or ())]:
-            said.append(f'{_join(changed)} changed.')
+        if changed := self._changed(state, names):
+            said.append(f'{changed} changed.')
         if state.spec_changed:
             said.append('It was reduced by another version of the workflow.')
         return ' '.join(said)
+
+    def _changed(self, state: RowState, names: Iterable[str]) -> str:
+        """The titles of the parameters of ``names`` that changed, in words."""
+        titles = {**self.settings.titles, **self._cells.titles}
+        return _join([titles.get(n, n) for n in names if n in (state.changed or ())])
 
     def _row(
         self,
         row: TableRow,
         state: RowState,
         status: str,
+        earlier: bool,
+        refused: str,
         failures: Mapping[str, str],
         scan: Mapping[str, TableRow],
         added: set[str],
@@ -438,10 +552,15 @@ class Server:
         }
         record = state.record
         reason = ''
-        if status in ('failed', 'cancelled') and record is not None:
+        if refused:
+            reason = refused
+        elif status in ('failed', 'cancelled') and record is not None:
             reason = failures.get(record.id, '')
         elif problems:
             reason = '; '.join(problems.values())
+        elif earlier:
+            changed = self._changed(state, self.batch.settings_fields)
+            reason = f'Reduced with earlier settings: {changed} changed since.'
         elif status == 'outdated' and state.outdated:
             reason = self._outdated(state)
         elif status == 'outdated':
@@ -470,6 +589,7 @@ class Server:
             reason=reason,
             added=row.key in added,
             alone=state.tweaked and record is not None,
+            earlier=earlier,
             record=None if record is None else record.id,
             result=result,
             cells=cells,
@@ -481,9 +601,10 @@ class Server:
         states: Mapping[str, RowState],
         statuses: Mapping[str, str],
         blocked: str | None,
+        earlier: int,
     ) -> Action:
         """What the primary button does now, and how far the rows running are."""
-        left = [] if blocked else remaining(states)
+        left = [] if blocked else left_to_reduce(states, self.batch.columns)
         kinds = {statuses[k] for k in left}
         n = len(left)
         if blocked:
@@ -505,6 +626,7 @@ class Server:
             blocked=blocked,
             remaining=n,
             again=len(ready(states)),
+            earlier=earlier,
             running=sum(s.status is Status.PENDING for s in states.values()),
             progress=_progress(states),
         )
@@ -544,18 +666,17 @@ class Server:
     @_action
     def scan(self) -> str:
         """Make the rows from the files again; what was set by hand stays."""
-        self.runs_version += 1
-
-        def scan() -> None:
-            try:
-                self.batch.scan()
-            except SubmitError as error:
-                raise Problem('; '.join(map(str, error.errors))) from None
-            except Exception as error:  # a source is code of the application
-                raise Problem(f'The scan failed: {error}') from None
-
-        changes = self._scanned(scan)
+        changes = self._scanned(self._scan)
         return f'Found {self.words.count(len(self.batch.rows))}. {changes}'.strip()
+
+    def _scan(self, failed: str = 'The scan failed') -> None:
+        """The scan of "Rescan runs", of a correction of runs, and of Follow."""
+        try:
+            self.batch.scan()
+        except SubmitError as error:
+            raise Problem('; '.join(map(str, error.errors))) from None
+        except Exception as error:  # a source is code of the application
+            raise Problem(f'{failed}: {error}') from None
 
     def _incomplete(self) -> set[str]:
         return {k for k, s in self._states()[0].items() if s.problems}
@@ -573,6 +694,7 @@ class Server:
             # New rows may name files that the listing lacks, and a correction
             # of runs changes what it offers, even if the scan then fails.
             self._relist()
+            self._new_runs()
         changed = sum(before.get(r.key) != dict(r.values) for r in self.batch.rows)
         new = self._incomplete() - incomplete
         names = [self._named(r) for r in self.batch.rows if r.key in new]
@@ -681,12 +803,16 @@ class Server:
             self._row_of(key)
         try:
             self._complete()
+            columns = self.batch.columns
+            rules: dict[str, Callable[[Mapping[str, RowState]], list[str]]] = {
+                'remaining': lambda s: left_to_reduce(s, columns),
+                'earlier': lambda s: earlier_settings(s, columns),
+                'all': ready,
+            }
             keys = (
                 request.keys
                 if request.which == 'selected'
-                else {'remaining': remaining, 'all': ready}[request.which](
-                    self.batch.state()
-                )
+                else rules[request.which](self.batch.state())
             )
             records = self.batch.reduce(keys)
         except SubmitError as error:
@@ -701,6 +827,104 @@ class Server:
     def cancel(self) -> str:
         self.batch.cancel()
         return f'Cancelled the {self.words.many} still running.'
+
+    # Follow
+
+    @_action
+    def follow(self, on: bool) -> str:
+        """Follow the files, with a first step at once, or stop."""
+        if self.loop is None:
+            raise Problem('This page does not follow the files.')
+        self.following = on
+        if not on:
+            return 'Stopped following.'
+        self._step()
+        return 'Following.'
+
+    def step(self) -> None:
+        """
+        One step of Follow: the scan of "Rescan runs", then the reduction of
+        :meth:`_follow_reduce`. A step that changes nothing the page shows,
+        such as the rows, the runs, the records, what waits and why, or its
+        failure, leaves the version, so that a page polling it gets nothing new.
+        """
+        with self.lock:
+            if self._step():
+                self.version += 1
+            self._rows = self.batch.rows
+
+    def _step(self) -> bool:
+        """
+        A step of Follow; whether it changed what the page shows. Whatever it
+        raises, from the files, the workflow or the workspace, is its failure,
+        said in the state until a step runs through.
+        """
+        rows, waiting, failure = self._rows, self.waiting, self.step_failure
+        moved = False
+        try:
+            try:
+                self._scan()
+                self._follow_reduce()
+            finally:
+                moved = self._caught_up()
+            self.step_failure = None
+        except Exception as error:  # the next step tries again
+            self.step_failure = str(error) or repr(error)
+        return (
+            moved
+            or self.batch.rows != rows
+            or self.waiting != waiting
+            or self.step_failure != failure
+        )
+
+    def _caught_up(self) -> bool:
+        """
+        A new listing, with one reading of the changes of records, and a new
+        version of the runs if they changed; the forms are refreshed only if
+        either changed. Whether one did.
+        """
+        cursor = self._listing.cursor
+        self._listing = Listing(self.batch.client, previous=self._listing)
+        records = self._listing.cursor != cursor
+        runs = self._runs_seen() != self._runs
+        if runs:
+            self._new_runs()
+        if records or runs:
+            self._refresh()
+        return records or runs
+
+    def _follow_reduce(self) -> None:
+        """
+        The reduction of a step, by the rule of "Reduce": while the form of
+        the settings misses something, none, and the rows that a step would
+        reduce wait for it; else :meth:`Automatic.reduce`. :attr:`waiting`
+        says why each row was not reduced.
+        """
+        if self.loop is None:
+            raise Problem('This page does not follow the files.')
+        if missing := self.settings.held()[1]:
+            reason = f'Follow waits for the settings: {self._said(missing)}'
+            self.waiting = dict.fromkeys((row.key for row in self.batch.rows), reason)
+            return
+        self.loop.reduce()
+        self.waiting = {
+            key: f'Follow could not reduce it: {forms.message(reason)}'
+            for key, reason in self.loop.refused.items()
+        }
+
+    def _follow_now(self) -> None:
+        """While following, the reduction of a step, after an action."""
+        if not self.following:
+            return
+        try:
+            self._follow_reduce()
+        except Exception as error:  # the next step tries again
+            self.step_failure = str(error) or repr(error)
+
+    def tick(self) -> None:
+        """A step, if following; :func:`~.api.create_app` calls it on a timer."""
+        if self.following:
+            self.step()
 
     # Settings
 
@@ -787,7 +1011,16 @@ class Server:
         except SubmitError as error:
             raise Problem('; '.join(map(str, error.errors))) from None
         self._relist()
-        return f'Reducing {self._named(self.batch.rows[key])} alone.'
+        name = self._named(self.batch.rows[key])
+        notice = f'Reducing {name} alone.'
+        if self.loop is not None and self.following:
+            # Follow reduces the row again where its cells differ at `at`.
+            if changed := self._changed(self._states([key])[0][key], self.loop.at):
+                notice += (
+                    f' Its {changed} differs from its cells, so Follow reduces it'
+                    ' again with its cells once this is done.'
+                )
+        return notice
 
     # The result
 
@@ -802,6 +1035,9 @@ class Server:
             sorted({k for k in keys if k in order}, key=order.__getitem__)
             if keys
             else None
+        )
+        earlier = (
+            set() if unusable else set(earlier_settings(states, self.batch.columns))
         )
         done = [
             s
@@ -827,7 +1063,7 @@ class Server:
                 s.key,
                 self._named(self.batch.rows[s.key]),
                 s.record,
-                self._status(s, not unusable) == 'outdated',
+                self._status(s, s.key in earlier, refused=False) == 'outdated',
                 c,
             )
             for s, c in zip(chosen, colors, strict=True)
@@ -883,15 +1119,9 @@ class Server:
         Show the runs as corrected now, and the rows made from them; say what
         changed.
         """
-        self.runs_version += 1
-
-        def scan() -> None:
-            try:
-                self.batch.scan()
-            except Exception as error:  # a source is code of the application
-                raise Problem(f'Corrected, but the scan failed: {error}') from None
-
-        return self._scanned(scan)
+        return self._scanned(
+            functools.partial(self._scan, 'Corrected, but the scan failed')
+        )
 
     @_action
     def correct(self, edit: CellEdit) -> str:

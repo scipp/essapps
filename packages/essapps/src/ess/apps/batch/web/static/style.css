@@ -463,6 +463,12 @@ main.wide .right { display: none; }
   text-align: center;
 }
 .pill sup { margin-left: 1px; font-size: 11px; line-height: 0; }
+.status { display: inline-flex; align-items: center; gap: 6px; }
+.status .earlier { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.follow { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; cursor: pointer; white-space: nowrap; }
+.follow-status { margin-right: 12px; color: var(--muted); font-size: 12px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.follow-status.bad { color: var(--bad); }
+.apply { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
 .tabulator-row .tabulator-cell.editable { cursor: text; }
 .tabulator-row .tabulator-cell.editable.select { cursor: pointer; }
 .tabulator-row .tabulator-cell.editable:hover { box-shadow: inset 0 0 0 1px var(--line-strong); }

@@ -14,7 +14,10 @@ path, since a key may hold any character.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import itertools
+from collections.abc import AsyncIterator, Sequence
+from collections.abc import Set as AbstractSet
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -24,9 +27,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import Batch, CorrectedFiles
+from ..auto import every
 from .models import (
     Key,
     Keys,
+    On,
     Plot,
     RowDetail,
     RowEdit,
@@ -61,12 +66,18 @@ def create_app(
     files: CorrectedFiles | None = None,
     marks: type[BaseModel] | None = None,
     folder: str = '',
+    at: AbstractSet[str] | None = None,
+    follow: bool = False,
+    interval: float = 5.0,
 ) -> FastAPI:
     """
     The JSON API of ``batch`` and the page that uses it, at ``/``. The
     arguments are those of :class:`Server`. ``/docs`` lists the API. The page
     loads libraries that ``sh static/vendor.sh`` fetches into
     ``static/vendor``.
+
+    Given ``at``, the app owns the timer of Follow: a thread that the app's
+    lifespan starts, and stops at its end once a step that runs has finished.
     """
     server = Server(
         batch,
@@ -78,8 +89,20 @@ def create_app(
         files=files,
         marks=marks,
         folder=folder,
+        at=at,
+        follow=follow,
+        interval=interval,
     )
-    app = FastAPI(title=f'{server.title}: batch')
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if server.loop is None:
+            yield
+            return
+        with every(server.interval, itertools.repeat(server.tick)):
+            yield
+
+    app = FastAPI(title=f'{server.title}: batch', lifespan=lifespan)
     app.state.server = server
 
     @app.exception_handler(Problem)
@@ -113,6 +136,11 @@ def create_app(
     @app.post('/api/rows/add')
     def add(body: Key) -> State:
         return server.add(body.key)
+
+    @app.post('/api/follow')
+    def follow_files(body: On) -> State:
+        """Follow the files, with a step at once, or stop."""
+        return server.follow(body.on)
 
     @app.post('/api/row/use-settings')
     def use_settings(body: Key) -> State:

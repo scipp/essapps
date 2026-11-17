@@ -43,17 +43,24 @@ def rows(state: dict[str, Any]) -> dict[str, str]:
     return {row['name']: row['status'] for row in state['rows']}
 
 
-def test_a_sample_whose_runs_arrived_is_reduced_after_a_rescan(
+def test_a_sample_whose_runs_arrived_is_reduced_by_hand_or_by_a_step_of_follow(
     page: tuple[TestClient, Instrument, Client],
 ) -> None:
     http, instrument, client = page
-    for sample, role, source in arrivals(3):
-        instrument.measure(role, sample, source)
+    plan = [(role, sample, source) for sample, role, source in arrivals(4)]
+    for arrival in plan[:3]:
+        instrument.measure(*arrival)
 
     scanned = http.post('/api/scan').json()
     reduced = http.post('/api/reduce', json={'which': 'remaining'}).json()
     client.wait(client.records())
+    instrument.measure(*plan[3])
+    http.app.state.server.step()  # type: ignore[attr-defined]
+    client.wait(client.records())
 
     assert rows(scanned) == {'AgBeh': 'ready', 'porous silica': 'incomplete'}
     assert reduced['notice'] == 'Reducing 1 sample run.'
-    assert rows(http.get('/api/state').json())['AgBeh'] == 'done'
+    assert rows(http.get('/api/state').json()) == {
+        'AgBeh': 'done',
+        'porous silica': 'done',
+    }

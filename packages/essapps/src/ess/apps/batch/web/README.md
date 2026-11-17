@@ -12,13 +12,31 @@ python -m ess.apps.batch.web.demo [FOLDER] --port 8000                  # fake r
 python -m ess.apps.batch.web.demo --arrive 10 [--count N]               # fake runs, a sample arriving every 10 s
 python -m ess.instruments.loki.web FOLDER --port 8000                   # LoKI's I(Q) on a workspace folder
 python -m ess.instruments.loki.arrivals [FOLDER] --arrive 15 [--count N] # LoKI's I(Q), runs arriving in a new folder
+python -m ess.instruments.loki.arrivals --follow 2                      # the same, following the files, a step every 2 s
 ```
 
 Open `http://localhost:8000/`. Each `FOLDER` is a workspace folder (`ess.apps.folder`); the demos make a temporary one if none is given, and say which.
 The demo needs the extra `essapps[web]`, the LoKI modules `essinstruments[loki-app]`.
 The LoKI page reads the masks from a record, so reduce the detector and the masks on the folder first, with two `essapps-batch` commands that [the docstring of `ess.instruments.loki.web`](../../../../../../essinstruments/src/ess/instruments/loki/web.py) gives; the LoKI arrivals do this themselves.
-With `--arrive`, the runs of one sample (fake demo) or one run (LoKI) arrive every `SECONDS`, until `--count` have arrived. Press **Rescan runs** to see them, and **Reduce** to reduce the rows they complete.
+With `--arrive`, the runs of one sample (fake demo) or one run (LoKI) arrive every `SECONDS`, until `--count` have arrived. Press **Rescan runs** to see them, and **Reduce** to reduce the rows they complete, or turn on **Follow**.
 Each page reads `files.csv` again when it is replaced (`ess.apps.folder.ArrivingFiles`), so a run registered by hand, with `ess.apps.folder.write_files_table`, shows too.
+The demo, the LoKI page and the LoKI arrivals take `--follow [SECONDS]`, which turns the switch on from the start, with a step every `SECONDS` (5).
+
+## Settings and Follow
+
+A change of the settings applies to the rows not reduced yet.
+A row reduced before stays `done`, marked "earlier settings", and **Reduce** leaves it (`ess.apps.batch.left_to_reduce`).
+**Apply to all** in the Settings tab reduces those rows again (`earlier_settings`), after a confirmation that names how many.
+While the form misses something, its changes are not applied: the batch keeps the settings it had.
+
+**Follow** is a switch next to **Rescan runs**, offered when the application gives `create_app(..., at=...)`, the columns at which a changed cell reduces a row again.
+While it is on, a timer in the server runs a step every `interval` seconds (5 by default; `create_app(..., interval=...)`, or `--follow SECONDS`): the scan of **Rescan runs**, then a reduction of the rows that `ess.apps.batch.arrived` gives, under the lock of every request, with or without a page open.
+Follow reduces by the rule of **Reduce**: while the settings form misses something, a step scans and reduces nothing, and the rows it would reduce read `incomplete`, with "Follow waits for the settings" and what is missing.
+The rows still read as with the batch's settings.
+Each action of a person is followed at once by the reduction of a step, so an edit at a column of `at`, or settings completed, are reduced at once, and a refusal by Follow never shows after the action that removed its cause.
+Other changes wait for **Reduce**, as without Follow.
+The page shows "Following, every N s", why the last step failed if it did, and, as an `incomplete` row, why a row could not be submitted.
+Whatever a step raises, from the files, the workflow or the workspace, is the step's failure; the next step tries again.
 
 ## Layers
 
@@ -31,8 +49,8 @@ api.py            HTTP: create_app(batch, ...); each action is a POST that
                   answers with the new State (models.py), or 422 {message}
    ▼
 server.py         Server: what the page does, without HTTP; holds the Batch,
-                  the settings form, the corrections of runs, the refusals;
-                  one lock around every request
+                  the settings form, the corrections of runs, the refusals,
+                  the loop of Follow; one lock around every request and step
    ▼
 ess.apps.batch    the logic: Batch, RowTable, states, CorrectedFiles;
                   shared with the Panel view and the command essapps-batch
@@ -44,7 +62,7 @@ ess.apps.batch    the logic: Batch, RowTable, states, CorrectedFiles;
 
 The page asks for `GET /api/state?after=<version>&start=<start>` every second.
 The server answers 204 if nothing changed since `version`, and else the whole `State`.
-`version` counts each action and each change of the workspace's records, such as a reduction that finished.
+`version` counts each action, each step of Follow that changes what the page shows (the rows, the runs, the records, the refusals, or its failure), and each change of the workspace's records, such as a reduction that finished.
 `start` is new at each start of the server; a page that sees another one loads again.
 `State.runs` counts the changes of the runs; the Runs view asks for `/api/runs` when it moves.
 
@@ -61,6 +79,7 @@ See [Where the definition is kept](../../../../../docs/batch.md#where-the-defini
 - One process holds the folder. `essapps-batch` opens it only while the server is stopped; its `reduce` imports what it is given into the label's definitions, which the page shows at its next start.
 - One `Batch` per label. Another one on the page's label writes its whole table of edits at each change, over those of the page ([Where the definition is kept](../../../../../docs/batch.md#where-the-definition-is-kept)).
 - One user. Two open pages show and edit the same state.
+- Follow belongs to the process, not to the definition: a restart starts with `--follow` or without, whatever the switch was.
 
 ## Browser tests
 

@@ -14,7 +14,9 @@ in ``definitions/`` (:mod:`..definition`). The file source reads
 
 With ``--arrive SECONDS [--count N]``, a new folder starts with the empty cell
 and the first few samples, and the runs of one more sample arrive every
-``SECONDS``, until ``N`` have arrived (all if not given).
+``SECONDS``, until ``N`` have arrived (all if not given). ``--follow
+[SECONDS]`` turns the switch "Follow" on from the start, with a step every
+``SECONDS`` (5).
 
 Each sample run holds the size of its particles, so samples differ visibly, and
 the curve depends on the settings. Three samples have no transmission run, one
@@ -285,8 +287,13 @@ def build(
     files: CorrectedFiles,
     definitions: FolderDefinitions,
     folder: str = '',
+    *,
+    follow: float | None = None,
 ) -> FastAPI:
-    """The application on what :func:`open_demo` returns, scanned."""
+    """
+    The application on what :func:`open_demo` returns, scanned; following the
+    files from the start, with a step every ``follow`` seconds, if given.
+    """
     batch = Batch(
         client,
         DEMO,
@@ -314,6 +321,9 @@ def build(
         files=files,
         marks=Marks,
         folder=folder,
+        at={'sample', 'transmission'},
+        follow=follow is not None,
+        interval=follow or 5.0,
     )
 
 
@@ -325,6 +335,14 @@ def main() -> None:
         '--arrive', type=float, metavar='SECONDS', help='a sample every SECONDS'
     )
     parser.add_argument('--count', type=int, help='the samples that arrive')
+    parser.add_argument(
+        '--follow',
+        type=float,
+        nargs='?',
+        const=5.0,
+        metavar='SECONDS',
+        help='follow the files from the start, a step every SECONDS (5)',
+    )
     args = parser.parse_args()
     if args.count is not None and args.arrive is None:
         parser.error('--count goes with --arrive')
@@ -339,7 +357,7 @@ def main() -> None:
     sys.stdout.write(f'folder {directory}\n')
     sys.stdout.flush()
     if args.arrive is None:
-        _serve(directory, args.port)
+        _serve(directory, args.port, follow=args.follow)
         return
     groups = measurements()
     arrived = [run for group in groups[: AT_START + 1] for run in group]
@@ -351,15 +369,15 @@ def main() -> None:
 
     plan = [partial(arrive, g) for g in groups[AT_START + 1 :][: args.count]]
     with every(args.arrive, plan):
-        _serve(directory, args.port)
+        _serve(directory, args.port, follow=args.follow)
 
 
-def _serve(directory: Path, port: int) -> None:
+def _serve(directory: Path, port: int, *, follow: float | None) -> None:
     import uvicorn
 
     client, files, definitions = open_demo(directory)
     with client:
-        app = build(client, files, definitions, folder=directory.name)
+        app = build(client, files, definitions, folder=directory.name, follow=follow)
         uvicorn.run(app, host='localhost', port=port)
 
 
