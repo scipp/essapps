@@ -537,6 +537,30 @@ def test_a_step_that_raises_anywhere_is_said_and_follow_stays_on(
     assert statuses(done(server, client)) == {'water': 'done'}
 
 
+class Unsayable(Exception):
+    """An exception that cannot be put in words."""
+
+    def __str__(self) -> str:
+        raise ValueError('no words')
+
+    __repr__ = __str__
+
+
+def test_a_tick_whose_step_raises_what_cannot_be_said_lets_the_next_tick_run(
+    server: Server, client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    sample(1, 'water')
+    listed = fake.list
+    fake.list = lambda selector: (_ for _ in ()).throw(Unsayable())
+    server.following = True
+
+    server.tick()
+    fake.list = listed
+    server.tick()
+
+    assert statuses(done(server, client)) == {'water': 'done'}
+
+
 def test_a_tick_does_nothing_while_not_following(
     server: Server, client: Client, sample: Measure
 ) -> None:

@@ -904,8 +904,10 @@ class Server:
     def tick(self) -> None:
         """A step, if following; :func:`~.api.create_app` calls it on a timer."""
         # Under the lock, so that a tick that waited for a request sees what
-        # that request did: no step after "Stopped following".
-        with self.lock:
+        # that request did: no step after "Stopped following". A step says
+        # what it raises; what it cannot say, such as an exception whose text
+        # raises, must not end the timer.
+        with self.lock, suppress(Exception):
             if self.following:
                 self.step()
 
