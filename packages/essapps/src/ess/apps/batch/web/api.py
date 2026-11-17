@@ -9,7 +9,10 @@ Each action of the page is a ``POST`` that answers with the
 reasons of a refused reduction are in the state. ``GET /api/state`` with the
 ``after`` version and the ``start`` the page has answers 204 while nothing
 changed. A row is named by its key in the body or the query, never in the
-path, since a key may hold any character.
+path, since a key may hold any character; the keys of many rows go in the
+body, since a URL has a limit. The page asks for ``api/...`` relative to its
+own URL, so the app can be mounted under a path prefix. Answers are gzipped
+for a client that accepts it.
 """
 
 from __future__ import annotations
