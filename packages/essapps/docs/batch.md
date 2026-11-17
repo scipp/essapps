@@ -112,7 +112,7 @@ flowchart TB
 
 Cylinders are stored tables and dashed boxes derived ones. The thick arrows are the cycle.
 
-**The cycle** is the only path from the state to a write of a stored table, but for a person who reads the page. A *rule* is a function from the state to keys, and `batch.reduce` submits those rows. The workspace writes their records, and the results and the state follow from them:
+**The cycle** is the only path from the state to a write of a stored table, apart from a person who reads the page and changes the definition. A *rule* is a function from the state to keys, and `batch.reduce` submits those rows. The workspace writes their records, and the results and the state follow from them:
 
 ```python
 batch.scan()                  # if the trigger scans
