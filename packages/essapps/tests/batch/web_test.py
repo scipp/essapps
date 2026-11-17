@@ -4,7 +4,7 @@
 
 import io
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import numpy as np
@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from ess.apps import Client, local
 from ess.apps.batch import Batch, CorrectedFiles
 from ess.apps.batch.web import Shown, create_app, plots
-from ess.apps.testing import FakeFiles
+from ess.apps.testing import CountingClient, FakeFiles
 from ess.spec import SampleRunFile, WorkflowSpec, function_binding
 
 from .toys import COLUMNS, PLAIN, STAGED, Gate, Measure, Outputs, pair
@@ -459,6 +459,30 @@ def test_no_two_curves_of_a_figure_share_a_colour() -> None:
 
     assert plots.colors([1, n + 1, 2]) == [second, first, third]
     assert len(set(plots.colors(range(3 * n)))) == 3 * n
+
+
+def test_plotting_and_saving_chosen_rows_reads_their_records_only(
+    client: Client, sample: Measure
+) -> None:
+    counting = CountingClient(client)
+    batch = Batch(counting, STAGED, columns=COLUMNS, label='scan', source=pair)  # type: ignore[arg-type]
+    for run in (1, 2, 3):
+        sample(run, f's{run}')
+    batch.scan()
+    page = TestClient(create_app(batch, name='name', draw=draw))
+    reduced(page, client, 'all')
+    chosen = {'keys': ['1']}
+
+    def reads(call: Callable[[], object]) -> int:
+        counting.reads.clear()
+        call()
+        return counting.reads['status']
+
+    plot = reads(lambda: page.get('/api/plot', params=chosen))
+    saved = reads(lambda: page.get('/api/results.zip', params=chosen))
+
+    # the zip also asks the status of the record it exports
+    assert (plot, saved) == (1, 2)
 
 
 def test_a_row_shows_which_settings_its_result_was_reduced_with(

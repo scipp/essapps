@@ -625,12 +625,13 @@ class Server:
             self._row_of(key)
         try:
             settings = self.settings.params
-            states = self.batch.state(settings)
-            keys = {
-                'remaining': lambda: remaining(states),
-                'all': lambda: ready(states),
-                'selected': lambda: request.keys,
-            }[request.which]()
+            keys = (
+                request.keys
+                if request.which == 'selected'
+                else {'remaining': remaining, 'all': ready}[request.which](
+                    self.batch.state(settings)
+                )
+            )
             records = self.batch.reduce(settings, keys)
         except SubmitError as error:
             self.refused = list(error.errors)
@@ -736,14 +737,23 @@ class Server:
         The figure of the results among the rows ``keys``, or of the first
         results if none is given, and a note of what it shows.
         """
-        rows = {r.key: r for r in self.state().rows}
-        done = {k: r for k, r in rows.items() if r.result is not None}
+        order = {row.key: i for i, row in enumerate(self.batch.rows)}
+        states, unusable = self._states(
+            sorted({k for k in keys if k in order}, key=order.__getitem__)
+            if keys
+            else None
+        )
+        done = [
+            s
+            for s in states.values()
+            if s.record is not None and s.status is Status.COMPLETED
+        ]
         many = self.words.many
         if keys:
-            chosen = [r for k, r in done.items() if k in keys]
+            chosen = done
             note = '' if chosen else f'None of the {many} selected has a result.'
         else:
-            chosen = list(done.values())[:_DRAWN]
+            chosen = done[:_DRAWN]
             note = (
                 f'No results yet. Reduce {many} to see them here.' if not done else ''
             )
@@ -751,14 +761,17 @@ class Server:
                 note = f'The first {_DRAWN} of {len(done)}. Select {many} to choose.'
         if not chosen or self._draw is None:
             return Plot(figure=None, note=note)
-        ids = [r.record for r in chosen if r.record is not None]
-        records = {r.id: r for r in self.batch.client.records(ids=ids)}
-        order = {k: i for i, k in enumerate(rows)}
-        colors = plots.colors([order[r.key] for r in chosen])
+        colors = plots.colors([order[s.key] for s in chosen])
         shown = [
-            Shown(r.key, r.name, records[r.record], r.result == 'outdated', c)
-            for r, c in zip(chosen, colors, strict=True)
-            if r.record is not None
+            Shown(
+                s.key,
+                self._named(self.batch.rows[s.key]),
+                s.record,
+                self._status(s, not unusable) == 'outdated',
+                c,
+            )
+            for s, c in zip(chosen, colors, strict=True)
+            if s.record is not None
         ]
         try:
             return Plot(
@@ -906,12 +919,9 @@ class Server:
     @_locked
     def results_file(self, keys: Sequence[str]) -> bytes:
         """A zip of the outputs of the done rows among ``keys``, or of all."""
-        states, _ = self._states()
-        done = [
-            k
-            for k, s in states.items()
-            if s.status is Status.COMPLETED and (not keys or k in keys)
-        ]
+        known = [k for k in keys if k in self.batch.rows]
+        states, _ = self._states(known if keys else None)
+        done = [k for k, s in states.items() if s.status is Status.COMPLETED]
         if not done:
             raise Problem(f'None of these {self.words.many} has a result.')
         buffer = io.BytesIO()

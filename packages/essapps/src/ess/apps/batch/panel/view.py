@@ -270,24 +270,24 @@ class BatchView:
         self._list_again()
 
     def _reduce(
-        self, keys_of: Callable[[dict[str, RowState]], Sequence[str]]
+        self, keys_of: Callable[[dict[str, Any]], Sequence[str]]
     ) -> dict[str, Record]:
-        """Submit the rows that ``keys_of`` picks from the state of all."""
+        """Submit the rows that ``keys_of`` picks, given the settings."""
         records: dict[str, Record] = {}
         with self._showing_errors('Cannot submit'):
             settings = self.settings.params
-            records = self.batch.reduce(settings, keys_of(self.batch.state(settings)))
+            records = self.batch.reduce(settings, keys_of(settings))
             self.message.object = f'Submitted {len(records)} rows.'
         self._list_again()
         return records
 
     def reduce_all(self) -> dict[str, Record]:
         """Submit every row that is ready; their records by key."""
-        return self._reduce(ready)
+        return self._reduce(lambda settings: ready(self.batch.state(settings)))
 
     def reduce_remaining(self) -> dict[str, Record]:
         """Submit the rows with no result, a failed one, or an outdated one."""
-        return self._reduce(remaining)
+        return self._reduce(lambda settings: remaining(self.batch.state(settings)))
 
     def reduce_selected(self) -> dict[str, Record]:
         """Submit the rows selected."""
