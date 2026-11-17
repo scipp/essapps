@@ -9,18 +9,9 @@ The framework knows no technique: which runs make one reduction is the applicati
 It says so once, as the *source* of a batch, a function from files to rows.
 A person reducing a batch and automatic reduction use the same source.
 
-The batch is a chain of tables, of which only the files and the records grow on their own:
+[The model](../../packages/essapps/docs/batch.md#the-model-tables-and-one-cycle) shows a batch as stored tables, derived tables, and one cycle: a rule picks rows from the state, and `Batch.reduce` submits them.
 
-```python
-files   = client.files.list(selector)                   # with their metadata
-rows    = source(files)                                 # Batch.scan: plain data in and out
-results = records under the batch's label, by member    # the history, read as a table
-state   = rows with settings, joined with results on key == member   # Batch.state()
-todo    = rule(state)                                   # remaining for a person, arrived for the loop
-submit(todo)                                            # appends to the history, so results change
-```
-
-Automatic reduction steps this chain with a *loop*, an `ess.apps.batch.auto.Automatic`:
+Automatic reduction steps this cycle with a *loop*, an `ess.apps.batch.auto.Automatic`:
 
 ```python
 batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'), label='auto/iofq',
@@ -39,10 +30,10 @@ The loop is a controller: it runs in a process of its own or in a notebook, neve
 
 ## Which rows run
 
-A person and the loop differ in one rule, `rule` above ([batch.md](../../packages/essapps/docs/batch.md#automatic-reduction) tables both):
+A person and the loop differ in the rule of the cycle ([batch.md](../../packages/essapps/docs/batch.md#automatic-reduction) tables each). `remaining` stands for a person here:
 
 ```python
-def remaining(state):      # a person's "reduce remaining"
+def remaining(state):      # essapps-batch reduce --remaining; the page's Reduce leaves out earlier_settings
     return [key for key in ready(state)
             if state[key].status in (None, FAILED, CANCELLED) or state[key].outdated]
 
@@ -116,7 +107,7 @@ It also keeps which results are its own tweaks, which changes `outdated` but not
 ## Problems and refusals
 
 A *problem* is found when the state is read, a *refusal* when a row is submitted.
-A row whose cell the workspace does not accept, such as a thickness below zero or a file named before it is measured, is `incomplete`: `Batch.state(settings)` resolves the cells it compares, and the reason is one of the row's `problems`.
+A row whose cell the workspace does not accept, such as a thickness below zero or a file named before it is measured, is `incomplete`: `Batch.state()` resolves the cells it compares, and the reason is one of the row's `problems`.
 So `arrived` does not give it, the page shows why, and the loop reduces the row once the cell is accepted.
 
 `submit` checks more than `client.resolve`, which looks at values only ([`WorkspaceProtocol.resolve`](../../packages/essapps/src/ess/apps/protocol.py)).
