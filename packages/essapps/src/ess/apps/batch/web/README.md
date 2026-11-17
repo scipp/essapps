@@ -38,8 +38,13 @@ Each state replaces the form, but not while the focused input holds a value type
 **Follow** is a switch next to **Rescan runs**, offered when the application gives `create_app(..., at=...)`, the columns at which a changed cell reduces a row again.
 While it is on, a timer in the server runs a step every `interval` seconds (5 by default; `create_app(..., interval=...)`, or `--follow SECONDS`): the scan of **Rescan runs**, then a reduction of the rows that `ess.apps.batch.arrived` gives, under the lock of every request, with or without a page open.
 Follow reduces with the batch's settings, whatever the form holds.
-Each action of a person is followed at once by the reduction of a step, so an edit at a column of `at` is reduced at once, a row that Follow could not submit with the settings is tried again at Apply, and a refusal by Follow never shows after the action that removed its cause.
-Other changes wait for **Reduce**, as without Follow.
+Follow reduces a row for what the files changed, never for what a person changed.
+A row with a cell set by hand that is not reduced yet waits for **Reduce**, with or without Follow, so a row edited at two cells of `at` is reduced once, with both.
+While following, such a row says "Changed by hand: Follow leaves it to you."
+Once reduced, the row follows the files again, with its cells set by hand.
+A correction in the Runs view reaches the rows through the scan, so Follow reduces for it as for a file that arrives; two corrections that belong together reduce a row twice if a step runs between them.
+An action submits nothing but what a person asks to reduce: Apply reduces nothing, and the next step reduces the rows without a result with the settings applied.
+Apply forgets why Follow could not reduce a row, since the next step tries again.
 The page shows "Following, every N s", why the last step failed if it did, and, as an `incomplete` row, why a row could not be submitted.
 Whatever a step raises, from the files, the workflow or the workspace, is the step's failure; the next step tries again.
 

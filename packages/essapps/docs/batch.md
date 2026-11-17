@@ -133,7 +133,7 @@ Every way of reducing a batch is this cycle, with its own rule and its own trigg
 | **Reduce** on the page | a person | `left_to_reduce(state, batch.columns)` |
 | **Reduce them again** on the page | a person | `earlier_settings(state, batch.columns)` |
 | **Reduce all**, **Reduce selected** | a person | `ready(state)`, the keys selected |
-| **Follow** on the page: a timer that scans as **Rescan runs** does, and each action of a person | the page's process | `arrived(state, at)` |
+| **Follow** on the page: a timer that scans as **Rescan runs** does | the page's process | `arrived(state, at)` |
 | `Automatic.step`, which `run` calls from a timer | a process of its own | `arrived(state, at)` |
 | `essapps-batch reduce` | a person or a script | every row of the table, or `remaining(state)` with `--remaining` |
 
@@ -221,7 +221,7 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 |---|---|
 | `ready(states)` | every row that can run now |
 | `remaining(states)` | ready rows with no result, a failed or cancelled one, or an outdated one |
-| `arrived(states, at)` | ready rows with no result, or whose request differs from their result's at a column of `at` ([Automatic reduction](#automatic-reduction)) |
+| `arrived(states, at)` | ready rows with no result, or whose request differs from their result's at a column of `at`, but those changed by hand ([Automatic reduction](#automatic-reduction)) |
 | `earlier_settings(states, columns)` | ready rows whose completed result differs from their request only at settings, not at a column, and of the same spec; no tweak |
 | `left_to_reduce(states, columns)` | the rows of `remaining` but those of `earlier_settings` |
 | `refused_again(states, at, refused)` | of the reasons `refused` by row, those of the rows of `arrived`: why the next step of a loop will be refused again |
@@ -235,6 +235,8 @@ s.record         # the result: the newest record under the label with member '60
 s.changed        # frozenset({'q'}): the parameters whose value differs from the result's
 s.spec_changed   # True if s.record is of another spec than the one bound
 s.outdated       # True if either holds; for a tweak, if a column changed (below)
+s.set_by_hand    # frozenset({'thickness'}): the columns set by hand, all of a row added
+s.changed_by_hand  # True if the row has no result, or changed at a column set by hand
 s.text           # 'outdated'
 ```
 
@@ -394,14 +396,25 @@ A step is [the cycle](#the-model-tables-and-one-cycle) with a scan and the rule 
 | `s1'` | row 1, `[s1, s1']`, `[t1]` | row 1, `[s1, s1']`, `[t1]` | nothing: row 1 reads `outdated` |
 | `t1'` | row 1, `[s1, s1']`, `[t1, t1']` | nothing: row 1 reads `outdated` | nothing |
 
+A row that a person changed is the person's to reduce: the loop leaves a row with a cell set by hand ([Rules](#rules)) while it has no result, or while its request differs from its result's at such a cell:
+
+```python
+def arrived(state, at):
+    return [key for key in ready(state)
+            if not state[key].changed_by_hand   # a cell set by hand, not reduced yet
+            and (state[key].record is None or state[key].changed & at)]
+```
+
+The loop reduces a row for what the files changed, never for what a person changed. Every cell of a row added by hand is set by hand. A row edited at two cells of `at`, such as its sample run and then its transmission run, waits until a person reduces it with both. Once reduced, a cell set by hand equals its result's, so a file that arrives later at another cell of `at` reduces the row again, with the cell set by hand. A cell set back to the scan's (`reset`) follows the files again. A correction of a file's metadata ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)) reaches the rows through the scan, so the loop reduces for it as for a file that arrives: two corrections that belong together reduce a row twice if a step runs between them.
+
 So the loop, the page's buttons, and the command differ:
 
-| A row is reduced if it has | no result | a failed or cancelled result | a result, and a setting changed | a result, and a cell changed at `at` | a result, and a cell changed at another column |
-|---|---|---|---|---|---|
-| the page, "Reduce" (`left_to_reduce`) | yes | yes | no | yes | yes |
-| the page, "Reduce them again" (`earlier_settings`) | no | no | yes, but for a tweak | no | no |
-| `essapps-batch reduce --remaining` (`remaining`) | yes | yes | yes, but for a tweak | yes | yes |
-| the loop (`arrived`) | yes | no | no | yes | no |
+| A row is reduced if it has | no result | a failed or cancelled result | a result, and a setting changed | a result, and the scan changed a cell at `at` | a result, and the scan changed a cell at another column | a cell set by hand, not reduced yet |
+|---|---|---|---|---|---|---|
+| the page, "Reduce" (`left_to_reduce`) | yes | yes | no | yes | yes | yes |
+| the page, "Reduce them again" (`earlier_settings`) | no | no | yes, but for a tweak | no | no | no |
+| `essapps-batch reduce --remaining` (`remaining`) | yes | yes | yes, but for a tweak | yes | yes | yes |
+| the loop (`arrived`) | yes, but for a row set by hand | no | no | yes | no | no |
 
 On the page, a change of settings applies to rows not reduced yet, and to all only when a person says so. The command is given its settings at each call, so it applies them to all.
 
@@ -419,7 +432,7 @@ The batch page holds a loop of its own: its switch "Follow" steps it on the page
 
 ### One label, one batch
 
-Which rows a step reduces follows from the files, the batch's rows and settings, and the records under its label. The loop keeps nothing else, so a step that raises, in the settings, the source, or a submission, loses nothing. The loop keeps the results under its label equal to its batch's rows at the columns of `at`:
+Which rows a step reduces follows from the files, the batch's rows and settings, and the records under its label. The loop keeps nothing else, so a step that raises, in the settings, the source, or a submission, loses nothing. The loop keeps the results under its label equal to its batch's rows at the cells of `at` that the scan gives:
 
 ```python
 page = Batch(client, IOFQ, columns=..., label='auto/iofq', source=pair_by_sample)  # a second batch on the label
@@ -428,13 +441,13 @@ page.reduce(['60339'])               # a record with run 60400 at `sample`
 loop.step()                          # reduces '60339' again with the source's file: the loop's rows win
 ```
 
-So a label has one batch. A person who wants another file for a row edits the loop's own batch, or corrects the file's metadata so that the source gives the row another file ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)). Two loops never share a label: if their rows differ at `at`, each replaces the other's records at every step. A record under the label that equals the loop's row at `at`, from any submitter, counts as the row's result.
+The edit is in another batch, so the loop's row still has the scan's cell. So a label has one batch. A person who wants another file for a row edits the loop's own batch and reduces the row, and the loop leaves the cell set by hand as it is; or the person corrects the file's metadata so that the source gives the row another file ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)), which the loop reduces. Two loops never share a label: if their rows differ at `at`, each replaces the other's records at every step. A record under the label that equals the loop's row at `at`, from any submitter, counts as the row's result.
 
 A restart starts from a new scan, with the edits that the batch's definitions kept. So after a restart, a row is not reduced again unless the files changed it at `at`. Without definitions the edits are gone, and a row that was edited at a column of `at` is reduced again with the source's cells. A record that was running when the workspace ended is failed at the restart; the loop does not run a failed row again, and a person retries it.
 
 ### Problems and refusals
 
-A row with an empty cell, or a cell that the workspace does not accept when the state is read, such as a thickness below zero or a file named before it is measured, is `incomplete`. The reason is one of the row's `problems`, `arrived` does not give the row, and the loop reduces it once the cell is filled or accepted.
+A row with an empty cell, or a cell that the workspace does not accept when the state is read, such as a thickness below zero or a file named before it is measured, is `incomplete`. The reason is one of the row's `problems`, `arrived` does not give the row, and the loop reduces it once the scan fills the cell or the workspace accepts it. A cell that a person fills is set by hand, so the person reduces that row.
 
 `submit` checks a few things that `state` does not, such as a reference to an output that the workspace no longer keeps, and refuses the rows with a `SubmitError`. The step drops the rows that the error names, submits the others, and `refused` holds the reasons by key until the next step. Such a row is submitted again at every step. A reason that names no row refuses every row of the step. If the settings are refused, no row can run: the step submits nothing, and `refused` holds the reason for every ready row, `{'1': 'unknown spec sans-iofq/v1'}`.
 
@@ -566,7 +579,7 @@ One command holds the folder at a time. If a command was killed, the next one fi
 ## The UI
 
 [The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows a batch in a browser: how to run it, its layers, and its limits.
-The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown; a reduction of one row alone uses its own parameters and is not. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. Given the columns `at`, the page offers a switch **Follow**: a step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, in the page's own process and batch, with the batch's settings, whatever the form holds. Each action of a person is followed at once by a step's reduction. Whether the page follows belongs to its process, not to the definition: a restart starts with `--follow` or without.
+The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown; a reduction of one row alone uses its own parameters and is not. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. Given the columns `at`, the page offers a switch **Follow**: a step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, in the page's own process and batch, with the batch's settings, whatever the form holds. Follow leaves a row that a person changed to the person, who reduces it with **Reduce**: while following, such a row says "Changed by hand: Follow leaves it to you." An action reduces nothing that a person did not ask for, and Apply reduces nothing either: the next step reduces the rows without a result with the settings applied. Whether the page follows belongs to its process, not to the definition: a restart starts with `--follow` or without.
 
 `create_app(batch, ...)` makes the page. Its arguments name the column that names a row (`name`) and the other columns to show (`info`), draw the results (`draw`), correct the metadata of runs (`files`, `marks`), and offer Follow (`at`, `follow`, `interval`). `Server` (`ess.apps.batch.web.server`) holds what the page shows and does, and its actions return `State`, the whole of what the page shows. The browser renders `State` and sends the actions.
 

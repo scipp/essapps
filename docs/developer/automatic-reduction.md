@@ -39,20 +39,25 @@ def remaining(state):      # essapps-batch reduce --remaining; the page's Reduce
 
 def arrived(state, at):    # the loop
     return [key for key in ready(state)
-            if state[key].record is None or state[key].changed & at]
+            if not state[key].changed_by_hand
+            and (state[key].record is None or state[key].changed & at)]
 ```
 
 `ready` is the batch's: the row is complete, and its result is not running.
 `changed` names the parameters at which the row's request differs from its result's request, both resolved as a record holds them.
 `at` is a set of columns that the application names, with no default: the columns whose change reduces a row again.
+`changed_by_hand` is true if the row has a cell set by hand (an edit, or any cell of a row added by hand) and has no result, or differs from its result at such a cell.
+So the loop reduces a row for what the files changed, never for what a person changed: a person reduces what they changed, with or without the loop.
 
 | What happened to a row | `arrived` | `remaining` |
 |---|---|---|
-| it has no result | yes | yes |
+| it has no result | yes, unless a cell is set by hand | yes |
 | its result failed or was cancelled | no | yes |
 | a setting changed | no | yes, but for a tweak, which is `outdated` only where a column changed |
-| a cell changed at a column of `at`, such as a run that joins its list | yes | yes |
-| a cell changed at another column | no | yes |
+| the scan changed a cell at a column of `at`, such as a run that joins its list | yes | yes |
+| the scan changed a cell at another column | no | yes |
+| a person set a cell, and it is not reduced yet | no | yes |
+| a person set a cell, reduced it, and then the scan changed another cell at `at` | yes | yes |
 | its result is of another spec | at the columns of `at` the other spec lacks | yes |
 
 Each line answers a story or a failure mode:
@@ -62,6 +67,8 @@ Each line answers a story or a failure mode:
 - A later partner, such as a transmission run that the source pairs with rows made before, changes a cell at a column outside `at`, and does not reduce those rows again.
 - A series grows (E1): a new angle in a row's list at `at` reduces the row again with every angle so far, and an angle whose file arrives again keeps its identity and changes nothing.
 - A cell that names a file by run, `file(run=1)`, resolves to the identity that the record holds, so it is not a change.
+- A person edits a row at two cells of `at`, such as its sample run and then its transmission run. The loop does not reduce the row with half of the change; the person reduces it once both are set. A cell set back to the scan's (`reset`) follows the files again.
+- A correction of a file's metadata reaches the rows through the scan, so the loop reduces for it as for a file that arrives. Two corrections that belong together reduce a row twice if a step runs between them.
 
 A result of another spec, such as an older version, stays the row's result.
 `differs` counts a parameter that one of the two requests lacks as changed, so the row is reduced again if the other spec lacks a column of `at`, and is otherwise compared as any other.
@@ -72,7 +79,7 @@ A list is compared element by element, in order, so a source gives a list cell i
 ## One label, one batch
 
 Which rows are reduced follows from the records under the label and from the cells of the loop's rows.
-The loop keeps the results under its label equal to its batch's rows at the columns of `at`.
+The loop keeps the results under its label equal to its batch's rows at the cells of `at` that the scan gives.
 So a label has one batch:
 
 ```python
@@ -82,8 +89,9 @@ page.reduce(['60339'])             # the row's result now holds run 60400 at `sa
 loop.step()                        # differs from the loop's row at `at`: reduced again with the source's file
 ```
 
+The edit is in another batch, so the loop's row still has the scan's cell.
 A record that another `Batch` submits under the label with other cells at `at` is replaced at the next step.
-A person who wants another file for a row edits the loop's own batch, or corrects the file's metadata so that the source gives another file.
+A person who wants another file for a row edits the loop's own batch and reduces the row, and the loop leaves the cell set by hand as it is; or the person corrects the file's metadata so that the source gives another file, which the loop reduces.
 Two loops never share a label: if their rows differ at `at`, each replaces the other's records at every step.
 A record under the label that equals the loop's row at `at`, from any submitter, counts as the row's result.
 A loop on a new label starts from the first file. A person's batch under its own label does not touch the loop's rows.
@@ -95,7 +103,7 @@ A step reads the files, the batch's rows and settings, and the records under the
 `Automatic` keeps its batch, `at`, and `refused`, the reasons of the last step, which no step reads.
 So a step that raises, in the settings, the source, or a submission, loses nothing: the next step tries again.
 A restarted loop reduces no row again whose cells come from the source alone.
-The batch's definitions keep its edits and settings ([`ess.apps.batch.definition`](../../packages/essapps/src/ess/apps/batch/definition.py)), so with them an edited row is not reduced again either.
+The batch's definitions keep its edits and settings ([`ess.apps.batch.definition`](../../packages/essapps/src/ess/apps/batch/definition.py)), so with them an edited row is not reduced again either, and one edited but not reduced still waits for a person.
 Without one, the edits are gone at a restart, and a row that was edited at a column of `at` is reduced again with the source's cells.
 A record that was running when the workspace ended is failed at the restart, and one that had not started is cancelled unless it persists outputs ([`Workspace._restart`](../../packages/essapps/src/ess/apps/workspace.py)); the loop does not run such a row again, and a person retries it.
 This holds while the proposal's history is kept. A running loop keeps it, since its calls keep the proposal from being idle ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
@@ -108,7 +116,7 @@ It also keeps which results are its own tweaks, which changes `outdated` but not
 
 A *problem* is found when the state is read, a *refusal* when a row is submitted.
 A row whose cell the workspace does not accept, such as a thickness below zero or a file named before it is measured, is `incomplete`: `Batch.state()` resolves the cells it compares, and the reason is one of the row's `problems`.
-So `arrived` does not give it, the page shows why, and the loop reduces the row once the cell is accepted.
+So `arrived` does not give it, the page shows why, and the loop reduces the row once the cell is accepted, unless a person set it.
 
 `submit` checks more than `client.resolve`, which looks at values only ([`WorkspaceProtocol.resolve`](../../packages/essapps/src/ess/apps/protocol.py)).
 What only `submit` refuses, and how a batch row meets it:

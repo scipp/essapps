@@ -253,9 +253,10 @@ class Server:
     folder:
         What the header names as the place of the data, such as a folder.
     at:
-        The columns at which a change of a row's cells makes Follow reduce the
-        row again (:class:`~ess.apps.batch.auto.Automatic`); without them, the
-        page does not offer to follow. The batch needs a source.
+        The columns at which a change of a row's cells by the scan makes
+        Follow reduce the row again (:class:`~ess.apps.batch.auto.Automatic`);
+        without them, the page does not offer to follow. The batch needs a
+        source.
     follow:
         Whether to follow from the start.
     interval:
