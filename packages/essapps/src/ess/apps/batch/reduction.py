@@ -122,12 +122,16 @@ class Batch:
         self._submitted: dict[str, Request] = {}
         self._tweaked: dict[str, Mapping[str, Any]] = {}
 
-    def scan(self) -> None:
-        """Make rows from the files now; what was set by hand stays."""
+    def scan(self) -> list[FileInfo]:
+        """
+        Make rows from the files now; what was set by hand stays. Returns the
+        files, as the source got them.
+        """
         if self.source is None:
             raise ValueError('this batch has no source of rows')
         infos = file_infos(self.client, self._selector)
         self.rows = self.rows.rescan(self.source(infos))
+        return infos
 
     def template(self, settings: Mapping[str, Any]) -> Template:
         """The template of ``settings``, with the columns as its blanks."""

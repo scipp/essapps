@@ -56,14 +56,14 @@ def test_e1_series_grows_reduction_follows(
         source=angles,
         persist=True,
     )
-    auto = Automatic(batch, at='runs', settings=lambda: {'reference': reference})
+    loop = Automatic(batch, at='runs', settings=lambda: {'reference': reference})
 
     r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
-    client.wait(auto.step())
+    client.wait(loop.step())
     r4 = measure(4, [4.0, 8.0], role='sample', sample='si')
     r3 = measure(3, [1.0, 1.0], role='sample', sample='si')
     measure(2, [1.0, 2.0], role='sample', sample='si')
-    auto.step()
+    loop.step()
 
     user = connect()  # any client of the proposal
     latest = user.latest('reflectivity', member='si')
@@ -84,41 +84,41 @@ def test_e2_automatic_reduction_goes_quiet(
     upgrade: Callable[..., Client], measure: toys.Measure
 ) -> None:
     upgraded = upgrade(specs=[toys.IOFQ_V2])  # a workspace without version 1
-    auto = Automatic(
+    loop = Automatic(
         iofq_batch(upgraded), at='sample', settings=lambda: {'normalization': None}
     )
     measure(1, [1.0, 1.0], role='sample')
 
-    assert auto.step() == {}
-    assert auto.refused == {'1': 'unknown spec sans-iofq/v1'}
+    assert loop.step() == {}
+    assert loop.refused == {'1': 'unknown spec sans-iofq/v1'}
 
 
 @pytest.mark.xfail(reason=NO_PUBLISH)
 def test_e3_reduction_of_our_own_output(
     client: Client, measure: toys.Measure, files: FakeFiles
 ) -> None:
-    auto = Automatic(
+    loop = Automatic(
         iofq_batch(client), at='sample', settings=lambda: {'normalization': None}
     )
     measure(1, [1.0, 2.0, 3.0, 4.0])
-    (reduced,) = auto.step().values()
+    (reduced,) = loop.step().values()
     pid = client.publish(reduced.ref('iofq'), 'scicat')
     files.add_published(scicat.entries[pid])
 
-    assert auto.step() == {}
+    assert loop.step() == {}
 
 
 def test_e4_template_improved_during_a_beamtime(
     client: Client, connect: Callable[..., Client], measure: toys.Measure
 ) -> None:
     settings = {'normalization': None}
-    auto = Automatic(iofq_batch(client), at='sample', settings=lambda: settings)
+    loop = Automatic(iofq_batch(client), at='sample', settings=lambda: settings)
     first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
-    (before,) = auto.step().values()
+    (before,) = loop.step().values()
 
     settings = {'reduction': toys.Reduction(threshold=1.5), 'normalization': None}
     second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
-    (after,) = auto.step().values()
+    (after,) = loop.step().values()
 
     user = connect()  # any client of the proposal
     assert after.request.files() == [second]

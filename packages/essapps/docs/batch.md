@@ -58,7 +58,7 @@ batch.cancel()
 - A **row** has a **key**, a value per column, and read-only **info** to show with it. A cell can hold anything a request can: a file, a reference to an output, a number, a list of runs.
 - A **source** is your function from files to rows. A **scan** calls it.
 - An **edit** is a cell set by hand, by a person or by your code.
-- A row's **result** is the newest record with the batch's spec and label, and the row's key as its member, whoever submitted it. So two `Batch` objects with the same spec and label are one batch: give each batch its own label.
+- A row's **result** is the newest record with the batch's spec and label, and the row's key as its member, whoever submitted it. So two `Batch` objects with the same spec and label are one batch: give each batch its own label. An application that wants a table per person puts the person in the label.
 
 Choose a key that does not change from one scan to the next, such as the run number. Results and edits are found by key. Put the name of the sample in `info`, under a name that is not a column.
 
@@ -164,10 +164,10 @@ batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'), label='au
 loop = Automatic(batch, at='sample', settings=lambda: settings)
 loop.step()       # scans, and reduces the rows with a new file at `sample`; their records by key
 loop.refused      # why each such row did not run, by key: {'60339': '60339: sample_transmission: empty'}
-run([loop])       # steps forever, once a second
+run([loop])       # steps once a second, until a step raises
 ```
 
-`at` is the *trigger column*, of a file or a list of files, each as `FileInfo.ref` gives it. A cell there that names a file another way, such as `file(run=1)`, which the workspace resolves, would never count as held, and its row would be reduced at every step. So once the record of a row does not hold the files of its cell, `step` raises `ValueError`, naming the row, and so does every later step, before it submits anything, until the cell changes. `settings` is called at each step, so a change applies to the rows not reduced yet.
+`at` is the *trigger column*, of a file or a list of files, each as `FileInfo.ref` gives it. A cell there that names a file another way, such as `file(run=1)`, which the workspace resolves, would never count as held, and its row would be reduced at every step. So each file of a cell at `at` must be one of the files of the scan, those the source got. A row with any other file there is refused before it is submitted, as `refused` says: `{'60339': '60339: sample: run:60339 is not a file of the scan. ...'}`. `settings` is called at each step, so a change applies to the rows not reduced yet.
 
 **A row runs if its cell at `at` holds a file that no record under the label, with the row's key, holds at `at`.** Any record counts: failed, cancelled, of any spec, and of any submitter. So automatic reduction differs from a person's reduce:
 
@@ -385,6 +385,6 @@ Raise in the fake to make a row fail; hold it back on a `threading.Event` to kee
 ## What it does not do
 
 - Keep the table across sessions, but in a file that a person saves and loads. A new `Batch` scans again. It finds results by key in its workspace, so `local()` per session starts with none, and a result that is not persisted is gone once its workspace closes.
-- Show a stale result after a restart.
+- Show a stale result after a restart, or one that another `Batch` object submitted. Stale compares a row with the request that this object submitted for it. So of two people on one label, each sees the other's results as up to date, whatever their own settings.
 - Free the values of replaced results. They stay until the workspace closes or they are released, unless the batch persists them (`persist=`).
 - Offer preparatory steps with a **Use** button. A `Referenced[...]` setting offers each record in the settings form.

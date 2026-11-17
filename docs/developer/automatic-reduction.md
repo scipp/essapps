@@ -26,7 +26,7 @@ Automatic reduction steps this chain with a *loop*, an `ess.apps.batch.auto.Auto
 batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'), label='auto/iofq',
               source=pair_by_sample, staged=True, persist=True)
 loop = Automatic(batch, at='sample', settings=lambda: load_settings('iofq.yaml'))
-run([loop])              # steps forever: scan, then reduce the rows with a new file at `sample`
+run([loop])              # steps until one raises: scan, then reduce the rows with a new file at `sample`
 ```
 
 `settings` is called at each step, so a setting changed during a beamtime applies to the rows not reduced yet.
@@ -79,6 +79,7 @@ Besides `held`, the loop keeps the settings of the last step and the rows it cou
 | a cell is empty, such as a missing transmission run | its cells change |
 | its result is running | its record changes |
 | its request was refused, such as an invalid value | its cells, its records, or the settings change |
+| a file of its cell at `at` is not a file of the scan | its cells, its records, or the settings change |
 
 ## Refusals
 
@@ -86,6 +87,19 @@ Besides `held`, the loop keeps the settings of the last step and the rows it cou
 The loop instead submits the rows, drops those the `SubmitError` names (`FieldError.entry`), and submits the rest, so a refused row does not hold back the others.
 A reason that names no row is about the settings, such as a spec the workspace no longer runs (E2), and refuses every row.
 `Automatic.refused` holds the reason of each row that has a new file and did not run, by key, so that an application can show why. Why a row waits is also its `RowState.problems`.
+
+The loop itself refuses one kind of row, before it submits: a row whose cell at `at` holds a file that is not one of the files of the scan.
+Files are compared by identity, as the scan lists them and as `FileInfo.ref` gives them, and a client has no call that resolves a name:
+
+```python
+listed  = {f.ref.file for f in files}        # {'pid:20.500.12269/ab12', ...}
+cell    = file(run=60339)                    # a name, 'run:60339': not in listed, so the row is refused
+record.request.params['sample']              # would hold 'pid:20.500.12269/ab12', which the workspace resolved
+```
+
+Without the check, no record would count as holding `run:60339`, and the row would be reduced at every step.
+The check reads no record, so a restarted loop refuses the row again without submitting it.
+It also refuses a file that exists but that the batch's selector does not match: a file that the scan does not list has not arrived.
 
 ## Chains
 
@@ -169,7 +183,7 @@ A cut-off that a person sets on purpose, "only the files since Tuesday", is a se
     ```
 
   A class with state that the author writes, `add(file) -> changed rows`, is not offered. It would have to give the same rows for any order of arrival, a role corrected later, a file that arrives again, and a restart, which a function over the files gives without effort.
-- **A cell at `at` that names a file.** Files are compared by identity, as `FileInfo.ref` gives it, and a client has no call that resolves a file name such as `file(run=1)`. So the loop cannot accept such a cell: once a record does not hold the files of its row's cell, the loop refuses the cell by stopping, and raises at every step until the cell changes.
+- **A step that raises ends `run`.** A later step would lose nothing, but `run` does not take it: which errors a service logs and steps past, such as a lost connection, is not decided.
 - **Starting a new label at a given run.** A loop on a new label consumes from the first file. Starting it at a run needs a range in `Selector`, which matches equal values only.
 - **Old rows reduced again for a new spec version.** One more term of the predicate, from the spec of each row's result (ADR 0009): `runs(row, held) or result.spec != spec`.
 - **The files held at `at`, by key, for a page.** A page reads `Batch.state`, which counts the results of the batch's spec only. After a new version of the spec, a page shows the old rows as not reduced, while the loop holds them.

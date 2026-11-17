@@ -65,6 +65,22 @@ def test_the_state_of_chosen_rows_asks_the_status_of_their_records_only(
     assert counting.reads['status'] == 0
 
 
+def test_a_scan_returns_the_files_its_source_got(
+    client: Client, sample: Measure
+) -> None:
+    got: list[FileInfo] = []
+
+    def source(files: Sequence[FileInfo]) -> list[Row]:
+        got.extend(files)
+        return pair(files)
+
+    batch = Batch(client, PLAIN, columns=COLUMNS, label='scan', source=source)
+    run = sample(1, 'water')
+
+    assert batch.scan() == got
+    assert run in [f.ref for f in got]
+
+
 def test_columns_must_be_parameters(client: Client) -> None:
     with pytest.raises(KeyError, match='nope'):
         Batch(client, STAGED, columns=('nope',), label='scan')
