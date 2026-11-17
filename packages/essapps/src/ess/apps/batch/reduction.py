@@ -8,6 +8,32 @@ It needs no interface of its own over the client: tests and UI work run it on
 ``local()`` with fake workflows, which start in milliseconds and refuse and fail
 as real ones do.
 
+A row's state is read from the records, not from what this object submitted,
+so every ``Batch`` on the label, and this one after a restart, sees the same,
+but for how it resolved a file name, which it keeps until its next scan.
+What a ``Batch`` keeps of them can be rebuilt from the records at any time:
+the newest record of each member under the label, the IDs of the records under
+the label it has read, and which of them are not of the bound spec
+(:meth:`~ess.apps.Client.bound`), all read from ``client.changes``, so that the
+state of chosen rows does not read every record under the label. Only a tweak
+is kept that the records cannot explain (:meth:`Batch.tweak`).
+
+Where a row's request differs from its result's (``RowState.changed``) is
+worked out on both as a record holds them, resolving as little as it can::
+
+    settings = client.resolve(Template(spec, params=settings, blanks=columns))
+    # once per call; a refusal is raised: no row can run with these settings
+    cells = {c: v for c, v in cells.items() if v != record.request.params[c]}
+    # a row with a result: only the cells that differ as given, such as a
+    # file named by run; a row without one: all its cells
+    client.resolve({key: Template(spec, params=cells, blanks=the_others)})
+    # one call for all rows; a refusal is a problem of its row
+    changed = differs({**settings, **cells}, record.request.params, names)
+
+A parameter resolves the same whatever the other parameters are, so a cell is
+resolved on its own, and a value resolved once is kept by its column and value
+until the next scan (:meth:`Batch._resolve_cells`).
+
 A stage is opened lazily and kept with the template it was opened from, as
 given, since the stage's own holds resolved values. A refusal with no position
 is the stage's, one that stopped or was released, so the stage is replaced and
@@ -47,6 +73,18 @@ def file_infos(client: Client, selector: Selector | None = None) -> list[FileInf
     return [
         FileInfo(*pair) for pair in zip(refs, client.files.metadata(refs), strict=True)
     ]
+
+
+_NONE = object()
+
+
+def _kept(name: str, value: Any) -> tuple[str, type, Any] | None:
+    """The key a resolved value is kept by, ``None`` for one that cannot be a key."""
+    try:
+        hash(value)
+    except TypeError:
+        return None
+    return (name, type(value), value)
 
 
 def _running(row: RowState) -> list[FieldError]:
@@ -119,8 +157,15 @@ class Batch:
         self._staged = staged
         self._persist = persist
         self._stage: tuple[Template, Stage] | None = None
-        self._submitted: dict[str, Request] = {}
-        self._tweaked: dict[str, Mapping[str, Any]] = {}
+        # The ID of the record of each tweak, by key.
+        self._tweaked: dict[str, str] = {}
+        # The records under the label, read from the proposal's changes.
+        self._cursor: int | None = None
+        self._seen: set[str] = set()
+        self._found: dict[str, Record] = {}
+        self._unbound: set[str] = set()
+        # A cell's value as a record holds it, by its column and value as given.
+        self._resolved: dict[tuple[str, type, Any], Any] = {}
 
     def scan(self) -> list[FileInfo]:
         """
@@ -131,6 +176,7 @@ class Batch:
             raise ValueError('this batch has no source of rows')
         infos = file_infos(self.client, self._selector)
         self.rows = self.rows.rescan(self.source(infos))
+        self._resolved.clear()
         return infos
 
     def template(self, settings: Mapping[str, Any]) -> Template:
@@ -154,32 +200,52 @@ class Batch:
     ) -> dict[str, RowState]:
         """
         Where each row stands now, read from the client, or the rows of
-        ``keys`` if given. With ``settings``, also which rows are stale. A
-        result that came from :meth:`tweak` is stale only if the row's cells
-        have changed since.
+        ``keys`` if given. With ``settings``, also where each row's request
+        differs from its result's (:attr:`RowState.changed`), and the reasons
+        a cell is refused, as problems of its row.
+
+        Raises ``SubmitError`` if ``settings`` are refused, with reasons that
+        name no row: no row can run with them.
         """
+        self._poll()
         rows = list(self.rows) if keys is None else [self.rows[k] for k in keys]
-        found = self._results(keys)
+        found = {r.key: self._found[r.key] for r in rows if r.key in self._found}
+        changed, refused = (
+            ({}, {}) if settings is None else self._compare(settings, rows, found)
+        )
         upstream = self._known(sorted(state.references(rows)))
         status = self._status([*found.values(), *upstream])
-        stale = set() if settings is None else self._stale(settings, rows)
         return state.row_states(
             rows,
             self.spec.params,
             self.columns,
             found,
             status,
-            stale,
-            self._tweaked.keys(),
+            changed,
+            refused,
+            self._spec_changed(found),
+            {k for k, r in found.items() if self._tweaked.get(k) == r.id},
         )
 
-    def _results(self, keys: Sequence[str] | None = None) -> dict[str, Record]:
-        """The result of each row, or of the rows of ``keys`` if given."""
-        records = self.client.records(label=self.label)
-        if keys is not None:
-            chosen = set(keys)
-            records = [r for r in records if r.member in chosen]
-        return state.results(records, SpecId.of(self.spec))
+    def _poll(self) -> None:
+        """
+        Bring the result of each member under the label up to date, from the
+        proposal's changes; the first call reads every record under the label.
+        """
+        if self._cursor is None:
+            self._cursor = self.client.changes().cursor
+            records = self.client.records(label=self.label)
+        else:
+            changes = self.client.changes(after=self._cursor)
+            self._cursor = changes.cursor
+            # A record is in the changes when submitted and when it finishes,
+            # so one seen before is not newer than the result held.
+            new = [i for i in changes.records if i not in self._seen]
+            records = [r for r in self._known(new) if r.label == self.label]
+        self._seen.update(r.id for r in records)
+        self._found |= state.results(records)
+        bound = self.client.bound(records) if records else []
+        self._unbound.update(r.id for r, b in zip(records, bound, strict=True) if not b)
 
     def _known(self, ids: list[str]) -> list[Record]:
         """
@@ -198,18 +264,96 @@ class Batch:
         statuses = self.client.status(records)
         return {r.id: s for r, s in zip(records, statuses, strict=True)}
 
-    def _stale(self, settings: Mapping[str, Any], rows: list[Row]) -> set[str]:
-        template = self.template(settings)
-        return {row.key for row in rows if self._differs(row, template)}
+    def _spec_changed(self, found: Mapping[str, Record]) -> set[str]:
+        """The keys whose result is of another spec than the bound one."""
+        spec = SpecId.of(self.spec)
+        return {
+            key for key, r in found.items() if r.spec != spec or r.id in self._unbound
+        }
 
-    def _differs(self, row: Row, template: Template) -> bool:
-        if row.key in self._tweaked:
-            return row.values != self._tweaked[row.key]
-        return (
-            row.key in self._submitted
-            and not state.problems(row, self.spec.params, self.columns, {})
-            and template.fill(params=self._cells(row)) != self._submitted[row.key]
-        )
+    def _compare(
+        self, settings: Mapping[str, Any], rows: list[Row], found: Mapping[str, Record]
+    ) -> tuple[dict[str, frozenset[str]], dict[str, tuple[FieldError, ...]]]:
+        """
+        For each row with a result, the names at which its request with
+        ``settings`` differs from its result's; and the reasons of the rows
+        whose cells are refused. Raises ``SubmitError`` if the settings are.
+        """
+        resolved = self.client.resolve(self.template(settings))
+        if isinstance(resolved, SubmitError):
+            raise resolved
+        fields = self.spec.params.model_fields
+        required = {c for c in self.columns if fields[c].is_required()}
+        asked = {}
+        for row in rows:
+            if not required <= row.values.keys():
+                continue  # an empty cell is a problem, and nothing to resolve
+            if (record := found.get(row.key)) is None:
+                asked[row.key] = {
+                    c: row.values[c] for c in self.columns if c in row.values
+                }
+            else:
+                cells = self._cells(row)
+                was = record.request.params
+                asked[row.key] = {
+                    c: cells[c] for c in state.differs(cells, was, self.columns)
+                }
+        cells_now, refused = self._resolve_cells(asked)
+        changed = {}
+        for key, record in found.items():
+            if key in asked:
+                now = {**resolved.params, **cells_now[key]}
+                names = [*self.settings_fields, *cells_now[key]]
+                changed[key] = frozenset(
+                    state.differs(now, record.request.params, names)
+                )
+        return changed, refused
+
+    def _resolve_cells(
+        self, asked: Mapping[str, Mapping[str, Any]]
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, tuple[FieldError, ...]]]:
+        """
+        The cells of each row, by key, as a record holds them, and the reasons
+        of each row whose cells are refused. A row asks for its cells not
+        resolved before in a template of their own, every other parameter
+        blank, all rows in one call of :meth:`~ess.apps.Client.resolve`.
+
+        A value resolved is kept by its column and value until the next scan,
+        since a parameter resolves the same whatever the others are. A kept
+        value differs from one resolved now only for a file that gained a
+        catalogue identifier since, which keeps its old identity until the
+        scan, as ``resolve`` allows. A value that cannot be a key, such as a
+        list, is resolved each time. A refusal is not kept, so that a file that
+        arrives later is found.
+        """
+        fields = self.spec.params.model_fields
+        cells: dict[str, dict[str, Any]] = {}
+        new: dict[str, dict[str, Any]] = {}
+        for key, given in asked.items():
+            cells[key] = {}
+            for name, value in given.items():
+                kept = self._resolved.get(_kept(name, value), _NONE)
+                if kept is _NONE:
+                    new.setdefault(key, {})[name] = value
+                else:
+                    cells[key][name] = kept
+        templates = {
+            key: Template(
+                self.spec, params=given, blanks=[n for n in fields if n not in given]
+            )
+            for key, given in new.items()
+        }
+        resolved = self.client.resolve(templates) if templates else {}
+        refused = {}
+        for key, result in resolved.items():
+            if isinstance(result, SubmitError):
+                refused[key] = result.errors
+                continue
+            for name, value in new[key].items():
+                cells[key][name] = result.params[name]
+                if (at := _kept(name, value)) is not None:
+                    self._resolved[at] = result.params[name]
+        return cells, refused
 
     def reduce(
         self, settings: Mapping[str, Any], keys: Sequence[str]
@@ -234,9 +378,6 @@ class Batch:
             records = self._submit(template, each)
         except SubmitError as error:
             raise SubmitError(self._once(error.errors)) from None
-        self._submitted |= {k: template.fill(params=c) for k, c in each.items()}
-        for key in keys:
-            self._tweaked.pop(key, None)
         return records
 
     def _submit(
@@ -273,9 +414,12 @@ class Batch:
     def tweak(self, key: str, params: Mapping[str, Any]) -> Record:
         """
         Submit one row with ``params``, all of its request's, which become its
-        result. It is not stale for differing from the settings or the cells,
-        only if the cells change after this. Raises ``SubmitError`` if the row
-        is still running.
+        result. While it is the row's result, the row is outdated only where
+        its cells differ from ``params``, not where the settings do;
+        :attr:`RowState.changed` names both. This batch keeps that in memory:
+        another ``Batch`` on the label, or this one after a restart, reads the
+        tweak's result as outdated where the settings differ, as any other.
+        Raises ``SubmitError`` if the row is still running.
         """
         if running := _running(self.state(keys=[key])[key]):
             raise SubmitError(running)
@@ -283,24 +427,30 @@ class Batch:
         record = self.client.submit(
             request, label=self.label, member=key, persist=self._persist
         )
-        self._tweaked[key] = self.rows[key].values
+        self._tweaked[key] = record.id
         return record
 
     def tweak_params(
-        self, key: str, record: Record | None, settings: Mapping[str, Any] | None
+        self, row: RowState, settings: Mapping[str, Any] | None
     ) -> dict[str, Any]:
         """
-        The params that a :meth:`tweak` of row ``key`` starts from: its cells,
-        and the other params of ``record``, its result, or of ``settings`` if it
-        has none.
+        The params that a :meth:`tweak` of ``row`` starts from: its cells, and
+        the other params of its result, or of ``settings`` if it has none or one
+        of another spec, whose params are not this spec's.
         """
+        record = None if row.spec_changed else row.record
         base = (settings or {}) if record is None else record.request.params
         rest = {k: v for k, v in base.items() if k not in self.columns}
-        return {**rest, **self.rows[key].values}
+        return {**rest, **self.rows[row.key].values}
 
     def cancel(self, keys: Sequence[str] | None = None) -> None:
-        """Cancel the results still running, of ``keys`` if given, or of any row."""
-        chosen = list(self._results(keys).values())
+        """
+        Cancel the records still running that are the newest under the label
+        for their member, of the members ``keys`` if given, or of every member,
+        whether or not it is a row now.
+        """
+        self._poll()
+        chosen = [r for k, r in self._found.items() if keys is None or k in keys]
         status = self._status(chosen)
         self.client.cancel([r for r in chosen if status[r.id] is Status.PENDING])
 

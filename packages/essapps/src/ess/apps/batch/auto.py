@@ -20,8 +20,8 @@ every step. Such a row is refused before it is submitted: each file of its cell
 at the trigger column must be one of the files of the scan.
 
 A step costs the scan of all files and a check of each row's cell at the
-trigger column. The state of the rows it submits reads every record under the
-batch's label, though it works out the status of those rows only.
+trigger column. The state of the rows it submits reads the records that
+changed since the batch last read them, and the status of those rows only.
 """
 
 from __future__ import annotations

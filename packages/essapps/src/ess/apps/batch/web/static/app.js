@@ -478,7 +478,7 @@ function renderRow(detail) {
           detail.differs.length > 0 &&
             h('button', {type: 'button', text: `Use these settings for every ${words().one}`, onclick: useSettings}),
         )
-      : h('p', {class: 'hint', text: 'Not reduced yet.'}),
+      : !row.record && h('p', {class: 'hint', text: 'Not reduced yet.'}),
   ];
   // The form to reduce the row alone is kept while the row stays, and drawn
   // again in place only when it changed, so that typing in it goes on.

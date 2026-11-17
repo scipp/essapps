@@ -20,10 +20,11 @@ raises :class:`Problem` too, with what to tell the person. One server serves
 one batch to one person, and takes one request at a time.
 
 Statuses are named in a scientist's words: a row that is ``not reduced`` is
-``ready``, a ``pending`` one ``running``, a ``completed`` one ``done``, and a
-``stale`` one ``outdated``. A failed or cancelled row stays so when the
-settings change, since it needs reducing either way. While the settings are
-incomplete, no result can be said to be current, so a done row is outdated.
+``ready``, a ``pending`` one ``running``, and a ``completed`` one ``done``;
+``incomplete`` and ``outdated`` keep their names. A failed or cancelled row
+stays so when the settings change, since it needs reducing either way. While
+the settings are incomplete, or the workflow refuses them, no result can be
+said to be current, so a done row is outdated.
 """
 
 from __future__ import annotations
@@ -92,7 +93,6 @@ _STATUS = {
     'not reduced': 'ready',
     'pending': 'running',
     'completed': 'done',
-    'stale': 'outdated',
 }
 _ORDER = ('ready', 'running', 'done', 'outdated', 'failed', 'cancelled', 'incomplete')
 _ENDED = (Status.FAILED, Status.CANCELLED)
@@ -243,8 +243,18 @@ class Server:
         except SubmitError:
             return None
 
-    def _states(self) -> dict[str, RowState]:
-        return self.batch.state(self._settings())
+    def _states(
+        self, keys: Sequence[str] | None = None
+    ) -> tuple[dict[str, RowState], tuple[FieldError, ...]]:
+        """
+        The state of the rows of ``keys``, or of all, read with the settings;
+        and, if they are incomplete or refused, the reasons, and the state
+        read without them.
+        """
+        try:
+            return self.batch.state(self.settings.params, keys), ()
+        except SubmitError as error:
+            return self.batch.state(keys=keys), error.errors
 
     def _status(self, state: RowState, settings_ok: bool) -> str:
         if state.status in _ENDED and not state.problems:
@@ -277,26 +287,22 @@ class Server:
     @_locked
     def state(self, notice: str = '') -> State:
         """Everything the page shows but a row's details, the plot, and the runs."""
-        settings = self._settings()
-        states = self.batch.state(settings)
-        statuses = {k: self._status(s, settings is not None) for k, s in states.items()}
+        states, unusable = self._states()
+        statuses = {k: self._status(s, not unusable) for k, s in states.items()}
         failures = self._failures(states)
         scan = {row.key: row for row in self.batch.rows.scan}
         added = {row.key for row in self.batch.rows.added}
         rows = [
-            self._row(
-                row, settings, states[row.key], statuses[row.key], failures, scan, added
-            )
+            self._row(row, states[row.key], statuses[row.key], failures, scan, added)
             for row in self.batch.rows
         ]
         counts = dict.fromkeys(_ORDER, 0)
         for status in statuses.values():
             counts[status] += 1
-        problem = None
-        if settings is None:
-            _, missing = self.settings.held()
-            said = [_say(self._setting_title(e), e.msg) for e in missing if e.loc]
-            problem = '; '.join(said) or 'The settings are incomplete.'
+        said = [
+            _say(self._setting_title(e), e.msg) if e.loc else e.msg for e in unusable
+        ]
+        problem = '; '.join(said) or None
         fields = self.batch.spec.params.model_fields
         return State(
             version=self.version,
@@ -325,7 +331,7 @@ class Server:
             removed=len(scan.keys() & self.batch.rows.removed),
             action=self._primary(states, statuses, problem),
             settings=forms.tree(
-                self.settings, [e for e in self.refused if not e.entry]
+                self.settings, [e for e in (*unusable, *self.refused) if not e.entry]
             ),
             settings_problem=problem,
             refused=[self._refused(e) for e in self.refused],
@@ -349,31 +355,23 @@ class Server:
         """What a cell shows (:meth:`Listing.text`); nothing if it is unset."""
         return '' if value is UNSET else self._listing.text(value)
 
-    def _changed(
-        self,
-        row: TableRow,
-        given: Mapping[str, Any],
-        settings: Mapping[str, Any],
-        tweaked: bool,
-    ) -> list[str]:
-        """
-        The titles of the cells and ``settings`` that differ from those
-        ``given`` to the reduction of ``row``; the settings count only if it
-        was not ``tweaked``, reduced alone.
-        """
-        now = {} if tweaked else dict(settings)
-        now.update({c: v for c, v in row.values.items() if c in self.batch.columns})
+    def _outdated(self, state: RowState) -> str:
+        """Why the result of a row is outdated: what changed since."""
         titles = {**self.settings.titles, **self._cells.titles}
-        return [
-            titles.get(n, n)
-            for n in now
-            if forms.jsonable(given.get(n)) != forms.jsonable(now[n])
-        ]
+        # a tweak is outdated by its cells only; its settings are its own
+        names = (
+            self.batch.columns if state.tweaked else self.batch.spec.params.model_fields
+        )
+        said = []
+        if changed := [titles.get(n, n) for n in names if n in state.changed]:
+            said.append(f'{_join(changed)} changed.')
+        if state.spec_changed:
+            said.append('It was reduced by another version of the workflow.')
+        return ' '.join(said)
 
     def _row(
         self,
         row: TableRow,
-        settings: Mapping[str, Any] | None,
         state: RowState,
         status: str,
         failures: Mapping[str, str],
@@ -381,7 +379,7 @@ class Server:
         added: set[str],
     ) -> Row:
         edits = self.batch.rows.edits.get(row.key, {})
-        titles = self._cells.titles
+        titles = {**self.settings.titles, **self._cells.titles}
         problems = {
             str(e.loc[0]): _say(titles.get(str(e.loc[0]), str(e.loc[0])), e.msg)
             for e in (*state.problems, *self.refused)
@@ -393,13 +391,10 @@ class Server:
             reason = failures.get(record.id, '')
         elif problems:
             reason = '; '.join(problems.values())
-        elif status == 'outdated' and state.stale and record is not None:
-            changed = self._changed(
-                row, record.request.params, settings or {}, state.tweaked
-            )
-            reason = f'{_join(changed)} changed.' if changed else 'Its cells changed.'
+        elif status == 'outdated' and state.outdated:
+            reason = self._outdated(state)
         elif status == 'outdated':
-            reason = 'The settings are incomplete, so this result may not match them.'
+            reason = 'The settings cannot be used, so this result may not match them.'
         scanned = scan.get(row.key)
         cells = {
             c: Cell(
@@ -440,7 +435,7 @@ class Server:
         kinds = {statuses[k] for k in left}
         n = len(left)
         if blocked:
-            label = 'Settings incomplete'
+            label = 'Check the settings'
         elif not left:
             label = 'Nothing left to reduce'
         elif kinds == {'failed'}:
@@ -514,7 +509,7 @@ class Server:
         return f'Found {self.words.count(len(self.batch.rows))}. {changes}'.strip()
 
     def _incomplete(self) -> set[str]:
-        return {k for k, s in self._states().items() if s.problems}
+        return {k for k, s in self._states()[0].items() if s.problems}
 
     def _scanned(self, scan: Callable[[], None]) -> str:
         """
@@ -664,10 +659,15 @@ class Server:
     def use_settings(self, key: str) -> str:
         """Take the settings that the result of row ``key`` was reduced with."""
         name = self._named(self._row_of(key))
-        record = self._states()[key].record
-        if record is None:
+        row = self._states([key])[0][key]
+        if row.record is None:
             raise Problem(f'{name} has no result.')
-        self.settings.set(record.request.params, self._listing)
+        if row.spec_changed:
+            raise Problem(
+                f'{name} was reduced by another version of the workflow, '
+                'whose settings this one does not take.'
+            )
+        self.settings.set(row.record.request.params, self._listing)
         self._forget_settings()
         return f'All {self.words.many} now use the settings {name} was reduced with.'
 
@@ -676,19 +676,20 @@ class Server:
     def _load_tweak(self, key: str) -> None:
         """Load the row's cells and what its result ran with, once per result."""
         cells = self._row_of(key).values
-        record = self._states()[key].record
-        source = (key, cells, None if record is None else record.id)
+        row = self._states([key])[0][key]
+        source = (key, cells, None if row.record is None else row.record.id)
         if self._tweak_of == source:
             return
         self._tweak_of = source
-        params = self.batch.tweak_params(key, record, self._settings())
+        params = self.batch.tweak_params(row, self._settings())
         self.tweak.set(params, self._listing)
 
     @_locked
     def row(self, key: str) -> RowDetail:
         """What one row was reduced with, and its form for a reduction alone."""
         self._load_tweak(key)
-        record = self._states()[key].record
+        state = self._states([key])[0][key]
+        record = state.record
         detail = RowDetail(
             key=key,
             reduced_with=None,
@@ -696,21 +697,15 @@ class Server:
             differs=[],
             tweak=forms.tree(self.tweak),
         )
-        if record is None:
-            return detail
+        if record is None or state.spec_changed:
+            return detail  # another spec's params are not this one's
         given = Fields(
             self.batch.spec.params, self._listing, fields=self.batch.settings_fields
         )
         given.set(record.request.params, self._listing)
-        now = self._settings() or {}
         detail.reduced_with = forms.tree(given)
         detail.created = record.created
-        detail.differs = [
-            n
-            for n in self.batch.settings_fields
-            if forms.jsonable(record.request.params.get(n))
-            != forms.jsonable(now.get(n))
-        ]
+        detail.differs = [n for n in self.batch.settings_fields if n in state.changed]
         return detail
 
     @_locked
@@ -853,7 +848,7 @@ class Server:
     def table_file(self, suffix: str) -> bytes:
         """The rows as a table file, ``.csv`` or ``.xlsx``."""
         with _file(f'{self.words.many}{suffix}') as path:
-            frames.write_table(frames.batch_table(self.batch, self._states()), path)
+            frames.write_table(frames.batch_table(self.batch, self._states()[0]), path)
             return path.read_bytes()
 
     @_action
@@ -911,7 +906,7 @@ class Server:
     @_locked
     def results_file(self, keys: Sequence[str]) -> bytes:
         """A zip of the outputs of the done rows among ``keys``, or of all."""
-        states = self._states()
+        states, _ = self._states()
         done = [
             k
             for k, s in states.items()

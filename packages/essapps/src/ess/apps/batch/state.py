@@ -6,6 +6,21 @@ Where each row of a batch stands, worked out from plain data.
 Nothing here calls a client, so every rule of what is ready and what is left
 to do is tested on values. :class:`~.reduction.Batch` reads
 the records and gives them to these functions.
+
+A row's *result* is the newest record under the batch's label with the row's
+key as its member, of any spec (:func:`results`). The row's request now differs
+from its result's at the parameters that :attr:`RowState.changed` names, found
+with :func:`differs` on both as a record holds them. A result is *outdated*
+(:attr:`RowState.outdated`) if it is of another spec than the one bound
+(:attr:`RowState.spec_changed`), or if the request changed: at any parameter
+for a result reduced with the settings, at a column for a tweak, whose other
+parameters are its own (:func:`row_states`)::
+
+    changed == {'binning'}               # outdated, but a tweak is not
+    changed == {'binning', 'thickness'}  # outdated, a tweak too
+
+A value refused when resolved is a problem of the row, not a change: the row
+cannot run with it, and a change would offer it to :func:`remaining`.
 """
 
 from __future__ import annotations
@@ -14,6 +29,7 @@ from collections import Counter
 from collections.abc import Collection, Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -21,7 +37,7 @@ from ess.spec import OutputRef
 from ess.spec.refs import iter_refs
 
 from ..errors import FieldError
-from ..records import Record, SpecId, Status
+from ..records import Record, Status
 from .table import Row
 
 _RERUN = (Status.FAILED, Status.CANCELLED)
@@ -33,19 +49,25 @@ class RowState:
     Where one row stands.
 
     ``record`` is the row's result, if it has one, and ``status`` its status.
-    ``problems`` say why the row cannot be reduced now. ``stale`` is true if
-    the row or the settings differ from those of its result. ``tweaked`` is
-    true if the batch last submitted the row by :meth:`~.reduction.Batch.tweak`,
-    with parameters of its own, so that its result does not follow the
-    settings.
+    ``problems`` say why the row cannot be reduced now. ``changed`` names the
+    parameters at which the row's request now differs from the request of its
+    result, both as a record holds them, and is empty unless the state was read
+    with settings; ``spec_changed`` is true if the result is of another spec
+    than the one bound. ``tweaked`` is true if the result came from
+    :meth:`~.reduction.Batch.tweak` of this batch, with parameters of its own,
+    so that it does not follow the settings. ``outdated`` is true if the result
+    is of another spec, or if the request changed, at a column only for a
+    tweak.
     """
 
     key: str
     record: Record | None = None
     status: Status | None = None
     problems: tuple[FieldError, ...] = ()
-    stale: bool = False
+    changed: frozenset[str] = frozenset()
+    spec_changed: bool = False
     tweaked: bool = False
+    outdated: bool = False
 
     @property
     def text(self) -> str:
@@ -56,7 +78,9 @@ class RowState:
             return 'incomplete'
         if self.status is None:
             return 'not reduced'
-        return 'stale' if self.stale else str(self.status)
+        if self.outdated:
+            return 'outdated'
+        return str(self.status)
 
 
 def problems(
@@ -88,13 +112,13 @@ def problems(
     return tuple(found)
 
 
-def results(records: Iterable[Record], spec: SpecId) -> dict[str, Record]:
+def results(records: Iterable[Record]) -> dict[str, Record]:
     """
     The result of each row by its key: the newest of ``records``, oldest
-    first, of ``spec`` with that member, whoever submitted it. So a rerun of a
-    row is its result, and one folder or one service holds one history.
+    first, with that member, of any spec and whoever submitted it. So a rerun
+    of a row is its result, and one folder or one service holds one history.
     """
-    return {r.member: r for r in records if r.member is not None and r.spec == spec}
+    return {r.member: r for r in records if r.member is not None}
 
 
 def references(rows: Iterable[Row]) -> set[str]:
@@ -107,31 +131,53 @@ def references(rows: Iterable[Row]) -> set[str]:
     }
 
 
+def differs(
+    now: Mapping[str, Any], was: Mapping[str, Any], names: Iterable[str]
+) -> list[str]:
+    """
+    The ``names`` at which the params ``now`` differ from ``was``. A name that
+    either lacks differs: a value left out takes its default, and a spec of
+    another version may not have the parameter.
+    """
+    return [n for n in names if n not in now or n not in was or now[n] != was[n]]
+
+
 def row_states(
     rows: Iterable[Row],
     model: type[BaseModel],
     columns: Collection[str],
     found: Mapping[str, Record],
     status: Mapping[str, Status],
-    stale: AbstractSet[str] = frozenset(),
+    changed: Mapping[str, frozenset[str]] | None = None,
+    refused: Mapping[str, tuple[FieldError, ...]] | None = None,
+    spec_changed: AbstractSet[str] = frozenset(),
     tweaked: AbstractSet[str] = frozenset(),
 ) -> dict[str, RowState]:
     """
     The state of each row. ``found`` holds their results by key, ``status`` the
     status of those and of the records their cells reference, by record ID,
-    ``stale`` the keys that differ from their results, and ``tweaked`` the keys
-    last submitted by a tweak.
+    ``changed`` the names at which a row differs from its result, ``refused``
+    the reasons a row's cells were refused when resolved, ``spec_changed`` the
+    keys whose result is of another spec, and ``tweaked`` the keys whose result
+    is a tweak.
     """
+    changed = changed or {}
+    refused = refused or {}
     states = {}
     for row in rows:
         record = found.get(row.key)
+        names = changed.get(row.key, frozenset())
+        tweak = row.key in tweaked
         states[row.key] = RowState(
             key=row.key,
             record=record,
             status=None if record is None else status[record.id],
-            problems=problems(row, model, columns, status),
-            stale=row.key in stale,
-            tweaked=row.key in tweaked,
+            problems=problems(row, model, columns, status) + refused.get(row.key, ()),
+            changed=names,
+            spec_changed=row.key in spec_changed,
+            tweaked=tweak,
+            outdated=row.key in spec_changed
+            or bool(names & set(columns) if tweak else names),
         )
     return states
 
@@ -146,11 +192,14 @@ def ready(states: Mapping[str, RowState]) -> list[str]:
 
 
 def remaining(states: Mapping[str, RowState]) -> list[str]:
-    """The ready rows with no result yet, one that failed or was cancelled, or stale."""
+    """
+    The ready rows with no result, one that failed or was cancelled, or one
+    that is outdated.
+    """
     return [
         k
         for k in ready(states)
-        if states[k].status is None or states[k].status in _RERUN or states[k].stale
+        if states[k].status is None or states[k].status in _RERUN or states[k].outdated
     ]
 
 

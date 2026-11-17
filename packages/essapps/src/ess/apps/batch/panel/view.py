@@ -53,7 +53,7 @@ _FILTERS = (
     'completed',
     'failed',
     'cancelled',
-    'stale',
+    'outdated',
 )
 
 
@@ -87,7 +87,7 @@ class BatchView:
         self._drawn: tuple[tuple[str, str], ...] = ()
         model, listing = batch.spec.params, self._listing
         self.settings = Form(model, listing, fields=batch.settings_fields)
-        self.settings.watch(self._show)  # changed settings make results stale
+        self.settings.watch(self._show)  # changed settings make results outdated
         self.row = Form(model, listing, fields=batch.columns)
         self.tweak = Form(model, listing)
         self._titles = {
@@ -154,7 +154,12 @@ class BatchView:
             return None
 
     def _show(self) -> None:
-        self._states = self.batch.state(self._current_settings())
+        settings = self._current_settings()
+        try:
+            self._states = self.batch.state(settings)
+        except SubmitError as error:  # settings refused: shown without them
+            self.message.object = _refused(error.errors)
+            self._states = self.batch.state()
         counts = summary(self._states)
         self.summary.object = ', '.join(f'{n} {text}' for text, n in counts.items())
         chosen = self.filter.value
@@ -199,12 +204,12 @@ class BatchView:
         if len(keys) != 1:
             return
         cells = self.batch.rows[keys[0]].values
-        record = self._states[keys[0]].record
-        source = (keys[0], cells, None if record is None else record.id)
+        row = self._states[keys[0]]
+        source = (keys[0], cells, None if row.record is None else row.record.id)
         if self._tweak_loaded == source:
             return
         self._tweak_loaded = source
-        params = self.batch.tweak_params(keys[0], record, self._current_settings())
+        params = self.batch.tweak_params(row, self._current_settings())
         self.tweak.set(params, self._listing)
 
     def _describe(self, keys: list[str]) -> None:
@@ -281,7 +286,7 @@ class BatchView:
         return self._reduce(ready)
 
     def reduce_remaining(self) -> dict[str, Record]:
-        """Submit the rows with no result, a failed one, or a stale one."""
+        """Submit the rows with no result, a failed one, or an outdated one."""
         return self._reduce(remaining)
 
     def reduce_selected(self) -> dict[str, Record]:
@@ -296,11 +301,11 @@ class BatchView:
     def use_settings(self) -> None:
         """Show the settings of the result of the row selected."""
         key = self.table.selected
-        record = None if key is None else self._states[key].record
-        if record is None:
-            self.message.object = 'Select one row that has a result.'
+        row = None if key is None else self._states[key]
+        if row is None or row.record is None or row.spec_changed:
+            self.message.object = 'Select one row that has a result of this workflow.'
             return
-        self.settings.set(record.request.params, self._listing)
+        self.settings.set(row.record.request.params, self._listing)
         self._show()
 
     def add(self) -> None:

@@ -126,9 +126,7 @@ def test_e4_template_improved_during_a_beamtime(
         [3.0, 7.0],
         [2.0, 7.0],
     ]
-    stale = [
-        r
-        for r in user.records(label='iofq')
-        if r.request.params['reduction']['threshold'] != 1.5
-    ]
-    assert [r.request.files() for r in stale] == [[first]]
+    batch = iofq_batch(user)
+    batch.scan()
+    outdated = [k for k, s in batch.state(settings).items() if s.outdated]
+    assert [batch.state()[k].record.request.files() for k in outdated] == [[first]]

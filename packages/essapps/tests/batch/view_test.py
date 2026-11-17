@@ -262,7 +262,7 @@ def test_a_tweak_becomes_the_result_of_its_row(
 ) -> None:
     reduced.table.select_keys(['1'])
     params = dict(reduced.tweak.params)
-    params['thickness'] = 4.0
+    params['binning'] = {'bins': 4}
     reduced.tweak.set(params, Listing(client))
 
     record = reduced.submit_tweak()
@@ -304,10 +304,10 @@ def test_a_column_chosen_is_written_to_all_selected_even_at_its_default(
     assert view.write.value == ''
 
 
-def test_changing_a_setting_shows_the_results_as_stale(reduced: BatchView) -> None:
+def test_changing_a_setting_shows_the_results_as_outdated(reduced: BatchView) -> None:
     reduced.settings.panel().select(pn.widgets.IntInput)[0].value = 3
 
-    assert results(reduced) == {'1': 'stale', '2': 'stale', '3': 'incomplete'}
+    assert results(reduced) == {'1': 'outdated', '2': 'outdated', '3': 'incomplete'}
 
 
 def test_nothing_changed_says_so(view: BatchView) -> None:

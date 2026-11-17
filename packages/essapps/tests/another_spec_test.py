@@ -394,15 +394,16 @@ def batch_of(folder: Path) -> Callable[[list[Binding]], Batch]:
     return make
 
 
-@pytest.mark.parametrize(
-    ('another', 'shows'), [('renamed', 'completed'), ('bumped', 'not reduced')]
-)
-def test_a_batch_shows_a_row_whose_result_is_of_another_spec(
-    batch_of: Callable[[list[Binding]], Batch], another: str, shows: str
+@pytest.mark.parametrize('another', ['renamed', 'bumped'])
+def test_a_batch_shows_a_row_whose_result_is_of_another_spec_as_outdated(
+    batch_of: Callable[[list[Binding]], Batch], another: str
 ) -> None:
     batch = batch_of(OTHERS[another])
     try:
         Listing(batch.client)  # what the batch's views list
-        assert batch.state()['5'].text == shows
+        state = batch.state()['5']
+        assert state.record is not None
+        assert state.spec_changed
+        assert state.text == 'outdated'
     finally:
         batch.client.close()

@@ -3,13 +3,15 @@
 """What is ready, left to do, and shown, on plain values: no client."""
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
 from ess.apps import Record, Request, SpecId, Status
 from ess.apps.batch import Row, RowState, ready, remaining, summary
-from ess.apps.batch.state import row_states
+from ess.apps.batch.state import differs, results, row_states
+from ess.apps.errors import FieldError
 from ess.spec import OutputRef
 
 SPEC = SpecId(name='iofq', version=1)
@@ -29,7 +31,7 @@ def record(
 ) -> Record:
     return Record(
         id=id_,
-        request=Request(SPEC),
+        request=Request(spec),
         proposal='p1',
         submitter='me',
         created=datetime(2026, 1, 1, tzinfo=UTC),
@@ -93,18 +95,78 @@ def test_a_row_without_a_result_is_left_to_do() -> None:
     assert remaining(states([Row('a', {'sample': 'x'})])) == ['a']
 
 
-def test_a_stale_row_is_left_to_do_and_shown_as_stale() -> None:
+@pytest.mark.parametrize(
+    'outdated', [{'changed': {'a': frozenset({'thickness'})}}, {'spec_changed': {'a'}}]
+)
+def test_an_outdated_row_is_left_to_do_and_shown_as_outdated(
+    outdated: dict[str, Any],
+) -> None:
     found = row_states(
         [Row('a', {'sample': 'x'})],
         Model,
         COLUMNS,
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
-        stale={'a'},
+        **outdated,
     )
 
     assert remaining(found) == ['a']
-    assert found['a'].text == 'stale'
+    assert found['a'].text == 'outdated'
+
+
+@pytest.mark.parametrize(
+    ('changed', 'outdated'), [({'shared'}, False), ({'shared', 'thickness'}, True)]
+)
+def test_a_tweak_is_outdated_only_where_a_column_changed(
+    changed: set[str], outdated: bool
+) -> None:
+    found = row_states(
+        [Row('a', {'sample': 'x'})],
+        Model,
+        COLUMNS,
+        {'a': record('1', 'a')},
+        {'1': Status.COMPLETED},
+        changed={'a': frozenset(changed)},
+        tweaked={'a'},
+    )
+
+    assert found['a'].changed == changed
+    assert found['a'].outdated is outdated
+    assert (remaining(found) == ['a']) is outdated
+
+
+def test_a_refused_value_is_a_problem_of_its_row() -> None:
+    reason = FieldError('a', ('thickness',), 'must be positive')
+    found = row_states(
+        [Row('a', {'sample': 'x'})],
+        Model,
+        COLUMNS,
+        {'a': record('1', 'a')},
+        {'1': Status.COMPLETED},
+        refused={'a': (reason,)},
+    )
+
+    assert found['a'].problems == (reason,)
+    assert remaining(found) == []
+
+
+def test_the_result_of_a_row_is_its_newest_record_of_any_spec() -> None:
+    older = SpecId(name='iofq', version=0)
+
+    found = results([record('1', 'a'), record('2', 'a', spec=older), record('3', 'b')])
+
+    assert {k: r.id for k, r in found.items()} == {'a': '2', 'b': '3'}
+
+
+def test_a_value_differs_if_either_side_lacks_it() -> None:
+    was = {'sample': 'x', 'thickness': 1.0, 'shared': 0}
+
+    assert differs({'sample': 'x', 'thickness': 1.0}, was, Model.model_fields) == [
+        'shared'
+    ]
+    assert differs({'sample': 'y', 'shared': 0}, was, ['sample', 'shared']) == [
+        'sample'
+    ]
 
 
 def test_summary_counts_the_rows_by_what_they_show() -> None:
