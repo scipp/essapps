@@ -535,15 +535,33 @@ def test_a_tick_does_nothing_while_not_following(
     assert server.state().rows == []
 
 
+class WatchedLock:
+    """A re-entrant lock that says when a thread has to wait to take it."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self.waited = threading.Event()
+
+    def __enter__(self) -> None:
+        if not self._lock.acquire(blocking=False):
+            self.waited.set()
+            self._lock.acquire()
+
+    def __exit__(self, *_: object) -> None:
+        self._lock.release()
+
+
 def test_a_tick_that_waited_for_the_request_that_stops_following_does_nothing(
     server: Server, client: Client, sample: Measure
 ) -> None:
     server.follow(True)
+    lock = WatchedLock()
+    server.lock = lock  # type: ignore[assignment]
     timer = threading.Thread(target=server.tick)
 
     with server.lock:  # a request that runs while the timer fires
         timer.start()
-        time.sleep(0.2)  # the tick waits for the lock
+        assert lock.waited.wait(30)  # the tick waits for the lock
         sample(1, 'water')
         server.follow(False)
     timer.join()
