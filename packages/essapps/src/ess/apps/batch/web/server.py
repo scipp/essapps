@@ -530,7 +530,12 @@ class Server:
         """
         before = {r.key: dict(r.values) for r in self.batch.rows}
         incomplete = self._incomplete()
-        scan()
+        try:
+            scan()
+        finally:
+            # New rows may name files that the listing lacks, and a correction
+            # of runs changes what it offers, even if the scan then fails.
+            self._relist()
         self.loaded = None
         changed = sum(before.get(r.key) != dict(r.values) for r in self.batch.rows)
         new = self._incomplete() - incomplete
@@ -823,7 +828,6 @@ class Server:
         changed.
         """
         self.runs_version += 1
-        self._relist()
 
         def scan() -> None:
             try:

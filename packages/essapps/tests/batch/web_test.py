@@ -125,6 +125,18 @@ def test_a_poll_sees_a_row_that_another_caller_scanned_without_a_record(
     assert salt['cells']['sample']['value'].startswith('run 4')
 
 
+def test_a_rescan_offers_the_files_it_found_at_the_new_rows(
+    http: TestClient, sample: Measure
+) -> None:
+    sample(4, 'salt')
+
+    scanned = http.post('/api/scan').json()
+
+    salt = {row['key']: row for row in scanned['rows']}['4']
+    assert salt['cells']['sample']['value'].startswith('run 4')
+    assert salt['cells']['transmission']['value'].startswith('run 1004')
+
+
 def test_an_action_answers_with_the_state_after_it(http: TestClient) -> None:
     after = thickness(http, ['1'], 3)
 
