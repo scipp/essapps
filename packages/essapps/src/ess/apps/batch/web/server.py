@@ -2,6 +2,8 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 What the batch page does, without HTTP: :class:`Server`. :mod:`.api` serves it.
+This module imports neither ``fastapi`` nor ``starlette``, so another view of a
+batch can call the same actions and render the same :class:`~.models.State`.
 
 The server holds everything a person changes: the
 :class:`~ess.apps.batch.Batch` with its rows and settings, the form of the

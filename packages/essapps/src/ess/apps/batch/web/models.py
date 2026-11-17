@@ -3,6 +3,9 @@
 """
 What the API sends and takes, as pydantic models, so that ``/docs`` shows them.
 
+This module does not depend on HTTP: it imports neither ``fastapi`` nor
+``starlette``.
+
 A page reads :class:`State` and sends the requests at the end. A form is a
 list of :class:`Node`; a cell of the table, of a sample or of a run, is a
 :class:`Cell`.
