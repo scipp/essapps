@@ -47,13 +47,13 @@ uvicorn.run(app, host='localhost', port=8000)
 The same logic works without the page, in a notebook or a test:
 
 ```python
-from ess.apps.batch import ready, remaining
+from ess.apps.batch import left_to_reduce, ready
 
 batch.settings = settings      # one write; nothing is reduced for it
 batch.scan()
 state = batch.state()           # where each row stands
 records = batch.reduce(ready(state))
-batch.reduce(remaining(batch.state()))
+batch.reduce(left_to_reduce(batch.state(), batch.columns))
 batch.cancel()
 ```
 
@@ -135,7 +135,7 @@ Every way of reducing a batch is this cycle, with its own rule and its own trigg
 | **Reduce all**, **Reduce selected** | a person | `ready(state)`, the keys selected |
 | **Follow** on the page: a timer that scans as **Rescan runs** does | the page's process | `arrived(state, at)` |
 | `Automatic.step`, which `run` calls from a timer | a process of its own | `arrived(state, at)` |
-| `essapps-batch reduce` | a person or a script | every row of the table, or `remaining(state)` with `--remaining` |
+| `essapps-batch reduce` | a person or a script | every row of the table; with `--remaining`, `left_to_reduce(state, batch.columns)`, and with `--earlier-settings` too, `earlier_settings(state, batch.columns)` |
 
 So a person and automatic reduction differ in the rule and in the trigger only. [Rules](#rules) defines each rule, and [Automatic reduction](#automatic-reduction) compares the rows they give. A person is a second loop: they read the state on the page and write the definition. In automatic reduction this loop is idle most of the time.
 
@@ -220,10 +220,9 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 | Function | Gives |
 |---|---|
 | `ready(states)` | every row that can run now |
-| `remaining(states)` | ready rows with no result, a failed or cancelled one, or an outdated one |
 | `arrived(states, at)` | ready rows with no result, or whose request differs from their result's at a column of `at`, but those changed by hand ([Automatic reduction](#automatic-reduction)) |
 | `earlier_settings(states, columns)` | ready rows whose completed result differs from their request only at settings, not at a column, and of the same spec; no tweak |
-| `left_to_reduce(states, columns)` | the rows of `remaining` but those of `earlier_settings` |
+| `left_to_reduce(states, columns)` | ready rows with no result, a failed or cancelled one, or an outdated one, but those of `earlier_settings` |
 | `refused_again(states, at, refused)` | of the reasons `refused` by row, those of the rows of `arrived`: why the next step of a loop will be refused again |
 | `status_texts(states, columns)` | the status of each row as a table shows it: `completed, earlier settings` for a row of `earlier_settings` |
 
@@ -242,7 +241,7 @@ s.text           # 'outdated'
 
 The state is read from the records, so every `Batch` on the label, and the same one after a restart, reads the same, with two limits. A `Batch` knows its own tweaks only (below). A `Batch` keeps how it resolved a file name until its next `scan`. That differs from a new `Batch` only for a file that gained a catalogue identifier since: its names, its old identity among them, now resolve to the identifier. `results()` gives each row with its result but without its request: it resolves nothing, so `changed` is empty, and a result is `outdated` only if it is of another spec. It is what a page shows while the settings are refused, and what `reduce` checks before it submits.
 
-A record holds its request resolved: files by identity, defaults filled in, values in their JSON form. So `state()` resolves with `client.resolve` what it compares. The settings are resolved once per call, whatever the number of rows, and compared with each result. If they are refused, `state` raises the `SubmitError`, with reasons that name no row: no row can run with them. A cell of a row with a result is compared as given first, and only a cell that differs so is resolved and compared again, so writing a default out, or naming a file by run, does not make a row `changed`. Every cell of a row without a result is resolved, so a file named before it is measured shows before anything is submitted. A value resolved is kept by its column and its value, with the type of the value and of each element of a list or tuple, until the next `scan`; a value that cannot be a dictionary key, such as a dict, is resolved at each call. A cell that `resolve` refuses is not `changed`: its reason is one of the row's `problems`, so the row shows as `incomplete`, with the reason at the cell, and neither `ready` nor `remaining` gives it. It is asked again at the next call, so a file that arrives later is found.
+A record holds its request resolved: files by identity, defaults filled in, values in their JSON form. So `state()` resolves with `client.resolve` what it compares. The settings are resolved once per call, whatever the number of rows, and compared with each result. If they are refused, `state` raises the `SubmitError`, with reasons that name no row: no row can run with them. A cell of a row with a result is compared as given first, and only a cell that differs so is resolved and compared again, so writing a default out, or naming a file by run, does not make a row `changed`. Every cell of a row without a result is resolved, so a file named before it is measured shows before anything is submitted. A value resolved is kept by its column and its value, with the type of the value and of each element of a list or tuple, until the next `scan`; a value that cannot be a dictionary key, such as a dict, is resolved at each call. A cell that `resolve` refuses is not `changed`: its reason is one of the row's `problems`, so the row shows as `incomplete`, with the reason at the cell, and neither `ready` nor `left_to_reduce` gives it. It is asked again at the next call, so a file that arrives later is found.
 
 **Cost of `state()`.** Measured with 30 000 rows of two files each, on an in-memory workspace with a file source that finds a name by one lookup:
 
@@ -351,7 +350,7 @@ The files that a person loads and writes ([The UI](#the-ui)) are copies, for oth
 A cell may read another record, also one still running, so a row can use a value computed for that row:
 
 ```python
-centres = find.reduce(remaining(find.state()))
+centres = find.reduce(left_to_reduce(find.state(), find.columns))
 for key, record in centres.items():
     iofq.rows = iofq.rows.edit(key, {'beam_centre': record.ref('centre')})
 ```
@@ -415,10 +414,9 @@ So the loop, the page's buttons, and the command differ:
 |---|---|---|---|---|---|---|
 | the page, "Reduce" (`left_to_reduce`) | yes | yes | no | yes | yes | yes |
 | the page, "Reduce them again" (`earlier_settings`) | no | no | yes, but for a tweak | no | no | no |
-| `essapps-batch reduce --remaining` (`remaining`) | yes | yes | yes, but for a tweak | yes | yes | yes |
 | the loop (`arrived`) | yes, but for a row set by hand | no | no | yes | no | no |
 
-On the page, a change of settings applies to rows not reduced yet, and to all only when a person says so. The command is given its settings at each call, so it applies them to all.
+On the page, a change of settings applies to rows not reduced yet, and to all only when a person says so. `essapps-batch reduce --remaining` follows the page's "Reduce", and `--earlier-settings` with it adds the rows of "Reduce them again". The command is given its settings at each call, so without `--remaining` it applies them to all.
 
 A tweak is `outdated` only where a column changed ([Rules](#rules)), so neither the page nor the command reduces a tweaked row whose settings changed. A failed or cancelled result counts as any other, so a row whose reduction fails is not reduced at every step. A changed setting reduces no row again ([The model](#the-model-tables-and-one-cycle)). A person reduces those rows through the loop's batch, with **Reduce them again** on the page ([one label, one batch](#one-label-one-batch)).
 
@@ -517,7 +515,7 @@ A cell that is not text is its value, and `None` or `NaN` is an empty cell, so o
 
 **A cell** is read as JSON if it is JSON, so `1.5`, `null`, and `{"x": 0, "y": 1}` are values, and anything else is text. Text that is JSON is written in quotes, such as `"12"` for a sample name at a string parameter; a `.csv` file doubles them, `"""12"""`. At a parameter that is a file field, or a list of them, a whole number names a run, text with a kind, such as `pid:...` or `path:...`, a file as the record holds it, and other text a path, relative to the working directory. A table that the batch writes holds each file as the record does, by its identity: `pid:20.500.12269/<uuid>` for a raw file the catalogue lists, and `path:masks/mask.xml`, relative to the workspace's folder, for any other file in it. A number with a leading zero, such as `0342`, is not JSON, so it is read as a path: write `342`. The same holds for the values of the template's file. A file field inside a group takes the JSON form, `{"@ref": "file", "file": "run:60339"}`. Every file is one that the workspace's file source knows.
 
-**`reduce`** returns the table with three columns, which it replaces if the table has them: `status`, the ID of the `record`, and `failure`, the reason. So its result can be its next table. With `--remaining` it reduces only the rows that `remaining` gives: those with no result, a failed or cancelled one, or an outdated one, whose cells or settings changed since, or whose result is of another spec ([Rules](#rules)). A row that cannot run is submitted all the same, so that the command refuses it by name. The `status` of a row is `completed`, `failed`, or `cancelled`.
+**`reduce`** returns the table with three columns, which it replaces if the table has them: `status`, the ID of the `record`, and `failure`, the reason. So its result can be its next table. With `--remaining` it reduces only the rows that `left_to_reduce` gives: those with no result, a failed or cancelled one, or one whose cells changed since, or whose result is of another spec ([Rules](#rules)). A row reduced with earlier settings is left, and reads `completed, earlier settings`: the command then says how many rows it left, and ends with status 3. `--earlier-settings`, only with `--remaining`, reduces those rows too. A row that cannot run is submitted all the same, so that the command refuses it by name. The `status` of a row is `completed`, `failed`, or `cancelled`.
 
 Ctrl-C cancels every row that has not completed, those running among them, and the command ends with a `KeyboardInterrupt` once the workflows that were running return. It writes no table; reduce again with `--remaining`.
 
@@ -576,7 +574,7 @@ $B reduce iofq.yaml runs.csv --label water-series
 
 `{'@latest': label, output: name}` is read when the command starts, as the output of the newest record under the label, of `member` if given, whoever submitted it. It is for a template, not for a cell of a table. The record of each row holds the ID that it was read as. A reference by ID is `{'@ref': output, record: ..., output: ...}`.
 
-One command holds the folder at a time. If a command was killed, the next one first finishes the rows that had not started, but fails those of a spec it does not bind with the same version and models. A row that was running fails, since its workflow may have been what ended the process. Reduce again with `--remaining` to submit every row that has not completed, the failed ones included. A command that binds another version of a spec, or the same version with changed models, reads the old results as plain scipp data, and reduces their rows again with `--remaining`. Nothing removes the files of the store.
+One command holds the folder at a time. If a command was killed, the next one first finishes the rows that had not started, but fails those of a spec it does not bind with the same version and models. A row that was running fails, since its workflow may have been what ended the process. Reduce again with `--remaining` to submit every row that has not completed, the failed ones included. A command that binds another version of a spec, or the same version with changed models, reads the old results as plain scipp data, and reduces their rows again with `--remaining`, whatever settings the template gives. Nothing removes the files of the store.
 
 ## The UI
 
