@@ -338,33 +338,51 @@ export class Grid {
     const json = new Map(rows.map((row) => [row.key, JSON.stringify(row)]));
     this.quiet = true;
     try {
-      if (before.length && kept.every((row, i) => row.key === stay[i])) {
-        if (gone.length) await this.table.deleteRow(gone);
-        // Each row changed is drawn again whole: a cell shows more than the
-        // value Tabulator compares.
-        const changed = kept.filter((row) => this.json.get(row.key) !== json.get(row.key));
-        if (changed.length) await this.table.updateData(changed);
-        for (const row of changed) this.table.getRow(row.key).reformat();
-        // New rows next to each other are added at once, after the row
-        // before them, or at the top.
-        for (let i = 0, end; i < rows.length; i = end) {
-          end = i + 1;
-          if (had.has(rows[i].key)) continue;
-          while (end < rows.length && !had.has(rows[end].key)) end++;
-          await this.table.addData(rows.slice(i, end), i === 0, rows[i - 1]?.key);
+      await this.keepFocus(async () => {
+        if (before.length && kept.every((row, i) => row.key === stay[i])) {
+          if (gone.length) await this.table.deleteRow(gone);
+          // Each row changed is drawn again whole: a cell shows more than the
+          // value Tabulator compares.
+          const changed = kept.filter((row) => this.json.get(row.key) !== json.get(row.key));
+          if (changed.length) await this.table.updateData(changed);
+          for (const row of changed) this.table.getRow(row.key).reformat();
+          // New rows next to each other are added at once, after the row
+          // before them, or at the top.
+          for (let i = 0, end; i < rows.length; i = end) {
+            end = i + 1;
+            if (had.has(rows[i].key)) continue;
+            while (end < rows.length && !had.has(rows[end].key)) end++;
+            await this.table.addData(rows.slice(i, end), i === 0, rows[i - 1]?.key);
+          }
+          if (gone.length || changed.length || kept.length < rows.length) this.table.refreshFilter();
+        } else {
+          const selected = this.selected().filter((key) => keys.has(key));
+          await this.table.replaceData(rows);
+          if (selected.length) this.table.selectRow(selected);
         }
-        this.table.refreshFilter();
-      } else {
-        const selected = this.selected().filter((key) => keys.has(key));
-        await this.table.replaceData(rows);
-        if (selected.length) this.table.selectRow(selected);
-      }
-      this.deselectHidden();
+        this.deselectHidden();
+      });
     } finally {
       this.quiet = false;
     }
     this.json = json;
     this.announce();
+  }
+
+  // Run `work`, which may draw rows again, and give the keyboard focus back to
+  // the control it was on in a cell: the first of its tag in the cell at the
+  // same place in the row of the same key.
+  async keepFocus(work) {
+    const active = document.activeElement;
+    const cell = active.closest?.('.tabulator-cell');
+    const row = cell && this.table.getRows('visible').find((r) => r.getElement().contains(cell));
+    if (!row) return work();
+    const key = row.getData().key;
+    const at = [...row.getElement().querySelectorAll('.tabulator-cell')].indexOf(cell);
+    await work();
+    if (document.activeElement === active) return;
+    const again = this.table.getRow(key)?.getElement().querySelectorAll('.tabulator-cell')[at];
+    again?.querySelector(active.tagName)?.focus({preventScroll: true});
   }
 
   async select(keys) {

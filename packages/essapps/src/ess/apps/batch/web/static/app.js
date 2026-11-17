@@ -301,16 +301,19 @@ function renderAction(action) {
 
 const CHIPS = ['all', 'ready', 'running', 'done', 'outdated', 'failed', 'incomplete', 'cancelled'];
 
-function renderChips(counts) {
-  const shown = CHIPS.filter((s) => s === 'all' || counts[s] > 0 || s === view.filter);
-  $('chips').replaceChildren(
-    ...shown.map((status) =>
+// The chip of each status is made once and updated in place, so that a chip
+// that has the keyboard focus keeps it.
+const chips = new Map();
+
+function chip(status) {
+  if (!chips.has(status)) {
+    chips.set(
+      status,
       h(
         'button',
         {
           type: 'button',
           class: `chip st-${status}`,
-          'aria-pressed': String(view.filter === status),
           onclick: () => {
             view.filter = view.filter === status ? 'all' : status;
             remember();
@@ -320,10 +323,23 @@ function renderChips(counts) {
         },
         h('span', {class: 'dot'}),
         h('span', {text: status}),
-        h('span', {class: 'n', text: counts[status]}),
+        h('span', {class: 'n'}),
       ),
-    ),
-  );
+    );
+  }
+  return chips.get(status);
+}
+
+function renderChips(counts) {
+  const box = $('chips');
+  const shown = CHIPS.filter((s) => s === 'all' || counts[s] > 0 || s === view.filter);
+  shown.forEach((status, i) => {
+    const element = chip(status);
+    element.setAttribute('aria-pressed', String(view.filter === status));
+    element.querySelector('.n').textContent = counts[status];
+    if (box.children[i] !== element) box.insertBefore(element, box.children[i] ?? null);
+  });
+  [...box.children].slice(shown.length).forEach((element) => element.remove());
 }
 
 // The reasons of a refused reduction, until closed or the next change.
@@ -539,7 +555,11 @@ function renderRow(detail) {
         )
       : !row.record && h('p', {class: 'hint', text: 'Not reduced yet.'}),
   ];
-  $('tab-row').replaceChildren(...parts.filter(Boolean));
+  const pane = $('tab-row');
+  const focused = pane.contains(document.activeElement) && document.activeElement.textContent;
+  pane.replaceChildren(...parts.filter(Boolean));
+  // The buttons are made again; the focus goes to the one with the same text.
+  if (focused) [...pane.querySelectorAll('button')].find((b) => b.textContent === focused)?.focus();
 }
 
 // A time as 2026-11-10 13:11, in the time zone of the browser.

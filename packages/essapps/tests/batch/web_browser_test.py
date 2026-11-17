@@ -688,3 +688,59 @@ def test_a_run_corrected_while_the_runs_are_hidden_shows_when_they_are_opened(
     page.click('[data-view=runs]')
 
     page.wait_for_selector('#runs .tabulator-cell:has-text("corrected")')
+
+
+def active(page: Any) -> str:
+    """The tag and the class of the element that has the keyboard focus."""
+    return page.evaluate(
+        '`${document.activeElement.tagName}.${document.activeElement.className}`'
+    )
+
+
+def test_a_chip_of_the_filter_keeps_the_focus_when_the_state_changes(
+    page: Any, url: str, client: Client
+) -> None:
+    page.focus('.chip.st-ready')
+
+    reduce_rows(page, url, client, '2')
+
+    assert active(page) == 'BUTTON.chip st-ready'
+
+
+def test_the_button_that_reverts_a_cell_can_be_focused_and_keeps_the_focus(
+    page: Any, url: str
+) -> None:
+    edit = {'keys': ['2'], 'column': 'thickness', 'value': 2.0}
+    assert page.request.post(f'{url}api/cells', data=edit).ok
+    revert = page.locator('#rows .tabulator-row', has_text='sds').locator('.revert')
+    revert.focus()
+    assert active(page) == 'BUTTON.revert'
+
+    assert page.request.post(f'{url}api/cells', data=edit | {'value': 3.0}).ok
+
+    page.wait_for_function(
+        "document.querySelector('.tabulator-cell.edited').innerText.includes('3.0')"
+        " && document.activeElement.classList.contains('revert')"
+    )
+
+
+def test_a_button_of_the_row_tab_keeps_the_focus_when_the_row_changes(
+    page: Any, url: str, client: Client
+) -> None:
+    reduce_rows(page, url, client, '1')
+    change = {'path': ['binning', 'bins'], 'op': 'set', 'value': 5}
+    assert page.request.post(f'{url}api/settings', data=change).ok
+    assert page.request.post(f'{url}api/settings/apply').ok
+    page.click('[data-tab=row]')
+    select(page, 'water')
+    button = page.locator('#tab-row button', has_text='Put these settings')
+    button.focus()
+    assert active(page) == 'BUTTON.'
+
+    edit = {'keys': ['1'], 'column': 'thickness', 'value': 9.0}
+    assert page.request.post(f'{url}api/cells', data=edit).ok
+
+    page.wait_for_function(
+        "document.querySelector('#tab-row dl').innerText.includes('9.0')"
+        " && document.activeElement.textContent.startsWith('Put these settings')"
+    )
