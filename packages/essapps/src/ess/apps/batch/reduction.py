@@ -368,7 +368,14 @@ class Batch:
             refused,
             self._spec_changed(found),
             {k for k, r in found.items() if self._tweaked.get(k) == r.id},
+            self._set_by_hand(),
         )
+
+    def _set_by_hand(self) -> dict[str, frozenset[str]]:
+        """The columns set by hand of each row: its edits, or all if added."""
+        rows = self.rows
+        added = dict.fromkeys((r.key for r in rows.added), frozenset(self.columns))
+        return {k: frozenset(cells) for k, cells in rows.edits.items()} | added
 
     def _poll(self) -> None:
         """

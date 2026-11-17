@@ -301,22 +301,79 @@ def test_a_refusal_of_a_running_row_is_said_once_and_not_kept(
     assert after.refused == []
 
 
-def test_an_edit_at_a_column_of_at_is_reduced_at_once_while_following(
-    server: Server, client: Client, sample: Measure, gate: Gate
+def ids(client: Client) -> set[str]:
+    return {r.id for r in client.records()}
+
+
+def test_follow_leaves_a_row_changed_by_hand_to_the_person(
+    server: Server, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
     sample(2, 'oil')
     server.follow(True)
     done(server, client)
+    before = ids(client)
 
-    other = option(server, 'transmission', 1002)
-    gate.close()
-    edited = server.edit(CellEdit(keys=['1'], column='transmission', value=other))
-    server.edit(CellEdit(keys=['2'], column='thickness', value=2.0))
+    for column, run in [('sample', 2), ('transmission', 1002)]:
+        value = option(server, column, run)
+        edited = server.edit(CellEdit(keys=['1'], column=column, value=value))
+        server.step()
 
-    assert statuses(edited) == {'water': 'running', 'oil': 'done'}
-    assert statuses(server.state()) == {'water': 'running', 'oil': 'outdated'}
-    gate.open()
+    assert ids(client) == before
+    assert statuses(edited) == {'water': 'outdated', 'oil': 'done'}
+    assert edited.action.label == 'Reduce 1 outdated'
+    server.reduce(Reduce(which='remaining'))
+    server.step()
+    assert len(ids(client) - before) == 1
+    water, oil = (client.latest('scan', k).request.params for k in ('1', '2'))
+    assert (water['sample'], water['transmission']) == (
+        oil['sample'],
+        oil['transmission'],
+    )
+
+
+def test_a_row_a_person_reduced_after_an_edit_follows_the_files_again(
+    server: Server, client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    sample(1, 'water')
+    sample(2, 'oil')
+    server.follow(True)
+    done(server, client)
+    other = option(server, 'sample', 2)
+    server.edit(CellEdit(keys=['1'], column='sample', value=other))
+    server.reduce(Reduce(which='remaining'))
+    edited = done(server, client).rows[0].record
+
+    fake.measure(1005, 2.0, role='transmission', sample='water')
+    server.step()
+
+    assert statuses(done(server, client)) == {'water': 'done', 'oil': 'done'}
+    record = client.latest('scan', '1')
+    assert record.id != edited
+    assert (
+        record.request.params['sample']
+        == client.latest('scan', '2').request.params['sample']
+    )
+
+
+def test_an_edit_not_reduced_leaves_its_row_to_the_person_when_a_file_arrives(
+    server: Server, client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    sample(1, 'water')
+    server.follow(True)
+    done(server, client)
+    server.edit(CellEdit(keys=['1'], column='thickness', value=2.0))
+    before = ids(client)
+
+    fake.measure(1005, 2.0, role='transmission', sample='water')
+    server.step()
+
+    (row,) = server.state().rows
+    assert ids(client) == before
+    assert (row.status, row.reason) == (
+        'outdated',
+        'Transmission and Thickness changed.',
+    )
 
 
 @pytest.mark.parametrize('value', [3, None], ids=['changed', 'missing'])
