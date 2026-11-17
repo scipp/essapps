@@ -56,7 +56,7 @@ def test_e1_series_grows_reduction_follows(
         source=angles,
         persist=True,
     )
-    loop = Automatic(batch, at='runs', settings=lambda: {'reference': reference})
+    loop = Automatic(batch, at={'runs'}, settings=lambda: {'reference': reference})
 
     r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
     client.wait(loop.step())
@@ -85,7 +85,7 @@ def test_e2_automatic_reduction_goes_quiet(
 ) -> None:
     upgraded = upgrade(specs=[toys.IOFQ_V2])  # a workspace without version 1
     loop = Automatic(
-        iofq_batch(upgraded), at='sample', settings=lambda: {'normalization': None}
+        iofq_batch(upgraded), at={'sample'}, settings=lambda: {'normalization': None}
     )
     measure(1, [1.0, 1.0], role='sample')
 
@@ -98,7 +98,7 @@ def test_e3_reduction_of_our_own_output(
     client: Client, measure: toys.Measure, files: FakeFiles
 ) -> None:
     loop = Automatic(
-        iofq_batch(client), at='sample', settings=lambda: {'normalization': None}
+        iofq_batch(client), at={'sample'}, settings=lambda: {'normalization': None}
     )
     measure(1, [1.0, 2.0, 3.0, 4.0])
     (reduced,) = loop.step().values()
@@ -112,7 +112,7 @@ def test_e4_template_improved_during_a_beamtime(
     client: Client, connect: Callable[..., Client], measure: toys.Measure
 ) -> None:
     settings = {'normalization': None}
-    loop = Automatic(iofq_batch(client), at='sample', settings=lambda: settings)
+    loop = Automatic(iofq_batch(client), at={'sample'}, settings=lambda: settings)
     first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
     (before,) = loop.step().values()
 

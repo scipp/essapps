@@ -32,6 +32,15 @@ def _series(gate: toys.Gate) -> Callable[[toys.SeriesParams], toys.Outputs]:
     return series
 
 
+def _repeated(gate: toys.Gate) -> Callable[[toys.RepeatedParams], toys.Outputs]:
+    def repeated(params: toys.RepeatedParams) -> toys.Outputs:
+        gate.wait()
+        runs = [*params.sample_runs, *params.trans_runs]
+        return toys.Outputs(total=sum(read_file(run) for run in runs))
+
+    return repeated
+
+
 @pytest.fixture
 def gate() -> toys.Gate:
     return toys.Gate()
@@ -66,13 +75,11 @@ def workspace(
     plain = function_binding(toys.PLAIN, staged_binding.function)
     find = function_binding(toys.FIND, _find)
     series = function_binding(toys.SERIES, _series(gate))
-    grouped = function_binding(
-        toys.GROUPED, lambda p: toys.Outputs(total=read_file(p.group.run))
-    )
+    repeated = function_binding(toys.REPEATED, _repeated(gate))
     workspace = Workspace(
         proposal='p1',
         files=files,
-        bind=[staged_binding, plain, find, series, grouped],
+        bind=[staged_binding, plain, find, series, repeated],
     )
     yield workspace
     workspace.close()

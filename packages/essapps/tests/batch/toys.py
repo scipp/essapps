@@ -46,12 +46,10 @@ class SeriesParams(BaseModel):
     runs: list[RunFile] = Field(min_length=1)
 
 
-class Group(BaseModel):
-    run: RunFile
-
-
-class GroupedParams(BaseModel):
-    group: Group
+class RepeatedParams(BaseModel):
+    sample_runs: list[RunFile] = Field(min_length=1)
+    trans_runs: list[RunFile] = Field(min_length=1)
+    binning: Binning = Field(default_factory=Binning)
 
 
 STAGED = WorkflowSpec(
@@ -87,13 +85,14 @@ SERIES = WorkflowSpec(
     outputs=Outputs,
     tables=('runs',),
 )
-GROUPED = WorkflowSpec(
-    name='grouped',
+REPEATED = WorkflowSpec(
+    name='repeated',
     version=1,
-    title='Grouped',
-    description='A toy whose run is inside a group.',
-    params=GroupedParams,
+    title='Repeated',
+    description='A toy of sample and transmission runs, each repeated.',
+    params=RepeatedParams,
     outputs=Outputs,
+    tables=('sample_runs', 'trans_runs'),
 )
 COLUMNS = ('sample', 'transmission', 'thickness')
 

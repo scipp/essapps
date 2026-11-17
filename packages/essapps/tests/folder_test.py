@@ -175,7 +175,7 @@ def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_t
 ) -> None:
     with open_folder(folder, bindings) as first:
         found = list(
-            Automatic(_found(first), at='sample', settings=dict).step().values()
+            Automatic(_found(first), at={'sample'}, settings=dict).step().values()
         )
         first.wait(found)
         table = _table(first)
@@ -189,7 +189,7 @@ def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_t
     with open_folder(folder.rename(folder.with_name('moved')), bindings) as second:
         assert second.files.list(Selector()) == files
         assert [second.output(r, 'offset').value for r in found] == [1, 2, 3]
-        assert Automatic(_found(second), at='sample', settings=dict).step() == {}
+        assert Automatic(_found(second), at={'sample'}, settings=dict).step() == {}
         assert _table(second).equals(table)
         again = second.submit(found[0].request)
         second.wait([again])
