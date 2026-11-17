@@ -29,6 +29,7 @@ from collections import Counter
 from collections.abc import Collection, Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from pydantic import BaseModel
@@ -51,27 +52,33 @@ class RowState:
     ``record`` is the row's result, if it has one, and ``status`` its status.
     ``problems`` say why the row cannot be reduced now. ``changed`` names the
     parameters at which the row's request now differs from the request of its
-    result, both as a record holds them, and is empty in what
-    :meth:`~.reduction.Batch.results` gives; ``spec_changed`` is true if the
-    result is of another spec than the one bound. ``tweaked`` is true if the
-    result came from :meth:`~.reduction.Batch.tweak` of this batch, with
-    parameters of its own, so that it does not follow the settings.
-    ``outdated`` is true if the result is of another spec, or if the request
-    changed, at a column only for a tweak.
+    result, both as a record holds them, and is ``None`` if they were not
+    compared, as in what :meth:`~.reduction.Batch.results` gives.
+    ``spec_changed`` is true if the result is of another spec than the one
+    bound. ``tweaked`` is true if the result came from
+    :meth:`~.reduction.Batch.tweak` of this batch, with parameters of its own,
+    so that it does not follow the settings. ``outdated`` is true if the result
+    is of another spec, or if the request changed, at a column only for a
+    tweak; ``None`` if that is not known, since the requests were not compared.
     """
 
     key: str
     record: Record | None = None
     status: Status | None = None
     problems: tuple[FieldError, ...] = ()
-    changed: frozenset[str] = frozenset()
+    changed: frozenset[str] | None = frozenset()
     spec_changed: bool = False
     tweaked: bool = False
-    outdated: bool = False
+    outdated: bool | None = False
 
     @property
     def text(self) -> str:
-        """What a table shows, and what :func:`summary` counts."""
+        """
+        What a table shows, and what :func:`summary` counts. A completed result
+        not compared with the settings, as while they are refused, reads
+        ``outdated``: it cannot be told to match them. A tweak does not follow
+        the settings, so it reads as its status.
+        """
         if self.status is Status.PENDING:
             return 'pending'
         if self.problems:
@@ -80,6 +87,8 @@ class RowState:
             return 'not reduced'
         if self.outdated:
             return 'outdated'
+        if self.outdated is None and self.status is Status.COMPLETED:
+            return str(self.status) if self.tweaked else 'outdated'
         return str(self.status)
 
 
@@ -148,7 +157,7 @@ def row_states(
     columns: Collection[str],
     found: Mapping[str, Record],
     status: Mapping[str, Status],
-    changed: Mapping[str, frozenset[str]] | None = None,
+    changed: Mapping[str, frozenset[str]] | None = MappingProxyType({}),
     refused: Mapping[str, tuple[FieldError, ...]] | None = None,
     spec_changed: AbstractSet[str] = frozenset(),
     tweaked: AbstractSet[str] = frozenset(),
@@ -156,18 +165,24 @@ def row_states(
     """
     The state of each row. ``found`` holds their results by key, ``status`` the
     status of those and of the records their cells reference, by record ID,
-    ``changed`` the names at which a row differs from its result, ``refused``
+    ``changed`` the names at which a row differs from its result, ``None`` if
+    the rows were not compared with their results, ``refused``
     the reasons a row's cells were refused when resolved, ``spec_changed`` the
     keys whose result is of another spec, and ``tweaked`` the keys whose result
     is a tweak.
     """
-    changed = changed or {}
     refused = refused or {}
     states = {}
     for row in rows:
         record = found.get(row.key)
-        names = changed.get(row.key, frozenset())
+        names = None if changed is None else changed.get(row.key, frozenset())
         tweak = row.key in tweaked
+        if row.key in spec_changed:
+            outdated: bool | None = True
+        elif names is None:
+            outdated = None
+        else:
+            outdated = bool(names & set(columns) if tweak else names)
         states[row.key] = RowState(
             key=row.key,
             record=record,
@@ -176,10 +191,23 @@ def row_states(
             changed=names,
             spec_changed=row.key in spec_changed,
             tweaked=tweak,
-            outdated=row.key in spec_changed
-            or bool(names & set(columns) if tweak else names),
+            outdated=outdated,
         )
     return states
+
+
+def _compared(states: Mapping[str, RowState]) -> dict[str, frozenset[str]]:
+    """
+    What changed in each row; raises ``ValueError`` if a row was not compared
+    with its result.
+    """
+    changed = {k: s.changed for k, s in states.items() if s.changed is not None}
+    if not_compared := sorted(states.keys() - changed.keys()):
+        raise ValueError(
+            f'rows {not_compared} were not compared with their results: '
+            'the states are those of Batch.results, not of Batch.state'
+        )
+    return changed
 
 
 def ready(states: Mapping[str, RowState]) -> list[str]:
@@ -194,8 +222,10 @@ def ready(states: Mapping[str, RowState]) -> list[str]:
 def remaining(states: Mapping[str, RowState]) -> list[str]:
     """
     The ready rows with no result, one that failed or was cancelled, or one
-    that is outdated.
+    that is outdated. Raises ``ValueError`` if a row was not compared with its
+    result (:attr:`RowState.changed` is ``None``).
     """
+    _compared(states)
     return [
         k
         for k in ready(states)
@@ -207,16 +237,18 @@ def arrived(states: Mapping[str, RowState], at: Collection[str]) -> list[str]:
     """
     The ready rows with no result, or whose request differs from their result's
     at a column of ``at``: the rule of automatic reduction. ``changed`` is read,
-    so ``states`` are those of :meth:`~.reduction.Batch.state`.
+    so ``states`` are those of :meth:`~.reduction.Batch.state`; raises
+    ``ValueError`` for a row that was not compared.
 
     A failed or cancelled result counts as any other, so such a row is given
     again only for a change at ``at``. With ``at=set()``, no row with a result
     is given.
     """
+    changed = _compared(states)
     return [
         k
         for k in ready(states)
-        if states[k].record is None or not states[k].changed.isdisjoint(at)
+        if states[k].record is None or not changed[k].isdisjoint(at)
     ]
 
 

@@ -308,14 +308,16 @@ class Batch:
         Each row, or each of ``keys``, with its result, without its request:
         the problems of its cells as given, its status, and whether its result
         is of another spec. Nothing is resolved, so :attr:`RowState.changed`
-        is empty and a result is ``outdated`` only if it is of another spec.
+        is ``None``, and so is :attr:`RowState.outdated` unless the result is
+        of another spec: :func:`~.state.remaining` and
+        :func:`~.state.arrived` refuse these states.
 
         It is what a page shows while the settings are refused, and what
         :meth:`reduce` checks before it submits. Which rows to reduce is
         chosen from :meth:`state`.
         """
         rows, found = self._rows_and_results(keys)
-        return self._states(rows, found, {}, {})
+        return self._states(rows, found, None, {})
 
     def _rows_and_results(
         self, keys: Sequence[str] | None
@@ -329,7 +331,7 @@ class Batch:
         self,
         rows: list[Row],
         found: Mapping[str, Record],
-        changed: Mapping[str, frozenset[str]],
+        changed: Mapping[str, frozenset[str]] | None,
         refused: Mapping[str, tuple[FieldError, ...]],
     ) -> dict[str, RowState]:
         upstream = self._known(sorted(state.references(rows)))

@@ -211,3 +211,28 @@ def test_summary_counts_the_rows_by_what_they_show() -> None:
     )
 
     assert summary(found) == {'completed': 1, 'incomplete': 1, 'not reduced': 1}
+
+
+def not_compared(*, tweaked: bool = False) -> dict[str, RowState]:
+    return row_states(
+        [Row('a', {'sample': 'x'})],
+        Model,
+        COLUMNS,
+        {'a': record('1', 'a')},
+        {'1': Status.COMPLETED},
+        changed=None,
+        tweaked={'a'} if tweaked else set(),
+    )
+
+
+def test_a_completed_row_not_compared_reads_outdated_but_a_tweak_reads_completed() -> (
+    None
+):
+    assert not_compared()['a'].text == 'outdated'
+    assert not_compared(tweaked=True)['a'].text == 'completed'
+
+
+@pytest.mark.parametrize('rule', [remaining, lambda s: arrived(s, {'sample'})])
+def test_the_rules_that_read_what_changed_refuse_rows_not_compared(rule: Any) -> None:
+    with pytest.raises(ValueError, match=r"\['a'\] were not compared"):
+        rule(not_compared())

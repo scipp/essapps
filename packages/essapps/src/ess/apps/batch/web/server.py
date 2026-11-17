@@ -384,7 +384,7 @@ class Server:
             self.batch.columns if state.tweaked else self.batch.spec.params.model_fields
         )
         said = []
-        if changed := [titles.get(n, n) for n in names if n in state.changed]:
+        if changed := [titles.get(n, n) for n in names if n in (state.changed or ())]:
             said.append(f'{_join(changed)} changed.')
         if state.spec_changed:
             said.append('It was reduced by another version of the workflow.')
@@ -452,7 +452,7 @@ class Server:
         blocked: str | None,
     ) -> Action:
         """What the primary button does now, and how far the rows running are."""
-        left = remaining(states)
+        left = [] if blocked else remaining(states)
         kinds = {statuses[k] for k in left}
         n = len(left)
         if blocked:
@@ -730,7 +730,9 @@ class Server:
         given.set(record.request.params, self._listing)
         detail.reduced_with = forms.tree(given)
         detail.created = record.created
-        detail.differs = [n for n in self.batch.settings_fields if n in state.changed]
+        detail.differs = [
+            n for n in self.batch.settings_fields if n in (state.changed or ())
+        ]
         return detail
 
     @_locked
