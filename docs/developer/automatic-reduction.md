@@ -80,7 +80,7 @@ A list is compared element by element, in order, so a source gives a list cell i
 ## One label, one batch
 
 Which rows are reduced follows from the records under the label and from the cells of the loop's rows.
-The loop keeps the results under its label equal to its batch's rows at the cells of `at` that the scan gives.
+For the rows with no change by hand that is not reduced yet, the loop keeps the results under its label equal to its batch's rows at the columns of `at`.
 So a label has one batch:
 
 ```python

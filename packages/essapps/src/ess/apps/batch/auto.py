@@ -23,15 +23,15 @@ changed: :func:`~.state.arrived` leaves a row with a cell set by hand that is
 not reduced yet (:attr:`~.state.RowState.changed_by_hand`), with or without a
 page, so a person reduces it.
 
-The loop keeps the results under its label equal to its batch's rows at the
-cells of ``at`` that the scan gives, so a label has one batch. A record that
-another ``Batch`` submits under the label with other cells at ``at`` is
-replaced at the next step. A restarted loop reduces no row again whose result
-equals its row at ``at``. An edit is kept by the batch's definitions
-(:mod:`.definition`), so with them, an edited row is not reduced again either,
-and one not reduced still waits for a person; without them, the edit is gone
-after a restart, and a row edited at ``at`` is reduced again with the source's
-cells.
+For the rows with no change by hand that is not reduced yet, the loop keeps
+the results under its label equal to its batch's rows at the columns of
+``at``, so a label has one batch. A record that another ``Batch`` submits
+under the label with other cells at ``at`` is replaced at the next step. A
+restarted loop reduces no row again whose result equals its row at ``at``. An
+edit is kept by the batch's definitions (:mod:`.definition`), so with them, an
+edited row is not reduced again either, and one not reduced still waits for a
+person; without them, the edit is gone after a restart, and a row edited at
+``at`` is reduced again with the source's cells.
 
 A step costs the scan of all files and the state of all rows:
 the status of every row's result, and the comparison of every row's cells with

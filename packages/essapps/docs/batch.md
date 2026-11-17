@@ -236,7 +236,7 @@ s.changed        # frozenset({'q'}): the parameters whose value differs from the
 s.spec_changed   # True if s.record is of another spec than the one bound
 s.outdated       # True if either holds; for a tweak, if a column changed (below)
 s.set_by_hand    # frozenset({'thickness'}): the columns set by hand, all of a row added
-s.changed_by_hand  # True if the row has no result, or changed at a column set by hand
+s.changed_by_hand  # True if a cell is set by hand, and the row has no result or differs from it there
 s.text           # 'outdated'
 ```
 
@@ -434,7 +434,7 @@ The batch page holds a loop of its own: its switch "Follow" steps it on the page
 
 ### One label, one batch
 
-Which rows a step reduces follows from the files, the batch's rows and settings, and the records under its label. The loop keeps nothing else, so a step that raises, in the settings, the source, or a submission, loses nothing. The loop keeps the results under its label equal to its batch's rows at the cells of `at` that the scan gives:
+Which rows a step reduces follows from the files, the batch's rows and settings, and the records under its label. The loop keeps nothing else, so a step that raises, in the settings, the source, or a submission, loses nothing. For the rows with no change by hand that is not reduced yet, the loop keeps the results under its label equal to its batch's rows at the columns of `at`:
 
 ```python
 page = Batch(client, IOFQ, columns=..., label='auto/iofq', source=pair_by_sample)  # a second batch on the label
