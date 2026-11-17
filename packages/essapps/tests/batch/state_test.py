@@ -9,7 +9,16 @@ import pytest
 from pydantic import BaseModel
 
 from ess.apps import Record, Request, SpecId, Status
-from ess.apps.batch import Row, RowState, arrived, ready, remaining, summary
+from ess.apps.batch import (
+    Row,
+    RowState,
+    arrived,
+    earlier_settings,
+    left_to_reduce,
+    ready,
+    remaining,
+    summary,
+)
 from ess.apps.batch.state import differs, results, row_states
 from ess.apps.errors import FieldError
 from ess.spec import OutputRef
@@ -136,6 +145,46 @@ def test_a_tweak_is_outdated_only_where_a_column_changed(
 
 
 @pytest.mark.parametrize(
+    ('status', 'changed', 'other', 'earlier', 'left'),
+    [
+        (Status.COMPLETED, {'shared'}, {}, True, False),
+        (Status.COMPLETED, {'shared', 'thickness'}, {}, False, True),
+        (Status.COMPLETED, {'shared'}, {'spec_changed': {'a'}}, False, True),
+        (Status.COMPLETED, {'shared'}, {'tweaked': {'a'}}, False, False),
+        (Status.COMPLETED, set(), {}, False, False),
+        (Status.FAILED, {'shared'}, {}, False, True),
+        (Status.PENDING, {'shared'}, {}, False, False),
+    ],
+)
+def test_a_result_that_differs_only_at_settings_is_not_left_to_reduce(
+    status: Status,
+    changed: set[str],
+    other: dict[str, Any],
+    earlier: bool,
+    left: bool,
+) -> None:
+    found = row_states(
+        [Row('a', {'sample': 'x'})],
+        Model,
+        COLUMNS,
+        {'a': record('1', 'a')},
+        {'1': status},
+        changed={'a': frozenset(changed)},
+        **other,
+    )
+
+    assert earlier_settings(found, COLUMNS) == (['a'] if earlier else [])
+    assert left_to_reduce(found, COLUMNS) == (['a'] if left else [])
+    assert (remaining(found) == ['a']) is (earlier or left)
+
+
+def test_a_row_without_a_result_is_left_to_reduce() -> None:
+    found = states([Row('a', {'sample': 'x'}), Row('b')])
+
+    assert left_to_reduce(found, COLUMNS) == ['a']
+
+
+@pytest.mark.parametrize(
     ('status', 'changed', 'at', 'given'),
     [
         (Status.COMPLETED, {'sample'}, {'sample'}, True),
@@ -232,7 +281,15 @@ def test_a_completed_row_not_compared_reads_outdated_but_a_tweak_reads_completed
     assert not_compared(tweaked=True)['a'].text == 'completed'
 
 
-@pytest.mark.parametrize('rule', [remaining, lambda s: arrived(s, {'sample'})])
+@pytest.mark.parametrize(
+    'rule',
+    [
+        remaining,
+        lambda s: arrived(s, {'sample'}),
+        lambda s: earlier_settings(s, COLUMNS),
+        lambda s: left_to_reduce(s, COLUMNS),
+    ],
+)
 def test_the_rules_that_read_what_changed_refuse_rows_not_compared(rule: Any) -> None:
     with pytest.raises(ValueError, match=r"\['a'\] were not compared"):
         rule(not_compared())

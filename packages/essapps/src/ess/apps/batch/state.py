@@ -233,6 +233,44 @@ def remaining(states: Mapping[str, RowState]) -> list[str]:
     ]
 
 
+def earlier_settings(
+    states: Mapping[str, RowState], columns: Collection[str]
+) -> list[str]:
+    """
+    The ready rows whose completed result differs from their request only at
+    settings: not at a column of ``columns``, and of the same spec. A tweak's
+    settings are its own, so a tweak is not one of them. ``changed`` is read, so
+    ``states`` are those of :meth:`~.reduction.Batch.state`; raises
+    ``ValueError`` for a row that was not compared.
+
+    A page that applies a change of settings to new rows only leaves these
+    rows as they are, until a person applies the settings to all.
+    """
+    changed = _compared(states)
+    return [
+        k
+        for k in ready(states)
+        if states[k].status is Status.COMPLETED
+        and changed[k]
+        and changed[k].isdisjoint(columns)
+        and not states[k].spec_changed
+        and not states[k].tweaked
+    ]
+
+
+def left_to_reduce(
+    states: Mapping[str, RowState], columns: Collection[str]
+) -> list[str]:
+    """
+    The rows of :func:`remaining` but those of :func:`earlier_settings`: a
+    change of settings applies to rows not reduced yet, and a change of a
+    cell, or of the spec, to its row. Raises ``ValueError`` for a row that was
+    not compared.
+    """
+    earlier = set(earlier_settings(states, columns))
+    return [k for k in remaining(states) if k not in earlier]
+
+
 def arrived(states: Mapping[str, RowState], at: Collection[str]) -> list[str]:
     """
     The ready rows with no result, or whose request differs from their result's

@@ -11,7 +11,15 @@ for application developers is ``packages/essapps/docs/batch.md``.
 from .corrections import CorrectedFiles
 from .definition import DefinitionStore, FolderDefinitions
 from .reduction import Batch, FileInfo, RowSource, file_infos
-from .state import RowState, arrived, ready, remaining, summary
+from .state import (
+    RowState,
+    arrived,
+    earlier_settings,
+    left_to_reduce,
+    ready,
+    remaining,
+    summary,
+)
 from .table import EMPTY, Row, RowTable
 
 __all__ = [
@@ -26,7 +34,9 @@ __all__ = [
     'RowState',
     'RowTable',
     'arrived',
+    'earlier_settings',
     'file_infos',
+    'left_to_reduce',
     'ready',
     'remaining',
     'summary',
