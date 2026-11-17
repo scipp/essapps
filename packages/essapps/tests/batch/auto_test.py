@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from ess.apps import Client, file
-from ess.apps.batch import Batch, FileInfo, Row, RowSource
+from ess.apps.batch import Batch, CorrectedFiles, FileInfo, Row, RowSource
 from ess.apps.batch.auto import Automatic
 from ess.apps.folder import open_folder
 from ess.apps.testing import FakeFiles
@@ -280,16 +280,18 @@ def test_a_restart_on_the_same_folder_reduces_nothing_again(
         assert loop(second).step() == {}
 
 
-def test_a_refusal_that_only_submit_finds_is_tried_again_at_every_step(
+def test_refusals_that_only_submit_finds_are_tried_again_at_every_step(
     client: Client, sample: Measure
 ) -> None:
     found = client.compute(FIND, params={'sample': sample(1, 'water')})
     client.release(found)
+    unknown = found.ref('offset').model_copy(update={'record': '0' * 32})
+    offsets = {'2': found.ref('offset'), '3': unknown}
 
     def with_offset(files: Sequence[FileInfo]) -> list[Row]:
         return [
-            replace(row, values={**row.values, 'offset': found.ref('offset')})
-            if row.key == '2'
+            replace(row, values={**row.values, 'offset': offsets[row.key]})
+            if row.key in offsets
             else row
             for row in pair(files)
         ]
@@ -298,31 +300,161 @@ def test_a_refusal_that_only_submit_finds_is_tried_again_at_every_step(
         client, PLAIN, columns=(*COLUMNS, 'offset'), label='scan', source=with_offset
     )
     loop = Automatic(batch, at={'sample'}, settings=lambda: SETTINGS)
-    sample(2, 'sds')
-    sample(3, 'dmso')
+    for run, name in [(2, 'sds'), (3, 'dmso'), (4, 'd2o')]:
+        sample(run, name)
+    refused = {
+        '2': f'2: offset: record {found.id} is not kept',
+        '3': f'3: offset: unknown record or accumulator {unknown.record}',
+    }
 
-    assert list(loop.step()) == ['1', '3']
-    assert loop.refused == {'2': f'2: offset: record {found.id} is not kept'}
+    assert list(loop.step()) == ['1', '4']
+    assert loop.refused == refused
     assert batch.state(SETTINGS)['2'].text == 'not reduced'
     assert loop.step() == {}
-    assert list(loop.refused) == ['2']
+    assert loop.refused == refused
 
 
-def test_rows_refused_for_the_settings_run_once_the_settings_change(
-    batch: Batch, sample: Measure
+class Submits:
+    """Delegates to a client and counts the calls of ``submit``, at most three."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+        self.calls = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    def submit(self, *args: Any, **kwargs: Any) -> Any:
+        self.calls += 1
+        if self.calls > 3:
+            raise RuntimeError('submitted again and again')
+        return self._client.submit(*args, **kwargs)
+
+
+def test_a_refusal_that_names_no_row_refuses_every_row_of_the_step(
+    client: Client, sample: Measure
 ) -> None:
-    settings = {'binning': {'bins': 0}}
-    loop = Automatic(batch, at={'sample'}, settings=lambda: settings)
+    submits = Submits(client)
+    # The workspace of the tests has no store.
+    batch = Batch(
+        submits, PLAIN, columns=COLUMNS, label='scan', source=pair, persist=True
+    )
+    loop = Automatic(batch, at={'sample'}, settings=lambda: SETTINGS)
     sample(1, 'water')
     sample(2, 'sds')
+
+    assert loop.step() == {}
+    assert loop.refused == dict.fromkeys(
+        ['1', '2'], 'persisting needs a store, which this workspace lacks'
+    )
+    assert submits.calls == 1
+
+
+def test_a_cell_the_workspace_does_not_accept_makes_its_row_wait(
+    loop: Automatic, batch: Batch, sample: Measure
+) -> None:
+    sample(1, 'water')
+    sample(2, 'sds')
+    batch.scan()
+    batch.rows = batch.rows.edit('2', {'thickness': -1.0})
+
+    assert list(loop.step()) == ['1']
+    assert loop.refused == {}
+    assert batch.state(SETTINGS)['2'].text == 'incomplete'
+
+    batch.rows = batch.rows.edit('2', {'thickness': 1.0})
+
+    assert list(loop.step()) == ['2']
+
+
+def test_a_record_of_another_batch_on_the_label_is_replaced_if_it_differs_at_at(
+    loop: Automatic, client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    run = sample(1, 'water')
+    client.wait(loop.step())
+    other = fake.measure(77, 7.0, role='sample', sample='other')
+    page = Batch(client, STAGED, columns=COLUMNS, label='scan', source=pair)
+    page.scan()
+    page.rows = page.rows.edit('1', {'sample': other})
+    client.wait(page.reduce(SETTINGS, ['1']))
+
+    (record,) = loop.step().values()
+
+    assert record.request.params['sample'] == run
+
+
+def test_after_a_restart_a_row_edited_at_at_is_reduced_again_as_the_source_gives_it(
+    client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    run = sample(1, 'water')
+    other = fake.measure(77, 7.0, role='sample', sample='other')
+    loop = _loop(client)
+    client.wait(loop.step())
+    loop.batch.rows = loop.batch.rows.edit('1', {'sample': other})
+    (edited,) = loop.step().values()
+    client.wait(edited)
+
+    (record,) = _loop(client).step().values()
+
+    assert edited.request.params['sample'] == other
+    assert record.request.params['sample'] == run
+
+
+def test_a_row_whose_key_changes_is_reduced_under_its_new_key(
+    client: Client, sample: Measure, files: CorrectedFiles
+) -> None:
+    def by_name(files: Sequence[FileInfo]) -> list[Row]:
+        return [replace(row, key=row.info['name']) for row in pair(files)]
+
+    loop = _loop(client, by_name)
+    run = sample(1, 'water')
+    client.wait(loop.step())
+
+    files.correct(run, sample='oil')
+    files.correct(FileRef(file='uuid:run-1001'), sample='oil')
+
+    assert list(loop.step()) == ['oil']
+
+
+def test_a_list_at_at_in_another_order_reduces_the_row_again(
+    client: Client, fake: FakeFiles
+) -> None:
+    reverse = False
+
+    def runs(files: Sequence[FileInfo]) -> list[Row]:
+        ordered = sorted(files, key=lambda f: f.metadata['run'], reverse=reverse)
+        return [Row('si', {'runs': [f.ref for f in ordered]})]
+
+    batch = Batch(client, SERIES, columns=('runs',), label='series', source=runs)
+    loop = Automatic(batch, at={'runs'}, settings=dict)
+    fake.measure(1, 1.0, sample='si')
+    fake.measure(2, 2.0, sample='si')
+    client.wait(loop.step())
+    assert loop.step() == {}
+
+    reverse = True
+
+    assert list(loop.step()) == ['si']
+
+
+def test_refused_settings_refuse_every_ready_row_until_they_change(
+    batch: Batch, client: Client, sample: Measure
+) -> None:
+    settings = SETTINGS
+    loop = Automatic(batch, at={'sample'}, settings=lambda: settings)
+    sample(1, 'water')
+    client.wait(loop.step())
+    sample(2, 'sds')
+    sample(3, 'dmso', partner=False)
+
+    settings = {'binning': {'bins': 0}}
     assert loop.step() == {}
     assert loop.refused == dict.fromkeys(
         ['1', '2'], 'binning.bins: Input should be greater than or equal to 1'
     )
 
     settings = SETTINGS
-
-    assert list(loop.step()) == ['1', '2']
+    assert list(loop.step()) == ['2']
     assert loop.refused == {}
 
 

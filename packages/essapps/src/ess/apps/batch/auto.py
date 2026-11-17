@@ -16,12 +16,19 @@ Which rows a step reduces follows from the files, the batch's rows and the
 settings, and the records under its label. :class:`Automatic` keeps nothing
 that changes it: :attr:`Automatic.refused` says why rows of the last step were
 refused, and a refused row is tried again at every step. So a step that raises
-loses nothing, and a restart reduces no row again.
+loses nothing.
+
+The loop keeps the results under its label equal to its batch's rows at the
+columns of ``at``, so a label has one batch. A record that another ``Batch``
+submits under the label with other cells at ``at`` is replaced at the next
+step. An edit lives in the ``Batch``, so after a restart a row edited at ``at``
+is reduced again with the source's cells; a row without edits is not.
 
 A step costs the scan of all files and the state of all rows with the settings:
 the status of every row's result, and the comparison of every row's cells with
 its result's request, which resolves the cells that differ as given, such as a
-file named by run (:meth:`~.reduction.Batch.state`).
+file named by run (:meth:`~.reduction.Batch.state`). Since a scan drops what
+the batch kept resolved, such a cell is resolved at every step, at any column.
 """
 
 from __future__ import annotations
@@ -34,7 +41,7 @@ from typing import Any
 from ..errors import SubmitError
 from ..records import Record
 from .reduction import Batch
-from .state import arrived
+from .state import arrived, ready
 
 
 class Automatic:
@@ -57,7 +64,9 @@ class Automatic:
     Attributes
     ----------
     refused:
-        Why each row that the last step submitted was refused, by key.
+        Why the last step's submission refused each row, by key: the rows it
+        submitted that a ``SubmitError`` names, or every row it submitted if
+        the reason names none. If the settings are refused, every ready row.
 
     Raises
     ------
@@ -94,7 +103,7 @@ class Automatic:
         others, and :attr:`refused` says why.
 
         If the settings are refused, no row can run: the step reduces none,
-        and :attr:`refused` gives the reason for each ready row with no result.
+        and :attr:`refused` gives the reason for each ready row.
         """
         batch = self.batch
         settings = self.settings()
@@ -102,7 +111,7 @@ class Automatic:
         try:
             state = batch.state(settings)
         except SubmitError as error:
-            self.refused = dict.fromkeys(arrived(batch.state(), self.at), str(error))
+            self.refused = dict.fromkeys(ready(batch.state()), str(error))
             return {}
         records, self.refused = self._reduce(settings, arrived(state, self.at))
         return records
