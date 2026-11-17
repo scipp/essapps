@@ -53,6 +53,15 @@ class Row:
             raise TypeError(f'the key of a row is a string, not {self.key!r}')
 
 
+def _unique(rows: Iterable[Row]) -> tuple[Row, ...]:
+    """``rows``; raises ``SubmitError`` for a key given twice."""
+    rows = tuple(rows)
+    count = Counter(row.key for row in rows)
+    if twice := sorted(key for key, n in count.items() if n > 1):
+        raise SubmitError(FieldError(k, (), 'two rows have this key') for k in twice)
+    return rows
+
+
 @dataclass(frozen=True)
 class RowTable:
     """
@@ -97,13 +106,34 @@ class RowTable:
         Replace the scan's layer. What was set by hand stays: an edit, a row
         added, and a row removed. Raises ``SubmitError`` for a key given twice.
         """
-        rows = tuple(rows)
-        count = Counter(row.key for row in rows)
-        if twice := sorted(key for key, n in count.items() if n > 1):
-            raise SubmitError(
-                FieldError(k, (), 'two rows have this key') for k in twice
-            )
-        return replace(self, scan=rows)
+        return replace(self, scan=_unique(rows))
+
+    def put(self, rows: Iterable[Row], columns: Iterable[str]) -> RowTable:
+        """
+        Set ``rows`` by hand, as a table of them gives them: a row of a key
+        that the table does not show is added, and of one that it shows, each
+        of ``columns`` whose cell differs is set, or cleared if the row given
+        leaves it empty. A cell that does not differ is left as it is, so one
+        from the scan keeps following the scan. Raises ``SubmitError`` for a
+        key given twice.
+        """
+        columns = tuple(columns)
+        added = list(self.added)
+        edits = dict(self.edits)
+        for row in _unique(rows):
+            if row.key not in self:
+                added.append(row)
+                edits.pop(row.key, None)  # as :meth:`add`
+                continue
+            shown = self[row.key].values
+            changed = {
+                c: row.values.get(c, EMPTY)
+                for c in columns
+                if (c in row.values, row.values.get(c)) != (c in shown, shown.get(c))
+            }
+            if changed:
+                edits[row.key] = {**edits.get(row.key, {}), **changed}
+        return replace(self, added=tuple(added), edits=edits)
 
     def add(self, row: Row) -> RowTable:
         """
