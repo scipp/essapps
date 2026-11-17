@@ -227,8 +227,8 @@ class Server:
         self.refused: list[FieldError] = []
         self.loaded: str | None = None
         self.version = 1
+        # Equal to the rows of the batch at the last change of the version.
         self._rows = batch.rows
-        """Equal to the rows of the batch at the last change of the version."""
         self.runs_version = 1
         self.start = uuid.uuid4().hex[:8]
 
