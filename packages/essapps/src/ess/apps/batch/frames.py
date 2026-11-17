@@ -31,7 +31,8 @@ import pandas as pd
 from pydantic import BaseModel
 
 from ..client import Client
-from ..records import Status, Template
+from ..records import Template
+from . import state
 from .reduction import Batch
 from .state import RowState
 from .table import Row
@@ -215,8 +216,9 @@ def reduce_table(
     persist:
         As :meth:`~ess.apps.Client.submit` takes it.
     remaining:
-        Leave out the rows whose newest record under ``label`` completed,
-        whatever its cells and settings were.
+        Reduce only the rows that :func:`~.state.remaining` gives: those whose
+        newest record under ``label`` did not complete, or is outdated, since
+        the row's cells or the settings changed, or its spec did.
 
     Raises
     ------
@@ -242,11 +244,10 @@ def reduce_table(
     try:
         # Records that a workspace went on with after a restart finish first.
         client.wait([s.record for s in batch.state().values() if s.record])
-        keys = [
-            key
-            for key, state in batch.state().items()
-            if not (remaining and state.status is Status.COMPLETED)
-        ]
+        states = batch.state(settings)
+        left = set(state.remaining(states)) if remaining else states.keys()
+        # A row that cannot run is given too, so that reduce refuses it by key.
+        keys = [k for k, s in states.items() if k in left or s.problems]
         client.wait(batch.reduce(settings, keys))
     except KeyboardInterrupt:
         batch.cancel()
