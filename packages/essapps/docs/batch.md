@@ -50,7 +50,7 @@ batch.reduce(remaining(batch.state()))
 batch.cancel()
 ```
 
-`batch.settings` is a dict of the parameters that are not columns, as `Form.params` gives it. `Batch(..., settings=...)` gives the settings that a new batch starts with, such as the technique's defaults. Every state and every reduction reads them. Only an assignment of all of them changes them: `batch.settings` is a copy, so `batch.settings['q'] = ...` raises, and a change inside a value changes only the copy.
+`batch.settings` is a read-only mapping of the parameters that are not columns, as `Form.params` gives them. `Batch(..., settings=...)` gives the settings that a new batch starts with, such as the technique's defaults. Every state and every reduction reads them. Only an assignment of all of them changes them: `batch.settings` is a copy, so `batch.settings['q'] = ...` raises, and a change inside a value changes only the copy.
 
 ## Terms
 
@@ -58,7 +58,7 @@ batch.cancel()
 - The **settings** are all other parameters, shared by every row. They are the batch's (`batch.settings`), and the template's values.
 - A **row** has a **key**, a value per column, and read-only **info** to show with it. A cell can hold anything a request can: a file, a reference to an output, a number, a list of runs.
 - A **source** is your function from files to rows. A **scan** calls it.
-- An **edit** is a cell set by hand, by a person or by your code.
+- An **edit** is a cell set, a row added, or a row removed, by hand: by a person or by your code.
 - A row's **result** is the newest record with the batch's label and the row's key as its member, of any spec and whoever submitted it. So two `Batch` objects with the same label are one batch: give each batch its own label. An application that wants a table per person puts the person in the label.
 - A row's **request** is what `reduce` would submit for it now: the settings and its cells. A result is **outdated** if the row's request differs from the result's, or if the result is of another spec than the one bound ([Rules](#rules)).
 
@@ -160,20 +160,22 @@ App(client, tabs={'I(Q)': view, 'Runs': sheet})
 
 ## Where the definition is kept
 
-The *definition* of a batch is what a person makes of it: the corrections of files, the edits of rows, and the settings. Give the batch and the file source a store, and a batch made again, after a restart or in another process, starts with it:
+The *definition* of a batch is what a person makes of it: the corrections of files, the edits of rows, and the settings. Give the batch and the file source the *definitions* of the workspace, and a batch made again, after a restart or in another process, starts with them:
 
 ```python
 from ess.apps.batch import FolderDefinitions
 
-store = FolderDefinitions(directory)                         # the workspace's folder
-files = CorrectedFiles(folder_files(directory), store=store)
+definitions = FolderDefinitions(directory)                   # the workspace's folder
+files = CorrectedFiles(folder_files(directory), definitions=definitions)  # reads the corrections
 client = open_folder(directory, BINDINGS, files=files)
 batch = Batch(client, IOFQ, columns=..., label='auto/iofq', source=pair_by_sample,
-              settings=DEFAULTS, store=store)               # the stored settings replace DEFAULTS
-batch.scan()                                                 # the scan, with the stored edits on top
+              settings=DEFAULTS, definitions=definitions)    # the settings kept replace DEFAULTS
+batch.scan()                                                 # the scan, with the edits kept on top
 ```
 
-Without a store, all three stay in memory. Each write changes the store before the batch, so a write that the store refuses raises and changes nothing. A scan writes nothing. In-place changes are not possible: `batch.rows` is immutable and `batch.settings` a copy, so every change is an assignment that the store sees.
+Without definitions, all three stay in memory. The edits and settings are read when the `Batch` is made, the corrections when the `CorrectedFiles` is made, and nothing reads them again while these live. Each change is written to the definitions before it is made, so a change that they refuse raises and changes nothing; the page answers it with a message, and its settings form shows the batch's settings again. A scan writes nothing.
+
+What is written is what is assigned: `batch.rows = ...`, `batch.settings = ...`, `batch.put(...)`, and `files.correct(...)`, `files.correct_each(...)`, `files.reset(...)`. `batch.settings` is a read-only copy, so a change inside it changes nothing, and settings that name a column raise `ValueError`. The methods of `RowTable` return a new table. Its `edits` and a row's `values` are plain dicts, though: a change made in them is not written and is lost at a restart, so never change them in place.
 
 `FolderDefinitions` writes JSON files, which a person can read, in `definitions/` of the folder. A label holds `/`, written as `%2F`, so each label has a folder of its own:
 
@@ -190,9 +192,19 @@ definitions/labels/auto%2Fiofq/settings.json    a template, which essapps-batch 
  "removed": ["60340"]}
 ```
 
-The edits hold only what was set by hand, so a cell from the scan follows the files after a restart. A stored definition that no longer fits the code shows as it would after a change by hand: an edit at a column that is gone makes its row `incomplete` (`not a column`), settings of another version of the spec are refused by `state()` and `reduce`, and a correction of a file no longer listed is not used. A file that is not the data described raises `ValueError` with the file and the row when the batch is made.
+A file is written to a temporary file next to it, which then replaces it, so a reader never sees half of one; a temporary file left by a write that was cut off is removed when the file is read. A label too long to name a folder, once written so, is refused with `ValueError` when the batch is made. Labels that differ only in case share a folder on a file system that ignores case, such as that of macOS.
 
-The files that a person loads and exports ([The UI](#the-ui)) are copies, for the command and for other people. The store is the one place that a batch is kept.
+The edits hold only what was set by hand, so a cell from the scan follows the files after a restart. A definition kept that no longer fits the code:
+
+- An edit at a column that is gone makes its row `incomplete` (`not a column`). The page offers to remove it.
+- Settings of another version of the spec are read as they are. The settings form shows those that fit, and names the others with their values. `state()` and `reduce` refuse what the spec bound does not take. Nothing is written until a person changes a setting, which writes the settings of the form.
+- Settings of a spec of another name raise `ValueError` when the batch is made, naming the file and both specs.
+- A correction of a file no longer listed is kept, and not used.
+- A file that is not of the shape described raises `ValueError` naming the file and the entry, when the batch or the `CorrectedFiles` is made.
+
+Two `Batch` objects on one label and one folder each write their whole table of edits at each change. A change made through the other since it was made is lost, and neither sees the other's changes. A label has one `Batch` in a process: the Panel demo shows one batch in every session.
+
+The files that a person loads and writes ([The UI](#the-ui)) are copies, for other people and other tools. The definitions are the one place that a batch is kept, for an application and for the command ([The app and the command on one folder](#the-app-and-the-command-on-one-folder)).
 
 ## Chains
 
@@ -287,7 +299,7 @@ loop.step()                          # reduces '60339' again with the source's f
 
 So a label has one batch. A person who wants another file for a row edits the loop's own batch, or corrects the file's metadata so that the source gives the row another file ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)). Two loops never share a label: if their rows differ at `at`, each replaces the other's records at every step. A record under the label that equals the loop's row at `at`, from any submitter, counts as the row's result.
 
-A restart starts from a new scan, with the edits that the batch's store kept. So after a restart, a row is not reduced again unless the files changed it at `at`. Without a store the edits are gone, and a row that was edited at a column of `at` is reduced again with the source's cells. A record that was running when the workspace ended is failed at the restart; the loop does not run a failed row again, and a person retries it.
+A restart starts from a new scan, with the edits that the batch's definitions kept. So after a restart, a row is not reduced again unless the files changed it at `at`. Without definitions the edits are gone, and a row that was edited at a column of `at` is reduced again with the source's cells. A record that was running when the workspace ended is failed at the restart; the loop does not run a failed row again, and a person retries it.
 
 ### Problems and refusals
 
@@ -430,30 +442,31 @@ One command holds the folder at a time. If a command was killed, the next one fi
 - an editor: select rows, change cells, and **Update selected** writes only the changed cells, to all of them. A cell with something missing is not written and is named. To write a value that equals its default to several rows, choose the column in **Write**;
 - **Bring back removed rows**;
 - a form for a tweak of one row;
-- a path, and buttons that read and write the files of the command: **Load rows** and **Export rows** (a table), **Load settings** and **Export settings** (a template), and **Export selected** (a folder).
+- a path, and buttons that read and write the files of the command: **Load rows** and **Write rows** (a table), **Load settings** and **Write settings** (a template), and **Export selected** (a folder of outputs). The page's **Download** of a table or of the settings is what **Write** is here.
 
 ## The app and the command on one folder
 
-A `BatchView` reads and writes the files of `essapps-batch`, so a person and the command share one workspace folder (`open_folder`). One process holds the folder at a time, so stop the app before the command runs:
+A person and the command share one workspace folder (`open_folder`), and a label is one batch for both: the command keeps a batch in the folder's definitions as an app does. One process holds the folder at a time, so stop the app before the command runs:
 
 ```sh
-python -m ess.apps.batch.panel.demo ws     # Export rows: rows.csv, Export settings: settings.yaml
+python -m ess.apps.batch.panel.demo ws     # Write rows: rows.csv, Write settings: settings.yaml
 B="essapps-batch -w ws --bind ess.apps.batch.panel.demo:BINDINGS"
 $B reduce settings.yaml rows.csv --label demo -o done.csv
+$B reduce --label demo --remaining           # the batch as the label keeps it
 python -m ess.apps.batch.panel.demo ws     # the rows show as completed
 ```
 
-The command finds the results of the app, and the app those of the command, if both use the batch's label, and the outputs are persisted (`Batch(..., persist=True)`).
+`reduce` imports what it is given into the definitions of its label, then reduces the rows of the table: the template becomes the batch's settings, and the table is set by hand as **Load rows** sets it, on the rows that `--source` makes from the files, if given, and on the edits that the label keeps. So what the command was given shows in the app afterwards, and a table older than an edit made in the app sets the cell back, as any import does. Without a template and a table, `reduce` reduces the batch that the label keeps, with the app's edits. `rows`, `files`, and `export` read the files as corrected, and keep no batch. The command finds the results of the app, and the app those of the command, if the outputs are persisted (`Batch(..., persist=True)`).
 
 | Button | Same as |
 |---|---|
-| **Load rows** | `batch.rows = batch.rows.put(frames.rows_of(frames.read_table(path), spec.params, batch.columns), batch.columns)` |
-| **Export rows** | `frames.batch_table(batch, states)`, written with `frames.write_table` |
+| **Load rows** | `batch.scan()`, then `batch.put(frames.rows_of(frames.read_table(path), spec.params, batch.columns))` |
+| **Write rows** | `frames.batch_table(batch, states)`, written with `frames.write_table` |
 | **Load settings** | `batch.settings = text.settings_of(batch, text.load_template(path))`, refused if of another spec, another version of it, or with other blanks than the columns |
-| **Export settings** | `text.write_template(batch.template(), path)` |
+| **Write settings** | `text.write_template(batch.template(), path)` |
 | **Export selected** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows selected |
 
-`reduce` refuses a table with a row that cannot run, so remove the incomplete rows before exporting. A table loaded is set by hand: each cell that differs from the row shown is an edit, and a row the batch does not show is added, so it stays after **Scan files**, and the store keeps it. The `status` of an exported table is what the view shows, such as `outdated` or `not reduced`. `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table. A relative path is relative to the working directory of the app.
+`reduce` refuses a table with a row that cannot run, so remove the incomplete rows before writing it. A table loaded is set by hand: each cell that differs from the row shown is an edit, a row the batch removed is brought back, and a row the batch does not show is added, so it stays after **Scan files**, and the definitions keep it. The `status` of a table written is what the view shows, such as `outdated` or `not reduced`. `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table. A relative path is relative to the working directory of the app.
 
 `draw(records)` gets the completed results of the rows selected, by key, and returns a Panel object.
 
@@ -495,7 +508,7 @@ Raise in the fake to make a row fail; hold it back on a `threading.Event` to kee
 ## What it does not do
 
 - Keep a result that is not persisted. A `Batch` finds results by key in its workspace, so `local()` per session starts with none, and a result that is not persisted is gone once its workspace closes.
-- Merge two writers of one definition. Two batches on one label with one store, such as two sessions of the demo, each write what they hold, and the last write wins. A label has one batch.
+- Merge two writers of one definition, or lock it. Two `Batch` objects on one label each write their whole table of edits, so a change made through the other since is lost ([Where the definition is kept](#where-the-definition-is-kept)).
 - Keep a tweak across sessions. After a restart a tweaked row reads `outdated` where the tweak differs from the settings, and "reduce remaining" reduces it again with the settings.
 - Free the values of replaced results. They stay until the workspace closes or they are released, unless the batch persists them (`persist=`).
 - Offer preparatory steps with a **Use** button. A `Referenced[...]` setting offers each record in the settings form.

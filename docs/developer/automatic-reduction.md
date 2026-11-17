@@ -104,7 +104,7 @@ A step reads the files, the batch's rows and settings, and the records under the
 `Automatic` keeps its batch, `at`, and `refused`, the reasons of the last step, which no step reads.
 So a step that raises, in the settings, the source, or a submission, loses nothing: the next step tries again.
 A restarted loop reduces no row again whose cells come from the source alone.
-The batch's store keeps its edits and settings ([`ess.apps.batch.definition`](../../packages/essapps/src/ess/apps/batch/definition.py)), so with a store an edited row is not reduced again either.
+The batch's definitions keep its edits and settings ([`ess.apps.batch.definition`](../../packages/essapps/src/ess/apps/batch/definition.py)), so with them an edited row is not reduced again either.
 Without one, the edits are gone at a restart, and a row that was edited at a column of `at` is reduced again with the source's cells.
 A record that was running when the workspace ended is failed at the restart, and one that had not started is cancelled unless it persists outputs ([`Workspace._restart`](../../packages/essapps/src/ess/apps/workspace.py)); the loop does not run such a row again, and a person retries it.
 This holds while the proposal's history is kept. A running loop keeps it, since its calls keep the proposal from being idle ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
