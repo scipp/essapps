@@ -14,10 +14,17 @@ function, for a notebook: :func:`.frames.reduce_table` and
 :mod:`ess.apps.folder`), so a template may reference a record of an earlier
 command, by its ID or by its label (see :func:`.text.with_latest`).
 
-The files of the folder are read with the corrections that an application
-keeps there (:mod:`.definition`), so ``rows`` pairs runs as the application
-does. A batch of ``reduce`` is its template and its table: the edits and
-settings that an application keeps under the same label are not read.
+The command keeps a batch where an application does, in the folder's
+definitions (:mod:`.definition`), so a label is one batch whoever works on it:
+
+- ``reduce`` imports its template as the label's settings, and its table as an
+  application imports one (:meth:`.reduction.Batch.put`): set by hand on the
+  rows that ``--source`` makes from the files, if given, and on those that
+  the definitions hold. It then reduces the rows of the table. Without a
+  template and a table, it reduces the batch that the definitions hold.
+- ``rows`` and ``files`` write a table from the files, as corrected in the
+  definitions; ``export`` writes the outputs of a table that ``reduce`` wrote.
+  None of them reads or writes a batch.
 
 The guide is ``packages/essapps/docs/batch.md``.
 
@@ -79,12 +86,21 @@ def _parser() -> argparse.ArgumentParser:
     reduce = commands.add_parser(
         'reduce', parents=[output], help='reduce the rows of a table'
     )
-    reduce.add_argument('template', type=Path, help='a template, YAML')
+    reduce.add_argument(
+        'template',
+        type=Path,
+        nargs='?',
+        help='a template, YAML; without it, the settings that the label keeps',
+    )
     reduce.add_argument(
         'table',
         type=Path,
         nargs='?',
         help='the rows, .csv, .tsv, or .xlsx; without it, the template is one row',
+    )
+    reduce.add_argument(
+        '--source',
+        help='files to rows, as package.module:name; the table is set on them',
     )
     reduce.add_argument(
         '-l', '--label', required=True, help='names the batch; each has its own'
@@ -119,25 +135,32 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _run(client: Client, args: argparse.Namespace) -> pd.DataFrame:
+def _run(
+    client: Client, args: argparse.Namespace, definitions: FolderDefinitions
+) -> pd.DataFrame:
     if args.command == 'rows':
         return frames.table_of(_named(args.source)(file_infos(client)))
     if args.command == 'export':
         return export_table(client, frames.read_table(args.table), args.directory)
-    table = (
-        pd.DataFrame({'key': [args.label]})
-        if args.table is None
-        else frames.read_table(args.table)
-    )
-    template = load_template(args.template)
+    template, table = None, None
+    if args.template is not None:
+        template = load_template(args.template)
+        template = replace(template, params=with_latest(client, template.params))
+        table = (
+            pd.DataFrame({'key': [args.label]})
+            if args.table is None
+            else frames.read_table(args.table)
+        )
     return frames.reduce_table(
         client,
-        replace(template, params=with_latest(client, template.params)),
+        template,
         table,
         label=args.label,
+        source=None if args.source is None else _named(args.source),
         staged=args.staged,
         persist=True,
         remaining=args.remaining,
+        definitions=definitions,
     )
 
 
@@ -182,7 +205,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.workspace, bind, files=files, proposal=args.proposal
     ) as client:
         try:
-            result = _run(client, args)
+            result = _run(client, args, definitions)
         except (SubmitError, ValueError) as error:
             sys.stderr.write(f'{error}\n')
             return 2

@@ -2,6 +2,9 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """A batch from files: a template file, and the command on a workspace in a folder."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from importlib import import_module
 from pathlib import Path
 
 import pandas as pd
@@ -9,8 +12,9 @@ import pytest
 import yaml
 
 from ess.apps import Template, file
-from ess.apps.batch import CorrectedFiles, FolderDefinitions
+from ess.apps.batch import Batch, CorrectedFiles, FolderDefinitions, remaining
 from ess.apps.batch.cli import main
+from ess.apps.batch.definition import edits_key, settings_key, template_of
 from ess.apps.batch.frames import read_table
 from ess.apps.batch.text import load_template
 from ess.apps.folder import folder_files, open_folder
@@ -223,6 +227,125 @@ def test_main_with_remaining_reduces_the_rows_whose_cells_or_settings_changed(
     assert (cell[0], cell[1] != first[1]) == (first[0], True)
     assert not set(setting) & set(cell)
     assert records(['1', '3']) == setting
+
+
+@contextmanager
+def app(folder: Path, label: str = 'x') -> Iterator[Batch]:
+    """The batch of ``label`` as an application on the folder makes it."""
+    definitions = FolderDefinitions(folder)
+    files = CorrectedFiles(folder_files(folder), definitions=definitions)
+    bind = import_module('cli_toys_batch_files').BINDINGS
+    template = definitions.load(settings_key(label), template_of)
+    assert template is not None
+    with open_folder(folder, bind, files=files) as client:
+        yield Batch(
+            client,
+            client.spec(template.spec),
+            columns=template.blanks,
+            label=label,
+            definitions=definitions,
+        )
+
+
+@pytest.fixture
+def reduced_once(command: list[str], folder: Path) -> Path:
+    """The folder after a reduction of samples 1 and 2 with an offset, as ``x``."""
+    template = folder / 'offset.yaml'
+    template.write_text(
+        'spec: {name: cli-toy, version: 1}\nblanks: [sample]\n'
+        'params: {offset: {value: 0.5}}\n'
+    )
+    runs = write_rows(folder, ['1', '2'])
+    assert main([*command, 'reduce', str(template), str(runs), '-l', 'x']) == 0
+    return folder
+
+
+def test_a_batch_on_the_label_reduced_has_the_settings_and_rows_of_the_files(
+    reduced_once: Path,
+) -> None:
+    with app(reduced_once) as batch:
+        assert batch.settings == {'offset': {'value': 0.5}}
+        assert {r.key: r.values['sample'] for r in batch.rows} == {
+            'row-0': file(run=1),
+            'row-1': file(run=2),
+        }
+        assert remaining(batch.state()) == []
+
+
+def test_an_edit_of_an_app_is_reduced_by_the_command_given_no_files(
+    command: list[str], reduced_once: Path
+) -> None:
+    with app(reduced_once) as batch:
+        batch.rows = batch.rows.edit('row-1', {'sample': file(run=3)})
+    out = reduced_once / 'out.csv'
+
+    code = main([*command, 'reduce', '-l', 'x', '--remaining', '-o', str(out)])
+
+    with app(reduced_once) as batch:
+        state = batch.state()
+        totals = {k: batch.client.output(s.record, 'total') for k, s in state.items()}
+        records = batch.client.records(label='x')
+    assert code == 0
+    assert list(read_table(out)['key']) == ['row-0', 'row-1']
+    assert totals == {'row-0': 1.0, 'row-1': 3.0}
+    assert len(records) == 3  # row-0 is not reduced again
+
+
+def test_a_table_given_to_the_command_takes_the_place_of_an_edit_of_an_app(
+    command: list[str], reduced_once: Path
+) -> None:
+    with app(reduced_once) as batch:
+        batch.rows = batch.rows.edit('row-1', {'sample': file(run=3)})
+    runs = write_rows(reduced_once, ['1', '2'])
+    template = reduced_once / 'offset.yaml'
+
+    assert main([*command, 'reduce', str(template), str(runs), '-l', 'x']) == 0
+
+    with app(reduced_once) as batch:
+        assert batch.rows['row-1'].values['sample'] == file(run=2)
+
+
+def test_a_table_given_with_a_source_keeps_only_what_differs_from_the_scan(
+    command: list[str], cli_template: Path, folder: Path
+) -> None:
+    runs = folder / 'runs.csv'
+    assert main([*command, 'rows', 'cli_toys_batch_files:pair', '-o', str(runs)]) == 0
+    runs.write_text(runs.read_text().replace('3,path:run-3.json', '3,path:run-1.json'))
+    source = ['--source', 'cli_toys_batch_files:pair']
+
+    assert (
+        main([*command, 'reduce', *source, str(cli_template), str(runs), '-l', 'x'])
+        == 0
+    )
+
+    edits = FolderDefinitions(folder).load(edits_key('x'), lambda data: data)
+    assert edits == {
+        'added': [],
+        'edited': {'3': {'sample': {'@ref': 'file', 'file': 'path:run-1.json'}}},
+        'cleared': {},
+        'removed': [],
+    }
+
+
+def test_the_command_without_files_on_a_label_that_keeps_nothing_says_so(
+    command: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main([*command, 'reduce', '-l', 'nothing']) == 2
+    assert (
+        'nothing: no settings are kept, so give a template' in capsys.readouterr().err
+    )
+
+
+def test_definitions_that_cannot_be_read_are_said_without_a_traceback(
+    command: list[str], folder: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (folder / 'definitions').mkdir()
+    (folder / 'definitions' / 'corrections.json').write_text('{"x": ')
+
+    code = main([*command, 'rows', 'cli_toys_batch_files:pair'])
+
+    assert code == 2
+    assert 'definitions/corrections.json: ' in capsys.readouterr().err
 
 
 def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(

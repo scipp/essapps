@@ -33,7 +33,8 @@ from pydantic import BaseModel
 from ..client import Client
 from ..records import Template
 from . import state
-from .reduction import Batch
+from .definition import DefinitionStore, settings_key, template_of
+from .reduction import Batch, RowSource
 from .state import RowState
 from .table import Row
 from .text import read_cell, with_named_files, write_cell
@@ -186,18 +187,27 @@ The columns that :func:`reduce_table`, :func:`batch_table`, and
 
 def reduce_table(
     client: Client,
-    template: Template,
-    table: pd.DataFrame,
+    template: Template | None,
+    table: pd.DataFrame | None,
     *,
     label: str,
+    source: RowSource | None = None,
     staged: bool = False,
     persist: bool | Sequence[str] = False,
     remaining: bool = False,
+    definitions: DefinitionStore | None = None,
 ) -> pd.DataFrame:
     """
     Reduce each row of ``table`` with ``template``, wait, and return the table
     with what came of each row: its ``status``, the ID of its ``record``, and
     why it failed in ``failure``.
+
+    The template and the table are imported into the batch of ``label``, as
+    an application imports them: the template's settings are the batch's, and
+    the table's rows are set by hand (:meth:`~.reduction.Batch.put`), on the
+    rows that ``source`` makes from the files, and on those that
+    ``definitions`` hold. With ``definitions``, both are kept there, so that
+    an application on the label shows them, and a later call reduces them.
 
     Parameters
     ----------
@@ -205,12 +215,17 @@ def reduce_table(
         The client that submits.
     template:
         The settings, and the blanks, each a column of ``table``. A file in it
-        may be named as in a table (see :mod:`.text`).
+        may be named as in a table (see :mod:`.text`). ``None`` for the
+        template that ``definitions`` hold for ``label``.
     table:
-        The rows, as :func:`rows_of` reads them.
+        The rows, as :func:`rows_of` reads them. ``None`` for every row of the
+        batch, as ``definitions`` and ``source`` give them; the table returned
+        is then :func:`batch_table`.
     label:
         The label of the records. A batch is found again by it, so each batch
         has its own.
+    source:
+        Makes rows from the files, as for :class:`~.reduction.Batch`.
     staged:
         Run the rows through a stage.
     persist:
@@ -219,6 +234,8 @@ def reduce_table(
         Reduce only the rows that :func:`~.state.remaining` gives: those whose
         newest record under ``label`` did not complete, or is outdated, since
         the row's cells or the settings changed, or its spec did.
+    definitions:
+        Where the batch of ``label`` is kept (:mod:`.definition`).
 
     Raises
     ------
@@ -226,8 +243,16 @@ def reduce_table(
         If a row cannot run; nothing is submitted.
     ValueError
         If the table does not fit the template (see :func:`rows_of`), or a
-        blank is named as one of :data:`RESULT`.
+        blank is named as one of :data:`RESULT`; or if no template is given
+        and ``definitions`` hold none.
     """
+    if template is None:
+        kept = None
+        if definitions is not None:
+            kept = definitions.load(settings_key(label), template_of)
+        if kept is None:
+            raise ValueError(f'{label}: no settings are kept, so give a template')
+        template = kept
     if taken := sorted(set(template.blanks) & set(RESULT)):
         raise ValueError(f'a table cannot hold the blank {", ".join(taken)}')
     spec = client.spec(template.spec)
@@ -236,25 +261,36 @@ def reduce_table(
         spec,
         columns=template.blanks,
         label=label,
+        source=source,
         staged=staged,
         persist=persist,
-        settings=with_named_files(spec.params, template.params),
+        definitions=definitions,
     )
-    batch.rows = batch.rows.rescan(rows_of(table, spec.params, template.blanks))
+    batch.settings = with_named_files(spec.params, template.params)
+    if source is not None:
+        batch.scan()
+    keys = None
+    if table is not None:
+        rows = rows_of(table, spec.params, template.blanks)
+        batch.put(rows)
+        keys = [row.key for row in rows]
     try:
         # Records that a workspace went on with after a restart finish first.
-        client.wait([s.record for s in batch.results().values() if s.record])
-        states = batch.state()
+        client.wait([s.record for s in batch.results(keys).values() if s.record])
+        states = batch.state(keys)
         left = set(state.remaining(states)) if remaining else states.keys()
         # A row that cannot run is given too, so that reduce refuses it by key.
-        keys = [k for k, s in states.items() if k in left or s.problems]
-        client.wait(batch.reduce(keys))
+        picked = [k for k, s in states.items() if k in left or s.problems]
+        client.wait(batch.reduce(picked))
     except KeyboardInterrupt:
         batch.cancel()
         raise
     finally:
         batch.close()
-    return with_results(client, batch.state(), table)
+    states = batch.state(keys)
+    if table is None:
+        table = batch_table(batch, states)
+    return with_results(client, states, table)
 
 
 def batch_table(
