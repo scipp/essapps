@@ -349,11 +349,7 @@ class Server:
         held = self.settings.held()
         if held == self._shown:
             return None
-        return (
-            'Fill in or discard the settings'
-            if held[1]
-            else 'Apply or discard the settings'
-        )
+        return f'{"Fill in" if held[1] else "Apply"} or discard the settings'
 
     def _states(
         self, keys: Sequence[str] | None = None
@@ -442,13 +438,12 @@ class Server:
             counts[status] += 1
         given, missing = self.settings.held()
 
+        # A refusal of the batch's settings is said, and marked at its field,
+        # while the form shows the value refused.
         def shown(error: FieldError) -> bool:
-            """Whether the form shows the batch's value where ``error`` is."""
             name = str(error.loc[0]) if error.loc else ''
             return not name or given.get(name) == self._shown[0].get(name)
 
-        # A refusal of the batch's settings is said, and marked at its field,
-        # while the form shows the value refused.
         errors = [*missing, *filter(shown, unusable)]
         said = [self._said(errors)] if errors else []
         if self._unfit:
@@ -615,10 +610,7 @@ class Server:
         earlier: int,
         label: str | None = None,
     ) -> Action:
-        """
-        What the primary button does now, ``label`` if given while it is
-        ``blocked``, and how far the rows running are.
-        """
+        """What the button does now, or ``label`` if blocked; how far rows run."""
         left = [] if blocked else left_to_reduce(states, self.batch.columns)
         kinds = {statuses[k] for k in left}
         n = len(left)
