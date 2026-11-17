@@ -863,7 +863,7 @@ class Server:
     def step(self) -> None:
         """
         One step of Follow: the scan of "Rescan runs", then the reduction of
-        :meth:`_follow_reduce`. A step that changes nothing the page shows,
+        :meth:`Automatic.reduce`. A step that changes nothing the page shows,
         such as the rows, the runs, the records, what waits and why, or its
         failure, leaves the version, so that a page polling it gets nothing new.
         """
@@ -874,16 +874,24 @@ class Server:
 
     def _step(self) -> bool:
         """
-        A step of Follow; whether it changed what the page shows. Whatever it
-        raises, from the files, the workflow or the workspace, is its failure,
-        said in the state until a step runs through.
+        A step of Follow, with the batch's settings, whatever the form holds;
+        whether it changed what the page shows. :attr:`waiting` says why each
+        row was not reduced. Whatever it raises, from the files, the workflow
+        or the workspace, is its failure, said in the state until a step runs
+        through.
         """
         rows, waiting, failure = self._rows, self.waiting, self.step_failure
         moved = False
         try:
             try:
+                if self.loop is None:
+                    raise Problem('This page does not follow the files.')
                 self._scan()
-                self._follow_reduce()
+                self.loop.reduce()
+                self.waiting = {
+                    key: f'Follow could not reduce it: {forms.message(reason)}'
+                    for key, reason in self.loop.refused.items()
+                }
             finally:
                 moved = self._caught_up()
             self.step_failure = None
@@ -911,20 +919,6 @@ class Server:
         if records or runs:
             self._refresh()
         return records or runs
-
-    def _follow_reduce(self) -> None:
-        """
-        The reduction of a step, :meth:`Automatic.reduce`, with the batch's
-        settings, whatever the form holds. :attr:`waiting` says why each row
-        was not reduced.
-        """
-        if self.loop is None:
-            raise Problem('This page does not follow the files.')
-        self.loop.reduce()
-        self.waiting = {
-            key: f'Follow could not reduce it: {forms.message(reason)}'
-            for key, reason in self.loop.refused.items()
-        }
 
     def tick(self) -> None:
         """A step, if following; :func:`~.api.create_app` calls it on a timer."""
