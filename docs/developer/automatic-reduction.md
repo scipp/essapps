@@ -101,10 +101,11 @@ A loop on a new label starts from the first file. A person's batch under its own
 
 Nothing that decides which rows run.
 A step reads the files, the batch's rows and settings, and the records under the label, and works out the rest.
-`Automatic` keeps its batch, `at`, the settings callable, and `refused`, the reasons of the last step, which no step reads.
+`Automatic` keeps its batch, `at`, and `refused`, the reasons of the last step, which no step reads.
 So a step that raises, in the settings, the source, or a submission, loses nothing: the next step tries again.
 A restarted loop reduces no row again whose cells come from the source alone.
-An edit lives in the `Batch` and is lost at a restart, so a row that was edited at a column of `at` is reduced again with the source's cells.
+The batch's store keeps its edits and settings ([`ess.apps.batch.definition`](../../packages/essapps/src/ess/apps/batch/definition.py)), so with a store an edited row is not reduced again either.
+Without one, the edits are gone at a restart, and a row that was edited at a column of `at` is reduced again with the source's cells.
 A record that was running when the workspace ended is failed at the restart, and one that had not started is cancelled unless it persists outputs ([`Workspace._restart`](../../packages/essapps/src/ess/apps/workspace.py)); the loop does not run such a row again, and a person retries it.
 This holds while the proposal's history is kept. A running loop keeps it, since its calls keep the proposal from being idle ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
 
@@ -164,7 +165,7 @@ In the step in which the transmission is submitted, the sample's row references 
 If the transmission's record has failed by the time the sample's row is made, the row waits: a cell reads a failed record.
 If it fails after, the sample's record fails with it, and the row is not reduced again unless a cell at `at` changes.
 A transmission reduced again gives a new record, so the sample's cell `transmission` changes: the row is reduced again if `transmission` is in `at`, and reads `outdated` otherwise.
-A source is recomputed at every step, so a chain survives a restart, which a reference set by hand in a cell (an edit) does not.
+A source is recomputed at every step, so a chain follows each new record of the first batch, which a reference set by hand in a cell (an edit) does not.
 The source reads the state of every row of the first batch at every step.
 
 ## Cost
