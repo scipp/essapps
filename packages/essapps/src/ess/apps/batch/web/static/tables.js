@@ -320,7 +320,8 @@ export class Grid {
   }
 
   // Remove the rows gone, update those changed, and add the new ones where
-  // they stand in `rows`; the others are not drawn again. Only if the rows
+  // they stand in `rows`; the others are not drawn again. Then the filter and
+  // the sort are applied again, which these calls do not do. Only if the rows
   // kept changed order is the table replaced.
   async draw(rows) {
     await this.built;
@@ -351,11 +352,13 @@ export class Grid {
           while (end < rows.length && !had.has(rows[end].key)) end++;
           await this.table.addData(rows.slice(i, end), i === 0, rows[i - 1]?.key);
         }
+        this.table.refreshFilter();
       } else {
         const selected = this.selected().filter((key) => keys.has(key));
         await this.table.replaceData(rows);
         if (selected.length) this.table.selectRow(selected);
       }
+      this.deselectHidden();
     } finally {
       this.quiet = false;
     }
@@ -374,6 +377,10 @@ export class Grid {
     await this.built;
     if (status === 'all') this.table.clearFilter();
     else this.table.setFilter('status', '=', status);
+    this.deselectHidden();
+  }
+
+  deselectHidden() {
     const shown = new Set(this.table.getRows('active').map((row) => row.getData().key));
     const hidden = this.selected().filter((key) => !shown.has(key));
     if (hidden.length) this.table.deselectRow(hidden);

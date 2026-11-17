@@ -622,3 +622,47 @@ def test_a_run_that_arrives_can_be_chosen_in_a_cell(
     cell(page, 'water', 'transmission').click()
 
     page.wait_for_selector('.choices li:has-text("run 1004")')
+
+
+def pills(page: Any) -> list[str]:
+    return page.evaluate(PILLS)
+
+
+PILLS = """[...document.querySelectorAll('#rows .tabulator-row')].map(
+  (r) => r.querySelector('.pill').textContent
+)"""
+"""The status of each row shown, from the top."""
+
+
+def reduce_rows(page: Any, url: str, client: Client, *keys: str) -> None:
+    """Reduce the rows of ``keys`` and wait until the page shows them done."""
+    answer = page.request.post(
+        f'{url}api/reduce', data={'which': 'selected', 'keys': keys}
+    )
+    assert answer.ok
+    client.wait(client.records())
+    page.wait_for_selector(f'.chip.st-done .n:text-is("{len(keys)}")')
+
+
+def test_a_row_that_changes_is_filtered_out_again(
+    page: Any, url: str, client: Client
+) -> None:
+    page.click('.chip.st-ready')
+    assert pills(page) == ['ready'] * 3
+
+    reduce_rows(page, url, client, '2')
+
+    page.wait_for_function(f'{PILLS}.length === 2')
+    assert pills(page) == ['ready'] * 2
+
+
+def test_a_row_that_changes_moves_to_where_the_sort_puts_it(
+    page: Any, url: str, client: Client
+) -> None:
+    page.click('#rows .tabulator-col[tabulator-field=status]')
+    assert pills(page) == ['ready'] * 3
+
+    reduce_rows(page, url, client, '1')
+
+    page.wait_for_function(f'{PILLS}[2] === "done"')
+    assert pills(page) == ['ready', 'ready', 'done']
