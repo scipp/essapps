@@ -129,8 +129,8 @@ class Action(BaseModel):
     """
     What the primary button does, ``label``, or why it cannot, ``blocked``;
     how many rows each way of reducing takes: ``remaining``, ``again`` (all),
-    and ``earlier``, those reduced with earlier settings, which "Reduce them
-    again" in the Settings tab reduces; and while rows run, how many of the
+    and ``earlier``, those reduced with earlier settings, which "Apply to all"
+    in the Settings tab reduces; and while rows run, how many of the
     rows submitted with them are finished, as ``[finished, all]``.
     """
 
