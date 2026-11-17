@@ -17,7 +17,8 @@ from ess.apps.batch.frames import RESULT, read_table, rows_of, write_table
 from ess.apps.batch.panel import BatchView, RunSheet
 from ess.apps.batch.panel.demo import build, open_demo
 from ess.apps.batch.panel.view import Draw
-from ess.apps.batch.text import write_template
+from ess.apps.batch.text import load_template, write_template
+from ess.apps.fields import ChoiceField, ScalarField
 from ess.apps.panel import App
 from ess.apps.testing import FakeFiles
 
@@ -89,6 +90,47 @@ def test_reduce_all_runs_the_ready_rows_and_says_so(
     assert results(view) == {'1': 'completed', '2': 'completed', '3': 'incomplete'}
     assert view.message.object == 'Submitted 2 rows.'
     assert view.summary.object == '2 completed, 1 incomplete'
+
+
+def bins(view: BatchView) -> ScalarField:
+    """The input of the number of bins in the settings form, as a person types in it."""
+    field = view.settings.fields['binning']
+    group = field.ways[field.chosen] if isinstance(field, ChoiceField) else field
+    return group.fields['bins']
+
+
+def test_the_form_starts_with_the_settings_of_the_batch(
+    batch: Batch, measured: None
+) -> None:
+    batch.settings = {'binning': {'bins': 5}}
+
+    assert BatchView(batch).settings.held()[0]['binning'] == {'bins': 5}
+
+
+def test_settings_assigned_by_code_show_in_the_form_and_are_exported(
+    view: BatchView, tmp_path: Path
+) -> None:
+    view.batch.settings = {'binning': {'bins': 7}}
+    view.path.value = str(tmp_path / 's.yaml')
+
+    view.export_settings()
+
+    assert load_template(tmp_path / 's.yaml').params['binning'] == {'bins': 7}
+    assert view.settings.held()[0]['binning'] == {'bins': 7}
+
+
+def test_a_form_with_something_missing_writes_nothing_and_refuses_an_export(
+    view: BatchView, tmp_path: Path
+) -> None:
+    bins(view).value = 4
+    bins(view).value = None
+    view.path.value = str(tmp_path / 's.yaml')
+
+    view.export_settings()
+
+    assert view.batch.settings['binning'] == {'bins': 4}
+    assert not (tmp_path / 's.yaml').exists()
+    assert 'binning.bins: give a value' in view.message.object
 
 
 def test_settings_refused_are_named_in_the_message(

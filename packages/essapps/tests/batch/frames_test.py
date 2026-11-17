@@ -23,7 +23,7 @@ from ess.apps.batch.frames import (
 )
 from ess.apps.folder import open_folder
 from ess.apps.log import Finished, Log, Started
-from ess.apps.testing import StagedFunction
+from ess.apps.testing import CountingClient, StagedFunction
 from ess.spec import Binding, WorkflowSpec, function_binding
 
 from . import toys
@@ -315,6 +315,16 @@ def test_rows_staged_run_through_a_stage(
 
     assert list(result['status']) == ['completed', 'completed']
     assert folder_staged.staged != []
+
+
+def test_a_table_is_reduced_with_one_state_to_choose_the_rows_and_one_to_report(
+    folder_client: Client, template: Template, table: pd.DataFrame
+) -> None:
+    counting = CountingClient(folder_client)
+
+    reduce_table(counting, template, table, label='scan')  # type: ignore[arg-type]
+
+    assert counting.reads['resolve'] == 2
 
 
 def test_rows_pending_after_a_restart_finish_and_are_not_submitted_again(

@@ -7,9 +7,13 @@ The server holds everything a person changes: the
 :class:`~ess.apps.batch.Batch` with its rows and settings, the form of the
 settings, the form of a reduction of one row alone, and the corrections of
 runs. The batch and the corrections keep their part in their store, if given
-one (:mod:`..definition`). The form of the settings writes them to the batch
-at each change that leaves nothing missing; while something is missing, the
-batch keeps the settings it had, and nothing is reduced or downloaded.
+one (:mod:`..definition`). The form of the settings is a draft of the batch's
+settings: it writes them to the batch at each change that leaves nothing
+missing; while something is missing, the batch keeps the settings it had, and
+nothing is reduced and no settings file downloaded. Before each action, and
+when the state is read, the form shows the batch's settings again if they are
+not those that it last showed or wrote, as after an assignment by code
+(:meth:`Server._show_settings`).
 
 The page holds only what it shows: the selection, the filter, the tab. Each
 action returns the :class:`~.models.State` after it, and the page polls the
@@ -165,6 +169,7 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
     def action(*args: P.args, **kwargs: P.kwargs) -> State:
         server: Server = args[0]  # type: ignore[assignment]
         with server.lock:
+            server._show_settings()
             try:
                 notice = method(*args, **kwargs)
             finally:
@@ -226,10 +231,8 @@ class Server:
         self._listing = Listing(batch.client)
         model, listing = batch.spec.params, self._listing
         self.settings = Fields(model, listing, fields=batch.settings_fields)
-        # Settings kept for another version of the spec may not fit the form;
-        # the batch keeps them, and its state refuses them until replaced.
-        with suppress(KeyError, ValueError):
-            self.settings.set(batch.settings, listing)
+        self._settings_shown: Mapping[str, Any] | None = None
+        self._show_settings()
         self._cells = Fields(model, listing, fields=batch.columns)
         self.tweak = Fields(model, listing)
         self._tweak_of: tuple[str, Any, str | None] | None = None
@@ -249,11 +252,26 @@ class Server:
             if fields is not None:
                 fields.refresh(self._listing)
 
+    def _show_settings(self) -> None:
+        """
+        Show the batch's settings in the form, unless they are those that it
+        last showed or wrote.
+        """
+        settings = self.batch.settings
+        if settings == self._settings_shown:
+            return
+        # Settings kept for another version of the spec may not fit the form;
+        # the batch keeps them, and its state refuses them until replaced.
+        with suppress(KeyError, ValueError):
+            self.settings.set(settings, self._listing)
+        self._settings_shown = settings
+
     def _write_settings(self) -> None:
         """Give the batch the settings of the form, unless one is missing."""
         given, missing = self.settings.held()
         if not missing:
             self.batch.settings = given
+            self._settings_shown = self.batch.settings
 
     def _complete(self) -> None:
         """Raise ``SubmitError`` if the form of the settings misses something."""
@@ -309,6 +327,7 @@ class Server:
     @_locked
     def state(self, notice: str = '') -> State:
         """Everything the page shows but a row's details, the plot, and the runs."""
+        self._show_settings()
         states, unusable = self._states()
         statuses = {k: self._status(s, not unusable) for k, s in states.items()}
         failures = self._failures(states)
@@ -911,6 +930,7 @@ class Server:
     @_locked
     def settings_file(self) -> bytes:
         """The settings as a YAML template."""
+        self._show_settings()
         try:
             self._complete()
         except SubmitError as error:

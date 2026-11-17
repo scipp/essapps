@@ -472,7 +472,7 @@ def test_what_a_person_set_on_the_page_is_there_when_it_is_served_again(
 
 
 def test_the_settings_downloaded_and_uploaded_are_the_same(
-    http: TestClient,
+    http: TestClient, batch: Batch
 ) -> None:
     content = http.get('/api/settings.yaml').content
     http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 9})
@@ -481,6 +481,36 @@ def test_the_settings_downloaded_and_uploaded_are_the_same(
 
     (binning, *_) = state(http)['settings']
     assert binning['child']['children'][0]['value'] == 2
+    assert batch.settings['binning'] == {'bins': 2}
+
+
+def test_settings_assigned_by_code_show_and_an_edit_of_another_keeps_them(
+    http: TestClient, batch: Batch
+) -> None:
+    batch.settings = {'binning': {'bins': 5}, 'offset': {'value': 1.5}}
+
+    (binning, *_) = state(http)['settings']
+    http.post(
+        '/api/settings', json={'path': ['offset', 'value'], 'op': 'set', 'value': 2}
+    )
+
+    assert binning['child']['children'][0]['value'] == 5
+    assert batch.settings == {'binning': {'bins': 5}, 'offset': {'value': 2.0}}
+
+
+def test_settings_with_something_missing_are_not_written_reduced_or_downloaded(
+    http: TestClient, batch: Batch, client: Client
+) -> None:
+    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 3})
+    before = dict(batch.settings)
+
+    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': None})
+    reduce = http.post('/api/reduce', json={'which': 'remaining'})
+    download = http.get('/api/settings.yaml')
+
+    assert batch.settings == before
+    assert (reduce.status_code, download.status_code) == (422, 422)
+    assert client.records(label='scan') == []
 
 
 @pytest.mark.parametrize(

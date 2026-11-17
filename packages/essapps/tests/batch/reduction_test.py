@@ -122,18 +122,59 @@ def test_a_batch_without_a_source_cannot_scan(client: Client) -> None:
         Batch(client, STAGED, columns=COLUMNS, label='scan').scan()
 
 
-def test_a_batch_starts_with_the_settings_given(
+def test_a_batch_starts_with_a_copy_of_the_settings_given(
     client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
+    given = {'binning': {'bins': 3}}
     batch = Batch(
-        client, PLAIN, columns=COLUMNS, label='s', source=pair, settings=OTHER_SETTINGS
+        client, PLAIN, columns=COLUMNS, label='s', source=pair, settings=given
     )
     batch.scan()
+    given['binning']['bins'] = 4
 
     records = batch.reduce(['1'])
 
     assert records['1'].request.params['binning'] == {'bins': 3}
+
+
+def test_settings_that_name_a_column_are_refused(scanned: Batch) -> None:
+    with pytest.raises(ValueError, match='thickness'):
+        scanned.settings = {**SETTINGS, 'thickness': 4.0}
+    with pytest.raises(ValueError, match='thickness'):
+        Batch(
+            scanned.client,
+            PLAIN,
+            columns=COLUMNS,
+            label='s',
+            settings={'thickness': 4.0},
+        )
+
+    assert scanned.settings == SETTINGS
+
+
+def test_a_reduction_compares_no_row_and_a_state_resolves_the_settings_once(
+    client: Client, sample: Measure
+) -> None:
+    counting = CountingClient(client)
+    batch = Batch(
+        counting,  # type: ignore[arg-type]
+        PLAIN,
+        columns=COLUMNS,
+        label='scan',
+        source=pair,
+    )
+    sample(1, 'water')
+    batch.scan()
+    client.wait(batch.reduce(['1']))
+    batch.settings = OTHER_SETTINGS
+
+    client.wait(batch.reduce(['1']))
+    batch.results()
+    reduced = counting.reads['resolve']
+    batch.state()
+
+    assert (reduced, counting.reads['resolve']) == (0, 1)
 
 
 def test_the_settings_change_only_by_an_assignment_of_all_of_them(

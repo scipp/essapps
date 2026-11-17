@@ -8,10 +8,12 @@ where it stands comes from :class:`~ess.apps.batch.Batch`. The settings form and
 the row form are one :class:`~ess.apps.panel.Form` with complementary fields, the
 values and the blanks of the batch's template.
 
-The settings form shows the batch's settings. It writes them to the batch at
-each change that leaves nothing missing, and before a reduction or an export,
-which it refuses while something is missing; meanwhile the batch keeps the
-settings it had.
+The settings form is a draft of the batch's settings. It writes them to the
+batch at each change that leaves nothing missing, and before a reduction or an
+export, which it refuses while something is missing; meanwhile the batch keeps
+the settings it had. When the batch's settings are not those the form last
+showed or wrote, as after an assignment by code, the form shows them again and
+writes nothing (:meth:`BatchView._show_settings`).
 
 The editor writes only the cells that differ from what it was showing, so
 updating one cell of a row, or of several rows at once, leaves the others as
@@ -94,10 +96,8 @@ class BatchView:
         self._drawn: tuple[tuple[str, str], ...] = ()
         model, listing = batch.spec.params, self._listing
         self.settings = Form(model, listing, fields=batch.settings_fields)
-        # Settings kept for another version of the spec may not fit the form;
-        # the batch keeps them, and its state refuses them until replaced.
-        with suppress(KeyError, ValueError):
-            self.settings.set(batch.settings, listing)
+        self._settings_shown: Mapping[str, Any] | None = None
+        self._show_settings()
         self.settings.watch(self._settings_changed)
         self.row = Form(model, listing, fields=batch.columns)
         self.tweak = Form(model, listing)
@@ -158,15 +158,34 @@ class BatchView:
     def _list_again(self) -> None:
         self.refresh(Listing(self.batch.client, previous=self._listing))
 
+    def _show_settings(self) -> None:
+        """
+        Show the batch's settings in the form, unless they are those that it
+        last showed or wrote.
+        """
+        settings = self.batch.settings
+        if settings == self._settings_shown:
+            return
+        # Settings kept for another version of the spec may not fit the form;
+        # the batch keeps them, and its state refuses them until replaced.
+        with suppress(KeyError, ValueError):
+            self.settings.set(settings, self._listing)
+        self._settings_shown = settings
+
     def _write_settings(self) -> None:
         """
         Give the batch the settings of the form. Raises ``SubmitError``, and
-        gives none, if one is missing.
+        gives none, if one is missing. A form filled from settings older than
+        the batch's is not written: it shows the batch's.
         """
+        if self.batch.settings != self._settings_shown:
+            self._show_settings()
+            return
         given, missing = self.settings.held()
         if missing:
             raise SubmitError(missing)
         self.batch.settings = given
+        self._settings_shown = self.batch.settings
 
     def _settings_changed(self) -> None:
         with suppress(SubmitError):  # the form shows what is missing
@@ -174,6 +193,7 @@ class BatchView:
         self._show()  # changed settings make results outdated
 
     def _show(self) -> None:
+        self._show_settings()
         try:
             self._states = self.batch.state()
         except SubmitError as error:  # settings refused: shown without them
@@ -322,6 +342,7 @@ class BatchView:
         if row is None or row.record is None or row.spec_changed:
             self.message.object = 'Select one row that has a result of this workflow.'
             return
+        self._show_settings()  # what the form shows next is a change of these
         self.settings.set(row.record.request.params, self._listing)
         self._settings_changed()
 
@@ -399,6 +420,7 @@ class BatchView:
         """Show the settings of the template at :attr:`path`."""
         with self._showing_errors('Cannot load the settings'):
             template = load_template(Path(self.path.value))
+            self._show_settings()  # what the form shows next is a change of these
             self.settings.set(settings_of(self.batch, template), self._listing)
             self.message.object = 'Loaded the settings.'
         self._settings_changed()

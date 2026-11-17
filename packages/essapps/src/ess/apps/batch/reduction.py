@@ -160,6 +160,8 @@ class Batch:
     KeyError
         If a column is not a parameter of the spec.
     ValueError
+        If ``settings`` name a column.
+    ValueError
         If ``store`` holds edits that cannot be read, naming the row.
     """
 
@@ -188,7 +190,7 @@ class Batch:
         self.source = source
         self._store = store
         self._rows = RowTable()
-        self._settings = copy.deepcopy(dict(settings or {}))
+        self._settings = self._own(settings or {})
         if store is not None:
             self._load(store)
         self._selector = Selector() if selector is None else selector
@@ -261,19 +263,25 @@ class Batch:
         An assignment reduces no row: the rows reduced before read
         ``outdated``, with the setting in :attr:`RowState.changed`. The
         workspace checks the settings when :meth:`state` resolves them, and
-        refuses a name that is not a parameter; a value at a column is dropped,
-        as :class:`~ess.apps.Template` drops it.
+        refuses a name that is not a parameter. Raises ``ValueError`` for a
+        name that is a column: a column's value is a cell of each row.
         """
         return MappingProxyType(copy.deepcopy(self._settings))
 
     @settings.setter
     def settings(self, settings: Mapping[str, Any]) -> None:
-        settings = copy.deepcopy(dict(settings))
+        settings = self._own(settings)
         if self._store is not None:
             template = Template(self.spec, params=settings, blanks=self.columns)
             key = definition.settings_key(self.label)
             self._store.save(key, definition.settings_data(template))
         self._settings = settings
+
+    def _own(self, settings: Mapping[str, Any]) -> dict[str, Any]:
+        """A copy of ``settings``; raises ``ValueError`` for a column in them."""
+        if at := sorted(settings.keys() & set(self.columns)):
+            raise ValueError(f'{at}: columns of the batch, not settings')
+        return copy.deepcopy(dict(settings))
 
     def template(self) -> Template:
         """The template of the settings, with the columns as its blanks."""
