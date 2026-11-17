@@ -69,14 +69,27 @@ def browser() -> Iterator[Any]:
 
 
 @pytest.fixture
-def url(batch: Batch, sample: Measure, files: CorrectedFiles) -> Iterator[str]:
+def url(
+    batch: Batch, sample: Measure, files: CorrectedFiles, gate: Gate
+) -> Iterator[str]:
+    """
+    The URL of the page. The gate opens at the end, so that a test that fails
+    while it holds the gate closed does not stall the end of the server.
+    """
     for run, name in enumerate(['water', 'sds', 'oil'], start=1):
         sample(run, name)
     batch.scan()
     with serve(
         create_app(batch, name='name', draw=draw, files=files, marks=Marks)
     ) as url:
-        yield url
+        try:
+            yield url
+        finally:
+            gate.open()
+
+
+START = 30
+"""The seconds that a server may take to start."""
 
 
 @contextmanager
@@ -90,7 +103,11 @@ def serve(app: FastAPI) -> Iterator[str]:
     )
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
+    deadline = time.monotonic() + START
     while not server.started:
+        if not thread.is_alive() or time.monotonic() > deadline:
+            server.should_exit = True
+            pytest.fail(f'the server did not start within {START} s', pytrace=False)
         time.sleep(0.01)
     yield f'http://localhost:{port}/'
     server.should_exit = True
