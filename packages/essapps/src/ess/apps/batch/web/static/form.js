@@ -4,31 +4,43 @@
 // with the form again, which replaces this one.
 import {h} from './dom.js';
 
-// The form is not replaced while a person types in one of its inputs, so that
-// the caret stays and no half-typed value is sent: the latest form waits until
-// the input loses the focus. An edit sent drops it, since its answer is newer.
+// Each new form replaces this one, with the focus given back by path, but it
+// waits while the focused input holds a value typed and not sent, so that the
+// caret stays and no half-typed value is sent, and while an edit is on its
+// way, since its answer is newer. A form that waits is drawn once neither
+// holds, never dropped. `edit` returns a promise of the answer drawn.
 export function renderForm(container, nodes, edit) {
   container.onfocusout ??= (event) => drawWaiting(container, event.relatedTarget);
-  const send = (change) => {
-    container.waiting = null;
-    edit(change);
-  };
-  container.waiting = () =>
-    container.replaceChildren(
-      ...nodes.map((node) =>
-        h('section', {class: 'param'}, h('h3', {text: node.label}), ...body(node, send)),
-      ),
-    );
-  const active = document.activeElement;
-  const typing = container.contains(active) && active.matches('input:not([type=checkbox])');
-  if (!typing) drawWaiting(container, active);
+  const json = JSON.stringify(nodes);
+  if (json !== container.given) {
+    container.given = json;
+    container.sending ??= 0;
+    const send = (change) => {
+      container.given = null; // the answer is drawn even if it equals this form
+      container.sending += 1;
+      Promise.resolve(edit(change)).finally(() => {
+        container.sending -= 1;
+        drawWaiting(container);
+      });
+    };
+    container.waiting = () =>
+      container.replaceChildren(
+        ...nodes.map((node) =>
+          h('section', {class: 'param'}, h('h3', {text: node.label}), ...body(node, send)),
+        ),
+      );
+  }
+  drawWaiting(container);
 }
 
-// Draw the form that waits, if one does, and give the focus back to `focused`.
-function drawWaiting(container, focused) {
+// Draw the form that waits, if one does and may, and give the focus back to
+// `focused`.
+function drawWaiting(container, focused = document.activeElement) {
+  const active = document.activeElement;
+  const typed = container.contains(active) && active.drawn !== undefined && active.value !== active.drawn;
+  if (!container.waiting || container.sending || typed) return;
   const draw = container.waiting;
   container.waiting = null;
-  if (!draw) return;
   const path = container.contains(focused) ? focused.dataset.path : null;
   draw();
   if (path) container.querySelector(`[data-path='${CSS.escape(path)}']`)?.focus();
@@ -91,8 +103,8 @@ function ways(node, edit) {
 
 const isSwitch = (node) => node.options.length === 2 && node.options.join() === 'True,False';
 
-// The input of one value. Enter or leaving the input sends it; Escape puts
-// back what the server holds.
+// The input of one value. Enter or leaving the input sends it, if it differs
+// from the value drawn or sent last (`drawn`); Escape puts that value back.
 function control(node, edit) {
   const path = JSON.stringify(node.path);
   const props = {id: `f-${path}`, 'data-path': path, 'aria-invalid': node.problem ? 'true' : null};
@@ -120,13 +132,16 @@ function control(node, edit) {
     step: node.input === 'int' ? '1' : number ? 'any' : null,
     value: node.value ?? '',
   });
+  input.drawn = input.value;
   input.addEventListener('change', () => {
+    if (input.value === input.drawn) return;
+    input.drawn = input.value;
     if (number) send(input.value === '' ? null : Number(input.value));
     else send(input.value);
   });
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
-      input.value = node.value ?? '';
+      input.value = input.drawn;
       input.blur();
     }
   });

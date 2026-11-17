@@ -54,9 +54,23 @@ const count = (n) => `${n} ${n === 1 ? words().one : words().many}`;
 
 // Talking to the server
 
+// Run `task` after the actions sent before it, so that the server gets them
+// in the order a person did them, such as an edit at the blur of an input and
+// the click of Apply that moved the focus.
+let queue = Promise.resolve();
+function queued(task) {
+  const done = queue.then(task);
+  queue = done.catch(() => {});
+  return done;
+}
+
 // Send an action and show the state it answers with, or what went wrong;
 // whether it was done.
-async function act(url, body) {
+function act(url, body) {
+  return queued(() => perform(url, body));
+}
+
+async function perform(url, body) {
   let response;
   try {
     response = await post(url, body);
@@ -260,6 +274,7 @@ function renderAction(action) {
       Boolean(action.blocked) || (which === 'remaining' ? action.remaining : action.again) === 0;
   }
   $('reduce-more').disabled = Boolean(action.blocked);
+  for (const id of ['reduce-more', 'reduce-earlier']) $(id).title = action.blocked ?? '';
   $('settings-badge').hidden = !action.blocked;
   $('settings-badge').title = action.blocked ?? '';
 }
@@ -321,7 +336,6 @@ function renderFollow(follow) {
 // The settings form, which holds changes until Apply; and the rows reduced
 // with earlier settings, which a person may reduce again. Apply and Discard
 // are never disabled: a click on them may send the value typed first.
-let shownSettings = '';
 function renderSettings(state) {
   const {action, settings_changed: changed, settings_problem: problem} = state;
   $('earlier').hidden = action.earlier === 0;
@@ -330,10 +344,12 @@ function renderSettings(state) {
   $('draft').classList.toggle('changed', changed);
   const said = problem ? ` ${problem}.` : '';
   $('draft-state').textContent = changed ? `Changed, not applied yet.${said}` : said.trim() || 'These settings are in force.';
-  const json = JSON.stringify(state.settings);
-  if (json === shownSettings) return;
-  shownSettings = json;
   renderForm($('settings'), state.settings, (edit) => act('/api/settings', edit));
+}
+
+// Whether to replace the changes of the settings form that are not applied.
+function replaceChanges() {
+  return !view.state.settings_changed || confirm('The settings form holds changes that are not applied. Replace them?');
 }
 
 function selectedRows() {
@@ -472,7 +488,7 @@ function renderRow(detail) {
   view.detail = json;
   const tried = row.status === 'failed' || row.status === 'cancelled';
   const reasonClass = row.earlier ? 'info' : {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info'}[row.status];
-  const useSettings = () => act('/api/row/use-settings', {key: row.key}).then((done) => done && showTab('settings'));
+  const useSettings = () => replaceChanges() && act('/api/row/use-settings', {key: row.key}).then((done) => done && showTab('settings'));
   const settingsNames = Object.fromEntries(view.state.settings.map((n) => [n.path[0], n.label]));
   const parts = [
     h('div', {class: 'row-head'}, h('h2', {text: row.name}), h('span', {class: `pill st-${row.status}`, text: row.status})),
@@ -646,7 +662,7 @@ function wire() {
   };
   const actions = {
     'load-table': loadTable,
-    'load-settings': () => $('pick-settings').click(),
+    'load-settings': () => replaceChanges() && $('pick-settings').click(),
     'table.csv': () => download('/api/table.csv', `${words().many}.csv`),
     'table.xlsx': () => download('/api/table.xlsx', `${words().many}.xlsx`),
     'settings.yaml': () => download('/api/settings.yaml', 'settings.yaml'),
@@ -664,15 +680,17 @@ function wire() {
       if (!input.files.length) return;
       const file = input.files[0];
       input.value = '';
-      const response = await upload(url, file);
-      if (response.ok) {
-        hideMessage();
-        render(response.body);
-        toast(response.body.notice);
-        if (url === '/api/settings.yaml') showTab('settings');
-      } else {
-        showMessage(response.body?.message ?? `The server answered ${response.status}.`);
-      }
+      await queued(async () => {
+        const response = await upload(url, file);
+        if (response.ok) {
+          hideMessage();
+          render(response.body);
+          toast(response.body.notice);
+          if (url === '/api/settings.yaml') showTab('settings');
+        } else {
+          showMessage(response.body?.message ?? `The server answered ${response.status}.`);
+        }
+      });
     };
   }
 

@@ -319,6 +319,64 @@ def test_typing_in_the_settings_form_while_a_poll_arrives_sends_what_was_typed(
     assert page.input_value(BINS) == '12'
 
 
+def test_a_value_typed_and_apply_clicked_at_once_are_applied_with_one_click(
+    page: Any, batch: Batch
+) -> None:
+    page.click('[data-tab=settings]')
+    page.click(BINS)
+    page.keyboard.press('Control+a')
+    page.keyboard.type('5')
+
+    page.click('#settings-apply')
+
+    page.wait_for_selector('#toast:has-text("Applied the settings.")')
+    page.wait_for_selector('#draft:not(.changed)')
+    assert batch.settings['binning'] == {'bins': 5}
+
+
+def test_escape_after_a_value_sent_puts_that_value_back_and_sends_nothing(
+    page: Any,
+) -> None:
+    sent: list[str] = []
+    page.on(
+        'request',
+        lambda r: sent.append(r.post_data) if r.url.endswith('/api/settings') else None,
+    )
+    page.click('[data-tab=settings]')
+    page.click(BINS)
+    page.keyboard.press('Control+a')
+    page.keyboard.type('7')
+    with page.expect_response('**/api/settings'):
+        page.keyboard.press('Enter')
+
+    page.keyboard.press('Control+a')
+    page.keyboard.type('6')
+    page.keyboard.press('Escape')
+    # Actions are sent in order, so an edit at the blur would come before this.
+    with page.expect_response('**/api/scan'):
+        page.click('#rescan')
+
+    assert sent == ['{"path":["binning","bins"],"op":"set","value":7}']
+    assert page.input_value(BINS) == '7'
+
+
+def test_a_form_that_arrives_while_the_focus_rests_in_an_input_is_drawn(
+    page: Any, url: str
+) -> None:
+    page.click('[data-tab=settings]')
+    page.click(BINS)
+
+    edit = {'path': ['binning', 'bins'], 'op': 'set', 'value': 4}
+    assert page.request.post(f'{url}api/settings', data=edit).ok
+
+    page.wait_for_function(
+        f'document.querySelector({BINS!r}).value === "4"', polling=100
+    )
+    assert page.evaluate('document.activeElement.dataset.path') == (
+        '["binning","bins"]'
+    )
+
+
 @pytest.fixture
 def holder(page: Any, batch: Batch, sample: Measure) -> Any:
     """The holder of the rows of the page, with more rows than it shows."""
