@@ -172,7 +172,7 @@ function build(state) {
   $('word-many').textContent = title(many);
   $('tab-row-label').textContent = title(one);
   $('add-row').textContent = `+ Add ${one}`;
-  $('settings-hint').textContent = `Shared by every ${one}. A change applies to the ${many} not reduced yet, once nothing is missing.`;
+  $('settings-hint').textContent = `Shared by every ${one}. A change is in force after Apply, for the ${many} not reduced yet.`;
   const named = {
     title: 'Name',
     field: 'name',
@@ -261,6 +261,7 @@ function renderAction(action) {
   }
   $('reduce-more').disabled = Boolean(action.blocked);
   $('settings-badge').hidden = !action.blocked;
+  $('settings-badge').title = action.blocked ?? '';
 }
 
 const CHIPS = ['all', 'ready', 'running', 'done', 'outdated', 'failed', 'incomplete', 'cancelled'];
@@ -317,13 +318,23 @@ function renderFollow(follow) {
   status.title = status.textContent;
 }
 
+// The settings form, which holds changes until Apply; and the rows reduced
+// with earlier settings, which a person may reduce again.
 let shownSettings = '';
 function renderSettings(state) {
   const {action} = state;
-  $('apply').hidden = action.earlier === 0;
-  $('apply-all').textContent = `Apply to all (${count(action.earlier)})`;
-  $('apply-all').disabled = Boolean(action.blocked);
-  $('apply-hint').textContent = `Reduces the ${words().many} reduced with earlier settings again.`;
+  const {changed, missing} = state.settings_draft;
+  $('earlier').hidden = action.earlier === 0;
+  $('earlier-hint').textContent = `${count(action.earlier)} reduced with earlier settings.`;
+  $('reduce-earlier').disabled = Boolean(action.blocked);
+  $('draft').classList.toggle('changed', changed);
+  $('draft-state').textContent = !changed
+    ? state.settings_problem ?? 'These settings are in force.'
+    : missing.length
+      ? `Changed, not applied: ${missing.join('; ')}.`
+      : 'Changed, not applied yet.';
+  $('settings-apply').disabled = !changed || missing.length > 0;
+  $('settings-discard').disabled = !changed;
   const json = JSON.stringify(state.settings);
   if (json === shownSettings) return;
   shownSettings = json;
@@ -466,10 +477,7 @@ function renderRow(detail) {
   view.detail = json;
   const tried = row.status === 'failed' || row.status === 'cancelled';
   const reasonClass = row.earlier ? 'info' : {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info'}[row.status];
-  const useSettings = () => {
-    const question = `Replace the settings of every ${words().one} with those that ${row.name} was reduced with? To keep a copy of the settings you have now, download them first (Files, Download settings).`;
-    if (confirm(question)) act('/api/row/use-settings', {key: row.key});
-  };
+  const useSettings = () => act('/api/row/use-settings', {key: row.key}).then((done) => done && showTab('settings'));
   const settingsNames = Object.fromEntries(view.state.settings.map((n) => [n.path[0], n.label]));
   const parts = [
     h('div', {class: 'row-head'}, h('h2', {text: row.name}), h('span', {class: `pill st-${row.status}`, text: row.status})),
@@ -493,7 +501,7 @@ function renderRow(detail) {
             h('p', {class: 'hint differs', text: `Differs from the settings now in ${detail.differs.map((n) => settingsNames[n] ?? n).join(', ')}.`}),
           summary(detail.reduced_with, detail.differs),
           detail.differs.length > 0 &&
-            h('button', {type: 'button', text: `Use these settings for every ${words().one}`, onclick: useSettings}),
+            h('button', {type: 'button', text: 'Put these settings in the form', onclick: useSettings}),
         )
       : !row.record && h('p', {class: 'hint', text: 'Not reduced yet.'}),
   ];
@@ -582,7 +590,9 @@ function wire() {
   });
   $('cancel').onclick = () => act('/api/cancel');
   $('follow').querySelector('input').onchange = (event) => act('/api/follow', {on: event.target.checked});
-  $('apply-all').onclick = () => {
+  $('settings-apply').onclick = () => act('/api/settings/apply');
+  $('settings-discard').onclick = () => act('/api/settings/discard');
+  $('reduce-earlier').onclick = () => {
     const n = view.state.action.earlier;
     const question = `Reduce the ${count(n)} reduced with earlier settings again, with the settings now?`;
     if (confirm(question)) act('/api/reduce', {which: 'earlier'});
@@ -664,6 +674,7 @@ function wire() {
         hideMessage();
         render(response.body);
         toast(response.body.notice);
+        if (url === '/api/settings.yaml') showTab('settings');
       } else {
         showMessage(response.body?.message ?? `The server answered ${response.status}.`);
       }

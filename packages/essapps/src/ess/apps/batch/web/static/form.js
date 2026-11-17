@@ -4,14 +4,34 @@
 // with the form again, which replaces this one.
 import {h} from './dom.js';
 
+// The form is not replaced while a person types in one of its inputs, so that
+// the caret stays and no half-typed value is sent: the latest form waits until
+// the input loses the focus. An edit sent drops it, since its answer is newer.
 export function renderForm(container, nodes, edit) {
-  const focused = document.activeElement?.dataset?.path;
-  container.replaceChildren(
-    ...nodes.map((node) =>
-      h('section', {class: 'param'}, h('h3', {text: node.label}), ...body(node, edit)),
-    ),
-  );
-  if (focused) container.querySelector(`[data-path='${CSS.escape(focused)}']`)?.focus();
+  container.onfocusout ??= (event) => drawWaiting(container, event.relatedTarget);
+  const send = (change) => {
+    container.waiting = null;
+    edit(change);
+  };
+  container.waiting = () =>
+    container.replaceChildren(
+      ...nodes.map((node) =>
+        h('section', {class: 'param'}, h('h3', {text: node.label}), ...body(node, send)),
+      ),
+    );
+  const active = document.activeElement;
+  const typing = container.contains(active) && active.matches('input:not([type=checkbox])');
+  if (!typing) drawWaiting(container, active);
+}
+
+// Draw the form that waits, if one does, and give the focus back to `focused`.
+function drawWaiting(container, focused) {
+  const draw = container.waiting;
+  container.waiting = null;
+  if (!draw) return;
+  const path = container.contains(focused) ? focused.dataset.path : null;
+  draw();
+  if (path) container.querySelector(`[data-path='${CSS.escape(path)}']`)?.focus();
 }
 
 function body(node, edit) {

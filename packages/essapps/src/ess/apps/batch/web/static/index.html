@@ -89,7 +89,7 @@
     <aside class="right">
       <div class="tabs" role="tablist">
         <button type="button" role="tab" data-tab="result" aria-selected="true">Result</button>
-        <button type="button" role="tab" data-tab="settings" aria-selected="false">Settings <span class="badge" id="settings-badge" title="The settings are incomplete" hidden>!</span></button>
+        <button type="button" role="tab" data-tab="settings" aria-selected="false">Settings <span class="badge" id="settings-badge" hidden>!</span></button>
         <button type="button" role="tab" data-tab="row" aria-selected="false" id="tab-row-label">Row</button>
       </div>
       <div class="tab" id="tab-result">
@@ -108,10 +108,15 @@
         <ul class="legend" id="legend" aria-label="Legend"></ul>
       </div>
       <div class="tab" id="tab-settings" hidden>
-        <p class="hint" id="settings-hint">Shared by every row. A change applies to the rows not reduced yet, once nothing is missing.</p>
-        <div class="apply" id="apply" hidden>
-          <button type="button" id="apply-all"></button>
-          <span class="hint" id="apply-hint"></span>
+        <p class="hint" id="settings-hint">Shared by every row. A change is in force after Apply, for the rows not reduced yet.</p>
+        <div class="earlier" id="earlier" hidden>
+          <span class="hint" id="earlier-hint"></span>
+          <button type="button" id="reduce-earlier">Reduce them again</button>
+        </div>
+        <div class="draft" id="draft">
+          <span class="draft-state" id="draft-state"></span>
+          <button type="button" class="primary" id="settings-apply">Apply</button>
+          <button type="button" id="settings-discard">Discard</button>
         </div>
         <div class="form" id="settings"></div>
       </div>

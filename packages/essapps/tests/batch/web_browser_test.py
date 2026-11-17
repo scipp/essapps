@@ -263,6 +263,62 @@ def test_an_edit_the_server_does_not_get_is_taken_back_and_said(
     page.errors.clear()
 
 
+BINS = '#settings input[data-path=\'["binning","bins"]\']'
+"""The input of the number of bins in the settings form."""
+
+
+def test_a_setting_is_in_force_after_apply_and_discard_takes_a_change_back(
+    page: Any, batch: Batch
+) -> None:
+    page.click('[data-tab=settings]')
+    page.fill(BINS, '5')
+    page.press(BINS, 'Tab')
+    page.wait_for_selector('#draft.changed')
+    said = page.inner_text('#draft-state')
+    before = dict(batch.settings)
+
+    page.click('#settings-apply')
+    page.wait_for_selector('#draft:not(.changed)')
+    applied = dict(batch.settings)
+    page.fill(BINS, '7')
+    page.press(BINS, 'Tab')
+    page.wait_for_selector('#draft.changed')
+    page.click('#settings-discard')
+    page.wait_for_selector('#draft:not(.changed)')
+
+    assert said == 'Changed, not applied yet.'
+    assert before == {}
+    assert applied['binning'] == {'bins': 5}
+    assert page.input_value(BINS) == '5'
+    assert batch.settings['binning'] == {'bins': 5}
+
+
+def test_typing_in_the_settings_form_while_a_poll_arrives_sends_what_was_typed(
+    page: Any, url: str
+) -> None:
+    sent: list[str] = []
+    page.on(
+        'request',
+        lambda r: sent.append(r.post_data) if r.url.endswith('/api/settings') else None,
+    )
+    page.click('[data-tab=settings]')
+    page.click(BINS)
+    page.press(BINS, 'Control+a')
+    page.keyboard.type('1')
+
+    # Another page changes the form, which the next poll of this one brings.
+    choose = {'path': ['offset'], 'op': 'choose', 'value': 'Given'}
+    assert page.request.post(f'{url}api/settings', data=choose).ok
+    page.wait_for_selector('#draft.changed')
+    page.keyboard.type('2')
+    with page.expect_response('**/api/settings'):
+        page.keyboard.press('Tab')
+
+    assert sent == ['{"path":["binning","bins"],"op":"set","value":12}']
+    page.wait_for_selector('#settings input[data-path=\'["offset","value"]\']')
+    assert page.input_value(BINS) == '12'
+
+
 @pytest.fixture
 def holder(page: Any, batch: Batch, sample: Measure) -> Any:
     """The holder of the rows of the page, with more rows than it shows."""

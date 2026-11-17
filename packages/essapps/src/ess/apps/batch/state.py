@@ -255,7 +255,7 @@ def earlier_settings(
     ``ValueError`` for a row that was not compared.
 
     A page that applies a change of settings to new rows only leaves these
-    rows as they are, until a person applies the settings to all.
+    rows as they are, until a person reduces them again.
     """
     changed = _compared(states)
     return [
