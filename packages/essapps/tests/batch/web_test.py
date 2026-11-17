@@ -2,9 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The batch page's API over HTTP, on a real in-process workspace."""
 
-import functools
 import io
-import threading
 import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -21,7 +19,7 @@ from ess.apps import Client, local
 from ess.apps.batch import Batch, CorrectedFiles
 from ess.apps.batch.definition import Key, settings_key
 from ess.apps.batch.web import Shown, create_app, demo, plots
-from ess.apps.testing import CountingClient, FakeFiles, every
+from ess.apps.testing import CountingClient, FakeFiles
 from ess.spec import SampleRunFile, WorkflowSpec, function_binding
 
 from .toys import COLUMNS, PLAIN, STAGED, Gate, Measure, Outputs, pair
@@ -903,20 +901,3 @@ def test_the_runs_of_a_sample_that_arrive_in_the_demo_show_after_a_rescan(
 
     assert [row['name'] for row in before.values()] == ['H2O buffer']
     assert [row['name'] for row in after['rows']] == ['H2O buffer', 'D2O buffer']
-
-
-def test_every_calls_the_actions_in_turn_until_the_block_ends() -> None:
-    called: list[int] = []
-    all_called = threading.Event()
-
-    def call(i: int) -> None:
-        called.append(i)
-        if i == 2:
-            all_called.set()
-
-    with every(0, [functools.partial(call, i) for i in range(3)]):
-        assert all_called.wait(10)
-    with every(60, [functools.partial(call, 3)]):
-        pass
-
-    assert called == [0, 1, 2]

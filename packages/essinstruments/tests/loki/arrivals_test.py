@@ -13,13 +13,10 @@ from ess.instruments.loki.arrivals import (
     arrivals,
     settings,
 )
-from ess.instruments.loki.bindings import BINDINGS
-from ess.instruments.loki.web import build
+from ess.instruments.loki.web import build, open_loki
 from fastapi.testclient import TestClient
 
 from ess.apps import Client
-from ess.apps.batch import CorrectedFiles, FolderDefinitions
-from ess.apps.folder import ArrivingFiles, open_folder
 
 
 def test_the_experiment_comes_again_with_its_samples_numbered() -> None:
@@ -35,9 +32,8 @@ def test_the_experiment_comes_again_with_its_samples_numbered() -> None:
 @pytest.fixture
 def page(tmp_path: Path) -> Iterator[tuple[TestClient, Instrument, Client]]:
     instrument = Instrument(tmp_path)
-    definitions = FolderDefinitions(tmp_path)
-    files = CorrectedFiles(ArrivingFiles(tmp_path), definitions=definitions)
-    with open_folder(tmp_path, BINDINGS, files=files) as client:
+    client, files, definitions = open_loki(tmp_path)
+    with client:
         given = settings(client, instrument)
         app = build(client, files, definitions, settings=given)
         yield TestClient(app), instrument, client

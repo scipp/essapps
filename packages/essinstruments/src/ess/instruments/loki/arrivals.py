@@ -5,11 +5,11 @@ The LoKI batch page (:mod:`.web`) on a new folder into which runs arrive over
 time, as if the instrument wrote them. It needs the extra ``[loki-app]`` and
 esssans' tutorial data, which ``ess.loki.data`` downloads at the first start::
 
-    python -m ess.instruments.loki.arrivals [FOLDER] [--port 8000] [--interval 15]
+    python -m ess.instruments.loki.arrivals [FOLDER] [--port 8000] [--arrive 15]
 
 ``FOLDER`` must be new or empty; a new temporary folder if not given. The can
 and its transmission run, the masks and the direct beam are there from the
-start, and the settings are filled in. Then a run arrives every ``--interval``
+start, and the settings are filled in. Then a run arrives every ``--arrive``
 seconds, in the order of :data:`EXPERIMENT`. Press "Rescan runs" to see it, and
 "Reduce" to reduce the rows it completes.
 
@@ -23,9 +23,7 @@ as a row of ``files.csv`` with its run, role and sample, which
 from __future__ import annotations
 
 import argparse
-import csv
 import functools
-import io
 import os
 import shutil
 import sys
@@ -38,18 +36,15 @@ from typing import Any
 from ess.loki import data
 
 from ess.apps import Client, file
-from ess.apps.batch import CorrectedFiles, FolderDefinitions
+from ess.apps.batch.auto import every
 from ess.apps.batch.web.api import STATIC
-from ess.apps.folder import ArrivingFiles, open_folder
-from ess.apps.testing import every
+from ess.apps.folder import write_files_table
 from ess.spec import FileRef
 
-from .bindings import BINDINGS
 from .specs import CALIBRATED_DETECTOR, MASKS
-from .web import build
+from .web import build, open_loki
 
 FIRST_RUN = 70001
-_FIELDS = ('file', 'run', 'kind', 'role', 'sample')
 
 TUTORIAL: dict[int, Callable[[], Any]] = {
     60387: data.loki_tutorial_agbeh_sample_run,
@@ -153,13 +148,7 @@ class Instrument:
         self.rows.append(
             {'file': name, 'run': run, 'kind': 'raw', 'role': role, 'sample': sample}
         )
-        text = io.StringIO()
-        writer = csv.DictWriter(text, _FIELDS, lineterminator='\n')
-        writer.writeheader()
-        writer.writerows([{k: r.get(k) or '' for k in _FIELDS} for r in self.rows])
-        partial = self.directory / 'files.csv.partial'
-        partial.write_text(text.getvalue())
-        os.replace(partial, self.directory / 'files.csv')
+        write_files_table(self.directory, self.rows)
         return FileRef(file=f'path:{name}')
 
 
@@ -207,7 +196,13 @@ def main() -> None:
     )
     parser.add_argument('folder', type=Path, nargs='?', help='a new or empty folder')
     parser.add_argument('--port', type=int, default=8000)
-    parser.add_argument('--interval', type=float, default=15.0, help='seconds')
+    parser.add_argument(
+        '--arrive',
+        type=float,
+        default=15.0,
+        metavar='SECONDS',
+        help='a run every SECONDS',
+    )
     parser.add_argument('--count', type=int, default=len(EXPERIMENT), help='runs')
     args = parser.parse_args()
     if not (STATIC / 'vendor').is_dir():
@@ -216,10 +211,9 @@ def main() -> None:
     if directory.exists() and any(directory.iterdir()):
         parser.exit(1, f'{directory} is not empty\n')
     instrument = Instrument(directory)
-    definitions = FolderDefinitions(directory)
-    files = CorrectedFiles(ArrivingFiles(directory), definitions=definitions)
+    client, files, definitions = open_loki(directory)
     _say(f'folder {directory}; reducing the detector and the masks')
-    with open_folder(directory, BINDINGS, files=files) as client:
+    with client:
         given = settings(client, instrument)
         app = build(client, files, definitions, folder=directory.name, settings=given)
 
@@ -230,7 +224,7 @@ def main() -> None:
 
         plan = [functools.partial(arrive, *arrival) for arrival in arrivals(args.count)]
         _say(f'serving http://localhost:{args.port}/; Ctrl-C stops')
-        with every(args.interval, plan):
+        with every(args.arrive, plan):
             uvicorn.run(app, host='localhost', port=args.port, log_level='warning')
 
 

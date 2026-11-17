@@ -28,6 +28,7 @@ the keys of its rows.
 from __future__ import annotations
 
 import csv
+import io
 import threading
 import warnings
 from collections.abc import Callable, Mapping, Sequence
@@ -134,12 +135,30 @@ def folder_files(directory: Path) -> FolderFiles:
     return FolderFiles(directory, table, root=directory)
 
 
+def write_files_table(directory: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    """
+    Replace ``files.csv`` in ``directory`` with a table of ``rows`` at once: it
+    is written next to it, then renamed, so that no reader, such as
+    :class:`ArrivingFiles`, sees half of it. The columns are the keys of the
+    rows, in the order they first appear; ``None`` is an empty cell.
+    """
+    columns = list(dict.fromkeys(key for row in rows for key in row))
+    text = io.StringIO()
+    writer = csv.DictWriter(text, columns, lineterminator='\n')
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({k: '' if row.get(k) is None else row[k] for k in columns})
+    partial = directory / 'files.csv.partial'
+    partial.write_text(text.getvalue())
+    partial.replace(directory / 'files.csv')
+
+
 class ArrivingFiles:
     """
     The files that ``files.csv`` in ``directory`` lists (:func:`folder_files`),
     read again whenever the file was replaced or changed, so that files
-    registered while a client is open are found. Replace ``files.csv`` at once
-    (write a file next to it, then rename it), so that no read sees half of it.
+    registered while a client is open are found. Replace ``files.csv`` at once,
+    with :func:`write_files_table`, so that no read sees half of it.
     """
 
     def __init__(self, directory: Path) -> None:

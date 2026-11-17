@@ -9,10 +9,32 @@ The batch page of LoKI's I(Q) on a workspace folder, as a web page
 ``FOLDER`` is a workspace folder (:mod:`ess.apps.folder`): its ``files.csv``
 says the run, role and sample of each file, as ``essapps-batch files`` writes
 it. A row is a sample run, paired with the transmission run of its sample
-(:func:`~.batch.pair_by_sample`). The settings name the masks by a record, so
-reduce the detector and the masks first, with ``essapps-batch`` on the same
-folder. The edits, the settings and the corrections of runs are kept in
-``FOLDER/definitions/``, the results in ``FOLDER/store/``.
+(:func:`~.batch.pair_by_sample`). The edits, the settings and the corrections
+of runs are kept in ``FOLDER/definitions/``, the results in ``FOLDER/store/``.
+
+The settings name the masks by a record, so reduce the detector and the masks
+first, on the same folder, while no page runs on it. With the run of the can
+and a mask file of the folder, two templates::
+
+    # detector.yaml
+    spec: {name: loki-calibrated-detector, version: 1}
+    params: {run: 70001}
+
+    # masks.yaml
+    spec: {name: loki-masks, version: 1}
+    params:
+      detector: {'@latest': detector, output: detector}
+      mask_files: [path:calibration/mask_new_July2022.xml]
+
+and two commands::
+
+    B="essapps-batch -w FOLDER -b ess.instruments.loki.bindings:BINDINGS"
+    $B reduce detector.yaml -l detector
+    $B reduce masks.yaml -l masks
+
+The command persists the outputs, so the page then offers the masks in the
+settings, under "Masks", "From a result". ``path:`` names a file by its path in
+the folder, as ``files.csv`` lists it.
 """
 
 from __future__ import annotations
@@ -30,7 +52,7 @@ from ess.apps.batch import CorrectedFiles, FolderDefinitions
 from ess.apps.batch.web import Shown, create_app, plots
 from ess.apps.batch.web.api import STATIC
 from ess.apps.batch.web.models import Words
-from ess.apps.folder import folder_files, open_folder
+from ess.apps.folder import ArrivingFiles, open_folder
 
 from .batch import iofq_batch
 from .bindings import BINDINGS
@@ -46,10 +68,13 @@ class Marks(BaseModel):
 def open_loki(directory: Path) -> tuple[Client, CorrectedFiles, FolderDefinitions]:
     """
     A client of the workspace in ``directory``, its file source with the
-    corrections kept in the folder, and the folder's definitions.
+    corrections kept in the folder, and the folder's definitions. The file
+    source reads ``files.csv`` again when it is replaced
+    (:class:`~ess.apps.folder.ArrivingFiles`), so a run registered while the
+    page runs shows at the next "Rescan runs".
     """
     definitions = FolderDefinitions(directory)
-    files = CorrectedFiles(folder_files(directory), definitions=definitions)
+    files = CorrectedFiles(ArrivingFiles(directory), definitions=definitions)
     return open_folder(directory, BINDINGS, files=files), files, definitions
 
 

@@ -3,7 +3,7 @@
 """
 Fakes for tests: a file source whose files a test makes appear, a store
 held in memory, clients that count the records they read or log the values they
-read, bindings over plain functions, and a timer that makes files arrive.
+read, and bindings over plain functions.
 """
 
 from __future__ import annotations
@@ -13,8 +13,7 @@ import functools
 import json
 import threading
 from collections import Counter
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -45,30 +44,6 @@ def read_file(path: Path) -> Any:
     if content == _CORRUPT:
         raise OSError('file signature not found')
     return json.loads(content)
-
-
-@contextmanager
-def every(seconds: float, actions: Iterable[Callable[[], object]]) -> Iterator[None]:
-    """
-    Call ``actions`` in turn from a thread, one every ``seconds``, until all are
-    called or the block ends. The end of the block waits for an action that
-    runs. A demo makes files arrive with it while it serves a page.
-    """
-    stop = threading.Event()
-
-    def run() -> None:
-        for action in actions:
-            if stop.wait(seconds):
-                return
-            action()
-
-    thread = threading.Thread(target=run, name='arrivals')
-    thread.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        thread.join()
 
 
 class FakeFiles:

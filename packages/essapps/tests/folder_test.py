@@ -14,7 +14,13 @@ from ess.apps import Client, Selector, file
 from ess.apps.batch import Batch, FileInfo, Row
 from ess.apps.batch.auto import Automatic
 from ess.apps.batch.frames import batch_table
-from ess.apps.folder import ArrivingFiles, FolderStore, open_folder, scan_folder
+from ess.apps.folder import (
+    ArrivingFiles,
+    FolderStore,
+    open_folder,
+    scan_folder,
+    write_files_table,
+)
 from ess.apps.testing import read_file
 from ess.spec import Binding, FileRef, WorkflowSpec, function_binding
 
@@ -284,9 +290,7 @@ def test_arriving_files_reads_the_table_again_when_it_is_replaced(
     tmp_path: Path,
 ) -> None:
     def register(*runs: int) -> None:
-        lines = ['file,run', *(f'{run}.nxs,{run}' for run in runs)]
-        (tmp_path / 'table.partial').write_text('\n'.join(lines))
-        (tmp_path / 'table.partial').replace(tmp_path / 'files.csv')
+        write_files_table(tmp_path, [{'file': f'{r}.nxs', 'run': r} for r in runs])
 
     for run in (1, 2):
         (tmp_path / f'{run}.nxs').touch()

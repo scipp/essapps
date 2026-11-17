@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import tempfile
 import time
 from collections.abc import Sequence
@@ -38,8 +39,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
 from ess.apps import Client
-from ess.apps.folder import ArrivingFiles, open_folder
-from ess.apps.testing import StagedFunction, every, read_file
+from ess.apps.folder import ArrivingFiles, open_folder, write_files_table
+from ess.apps.testing import StagedFunction, read_file
 from ess.spec import (
     BackgroundRunFile,
     SampleRunFile,
@@ -48,6 +49,7 @@ from ess.spec import (
 )
 
 from .. import Batch, CorrectedFiles, FileInfo, FolderDefinitions, Row
+from ..auto import every
 from . import create_app, plots
 from .api import STATIC
 from .models import Words
@@ -255,15 +257,13 @@ def measure(directory: Path, runs: Sequence[Run]) -> None:
     Write the file of each of ``runs`` that is not there, then replace
     ``files.csv`` with a table of ``runs``.
     """
-    lines = ['file,run,role,sample']
+    rows = []
     for run, content, role, sample in runs:
         path = directory / f'{run}.json'
         if not path.exists():
             path.write_text(json.dumps({'run': run, **content}))
-        lines.append(f'{path.name},{run},{role},{sample}')
-    partial_table = directory / 'files.csv.partial'
-    partial_table.write_text('\n'.join(lines) + '\n')
-    partial_table.replace(directory / 'files.csv')
+        rows.append({'file': path.name, 'run': run, 'role': role, 'sample': sample})
+    write_files_table(directory, rows)
 
 
 def open_demo(
@@ -318,8 +318,6 @@ def build(
 
 
 def main() -> None:
-    import uvicorn
-
     parser = argparse.ArgumentParser(description='Serve the batch page demo.')
     parser.add_argument('directory', type=Path, nargs='?', help='the workspace')
     parser.add_argument('--port', type=int, default=8000)
@@ -328,30 +326,41 @@ def main() -> None:
     )
     parser.add_argument('--count', type=int, help='the samples that arrive')
     args = parser.parse_args()
+    if args.count is not None and args.arrive is None:
+        parser.error('--count goes with --arrive')
     if not (STATIC / 'vendor').is_dir():
         parser.exit(1, f'The page needs its libraries: sh {STATIC / "vendor.sh"}\n')
     directory = args.directory
     if directory is None:
         directory = Path(tempfile.mkdtemp(prefix='essapps-web-demo-'))
     directory.mkdir(parents=True, exist_ok=True)
+    if args.arrive is not None and (directory / 'files.csv').exists():
+        parser.exit(1, f'--arrive needs a new folder; {directory} has runs\n')
+    sys.stdout.write(f'folder {directory}\n')
+    sys.stdout.flush()
+    if args.arrive is None:
+        _serve(directory, args.port)
+        return
     groups = measurements()
-    arriving: list[list[Run]] = []
-    if args.arrive is not None:
-        if (directory / 'files.csv').exists():
-            parser.exit(1, f'--arrive needs a new folder; {directory} has runs\n')
-        start, arriving = groups[: AT_START + 1], groups[AT_START + 1 :]
-        arriving = arriving[: args.count]
-        measure(directory, [run for group in start for run in group])
-    client, files, definitions = open_demo(directory)
     arrived = [run for group in groups[: AT_START + 1] for run in group]
+    measure(directory, arrived)
 
     def arrive(group: list[Run]) -> None:
         arrived.extend(group)
         measure(directory, arrived)
 
-    with client, every(args.arrive or 0, [partial(arrive, g) for g in arriving]):
+    plan = [partial(arrive, g) for g in groups[AT_START + 1 :][: args.count]]
+    with every(args.arrive, plan):
+        _serve(directory, args.port)
+
+
+def _serve(directory: Path, port: int) -> None:
+    import uvicorn
+
+    client, files, definitions = open_demo(directory)
+    with client:
         app = build(client, files, definitions, folder=directory.name)
-        uvicorn.run(app, host='localhost', port=args.port)
+        uvicorn.run(app, host='localhost', port=port)
 
 
 if __name__ == '__main__':
