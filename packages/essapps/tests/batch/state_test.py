@@ -9,7 +9,7 @@ import pytest
 from pydantic import BaseModel
 
 from ess.apps import Record, Request, SpecId, Status
-from ess.apps.batch import Row, RowState, ready, remaining, summary
+from ess.apps.batch import Row, RowState, arrived, ready, remaining, summary
 from ess.apps.batch.state import differs, results, row_states
 from ess.apps.errors import FieldError
 from ess.spec import OutputRef
@@ -133,6 +133,40 @@ def test_a_tweak_is_outdated_only_where_a_column_changed(
     assert found['a'].changed == changed
     assert found['a'].outdated is outdated
     assert (remaining(found) == ['a']) is outdated
+
+
+@pytest.mark.parametrize(
+    ('status', 'changed', 'at', 'given'),
+    [
+        (Status.COMPLETED, {'sample'}, {'sample'}, True),
+        (Status.COMPLETED, {'sample', 'shared'}, {'thickness'}, False),
+        (Status.COMPLETED, {'sample'}, set(), False),
+        (Status.COMPLETED, set(), {'sample', 'thickness'}, False),
+        (Status.FAILED, set(), {'sample'}, False),
+        (Status.FAILED, {'sample'}, {'sample'}, True),
+        (Status.CANCELLED, {'shared'}, {'sample'}, False),
+        (Status.PENDING, {'sample'}, {'sample'}, False),
+    ],
+)
+def test_a_row_with_a_result_arrives_for_a_change_at_a_column_of_at(
+    status: Status, changed: set[str], at: set[str], given: bool
+) -> None:
+    found = row_states(
+        [Row('a', {'sample': 'x'})],
+        Model,
+        COLUMNS,
+        {'a': record('1', 'a')},
+        {'1': status},
+        changed={'a': frozenset(changed)},
+    )
+
+    assert arrived(found, at) == (['a'] if given else [])
+
+
+def test_a_ready_row_without_a_result_arrives_whatever_at_is() -> None:
+    found = states([Row('a', {'sample': 'x'}), Row('b')])
+
+    assert arrived(found, set()) == ['a']
 
 
 def test_a_refused_value_is_a_problem_of_its_row() -> None:

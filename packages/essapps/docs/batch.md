@@ -84,6 +84,7 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 |---|---|
 | `ready(states)` | every row that can run now |
 | `remaining(states)` | ready rows with no result, a failed or cancelled one, or an outdated one |
+| `arrived(states, at)` | ready rows with no result, or whose request differs from their result's at a column of `at` ([Automatic reduction](#automatic-reduction)) |
 | `summary(states)` | the number of rows in each state |
 
 **A row's state is read from its result.** `state(settings)` compares each row's request with the request of its result, and says where they differ:
@@ -132,7 +133,7 @@ def test_a_sample_run_pairs_with_its_transmission_run():
     assert rows[0].values['sample_transmission'] == ref(2)
 ```
 
-Group runs by giving a cell a list of files. Leave a cell out if a partner is missing, so the row shows as incomplete and the rest of the batch can run. A key given twice is refused with the key named, and nothing changes.
+Group runs by giving a cell a list of files, in one order at every scan, such as sorted by run: `FileSource.list` promises no order, and a list in another order is another request, which automatic reduction reduces again ([Automatic reduction](#automatic-reduction)). Choose one of several partners by an order too, such as the last by run. Leave a cell out if a partner is missing, so the row shows as incomplete and the rest of the batch can run. A key given twice is refused with the key named, and nothing changes.
 
 Pairing is yours to write. The framework knows no technique. If a source raises, the view shows the error in its message.
 
@@ -189,29 +190,73 @@ from ess.apps.batch.auto import Automatic, run
 
 batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'), label='auto/iofq',
               source=pair_by_sample, staged=True, persist=True)
-loop = Automatic(batch, at='sample', settings=lambda: settings)
-loop.step()       # scans, and reduces the rows with a new file at `sample`; their records by key
-loop.refused      # why each such row did not run, by key: {'60339': '60339: sample_transmission: empty'}
+loop = Automatic(batch, at={'sample'}, settings=lambda: settings)
+loop.step()       # scans, and reduces the rows that arrived; their records by key
+loop.refused      # why rows of the last step were refused, by key
 run([loop])       # steps once a second, until a step raises
 ```
 
-`at` is the *trigger column*, of a file or a list of files, each as `FileInfo.ref` gives it. A cell there that names a file another way, such as `file(run=1)`, which the workspace resolves, would never count as held, and its row would be reduced at every step. So each file of a cell at `at` must be one of the files of the scan, those the source got. A row with any other file there is refused before it is submitted, as `refused` says: `{'60339': '60339: sample: run:60339 is not a file of the scan. ...'}`. `settings` is called at each step, so a change applies to the rows not reduced yet.
+A step does what a person does on the page with the buttons to scan and to reduce, with a rule in place of the person's choice:
 
-**A row runs if its cell at `at` holds a file that no record under the label, with the row's key, holds at `at`.** Any record counts: failed, cancelled, of any spec, and of any submitter. So automatic reduction differs from a person's reduce:
+```python
+batch.scan()
+state = batch.state(settings)                # settings: what the callable gives at this step
+batch.reduce(settings, arrived(state, at))
 
-| A row runs if | no result | failed or cancelled | a setting or another cell changed | a new file at the trigger column | a result of another spec |
+def arrived(state, at):                      # ess.apps.batch.arrived
+    return [key for key in ready(state)
+            if state[key].record is None or state[key].changed & at]
+```
+
+`at` is a set of columns, and has no default. A row with no result is reduced whatever `at` is. A row with a result is reduced again only if its request differs from its result's at a column of `at`. Take a source that makes a row per sample, with the lists `sample_runs` and `trans_runs`, and leaves `trans_runs` out until a transmission run arrives. The files arrive as `s1, t1, s1', t1'`, where `s1'` repeats `s1`, and each step finishes before the next file arrives:
+
+| Arrives | `at={'sample_runs', 'trans_runs'}` | `at={'sample_runs'}` | `at=set()` |
+|---|---|---|---|
+| `s1` | nothing: row 1 is `incomplete` | nothing | nothing |
+| `t1` | row 1, `[s1]`, `[t1]` | row 1, `[s1]`, `[t1]` | row 1, `[s1]`, `[t1]` |
+| `s1'` | row 1, `[s1, s1']`, `[t1]` | row 1, `[s1, s1']`, `[t1]` | nothing: row 1 reads `outdated` |
+| `t1'` | row 1, `[s1, s1']`, `[t1, t1']` | nothing: row 1 reads `outdated` | nothing |
+
+So the loop and a person's "reduce remaining" differ:
+
+| A row is reduced if it has | no result | a failed or cancelled result | a result, and a setting changed | a result, and a cell changed at `at` | a result, and a cell changed at another column |
 |---|---|---|---|---|---|
-| the page, "reduce remaining" | yes | yes | yes (outdated) | yes | yes (outdated) |
+| the page, "reduce remaining" | yes | yes | yes, but for a tweak | yes | yes |
 | `essapps-batch reduce --remaining` | yes | yes | yes | yes | yes |
 | the loop | yes | no | no | yes | no |
 
-Which rows are reduced is defined by the records under the label and by nothing else. So a loop on a batch with a new label reduces from the first file, and a person's record under the loop's label counts as a row reduced: give the loop a label of its own. A row whose key changes from one scan to the next, such as a key made from a sample name that a correction changed, is a new row, and is reduced again under its new key; so choose a key that does not change, such as the run number ([Terms](#terms)).
+A tweak is `outdated` only where a column changed ([Rules](#rules)), so the page leaves a tweaked row whose settings changed. A failed or cancelled result counts as any other, so a row whose reduction fails is not reduced at every step. A changed setting reduces no row again: the rows reduced before read `outdated`, with the setting in `changed`. A row that the loop leaves `outdated` is reduced by a person, through the loop's batch ([one label, one batch](#one-label-one-batch)).
 
-A row that cannot run, such as one without its transmission run, or whose request is refused, does not hold back the others, and `refused` says why. A reason that names no row, about the settings, refuses every row. A row that waits is tried again when its cells change, a row still running when its record finishes, and a refused row also when its records or the settings change.
+A row whose result is running is not ready, and the loop does not submit it again. At the first step after its record finishes, it is reduced if a file arrived meanwhile at a column of `at`.
 
-The loop reads the records from the proposal's changes, from the start when it is made, so a restart needs nothing on disk and reduces no row again. A step that raises, in the settings, the source, or a submission, loses nothing: the next step tries again.
+`state` compares requests resolved. So a cell that names a file by run, `file(run=60339)`, equals the identity that the record holds, and its row is reduced once. A file that gained a catalogue identifier since its row was reduced resolves to another identity, and its row is reduced again if the cell is at a column of `at`. A list is compared element by element, in order: a list at `at` in another order, or shorter, reduces the row again. So a source gives a list in one order at every scan ([Writing a source](#writing-a-source)).
+
+A result of another spec, such as an older version, stays the row's result ([Rules](#rules)). Its request differs from the row's at each parameter that the other spec lacks, so the loop reduces the row again only if a column of `at` is among them, or a file arrives there.
+
+A row whose key changes from one scan to the next, such as a key made from a sample name that a correction changed, is a new row, and is reduced again under its new key; so choose a key that does not change, such as the run number ([Terms](#terms)).
 
 In a chain, step the loop of the batch that is read first: `run([Automatic(find, ...), Automatic(iofq, ...)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
+
+### One label, one batch
+
+Which rows a step reduces follows from the files, the batch's rows and settings, and the records under its label. The loop keeps nothing else, so a step that raises, in the settings, the source, or a submission, loses nothing. The loop keeps the results under its label equal to its batch's rows at the columns of `at`:
+
+```python
+page = Batch(client, IOFQ, columns=..., label='auto/iofq', source=pair_by_sample)  # a second batch on the label
+page.rows = page.rows.edit('60339', {'sample': file(run=60400)})
+page.reduce(settings, ['60339'])     # a record with run 60400 at `sample`
+loop.step()                          # reduces '60339' again with the source's file: the loop's rows win
+```
+
+So a label has one batch. A person who wants another file for a row edits the loop's own batch, or corrects the file's metadata so that the source gives the row another file ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)). Two loops never share a label: if their rows differ at `at`, each replaces the other's records at every step. A record under the label that equals the loop's row at `at`, from any submitter, counts as the row's result.
+
+An edit lives in the `Batch`, and a restart starts from a new scan. So after a restart, a row without edits is not reduced again, and a row that was edited at a column of `at` is reduced again with the source's cells. A record that was running when the workspace ended is failed at the restart; the loop does not run a failed row again, and a person retries it.
+
+### Problems and refusals
+
+A row with an empty cell, or a cell that the workspace does not accept when the state is read, such as a thickness below zero or a file named before it is measured, is `incomplete`. The reason is one of the row's `problems`, `arrived` does not give the row, and the loop reduces it once the cell is filled or accepted.
+
+`submit` checks a few things that `state` does not, such as a reference to an output that the workspace no longer keeps, and refuses the rows with a `SubmitError`. The step drops the rows that the error names, submits the others, and `refused` holds the reasons by key until the next step. Such a row is submitted again at every step. A reason that names no row refuses every row of the step. If the settings are refused, no row can run: the step submits nothing, and `refused` holds the reason for every ready row, `{'1': 'unknown spec sans-iofq/v1'}`.
 
 ## From files, and from the command line
 

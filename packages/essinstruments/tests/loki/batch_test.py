@@ -35,6 +35,21 @@ def test_a_sample_run_pairs_with_the_last_transmission_run_of_its_sample() -> No
     assert rows[0].info == {'name': 'water'}
 
 
+def test_the_rows_do_not_depend_on_the_order_the_files_are_listed_in() -> None:
+    files = [
+        info(10, role='sample', sample='water'),
+        info(9, role='transmission', sample='water'),
+        info(11, role='transmission', sample='water'),
+        info(2, role='sample', sample='water'),
+    ]
+
+    rows = pair_by_sample(files)
+
+    assert rows == pair_by_sample(files[::-1])
+    pairs = [(r.key, r.values['sample_transmission'].file) for r in rows]
+    assert pairs == [('2', 'uuid:11'), ('10', 'uuid:11')]
+
+
 def test_a_sample_measured_twice_has_two_rows() -> None:
     rows = pair_by_sample(
         [info(1, role='sample', sample='w'), info(2, role='sample', sample='w')]
@@ -105,11 +120,11 @@ def test_a_batch_of_iofq_over_real_workflows(
     }
     batch = iofq_batch(client)
     batch.scan()
-    assert ready(batch.state()) == ['60339', '60250']
+    assert ready(batch.state()) == ['60250', '60339']
 
     records = batch.reduce(settings, ready(batch.state()))
 
-    assert client.wait(records) == {'60339': 'completed', '60250': 'completed'}
+    assert client.wait(records) == {'60250': 'completed', '60339': 'completed'}
     assert client.output(records['60250'], 'iofq').intensity.sizes == {'Q': 100}
     assert remaining(batch.state(settings)) == []
     batch.close()

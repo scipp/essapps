@@ -11,6 +11,7 @@ sample, and pairs the run with the transmission run of the same sample::
     {'file': 'run-2.nxs', 'run': 2, 'role': 'transmission', 'sample': 'water'}
 """
 
+import sys
 from collections.abc import Sequence
 
 from ess.apps import Client
@@ -29,7 +30,12 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
     a sample measured twice has two rows. Where several transmission runs have the
     sample's name, the last measured is the row's. A sample run without a name
     has an empty transmission cell.
+
+    The files are sorted by run number, since a file source lists them in no
+    promised order, and a row whose transmission run changed from one scan to
+    the next would be reduced again.
     """
+    files = sorted(files, key=_measured)
     transmissions: dict[object, FileRef] = {}
     for f in files:
         if f.metadata.get('role') == 'transmission' and 'sample' in f.metadata:
@@ -45,6 +51,12 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
         info = {} if name is None else {'name': str(name)}
         rows.append(Row(str(f.metadata.get('run', f.ref.file)), values, info=info))
     return rows
+
+
+def _measured(f: FileInfo) -> tuple[int, str]:
+    """The order measured: by run number; a file without one last, by identity."""
+    run = str(f.metadata.get('run', ''))
+    return (int(run), '') if run.isdigit() else (sys.maxsize, f.ref.file)
 
 
 def iofq_batch(client: Client, *, label: str = 'iofq') -> Batch:

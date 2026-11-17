@@ -113,9 +113,9 @@ The stories use these calls:
 
 ```python
 batch = Batch(client, SPEC, columns=(...), label=..., source=rows_of_files, persist=True)
-auto = Automatic(batch, at='sample', settings=lambda: settings)
-auto.step()       # scans, and reduces the rows with a new file at `at`; their records by key
-auto.refused      # why each such row did not run, by key
+auto = Automatic(batch, at={'sample'}, settings=lambda: settings)
+auto.step()       # scans, and reduces the rows that arrived; their records by key
+auto.refused      # why rows of the last step were refused by submit, by key
 ```
 
 ## S. Small stories
@@ -664,7 +664,7 @@ def angles(files):                                             # a row per sampl
     return [Row(sample, {'runs': refs}) for sample, refs in runs.items()]
 
 batch = Batch(client, STITCH, columns=('runs',), label='reflectivity', source=angles, persist=True)
-auto = Automatic(batch, at='runs', settings=lambda: {'reference': reference})
+auto = Automatic(batch, at={'runs'}, settings=lambda: {'reference': reference})
 
 r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
 client.wait(auto.step())                                       # a row still running waits for its record
@@ -690,7 +690,7 @@ Actor: instrument scientist. Goal: after an upgrade removed the spec version of 
 
 ```python
 upgraded = upgrade(specs=[IOFQ_V2])                            # version 1 is gone
-auto = Automatic(iofq_batch(upgraded), at='sample', settings=lambda: {'normalization': None})
+auto = Automatic(iofq_batch(upgraded), at={'sample'}, settings=lambda: {'normalization': None})
 measure(1, [1.0, 1.0], role='sample')
 
 assert auto.step() == {}
@@ -702,7 +702,7 @@ assert auto.refused == {'1': 'unknown spec sans-iofq/v1'}
 Actor: none; a failure mode. Goal: a published result that SciCat lists as a dataset does not make a row.
 
 ```python
-auto = Automatic(iofq_batch(client), at='sample', settings=lambda: {'normalization': None})
+auto = Automatic(iofq_batch(client), at={'sample'}, settings=lambda: {'normalization': None})
 measure(1, [1.0, 2.0, 3.0, 4.0])
 (reduced,) = auto.step().values()
 pid = client.publish(reduced.ref('iofq'), 'scicat')
@@ -719,7 +719,7 @@ Actor: instrument scientist. Goal: new runs use the improved settings; earlier r
 
 ```python
 settings = {'normalization': None}
-auto = Automatic(iofq_batch(client), at='sample', settings=lambda: settings)
+auto = Automatic(iofq_batch(client), at={'sample'}, settings=lambda: settings)
 first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
 (before,) = auto.step().values()
 
@@ -737,7 +737,7 @@ outdated = [k for k, s in batch.state(settings).items() if s.outdated]
 assert [batch.state()[k].record.request.files() for k in outdated] == [[first]]   # to reprocess, if the user wants
 ```
 
-A row runs only for a file at `sample` that no record under `iofq` holds, so a changed setting does not reduce run 1 again. A restarted loop learns the same from the records. A row's state, read from its newest record, names the setting that changed since (`s.changed == {'reduction'}`), for any `Batch` on the label.
+The loop reduces a row with a result again only for a change at a column of `at`, `sample` here, so a changed setting does not reduce run 1 again. A restarted loop reads the same from the records. A row's state, read from its newest record, names the setting that changed since (`s.changed == {'reduction'}`), for any `Batch` on the label.
 
 ## F. Publication and provenance
 
