@@ -335,7 +335,7 @@ A file is written to a temporary file next to it, which then replaces it, so a r
 The edits hold only what was set by hand, so a cell from the scan follows the files after a restart. A definition kept that no longer fits the code:
 
 - An edit at a column that is gone makes its row `incomplete` (`not a column`). The page offers to remove it.
-- Settings of another version of the spec are read as they are. The settings form shows those that fit, and names the others with their values. `state()` and `reduce` refuse what the spec bound does not take. Nothing is written until a person presses **Apply**, which writes the settings of the form.
+- Settings of another version of the spec are read as they are. The settings form shows those that fit, and the page names the others with their values above it. `state()` and `reduce` refuse what the spec bound does not take. Nothing is written until a person presses **Apply**, which writes the settings of the form.
 - Settings of a spec of another name raise `ValueError` when the batch is made, naming the file and both specs.
 - A correction of a file no longer listed is kept, and not used.
 - A file that is not of the shape described raises `ValueError` naming the file and the entry, when the batch or the `CorrectedFiles` is made.
@@ -566,7 +566,7 @@ One command holds the folder at a time. If a command was killed, the next one fi
 ## The UI
 
 [The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows a batch in a browser: how to run it, its layers, and its limits.
-The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and every reduction by a person is refused while the form holds a change, so that nothing is reduced with settings other than those shown. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. Given the columns `at`, the page offers a switch **Follow**: a step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, in the page's own process and batch, with the batch's settings, whatever the form holds. Each action of a person is followed at once by a step's reduction. Whether the page follows belongs to its process, not to the definition: a restart starts with `--follow` or without.
+The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown; a reduction of one row alone uses its own parameters and is not. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. Given the columns `at`, the page offers a switch **Follow**: a step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, in the page's own process and batch, with the batch's settings, whatever the form holds. Each action of a person is followed at once by a step's reduction. Whether the page follows belongs to its process, not to the definition: a restart starts with `--follow` or without.
 
 `create_app(batch, ...)` makes the page. Its arguments name the column that names a row (`name`) and the other columns to show (`info`), draw the results (`draw`), correct the metadata of runs (`files`, `marks`), and offer Follow (`at`, `follow`, `interval`). `Server` (`ess.apps.batch.web.server`) holds what the page shows and does, and its actions return `State`, the whole of what the page shows. The browser renders `State` and sends the actions.
 
@@ -590,7 +590,7 @@ python -m ess.apps.batch.web.demo ws       # the rows show as done
 |---|---|
 | **Load table…** | `batch.scan()`, then `batch.put(frames.rows_of(frames.read_table(path), spec.params, batch.columns))` |
 | **Download as CSV**, **as XLSX** | `frames.batch_table(batch, states)`, written with `frames.write_table` |
-| **Load settings…** | `batch.settings = text.settings_of(batch, text.load_template(path))`, refused if of another spec, another version of it, or with other blanks than the columns |
+| **Load settings…**, then **Apply** | `batch.settings = text.settings_of(batch, text.load_template(path))`, refused if of another spec, another version of it, or with other blanks than the columns; the file fills the settings form, and Apply writes it |
 | **Download settings** | `text.write_template(batch.template(), path)` |
 | **Download selected**, **Download all** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows, zipped with their table |
 

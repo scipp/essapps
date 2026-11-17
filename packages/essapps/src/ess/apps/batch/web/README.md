@@ -25,14 +25,15 @@ The demo, the LoKI page and the LoKI arrivals take `--follow [SECONDS]`, which t
 ## Settings and Follow
 
 The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again.
-While the form differs from the batch's settings, the bar above it reads "Changed, not applied yet", and the rows still read as with the batch's settings.
-Apply is refused while the form misses something, and the bar says what.
-While the form holds a change, every way of reducing is refused, and so is **Download settings**, so that nothing is reduced or saved with settings other than those shown.
-**Load settings** and "Put these settings in the form" in the row tab fill the form; a file that cannot be read whole leaves the form as it was.
+While a person has changed the form and not applied the change, the bar above it reads "Changed, not applied yet", and the rows still read as with the batch's settings.
+Apply is refused while the form misses something, and the bar says what; it also names the settings kept that the form cannot show, which Apply replaces.
+While the form holds a change, **Reduce**, the ways of its menu, **Reduce them again** and **Download settings** are refused, so that nothing is reduced or saved with settings other than those shown; "Reduce alone" in the row tab, which uses its own parameters, is not.
+**Load settings** and "Put these settings in the form" in the row tab fill the form, after a confirmation if it holds a change; a file that cannot be read whole leaves the form as it was.
 A change of the settings applies to the rows not reduced yet.
 A row reduced before stays `done`, marked "earlier settings", and **Reduce** leaves it (`ess.apps.batch.left_to_reduce`).
 **Reduce them again** in the Settings tab reduces those rows (`earlier_settings`), after a confirmation that names how many.
-The form is not replaced while a person types in one of its inputs; it shows the latest state once the input loses the focus.
+The page sends its actions in the order a person did them, so a value typed and Apply clicked at once are applied with one click.
+Each state replaces the form, but not while the focused input holds a value typed and not sent; Escape puts back the value sent last.
 
 **Follow** is a switch next to **Rescan runs**, offered when the application gives `create_app(..., at=...)`, the columns at which a changed cell reduces a row again.
 While it is on, a timer in the server runs a step every `interval` seconds (5 by default; `create_app(..., interval=...)`, or `--follow SECONDS`): the scan of **Rescan runs**, then a reduction of the rows that `ess.apps.batch.arrived` gives, under the lock of every request, with or without a page open.
