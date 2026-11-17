@@ -17,19 +17,19 @@ The data and the I(Q) workflow are real; the run numbers, the sample names and
 the roles are this module's. A run arrives as a hard link to a tutorial file
 (a copy if the folder is on another file system) under ``raw/<run>.nxs``, then
 as a row of ``files.csv`` with its run, role and sample, which
-:class:`ArrivingFiles` reads again.
+:class:`~ess.apps.folder.ArrivingFiles` reads again.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import functools
 import io
 import os
 import shutil
 import sys
 import tempfile
-import threading
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -37,11 +37,11 @@ from typing import Any
 
 from ess.loki import data
 
-from ess.apps import Client, FolderFiles, file
+from ess.apps import Client, file
 from ess.apps.batch import CorrectedFiles, FolderDefinitions
 from ess.apps.batch.web.api import STATIC
-from ess.apps.files import Selector
-from ess.apps.folder import folder_files, open_folder
+from ess.apps.folder import ArrivingFiles, open_folder
+from ess.apps.testing import every
 from ess.spec import FileRef
 
 from .bindings import BINDINGS
@@ -103,40 +103,6 @@ def arrivals(count: int) -> list[tuple[str, str, int]]:
         repeat = i // len(EXPERIMENT)
         plan.append((f'{sample} #{repeat + 1}' if repeat else sample, role, source))
     return plan
-
-
-class ArrivingFiles:
-    """
-    The files that ``files.csv`` in ``directory`` lists (:func:`folder_files`),
-    read again whenever the file was replaced or changed.
-    """
-
-    def __init__(self, directory: Path) -> None:
-        self._directory = directory
-        self._lock = threading.Lock()
-        self._stamp: tuple[int, int] | None = None
-        self._files: FolderFiles | None = None
-
-    def _current(self) -> FolderFiles:
-        stat = (self._directory / 'files.csv').stat()
-        stamp = (stat.st_ino, stat.st_mtime_ns)
-        with self._lock:
-            if self._files is None or stamp != self._stamp:
-                self._files = folder_files(self._directory)
-                self._stamp = stamp
-            return self._files
-
-    def resolve(self, name: FileRef) -> FileRef:
-        return self._current().resolve(name)
-
-    def path(self, ref: FileRef) -> Path:
-        return self._current().path(ref)
-
-    def metadata(self, ref: FileRef) -> dict[str, Any]:
-        return self._current().metadata(ref)
-
-    def list(self, selector: Selector) -> list[FileRef]:
-        return self._current().list(selector)
 
 
 def _place(source: Path, target: Path) -> None:
@@ -256,25 +222,16 @@ def main() -> None:
     with open_folder(directory, BINDINGS, files=files) as client:
         given = settings(client, instrument)
         app = build(client, files, definitions, folder=directory.name, settings=given)
-        stop = threading.Event()
 
-        def arrive() -> None:
-            for sample, role, source in arrivals(args.count):
-                if stop.wait(args.interval):
-                    return
-                ref = instrument.measure(role, sample, source)
-                name = ref.file.removeprefix('path:')
-                _say(f'arrived {name}: {role} run of {sample!r}, data of {source}')
-            _say('all runs arrived')
+        def arrive(sample: str, role: str, source: int) -> None:
+            ref = instrument.measure(role, sample, source)
+            name = ref.file.removeprefix('path:')
+            _say(f'arrived {name}: {role} run of {sample!r}, data of {source}')
 
-        thread = threading.Thread(target=arrive, name='arrivals')
-        thread.start()
+        plan = [functools.partial(arrive, *arrival) for arrival in arrivals(args.count)]
         _say(f'serving http://localhost:{args.port}/; Ctrl-C stops')
-        try:
+        with every(args.interval, plan):
             uvicorn.run(app, host='localhost', port=args.port, log_level='warning')
-        finally:
-            stop.set()
-            thread.join()
 
 
 if __name__ == '__main__':

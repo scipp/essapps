@@ -9,6 +9,7 @@ One Python process holds the workspace, the batch and the server; the browser ho
 sh packages/essapps/src/ess/apps/batch/web/static/vendor.sh   # once: the page's libraries into static/vendor/ (needs npm)
 
 python -m ess.apps.batch.web.demo [FOLDER] --port 8000         # fake runs, fake I(Q)
+python -m ess.apps.batch.web.demo --arrive 10 [--count N]      # fake runs, a sample arriving every 10 s
 python -m ess.instruments.loki.web FOLDER --port 8000          # LoKI's I(Q) on a workspace folder
 python -m ess.instruments.loki.arrivals [FOLDER] --port 8000   # LoKI's I(Q), runs arriving in a new folder
 ```
@@ -16,7 +17,8 @@ python -m ess.instruments.loki.arrivals [FOLDER] --port 8000   # LoKI's I(Q), ru
 Open `http://localhost:8000/`. Each `FOLDER` is a workspace folder (`ess.apps.folder`); the demo and the arrivals make a temporary one if none is given.
 The demo needs the extra `essapps[web]`, the LoKI modules `essinstruments[loki-app]`.
 The LoKI page reads the masks from a record, so reduce the detector and the masks on the folder first, with `essapps-batch` (see the docstring of `ess.instruments.loki.web`).
-In the arrivals demo, a run arrives every `--interval` seconds (15): press **Rescan runs** to see it, and **Reduce** to reduce the rows it completes.
+In the LoKI arrivals demo, a run arrives every `--interval` seconds (15); in the fake demo with `--arrive`, the runs of one sample arrive every `SECONDS`, until `--count` samples have arrived. Press **Rescan runs** to see them, and **Reduce** to reduce the rows they complete.
+Both read `files.csv` again when it is replaced (`ess.apps.folder.ArrivingFiles`).
 
 ## Layers
 

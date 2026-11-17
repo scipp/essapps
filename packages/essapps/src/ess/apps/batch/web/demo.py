@@ -9,7 +9,12 @@ working on the page.
 :mod:`ess.apps.folder`), a new temporary folder if not given. The first start
 writes the fake runs and ``files.csv`` there; a later start reuses them, with
 the results of earlier starts, and the edits, settings, and corrections kept
-in ``definitions/`` (:mod:`..definition`).
+in ``definitions/`` (:mod:`..definition`). The file source reads
+``files.csv`` again when it changes (:class:`~ess.apps.folder.ArrivingFiles`).
+
+With ``--arrive SECONDS [--count N]``, a new folder starts with the empty cell
+and the first few samples, and the runs of one more sample arrive every
+``SECONDS``, until ``N`` have arrived (all if not given).
 
 Each sample run holds the size of its particles, so samples differ visibly, and
 the curve depends on the settings. Three samples have no transmission run, one
@@ -23,6 +28,7 @@ import json
 import tempfile
 import time
 from collections.abc import Sequence
+from functools import partial
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -32,8 +38,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
 from ess.apps import Client
-from ess.apps.folder import folder_files, open_folder
-from ess.apps.testing import StagedFunction, read_file
+from ess.apps.folder import ArrivingFiles, open_folder
+from ess.apps.testing import StagedFunction, every, read_file
 from ess.spec import (
     BackgroundRunFile,
     SampleRunFile,
@@ -215,29 +221,49 @@ SAMPLES = (
 _NO_TRANSMISSION = {'SDS 50 mM in D2O', 'Apoferritin', 'Casein micelles'}
 _NO_EVENTS = 'Detector check'
 FIRST_RUN = 60301
+AT_START = 3
+"""The samples there at the start when the others arrive (``--arrive``)."""
+
+type Run = tuple[int, dict[str, object], str, str]
+"""A run: its number, the content of its file, its role, and its sample."""
 
 
-def _measure(directory: Path) -> None:
-    """Write the runs and ``files.csv``, unless there."""
-    if (directory / 'files.csv').exists():
-        return
-    lines = ['file,run,role,sample']
-
-    def write(run: int, content: dict[str, object], role: str, sample: str) -> None:
-        (directory / f'{run}.json').write_text(json.dumps({'run': run, **content}))
-        lines.append(f'{run}.json,{run},{role},{sample}')
-
+def measurements() -> list[list[Run]]:
+    """
+    The runs, in the groups that arrive together: the empty cell, then each
+    sample run with its transmission run, if it has one.
+    """
     run = FIRST_RUN
-    write(run, {'level': 0.02}, 'background', 'empty cell')
+    groups = [[(run, {'level': 0.02}, 'background', 'empty cell')]]
     for i, (name, radius, scale) in enumerate(SAMPLES):
         run += 1
         events = 0 if name == _NO_EVENTS else 2_000_000
         sample = {'radius': radius, 'scale': scale, 'incoherent': 0.03}
-        write(run, {**sample, 'events': events, 'seed': i}, 'sample', name)
+        group: list[Run] = [
+            (run, {**sample, 'events': events, 'seed': i}, 'sample', name)
+        ]
         if name not in _NO_TRANSMISSION:
             run += 1
-            write(run, {'transmission': 0.95 - 0.01 * (i % 9)}, 'transmission', name)
-    (directory / 'files.csv').write_text('\n'.join(lines) + '\n')
+            content = {'transmission': 0.95 - 0.01 * (i % 9)}
+            group.append((run, content, 'transmission', name))
+        groups.append(group)
+    return groups
+
+
+def measure(directory: Path, runs: Sequence[Run]) -> None:
+    """
+    Write the file of each of ``runs`` that is not there, then replace
+    ``files.csv`` with a table of ``runs``.
+    """
+    lines = ['file,run,role,sample']
+    for run, content, role, sample in runs:
+        path = directory / f'{run}.json'
+        if not path.exists():
+            path.write_text(json.dumps({'run': run, **content}))
+        lines.append(f'{path.name},{run},{role},{sample}')
+    partial_table = directory / 'files.csv.partial'
+    partial_table.write_text('\n'.join(lines) + '\n')
+    partial_table.replace(directory / 'files.csv')
 
 
 def open_demo(
@@ -247,9 +273,10 @@ def open_demo(
     A client of the demo's workspace in ``directory``, its file source, and the
     folder's definitions.
     """
-    _measure(directory)
+    if not (directory / 'files.csv').exists():
+        measure(directory, [run for group in measurements() for run in group])
     definitions = FolderDefinitions(directory)
-    files = CorrectedFiles(folder_files(directory), definitions=definitions)
+    files = CorrectedFiles(ArrivingFiles(directory), definitions=definitions)
     return open_folder(directory, BINDINGS, files=files), files, definitions
 
 
@@ -296,6 +323,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description='Serve the batch page demo.')
     parser.add_argument('directory', type=Path, nargs='?', help='the workspace')
     parser.add_argument('--port', type=int, default=8000)
+    parser.add_argument(
+        '--arrive', type=float, metavar='SECONDS', help='a sample every SECONDS'
+    )
+    parser.add_argument('--count', type=int, help='the samples that arrive')
     args = parser.parse_args()
     if not (STATIC / 'vendor').is_dir():
         parser.exit(1, f'The page needs its libraries: sh {STATIC / "vendor.sh"}\n')
@@ -303,8 +334,22 @@ def main() -> None:
     if directory is None:
         directory = Path(tempfile.mkdtemp(prefix='essapps-web-demo-'))
     directory.mkdir(parents=True, exist_ok=True)
+    groups = measurements()
+    arriving: list[list[Run]] = []
+    if args.arrive is not None:
+        if (directory / 'files.csv').exists():
+            parser.exit(1, f'--arrive needs a new folder; {directory} has runs\n')
+        start, arriving = groups[: AT_START + 1], groups[AT_START + 1 :]
+        arriving = arriving[: args.count]
+        measure(directory, [run for group in start for run in group])
     client, files, definitions = open_demo(directory)
-    with client:
+    arrived = [run for group in groups[: AT_START + 1] for run in group]
+
+    def arrive(group: list[Run]) -> None:
+        arrived.extend(group)
+        measure(directory, arrived)
+
+    with client, every(args.arrive or 0, [partial(arrive, g) for g in arriving]):
         app = build(client, files, definitions, folder=directory.name)
         uvicorn.run(app, host='localhost', port=args.port)
 

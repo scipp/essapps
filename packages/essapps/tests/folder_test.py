@@ -14,7 +14,7 @@ from ess.apps import Client, Selector, file
 from ess.apps.batch import Batch, FileInfo, Row
 from ess.apps.batch.auto import Automatic
 from ess.apps.batch.frames import batch_table
-from ess.apps.folder import FolderStore, open_folder, scan_folder
+from ess.apps.folder import ArrivingFiles, FolderStore, open_folder, scan_folder
 from ess.apps.testing import read_file
 from ess.spec import Binding, FileRef, WorkflowSpec, function_binding
 
@@ -278,3 +278,23 @@ def test_a_scan_leaves_out_a_file_that_cannot_be_read_with_a_warning(
         rows = scan_folder(tmp_path, read)
 
     assert rows == [{'file': '2.json'}]
+
+
+def test_arriving_files_reads_the_table_again_when_it_is_replaced(
+    tmp_path: Path,
+) -> None:
+    def register(*runs: int) -> None:
+        lines = ['file,run', *(f'{run}.nxs,{run}' for run in runs)]
+        (tmp_path / 'table.partial').write_text('\n'.join(lines))
+        (tmp_path / 'table.partial').replace(tmp_path / 'files.csv')
+
+    for run in (1, 2):
+        (tmp_path / f'{run}.nxs').touch()
+    files = ArrivingFiles(tmp_path)
+    register(1)
+    assert [files.metadata(r)['run'] for r in files.list(Selector())] == ['1']
+
+    register(1, 2)
+
+    assert [files.metadata(r)['run'] for r in files.list(Selector())] == ['1', '2']
+    assert files.resolve(file(run=2)) == files.list(Selector())[1]
