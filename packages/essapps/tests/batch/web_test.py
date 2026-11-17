@@ -452,6 +452,18 @@ def test_the_table_downloaded_and_uploaded_gives_the_same_rows(
     ]
 
 
+def test_a_table_that_lacks_a_column_is_refused_and_the_rows_stay(
+    http: TestClient,
+) -> None:
+    content = b'key,sample\na,1\n'
+
+    loaded = http.post('/api/table', params={'name': 'rows.csv'}, content=content)
+
+    assert loaded.status_code == 422
+    assert 'transmission' in loaded.json()['message']
+    assert list(rows(http)) == ['1', '2', '3']
+
+
 def test_a_table_loaded_is_set_by_hand_and_stays_after_a_rescan(
     http: TestClient,
 ) -> None:
@@ -741,6 +753,23 @@ def test_the_plot_draws_the_results_of_the_rows_asked_for_in_their_colours(
     }
     assert plot['colors'] == {'2': plots.PALETTE[1]}
     assert http.get('/api/plot').json()['figure']['drawn'] == ['1', '2']
+
+
+def test_a_drawing_that_raises_says_so_in_place_of_the_figure(
+    batch: Batch, client: Client, sample: Measure
+) -> None:
+    def broken(_: Sequence[Shown]) -> Any:
+        raise RuntimeError('released')
+
+    sample(1, 'water')
+    page = TestClient(create_app(batch, draw=broken))
+    page.post('/api/scan')
+    reduced(page, client)
+
+    plot = page.get('/api/plot').json()
+
+    assert plot['figure'] is None
+    assert 'Cannot draw: released' in plot['note']
 
 
 def test_no_two_curves_of_a_figure_share_a_colour() -> None:

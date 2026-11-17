@@ -19,7 +19,6 @@ from ess.apps.batch import (
     refused_again,
     remaining,
     status_texts,
-    summary,
 )
 from ess.apps.batch.state import differs, results, row_states
 from ess.apps.errors import FieldError
@@ -143,7 +142,6 @@ def test_a_failed_or_cancelled_row_reads_so_when_its_request_changed(
 
     assert remaining(found) == ['a']
     assert found['a'].text == str(status)
-    assert summary(found) == {str(status): 1}
 
 
 @pytest.mark.parametrize(
@@ -314,16 +312,6 @@ def test_a_value_differs_if_either_side_lacks_it() -> None:
     assert differs({'sample': 'y', 'shared': 0}, was, ['sample', 'shared']) == [
         'sample'
     ]
-
-
-def test_summary_counts_the_rows_by_what_they_show() -> None:
-    found = states(
-        [Row('a', {'sample': 'x'}), Row('b'), Row('c', {'sample': 'y'})],
-        record('1', 'a'),
-        **{'1': Status.COMPLETED},
-    )
-
-    assert summary(found) == {'completed': 1, 'incomplete': 1, 'not reduced': 1}
 
 
 def not_compared(*, tweaked: bool = False) -> dict[str, RowState]:

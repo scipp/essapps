@@ -4,7 +4,7 @@
 A toolbox for applications that reduce many samples, built on :mod:`ess.apps`.
 
 This package depends on the rest of ``ess.apps``, which knows nothing of it, and
-imports no widget library; widgets are in :mod:`ess.apps.batch.panel`. The guide
+imports no widget library. The page is in :mod:`ess.apps.batch.web`. The guide
 for application developers is ``packages/essapps/docs/batch.md``.
 """
 
@@ -22,7 +22,6 @@ from .state import (
     refused_again,
     remaining,
     status_texts,
-    summary,
 )
 from .table import EMPTY, Row, RowTable
 
@@ -48,5 +47,4 @@ __all__ = [
     'refused_again',
     'remaining',
     'status_texts',
-    'summary',
 ]

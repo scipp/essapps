@@ -220,7 +220,6 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 | `left_to_reduce(states, columns)` | the rows of `remaining` but those of `earlier_settings` |
 | `refused_again(states, at, refused)` | of the reasons `refused` by row, those of the rows of `arrived`: why the next step of a loop will be refused again |
 | `status_texts(states, columns)` | the status of each row as a table shows it: `completed, earlier settings` for a row of `earlier_settings` |
-| `summary(states)` | the number of rows in each state |
 
 **A row's state is read from its result.** `state()` compares each row's request, its cells with the settings, with the request of its result, and says where they differ:
 
