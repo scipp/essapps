@@ -365,9 +365,8 @@ export class Grid {
 
 const STATUS_ORDER = ['failed', 'incomplete', 'outdated', 'cancelled', 'ready', 'running', 'done'];
 
-// The status of a row as a pill, with a star if its result was reduced alone
-// with its own parameters, and a mark if with earlier settings; the tooltip
-// says why.
+// The status of a row as a pill, with a mark if its result was reduced with
+// earlier settings; the tooltip says why.
 export const statusColumn = {
   title: 'Status',
   field: 'status',
@@ -380,13 +379,9 @@ export const statusColumn = {
     return h(
       'span',
       {class: 'status'},
-      h('span', {class: `pill st-${row.status}`}, row.status, row.alone && h('sup', {text: '*'})),
+      h('span', {class: `pill st-${row.status}`}, row.status),
       row.earlier && h('span', {class: 'earlier', text: 'earlier settings'}),
     );
   },
-  tooltip: (event, cell) => {
-    const row = cell.getData();
-    const alone = row.alone ? 'Reduced alone, with its own parameters.' : '';
-    return [row.reason, alone].filter(Boolean).join(' ');
-  },
+  tooltip: (event, cell) => cell.getData().reason,
 };

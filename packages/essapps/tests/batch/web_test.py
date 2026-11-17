@@ -388,9 +388,7 @@ def test_a_row_reduced_by_another_spec_version_is_outdated(
         )
         assert state(page)['action']['label'] == 'Reduce 1 outdated'
         detail = page.get('/api/row', params={'key': '1'}).json()
-        tweak = {tuple(n['path']): n for n in detail['tweak']}
         assert detail['reduced_with'] is None
-        assert tweak['binning',]['child']['children'][0]['value'] == 2
         used = page.post('/api/row/use-settings', json={'key': '1'})
         assert used.status_code == 422
         assert 'another version' in used.json()['message']
@@ -960,19 +958,31 @@ def test_the_settings_of_a_row_fill_the_form_until_apply(
     assert not applied['rows'][0]['earlier']
 
 
-def test_a_reduction_of_one_row_alone_becomes_its_result(
-    http: TestClient, client: Client
+@pytest.mark.parametrize('keep', [True, False], ids=['reduce them again', 'back'])
+def test_settings_tried_on_one_row_reach_the_others_only_when_a_person_says_so(
+    http: TestClient, client: Client, keep: bool
 ) -> None:
     reduced(http, client)
-    edit = {'key': '1', 'path': BINS, 'op': 'set', 'value': 4}
-
-    http.post('/api/row/tweak', json=edit)
-    http.post('/api/row/tweak/submit', json={'key': '1'})
+    bins(http, 4)
+    http.post('/api/reduce', json={'which': 'selected', 'keys': ['1']})
     client.wait(client.records())
 
-    assert (rows(http)['1']['status'], rows(http)['1']['alone']) == ('done', True)
-    assert client.latest('scan', '1').request.params['binning'] == {'bins': 4}
-    assert http.get('/api/row', params={'key': '1'}).json()['differs'] == ['binning']
+    def earlier() -> list[str]:
+        return [k for k, r in rows(http).items() if r['earlier']]
+
+    def binning() -> list[int]:
+        return [
+            client.latest('scan', k).request.params['binning']['bins'] for k in '12'
+        ]
+
+    assert (earlier(), binning()) == (['2'], [4, 2])
+    assert http.get('/api/row', params={'key': '1'}).json()['differs'] == []
+    if keep:
+        reduced(http, client, which='earlier')
+        assert (earlier(), binning()) == ([], [4, 4])
+    else:
+        bins(http, 2)
+        assert (earlier(), binning()) == (['1'], [4, 2])
 
 
 def test_a_row_added_by_hand_is_gone_for_good_when_removed(

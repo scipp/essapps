@@ -103,12 +103,11 @@ class Cell(BaseModel):
 class Row(BaseModel):
     """
     One row. ``result`` says whether it has a result to show, ``current`` or
-    ``outdated``. ``alone`` if that result was reduced with its own parameters;
-    ``earlier`` if it was reduced with earlier settings, which differ from the
-    settings now at settings only; ``added`` if the row was added by hand.
-    ``strays`` names the edits at a name that is not a column, such as one kept
-    for an older version of the application, which make the row incomplete
-    until they are taken back.
+    ``outdated``. ``earlier`` if it was reduced with earlier settings, which
+    differ from the settings now at settings only; ``added`` if the row was
+    added by hand. ``strays`` names the edits at a name that is not a column,
+    such as one kept for an older version of the application, which make the
+    row incomplete until they are taken back.
     """
 
     key: str
@@ -117,7 +116,6 @@ class Row(BaseModel):
     status: str
     reason: str
     added: bool
-    alone: bool
     earlier: bool = False
     record: str | None
     result: Literal['current', 'outdated'] | None
@@ -215,15 +213,14 @@ class State(BaseModel):
 
 class RowDetail(BaseModel):
     """
-    What one row's result was reduced with, ``reduced_with``, the names of the
-    settings that differ from those now, and the form of a reduction of it alone.
+    What one row's result was reduced with, ``reduced_with``, and the names of
+    the settings that differ from those now.
     """
 
     key: str
     reduced_with: list[Node] | None
     created: datetime | None
     differs: list[str]
-    tweak: list[Node]
 
 
 class RunRow(BaseModel):
@@ -285,9 +282,3 @@ class Reduce(BaseModel):
 
 class On(BaseModel):
     on: bool
-
-
-class RowEdit(Edit):
-    """An edit of the form of the reduction of row ``key`` alone."""
-
-    key: str

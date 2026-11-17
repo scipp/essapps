@@ -26,7 +26,6 @@ const view = {
   detail: '', // what the row tab shows, to draw it again only on a change
   dismissed: '', // the refusal whose message was closed
   runs: 0, // the version of the runs shown
-  tweakOpen: false,
 };
 let rows; // the Grid of the rows
 let runs; // the Grid of the runs
@@ -506,7 +505,6 @@ function renderRow(detail) {
     ...row.strays.map((name) =>
       h('button', {type: 'button', class: 'stray', text: `Remove the edit of ${name}`, onclick: () => act('/api/cells/revert', {keys: [row.key], column: name})}),
     ),
-    row.alone && h('p', {class: 'hint', text: 'Its result was reduced alone, with its own parameters.'}),
     detail.reduced_with
       ? h(
           'section',
@@ -520,27 +518,7 @@ function renderRow(detail) {
         )
       : !row.record && h('p', {class: 'hint', text: 'Not reduced yet.'}),
   ];
-  // The form to reduce the row alone is kept while the row stays, and drawn
-  // again in place only when it changed, so that typing in it goes on.
-  const pane = $('tab-row');
-  let info = pane.querySelector('.row-info');
-  let tweak = pane.querySelector('details.tweak');
-  if (!info || tweak?.dataset.key !== row.key) {
-    info = h('div', {class: 'row-info'});
-    tweak = tweakBox(row);
-    pane.replaceChildren(info, tweak);
-  }
-  info.replaceChildren(...parts.filter(Boolean));
-  const form = tweak.querySelector('.form');
-  const tweakJson = JSON.stringify(detail.tweak);
-  if (form.dataset.shown !== tweakJson) {
-    form.dataset.shown = tweakJson;
-    renderForm(form, detail.tweak, async (edit) => {
-      const response = await post('/api/row/tweak', {key: row.key, ...edit});
-      if (response.ok) renderRow(response.body);
-      else showMessage(response.body?.message ?? `The server answered ${response.status}.`);
-    });
-  }
+  $('tab-row').replaceChildren(...parts.filter(Boolean));
 }
 
 // A time as 2026-11-10 13:11, in the time zone of the browser.
@@ -548,17 +526,6 @@ function when(iso) {
   const t = new Date(iso);
   const two = (n) => String(n).padStart(2, '0');
   return `${t.getFullYear()}-${two(t.getMonth() + 1)}-${two(t.getDate())} ${two(t.getHours())}:${two(t.getMinutes())}`;
-}
-
-function tweakBox(row) {
-  return h(
-    'details',
-    {class: 'tweak', 'data-key': row.key, open: view.tweakOpen, ontoggle: (event) => (view.tweakOpen = event.target.open)},
-    h('summary', {text: `Reduce this ${words().one} alone with other parameters`}),
-    h('p', {class: 'hint', text: `The result becomes the result of ${row.name}. The shared settings stay as they are.`}),
-    h('div', {class: 'form'}),
-    h('button', {type: 'button', class: 'primary', text: `Reduce ${row.name} alone`, onclick: () => act('/api/row/tweak/submit', {key: row.key})}),
-  );
 }
 
 // Wiring
