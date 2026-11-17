@@ -53,7 +53,7 @@ server.py         Server: what the page does, without HTTP; holds the Batch,
                   the loop of Follow; one lock around every request and step
    ▼
 ess.apps.batch    the logic: Batch, RowTable, states, CorrectedFiles;
-                  shared with the Panel view and the command essapps-batch
+                  shared with the command essapps-batch
 ```
 
 `/docs` on a running server lists the API.
