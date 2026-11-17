@@ -71,7 +71,7 @@ import uuid
 import zipfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -89,6 +89,7 @@ from .. import (
     EMPTY,
     Batch,
     CorrectedFiles,
+    NotKept,
     RowState,
     earlier_settings,
     frames,
@@ -209,7 +210,7 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
             try:
                 notice = method(*args, **kwargs)
                 server._follow_now()
-            except OSError as error:  # the definitions could not keep a change
+            except NotKept as error:
                 server._settings_shown = None  # the form shows the batch's again
                 raise Problem(f'The change was not kept: {error}') from None
             finally:
@@ -681,6 +682,15 @@ class Server:
     def _incomplete(self) -> set[str]:
         return {k for k, s in self._states()[0].items() if s.problems}
 
+    def _renew_listing(self) -> None:
+        """
+        List again: new rows may name files that the listing lacks, and a
+        correction of runs changes what the Runs view offers, even if the scan
+        then fails.
+        """
+        self._relist()
+        self._new_runs()
+
     def _scanned(self, scan: Callable[[], None]) -> str:
         """
         Call ``scan``, which makes the rows again, and say how many rows
@@ -690,11 +700,13 @@ class Server:
         incomplete = self._incomplete()
         try:
             scan()
-        finally:
-            # New rows may name files that the listing lacks, and a correction
-            # of runs changes what it offers, even if the scan then fails.
-            self._relist()
-            self._new_runs()
+        except Problem:
+            # The listing may fail for the reason that the scan failed; the
+            # failure of the scan is what to say.
+            with suppress(Exception):
+                self._renew_listing()
+            raise
+        self._renew_listing()
         changed = sum(before.get(r.key) != dict(r.values) for r in self.batch.rows)
         new = self._incomplete() - incomplete
         names = [self._named(r) for r in self.batch.rows if r.key in new]

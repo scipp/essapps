@@ -73,14 +73,18 @@ def settings_key(label: str) -> Key:
     return ('labels', label, 'settings')
 
 
+class NotKept(OSError):
+    """A :class:`DefinitionStore` could not keep a table; it holds what it did."""
+
+
 class DefinitionStore(Protocol):
     """
     Keeps each table of the definition as plain data, under its :data:`Key`.
 
     ``save`` takes data that :func:`pydantic_core.to_json` writes, and raises
-    if it cannot keep it. ``load`` gives what ``read`` makes of the data in
-    its JSON form, or ``None`` if nothing was saved under the key; a
-    ``ValueError`` of ``read`` is raised naming where the data is kept.
+    :class:`NotKept` if it cannot keep it. ``load`` gives what ``read`` makes
+    of the data in its JSON form, or ``None`` if nothing was saved under the
+    key; a ``ValueError`` of ``read`` is raised naming where the data is kept.
     """
 
     def load[T](self, key: Key, read: Callable[[Any], T]) -> T | None: ...
@@ -145,19 +149,22 @@ class FolderDefinitions:
 
     def save(self, key: Key, data: Any) -> None:
         path = self.path(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
         content = to_json(data, indent=1)
-        with tempfile.NamedTemporaryFile(
-            dir=path.parent, prefix=f'.{path.name}.', delete=False
-        ) as f:
-            try:
-                f.write(content)
-                f.flush()
-                os.fsync(f.fileno())
-            except BaseException:
-                os.unlink(f.name)
-                raise
-        os.replace(f.name, path)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                dir=path.parent, prefix=f'.{path.name}.', delete=False
+            ) as f:
+                try:
+                    f.write(content)
+                    f.flush()
+                    os.fsync(f.fileno())
+                except BaseException:
+                    os.unlink(f.name)
+                    raise
+            os.replace(f.name, path)
+        except OSError as error:
+            raise NotKept(f'{path}: {error.strerror or error}') from error
 
 
 def _checked[T](adapter: TypeAdapter[T], data: Any) -> T:

@@ -19,7 +19,7 @@ from ess.apps.batch import (
     FolderDefinitions,
     Row,
 )
-from ess.apps.batch.definition import CORRECTIONS, Key, edits_key, settings_key
+from ess.apps.batch.definition import CORRECTIONS, Key, NotKept, edits_key, settings_key
 from ess.apps.batch.text import load_template
 from ess.apps.folder import folder_files, open_folder
 from ess.spec import Binding
@@ -221,6 +221,15 @@ def test_settings_of_another_version_are_taken_as_they_are(
             batch.state()
 
 
+def test_a_folder_that_cannot_be_written_raises_that_the_table_was_not_kept(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / 'definitions').write_text('a file where the folder should be')
+
+    with pytest.raises(NotKept, match='definitions'):
+        FolderDefinitions(tmp_path).save(CORRECTIONS, {})
+
+
 def test_a_label_is_kept_in_a_folder_of_its_own(tmp_path: Path) -> None:
     store = FolderDefinitions(tmp_path)
     labels = ['auto/iofq', 'auto%2Fiofq', '..', '.', 'labels']
@@ -305,7 +314,7 @@ class Failing:
         return None
 
     def save(self, key: Key, data: Any) -> None:
-        raise OSError('disk full')
+        raise NotKept('disk full')
 
 
 def test_a_change_that_cannot_be_kept_raises_and_changes_nothing(
@@ -319,11 +328,11 @@ def test_a_change_that_cannot_be_kept_raises_and_changes_nothing(
     batch.scan()  # writes nothing
     before = batch.rows
 
-    with pytest.raises(OSError, match='disk full'):
+    with pytest.raises(NotKept, match='disk full'):
         batch.rows = batch.rows.edit('1', {'thickness': 2.0})
-    with pytest.raises(OSError, match='disk full'):
+    with pytest.raises(NotKept, match='disk full'):
         batch.settings = {'binning': {'bins': 3}}
-    with pytest.raises(OSError, match='disk full'):
+    with pytest.raises(NotKept, match='disk full'):
         files.correct_each(list(client.files.list(Selector())), role='bad')
 
     assert batch.rows is before

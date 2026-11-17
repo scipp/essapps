@@ -18,10 +18,10 @@ from pydantic import BaseModel, Field
 
 from ess.apps import Client, local
 from ess.apps.batch import Batch, CorrectedFiles
-from ess.apps.batch.definition import Key, settings_key
+from ess.apps.batch.definition import Key, NotKept, settings_key
 from ess.apps.batch.web import Shown, create_app, demo, plots
 from ess.apps.testing import CountingClient, FakeFiles
-from ess.spec import SampleRunFile, WorkflowSpec, function_binding
+from ess.spec import FileRef, SampleRunFile, WorkflowSpec, function_binding
 
 from .toys import COLUMNS, PLAIN, STAGED, Gate, Measure, Outputs, pair
 
@@ -516,7 +516,7 @@ class Flaky:
 
     def save(self, key: Key, data: Any) -> None:
         if self.fail:
-            raise OSError('disk full')
+            raise NotKept('disk full')
         self.saves += 1
         self.kept[key] = data
 
@@ -864,6 +864,20 @@ FORMS = WorkflowSpec(
 def form(client: Client) -> TestClient:
     batch = Batch(client, FORMS, columns=('sample',), label='forms')
     return TestClient(create_app(batch))
+
+
+def test_a_correction_whose_scan_fails_says_that_it_was_kept(
+    http: TestClient, files: CorrectedFiles, fake: FakeFiles
+) -> None:
+    (run, *_) = http.get('/api/runs').json()['rows']
+    fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
+
+    edit = {'keys': [run['key']], 'column': 'role', 'value': 'sample'}
+    answer = http.post('/api/runs/cells', json=edit)
+
+    assert dict(files.corrections(FileRef(file=run['key']))) == {'role': 'sample'}
+    assert answer.status_code == 422
+    assert answer.json()['message'].startswith('Corrected, but the scan failed')
 
 
 def settings(form: TestClient, edit: dict[str, Any]) -> dict[str, Any]:

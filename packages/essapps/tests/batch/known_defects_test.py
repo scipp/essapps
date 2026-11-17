@@ -6,8 +6,6 @@ Each is marked as a strict ``xfail`` that says what happens instead.
 A fix moves its test next to the tests of the same behaviour and removes the marker.
 """
 
-from typing import Any
-
 import pytest
 import yaml
 from fastapi.testclient import TestClient
@@ -16,8 +14,6 @@ from pydantic import BaseModel
 from ess.apps import Client
 from ess.apps.batch import Batch, CorrectedFiles
 from ess.apps.batch.web import create_app
-from ess.apps.testing import FakeFiles
-from ess.spec import FileRef
 
 from .toys import Gate, Measure
 
@@ -34,30 +30,6 @@ def http(batch: Batch, files: CorrectedFiles, sample: Measure) -> TestClient:
     sample(1, 'water')
     batch.scan()
     return TestClient(create_app(batch, name='name', files=files, marks=Marks, at=AT))
-
-
-def half_written(selector: Any) -> Any:
-    """A file source's ``list`` while its list of files is being written."""
-    raise OSError('half written')
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason='D2: the scan after the correction fails with an OSError, which the '
-    'page reports as "The change was not kept" although the correction was kept.',
-)
-def test_a_correction_whose_scan_fails_says_that_it_was_kept(
-    http: TestClient, files: CorrectedFiles, fake: FakeFiles
-) -> None:
-    (run, *_) = http.get('/api/runs').json()['rows']
-    fake.list = half_written
-
-    edit = {'keys': [run['key']], 'column': 'sample', 'value': 'oil'}
-    answer = http.post('/api/runs/cells', json=edit)
-
-    assert dict(files.corrections(FileRef(file=run['key']))) == {'sample': 'oil'}
-    assert answer.status_code == 422
-    assert answer.json()['message'].startswith('Corrected, but the scan failed')
 
 
 @pytest.mark.xfail(
