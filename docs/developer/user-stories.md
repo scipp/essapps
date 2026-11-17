@@ -731,11 +731,13 @@ user = connect()                                                # any client of 
 assert after.request.files() == [second]                        # run 1 is not reduced again
 assert [user.output(r, 'iofq').values.tolist() for r in (before, after)] == [
     [3.0, 7.0], [2.0, 7.0]]
-stale = [r for r in user.records(label='iofq') if r.request.params['reduction']['threshold'] != 1.5]
-assert [r.request.files() for r in stale] == [[first]]          # to reprocess, if the user wants
+batch = iofq_batch(user)                                        # a batch of its own on the label
+batch.scan()
+outdated = [k for k, s in batch.state(settings).items() if s.outdated]
+assert [batch.state()[k].record.request.files() for k in outdated] == [[first]]   # to reprocess, if the user wants
 ```
 
-A row runs only for a file at `sample` that no record under `iofq` holds, so a changed setting does not reduce run 1 again. A restarted loop learns the same from the records.
+A row runs only for a file at `sample` that no record under `iofq` holds, so a changed setting does not reduce run 1 again. A restarted loop learns the same from the records. A row's state, read from its newest record, names the setting that changed since (`s.changed == {'reduction'}`), for any `Batch` on the label.
 
 ## F. Publication and provenance
 

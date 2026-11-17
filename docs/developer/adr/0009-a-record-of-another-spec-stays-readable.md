@@ -1,6 +1,6 @@
 # ADR 0009: A record names its spec by name, version, and digest, and a record of another spec stays readable
 
-- Status: accepted, implemented (`ess.apps.workspace`, with a new format of the log), but for what Open names.
+- Status: accepted, implemented (`ess.apps.workspace`, with a new format of the log; `ess.apps.batch` for a batch's rows).
 - Deciders: Simon
 - Date: 2026-11-13
 
@@ -68,7 +68,4 @@ A technique package's tests compare each spec's digest with one kept in the pack
 - A result of another spec cannot feed a new request. A person who needs it as an input reduces again, or keeps the old spec installed.
 - An edit to a title or a description changes no digest, so no record becomes one of another spec.
 - What the digest covers is part of the log's format ([ADR 0004](0004-history-is-append-only-lists.md#decision)).
-
-## Open
-
-- A batch should show a row whose record is of another spec as no longer current, while its result stays readable, so that results of two versions of a spec can be compared. How, and how that relates to "stale", is scipp/essapps#191.
+- A batch shows a row whose result is of another spec as outdated (`RowState.spec_changed`), and the result stays the row's result, readable as stored, so that the results of two versions of a spec can be compared ([batch.md](../../../packages/essapps/docs/batch.md#rules)).
