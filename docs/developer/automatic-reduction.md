@@ -140,7 +140,7 @@ A reason that names no row refuses every row of the step.
 Nothing is kept to spare a retry, so a refused row is submitted again at every step, and refused again until what it references changes.
 
 Settings that the workspace does not accept make `Batch.state()` raise a `SubmitError`, since no row can run with them.
-The step then submits nothing, and `refused` holds the reason for every ready row, such as `{'1': 'unknown spec sans-iofq/v1'}` after an upgrade removed the spec (E2).
+The step then submits nothing, and `refused` holds the reason for every ready row but those changed by hand, such as `{'1': 'unknown spec sans-iofq/v1'}` after an upgrade removed the spec (E2).
 
 ## Chains
 

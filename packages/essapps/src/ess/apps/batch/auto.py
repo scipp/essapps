@@ -75,7 +75,8 @@ class Automatic:
     refused:
         Why the last step's submission refused each row, by key: the rows it
         submitted that a ``SubmitError`` names, or every row it submitted if
-        the reason names none. If the settings are refused, every ready row.
+        the reason names none. If the settings are refused, every ready row
+        but those changed by hand.
 
     Raises
     ------
@@ -111,7 +112,8 @@ class Automatic:
         :attr:`refused` says why.
 
         If the settings are refused, no row can run: the step reduces none,
-        and :attr:`refused` gives the reason for each ready row.
+        and :attr:`refused` gives the reason for each ready row but those
+        changed by hand.
         """
         self.batch.scan()
         return self.reduce()
@@ -126,7 +128,11 @@ class Automatic:
         try:
             state = batch.state()
         except SubmitError as error:
-            self.refused = dict.fromkeys(ready(batch.results()), str(error))
+            # Without a comparison, a row with a result may be due or not; a
+            # row changed by hand is left to a person either way.
+            states = batch.results()
+            due = [k for k in ready(states) if not states[k].changed_by_hand]
+            self.refused = dict.fromkeys(due, str(error))
             return {}
         records, self.refused = self._reduce(arrived(state, self.at))
         return records

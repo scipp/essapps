@@ -551,6 +551,9 @@ def test_refused_settings_refuse_every_ready_row_until_they_change(
     client.wait(loop.step())
     sample(2, 'sds')
     sample(3, 'dmso', partner=False)
+    sample(4, 'd2o')
+    batch.scan()
+    batch.rows = batch.rows.edit('4', {'thickness': 2.0})  # left to a person
 
     batch.settings = {'binning': {'bins': 0}}
     assert loop.step() == {}
