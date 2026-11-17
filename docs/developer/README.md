@@ -196,6 +196,14 @@ resolved = client.resolve({'250K': request_250k, '260K': request_260k})
 resolved['250K'] == client.latest('iofq', member='250K').request   # the record ran these values
 ```
 
+A template comes back with its blanks, and every other parameter resolved, defaults filled in, so values that many requests share are resolved once:
+
+```python
+client.resolve(Template(IOFQ, params=settings, blanks=('sample',)))   # every parameter but sample
+```
+
+Each parameter resolves the same whatever the others are, since each value is checked by its own field: the template and the values of its blanks, each resolved, give the request filled from them, resolved.
+
 Resolving a resolved request gives the same request, and `client.resolve(record.request) == record.request` for a record of the bound spec.
 Three rules give this: a value written inline must read back from its JSON form (`ess.spec.validation.validate_request_value`), the identity of a file resolves to itself (`FileSource.resolve`), and a default is a value, the same at each call (`packages/essspec/docs/params.md`, Defaults).
 A file that gains a catalogue identifier later has another identity, so a request that names it by run number then resolves to another value than an older record holds.

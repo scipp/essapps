@@ -3,18 +3,20 @@
 
 
 """
-Resolving requests: the form a record holds a request in, without submitting it.
+Resolving requests and templates: the form a record holds a request in, without
+submitting it.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel, Field
 
-from ess.apps import Client, Request, SubmitError, Workspace, file
+from ess.apps import Client, Request, SubmitError, Template, Workspace, file, local
 from ess.apps.log import Log
 from ess.apps.testing import FakeFiles, FakeStore
-from ess.spec import function_binding
+from ess.spec import RunFile, function_binding
 
 from . import toys
 
@@ -158,6 +160,89 @@ def test_resolving_logs_nothing(client: Client) -> None:
     cursor = client.changes().cursor
 
     client.resolve([toys.load_request(2), toys.load_request(9)])
+    client.resolve(Template(toys.SHIFT, params={'source': load.ref('value')}))
 
     assert client.changes(after=cursor).records == ()
     assert client.records() == [load]
+
+
+class SidesParams(BaseModel):
+    """Files and tables on each side of a template, and a validator that changes."""
+
+    sample: RunFile
+    can: RunFile
+    runs: list[RunFile]
+    shifts: list[toys.Shift] = Field(min_length=1)
+    scale: toys.PositiveScale = Field(default_factory=toys.PositiveScale)
+
+
+SIDES = toys.make_spec('sides', params=SidesParams, tables=('runs', 'shifts'))
+
+
+@pytest.fixture
+def sides(files: FakeFiles) -> Iterator[Client]:
+    """A client whose workspace runs SIDES."""
+    bind = [function_binding(SIDES, lambda params: toys.as_value(0.0))]
+    with local(proposal='p1', files=files, bind=bind) as client:
+        yield client
+
+
+@pytest.fixture
+def settings() -> Template:
+    """A template of SIDES whose blanks are a file and a table."""
+    params = {
+        'can': file(run=7),
+        'shifts': [{}, {'offset': 1}],
+        'scale': {'factor': -2},
+    }
+    return Template(SIDES, params=params, blanks=('sample', 'runs'))
+
+
+def test_a_resolved_template_holds_every_value_but_its_blanks(
+    sides: Client, settings: Template
+) -> None:
+    resolved = sides.resolve(settings)
+
+    assert resolved == Template(
+        SIDES,
+        params={
+            'can': file(pid='x'),
+            'shifts': [{'offset': 0.0}, {'offset': 1.0}],
+            'scale': {'factor': 2.0},
+        },
+        blanks=('sample', 'runs'),
+    )
+    assert sides.resolve(resolved) == resolved
+
+
+def test_a_parameter_resolves_the_same_whatever_the_others_are(
+    sides: Client, settings: Template
+) -> None:
+    cells = {'sample': file(run=7), 'runs': [file(run=1), file(run=7)]}
+    others = [n for n in SidesParams.model_fields if n not in cells]
+
+    whole = sides.resolve(settings.fill(params=cells)).params
+    fixed = sides.resolve(settings).params
+    row = sides.resolve(Template(SIDES, params=cells, blanks=others)).params
+
+    assert whole == fixed | row
+
+
+def test_a_refused_template_hides_no_other(sides: Client, settings: Template) -> None:
+    resolved = sides.resolve(
+        {
+            'settings': settings,
+            'no-can': Template(
+                SIDES, params={'shifts': [{}]}, blanks=('sample', 'runs')
+            ),
+            'unknown': Template(
+                SIDES, params={'sample': file(run=9)}, blanks=('can', 'runs', 'shifts')
+            ),
+            'request': settings.fill(params={'sample': file(run=1), 'runs': []}),
+        }
+    )
+
+    assert resolved['settings'] == sides.resolve(settings)
+    assert isinstance(resolved['request'], Request)
+    assert str(resolved['no-can']) == 'no-can: can: a required parameter, not given'
+    assert str(resolved['unknown']) == 'unknown: sample: unknown file run:9'

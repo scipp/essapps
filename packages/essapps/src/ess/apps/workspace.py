@@ -84,8 +84,8 @@ In the *request phase*, at submission, ``checks.py`` checks what needs no data.
 The workspace adds, under its lock, what depends on history and on what it
 keeps: each reference is one that may be read, and its data fit the type of its
 field (see :data:`ess.spec.validation.OutputReads`). :meth:`Workspace.resolve`
-gives the first part alone, the request as its record would hold it, and logs
-nothing.
+gives the first part alone, the request or template as a record would hold its
+values, and logs nothing.
 
 In the *call phase*, on a worker, the workspace reads the output each reference
 names and validates each value, a row of a list on its own, by the params model
@@ -881,19 +881,37 @@ class Workspace(WorkspaceProtocol):
             raise SubmitError.at((), f'{spec_id} has no outputs {lacking} to persist')
         return names
 
-    def resolve(self, requests: list[Request]) -> list[Request | SubmitError]:
+    def resolve(
+        self, items: list[Request | Template]
+    ) -> list[Request | Template | SubmitError]:
         """
-        :meth:`_prepare` of each request, the part of :meth:`submit`'s checks
-        that reads neither history nor what the workspace keeps; needs no lock.
+        Each request or template resolved (see :meth:`_resolved`), the part of
+        :meth:`submit`'s checks that reads neither history nor what the
+        workspace keeps; needs no lock.
         """
         self._check_running()
-        resolved: list[Request | SubmitError] = []
-        for i, request in enumerate(requests):
+        resolved: list[Request | Template | SubmitError] = []
+        for i, item in enumerate(items):
             try:
-                resolved.append(self._prepare(i, request)[0])
+                resolved.append(self._resolved(i, item))
             except SubmitError as error:  # noqa: PERF203
                 resolved.append(error)
         return resolved
+
+    def _resolved(self, index: int, item: Request | Template) -> Request | Template:
+        """
+        A request as :meth:`_prepare` gives it, or a template with every value
+        but the blanks as :meth:`.checks.Checks.template` fixes it, defaults
+        included. A refusal names the item by ``index``.
+        """
+        if isinstance(item, Request):
+            return self._prepare(index, item)[0]
+        try:
+            self._spec(item.spec)  # an unknown spec is refused as such
+            _, fixed, _ = self._checks[item.spec].template(item, self._proposal)
+        except SubmitError as error:
+            raise _refused(index, error) from None
+        return Template(item.spec, params=fixed, blanks=item.blanks)
 
     def _prepare(self, index: int, request: Request) -> tuple[Request, OutputReads]:
         """

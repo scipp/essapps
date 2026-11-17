@@ -165,7 +165,9 @@ class WorkspaceProtocol(Protocol):
         """
         ...
 
-    def resolve(self, requests: list[Request]) -> list[Request | SubmitError]:
+    def resolve(
+        self, items: list[Request | Template]
+    ) -> list[Request | Template | SubmitError]:
         """
         Each request as its record would hold it, and log nothing: file names
         resolved to identities, defaults filled in, and inline values in JSON's
@@ -176,12 +178,24 @@ class WorkspaceProtocol(Protocol):
             resolved[0].params  # {'sample': FileRef(file='pid:...')}
             resolved[1]         # SubmitError: [1]: sample: unknown file run:9
 
-        A value is checked as :meth:`submit` checks it, and a refusal is the
-        ``SubmitError`` that :meth:`submit` raises for it, naming the request by
-        its index in ``requests``. Each request is resolved on its own, so a
-        refused request does not hide the others.
+        A template comes back as a template with the same blanks, holding each
+        other parameter as the record of a request filled from it would hold it,
+        so the values shared by many requests are resolved once::
 
-        Not looked at: whether the outputs that a request references may be read,
+            workspace.resolve([Template(IOFQ, params=settings, blanks=('sample',))])
+            # [Template(..., params={every parameter but 'sample'}, blanks=('sample',))]
+
+        This differs from the template a stage holds (see :meth:`open_stage`),
+        which has only the values given, since a request through the stage must
+        give exactly these.
+
+        A value is checked as :meth:`submit` checks it, and a refusal is the
+        ``SubmitError`` that :meth:`submit` raises for it, naming the item by its
+        index in ``items``; a template is refused also for a parameter that is
+        neither given nor a blank and has no default. Each item is resolved on its
+        own, so a refused item does not hide the others.
+
+        Not looked at: whether the outputs that an item references may be read,
         stages, ``persist``, and what shows once the workflow runs, such as a file
         that cannot be read. So a request resolved here may still be refused by
         :meth:`submit`.
@@ -198,6 +212,14 @@ class WorkspaceProtocol(Protocol):
         A file that gains a catalogue identifier later gets another identity, so
         a request that names it by run number then resolves to another value than
         an older record holds.
+
+        Each parameter resolves the same whatever the others are, so a template
+        resolved and the values of its blanks resolved give the request filled
+        from them resolved. Each value is checked by its own field: a group's
+        validators see only the group, and the params model has no validators
+        across parameters, which :class:`~ess.spec.WorkflowSpec` refuses
+        (``packages/essspec/docs/params.md``, What ``WorkflowSpec`` refuses). The
+        rules of a table, its length and no repeated row, only refuse.
         """
         ...
 
