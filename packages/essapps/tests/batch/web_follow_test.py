@@ -367,7 +367,9 @@ def test_a_row_set_by_hand_says_that_follow_leaves_it_to_the_person(
 
     (row,) = shown.rows
     assert row.status == 'ready'
-    assert row.reason == ('Changed by hand: Follow leaves it to you.' * following)
+    assert row.reason == (
+        'Set by hand, so Follow leaves it to you: reduce it.' * following
+    )
     assert shown.action.label == 'Reduce 1 remaining'
 
 
@@ -411,7 +413,8 @@ def test_an_edit_not_reduced_leaves_its_row_to_the_person_when_a_file_arrives(
     assert ids(client) == before
     assert (row.status, row.reason) == (
         'outdated',
-        'Transmission and Thickness changed. Changed by hand: Follow leaves it to you.',
+        'Transmission and Thickness changed.'
+        ' Set by hand, so Follow leaves it to you: reduce it.',
     )
 
 

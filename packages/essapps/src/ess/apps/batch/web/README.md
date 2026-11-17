@@ -40,7 +40,7 @@ While it is on, a timer in the server runs a step every `interval` seconds (5 by
 Follow reduces with the batch's settings, whatever the form holds.
 Follow reduces a row for what the files changed, never for what a person changed.
 A row with a cell set by hand that is not reduced yet waits for **Reduce**, with or without Follow, so a row edited at two cells of `at` is reduced once, with both.
-While following, such a row says "Changed by hand: Follow leaves it to you."
+While following, such a row says "Set by hand, so Follow leaves it to you: reduce it."
 Once reduced, the row follows the files again, with its cells set by hand.
 A correction in the Runs view reaches the rows through the scan, so Follow reduces for it as for a file that arrives; two corrections that belong together reduce a row twice if a step runs between them.
 An action submits nothing but what a person asks to reduce: Apply reduces nothing, and the next step reduces the rows without a result with the settings applied.
