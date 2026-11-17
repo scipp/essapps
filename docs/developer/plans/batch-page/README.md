@@ -8,6 +8,24 @@ Delete this folder when the last package is merged.
 Terms (*row*, *column*, *settings*, *source*, *scan*, *result*, *definition*, *label*) are those of [the batch guide](../../../../packages/essapps/docs/batch.md#terms).
 *Follow* is the switch of the page that steps the automatic reduction of the page's batch ([the page's README](../../../../packages/essapps/src/ess/apps/batch/web/README.md)).
 
+## Goal
+
+The batch page is the base for both ways of reducing a batch: by a person, and by Follow as the files arrive.
+The logic under it (`ess.apps.batch`) is small and predictable. The page on top grew by adding.
+The work of this plan makes the page as easy to understand, and as predictable for the person who uses it, as the logic is. It adds no features.
+
+The work is done when:
+
+1. **Each rule exists once.** One view of a batch, one place that says in which state a row is, one name for each rule of which rows are reduced.
+2. **A person can predict what the page does.** A change is in force when the person says so: settings after Apply, and Follow reduces for what the files bring, never for what a person changed. What the page says is true: no message that contradicts what happened, no mark that outlives its cause, no value sent that the person did not finish typing.
+3. **The defects found are gone**, each with a test that fails without its fix.
+4. **The code is no larger for it.** Two packages delete. No package adds a mechanism that a decision of section 2 does not ask for. `web/server.py` should be shorter at the end than at the start.
+5. **The next question is ready to decide**: how the page is built around a range of rows.
+
+Not goals: showing 10 000 rows fast, several people on one page, several batches on one page, hosting.
+
+Each package below states its own goal, then how to get there. The goal is what counts: the steps, the code and the names are a proposal written before the work was done.
+
 ## 1. How the batch page works
 
 ```python
@@ -125,9 +143,13 @@ Order and what each depends on:
 
 ### Package 1: defects of the server
 
+**Goal:** What the page tells a person after an action is true: a change that was kept is not reported as lost, and a refusal goes when its cause is gone.
+
 D2 and D6: the tests of `known_defects_test.py`, with the fix sketched in the table of section 3, one commit each. D3 has its test there too, and is fixed in package 4, which rewrites how the settings form is filled.
 
 ### Package 2: one status
+
+**Goal:** One function says in which state a row is. The page, the table it writes and the command agree on it for every row, and differ at most in their words.
 
 ```python
 # state.py: the one place that says in which state a row is
@@ -142,12 +164,16 @@ _STATUS = {'not reduced': 'ready', 'pending': 'running', 'completed': 'done'}
 
 ### Package 3: delete `ess.apps.batch.panel`
 
+**Goal:** A batch has one view, so a rule of the page is written once.
+
 - Delete the package (`view.py`, `sheet.py`, `cells.py`, `demo.py`) and `tests/batch/view_test.py`. Look for other users first (`rg 'batch.panel|BatchView|RunSheet'`), also in `packages/essinstruments` and the notebooks.
 - `ess.apps.panel` (`App`, forms, outputs) stays.
 - `batch.md`: the example of "An application", the sections "The UI" and "The app and the command on one folder", and the table of interfaces use the Panel view; write them for the page (`create_app`, `python -m ess.apps.batch.web.demo`). ADR 0007 names the package.
 - State in the docstrings of `web/server.py` and `web/models.py` that they do not depend on HTTP, and add to `tests/batch/boundaries_test.py` that they import neither `fastapi` nor `starlette`. Do not move or rename the modules: that waits for a second view.
 
 ### Package 4: Apply for settings, and Follow leaves a person's changes to the person
+
+**Goal:** Settings are in force only after Apply. A row that a person changed is reduced when the person says so, with or without Follow. Follow reduces what the files bring.
 
 ```python
 server.edit_settings(edit)     # changes the draft only
@@ -186,9 +212,13 @@ def arrived(states, at):                 # the rule of Follow and of auto.run
 
 ### Package 5: `--remaining`
 
+**Goal:** "Remaining" means the same rows on the page and in the command.
+
 `essapps-batch reduce --remaining` takes the rows of `left_to_reduce`. A second flag (name it for what it does, for example `--earlier-settings`) adds the rows of `earlier_settings`. `state.remaining` then has no caller outside `left_to_reduce`: keep one function under one name, and shorten the table "A row is reduced if it has ..." of `batch.md` by the row of the command.
 
 ### Package 6: remove the reduction of one row alone
+
+**Goal:** Everything the page says about a row follows from its cells, the settings and the records; nothing about a row is kept in memory only.
 
 With package 4, a person tries settings on one row without a tweak:
 
@@ -209,9 +239,13 @@ Not built now: a row that keeps settings of its own. If one is needed, the rule 
 
 ### Package 7: an edit of many rows
 
+**Goal:** An edit of K rows costs one pass over the table, not K.
+
 `RowTable.edit_each(keys, values)`, `remove_each(keys)`, `reset_each(keys, *columns)`, each one pass over the table, as `CorrectedFiles.correct_each` is; the single-row methods call them. `Server.edit`, `revert`, `remove`, `restore` use them. A test on the number of rows touched or on time at 10 000 rows is not needed; a test of the result is.
 
 ### Package 8: the page's requests and table
+
+**Goal:** The page never shows an answer older than one it has shown, never fails without a message, never runs text as HTML, and keeps the focus, the filter and the sort when the state changes.
 
 One commit per item, each with a browser test where the finding is marked F in section 3:
 
@@ -223,6 +257,8 @@ One commit per item, each with a browser test where the finding is marked F in s
 - `GZipMiddleware` in `create_app`.
 
 ### Package 9: tests, and what moves the version
+
+**Goal:** Each behaviour of Follow and of the version that an open page relies on fails a test when it is broken.
 
 The mutation table (`probes/mutation/table.md`) lists the mutations that no test fails. Add a test for each behaviour of this list that still exists after packages 1 to 8, through HTTP:
 
@@ -240,6 +276,8 @@ Then, only if `Server` still compares snapshots in more than one method: let `ve
 Hygiene: `test_a_tick_that_waited_for_the_request_that_stops_following_does_nothing` waits a fixed 0.2 s for the timer to reach the lock, so it can pass without testing anything; let the lock say when the tick waits. The browser tests wait for the server without a deadline (`web_browser_test.py`, where the thread is started); a test that fails while it holds `Gate` closed stalls for 30 s, so the fixture opens the gate at teardown.
 
 ### Package 10: a design for the row range (no code)
+
+**Goal:** Simon can decide from one document how the page is built around a range of rows.
 
 Write `row-range.md` next to this file, for Simon to decide on. Lead with examples and code, state each question with a line `> Simon:` under it. It should answer:
 
