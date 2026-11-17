@@ -579,3 +579,34 @@ def test_with_follow_on_rows_appear_and_are_reduced_without_a_click(
     following.wait_for_selector('#rows .tabulator-row:has-text("sds")')
     following.wait_for_selector('.chip.st-done .n:text-is("2")')
     assert following.inner_text('#follow-status') == 'Following, every 0.2 s'
+
+
+HTML = '<img src=x onerror="window.__xss = 1">'
+
+
+def test_html_in_the_name_of_a_row_shows_as_text_in_its_tooltip(page: Any) -> None:
+    page.click('#add-row')
+    page.keyboard.type(HTML)
+    page.keyboard.press('Enter')
+    name = page.locator('#rows .tabulator-cell[tabulator-field=name]', has_text='<img')
+
+    name.hover()
+
+    page.wait_for_selector('.tabulator-tooltip')
+    assert page.inner_text('.tabulator-tooltip') == HTML
+    assert page.locator('.tabulator-tooltip img').count() == 0
+
+
+def test_html_in_a_cell_shows_as_text_in_its_tooltip(page: Any) -> None:
+    page.click('[data-view=runs]')
+    role = page.locator('#runs .tabulator-cell[tabulator-field="cells.role.value"]')
+    role.first.click()
+    page.keyboard.type(HTML)
+    page.keyboard.press('Enter')
+    edited = page.locator('#runs .tabulator-cell.edited').first
+
+    edited.hover()
+
+    page.wait_for_selector('.tabulator-tooltip')
+    assert HTML in page.inner_text('.tabulator-tooltip')
+    assert page.locator('.tabulator-tooltip img').count() == 0

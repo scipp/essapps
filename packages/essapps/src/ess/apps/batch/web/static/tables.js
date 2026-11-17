@@ -5,7 +5,7 @@
 // and goes on. An edit of a
 // row that is selected along with others writes that cell to every row
 // selected.
-import {TabulatorFull as Tabulator, EditModule} from './vendor/tabulator_esm.min.js';
+import {TabulatorFull as Tabulator, EditModule, TooltipModule} from './vendor/tabulator_esm.min.js';
 import {h} from './dom.js';
 
 // Tabulator's virtual renderer scrolls the row of a cell whose editor opens
@@ -16,6 +16,20 @@ class Edit extends EditModule {
   focusScrollAdjust() {}
 }
 Tabulator.registerModule(Edit);
+
+// Tabulator sets a tooltip given as a string as HTML. Every tooltip, of a
+// cell or of a header, is made through `loadTooltip`, so there a string
+// becomes an element that holds it as text.
+class Tooltip extends TooltipModule {
+  loadTooltip(event, target, tip) {
+    const make = typeof tip === 'function' ? tip : () => tip;
+    super.loadTooltip(event, target, (e, component, onRendered) => {
+      const text = make(e, component, onRendered);
+      return typeof text === 'string' && text ? h('div', {text}) : text;
+    });
+  }
+}
+Tabulator.registerModule(Tooltip);
 
 const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
 
