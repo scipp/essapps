@@ -666,3 +666,25 @@ def test_a_row_that_changes_moves_to_where_the_sort_puts_it(
 
     page.wait_for_function(f'{PILLS}[2] === "done"')
     assert pills(page) == ['ready', 'ready', 'done']
+
+
+def test_the_runs_are_shown_when_the_view_is_first_opened(page: Any) -> None:
+    page.click('[data-view=runs]')
+
+    page.wait_for_selector('#runs .tabulator-row')
+    assert page.locator('#runs .tabulator-row').count() == 6
+
+
+def test_a_run_corrected_while_the_runs_are_hidden_shows_when_they_are_opened(
+    page: Any, url: str
+) -> None:
+    key = page.evaluate(
+        "fetch('api/runs').then(r => r.json()).then(b => b.rows[0].key)"
+    )
+    edit = {'keys': [key], 'column': 'role', 'value': 'corrected'}
+    with page.expect_response('**/api/runs'):
+        assert page.request.post(f'{url}api/runs/cells', data=edit).ok
+
+    page.click('[data-view=runs]')
+
+    page.wait_for_selector('#runs .tabulator-cell:has-text("corrected")')

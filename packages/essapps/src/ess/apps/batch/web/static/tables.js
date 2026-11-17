@@ -321,8 +321,9 @@ export class Grid {
 
   // Remove the rows gone, update those changed, and add the new ones where
   // they stand in `rows`; the others are not drawn again. Then the filter and
-  // the sort are applied again, which these calls do not do. Only if the rows
-  // kept changed order is the table replaced.
+  // the sort are applied again, which these calls do not do. The table is
+  // replaced instead if it has no rows yet, where adding takes quadratic time,
+  // or if the rows kept changed order.
   async draw(rows) {
     await this.built;
     this.pending = rows;
@@ -337,7 +338,7 @@ export class Grid {
     const json = new Map(rows.map((row) => [row.key, JSON.stringify(row)]));
     this.quiet = true;
     try {
-      if (kept.every((row, i) => row.key === stay[i])) {
+      if (before.length && kept.every((row, i) => row.key === stay[i])) {
         if (gone.length) await this.table.deleteRow(gone);
         // Each row changed is drawn again whole: a cell shows more than the
         // value Tabulator compares.

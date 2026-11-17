@@ -25,7 +25,7 @@ const view = {
   detail: '', // what the row tab shows, to draw it again only on a change
   dismissed: '', // the refusal whose message was closed
   runs: 0, // the version of the runs shown
-  runColumns: [], // the columns of the runs shown
+  runData: null, // the runs last loaded, with their columns
 };
 let rows; // the Grid of the rows
 let runs; // the Grid of the runs
@@ -243,27 +243,35 @@ async function loadRuns() {
   const shown = await request('runs', {kind: 'runs'});
   if (!shown) return;
   view.runs = shown.version;
-  view.runColumns = shown.columns;
+  view.runData = shown;
   $('n-runs').textContent = shown.rows.length;
+  if (view.page === 'runs') drawRuns();
+}
+
+// Show the runs last loaded. The grid is built and filled when the Runs view
+// is shown, and again after each change while it is.
+function drawRuns() {
+  const {columns, rows: shown} = view.runData ?? {};
+  if (!shown) return;
   if (!runs) {
-    const fields = shown.columns.map((c) => c.title.toLowerCase()).join(' or ');
+    const fields = columns.map((c) => c.title.toLowerCase()).join(' or ');
     $('runs-hint').textContent = `Correct the ${fields} of a run. The ${words().one} table follows at once.`;
     runs = new Grid($('runs'), {
       columns: [
         {title: 'Run', field: 'file', minWidth: 160, widthGrow: 2},
-        ...cellColumns(shown.columns, {
-          current: () => view.runColumns,
+        ...cellColumns(columns, {
+          current: () => view.runData.columns,
           revert: (key, column) => act('runs/cells/revert', {keys: [key], column}),
           say: showMessage,
         }),
       ],
-      edits: Object.fromEntries(shown.columns.map((c) => [`cells.${c.name}.value`, c])),
+      edits: Object.fromEntries(columns.map((c) => [`cells.${c.name}.value`, c])),
       placeholder: 'No runs in this folder.',
       edit: (keys, column, value) => act('runs/cells', {keys, column, value}),
       select: () => {},
     });
   }
-  runs.update(shown.rows);
+  runs.update(shown);
 }
 
 function renderAction(action) {
@@ -557,6 +565,7 @@ function showPage(page) {
   $('view-samples').hidden = page !== 'samples';
   $('view-runs').hidden = page !== 'runs';
   document.querySelector('main').classList.toggle('wide', page === 'runs');
+  if (page === 'runs') drawRuns();
   const grid = page === 'runs' ? runs : rows;
   grid?.built.then(() => grid.table.redraw());
 }
