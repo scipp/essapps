@@ -15,8 +15,7 @@ What a ``Batch`` keeps of them can be rebuilt from the records at any time:
 the newest record of each member under the label, the IDs of the records under
 the label it has read, and which of them are not of the bound spec
 (:meth:`~ess.apps.Client.bound`), all read from ``client.changes``, so that the
-state of chosen rows does not read every record under the label. Only a tweak
-is kept that the records cannot explain (:meth:`Batch.tweak`).
+state of chosen rows does not read every record under the label.
 
 The settings are the batch's own (:attr:`Batch.settings`), so each state is
 read with them, and each reduction submits them. A state that resolves
@@ -60,7 +59,7 @@ from ess.spec import FileRef, WorkflowSpec
 from ..client import Client, Stage
 from ..errors import FieldError, SubmitError
 from ..files import Selector
-from ..records import Record, Request, SpecId, Status, Template
+from ..records import Record, SpecId, Status, Template
 from . import definition, state
 from .definition import DefinitionStore
 from .state import RowState
@@ -200,8 +199,6 @@ class Batch:
         self._staged = staged
         self._persist = persist
         self._stage: tuple[Template, Stage] | None = None
-        # The ID of the record of each tweak, by key.
-        self._tweaked: dict[str, str] = {}
         # The records under the label, read from the proposal's changes.
         self._cursor: int | None = None
         self._seen: set[str] = set()
@@ -367,7 +364,6 @@ class Batch:
             changed,
             refused,
             self._spec_changed(found),
-            {k for k, r in found.items() if self._tweaked.get(k) == r.id},
             self._set_by_hand(),
         )
 
@@ -559,36 +555,6 @@ class Batch:
             for e in errors
         ]
         return list(dict.fromkeys(placed))
-
-    def tweak(self, key: str, params: Mapping[str, Any]) -> Record:
-        """
-        Submit one row with ``params``, all of its request's, which become its
-        result. While it is the row's result, the row is outdated only where
-        its cells differ from ``params``, not where the settings do;
-        :attr:`RowState.changed` names both. This batch keeps that in memory:
-        another ``Batch`` on the label, or this one after a restart, reads the
-        tweak's result as outdated where the settings differ, as any other.
-        Raises ``SubmitError`` if the row is still running.
-        """
-        if running := _running(self.results([key])[key]):
-            raise SubmitError(running)
-        request = Request(self.spec, params=params)
-        record = self.client.submit(
-            request, label=self.label, member=key, persist=self._persist
-        )
-        self._tweaked[key] = record.id
-        return record
-
-    def tweak_params(self, row: RowState) -> dict[str, Any]:
-        """
-        The params that a :meth:`tweak` of ``row`` starts from: its cells, and
-        the other params of its result, or the settings if it has none or one
-        of another spec, whose params are not this spec's.
-        """
-        record = None if row.spec_changed else row.record
-        base = self.settings if record is None else record.request.params
-        rest = {k: v for k, v in base.items() if k not in self.columns}
-        return {**rest, **self.rows[row.key].values}
 
     def cancel(self, keys: Sequence[str] | None = None) -> None:
         """

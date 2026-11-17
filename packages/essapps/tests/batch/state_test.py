@@ -144,33 +144,11 @@ def test_a_failed_or_cancelled_row_reads_so_when_its_request_changed(
 
 
 @pytest.mark.parametrize(
-    ('changed', 'outdated'), [({'shared'}, False), ({'shared', 'thickness'}, True)]
-)
-def test_a_tweak_is_outdated_only_where_a_column_changed(
-    changed: set[str], outdated: bool
-) -> None:
-    found = row_states(
-        [Row('a', {'sample': 'x'})],
-        Model,
-        COLUMNS,
-        {'a': record('1', 'a')},
-        {'1': Status.COMPLETED},
-        changed={'a': frozenset(changed)},
-        tweaked={'a'},
-    )
-
-    assert found['a'].changed == changed
-    assert found['a'].outdated is outdated
-    assert (left_to_reduce(found, COLUMNS) == ['a']) is outdated
-
-
-@pytest.mark.parametrize(
     ('status', 'changed', 'other', 'earlier', 'left'),
     [
         (Status.COMPLETED, {'shared'}, {}, True, False),
         (Status.COMPLETED, {'shared', 'thickness'}, {}, False, True),
         (Status.COMPLETED, {'shared'}, {'spec_changed': {'a'}}, False, True),
-        (Status.COMPLETED, {'shared'}, {'tweaked': {'a'}}, False, False),
         (Status.COMPLETED, set(), {}, False, False),
         (Status.FAILED, {'shared'}, {}, False, True),
         (Status.PENDING, {'shared'}, {}, False, False),
@@ -375,7 +353,7 @@ def test_a_value_differs_if_either_side_lacks_it() -> None:
     ]
 
 
-def not_compared(*, tweaked: bool = False) -> dict[str, RowState]:
+def not_compared() -> dict[str, RowState]:
     return row_states(
         [Row('a', {'sample': 'x'})],
         Model,
@@ -383,15 +361,11 @@ def not_compared(*, tweaked: bool = False) -> dict[str, RowState]:
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
         changed=None,
-        tweaked={'a'} if tweaked else set(),
     )
 
 
-def test_a_completed_row_not_compared_reads_outdated_but_a_tweak_reads_completed() -> (
-    None
-):
+def test_a_completed_row_not_compared_reads_outdated() -> None:
     assert not_compared()['a'].text == 'outdated'
-    assert not_compared(tweaked=True)['a'].text == 'completed'
 
 
 @pytest.mark.parametrize(
