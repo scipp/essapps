@@ -31,7 +31,8 @@ A file that is written before the records it reads exist names them by label
 
 A template is a YAML file (see :func:`load_template`). :func:`write_template`
 writes each file and reference in its JSON form, which reads back as the same.
-:func:`settings_of` reads the settings of a batch from a template.
+:func:`settings_of` reads the settings of a batch from a template, and
+``write_template(batch.template(), path)`` writes them.
 """
 
 from __future__ import annotations

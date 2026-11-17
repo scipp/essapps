@@ -320,7 +320,7 @@ def test_a_row_reduced_by_another_spec_version_is_outdated(
             for s in (PLAIN, v2)
         )
         old.scan()
-        client.wait(old.reduce({}, ['1']))
+        client.wait(old.reduce(['1']))
         new.scan()
         page = TestClient(create_app(new))
 
@@ -447,7 +447,7 @@ def test_a_settings_file_that_cannot_be_loaded_says_why_in_a_sentence(
 ) -> None:
     if content is None:  # a settings file with a value of the wrong kind
         template = yaml.safe_load(http.get('/api/settings.yaml').content)
-        template['params']['binning']['bins'] = 'two'
+        template['params']['binning'] = {'bins': 'two'}
         content = yaml.safe_dump(template).encode()
 
     response = http.post('/api/settings.yaml', params={'name': 'f'}, content=content)

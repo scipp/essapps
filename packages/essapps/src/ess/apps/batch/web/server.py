@@ -3,15 +3,20 @@
 """
 What the batch page does, without HTTP: :class:`Server`. :mod:`.api` serves it.
 
-The server holds everything a person changes: the rows of the
-:class:`~ess.apps.batch.Batch`, the settings, the form of a reduction of one
-row alone, and the corrections of runs. The page holds only what it shows: the
-selection, the filter, the tab. Each action returns the :class:`~.models.State`
-after it, and the page polls the state about once a second with the
-``version`` it has, to see results arrive. The version counts the changes made
-here and those of the client's records, which the server reads from
-``client.changes`` at each poll. ``start`` tells a page that the server started
-again, so that the same version may be another state.
+The server holds everything a person changes: the
+:class:`~ess.apps.batch.Batch` with its rows and settings, the form of the
+settings, the form of a reduction of one row alone, and the corrections of
+runs. The form of the settings writes them to the batch at each change that
+leaves nothing missing; while something is missing, the batch keeps the
+settings it had, and nothing is reduced or saved.
+
+The page holds only what it shows: the selection, the filter, the tab. Each
+action returns the :class:`~.models.State` after it, and the page polls the
+state about once a second with the ``version`` it has, to see results arrive.
+The version counts the changes made here and those of the client's records,
+which the server reads from ``client.changes`` at each poll. ``start`` tells a
+page that the server started again, so that the same version may be another
+state.
 
 A reduction refused raises :class:`Problem` and keeps its reasons in the state
 until the value of each is changed or a reduction succeeds, so that the page
@@ -220,6 +225,7 @@ class Server:
         self._listing = Listing(batch.client)
         model, listing = batch.spec.params, self._listing
         self.settings = Fields(model, listing, fields=batch.settings_fields)
+        self.settings.set(batch.settings, listing)
         self._cells = Fields(model, listing, fields=batch.columns)
         self.tweak = Fields(model, listing)
         self._tweak_of: tuple[str, Any, str | None] | None = None
@@ -240,24 +246,30 @@ class Server:
             if fields is not None:
                 fields.refresh(self._listing)
 
-    def _settings(self) -> dict[str, Any] | None:
-        try:
-            return self.settings.params
-        except SubmitError:
-            return None
+    def _write_settings(self) -> None:
+        """Give the batch the settings of the form, unless one is missing."""
+        given, missing = self.settings.held()
+        if not missing:
+            self.batch.settings = given
+
+    def _complete(self) -> None:
+        """Raise ``SubmitError`` if the form of the settings misses something."""
+        if missing := self.settings.held()[1]:
+            raise SubmitError(missing)
 
     def _states(
         self, keys: Sequence[str] | None = None
     ) -> tuple[dict[str, RowState], tuple[FieldError, ...]]:
         """
-        The state of the rows of ``keys``, or of all, read with the settings;
-        and, if they are incomplete or refused, the reasons, and the state
-        read without them.
+        The state of the rows of ``keys``, or of all; and, if the settings are
+        incomplete or refused, the reasons, and the rows with their results
+        only (:meth:`~ess.apps.batch.Batch.results`).
         """
         try:
-            return self.batch.state(self.settings.params, keys), ()
+            self._complete()
+            return self.batch.state(keys), ()
         except SubmitError as error:
-            return self.batch.state(keys=keys), error.errors
+            return self.batch.results(keys), error.errors
 
     def _status(self, state: RowState, settings_ok: bool) -> str:
         if state.status in _ENDED and not state.problems:
@@ -636,15 +648,15 @@ class Server:
         for key in request.keys:
             self._row_of(key)
         try:
-            settings = self.settings.params
+            self._complete()
             keys = (
                 request.keys
                 if request.which == 'selected'
                 else {'remaining': remaining, 'all': ready}[request.which](
-                    self.batch.state(settings)
+                    self.batch.state()
                 )
             )
-            records = self.batch.reduce(settings, keys)
+            records = self.batch.reduce(keys)
         except SubmitError as error:
             self.refused = list(error.errors)
             raise _Refusal(self.refused) from None
@@ -666,6 +678,7 @@ class Server:
             forms.apply(self.settings, edit)
         except (KeyError, ValueError) as error:
             raise Problem(_why(error)) from None
+        self._write_settings()
         self._forget_settings(edit.path)
 
     @_action
@@ -681,6 +694,7 @@ class Server:
                 'whose settings this one does not take.'
             )
         self.settings.set(row.record.request.params, self._listing)
+        self._write_settings()
         self._forget_settings()
         return f'All {self.words.many} now use the settings {name} was reduced with.'
 
@@ -694,7 +708,7 @@ class Server:
         if self._tweak_of == source:
             return
         self._tweak_of = source
-        params = self.batch.tweak_params(row, self._settings())
+        params = self.batch.tweak_params(row)
         self.tweak.set(params, self._listing)
 
     @_locked
@@ -902,11 +916,11 @@ class Server:
     def settings_file(self) -> bytes:
         """The settings as a YAML template."""
         try:
-            template = self.batch.template(self.settings.params)
+            self._complete()
         except SubmitError as error:
             raise Problem(f'Fill in the settings first: {error}') from None
         with _file('settings.yaml') as path:
-            write_template(template, path)
+            write_template(self.batch.template(), path)
             return path.read_bytes()
 
     @_action
@@ -924,6 +938,7 @@ class Server:
             self.settings.set(settings_of(self.batch, template), self._listing)
         except (ValueError, KeyError) as error:
             raise Problem(f'{cannot} {forms.message(_why(error))}.') from None
+        self._write_settings()
         self._forget_settings()
         return f'Loaded the settings of {name}.'
 

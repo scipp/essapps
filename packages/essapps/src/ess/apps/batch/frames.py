@@ -231,7 +231,6 @@ def reduce_table(
     if taken := sorted(set(template.blanks) & set(RESULT)):
         raise ValueError(f'a table cannot hold the blank {", ".join(taken)}')
     spec = client.spec(template.spec)
-    settings = with_named_files(spec.params, template.params)
     batch = Batch(
         client,
         spec,
@@ -239,16 +238,17 @@ def reduce_table(
         label=label,
         staged=staged,
         persist=persist,
+        settings=with_named_files(spec.params, template.params),
     )
     batch.rows = batch.rows.rescan(rows_of(table, spec.params, template.blanks))
     try:
         # Records that a workspace went on with after a restart finish first.
-        client.wait([s.record for s in batch.state().values() if s.record])
-        states = batch.state(settings)
+        client.wait([s.record for s in batch.results().values() if s.record])
+        states = batch.state()
         left = set(state.remaining(states)) if remaining else states.keys()
         # A row that cannot run is given too, so that reduce refuses it by key.
         keys = [k for k, s in states.items() if k in left or s.problems]
-        client.wait(batch.reduce(settings, keys))
+        client.wait(batch.reduce(keys))
     except KeyboardInterrupt:
         batch.cancel()
         raise

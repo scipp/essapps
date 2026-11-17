@@ -8,6 +8,11 @@ where it stands comes from :class:`~ess.apps.batch.Batch`. The settings form and
 the row form are one :class:`~ess.apps.panel.Form` with complementary fields, the
 values and the blanks of the batch's template.
 
+The settings form shows the batch's settings. It writes them to the batch at
+each change that leaves nothing missing, and before a reduction or a save,
+which it refuses while something is missing; meanwhile the batch keeps the
+settings it had.
+
 The editor writes only the cells that differ from what it was showing, so
 updating one cell of a row, or of several rows at once, leaves the others as
 the scan gave them. A cell with something missing is not written, and is named
@@ -25,7 +30,7 @@ columns of :func:`..frames.batch_table`, the status as the table shows it.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +92,8 @@ class BatchView:
         self._drawn: tuple[tuple[str, str], ...] = ()
         model, listing = batch.spec.params, self._listing
         self.settings = Form(model, listing, fields=batch.settings_fields)
-        self.settings.watch(self._show)  # changed settings make results outdated
+        self.settings.set(batch.settings, listing)
+        self.settings.watch(self._settings_changed)
         self.row = Form(model, listing, fields=batch.columns)
         self.tweak = Form(model, listing)
         self._titles = {
@@ -147,19 +153,27 @@ class BatchView:
     def _list_again(self) -> None:
         self.refresh(Listing(self.batch.client, previous=self._listing))
 
-    def _current_settings(self) -> dict[str, Any] | None:
-        try:
-            return self.settings.params
-        except SubmitError:
-            return None
+    def _write_settings(self) -> None:
+        """
+        Give the batch the settings of the form. Raises ``SubmitError``, and
+        gives none, if one is missing.
+        """
+        given, missing = self.settings.held()
+        if missing:
+            raise SubmitError(missing)
+        self.batch.settings = given
+
+    def _settings_changed(self) -> None:
+        with suppress(SubmitError):  # the form shows what is missing
+            self._write_settings()
+        self._show()  # changed settings make results outdated
 
     def _show(self) -> None:
-        settings = self._current_settings()
         try:
-            self._states = self.batch.state(settings)
+            self._states = self.batch.state()
         except SubmitError as error:  # settings refused: shown without them
             self.message.object = _refused(error.errors)
-            self._states = self.batch.state()
+            self._states = self.batch.results()
         counts = summary(self._states)
         self.summary.object = ', '.join(f'{n} {text}' for text, n in counts.items())
         chosen = self.filter.value
@@ -209,7 +223,7 @@ class BatchView:
         if self._tweak_loaded == source:
             return
         self._tweak_loaded = source
-        params = self.batch.tweak_params(row, self._current_settings())
+        params = self.batch.tweak_params(row)
         self.tweak.set(params, self._listing)
 
     def _describe(self, keys: list[str]) -> None:
@@ -269,29 +283,27 @@ class BatchView:
             self.message.object = f'The scan failed: {error!r}'
         self._list_again()
 
-    def _reduce(
-        self, keys_of: Callable[[dict[str, Any]], Sequence[str]]
-    ) -> dict[str, Record]:
-        """Submit the rows that ``keys_of`` picks, given the settings."""
+    def _reduce(self, keys_of: Callable[[], Sequence[str]]) -> dict[str, Record]:
+        """Submit the rows that ``keys_of`` picks."""
         records: dict[str, Record] = {}
         with self._showing_errors('Cannot submit'):
-            settings = self.settings.params
-            records = self.batch.reduce(settings, keys_of(settings))
+            self._write_settings()
+            records = self.batch.reduce(keys_of())
             self.message.object = f'Submitted {len(records)} rows.'
         self._list_again()
         return records
 
     def reduce_all(self) -> dict[str, Record]:
         """Submit every row that is ready; their records by key."""
-        return self._reduce(lambda settings: ready(self.batch.state(settings)))
+        return self._reduce(lambda: ready(self.batch.state()))
 
     def reduce_remaining(self) -> dict[str, Record]:
         """Submit the rows with no result, a failed one, or an outdated one."""
-        return self._reduce(lambda settings: remaining(self.batch.state(settings)))
+        return self._reduce(lambda: remaining(self.batch.state()))
 
     def reduce_selected(self) -> dict[str, Record]:
         """Submit the rows selected."""
-        return self._reduce(lambda _: self.table.selected_keys)
+        return self._reduce(lambda: self.table.selected_keys)
 
     def cancel(self) -> None:
         """Cancel the results still running."""
@@ -306,7 +318,7 @@ class BatchView:
             self.message.object = 'Select one row that has a result of this workflow.'
             return
         self.settings.set(row.record.request.params, self._listing)
-        self._show()
+        self._settings_changed()
 
     def add(self) -> None:
         """Add a row with the name typed and the cells of the editor."""
@@ -384,13 +396,13 @@ class BatchView:
             template = load_template(Path(self.path.value))
             self.settings.set(settings_of(self.batch, template), self._listing)
             self.message.object = 'Loaded the settings.'
-        self._show()
+        self._settings_changed()
 
     def save_settings(self) -> None:
         """Write the settings as a template to :attr:`path`."""
         with self._showing_errors('Cannot save the settings'):
-            template = self.batch.template(self.settings.params)
-            write_template(template, Path(self.path.value))
+            self._write_settings()
+            write_template(self.batch.template(), Path(self.path.value))
             self.message.object = f'Saved the settings to {self.path.value}.'
 
     def export_selected(self) -> None:

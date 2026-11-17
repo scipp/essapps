@@ -51,13 +51,13 @@ class RowState:
     ``record`` is the row's result, if it has one, and ``status`` its status.
     ``problems`` say why the row cannot be reduced now. ``changed`` names the
     parameters at which the row's request now differs from the request of its
-    result, both as a record holds them, and is empty unless the state was read
-    with settings; ``spec_changed`` is true if the result is of another spec
-    than the one bound. ``tweaked`` is true if the result came from
-    :meth:`~.reduction.Batch.tweak` of this batch, with parameters of its own,
-    so that it does not follow the settings. ``outdated`` is true if the result
-    is of another spec, or if the request changed, at a column only for a
-    tweak.
+    result, both as a record holds them, and is empty in what
+    :meth:`~.reduction.Batch.results` gives; ``spec_changed`` is true if the
+    result is of another spec than the one bound. ``tweaked`` is true if the
+    result came from :meth:`~.reduction.Batch.tweak` of this batch, with
+    parameters of its own, so that it does not follow the settings.
+    ``outdated`` is true if the result is of another spec, or if the request
+    changed, at a column only for a tweak.
     """
 
     key: str
@@ -207,7 +207,7 @@ def arrived(states: Mapping[str, RowState], at: Collection[str]) -> list[str]:
     """
     The ready rows with no result, or whose request differs from their result's
     at a column of ``at``: the rule of automatic reduction. ``changed`` is read,
-    so ``states`` must be read with settings.
+    so ``states`` are those of :meth:`~.reduction.Batch.state`.
 
     A failed or cancelled result counts as any other, so such a row is given
     again only for a change at ``at``. With ``at=set()``, no row with a result

@@ -427,7 +427,7 @@ def test_the_app_shows_its_tabs_first_and_refreshes_them(
     app = App(client, tabs={'Batch': view})
 
     assert view.table.widget in app.panel()[0].objects
-    batch.reduce(view.settings.params, ['1'])
+    batch.reduce(['1'])
     client.wait(client.records(label='scan'))
     app.poll()
     assert results(view)['1'] == 'completed'

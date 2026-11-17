@@ -156,7 +156,7 @@ def test_a_batch_table_has_the_rows_of_keys_in_order_with_their_results(
     sample(1, 'water')
     sample(2, 'sds')
     batch.scan()
-    client.wait(batch.reduce({}, ['1']))
+    client.wait(batch.reduce(['1']))
 
     table = batch_table(batch, batch.state(), ['2', '1'])
 

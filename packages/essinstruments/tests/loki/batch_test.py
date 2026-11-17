@@ -119,12 +119,13 @@ def test_a_batch_of_iofq_over_real_workflows(
         'beam_centre': tutorial_centre.model_dump(),
     }
     batch = iofq_batch(client)
+    batch.settings = settings
     batch.scan()
     assert ready(batch.state()) == ['60250', '60339']
 
-    records = batch.reduce(settings, ready(batch.state()))
+    records = batch.reduce(ready(batch.state()))
 
     assert client.wait(records) == {'60250': 'completed', '60339': 'completed'}
     assert client.output(records['60250'], 'iofq').intensity.sizes == {'Q': 100}
-    assert remaining(batch.state(settings)) == []
+    assert remaining(batch.state()) == []
     batch.close()
