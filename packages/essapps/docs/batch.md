@@ -77,7 +77,7 @@ t = t.rescan([Row('a', {'x': 99, 'y': 98}), Row('b', {'x': 3}), Row('c', {'x': 5
 # c: new
 ```
 
-A row added by hand stays. An edited row that a scan no longer gives is not shown, and comes back with its edits if a later scan gives it. `reset(key)` forgets a row's edits and that it was removed; `reset(key, column)` forgets the edit of one cell. `EMPTY` clears a cell whatever the scan gives. A batch with a store keeps what was set by hand there, so a batch made again on the label has it on top of its first scan ([Where the definition is kept](#where-the-definition-is-kept)).
+A row added by hand stays. An edited row that a scan no longer gives is not shown, and comes back with its edits if a later scan gives it. `reset(key)` forgets a row's edits and that it was removed; `reset(key, column)` forgets the edit of one cell. `EMPTY` clears a cell whatever the scan gives. A batch given definitions keeps what was set by hand there, so a batch made again on the label has it on top of its first scan ([Where the definition is kept](#where-the-definition-is-kept)).
 
 **A row is ready if it is complete and not running.** Each column with no default has a value, no cell reads a record that failed or was cancelled, and its result is not running. An empty cell of a column with a default takes the default. Whether a value is valid, such as a thickness below zero, is checked at submission, and by `state()` for a value that differs from the row's result (below).
 
@@ -434,6 +434,8 @@ One command holds the folder at a time. If a command was killed, the next one fi
 
 ## The UI
 
+[The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows a batch in a browser: how to run it, its layers, and its limits.
+
 `BatchView` is a tab for `App`:
 
 - the settings form, which writes the batch's settings at each change that leaves nothing missing, the table of rows with a filter by state, and a count of each state;
@@ -484,7 +486,7 @@ Any object with `refresh(listing)` and `panel()` can be a tab (`ess.apps.panel.T
 
 `ess.apps` and `ess.apps.panel` import nothing from `ess.apps.batch`, and `ess.apps.batch` imports no widget library. `ess.apps.batch.panel` holds the widgets. A test enforces this.
 
-`ess.apps.batch.web` shows the same batch as a web page without Panel: a FastAPI server and plain JavaScript. It is experimental and the candidate for a hosted interface. Its module docstring describes how to run it and its limits.
+`ess.apps.batch.web` shows the same batch as a web page without Panel: a FastAPI server and plain JavaScript. It is experimental and the candidate for a hosted interface.
 
 ## Testing an application
 

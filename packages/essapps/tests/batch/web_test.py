@@ -884,3 +884,20 @@ def test_a_figure_has_error_bars_axes_with_units_and_no_nan() -> None:
     assert trace['error_y']['array'] == [2.0, 1.0]
     assert figure['layout']['xaxis']['title']['text'] == 'Q [1/Å]'
     assert figure['layout']['yaxis']['title']['text'] == 'I(Q) [1/cm]'
+
+
+def test_the_runs_of_a_sample_that_arrive_in_the_demo_show_after_a_rescan(
+    tmp_path: Path,
+) -> None:
+    groups = demo.measurements()
+    demo.measure(tmp_path, groups[0] + groups[1])
+    client, files, definitions = demo.open_demo(tmp_path)
+
+    with client:
+        page = TestClient(demo.build(client, files, definitions))
+        before = rows(page)
+        demo.measure(tmp_path, groups[0] + groups[1] + groups[2])
+        after = page.post('/api/scan').json()
+
+    assert [row['name'] for row in before.values()] == ['H2O buffer']
+    assert [row['name'] for row in after['rows']] == ['H2O buffer', 'D2O buffer']

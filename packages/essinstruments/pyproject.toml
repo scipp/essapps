@@ -40,10 +40,11 @@ loki = [
 ]
 loki-app = [
     "essinstruments[loki]",
-    "essapps[panel]",
+    "essapps[panel,web]",
 ]
 test = [
     "essinstruments[loki-app]",
+    "httpx",  # the test client of the batch page
     "pooch>=1.5",  # downloads the data files of ess.loki.data
     "pytest>=9.0",
     "pytest-xdist>=3.6",
@@ -73,6 +74,8 @@ faulthandler_timeout = 120
 xfail_strict = true
 filterwarnings = [
   "error",
+  # Starlette 1.10's test client asks for httpx2 in place of httpx.
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated",
 ]
 
 [tool.mypy]

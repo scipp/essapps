@@ -12,10 +12,11 @@ sample, and pairs the run with the transmission run of the same sample::
 """
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from ess.apps import Client
-from ess.apps.batch import Batch, FileInfo, Row
+from ess.apps.batch import Batch, DefinitionStore, FileInfo, Row
 from ess.spec import FileRef
 
 from .specs import IOFQ
@@ -59,8 +60,18 @@ def _measured(f: FileInfo) -> tuple[int, str]:
     return (int(run), '') if run.isdigit() else (sys.maxsize, f.ref.file)
 
 
-def iofq_batch(client: Client, *, label: str = 'iofq') -> Batch:
-    """The batch of I(Q), through one stage, so that the can is reduced once."""
+def iofq_batch(
+    client: Client,
+    *,
+    label: str = 'iofq',
+    persist: bool = False,
+    settings: Mapping[str, Any] | None = None,
+    definitions: DefinitionStore | None = None,
+) -> Batch:
+    """
+    The batch of I(Q), through one stage, so that the can is reduced once.
+    ``persist``, ``settings`` and ``definitions`` are those of :class:`Batch`.
+    """
     return Batch(
         client,
         IOFQ,
@@ -68,4 +79,7 @@ def iofq_batch(client: Client, *, label: str = 'iofq') -> Batch:
         label=label,
         source=pair_by_sample,
         staged=True,
+        persist=persist,
+        settings=settings,
+        definitions=definitions,
     )

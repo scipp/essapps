@@ -2,6 +2,8 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """Automatic reduction: which rows a step reduces, and why a row did not run."""
 
+import functools
+import threading
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -19,7 +21,7 @@ from ess.apps.batch import (
     Row,
     RowSource,
 )
-from ess.apps.batch.auto import Automatic
+from ess.apps.batch.auto import Automatic, every
 from ess.apps.folder import open_folder
 from ess.apps.testing import FakeFiles
 from ess.spec import Binding, FileRef
@@ -655,3 +657,20 @@ def test_two_loops_on_one_label_submit_a_file_once(
 
     assert list(first.step()) == ['1']
     assert second.step() == {}
+
+
+def test_every_calls_the_actions_in_turn_until_the_block_ends() -> None:
+    called: list[int] = []
+    all_called = threading.Event()
+
+    def call(i: int) -> None:
+        called.append(i)
+        if i == 2:
+            all_called.set()
+
+    with every(0, [functools.partial(call, i) for i in range(3)]):
+        assert all_called.wait(10)
+    with every(60, [functools.partial(call, 3)]):
+        pass
+
+    assert called == [0, 1, 2]

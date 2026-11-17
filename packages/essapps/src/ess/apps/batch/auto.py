@@ -36,9 +36,11 @@ the batch kept resolved, such a cell is resolved at every step, at any column.
 
 from __future__ import annotations
 
+import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from collections.abc import Set as AbstractSet
+from contextlib import contextmanager
 
 from ..errors import SubmitError
 from ..records import Record
@@ -144,3 +146,27 @@ def run(loops: Sequence[Automatic], interval: float = 1.0) -> None:
         for loop in loops:
             loop.step()
         time.sleep(interval)
+
+
+@contextmanager
+def every(seconds: float, actions: Iterable[Callable[[], object]]) -> Iterator[None]:
+    """
+    Call ``actions`` in turn from a thread, one every ``seconds``, until all are
+    called or the block ends. The end of the block waits for an action that
+    runs. A demo makes files arrive with it while it serves a page.
+    """
+    stop = threading.Event()
+
+    def call() -> None:
+        for action in actions:
+            if stop.wait(seconds):
+                return
+            action()
+
+    thread = threading.Thread(target=call, name='every')
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
