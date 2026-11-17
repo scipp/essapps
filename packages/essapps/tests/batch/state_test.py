@@ -125,6 +125,27 @@ def test_an_outdated_row_is_left_to_do_and_shown_as_outdated(
     assert found['a'].text == 'outdated'
 
 
+@pytest.mark.parametrize('status', [Status.FAILED, Status.CANCELLED])
+@pytest.mark.parametrize(
+    'outdated', [{'changed': {'a': frozenset({'thickness'})}}, {'spec_changed': {'a'}}]
+)
+def test_a_failed_or_cancelled_row_reads_so_when_its_request_changed(
+    status: Status, outdated: dict[str, Any]
+) -> None:
+    found = row_states(
+        [Row('a', {'sample': 'x'})],
+        Model,
+        COLUMNS,
+        {'a': record('1', 'a')},
+        {'1': status},
+        **outdated,
+    )
+
+    assert remaining(found) == ['a']
+    assert found['a'].text == str(status)
+    assert summary(found) == {str(status): 1}
+
+
 @pytest.mark.parametrize(
     ('changed', 'outdated'), [({'shared'}, False), ({'shared', 'thickness'}, True)]
 )

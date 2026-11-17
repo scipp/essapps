@@ -74,7 +74,9 @@ class RowState:
     @property
     def text(self) -> str:
         """
-        What a table shows, and what :func:`summary` counts. A completed result
+        What a table shows, and what :func:`summary` counts. A failed or
+        cancelled result reads as its status whether or not the request changed
+        since, since the row needs reducing either way. A completed result
         not compared with the settings, as while they are refused, reads
         ``outdated``: it cannot be told to match them. A tweak does not follow
         the settings, so it reads as its status.
@@ -85,6 +87,8 @@ class RowState:
             return 'incomplete'
         if self.status is None:
             return 'not reduced'
+        if self.status in _RERUN:
+            return str(self.status)
         if self.outdated:
             return 'outdated'
         if self.outdated is None and self.status is Status.COMPLETED:

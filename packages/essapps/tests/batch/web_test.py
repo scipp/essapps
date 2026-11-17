@@ -389,6 +389,20 @@ def test_a_failed_row_stays_failed_when_the_settings_change(
     assert state(http)['action']['label'] == 'Retry 2 failed'
 
 
+def test_a_failed_row_reads_failed_in_the_table_and_the_counts_when_settings_change(
+    http: TestClient, client: Client
+) -> None:
+    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 1})
+    reduced(http, client)
+
+    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 2})
+
+    table = pd.read_csv(io.BytesIO(http.get('/api/table.csv').content), dtype=str)
+    assert list(table['status']) == ['failed', 'failed', 'incomplete']
+    counts = state(http)['counts']
+    assert (counts['failed'], counts['outdated']) == (2, 0)
+
+
 def test_incomplete_settings_block_reducing_and_are_not_applied(
     http: TestClient, client: Client
 ) -> None:

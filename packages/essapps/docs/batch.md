@@ -142,10 +142,12 @@ def text(row):                                       # RowState.text
     if row.status is PENDING: return 'pending'       # row.status: the status of the result
     if row.problems:          return 'incomplete'    # a cell is empty, not a column, refused, or reads a failed record
     if row.status is None:    return 'not reduced'   # no result
+    if row.status in (FAILED, CANCELLED):
+        return str(row.status)                       # needs reducing, whether or not the request changed
     if row.outdated:          return 'outdated'      # the request or the spec differs from the result's
     if row.outdated is None and row.status is COMPLETED and not row.tweaked:
         return 'outdated'                            # not compared, as while the settings are refused
-    return str(row.status)                           # 'completed', 'failed', 'cancelled'
+    return str(row.status)                           # 'completed'
 ```
 
 So the diagram has no memory of its own. Each arrow is a write to a stored table by the writer of that table:
@@ -172,7 +174,7 @@ stateDiagram-v2
 | a record is written | the workspace, when the cycle submits the row | records |
 | the record finishes | the workspace | records |
 
-A failed or cancelled row reads `outdated` when its request changes, as a completed one does, and goes back when the change is undone. A row reads `incomplete` from any state but `pending` when a cell is emptied or refused. The diagram leaves out these arrows. The pages show some states in other words. The batch page shows `not reduced` as `ready`, `pending` as `running`, and `completed` as `done`. A row of `earlier_settings` reads `outdated`, but the batch page shows it as `done`, marked "earlier settings", and `BatchView` and a table written show `completed, earlier settings` (`status_texts`). The batch page shows a failed or cancelled row as `failed` or `cancelled` whether or not its request changed.
+A failed or cancelled row reads `failed` or `cancelled` whether or not its request changed, since it needs reducing either way. A row reads `incomplete` from any state but `pending` when a cell is emptied or refused. The diagram leaves out these arrows. The pages show some states in other words. The batch page shows `not reduced` as `ready`, `pending` as `running`, and `completed` as `done`. A row of `earlier_settings` reads `outdated`, but the batch page shows it as `done`, marked "earlier settings", and `BatchView` and a table written show `completed, earlier settings` (`status_texts`).
 
 **Not in this picture:**
 
