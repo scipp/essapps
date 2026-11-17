@@ -14,8 +14,8 @@ the definitions cannot keep is not made, and answers a :class:`Problem`.
 The form of the settings is a draft of the batch's settings. An edit changes
 the form only; :meth:`Server.apply_settings` writes it to the batch, and is
 refused while something is missing; :meth:`Server.discard_settings` shows the
-batch's settings again. "Load settings" and "Use the settings of this row" fill
-the form, all or none. While the form holds a change, a reduction by a person
+batch's settings again. "Load settings" and "Put these settings in the form"
+fill the form, all or none. While the form holds a change, a reduction by a person
 and a download of the settings are refused, so that nothing is reduced or
 saved with settings other than those shown. Settings that the form cannot
 show, such as those kept for another version of the spec, are named in the
