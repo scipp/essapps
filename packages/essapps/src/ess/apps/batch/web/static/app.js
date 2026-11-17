@@ -339,8 +339,7 @@ function renderFollow(follow) {
 function renderSettings(state) {
   const {action, settings_changed: changed, settings_problem: problem} = state;
   $('earlier').hidden = action.earlier === 0;
-  $('earlier-hint').textContent = `Reduces the ${words().many} reduced with earlier settings again.`;
-  $('reduce-earlier').textContent = `Apply to all (${count(action.earlier)})`;
+  $('earlier-hint').textContent = `${count(action.earlier)} reduced with earlier settings.`;
   $('reduce-earlier').disabled = Boolean(action.blocked);
   $('draft').classList.toggle('changed', changed);
   const said = problem ? ` ${problem}.` : '';
