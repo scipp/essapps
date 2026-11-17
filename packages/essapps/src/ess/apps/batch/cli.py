@@ -32,7 +32,8 @@ definitions (:mod:`.definition`), so a label is one batch whoever works on it:
 The guide is ``packages/essapps/docs/batch.md``.
 
 Exit status: 0 if done, and every row completed; 1 for an error; 2 if the
-command or a row was refused, so that nothing ran; 3 if a row did not complete.
+command or a row was refused, so that nothing ran; 3 if a row did not complete,
+or ``--remaining`` left a row reduced with earlier settings.
 """
 
 from __future__ import annotations
