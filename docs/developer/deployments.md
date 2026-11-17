@@ -59,7 +59,7 @@ The web page (`ess.apps.batch.web`) is experimental and runs as a demo.
 ```
  DMSC server, one process per instrument
  ┌──────────────────────────────────────────────────────────────────┐
- │ loop: for each new file, submit what the file needs              │
+ │ loop: scan each batch, reduce the rows with a new file           │
  │ page to configure the reduction                                  │
  │ configuration: per instrument, adjusted per proposal             │
  │ a Client and a Workspace per proposal: history and store on disk │
@@ -74,7 +74,7 @@ The process holds a workspace for each proposal that has new files.
 It runs with no page open, and users find its results through SciCat, not by connecting to it.
 For the first release, the same process may run on a VISA machine ([requirements](../requirements/users.md)).
 A scientist who needs a variant of the automatic reduction runs a batch.
-Of this deployment, only the loop exists (`TriggerLoop`, [automatic-reduction.md](automatic-reduction.md)).
+Of this deployment, only the loop exists (`ess.apps.batch.auto`, [automatic-reduction.md](automatic-reduction.md)).
 
 ## One proposal, several histories
 

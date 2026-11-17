@@ -244,6 +244,17 @@ def test_an_unknown_file_is_refused(client: Client) -> None:
         client.submit(toys.load_request(9))
 
 
+def test_a_file_at_a_list_parameter_is_refused(
+    client: Client, files: FakeFiles
+) -> None:
+    run = files.measure(1, 2.0)
+
+    with pytest.raises(
+        SubmitError, match=rf'^runs: {run.file} is a reference to a whole list; '
+    ):
+        client.submit(toys.SUM, params={'runs': run})
+
+
 def test_a_file_of_another_proposal_is_refused(
     client: Client, files: FakeFiles
 ) -> None:

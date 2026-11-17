@@ -115,4 +115,4 @@ Property: every record pending at the upgrade with a persist request finishes wi
 ### H3. History ends when the work does
 
 Actor: user. Goal: the records of a proposal are there while the user works with them, and for days to weeks after; what was published lasts.
-Property: once a proposal has been idle for the retention period, with no call and no record pending, its history is dropped as a whole, never in part. So a kept record's provenance is complete. A running trigger loop keeps its proposal from being idle, so it never reduces a handled file again. A published entry still answers what produced it after the history behind it is dropped.
+Property: once a proposal has been idle for the retention period, with no call and no record pending, its history is dropped as a whole, never in part. So a kept record's provenance is complete. A running automatic reduction keeps its proposal from being idle, so it never reduces a row again for a file it has reduced. A published entry still answers what produced it after the history behind it is dropped.

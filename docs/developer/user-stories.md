@@ -108,12 +108,14 @@ Besides the calls in README.md, the stories use this one:
 record.request.files()    # the files the request names directly
 ```
 
-The trigger loop belongs to the sub-design for automatic reduction.
-The stories use two of its calls:
+Automatic reduction belongs to its sub-design ([automatic-reduction.md](automatic-reduction.md)), and is a batch of `ess.apps.batch` ([batch.md](../../packages/essapps/docs/batch.md)).
+The stories use these calls:
 
 ```python
-loop.step()                  # handles what arrived since the last step; returns the records it made
-loop.status(rule).reason     # why a rule submitted nothing or skipped a file
+batch = Batch(client, SPEC, columns=(...), label=..., source=rows_of_files, persist=True)
+auto = Automatic(batch, at='sample', settings=lambda: settings)
+auto.step()       # scans, and reduces the rows with a new file at `at`; their records by key
+auto.refused      # why each such row did not run, by key
 ```
 
 ## S. Small stories
@@ -637,29 +639,39 @@ That a cut is ready within seconds of each run, and how history grows with the r
 
 ## E. Automatic reduction
 
+The stories E2 to E4 reduce a row per run:
+
+```python
+def per_run(files):                                            # every raw file
+    return [Row(str(f.metadata['run']), {'sample': f.ref}) for f in files]
+
+def iofq_batch(client):
+    return Batch(client, IOFQ, columns=('sample',), label='iofq', source=per_run, persist=True)
+```
+
 ### E1. Series grows, reduction follows
 
 Actor: reflectometry user during a beamtime. Goal: after each angle, the stitched curve grows by one angle; one curve per sample, not one per arrival.
 
 ```python
 reference = measure(1, [1.0, 1.0], role='reference')
-template = Template(STITCH, params={'reference': reference}, blanks=('runs',))
 
-def stitch(client, run):                                       # all angles of the sample so far, in run order
-    sample = client.files.metadata(run)['sample']
-    angles = client.files.list(Selector(role='sample', sample=sample))
-    angles.sort(key=lambda ref: client.files.metadata(ref)['run'])
-    return client.submit(template.fill(params={'runs': angles}), label='reflectivity', member=sample, persist=True)
+def angles(files):                                             # a row per sample: all its angles so far, in run order
+    runs = {}
+    for f in sorted(files, key=lambda f: f.metadata['run']):
+        if f.metadata.get('role') == 'sample':
+            runs.setdefault(f.metadata['sample'], []).append(f.ref)
+    return [Row(sample, {'runs': refs}) for sample, refs in runs.items()]
 
-rule = Rule('reflectivity', stitch, selector=Selector(role='sample'), at='runs', label='reflectivity')
-loop = TriggerLoop(client, rules=[rule])
+batch = Batch(client, STITCH, columns=('runs',), label='reflectivity', source=angles, persist=True)
+auto = Automatic(batch, at='runs', settings=lambda: {'reference': reference})
 
 r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
-loop.step()
+client.wait(auto.step())                                       # a row still running waits for its record
 r4 = measure(4, [4.0, 8.0], role='sample', sample='si')
 r3 = measure(3, [1.0, 1.0], role='sample', sample='si')
 measure(2, [1.0, 2.0], role='sample', sample='si')             # arrives again
-loop.step()
+auto.step()
 
 user = connect()                                              # any client of the proposal
 latest = user.latest('reflectivity', member='si')
@@ -668,60 +680,52 @@ assert latest.request.params['runs'] == [r2, r3, r4]   # run order, not arrival 
 assert user.output(latest, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
 ```
 
-Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether a rule pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
+Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether the automatic reduction pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
 
-The function persists what it submits, so any client of the proposal reads each curve ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
+The batch persists what it submits, so any client of the proposal reads each curve ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
 
 ### E2. Automatic reduction goes quiet
 
-Actor: instrument scientist. Goal: after an upgrade removed the template's spec version, see why nothing is reduced.
+Actor: instrument scientist. Goal: after an upgrade removed the spec version of the settings, see why nothing is reduced.
 
 ```python
-def iofq_rule(template, selector):
-    def submit(client, run):
-        member = str(client.files.metadata(run)['run'])
-        return client.submit(template.fill(params={'sample': run}), label='iofq', member=member, persist=True)
-    return Rule('auto-iofq', submit, selector=selector, at='sample', label='iofq')
-
-rule = iofq_rule(Template(IOFQ, params={'normalization': None}, blanks=('sample',)), Selector(role='sample'))
 upgraded = upgrade(specs=[IOFQ_V2])                            # version 1 is gone
-loop = TriggerLoop(upgraded, rules=[rule])
-run = measure(1, [1.0, 1.0], role='sample')
+auto = Automatic(iofq_batch(upgraded), at='sample', settings=lambda: {'normalization': None})
+measure(1, [1.0, 1.0], role='sample')
 
-assert loop.step() == []
-assert loop.status(rule).reason == f'skipped {run.file}: unknown spec sans-iofq/v1'
+assert auto.step() == {}
+assert auto.refused == {'1': 'unknown spec sans-iofq/v1'}
 ```
 
 ### E3. Reduction of our own output
 
-Actor: none; a failure mode. Goal: a published result that SciCat lists as a dataset does not trigger the rule.
+Actor: none; a failure mode. Goal: a published result that SciCat lists as a dataset does not make a row.
 
 ```python
-rule = iofq_rule(Template(IOFQ, params={'normalization': None}, blanks=('sample',)), Selector())   # every raw file
-loop = TriggerLoop(client, rules=[rule])
+auto = Automatic(iofq_batch(client), at='sample', settings=lambda: {'normalization': None})
 measure(1, [1.0, 2.0, 3.0, 4.0])
-(reduced,) = loop.step()
+(reduced,) = auto.step().values()
 pid = client.publish(reduced.ref('iofq'), 'scicat')
 files.add_published(scicat.entries[pid])
 
-assert loop.step() == []
+assert auto.step() == {}
 ```
 
-A published entry is a file of kind `'derived'`, and a selector matches only raw files unless it names another kind.
+A published entry is a file of kind `'derived'`, and a batch's source is given only raw files unless its selector names another kind.
 
 ### E4. Template improved during a beamtime
 
-Actor: instrument scientist. Goal: new runs use the improved template; earlier results stay; the results made before the improvement can be found.
+Actor: instrument scientist. Goal: new runs use the improved settings; earlier results stay; the results made before the improvement can be found.
 
 ```python
-samples = Selector(role='sample')
-template = Template(IOFQ, params={'normalization': None}, blanks=('sample',))
+settings = {'normalization': None}
+auto = Automatic(iofq_batch(client), at='sample', settings=lambda: settings)
 first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
-(before,) = TriggerLoop(client, rules=[iofq_rule(template, samples)]).step()
+(before,) = auto.step().values()
 
-improved = Template(IOFQ, params={'reduction': Reduction(threshold=1.5), 'normalization': None}, blanks=('sample',))
+settings = {'reduction': Reduction(threshold=1.5), 'normalization': None}   # read at the next step
 second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
-(after,) = TriggerLoop(client, rules=[iofq_rule(improved, samples)]).step()
+(after,) = auto.step().values()
 
 user = connect()                                                # any client of the proposal
 assert after.request.files() == [second]                        # run 1 is not reduced again
@@ -731,7 +735,7 @@ stale = [r for r in user.records(label='iofq') if r.request.params['reduction'][
 assert [r.request.files() for r in stale] == [[first]]          # to reprocess, if the user wants
 ```
 
-The second loop stands in for a running trigger loop whose rule is replaced. It learns that run 1 is handled from the records under `iofq`.
+A row runs only for a file at `sample` that no record under `iofq` holds, so a changed setting does not reduce run 1 again. A restarted loop learns the same from the records.
 
 ## F. Publication and provenance
 

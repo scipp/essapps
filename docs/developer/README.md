@@ -60,7 +60,7 @@ What the framework adds to the plain loop:
 ## Components
 
 ```
-  controller: a notebook, an application, the trigger loop   decides what to run
+  controller: a notebook, an application, automatic reduction   decides what to run
         │  client: submit, push, output, release, ...
         ▼
   workspace ─── file source: files and their metadata
@@ -128,7 +128,7 @@ An output of a record of the bound spec, one the workspace runs with the same th
 An output of a record of another spec, such as an older version or the same version with changed models, is read as stored, an array as it is and anything else as a `DataGroup`, and a new request may not reference it ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)).
 
 **Controller.** The workspace does not decide what to run.
-A *controller* is client code that decides over time what to submit, push, and release, such as the cells of a notebook, the callbacks of an application's screen, or the trigger loop of automatic reduction.
+A *controller* is client code that decides over time what to submit, push, and release, such as the cells of a notebook, the callbacks of an application's screen, or the loop of automatic reduction.
 A controller is never part of the workspace, and calls it only through a client:
 
 ```python
@@ -265,19 +265,20 @@ total = client.freeze(volume)                               # the final sum, as 
 
 ## Automatic reduction
 
-A *rule* calls an application's function for each new file as it arrives; the function pairs runs as the technique needs and submits what the file needs ([automatic-reduction.md](automatic-reduction.md)):
+Automatic reduction is a batch of `ess.apps.batch` reduced as its files arrive ([automatic-reduction.md](automatic-reduction.md)).
+The application's source pairs runs as the technique needs, and a row runs once for each new file at its trigger column:
 
 ```python
-def reduce_transmission(client: Client, run: FileRef) -> Record:
-    return client.submit(TRANSMISSION, params={'run': run, 'empty_beam': file(run=60336)},
-                         label='transmission', persist=True)
+def transmission_runs(files: Sequence[FileInfo]) -> list[Row]:
+    return [Row(str(f.metadata['run']), {'run': f.ref})
+            for f in files if f.metadata.get('role') == 'transmission']
 
-rule = Rule('transmission', reduce_transmission, selector=Selector(role='transmission'),
-            label='transmission', at='run')
-TriggerLoop(client, rules=[rule]).run()
+batch = Batch(client, TRANSMISSION, columns=('run',), label='transmission',
+              source=transmission_runs, persist=True)
+run([Automatic(batch, at='run', settings=lambda: {'empty_beam': file(run=60336)})])
 ```
 
-The loop reads which files a rule has handled from the changes, so a step reads only the records that changed since the last one.
+The loop reads from the changes which files the records of each row hold, so a restarted loop reduces no row again.
 
 ## Provenance and publication
 

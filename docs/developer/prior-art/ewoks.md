@@ -52,7 +52,7 @@ The listener (`app/workflow_server`, 46 lines) starts at the newest scan (`get_l
 This bears on the one question that blocks our design, how files say what role a run plays ([requirements](../../requirements/README.md#questions-that-block-the-design)): ESRF writes the reduction request itself into the raw data.
 At ESS that would need NICOS to write it.
 It agrees with [#33][i33]: the configuration per beamline lives in `blissoda`, beside the acquisition system, not in ewoks.
-Our trigger loop instead counts a file as handled when a record under the rule's label names it, so downtime loses nothing ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
+Our automatic reduction instead counts a row's file as reduced when a record under the batch's label holds it, so downtime loses nothing ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)).
 
 **Calibrations are chosen from the state at trigger time.**
 ID11 takes the last file in a directory by name (`sorted(glob(pattern))[-1]`, `id11/xrpd_processor.py` L113), ID31 reads the live energy motor (`id31/xrpd_processor.py` L151), and the streamline scanner takes the calibration scan nearest the current motor position (`streamline/scanner.py` L445).

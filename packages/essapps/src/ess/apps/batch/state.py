@@ -88,19 +88,13 @@ def problems(
     return tuple(found)
 
 
-def results(
-    records: Iterable[Record], spec: SpecId, submitter: str
-) -> dict[str, Record]:
+def results(records: Iterable[Record], spec: SpecId) -> dict[str, Record]:
     """
     The result of each row by its key: the newest of ``records``, oldest
-    first, of ``spec`` and ``submitter`` with that member. So a rerun of a row
-    is its result, and a record of someone else under the same label is not.
+    first, of ``spec`` with that member, whoever submitted it. So a rerun of a
+    row is its result, and one folder or one service holds one history.
     """
-    return {
-        r.member: r
-        for r in records
-        if r.member is not None and r.spec == spec and r.submitter == submitter
-    }
+    return {r.member: r for r in records if r.member is not None and r.spec == spec}
 
 
 def references(rows: Iterable[Row]) -> set[str]:

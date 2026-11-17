@@ -26,8 +26,8 @@ class CorrectedFiles:
     """
     A file source over ``source``, with corrections a person makes.
 
-    The workspace gets this source, so forms, rules, and sources of rows all see
-    a file as corrected, as :class:`~ess.apps.protocol.FileSource` requires::
+    The workspace gets this source, so forms and sources of rows all see a file
+    as corrected, as :class:`~ess.apps.protocol.FileSource` requires::
 
         files = CorrectedFiles(FolderFiles('/data', table))
         client = local(proposal='p1', files=files, bind=BINDINGS)
