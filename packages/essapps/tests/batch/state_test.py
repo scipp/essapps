@@ -16,7 +16,9 @@ from ess.apps.batch import (
     earlier_settings,
     left_to_reduce,
     ready,
+    refused_again,
     remaining,
+    status_texts,
     summary,
 )
 from ess.apps.batch.state import differs, results, row_states
@@ -176,6 +178,47 @@ def test_a_result_that_differs_only_at_settings_is_not_left_to_reduce(
     assert earlier_settings(found, COLUMNS) == (['a'] if earlier else [])
     assert left_to_reduce(found, COLUMNS) == (['a'] if left else [])
     assert (remaining(found) == ['a']) is (earlier or left)
+
+
+def test_a_row_that_cannot_run_is_not_one_of_earlier_settings() -> None:
+    found = row_states(
+        [Row('a')],
+        Model,
+        COLUMNS,
+        {'a': record('1', 'a')},
+        {'1': Status.COMPLETED},
+        changed={'a': frozenset({'shared'})},
+    )
+
+    assert found['a'].problems
+    assert earlier_settings(found, COLUMNS) == []
+
+
+def earlier_and_new() -> dict[str, RowState]:
+    """Row ``a`` reduced with earlier settings, ``b`` without a result."""
+    return row_states(
+        [Row('a', {'sample': 'x'}), Row('b', {'sample': 'y'})],
+        Model,
+        COLUMNS,
+        {'a': record('1', 'a')},
+        {'1': Status.COMPLETED},
+        changed={'a': frozenset({'shared'}), 'b': frozenset()},
+    )
+
+
+def test_a_table_marks_the_rows_of_earlier_settings_as_completed() -> None:
+    assert status_texts(earlier_and_new(), COLUMNS) == {
+        'a': 'completed, earlier settings',
+        'b': 'not reduced',
+    }
+    assert status_texts(not_compared(), COLUMNS) == {'a': 'outdated'}
+
+
+def test_refused_again_keeps_the_reasons_of_the_rows_a_step_submits_again() -> None:
+    refused = {'a': 'no', 'b': 'no either'}
+
+    assert refused_again(earlier_and_new(), {'sample'}, refused) == {'b': 'no either'}
+    assert refused_again(not_compared(), {'sample'}, {'a': 'no'}) == {}
 
 
 def test_a_row_without_a_result_is_left_to_reduce() -> None:

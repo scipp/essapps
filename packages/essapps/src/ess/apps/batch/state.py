@@ -196,6 +196,15 @@ def row_states(
     return states
 
 
+def compared(states: Mapping[str, RowState]) -> bool:
+    """
+    Whether each row was compared with its result, as in what
+    :meth:`~.reduction.Batch.state` gives, but not
+    :meth:`~.reduction.Batch.results`.
+    """
+    return all(s.changed is not None for s in states.values())
+
+
 def _compared(states: Mapping[str, RowState]) -> dict[str, frozenset[str]]:
     """
     What changed in each row; raises ``ValueError`` if a row was not compared
@@ -288,6 +297,43 @@ def arrived(states: Mapping[str, RowState], at: Collection[str]) -> list[str]:
         for k in ready(states)
         if states[k].record is None or not changed[k].isdisjoint(at)
     ]
+
+
+def refused_again(
+    states: Mapping[str, RowState], at: Collection[str], refused: Mapping[str, str]
+) -> dict[str, str]:
+    """
+    Of the reasons ``refused`` by row, those of the rows that the next step of
+    automatic reduction would submit again: the rows of :func:`arrived`. States
+    that were not compared (:func:`compared`) tell this only for the rows with
+    no result.
+    """
+    again = (
+        arrived(states, at)
+        if compared(states)
+        else [k for k, s in states.items() if s.record is None]
+    )
+    return {k: refused[k] for k in again if k in refused}
+
+
+EARLIER = 'earlier settings'
+"""How a table marks a row of :func:`earlier_settings`."""
+
+
+def status_texts(
+    states: Mapping[str, RowState], columns: Collection[str]
+) -> dict[str, str]:
+    """
+    The status of each row as a table shows it, by key: its
+    :attr:`RowState.text`, but ``completed, earlier settings`` for a row of
+    :func:`earlier_settings`, since a change of settings applies to the rows
+    not reduced yet. States that were not compared mark no row.
+    """
+    earlier = set(earlier_settings(states, columns)) if compared(states) else set()
+    return {
+        k: f'completed, {EARLIER}' if k in earlier else s.text
+        for k, s in states.items()
+    }
 
 
 def summary(states: Mapping[str, RowState]) -> dict[str, int]:

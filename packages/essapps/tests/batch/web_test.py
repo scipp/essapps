@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import pytest
 import scipp as sc
 import yaml
@@ -33,7 +34,11 @@ class Marks(BaseModel):
 
 
 def draw(shown: Sequence[Shown]) -> dict[str, Any]:
-    return {'drawn': [s.key for s in shown], 'colors': [s.color for s in shown]}
+    return {
+        'drawn': [s.key for s in shown],
+        'colors': [s.color for s in shown],
+        'outdated': [s.outdated for s in shown],
+    }
 
 
 @pytest.fixture
@@ -288,6 +293,14 @@ def test_a_changed_setting_leaves_the_rows_done_marked_with_earlier_settings(
     assert state(http)['action']['earlier'] == 2
     detail = http.get('/api/row', params={'key': '1'}).json()
     assert detail['differs'] == ['binning']
+    plot = http.get('/api/plot', params={'keys': ['1']}).json()
+    assert plot['figure']['outdated'] == [False]
+    table = pd.read_csv(io.BytesIO(http.get('/api/table.csv').content), dtype=str)
+    assert list(table['status']) == [
+        'completed, earlier settings',
+        'completed, earlier settings',
+        'incomplete',
+    ]
 
 
 def test_reduce_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_them(
@@ -708,7 +721,11 @@ def test_the_plot_draws_the_results_of_the_rows_asked_for_in_their_colours(
 
     plot = http.get('/api/plot', params={'keys': ['2', '3']}).json()
 
-    assert plot['figure'] == {'drawn': ['2'], 'colors': [plots.PALETTE[1]]}
+    assert plot['figure'] == {
+        'drawn': ['2'],
+        'colors': [plots.PALETTE[1]],
+        'outdated': [False],
+    }
     assert plot['colors'] == {'2': plots.PALETTE[1]}
     assert http.get('/api/plot').json()['figure']['drawn'] == ['1', '2']
 

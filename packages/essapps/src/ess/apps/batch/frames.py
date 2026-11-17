@@ -290,7 +290,7 @@ def reduce_table(
     states = batch.state(keys)
     if table is None:
         table = batch_table(batch, states)
-    return with_results(client, states, table)
+    return with_results(client, states, table, template.blanks)
 
 
 def batch_table(
@@ -302,23 +302,29 @@ def batch_table(
     what ``states`` say of each (:func:`with_results`).
     """
     rows = batch.rows if keys is None else [batch.rows[key] for key in keys]
-    return with_results(batch.client, states, table_of(rows, batch.columns))
+    table = table_of(rows, batch.columns)
+    return with_results(batch.client, states, table, batch.columns)
 
 
 def with_results(
-    client: Client, states: Mapping[str, RowState], table: pd.DataFrame
+    client: Client,
+    states: Mapping[str, RowState],
+    table: pd.DataFrame,
+    columns: Collection[str],
 ) -> pd.DataFrame:
     """
     ``table`` with the columns of :data:`RESULT`, replaced if it has them: what
-    ``states`` say of the row of each key in its first column. ``status`` is the
-    row's :attr:`~.state.RowState.text`.
+    ``states`` say of the row of each key in its first column, for a batch of
+    ``columns``. ``status`` is the row's status as a table shows it
+    (:func:`~.state.status_texts`).
     """
+    texts = state.status_texts(states, columns)
     keys = table[table.columns[0]].astype(str)
     records = [states[key].record for key in keys]
     found = [r for r in records if r is not None]
     failure = dict(zip((r.id for r in found), client.failure(found), strict=True))
     return table.drop(columns=list(RESULT), errors='ignore').assign(
-        status=[states[key].text for key in keys],
+        status=[texts[key] for key in keys],
         record=['' if r is None else r.id for r in records],
         failure=['' if r is None else failure[r.id] or '' for r in records],
     )

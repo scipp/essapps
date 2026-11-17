@@ -12,17 +12,22 @@ from .corrections import CorrectedFiles
 from .definition import DefinitionStore, FolderDefinitions
 from .reduction import Batch, FileInfo, RowSource, file_infos
 from .state import (
+    EARLIER,
     RowState,
     arrived,
+    compared,
     earlier_settings,
     left_to_reduce,
     ready,
+    refused_again,
     remaining,
+    status_texts,
     summary,
 )
 from .table import EMPTY, Row, RowTable
 
 __all__ = [
+    'EARLIER',
     'EMPTY',
     'Batch',
     'CorrectedFiles',
@@ -34,10 +39,13 @@ __all__ = [
     'RowState',
     'RowTable',
     'arrived',
+    'compared',
     'earlier_settings',
     'file_infos',
     'left_to_reduce',
     'ready',
+    'refused_again',
     'remaining',
+    'status_texts',
     'summary',
 ]
