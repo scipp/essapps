@@ -3,7 +3,7 @@
 // action answers with the state after it; a poll every second sees results
 // arrive. The page keeps only what it shows: the selection, the filter, the
 // tab, the sort, and the axes, which survive a reload.
-import {h, get, post, upload, query, save} from './dom.js';
+import {h, get, post, query, save} from './dom.js';
 import {Grid, cellColumns, statusColumn} from './tables.js';
 import {renderForm, summary} from './form.js';
 
@@ -20,7 +20,6 @@ const view = {
   log: {x: true, y: true},
   ...remembered(),
   plotted: null, // what the plot shows, to fetch it again only on a change
-  plots: 0, // the number of the last plot asked for, to drop older answers
   zoom: 1, // a new value forgets the zoom of the plot; Plotly ignores 0
   colors: {}, // the colour of each curve drawn, by key
   detail: '', // what the row tab shows, to draw it again only on a change
@@ -63,35 +62,47 @@ function queued(task) {
   return done;
 }
 
+// Ask the server, with a body for a POST. The answer is the parsed body, or
+// null after the message of what went wrong is shown. The answer of a request
+// is also dropped, without a message, if a newer request of its `kind` was sent
+// meanwhile, or if `fresh()` says that what it was for has changed.
+const sent = {};
+async function request(url, {body, kind, fresh = () => true} = {}) {
+  const asked = kind && (sent[kind] = (sent[kind] ?? 0) + 1);
+  let response;
+  try {
+    response = body === undefined ? await get(url) : await post(url, body);
+  } catch {
+    showMessage('The server does not answer, so this was not done. Try again when it is back.');
+    return null;
+  }
+  if ((kind && sent[kind] !== asked) || !fresh()) return null;
+  if (response.ok) return response.body;
+  showMessage(response.body?.message ?? `The server answered ${response.status}.`);
+  return null;
+}
+
 // Send an action and show the state it answers with, or what went wrong;
 // whether it was done.
-function act(url, body) {
+function act(url, body = {}) {
   return queued(() => perform(url, body));
 }
 
 async function perform(url, body) {
-  let response;
-  try {
-    response = await post(url, body);
-  } catch {
-    showMessage('The server does not answer, so nothing was done. Try again when it is back.');
+  const state = await request(url, {body});
+  if (!state) {
+    await refresh().catch(() => {});
     return false;
   }
-  if (response.ok) {
-    hideMessage();
-    render(response.body);
-    if (response.body.notice) toast(response.body.notice);
-    return true;
-  }
-  showMessage(response.body?.message ?? `The server answered ${response.status}.`);
-  await refresh().catch(() => {});
-  return false;
+  hideMessage();
+  render(state);
+  if (state.notice) toast(state.notice);
+  return true;
 }
 
-async function download(url, name) {
-  const response = await get(url);
-  if (response.ok) save(response.body, name);
-  else showMessage(response.body?.message ?? `The server answered ${response.status}.`);
+async function download(url, name, body) {
+  const file = await request(url, {body});
+  if (file) save(file, name);
 }
 
 class Offline extends Error {}
@@ -228,9 +239,8 @@ function downloadResults(rows, name) {
 }
 
 async function loadRuns() {
-  const response = await get('/api/runs');
-  if (!response.ok) return;
-  const shown = response.body;
+  const shown = await request('/api/runs', {kind: 'runs'});
+  if (!shown) return;
   view.runs = shown.version;
   $('n-runs').textContent = shown.rows.length;
   if (!runs) {
@@ -408,10 +418,9 @@ async function renderPlot() {
   renderLegend();
   if (what === view.plotted) return;
   view.plotted = what;
-  const asked = ++view.plots;
-  const response = await get(`/api/plot?${query({keys: view.selected})}`);
-  if (asked !== view.plots || !response.ok) return;
-  const {figure, note, colors} = response.body;
+  const answer = await request(`/api/plot?${query({keys: view.selected})}`, {kind: 'plot'});
+  if (!answer) return;
+  const {figure, note, colors} = answer;
   view.colors = colors;
   renderLegend();
   const quantity = figure?.layout?.meta?.quantity ?? 'Result';
@@ -479,8 +488,9 @@ async function loadRow() {
     pane.replaceChildren(h('div', {class: 'empty', text}));
     return;
   }
-  const response = await get(`/api/row?${query({key: row.key})}`);
-  if (response.ok && view.selected[0] === row.key) renderRow(response.body);
+  const only = () => view.selected.length === 1 && view.selected[0] === row.key;
+  const detail = await request(`/api/row?${query({key: row.key})}`, {kind: 'row', fresh: only});
+  if (detail) renderRow(detail);
 }
 
 function renderRow(detail) {
@@ -651,17 +661,8 @@ function wire() {
       if (!input.files.length) return;
       const file = input.files[0];
       input.value = '';
-      await queued(async () => {
-        const response = await upload(url, file);
-        if (response.ok) {
-          hideMessage();
-          render(response.body);
-          toast(response.body.notice);
-          if (url === '/api/settings.yaml') showTab('settings');
-        } else {
-          showMessage(response.body?.message ?? `The server answered ${response.status}.`);
-        }
-      });
+      const done = await act(`${url}?${query({name: file.name})}`, file);
+      if (done && url === '/api/settings.yaml') showTab('settings');
     };
   }
 

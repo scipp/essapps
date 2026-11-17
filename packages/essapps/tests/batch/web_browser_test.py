@@ -24,9 +24,10 @@ from typing import Any, NoReturn
 import pytest
 import uvicorn
 from fastapi import FastAPI
+from pydantic import BaseModel
 
 from ess.apps import Client
-from ess.apps.batch import Batch
+from ess.apps.batch import Batch, CorrectedFiles
 from ess.apps.batch.web import Shown, create_app
 from ess.apps.batch.web.api import STATIC
 
@@ -47,6 +48,10 @@ if not (STATIC / 'vendor').is_dir():
     unavailable(f'needs the libraries of the page: sh {STATIC / "vendor.sh"}')
 
 
+class Marks(BaseModel):
+    role: str | None = None
+
+
 def draw(shown: Sequence[Shown]) -> dict[str, Any]:
     return {'data': [{'y': [1, 2], 'name': s.name} for s in shown], 'layout': {}}
 
@@ -64,11 +69,13 @@ def browser() -> Iterator[Any]:
 
 
 @pytest.fixture
-def url(batch: Batch, sample: Measure) -> Iterator[str]:
+def url(batch: Batch, sample: Measure, files: CorrectedFiles) -> Iterator[str]:
     for run, name in enumerate(['water', 'sds', 'oil'], start=1):
         sample(run, name)
     batch.scan()
-    with serve(create_app(batch, name='name', draw=draw)) as url:
+    with serve(
+        create_app(batch, name='name', draw=draw, files=files, marks=Marks)
+    ) as url:
         yield url
 
 
@@ -260,6 +267,98 @@ def test_an_edit_the_server_does_not_get_is_taken_back_and_said(
     assert cell(page, 'sds', 'thickness').inner_text() == '1.0'
     assert batch.rows.edits == {}
     assert page.errors == ['Failed to load resource: net::ERR_FAILED']
+    page.errors.clear()
+
+
+HOLD = """part => {
+  window.held = [];
+  const fetched = window.fetch;
+  window.fetch = async (url, init) => {
+    const response = await fetched(url, init);
+    if (!String(url).includes(part)) return response;
+    const copy = new Response(await response.blob(), response);
+    return new Promise((release) => window.held.push(() => release(copy)));
+  };
+}"""
+RELEASE = """async i => {
+  window.held[i]();
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+}"""
+
+
+def hold(page: Any, part: str) -> None:
+    """Keep the answers of the requests whose URL holds ``part`` until released."""
+    page.evaluate(HOLD, part)
+
+
+def held(page: Any, n: int) -> None:
+    """Wait until ``n`` answers are held."""
+    page.wait_for_function(f'window.held.length === {n}')
+
+
+def release(page: Any, i: int) -> None:
+    """Give the page the ``i``-th held answer, and wait until it has handled it."""
+    page.evaluate(RELEASE, i)
+
+
+def select(page: Any, name: str) -> None:
+    page.locator('#rows .tabulator-row', has_text=name).locator('input').click()
+
+
+def test_the_row_tab_does_not_show_a_row_after_a_second_is_selected(page: Any) -> None:
+    page.click('[data-tab=row]')
+    hold(page, '/api/row')
+    select(page, 'water')
+    held(page, 1)
+    select(page, 'sds')
+
+    release(page, 0)
+
+    assert 'Select only one' in page.inner_text('#tab-row')
+
+
+def test_an_older_answer_for_the_runs_does_not_replace_a_newer_one(
+    page: Any, url: str
+) -> None:
+    page.click('[data-view=runs]')
+    key = page.evaluate(
+        "fetch('api/runs').then(r => r.json()).then(b => b.rows[0].key)"
+    )
+    hold(page, '/api/runs')
+    for n, value in enumerate(['first', 'second']):
+        edit = {'keys': [key], 'column': 'role', 'value': value}
+        assert page.request.post(f'{url}api/runs/cells', data=edit).ok
+        held(page, n + 1)
+
+    release(page, 1)
+    release(page, 0)
+
+    assert 'second' in page.inner_text('#runs')
+    assert 'first' not in page.inner_text('#runs')
+
+
+def test_a_request_the_server_does_not_answer_says_so_where_no_action_asked(
+    page: Any,
+) -> None:
+    page.route('**/api/plot*', lambda route: route.abort())
+
+    select(page, 'water')
+
+    page.wait_for_selector('#message:has-text("The server does not answer")')
+    assert page.errors == ['Failed to load resource: net::ERR_FAILED']
+    page.errors.clear()
+
+
+def test_a_request_the_server_fails_says_its_status_where_no_action_asked(
+    page: Any,
+) -> None:
+    page.route('**/api/plot*', lambda route: route.fulfill(status=500))
+
+    select(page, 'water')
+
+    page.wait_for_selector('#message:has-text("The server answered 500.")')
+    assert len(page.errors) == 1
+    assert 'status of 500' in page.errors[0]
     page.errors.clear()
 
 

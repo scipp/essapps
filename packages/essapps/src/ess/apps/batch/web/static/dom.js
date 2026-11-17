@@ -16,12 +16,14 @@ export function h(tag, props = {}, ...children) {
   return el;
 }
 
-// Each call returns {ok, status, body}; a refusal (422) is not thrown.
-async function call(method, url, body, type = 'application/json') {
+// Each call returns {ok, status, body}; a refusal (422) is not thrown. A file
+// is sent as it is, anything else as JSON.
+async function call(method, url, body) {
   const init = {method, headers: {}};
   if (body !== undefined) {
-    init.headers['Content-Type'] = type;
-    init.body = type === 'application/json' ? JSON.stringify(body) : body;
+    const raw = body instanceof Blob;
+    init.headers['Content-Type'] = raw ? 'application/octet-stream' : 'application/json';
+    init.body = raw ? body : JSON.stringify(body);
   }
   const response = await fetch(url, init);
   const isJson = response.headers.get('Content-Type')?.includes('json');
@@ -34,8 +36,6 @@ async function call(method, url, body, type = 'application/json') {
 
 export const get = (url) => call('GET', url);
 export const post = (url, body = {}) => call('POST', url, body);
-export const upload = (url, file) =>
-  call('POST', `${url}?name=${encodeURIComponent(file.name)}`, file, 'application/octet-stream');
 
 export function query(params) {
   const search = new URLSearchParams();
