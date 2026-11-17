@@ -27,7 +27,7 @@ The demo, the LoKI page and the LoKI arrivals take `--follow [SECONDS]`, which t
 The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again.
 While a person has changed the form and not applied the change, the bar above it reads "Changed, not applied yet", and the rows still read as with the batch's settings.
 Apply is refused while the form misses something, and the bar says what; it also names the settings kept that the form cannot show, which Apply replaces.
-While the form holds a change, **Reduce**, the ways of its menu, **Reduce them again** and **Download settings** are refused, so that nothing is reduced or saved with settings other than those shown; "Reduce alone" in the row tab, which uses its own parameters, is not.
+While the form holds a change, **Reduce**, the ways of its menu, **Reduce them again** are refused, so that nothing is reduced with settings other than those shown; **Download settings** gives the batch's settings; "Reduce alone" in the row tab, which uses its own parameters, is not.
 **Load settings** and "Put these settings in the form" in the row tab fill the form, after a confirmation if it holds a change; a file that cannot be read whole leaves the form as it was.
 A change of the settings applies to the rows not reduced yet.
 A row reduced before stays `done`, marked "earlier settings", and **Reduce** leaves it (`ess.apps.batch.left_to_reduce`).

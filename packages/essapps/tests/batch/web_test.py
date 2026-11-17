@@ -821,14 +821,14 @@ def test_while_the_form_holds_a_change_nothing_is_reduced(
     assert client.records(label='scan') == []
 
 
-def test_while_the_form_holds_a_change_the_settings_are_not_downloaded(
+def test_while_the_form_holds_a_change_the_batch_s_settings_are_downloaded(
     http: TestClient,
 ) -> None:
     draft(http, 3)
 
     download = http.get('/api/settings.yaml')
 
-    assert download.json() == {'message': 'Apply or discard the settings first.'}
+    assert yaml.safe_load(download.content)['params'] == {}
 
 
 @pytest.mark.parametrize(
