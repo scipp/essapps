@@ -61,25 +61,69 @@ def test_a_step_shows_new_rows_and_runs_and_reduces_the_rows_that_arrived(
     assert len(server.runs().rows) == 3
     assert statuses(after) == {'water': 'running', 'oil': 'incomplete'}
     assert after.follow is not None
-    assert after.follow.stepped is not None
+    assert after.follow.failure is None
     gate.open()
     assert statuses(done(server, client)) == {'water': 'done', 'oil': 'incomplete'}
 
 
+def versions(server: Server) -> tuple[int, int]:
+    return server.version, server.runs_version
+
+
+@pytest.mark.parametrize(
+    'action',
+    [
+        lambda server: None,
+        lambda server: server.scan(),
+        lambda server: server.correct(
+            CellEdit(keys=[server.runs().rows[0].key], column='sample', value='tea')
+        ),
+    ],
+    ids=['nothing', 'rescan', 'correction'],
+)
 def test_a_step_that_finds_nothing_new_changes_no_version(
-    server: Server, client: Client, sample: Measure
+    server: Server, client: Client, sample: Measure, action: Any
 ) -> None:
     sample(1, 'water')
     server.step()
     client.wait(client.records())
     server.step()  # sees the result that finished
-    before = (server.state().version, server.runs().version)
+    action(server)
+    before = versions(server)
 
     server.step()
     server.step()
 
-    assert (server.state().version, server.runs().version) == before
+    assert versions(server) == before
     assert server.poll(before[0], server.start) is None
+
+
+def changed_behind_the_page(server: Server, what: str, fake: FakeFiles) -> None:
+    """Change one thing a step shows, and nothing else, but not by an action."""
+    if what == 'runs':
+        fake.measure(9, 1.0, role='background')
+    elif what == 'rows':
+        server.batch.rows = server.batch.rows.edit('1', {'thickness': 2.0})
+    elif what == 'refusals':
+        server.batch.settings = {**server.batch.settings, 'binning': {'bins': 0}}
+    elif what == 'failure':
+        fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
+
+
+@pytest.mark.parametrize('what', ['runs', 'rows', 'refusals', 'failure'])
+def test_a_step_that_changes_one_thing_the_page_shows_tells_the_page(
+    server: Server, client: Client, sample: Measure, fake: FakeFiles, what: str
+) -> None:
+    sample(1, 'water')
+    server.follow(True)
+    client.wait(client.records())
+    server.step()
+    seen = server.version
+
+    changed_behind_the_page(server, what, fake)
+    server.step()
+
+    assert server.poll(seen, server.start) is not None
 
 
 def test_a_step_after_a_result_finished_tells_the_page(
@@ -233,31 +277,81 @@ def option(server: Server, column: str, run: int) -> str:
     return next(o for o in shown.editor.options if o.startswith(f'run {run}'))
 
 
-def test_an_edit_at_a_column_of_at_is_reduced_at_the_next_step(
-    server: Server, client: Client, sample: Measure, gate: Gate
-) -> None:
-    sample(1, 'water')
-    sample(2, 'oil')
-    server.step()
-    done(server, client)
-
-    other = option(server, 'transmission', 1002)
-    server.edit(CellEdit(keys=['1'], column='transmission', value=other))
-    server.edit(CellEdit(keys=['2'], column='thickness', value=2.0))
-    gate.close()
-    server.step()
-
-    assert statuses(server.state()) == {'water': 'running', 'oil': 'outdated'}
-    gate.open()
-
-
-def test_a_tweak_at_a_column_of_at_says_that_follow_reduces_it_again(
+def test_an_edit_at_a_column_of_at_is_reduced_at_once_while_following(
     server: Server, client: Client, sample: Measure, gate: Gate
 ) -> None:
     sample(1, 'water')
     sample(2, 'oil')
     server.follow(True)
     done(server, client)
+
+    other = option(server, 'transmission', 1002)
+    gate.close()
+    edited = server.edit(CellEdit(keys=['1'], column='transmission', value=other))
+    server.edit(CellEdit(keys=['2'], column='thickness', value=2.0))
+
+    assert statuses(edited) == {'water': 'running', 'oil': 'done'}
+    assert statuses(server.state()) == {'water': 'running', 'oil': 'outdated'}
+    gate.open()
+
+
+def test_while_the_settings_miss_something_follow_waits_and_then_reduces_at_once(
+    server: Server, client: Client, sample: Measure
+) -> None:
+    server.follow(True)
+    server.edit_settings(Edit(path=BINS, op='set', value=None))
+    sample(1, 'water')
+
+    server.step()
+    waiting = server.state()
+    completed = server.edit_settings(Edit(path=BINS, op='set', value=3))
+
+    assert statuses(waiting) == {'water': 'incomplete'}
+    assert (
+        waiting.rows[0].reason == 'Follow waits for the settings: Binning: give a value'
+    )
+    assert statuses(completed) == {'water': 'running'}
+
+
+def test_a_step_that_raises_anywhere_is_said_and_follow_stays_on(
+    server: Server, client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    sample(1, 'water')
+    listed = fake.list
+    fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
+
+    on = server.follow(True)
+    server.tick()
+    failed = server.state().follow
+    fake.list = listed
+    server.tick()
+
+    assert on.follow is not None
+    assert (on.follow.on, on.notice) == (True, 'Following.')
+    assert failed is not None
+    assert 'half written' in (failed.failure or '')
+    assert statuses(done(server, client)) == {'water': 'done'}
+
+
+def test_a_tick_does_nothing_while_not_following(
+    server: Server, client: Client, sample: Measure
+) -> None:
+    sample(1, 'water')
+
+    server.tick()
+
+    assert server.state().rows == []
+
+
+@pytest.mark.parametrize('following', [True, False])
+def test_a_tweak_at_a_column_of_at_says_that_follow_reduces_it_again(
+    server: Server, client: Client, sample: Measure, gate: Gate, following: bool
+) -> None:
+    sample(1, 'water')
+    sample(2, 'oil')
+    server.follow(True)
+    done(server, client)
+    server.follow(following)
     other = option(server, 'transmission', 1002)
     server.edit_tweak('1', Edit(path=['transmission'], op='set', value=other))
 
@@ -268,6 +362,8 @@ def test_a_tweak_at_a_column_of_at_says_that_follow_reduces_it_again(
     assert notice == (
         'Reducing water alone. Its Transmission differs from its cells, so Follow'
         ' reduces it again with its cells once this is done.'
+        if following
+        else 'Reducing water alone.'
     )
 
 
@@ -285,4 +381,4 @@ def test_the_app_steps_while_following_and_stops_with_the_app(
 
     assert state['follow']['on']
     assert [row['name'] for row in state['rows']] == ['water']
-    assert not any(t.name == 'follow' for t in threading.enumerate())
+    assert not any(t.name == 'every' for t in threading.enumerate())

@@ -51,8 +51,13 @@ Given the columns ``at``, the server offers to follow the files: while
 :attr:`Server.following`, a timer calls :meth:`Server.step` every
 ``interval`` seconds, which runs the scan of "Rescan runs" and reduces the
 rows that :func:`~ess.apps.batch.arrived` gives (:mod:`ess.apps.batch.auto`),
-under the lock of every request. A step that raises is said in the state, and
-the next step runs all the same. :func:`~.api.create_app` owns the timer.
+under the lock of every request. It reduces by the rule of "Reduce": nothing
+while the form of the settings misses something. Whatever a step raises is
+said in the state, and the next step runs all the same. Each action is
+followed at once by the second half of a step, the reduction, so that what
+the page shows of Follow is never older than the last action. Whether the
+server follows belongs to its process, not to the definition: a server starts
+with ``follow``. :func:`~.api.create_app` owns the timer.
 """
 
 from __future__ import annotations
@@ -68,7 +73,6 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -86,11 +90,11 @@ from .. import (
     Batch,
     CorrectedFiles,
     RowState,
-    arrived,
     earlier_settings,
     frames,
     left_to_reduce,
     ready,
+    refused_again,
 )
 from .. import Row as TableRow
 from ..auto import Automatic
@@ -204,6 +208,7 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
             server._show_settings()
             try:
                 notice = method(*args, **kwargs)
+                server._follow_now()
             except OSError as error:  # the definitions could not keep a change
                 server._settings_shown = None  # the form shows the batch's again
                 raise Problem(f'The change was not kept: {error}') from None
@@ -291,22 +296,35 @@ class Server:
         # Equal to the rows of the batch at the last change of the version.
         self._rows = batch.rows
         self.runs_version = 1
-        # The runs at the last step of Follow that changed them.
-        self._runs: list[tuple[str, Mapping[str, Any]]] | None = None
+        # The runs as listed at the last change of the runs' version.
+        self._runs = self._runs_seen()
         self.start = uuid.uuid4().hex[:8]
         self.loop = None if at is None else Automatic(batch, at=at)
         self.following = follow
         self.interval = interval
-        self.stepped: datetime | None = None
+        # Why Follow did not reduce each row at its last reduction, by key.
+        self.waiting: dict[str, str] = {}
         self.step_failure: str | None = None
 
     # Reading
 
     def _relist(self) -> None:
         self._listing = Listing(self.batch.client, previous=self._listing)
+        self._refresh()
+
+    def _refresh(self) -> None:
         for fields in (self.settings, self._cells, self.tweak, self._marks):
             if fields is not None:
                 fields.refresh(self._listing)
+
+    def _runs_seen(self) -> dict[FileRef, dict[str, Any]]:
+        """The runs that the Runs view lists, with their metadata."""
+        return {} if self._marks is None else self._listing.listed(Selector())
+
+    def _new_runs(self) -> None:
+        """A new version of the runs, which the Runs view then asks for."""
+        self._runs = self._runs_seen()
+        self.runs_version += 1
 
     def _show_settings(self) -> None:
         """
@@ -386,24 +404,6 @@ class Server:
     def _setting_title(self, error: FieldError) -> str:
         return self.settings.titles.get(str(error.loc[0]), str(error.loc[0]))
 
-    def _follow_refused(
-        self, states: Mapping[str, RowState], compared: bool
-    ) -> dict[str, str]:
-        """
-        While following, why the last step refused the rows that the next step
-        would submit again, by key. Rows not ``compared`` with the settings, as
-        while those are refused, tell this only for the rows with no result.
-        """
-        if self.loop is None or not self.following:
-            return {}
-        refused = self.loop.refused
-        again = (
-            arrived(states, self.loop.at)
-            if compared
-            else [k for k, s in states.items() if s.record is None]
-        )
-        return {k: refused[k] for k in again if k in refused}
-
     @_locked
     def state(self, notice: str = '') -> State:
         """Everything the page shows but a row's details, the plot, and the runs."""
@@ -413,7 +413,11 @@ class Server:
         earlier = (
             set() if unusable else set(earlier_settings(states, self.batch.columns))
         )
-        refused = self._follow_refused(states, compared=not unusable)
+        refused = (
+            refused_again(states, self.loop.at, self.waiting)
+            if self.loop is not None and self.following
+            else {}
+        )
         statuses = {
             k: self._status(s, k in earlier, k in refused) for k, s in states.items()
         }
@@ -437,10 +441,7 @@ class Server:
         for status in statuses.values():
             counts[status] += 1
         missing = self.settings.held()[1]
-        said = [
-            _say(self._setting_title(e), e.msg) if e.loc else e.msg
-            for e in (*missing, *unusable)
-        ]
+        said = [self._said([*missing, *unusable])] if missing or unusable else []
         if self._unfit:
             said.insert(0, f'Settings that this form cannot show: {_join(self._unfit)}')
         problem = '; '.join(said) or None
@@ -481,6 +482,12 @@ class Server:
             notice=notice,
         )
 
+    def _said(self, errors: Sequence[FieldError]) -> str:
+        """Errors of the settings in words, each with its setting's title."""
+        return '; '.join(
+            _say(self._setting_title(e), e.msg) if e.loc else e.msg for e in errors
+        )
+
     def _follow(self) -> Follow | None:
         if self.loop is None:
             return None
@@ -488,7 +495,6 @@ class Server:
             on=self.following,
             interval=self.interval,
             at=sorted(self._cells.titles[c] for c in self.loop.at),
-            stepped=self.stepped,
             failure=self.step_failure,
         )
 
@@ -547,7 +553,7 @@ class Server:
         record = state.record
         reason = ''
         if refused:
-            reason = f'Follow could not reduce it: {forms.message(refused)}'
+            reason = refused
         elif status in ('failed', 'cancelled') and record is not None:
             reason = failures.get(record.id, '')
         elif problems:
@@ -660,18 +666,17 @@ class Server:
     @_action
     def scan(self) -> str:
         """Make the rows from the files again; what was set by hand stays."""
-        self.runs_version += 1
         changes = self._scanned(self._scan)
         return f'Found {self.words.count(len(self.batch.rows))}. {changes}'.strip()
 
-    def _scan(self) -> None:
-        """The scan of "Rescan runs" and of each step of Follow."""
+    def _scan(self, failed: str = 'The scan failed') -> None:
+        """The scan of "Rescan runs", of a correction of runs, and of Follow."""
         try:
             self.batch.scan()
         except SubmitError as error:
             raise Problem('; '.join(map(str, error.errors))) from None
         except Exception as error:  # a source is code of the application
-            raise Problem(f'The scan failed: {error}') from None
+            raise Problem(f'{failed}: {error}') from None
 
     def _incomplete(self) -> set[str]:
         return {k for k, s in self._states()[0].items() if s.problems}
@@ -689,6 +694,7 @@ class Server:
             # New rows may name files that the listing lacks, and a correction
             # of runs changes what it offers, even if the scan then fails.
             self._relist()
+            self._new_runs()
         changed = sum(before.get(r.key) != dict(r.values) for r in self.batch.rows)
         new = self._incomplete() - incomplete
         names = [self._named(r) for r in self.batch.rows if r.key in new]
@@ -837,11 +843,10 @@ class Server:
 
     def step(self) -> None:
         """
-        One step of Follow: the scan of "Rescan runs", then a reduction of the
-        rows that arrived (:meth:`Automatic.reduce`). What it refused, and why
-        it raised, if it did, are in the state until the next step. A step
-        that changes none of these, nor the rows or runs, leaves the version,
-        so that a page polling it gets nothing new.
+        One step of Follow: the scan of "Rescan runs", then the reduction of
+        :meth:`_follow_reduce`. A step that changes nothing the page shows,
+        such as the rows, the runs, the records, what waits and why, or its
+        failure, leaves the version, so that a page polling it gets nothing new.
         """
         with self.lock:
             if self._step():
@@ -849,48 +854,77 @@ class Server:
             self._rows = self.batch.rows
 
     def _step(self) -> bool:
-        """A step of Follow; whether it changed what the page shows."""
-        if self.loop is None:
-            raise Problem('This page does not follow the files.')
-        rows, refused, failure = self._rows, self.loop.refused, self.step_failure
+        """
+        A step of Follow; whether it changed what the page shows. Whatever it
+        raises, from the files, the workflow or the workspace, is its failure,
+        said in the state until a step runs through.
+        """
+        rows, waiting, failure = self._rows, self.waiting, self.step_failure
+        moved = False
         try:
-            self._scan()
-            self.loop.reduce()
+            try:
+                self._scan()
+                self._follow_reduce()
+            finally:
+                moved = self._caught_up()
             self.step_failure = None
         except Exception as error:  # the next step tries again
-            self.step_failure = str(error)
-        finally:
-            # The relisting takes the changes of records that :meth:`poll`
-            # reads: a submission, or a result that finished since the last.
-            client = self.batch.client
-            records = client.changes(after=self._listing.cursor).records
-            self._relist()
-            self.stepped = datetime.now(UTC)
-        runs = self._runs_seen()
-        runs_moved = runs != self._runs
-        if runs_moved:
-            self._runs = runs
-            self.runs_version += 1
-        return bool(
-            records
-            or runs_moved
+            self.step_failure = str(error) or repr(error)
+        return (
+            moved
             or self.batch.rows != rows
-            or self.loop.refused != refused
+            or self.waiting != waiting
             or self.step_failure != failure
         )
 
-    def _runs_seen(self) -> list[tuple[str, Mapping[str, Any]]]:
-        """The runs that the Runs view lists, with their metadata."""
-        if self._files is None:
-            return []
-        files = self._files
-        return [(ref.file, files.metadata(ref)) for ref in files.list(Selector())]
+    def _caught_up(self) -> bool:
+        """
+        A new listing, with one reading of the changes of records, and a new
+        version of the runs if they changed; the forms are refreshed only if
+        either changed. Whether one did.
+        """
+        cursor = self._listing.cursor
+        self._listing = Listing(self.batch.client, previous=self._listing)
+        records = self._listing.cursor != cursor
+        runs = self._runs_seen() != self._runs
+        if runs:
+            self._new_runs()
+        if records or runs:
+            self._refresh()
+        return records or runs
 
-    def tick(self, stop: threading.Event) -> None:
-        """Step every :attr:`interval` seconds while following, until ``stop``."""
-        while not stop.wait(self.interval):
-            if self.following:
-                self.step()
+    def _follow_reduce(self) -> None:
+        """
+        The reduction of a step, by the rule of "Reduce": while the form of
+        the settings misses something, none, and the rows that a step would
+        reduce wait for it; else :meth:`Automatic.reduce`. :attr:`waiting`
+        says why each row was not reduced.
+        """
+        if self.loop is None:
+            raise Problem('This page does not follow the files.')
+        if missing := self.settings.held()[1]:
+            reason = f'Follow waits for the settings: {self._said(missing)}'
+            self.waiting = dict.fromkeys((row.key for row in self.batch.rows), reason)
+            return
+        self.loop.reduce()
+        self.waiting = {
+            key: f'Follow could not reduce it: {forms.message(reason)}'
+            for key, reason in self.loop.refused.items()
+        }
+
+    def _follow_now(self) -> None:
+        """While following, the reduction of a step, after an action."""
+        if not self.following:
+            return
+        try:
+            self._follow_reduce()
+        except Exception as error:  # the next step tries again
+            self.step_failure = str(error) or repr(error)
+
+    def tick(self) -> None:
+        """A step, if following; :func:`~.api.create_app` calls it on a timer."""
+        if self.following:
+            self.step()
 
     # Settings
 
@@ -1085,15 +1119,9 @@ class Server:
         Show the runs as corrected now, and the rows made from them; say what
         changed.
         """
-        self.runs_version += 1
-
-        def scan() -> None:
-            try:
-                self.batch.scan()
-            except Exception as error:  # a source is code of the application
-                raise Problem(f'Corrected, but the scan failed: {error}') from None
-
-        return self._scanned(scan)
+        return self._scanned(
+            functools.partial(self._scan, 'Corrected, but the scan failed')
+        )
 
     @_action
     def correct(self, edit: CellEdit) -> str:

@@ -157,14 +157,13 @@ class Follow(BaseModel):
     """
     Whether the server follows the files, ``on``: a step every ``interval``
     seconds scans them and reduces the rows that arrived, or whose cells
-    changed at the columns titled ``at``. ``stepped`` is when the last step
-    ran, and ``failure`` why it raised, if it did.
+    changed at the columns titled ``at``. ``failure`` says why the last step
+    raised, if it did.
     """
 
     on: bool
     interval: float
     at: list[str]
-    stepped: datetime | None
     failure: str | None
 
 

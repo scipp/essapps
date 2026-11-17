@@ -4,7 +4,7 @@
 The batch page on fake SANS-shaped files and a fake I(Q) reduction, for
 working on the page.
 
-``python -m ess.apps.batch.web.demo [DIRECTORY] [--port N] [--follow]`` serves it on
+``python -m ess.apps.batch.web.demo [DIRECTORY] [--port N]`` serves it on
 ``http://localhost:N``, with the workspace kept in ``DIRECTORY`` (see
 :mod:`ess.apps.folder`), a new temporary folder if not given. The first start
 writes the fake runs and ``files.csv`` there; a later start reuses them, with
@@ -14,8 +14,9 @@ in ``definitions/`` (:mod:`..definition`). The file source reads
 
 With ``--arrive SECONDS [--count N]``, a new folder starts with the empty cell
 and the first few samples, and the runs of one more sample arrive every
-``SECONDS``, until ``N`` have arrived (all if not given). ``--follow`` turns
-the switch "Follow" on.
+``SECONDS``, until ``N`` have arrived (all if not given). ``--follow
+[SECONDS]`` turns the switch "Follow" on from the start, with a step every
+``SECONDS`` (5).
 
 Each sample run holds the size of its particles, so samples differ visibly, and
 the curve depends on the settings. Three samples have no transmission run, one
@@ -287,11 +288,11 @@ def build(
     definitions: FolderDefinitions,
     folder: str = '',
     *,
-    follow: bool = False,
+    follow: float | None = None,
 ) -> FastAPI:
     """
     The application on what :func:`open_demo` returns, scanned; following the
-    files from the start if ``follow``.
+    files from the start, with a step every ``follow`` seconds, if given.
     """
     batch = Batch(
         client,
@@ -321,7 +322,8 @@ def build(
         marks=Marks,
         folder=folder,
         at={'sample', 'transmission'},
-        follow=follow,
+        follow=follow is not None,
+        interval=follow or 5.0,
     )
 
 
@@ -333,7 +335,14 @@ def main() -> None:
         '--arrive', type=float, metavar='SECONDS', help='a sample every SECONDS'
     )
     parser.add_argument('--count', type=int, help='the samples that arrive')
-    parser.add_argument('--follow', action='store_true', help='turn Follow on')
+    parser.add_argument(
+        '--follow',
+        type=float,
+        nargs='?',
+        const=5.0,
+        metavar='SECONDS',
+        help='follow the files from the start, a step every SECONDS (5)',
+    )
     args = parser.parse_args()
     if args.count is not None and args.arrive is None:
         parser.error('--count goes with --arrive')
@@ -363,7 +372,7 @@ def main() -> None:
         _serve(directory, args.port, follow=args.follow)
 
 
-def _serve(directory: Path, port: int, *, follow: bool) -> None:
+def _serve(directory: Path, port: int, *, follow: float | None) -> None:
     import uvicorn
 
     client, files, definitions = open_demo(directory)

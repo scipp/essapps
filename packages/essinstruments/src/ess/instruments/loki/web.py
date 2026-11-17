@@ -4,7 +4,7 @@
 The batch page of LoKI's I(Q) on a workspace folder, as a web page
 (:mod:`ess.apps.batch.web`). It needs the extra ``[loki-app]``::
 
-    python -m ess.instruments.loki.web FOLDER [--port 8000] [--follow]
+    python -m ess.instruments.loki.web FOLDER [--port 8000] [--follow [SECONDS]]
 
 ``FOLDER`` is a workspace folder (:mod:`ess.apps.folder`): its ``files.csv``
 says the run, role and sample of each file, as ``essapps-batch files`` writes
@@ -36,9 +36,11 @@ The command persists the outputs, so the page then offers the masks in the
 settings, under "Masks", "From a result". ``path:`` names a file by its path in
 the folder, as ``files.csv`` lists it.
 
-The switch "Follow" of the page, or ``--follow`` from the start, reduces each
-row once both its runs are listed, and again when one of them changes, such as
-a newer transmission run of its sample (:data:`AT`).
+The switch "Follow" of the page, or ``--follow`` from the start, with a step
+every ``SECONDS`` (5), reduces each row once both its runs are listed, and
+again when one of them changes, such as a newer transmission run of its sample
+(:data:`AT`). Whether the page follows is not kept: a restart starts with
+``--follow`` or without.
 """
 
 from __future__ import annotations
@@ -105,14 +107,13 @@ def build(
     *,
     folder: str = '',
     settings: Mapping[str, Any] | None = None,
-    follow: bool = False,
-    interval: float = 5.0,
+    follow: float | None = None,
 ) -> FastAPI:
     """
     The page of the I(Q) batch of ``client``, labelled ``iofq``, scanned. The
     batch persists its results and keeps its definition in ``definitions``; it
-    starts with ``settings`` unless the definitions hold some. ``follow`` turns
-    Follow on from the start, with a step every ``interval`` seconds.
+    starts with ``settings`` unless the definitions hold some. Given ``follow``,
+    Follow is on from the start, with a step every ``follow`` seconds.
     """
     batch = iofq_batch(client, persist=True, settings=settings, definitions=definitions)
     batch.scan()
@@ -126,8 +127,8 @@ def build(
         marks=Marks,
         folder=folder,
         at=AT,
-        follow=follow,
-        interval=interval,
+        follow=follow is not None,
+        interval=follow or 5.0,
     )
 
 
@@ -137,7 +138,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description='Serve the LoKI batch page.')
     parser.add_argument('folder', type=Path, help='the workspace folder')
     parser.add_argument('--port', type=int, default=8000)
-    parser.add_argument('--follow', action='store_true', help='turn Follow on')
+    parser.add_argument(
+        '--follow',
+        type=float,
+        nargs='?',
+        const=5.0,
+        metavar='SECONDS',
+        help='follow the files from the start, a step every SECONDS (5)',
+    )
     args = parser.parse_args()
     if not (STATIC / 'vendor').is_dir():
         parser.exit(1, f'The page needs its libraries: sh {STATIC / "vendor.sh"}\n')

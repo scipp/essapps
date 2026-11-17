@@ -301,7 +301,7 @@ function renderRefused(refused) {
   showMessage('Nothing was reduced.', refused.map((e) => e.text), key);
 }
 
-// The switch of Follow, and when its last step ran or why it failed.
+// The switch of Follow, and why its last step failed, if it did.
 function renderFollow(follow) {
   $('follow').hidden = !follow;
   $('follow-status').hidden = !follow?.on;
@@ -313,9 +313,7 @@ function renderFollow(follow) {
   status.classList.toggle('bad', Boolean(follow.failure));
   status.textContent = follow.failure
     ? `Last step failed: ${follow.failure}`
-    : follow.stepped
-      ? `Last step ${clock(follow.stepped)}`
-      : '';
+    : `Following, every ${follow.interval} s`;
   status.title = status.textContent;
 }
 
@@ -527,11 +525,6 @@ function when(iso) {
   const t = new Date(iso);
   const two = (n) => String(n).padStart(2, '0');
   return `${t.getFullYear()}-${two(t.getMonth() + 1)}-${two(t.getDate())} ${two(t.getHours())}:${two(t.getMinutes())}`;
-}
-
-// A time as 13:11:05, in the time zone of the browser.
-function clock(iso) {
-  return new Date(iso).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false});
 }
 
 function tweakBox(row) {

@@ -14,7 +14,7 @@ path, since a key may hold any character.
 
 from __future__ import annotations
 
-import threading
+import itertools
 from collections.abc import AsyncIterator, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager
@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import Batch, CorrectedFiles
+from ..auto import every
 from .models import (
     Key,
     Keys,
@@ -98,14 +99,8 @@ def create_app(
         if server.loop is None:
             yield
             return
-        stop = threading.Event()
-        timer = threading.Thread(target=server.tick, args=(stop,), name='follow')
-        timer.start()
-        try:
+        with every(server.interval, itertools.repeat(server.tick)):
             yield
-        finally:
-            stop.set()
-            timer.join()
 
     app = FastAPI(title=f'{server.title}: batch', lifespan=lifespan)
     app.state.server = server

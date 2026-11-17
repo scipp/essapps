@@ -88,6 +88,8 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 | `arrived(states, at)` | ready rows with no result, or whose request differs from their result's at a column of `at` ([Automatic reduction](#automatic-reduction)) |
 | `earlier_settings(states, columns)` | ready rows whose completed result differs from their request only at settings, not at a column, and of the same spec; no tweak |
 | `left_to_reduce(states, columns)` | the rows of `remaining` but those of `earlier_settings` |
+| `refused_again(states, at, refused)` | of the reasons `refused` by row, those of the rows of `arrived`: why the next step of a loop will be refused again |
+| `status_texts(states, columns)` | the status of each row as a table shows it: `completed, earlier settings` for a row of `earlier_settings` |
 | `summary(states)` | the number of rows in each state |
 
 **A row's state is read from its result.** `state()` compares each row's request, its cells with the settings, with the request of its result, and says where they differ:
@@ -440,7 +442,7 @@ One command holds the folder at a time. If a command was killed, the next one fi
 ## The UI
 
 [The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows a batch in a browser: how to run it, its layers, and its limits.
-A change of its settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Apply to all** in the settings reduces those rows again, after a confirmation that names how many. Given the columns `at`, the page offers a switch **Follow**: a step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, in the page's own process and batch.
+A change of its settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Apply to all** in the settings reduces those rows again, after a confirmation that names how many. Given the columns `at`, the page offers a switch **Follow**: a step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, in the page's own process and batch. It reduces by the rule of **Reduce**, so nothing while the settings form misses something, and each action of a person is followed at once by a step's reduction. Whether the page follows belongs to its process, not to the definition: a restart starts with `--follow` or without.
 
 `BatchView` is a tab for `App`:
 
@@ -474,7 +476,7 @@ python -m ess.apps.batch.panel.demo ws     # the rows show as completed
 | **Write settings** | `text.write_template(batch.template(), path)` |
 | **Export selected** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows selected |
 
-`reduce` refuses a table with a row that cannot run, so remove the incomplete rows before writing it. A table loaded is set by hand: each cell that differs from the row shown is an edit, a row the batch removed is brought back, and a row the batch does not show is added, so it stays after **Scan files**, and the definitions keep it. The `status` of a table written is what the view shows, such as `outdated` or `not reduced`. `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table. A relative path is relative to the working directory of the app.
+`reduce` refuses a table with a row that cannot run, so remove the incomplete rows before writing it. A table loaded is set by hand: each cell that differs from the row shown is an edit, a row the batch removed is brought back, and a row the batch does not show is added, so it stays after **Scan files**, and the definitions keep it. The `status` of a table written is what the view shows, such as `outdated`, `not reduced`, or `completed, earlier settings` (`status_texts`); the downloads of the web page write the same. `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table. A relative path is relative to the working directory of the app.
 
 `draw(records)` gets the completed results of the rows selected, by key, and returns a Panel object.
 

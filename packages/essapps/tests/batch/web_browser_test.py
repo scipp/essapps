@@ -334,4 +334,4 @@ def test_with_follow_on_rows_appear_and_are_reduced_without_a_click(
 
     following.wait_for_selector('#rows .tabulator-row:has-text("sds")')
     following.wait_for_selector('.chip.st-done .n:text-is("2")')
-    assert following.inner_text('#follow-status').startswith('Last step ')
+    assert following.inner_text('#follow-status') == 'Following, every 0.2 s'
