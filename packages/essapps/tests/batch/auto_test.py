@@ -10,7 +10,15 @@ from typing import Any
 import pytest
 
 from ess.apps import Client, file
-from ess.apps.batch import Batch, CorrectedFiles, FileInfo, Row, RowSource
+from ess.apps.batch import (
+    Batch,
+    CorrectedFiles,
+    DefinitionStore,
+    FileInfo,
+    FolderDefinitions,
+    Row,
+    RowSource,
+)
 from ess.apps.batch.auto import Automatic
 from ess.apps.folder import open_folder
 from ess.apps.testing import FakeFiles
@@ -33,13 +41,22 @@ SETTINGS: dict[str, Any] = {'binning': {'bins': 2}}
 
 @pytest.fixture
 def loop(batch: Batch) -> Automatic:
-    return Automatic(batch, at={'sample'}, settings=lambda: SETTINGS)
+    return Automatic(batch, at={'sample'})
 
 
-def _loop(client: Any, source: RowSource = pair) -> Automatic:
+def _loop(
+    client: Any, source: RowSource = pair, definitions: DefinitionStore | None = None
+) -> Automatic:
     """A loop on ``client``, which may be a fake that wraps a client."""
-    batch = Batch(client, PLAIN, columns=COLUMNS, label='scan', source=source)
-    return Automatic(batch, at={'sample'}, settings=lambda: SETTINGS)
+    batch = Batch(
+        client,
+        PLAIN,
+        columns=COLUMNS,
+        label='scan',
+        source=source,
+        definitions=definitions,
+    )
+    return Automatic(batch, at={'sample'})
 
 
 def _angles(files: Sequence[FileInfo]) -> list[Row]:
@@ -53,7 +70,7 @@ def _angles(files: Sequence[FileInfo]) -> list[Row]:
 @pytest.fixture
 def series(client: Client) -> Automatic:
     batch = Batch(client, SERIES, columns=('runs',), label='series', source=_angles)
-    return Automatic(batch, at={'runs'}, settings=dict)
+    return Automatic(batch, at={'runs'})
 
 
 def _per_sample(files: Sequence[FileInfo]) -> list[Row]:
@@ -76,7 +93,7 @@ def _repeated(client: Client, at: set[str]) -> Automatic:
         label='repeated',
         source=_per_sample,
     )
-    return Automatic(batch, at=at, settings=lambda: SETTINGS)
+    return Automatic(batch, at=at)
 
 
 # The files of the section "The model: tables and one cycle" of the guide, in
@@ -144,7 +161,7 @@ def test_a_row_is_reduced_again_for_a_change_at_a_column_of_at(
         assert loop.refused == {}
 
     assert {name: rows for name, rows in seen.items() if rows} == reduced
-    state = loop.batch.state(SETTINGS)
+    state = loop.batch.state()
     assert {key: s.text for key, s in state.items()} == texts
 
 
@@ -156,7 +173,7 @@ def test_a_row_with_an_empty_cell_waits_and_its_state_says_why(
 
     assert loop.step() == {}
     assert loop.refused == {}
-    (problem,) = loop.batch.state(SETTINGS)['1'].problems
+    (problem,) = loop.batch.state()['1'].problems
     assert str(problem) == '1: trans_runs: empty'
 
 
@@ -177,19 +194,19 @@ def test_each_new_row_is_reduced_once(
 @pytest.mark.parametrize('at', [{'offset', 'sample'}, {'offset'}])
 def test_every_element_of_at_must_be_a_column(batch: Batch, at: set[str]) -> None:
     with pytest.raises(KeyError, match='offset'):
-        Automatic(batch, at=at, settings=dict)
+        Automatic(batch, at=at)
 
 
 def test_at_is_a_set_not_a_column_name(batch: Batch) -> None:
     with pytest.raises(TypeError, match='a set of columns'):
-        Automatic(batch, at='sample', settings=dict)  # type: ignore[arg-type]
+        Automatic(batch, at='sample')  # type: ignore[arg-type]
 
 
 def test_the_batch_must_have_a_source(client: Client) -> None:
     batch = Batch(client, PLAIN, columns=COLUMNS, label='scan')
 
     with pytest.raises(ValueError, match='no source'):
-        Automatic(batch, at={'sample'}, settings=dict)
+        Automatic(batch, at={'sample'})
 
 
 def test_a_failed_row_is_reduced_again_only_for_a_change_at_at(
@@ -242,7 +259,7 @@ def test_a_new_loop_of_any_submitter_reduces_only_the_rows_without_a_result(
     sample(2, 'sds')
 
     batch = Batch(other, STAGED, columns=COLUMNS, label='scan', source=pair)
-    restarted = Automatic(batch, at={'sample'}, settings=lambda: SETTINGS)
+    restarted = Automatic(batch, at={'sample'})
 
     assert list(restarted.step()) == ['2']
 
@@ -269,7 +286,7 @@ def test_a_restart_on_the_same_folder_reduces_nothing_again(
             source=_with_first_transmission,
             persist=True,
         )
-        return Automatic(batch, at=set(COLUMNS), settings=lambda: SETTINGS)
+        return Automatic(batch, at=set(COLUMNS))
 
     with open_folder(folder, folder_bindings) as first:
         reduced = loop(first).step()
@@ -299,7 +316,7 @@ def test_refusals_that_only_submit_finds_are_tried_again_at_every_step(
     batch = Batch(
         client, PLAIN, columns=(*COLUMNS, 'offset'), label='scan', source=with_offset
     )
-    loop = Automatic(batch, at={'sample'}, settings=lambda: SETTINGS)
+    loop = Automatic(batch, at={'sample'})
     for run, name in [(2, 'sds'), (3, 'dmso'), (4, 'd2o')]:
         sample(run, name)
     refused = {
@@ -309,7 +326,7 @@ def test_refusals_that_only_submit_finds_are_tried_again_at_every_step(
 
     assert list(loop.step()) == ['1', '4']
     assert loop.refused == refused
-    assert batch.state(SETTINGS)['2'].text == 'not reduced'
+    assert batch.state()['2'].text == 'not reduced'
     assert loop.step() == {}
     assert loop.refused == refused
 
@@ -339,7 +356,7 @@ def test_a_refusal_that_names_no_row_refuses_every_row_of_the_step(
     batch = Batch(
         submits, PLAIN, columns=COLUMNS, label='scan', source=pair, persist=True
     )
-    loop = Automatic(batch, at={'sample'}, settings=lambda: SETTINGS)
+    loop = Automatic(batch, at={'sample'})
     sample(1, 'water')
     sample(2, 'sds')
 
@@ -360,7 +377,7 @@ def test_a_cell_the_workspace_does_not_accept_makes_its_row_wait(
 
     assert list(loop.step()) == ['1']
     assert loop.refused == {}
-    assert batch.state(SETTINGS)['2'].text == 'incomplete'
+    assert batch.state()['2'].text == 'incomplete'
 
     batch.rows = batch.rows.edit('2', {'thickness': 1.0})
 
@@ -376,14 +393,14 @@ def test_a_record_of_another_batch_on_the_label_is_replaced_if_it_differs_at_at(
     page = Batch(client, STAGED, columns=COLUMNS, label='scan', source=pair)
     page.scan()
     page.rows = page.rows.edit('1', {'sample': other})
-    client.wait(page.reduce(SETTINGS, ['1']))
+    client.wait(page.reduce(['1']))
 
     (record,) = loop.step().values()
 
     assert record.request.params['sample'] == run
 
 
-def test_after_a_restart_a_row_edited_at_at_is_reduced_again_as_the_source_gives_it(
+def test_without_a_store_a_row_edited_at_at_is_reduced_again_after_a_restart(
     client: Client, sample: Measure, fake: FakeFiles
 ) -> None:
     run = sample(1, 'water')
@@ -398,6 +415,23 @@ def test_after_a_restart_a_row_edited_at_at_is_reduced_again_as_the_source_gives
 
     assert edited.request.params['sample'] == other
     assert record.request.params['sample'] == run
+
+
+def test_with_a_store_a_row_edited_at_at_keeps_its_edit_after_a_restart(
+    client: Client, sample: Measure, fake: FakeFiles, tmp_path: Path
+) -> None:
+    store = FolderDefinitions(tmp_path)
+    sample(1, 'water')
+    other = fake.measure(77, 7.0, role='sample', sample='other')
+    loop = _loop(client, definitions=store)
+    client.wait(loop.step())
+    loop.batch.rows = loop.batch.rows.edit('1', {'sample': other})
+    client.wait(loop.step())
+
+    restarted = _loop(client, definitions=store)
+
+    assert restarted.step() == {}
+    assert restarted.batch.rows['1'].values['sample'] == other
 
 
 def test_a_row_whose_key_changes_is_reduced_under_its_new_key(
@@ -426,7 +460,7 @@ def test_a_list_at_at_in_another_order_reduces_the_row_again(
         return [Row('si', {'runs': [f.ref for f in ordered]})]
 
     batch = Batch(client, SERIES, columns=('runs',), label='series', source=runs)
-    loop = Automatic(batch, at={'runs'}, settings=dict)
+    loop = Automatic(batch, at={'runs'})
     fake.measure(1, 1.0, sample='si')
     fake.measure(2, 2.0, sample='si')
     client.wait(loop.step())
@@ -440,20 +474,19 @@ def test_a_list_at_at_in_another_order_reduces_the_row_again(
 def test_refused_settings_refuse_every_ready_row_until_they_change(
     batch: Batch, client: Client, sample: Measure
 ) -> None:
-    settings = SETTINGS
-    loop = Automatic(batch, at={'sample'}, settings=lambda: settings)
+    loop = Automatic(batch, at={'sample'})
     sample(1, 'water')
     client.wait(loop.step())
     sample(2, 'sds')
     sample(3, 'dmso', partner=False)
 
-    settings = {'binning': {'bins': 0}}
+    batch.settings = {'binning': {'bins': 0}}
     assert loop.step() == {}
     assert loop.refused == dict.fromkeys(
         ['1', '2'], 'binning.bins: Input should be greater than or equal to 1'
     )
 
-    settings = SETTINGS
+    batch.settings = SETTINGS
     assert list(loop.step()) == ['2']
     assert loop.refused == {}
 
@@ -461,18 +494,17 @@ def test_refused_settings_refuse_every_ready_row_until_they_change(
 def test_a_changed_setting_reduces_no_row_again_and_its_rows_read_outdated(
     batch: Batch, client: Client, sample: Measure
 ) -> None:
-    settings = SETTINGS
-    loop = Automatic(batch, at={'sample'}, settings=lambda: settings)
+    loop = Automatic(batch, at={'sample'})
     sample(1, 'water')
     client.wait(loop.step())
 
-    settings = {'binning': {'bins': 3}}
+    batch.settings = {'binning': {'bins': 3}}
     sample(2, 'sds')
 
     (record,) = loop.step().values()
     assert record.member == '2'
     assert record.request.params['binning'] == {'bins': 3}
-    old = batch.state(settings)['1']
+    old = batch.state()['1']
     assert (old.text, old.changed) == ('outdated', {'binning'})
 
 
@@ -503,10 +535,10 @@ def test_a_result_of_another_spec_counts_at_the_columns_it_holds(
     client.wait(client.submit(FIND, params={'sample': run}, label='scan', member='1'))
     batch.scan()
 
-    state = batch.state(SETTINGS)['1']
+    state = batch.state()['1']
     assert (state.text, state.spec_changed) == ('outdated', True)
     assert state.changed == {'binning', 'transmission', 'thickness', 'offset'}
-    loop = Automatic(batch, at=at, settings=lambda: SETTINGS)
+    loop = Automatic(batch, at=at)
     assert list(loop.step()) == reduced
 
 
@@ -536,8 +568,8 @@ def test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before(
         client, PLAIN, columns=(*COLUMNS, 'offset'), label='reduce', source=with_offset
     )
     loops = [
-        Automatic(find, at={'sample'}, settings=dict),
-        Automatic(reduce, at={'sample'}, settings=lambda: SETTINGS),
+        Automatic(find, at={'sample'}),
+        Automatic(reduce, at={'sample'}),
     ]
     sample(1, 'water')
 
@@ -592,13 +624,12 @@ class Raising:
         return self.function(*args)
 
 
-@pytest.mark.parametrize('raising', ['settings', 'source'])
 def test_a_step_that_raises_as_a_running_record_finishes_loses_nothing(
-    client: Client, fake: FakeFiles, gate: Gate, raising: str
+    client: Client, fake: FakeFiles, gate: Gate
 ) -> None:
-    settings, source = Raising(dict), Raising(_angles)
+    source = Raising(_angles)
     batch = Batch(client, SERIES, columns=('runs',), label='series', source=source)
-    loop = Automatic(batch, at={'runs'}, settings=settings)
+    loop = Automatic(batch, at={'runs'})
     gate.close()
     fake.measure(1, 1.0, sample='si')
     first = loop.step()
@@ -607,10 +638,10 @@ def test_a_step_that_raises_as_a_running_record_finishes_loses_nothing(
     gate.open()
     client.wait(first)
 
-    (settings if raising == 'settings' else source).on = True
+    source.on = True
     with pytest.raises(RuntimeError):
         loop.step()
-    settings.on = source.on = False
+    source.on = False
 
     (record,) = loop.step().values()
     assert len(record.request.params['runs']) == 2

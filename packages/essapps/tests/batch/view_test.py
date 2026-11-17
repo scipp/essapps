@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The tab through its widgets and actions, on a real in-process workspace."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -11,17 +11,19 @@ import panel as pn
 import pytest
 from pydantic import BaseModel
 
-from ess.apps import Client, Listing, Record, Template
-from ess.apps.batch import Batch, CorrectedFiles, cli
+from ess.apps import Client, Listing, Record, Selector, Template
+from ess.apps.batch import Batch, CorrectedFiles, FolderDefinitions, cli
+from ess.apps.batch.definition import Key, settings_key
 from ess.apps.batch.frames import RESULT, read_table, rows_of, write_table
 from ess.apps.batch.panel import BatchView, RunSheet
 from ess.apps.batch.panel.demo import build, open_demo
 from ess.apps.batch.panel.view import Draw
-from ess.apps.batch.text import write_template
+from ess.apps.batch.text import load_template, write_template
+from ess.apps.fields import ChoiceField, ScalarField
 from ess.apps.panel import App
 from ess.apps.testing import FakeFiles
 
-from .toys import COLUMNS, STAGED, Gate, Measure, Params
+from .toys import COLUMNS, STAGED, Gate, Measure, Params, pair
 
 pn.extension('tabulator')
 
@@ -89,6 +91,47 @@ def test_reduce_all_runs_the_ready_rows_and_says_so(
     assert results(view) == {'1': 'completed', '2': 'completed', '3': 'incomplete'}
     assert view.message.object == 'Submitted 2 rows.'
     assert view.summary.object == '2 completed, 1 incomplete'
+
+
+def bins(view: BatchView) -> ScalarField:
+    """The input of the number of bins in the settings form, as a person types in it."""
+    field = view.settings.fields['binning']
+    group = field.ways[field.chosen] if isinstance(field, ChoiceField) else field
+    return group.fields['bins']
+
+
+def test_the_form_starts_with_the_settings_of_the_batch(
+    batch: Batch, measured: None
+) -> None:
+    batch.settings = {'binning': {'bins': 5}}
+
+    assert BatchView(batch).settings.held()[0]['binning'] == {'bins': 5}
+
+
+def test_settings_assigned_by_code_show_in_the_form_and_are_exported(
+    view: BatchView, tmp_path: Path
+) -> None:
+    view.batch.settings = {'binning': {'bins': 7}}
+    view.path.value = str(tmp_path / 's.yaml')
+
+    view.write_settings()
+
+    assert load_template(tmp_path / 's.yaml').params['binning'] == {'bins': 7}
+    assert view.settings.held()[0]['binning'] == {'bins': 7}
+
+
+def test_a_form_with_something_missing_writes_nothing_and_refuses_an_export(
+    view: BatchView, tmp_path: Path
+) -> None:
+    bins(view).value = 4
+    bins(view).value = None
+    view.path.value = str(tmp_path / 's.yaml')
+
+    view.write_settings()
+
+    assert view.batch.settings['binning'] == {'bins': 4}
+    assert not (tmp_path / 's.yaml').exists()
+    assert 'binning.bins: give a value' in view.message.object
 
 
 def test_settings_refused_are_named_in_the_message(
@@ -408,6 +451,67 @@ def test_a_correction_on_the_run_sheet_reaches_the_rows(
     assert frame.set_index('File').loc['run 2', 'Role'] == 'transmission'
 
 
+class Failing:
+    """Definitions that hold nothing, and fail to keep anything."""
+
+    def load[T](self, key: Key, read: Callable[[Any], T]) -> T | None:
+        return None
+
+    def save(self, key: Key, data: Any) -> None:
+        raise OSError('disk full')
+
+
+def test_a_correction_on_the_run_sheet_that_cannot_be_kept_says_so(
+    client: Client, fake: FakeFiles, sample: Measure
+) -> None:
+    sample(1, 'water')
+    files = CorrectedFiles(fake, definitions=Failing())
+    sheet = RunSheet(files, client, Marks)
+    refs = fake.list(Selector())
+
+    sheet.table.select_keys(refs)
+    sheet.form.set({'role': 'transmission'}, Listing(client))
+    sheet.correct()
+
+    assert sheet.message.object == 'Not corrected, since it was not kept: disk full'
+    assert [files.corrections(r) for r in refs] == [{}, {}]
+
+
+def test_a_change_the_definitions_cannot_keep_says_so_and_the_form_shows_the_batch(
+    client: Client, measured: None
+) -> None:
+    batch = Batch(
+        client, STAGED, columns=COLUMNS, label='f', source=pair, definitions=Failing()
+    )
+    view = BatchView(batch)
+    view.scan()
+
+    bins(view).value = 4
+    shown = view.message.object
+    view.table.select_keys(['1'])
+    view.remove()
+
+    assert shown == 'The settings were not kept: disk full'
+    assert view.message.object == 'The change was not kept: disk full'
+    assert view.settings.held()[0]['binning'] == {'bins': 2}
+    assert '1' in batch.rows
+
+
+def test_settings_kept_that_the_form_cannot_show_are_named_and_the_view_starts(
+    tmp_path: Path,
+) -> None:
+    kept = {'spec': {'name': 'demo-reduction', 'version': 1}, 'params': {'binning': 5}}
+    FolderDefinitions(tmp_path).save(settings_key('demo'), kept)
+    client, files, batch = open_demo(tmp_path, 3)
+
+    with client:
+        view = build(client, files, batch).tabs['Batch']
+
+    assert view.message.object.startswith(
+        'Settings that this form cannot show:\n\n- binning = 5: 5 is not a group'
+    )
+
+
 def test_a_field_chosen_on_the_run_sheet_is_written_at_its_default(
     client: Client, files: CorrectedFiles, fake: FakeFiles
 ) -> None:
@@ -427,7 +531,7 @@ def test_the_app_shows_its_tabs_first_and_refreshes_them(
     app = App(client, tabs={'Batch': view})
 
     assert view.table.widget in app.panel()[0].objects
-    batch.reduce(view.settings.params, ['1'])
+    batch.reduce(['1'])
     client.wait(client.records(label='scan'))
     app.poll()
     assert results(view)['1'] == 'completed'
@@ -451,7 +555,7 @@ def test_the_demo_builds_and_reduces(tmp_path: Path) -> None:
 # The files of the command
 
 
-def test_rows_loaded_from_a_table_take_the_place_of_the_scan_under_the_edits(
+def test_rows_loaded_from_a_table_are_set_by_hand_over_the_edits(
     view: BatchView, tmp_path: Path
 ) -> None:
     view.batch.rows = view.batch.rows.edit('1', {'thickness': 3.0})
@@ -462,8 +566,13 @@ def test_rows_loaded_from_a_table_take_the_place_of_the_scan_under_the_edits(
 
     view.load_rows()
 
-    assert results(view) == {'1': 'incomplete', 'new': 'incomplete'}
-    assert view.batch.rows['1'].values['thickness'] == 3.0
+    assert results(view) == {
+        '1': 'incomplete',
+        '2': 'not reduced',
+        '3': 'incomplete',
+        'new': 'incomplete',
+    }
+    assert 'thickness' not in view.batch.rows['1'].values
     assert view.message.object == 'Loaded 2 rows.'
 
 
@@ -485,7 +594,7 @@ def test_a_table_saved_has_the_results_and_its_rows_read_back(
 ) -> None:
     reduced.path.value = str(tmp_path / 'rows.csv')
 
-    reduced.save_rows()
+    reduced.write_rows()
 
     table = read_table(tmp_path / 'rows.csv')
     assert list(table['status']) == ['completed', 'completed', 'incomplete']
@@ -502,7 +611,7 @@ def test_settings_saved_as_a_template_are_loaded_back(
 ) -> None:
     saved = view.settings.params
     view.path.value = str(tmp_path / 'settings.yaml')
-    view.save_settings()
+    view.write_settings()
     view.settings.set({'binning': {'bins': 9}}, Listing(client))
 
     view.load_settings()
@@ -542,8 +651,8 @@ def test_the_command_reduces_what_the_demo_saved_and_the_demo_shows_it(
     view = demo_view(tmp_path, samples=3)
     with view.batch.client:
         for name, save in (
-            ('rows.csv', view.save_rows),
-            ('s.yaml', view.save_settings),
+            ('rows.csv', view.write_rows),
+            ('s.yaml', view.write_settings),
         ):
             view.path.value = str(tmp_path / name)
             save()

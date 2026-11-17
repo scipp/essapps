@@ -15,7 +15,7 @@ The batch is a chain of tables, of which only the files and the records grow on 
 files   = client.files.list(selector)                   # with their metadata
 rows    = source(files)                                 # Batch.scan: plain data in and out
 results = records under the batch's label, by member    # the history, read as a table
-state   = rows with settings, joined with results on key == member   # Batch.state(settings)
+state   = rows with settings, joined with results on key == member   # Batch.state()
 todo    = rule(state)                                   # remaining for a person, arrived for the loop
 submit(todo)                                            # appends to the history, so results change
 ```
@@ -24,17 +24,17 @@ Automatic reduction steps this chain with a *loop*, an `ess.apps.batch.auto.Auto
 
 ```python
 batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'), label='auto/iofq',
-              source=pair_by_sample, staged=True, persist=True)
-loop = Automatic(batch, at={'sample'}, settings=lambda: load_settings('iofq.yaml'))
+              source=pair_by_sample, staged=True, persist=True, settings=defaults)
+loop = Automatic(batch, at={'sample'})
 run([loop])              # steps until one raises
 
 # one step
 batch.scan()
-state = batch.state(settings)
-batch.reduce(settings, arrived(state, at))
+state = batch.state()
+batch.reduce(arrived(state, at))
 ```
 
-`settings` is called at each step, so a setting changed during a beamtime applies to the rows reduced from then on.
+A step reads the batch's settings, so a setting changed during a beamtime, `batch.settings = new`, applies to the rows reduced from then on.
 The loop is a controller: it runs in a process of its own or in a notebook, never in the workspace.
 
 ## Which rows run
@@ -87,7 +87,7 @@ So a label has one batch:
 ```python
 page = Batch(client, IOFQ, ..., label='auto/iofq', source=pair_by_sample)   # a second batch on the loop's label
 page.rows = page.rows.edit('60339', {'sample': file(run=60400)})
-page.reduce(settings, ['60339'])   # the row's result now holds run 60400 at `sample`
+page.reduce(['60339'])             # the row's result now holds run 60400 at `sample`
 loop.step()                        # differs from the loop's row at `at`: reduced again with the source's file
 ```
 
@@ -101,10 +101,11 @@ A loop on a new label starts from the first file. A person's batch under its own
 
 Nothing that decides which rows run.
 A step reads the files, the batch's rows and settings, and the records under the label, and works out the rest.
-`Automatic` keeps its batch, `at`, the settings callable, and `refused`, the reasons of the last step, which no step reads.
+`Automatic` keeps its batch, `at`, and `refused`, the reasons of the last step, which no step reads.
 So a step that raises, in the settings, the source, or a submission, loses nothing: the next step tries again.
 A restarted loop reduces no row again whose cells come from the source alone.
-An edit lives in the `Batch` and is lost at a restart, so a row that was edited at a column of `at` is reduced again with the source's cells.
+The batch's definitions keep its edits and settings ([`ess.apps.batch.definition`](../../packages/essapps/src/ess/apps/batch/definition.py)), so with them an edited row is not reduced again either.
+Without one, the edits are gone at a restart, and a row that was edited at a column of `at` is reduced again with the source's cells.
 A record that was running when the workspace ended is failed at the restart, and one that had not started is cancelled unless it persists outputs ([`Workspace._restart`](../../packages/essapps/src/ess/apps/workspace.py)); the loop does not run such a row again, and a person retries it.
 This holds while the proposal's history is kept. A running loop keeps it, since its calls keep the proposal from being idle ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
 
@@ -139,7 +140,7 @@ A reason that names no row refuses every row of the step.
 `Automatic.refused` holds the reasons of the last step by key, for a page to show.
 Nothing is kept to spare a retry, so a refused row is submitted again at every step, and refused again until what it references changes.
 
-Settings that the workspace does not accept make `Batch.state(settings)` raise a `SubmitError`, since no row can run with them.
+Settings that the workspace does not accept make `Batch.state()` raise a `SubmitError`, since no row can run with them.
 The step then submits nothing, and `refused` holds the reason for every ready row, such as `{'1': 'unknown spec sans-iofq/v1'}` after an upgrade removed the spec (E2).
 
 ## Chains
@@ -155,8 +156,8 @@ def samples(files):
             for k, s in transmissions.state().items() if s.record}
     return [Row(key, {'sample': run, 'transmission': done[name].ref('transmission')}) ...]
 
-run([Automatic(transmissions, at={'run'}, settings=...),
-     Automatic(Batch(client, IOFQ, ..., source=samples), at={'sample'}, settings=...)])
+run([Automatic(transmissions, at={'run'}),
+     Automatic(Batch(client, IOFQ, ..., source=samples), at={'sample'})])
 ```
 
 A sample that arrives before its transmission run waits with an empty cell.
@@ -164,7 +165,7 @@ In the step in which the transmission is submitted, the sample's row references 
 If the transmission's record has failed by the time the sample's row is made, the row waits: a cell reads a failed record.
 If it fails after, the sample's record fails with it, and the row is not reduced again unless a cell at `at` changes.
 A transmission reduced again gives a new record, so the sample's cell `transmission` changes: the row is reduced again if `transmission` is in `at`, and reads `outdated` otherwise.
-A source is recomputed at every step, so a chain survives a restart, which a reference set by hand in a cell (an edit) does not.
+A source is recomputed at every step, so a chain follows each new record of the first batch, which a reference set by hand in a cell (an edit) does not.
 The source reads the state of every row of the first batch at every step.
 
 ## Cost
@@ -172,11 +173,11 @@ The source reads the state of every row of the first batch at every step.
 Some instruments in full operation are expected to write 10 000 to 100 000 files per proposal, and a file every few seconds.
 The numbers below are measured against that scale.
 
-A step lists every file, runs the source over all of them, and reads the state of every row with the settings:
+A step lists every file, runs the source over all of them, and reads the state of every row:
 
 ```python
 batch.scan()                    # every file listed, the source run over all
-state = batch.state(settings)   # per row: its problems, its cells compared with its result's
+state = batch.state()           # per row: its problems, its cells compared with its result's
                                 # request, the status of its result; the settings resolved once
 ```
 

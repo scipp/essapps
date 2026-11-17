@@ -113,7 +113,7 @@ The stories use these calls:
 
 ```python
 batch = Batch(client, SPEC, columns=(...), label=..., source=rows_of_files, persist=True)
-auto = Automatic(batch, at={'sample'}, settings=lambda: settings)
+auto = Automatic(batch, at={'sample'})   # reads batch.settings at each step
 auto.step()       # scans, and reduces the rows that arrived; their records by key
 auto.refused      # why rows of the last step were refused by submit, by key
 ```
@@ -646,7 +646,8 @@ def per_run(files):                                            # every raw file
     return [Row(str(f.metadata['run']), {'sample': f.ref}) for f in files]
 
 def iofq_batch(client):
-    return Batch(client, IOFQ, columns=('sample',), label='iofq', source=per_run, persist=True)
+    return Batch(client, IOFQ, columns=('sample',), label='iofq', source=per_run, persist=True,
+                 settings={'normalization': None})
 ```
 
 ### E1. Series grows, reduction follows
@@ -663,8 +664,9 @@ def angles(files):                                             # a row per sampl
             runs.setdefault(f.metadata['sample'], []).append(f.ref)
     return [Row(sample, {'runs': refs}) for sample, refs in runs.items()]
 
-batch = Batch(client, STITCH, columns=('runs',), label='reflectivity', source=angles, persist=True)
-auto = Automatic(batch, at={'runs'}, settings=lambda: {'reference': reference})
+batch = Batch(client, STITCH, columns=('runs',), label='reflectivity', source=angles, persist=True,
+              settings={'reference': reference})
+auto = Automatic(batch, at={'runs'})
 
 r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
 client.wait(auto.step())                                       # a row still running waits for its record
@@ -690,7 +692,7 @@ Actor: instrument scientist. Goal: after an upgrade removed the spec version of 
 
 ```python
 upgraded = upgrade(specs=[IOFQ_V2])                            # version 1 is gone
-auto = Automatic(iofq_batch(upgraded), at={'sample'}, settings=lambda: {'normalization': None})
+auto = Automatic(iofq_batch(upgraded), at={'sample'})
 measure(1, [1.0, 1.0], role='sample')
 
 assert auto.step() == {}
@@ -702,7 +704,7 @@ assert auto.refused == {'1': 'unknown spec sans-iofq/v1'}
 Actor: none; a failure mode. Goal: a published result that SciCat lists as a dataset does not make a row.
 
 ```python
-auto = Automatic(iofq_batch(client), at={'sample'}, settings=lambda: {'normalization': None})
+auto = Automatic(iofq_batch(client), at={'sample'})
 measure(1, [1.0, 2.0, 3.0, 4.0])
 (reduced,) = auto.step().values()
 pid = client.publish(reduced.ref('iofq'), 'scicat')
@@ -718,12 +720,12 @@ A published entry is a file of kind `'derived'`, and a batch's source is given o
 Actor: instrument scientist. Goal: new runs use the improved settings; earlier results stay; the results made before the improvement can be found.
 
 ```python
-settings = {'normalization': None}
-auto = Automatic(iofq_batch(client), at={'sample'}, settings=lambda: settings)
+auto = Automatic(iofq_batch(client), at={'sample'})
 first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
 (before,) = auto.step().values()
 
-settings = {'reduction': Reduction(threshold=1.5), 'normalization': None}   # read at the next step
+settings = {'reduction': Reduction(threshold=1.5), 'normalization': None}
+auto.batch.settings = settings                                  # read at the next step
 second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
 (after,) = auto.step().values()
 
@@ -732,9 +734,11 @@ assert after.request.files() == [second]                        # run 1 is not r
 assert [user.output(r, 'iofq').values.tolist() for r in (before, after)] == [
     [3.0, 7.0], [2.0, 7.0]]
 batch = iofq_batch(user)                                        # a batch of its own on the label
+batch.settings = settings
 batch.scan()
-outdated = [k for k, s in batch.state(settings).items() if s.outdated]
-assert [batch.state()[k].record.request.files() for k in outdated] == [[first]]   # to reprocess, if the user wants
+states = batch.state()
+outdated = [k for k, s in states.items() if s.outdated]
+assert [states[k].record.request.files() for k in outdated] == [[first]]   # to reprocess, if the user wants
 ```
 
 The loop reduces a row with a result again only for a change at a column of `at`, `sample` here, so a changed setting does not reduce run 1 again. A restarted loop reads the same from the records. A row's state, read from its newest record, names the setting that changed since (`s.changed == {'reduction'}`), for any `Batch` on the label.

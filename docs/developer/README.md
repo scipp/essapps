@@ -296,11 +296,12 @@ def transmission_runs(files: Sequence[FileInfo]) -> list[Row]:
             for f in files if f.metadata.get('role') == 'transmission']
 
 batch = Batch(client, TRANSMISSION, columns=('run',), label='transmission',
-              source=transmission_runs, persist=True)
-run([Automatic(batch, at={'run'}, settings=lambda: {'empty_beam': file(run=60336)})])
+              source=transmission_runs, persist=True,
+              settings={'empty_beam': file(run=60336)})
+run([Automatic(batch, at={'run'})])
 ```
 
-Which rows run follows from the files, the batch's rows, and the records under its label, so a restarted loop reduces no row again that has no edits. A label has one batch: the loop replaces a record under its label whose cells at `at` differ from its rows.
+Which rows run follows from the files, the batch's rows, and the records under its label, so a restarted loop reduces no row again whose result equals its row at `at`, unless the files changed it. The batch's definitions keep its edits and settings (`ess.apps.batch.definition`); without them, a row edited at `at` is reduced again with the source's cells. A label has one batch: the loop replaces a record under its label whose cells at `at` differ from its rows.
 
 ## Provenance and publication
 

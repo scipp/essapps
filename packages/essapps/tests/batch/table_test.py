@@ -142,3 +142,36 @@ def test_a_row_given_with_empty_has_that_cell_empty() -> None:
 
     assert t['a'].values == {'y': 1}
     assert t['b'].values == {}
+
+
+def test_rows_put_show_their_cells_and_a_cell_that_was_the_same_follows_the_scan(
+    table: RowTable,
+) -> None:
+    put = table.edit('a', {'y': 5}).put(
+        [Row('a', {'x': 1}), Row('c', {'x': 4}, {'name': 'new'})], columns=('x', 'y')
+    )
+
+    assert cells(put) == {'a': {'x': 1}, 'b': {'x': 3}, 'c': {'x': 4}}
+    assert put['c'].info == {'name': 'new'}
+    assert cells(put.rescan([Row('a', {'x': 8, 'y': 9})])) == {
+        'a': {'x': 8},
+        'c': {'x': 4},
+    }
+
+
+def test_rows_put_with_a_key_twice_are_refused(table: RowTable) -> None:
+    with pytest.raises(SubmitError, match='c'):
+        table.put([Row('c'), Row('c')], columns=('x',))
+
+
+def test_a_row_put_that_was_removed_is_brought_back_with_its_cells(
+    table: RowTable,
+) -> None:
+    put = table.remove('a').put([Row('a', {'x': 1, 'y': 5})], columns=('x', 'y'))
+
+    assert cells(put) == {'a': {'x': 1, 'y': 5}, 'b': {'x': 3}}
+    assert (put.removed, put.added, dict(put.edits)) == (
+        frozenset(),
+        (),
+        {'a': {'y': 5}},
+    )

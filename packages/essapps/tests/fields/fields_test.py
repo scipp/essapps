@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+import re
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -386,6 +387,34 @@ def test_a_union_marked_referenced_offers_one_choice_of_alternatives_and_record(
 def test_set_refuses_a_tag_of_no_alternative(client: Client, form: Fields) -> None:
     with pytest.raises(ValueError, match='side: not an alternative'):
         form.set({'detector': {'kind': 'side'}}, Listing(client))
+
+
+@pytest.mark.parametrize(
+    ('params', 'said'),
+    [
+        ({'sample': 2.0}, '2.0 is not a group'),
+        ({'detector': 'side'}, "'side': not one of"),
+    ],
+)
+def test_set_refuses_a_value_of_another_shape_as_a_value_it_cannot_show(
+    client: Client, form: Fields, params: dict[str, Any], said: str
+) -> None:
+    with pytest.raises(ValueError, match=re.escape(said)):
+        form.set(params, Listing(client))
+
+
+def test_set_fitting_shows_what_fits_and_names_each_other_with_its_value(
+    client: Client, form: Fields
+) -> None:
+    params = {'sample': {'thickness': 2.0}, 'detector': 'side', 'gone': 1}
+
+    unfit = form.set_fitting(params, Listing(client))
+
+    assert unfit == [
+        'gone = 1: not a setting here',
+        "detector = \"side\": 'side': not one of ['Front', 'Rear bank']",
+    ]
+    assert form.held()[0]['sample'] == {'thickness': 2.0}
 
 
 def test_a_record_is_offered_and_lists_each_fitting_output_while_readable(

@@ -5,6 +5,7 @@
 import io
 import zipfile
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -16,7 +17,8 @@ from pydantic import BaseModel, Field
 
 from ess.apps import Client, local
 from ess.apps.batch import Batch, CorrectedFiles
-from ess.apps.batch.web import Shown, create_app, plots
+from ess.apps.batch.definition import Key, settings_key
+from ess.apps.batch.web import Shown, create_app, demo, plots
 from ess.apps.testing import CountingClient, FakeFiles
 from ess.spec import SampleRunFile, WorkflowSpec, function_binding
 
@@ -320,7 +322,7 @@ def test_a_row_reduced_by_another_spec_version_is_outdated(
             for s in (PLAIN, v2)
         )
         old.scan()
-        client.wait(old.reduce({}, ['1']))
+        client.wait(old.reduce(['1']))
         new.scan()
         page = TestClient(create_app(new))
 
@@ -400,30 +402,205 @@ def test_the_table_downloaded_and_uploaded_gives_the_same_rows(
     ]
 
 
-def test_a_table_loaded_replaces_what_was_set_by_hand_until_a_rescan(
+def test_a_table_loaded_is_set_by_hand_and_stays_after_a_rescan(
     http: TestClient,
 ) -> None:
-    thickness(http, ['1'], 4)
     content = http.get('/api/table.csv').content
+    thickness(http, ['1'], 4)
 
     loaded = http.post('/api/table', params={'name': 'rows.csv'}, content=content)
+    http.post('/api/scan')
 
-    assert loaded.json()['loaded'] == 'rows.csv'
+    assert loaded.json()['notice'] == 'Loaded 3 rows from rows.csv.'
     assert rows(http)['1']['cells']['thickness'] == {
-        'value': 4.0,
-        'text': '4.0',
-        'edited': False,
-        'scanned': '4.0',
+        'value': None,
+        'text': '',
+        'edited': True,
+        'scanned': '',
         'problem': None,
     }
-    scanned = http.post('/api/scan').json()
-    assert scanned['loaded'] is None
-    assert scanned['notice'] == 'Found 3 rows. 1 row changed.'
-    assert rows(http)['1']['cells']['thickness']['text'] == ''
+    assert not rows(http)['2']['cells']['thickness']['edited']
+
+
+def test_a_page_on_settings_kept_for_another_version_starts_and_names_them(
+    tmp_path: Path,
+) -> None:
+    client, files, store = demo.open_demo(tmp_path)
+    kept = {'spec': {'name': 'demo-iofq', 'version': 1}, 'params': {'gone': 1}}
+    store.save(settings_key('demo-iofq'), kept)
+
+    with client:
+        shown = state(TestClient(demo.build(client, files, store)))
+
+    assert shown['settings_problem'] == (
+        'Settings that this form cannot show: gone = 1: not a setting here; '
+        'gone: not a parameter of demo-iofq'
+    )
+
+
+def test_settings_kept_that_the_form_cannot_show_are_named_and_kept_until_a_change(
+    tmp_path: Path,
+) -> None:
+    client, files, definitions = demo.open_demo(tmp_path)
+    params = {'wavelength': 5.0, 'corrections': {'banks': 3, 'solid_angle': False}}
+    kept = {'spec': {'name': 'demo-iofq', 'version': 1}, 'params': params}
+    definitions.save(settings_key('demo-iofq'), kept)
+
+    with client:
+        page = TestClient(demo.build(client, files, definitions))
+        shown = state(page)
+        still = definitions.load(settings_key('demo-iofq'), lambda d: d['params'])
+        page.post(
+            '/api/settings',
+            json={'path': ['wavelength', 'start'], 'op': 'set', 'value': 3},
+        )
+        after = state(page)
+
+    assert shown['settings_problem'].startswith(
+        'Settings that this form cannot show: wavelength = 5.0: 5.0 is not a group'
+    )
+    assert (
+        'corrections = {"banks":3,"solid_angle":false}: ' in shown['settings_problem']
+    )
+    assert still == params
+    assert after['settings_problem'] is None
+
+
+class Flaky:
+    """Definitions in memory, which fail to keep anything while ``fail`` is set."""
+
+    def __init__(self) -> None:
+        self.kept: dict[Key, Any] = {}
+        self.saves = 0
+        self.fail = False
+
+    def load[T](self, key: Key, read: Callable[[Any], T]) -> T | None:
+        return read(self.kept[key]) if key in self.kept else None
+
+    def save(self, key: Key, data: Any) -> None:
+        if self.fail:
+            raise OSError('disk full')
+        self.saves += 1
+        self.kept[key] = data
+
+
+@pytest.fixture
+def flaky() -> Flaky:
+    return Flaky()
+
+
+@pytest.fixture
+def kept(client: Client, fake: FakeFiles, sample: Measure, flaky: Flaky) -> TestClient:
+    """A page on a batch and runs whose definitions are :class:`Flaky`."""
+    sample(1, 'water')
+    sample(2, 'sds')
+    batch = Batch(
+        client, STAGED, columns=COLUMNS, label='kept', source=pair, definitions=flaky
+    )
+    batch.scan()
+    files = CorrectedFiles(fake, definitions=flaky)
+    return TestClient(create_app(batch, files=files, marks=Marks))
+
+
+def test_a_change_the_definitions_cannot_keep_answers_422_and_nothing_changes(
+    kept: TestClient, flaky: Flaky
+) -> None:
+    flaky.fail = True
+
+    setting = kept.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 7})
+    cell = thickness(kept, ['1'], 3)
+    (binning, *_) = state(kept)['settings']
+
+    assert setting.status_code == 422
+    assert setting.json()['message'] == 'The change was not kept: disk full'
+    assert cell == {'message': 'The change was not kept: disk full'}
+    assert binning['child']['children'][0]['value'] == 2
+    assert not rows(kept)['1']['cells']['thickness']['edited']
+
+
+def test_a_correction_of_several_runs_is_one_write_and_all_or_none(
+    kept: TestClient, flaky: Flaky
+) -> None:
+    keys = [r['key'] for r in kept.get('/api/runs').json()['rows'][:2]]
+    edit = {'keys': keys, 'column': 'role', 'value': 'transmission'}
+
+    flaky.fail = True
+    refused = kept.post('/api/runs/cells', json=edit)
+    roles = [
+        r['cells']['role']['edited'] for r in kept.get('/api/runs').json()['rows'][:2]
+    ]
+    flaky.fail = False
+    kept.post('/api/runs/cells', json=edit)
+
+    assert refused.status_code == 422
+    assert roles == [False, False]
+    assert flaky.saves == 1
+
+
+def test_an_edit_at_a_name_that_is_not_a_column_can_be_removed(
+    http: TestClient, batch: Batch
+) -> None:
+    batch.rows = batch.rows.edit('1', {'gone': 1})
+    shown = rows(http)['1']
+
+    http.post('/api/cells/revert', json={'keys': ['1'], 'column': 'gone'})
+
+    assert (shown['status'], shown['strays']) == ('incomplete', ['gone'])
+    assert (rows(http)['1']['status'], rows(http)['1']['strays']) == ('ready', [])
+
+
+def test_a_table_loaded_on_a_page_not_scanned_is_set_on_the_scan(
+    batch: Batch, sample: Measure
+) -> None:
+    sample(1, 'water')
+    page = TestClient(create_app(batch))
+    content = b'key,sample,transmission,thickness\n1,1,1001,3\n'
+
+    loaded = page.post('/api/table', params={'name': 'rows.csv'}, content=content)
+
+    assert loaded.status_code == 200
+    assert batch.rows.added == ()
+    assert batch.rows['1'].values['thickness'] == 3.0
+
+
+def test_what_a_person_set_on_the_page_is_there_when_it_is_served_again(
+    tmp_path: Path,
+) -> None:
+    def served() -> tuple[Client, TestClient]:
+        client, files, store = demo.open_demo(tmp_path)
+        return client, TestClient(demo.build(client, files, store))
+
+    client, page = served()
+    with client:
+        run = page.get('/api/runs').json()['rows'][1]['key']
+        page.post(
+            '/api/cells', json={'keys': ['60302'], 'column': 'thickness', 'value': 2.5}
+        )
+        page.post(
+            '/api/settings',
+            json={'path': ['wavelength', 'start'], 'op': 'set', 'value': 3},
+        )
+        page.post(
+            '/api/runs/cells',
+            json={'keys': [run], 'column': 'sample', 'value': 'moved'},
+        )
+        before = state(page)
+        runs = page.get('/api/runs').json()
+
+    client, page = served()
+    with client:
+        after = state(page)
+        assert page.get('/api/runs').json()['rows'] == runs['rows']
+    wavelength = {tuple(n['path']): n for n in after['settings']}['wavelength',]
+    assert wavelength['child']['children'][0]['value'] == 3.0
+    assert runs['rows'][1]['cells']['sample']['edited']
+    assert after['rows'] == before['rows']
+    assert after['settings'] == before['settings']
+    assert {r['key']: r for r in after['rows']}['60302']['cells']['thickness']['edited']
 
 
 def test_the_settings_downloaded_and_uploaded_are_the_same(
-    http: TestClient,
+    http: TestClient, batch: Batch
 ) -> None:
     content = http.get('/api/settings.yaml').content
     http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 9})
@@ -432,6 +609,36 @@ def test_the_settings_downloaded_and_uploaded_are_the_same(
 
     (binning, *_) = state(http)['settings']
     assert binning['child']['children'][0]['value'] == 2
+    assert batch.settings['binning'] == {'bins': 2}
+
+
+def test_settings_assigned_by_code_show_and_an_edit_of_another_keeps_them(
+    http: TestClient, batch: Batch
+) -> None:
+    batch.settings = {'binning': {'bins': 5}, 'offset': {'value': 1.5}}
+
+    (binning, *_) = state(http)['settings']
+    http.post(
+        '/api/settings', json={'path': ['offset', 'value'], 'op': 'set', 'value': 2}
+    )
+
+    assert binning['child']['children'][0]['value'] == 5
+    assert batch.settings == {'binning': {'bins': 5}, 'offset': {'value': 2.0}}
+
+
+def test_settings_with_something_missing_are_not_written_reduced_or_downloaded(
+    http: TestClient, batch: Batch, client: Client
+) -> None:
+    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 3})
+    before = dict(batch.settings)
+
+    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': None})
+    reduce = http.post('/api/reduce', json={'which': 'remaining'})
+    download = http.get('/api/settings.yaml')
+
+    assert batch.settings == before
+    assert (reduce.status_code, download.status_code) == (422, 422)
+    assert client.records(label='scan') == []
 
 
 @pytest.mark.parametrize(
@@ -447,7 +654,7 @@ def test_a_settings_file_that_cannot_be_loaded_says_why_in_a_sentence(
 ) -> None:
     if content is None:  # a settings file with a value of the wrong kind
         template = yaml.safe_load(http.get('/api/settings.yaml').content)
-        template['params']['binning']['bins'] = 'two'
+        template['params']['binning'] = {'bins': 'two'}
         content = yaml.safe_dump(template).encode()
 
     response = http.post('/api/settings.yaml', params={'name': 'f'}, content=content)

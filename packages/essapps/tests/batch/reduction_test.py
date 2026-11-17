@@ -53,6 +53,7 @@ def scanned(batch: Batch, sample: Measure) -> Batch:
     sample(1, 'water')
     sample(2, 'sds')
     batch.scan()
+    batch.settings = SETTINGS
     return batch
 
 
@@ -64,7 +65,7 @@ def test_a_scan_makes_rows_from_the_files(scanned: Batch) -> None:
 def test_rows_are_reduced_and_found_by_their_key(
     scanned: Batch, client: Client
 ) -> None:
-    records = scanned.reduce(SETTINGS, ['1', '2'])
+    records = scanned.reduce(['1', '2'])
     client.wait(records)
 
     assert client.output(records['2'], 'total') == 2.0
@@ -88,10 +89,10 @@ def test_the_state_of_chosen_rows_asks_the_status_of_their_records_only(
     sample(1, 'water')
     sample(2, 'sds')
     batch.scan()
-    client.wait(batch.reduce(SETTINGS, ['1']))
+    client.wait(batch.reduce(['1']))
     counting.reads.clear()
 
-    assert list(batch.state(keys=['2'])) == ['2']
+    assert list(batch.state(['2'])) == ['2']
     assert counting.reads['status'] == 0
 
 
@@ -121,10 +122,78 @@ def test_a_batch_without_a_source_cannot_scan(client: Client) -> None:
         Batch(client, STAGED, columns=COLUMNS, label='scan').scan()
 
 
+def test_a_batch_starts_with_a_copy_of_the_settings_given(
+    client: Client, sample: Measure
+) -> None:
+    sample(1, 'water')
+    given = {'binning': {'bins': 3}}
+    batch = Batch(
+        client, PLAIN, columns=COLUMNS, label='s', source=pair, settings=given
+    )
+    batch.scan()
+    given['binning']['bins'] = 4
+
+    records = batch.reduce(['1'])
+
+    assert records['1'].request.params['binning'] == {'bins': 3}
+
+
+def test_settings_that_name_a_column_are_refused(scanned: Batch) -> None:
+    with pytest.raises(ValueError, match='thickness'):
+        scanned.settings = {**SETTINGS, 'thickness': 4.0}
+    with pytest.raises(ValueError, match='thickness'):
+        Batch(
+            scanned.client,
+            PLAIN,
+            columns=COLUMNS,
+            label='s',
+            settings={'thickness': 4.0},
+        )
+
+    assert scanned.settings == SETTINGS
+
+
+def test_a_reduction_compares_no_row_and_a_state_resolves_the_settings_once(
+    client: Client, sample: Measure
+) -> None:
+    counting = CountingClient(client)
+    batch = Batch(
+        counting,  # type: ignore[arg-type]
+        PLAIN,
+        columns=COLUMNS,
+        label='scan',
+        source=pair,
+    )
+    sample(1, 'water')
+    batch.scan()
+    client.wait(batch.reduce(['1']))
+    batch.settings = OTHER_SETTINGS
+
+    client.wait(batch.reduce(['1']))
+    batch.results()
+    reduced = counting.reads['resolve']
+    batch.state()
+
+    assert (reduced, counting.reads['resolve']) == (0, 1)
+
+
+def test_the_settings_change_only_by_an_assignment_of_all_of_them(
+    scanned: Batch,
+) -> None:
+    given = {'binning': {'bins': 3}}
+    scanned.settings = given
+    given['binning']['bins'] = 4
+    scanned.settings['binning']['bins'] = 5
+
+    with pytest.raises(TypeError):
+        scanned.settings['binning'] = {'bins': 6}  # type: ignore[index]
+    assert scanned.settings == {'binning': {'bins': 3}}
+
+
 def test_an_empty_cell_of_a_column_with_a_default_gets_it(
     scanned: Batch, client: Client
 ) -> None:
-    records = scanned.reduce(SETTINGS, ['1'])
+    records = scanned.reduce(['1'])
 
     assert records['1'].request.params['thickness'] == 1.0
 
@@ -137,7 +206,7 @@ def test_a_person_can_add_a_row_by_run_number(
         Row('mine', {'sample': file(run=7), 'transmission': file(run=1007)})
     )
 
-    records = batch.reduce(SETTINGS, ['mine'])
+    records = batch.reduce(['mine'])
     client.wait(records)
 
     assert client.output(records['mine'], 'total') == 7.0
@@ -152,7 +221,7 @@ def test_a_row_without_a_partner_is_skipped_by_ready_and_refused_when_picked(
 
     assert ready(batch.state()) == ['1']
     with pytest.raises(SubmitError) as error:
-        batch.reduce(SETTINGS, ['2'])
+        batch.reduce(['2'])
     assert [(e.entry, e.loc) for e in error.value.errors] == [('2', ('transmission',))]
 
 
@@ -164,7 +233,7 @@ def test_every_refused_row_is_named_and_none_is_submitted(
     )
 
     with pytest.raises(SubmitError) as error:
-        scanned.reduce(SETTINGS, ['1', '2'])
+        scanned.reduce(['1', '2'])
 
     assert [(e.entry, e.loc) for e in error.value.errors] == [
         ('1', ('thickness',)),
@@ -184,8 +253,10 @@ def test_a_reason_about_the_settings_is_named_once_without_a_key(
     )
     batch.scan()
 
+    batch.settings = {'binning': {'bins': 0}}
+
     with pytest.raises(SubmitError) as error:
-        batch.reduce({'binning': {'bins': 0}}, ['1', '2'])
+        batch.reduce(['1', '2'])
 
     assert [(e.entry, e.loc[0]) for e in error.value.errors] == [(None, 'binning')]
     batch.close()
@@ -198,7 +269,7 @@ def test_a_binding_without_stages_works_with_staged_off(
     batch = Batch(client, PLAIN, columns=COLUMNS, label='plain', source=pair)
     batch.scan()
 
-    records = batch.reduce(SETTINGS, ['1'])
+    records = batch.reduce(['1'])
 
     assert client.wait(records) == {'1': 'completed'}
 
@@ -206,8 +277,8 @@ def test_a_binding_without_stages_works_with_staged_off(
 def test_the_stage_is_reused_while_the_settings_stay(
     scanned: Batch, client: Client, staged_binding: StagedFunction
 ) -> None:
-    client.wait(scanned.reduce(SETTINGS, ['1']))
-    client.wait(scanned.reduce(dict(SETTINGS), ['2']))
+    client.wait(scanned.reduce(['1']))
+    client.wait(scanned.reduce(['2']))
 
     assert len(staged_binding.staged) == 1
 
@@ -215,8 +286,9 @@ def test_the_stage_is_reused_while_the_settings_stay(
 def test_changed_settings_open_a_new_stage(
     scanned: Batch, client: Client, staged_binding: StagedFunction
 ) -> None:
-    client.wait(scanned.reduce(SETTINGS, ['1']))
-    client.wait(scanned.reduce(OTHER_SETTINGS, ['1']))
+    client.wait(scanned.reduce(['1']))
+    scanned.settings = OTHER_SETTINGS
+    client.wait(scanned.reduce(['1']))
 
     assert len(staged_binding.staged) == 2
 
@@ -224,13 +296,13 @@ def test_changed_settings_open_a_new_stage(
 def test_a_row_refused_leaves_the_stage_alone(
     scanned: Batch, client: Client, staged_binding: StagedFunction
 ) -> None:
-    client.wait(scanned.reduce(SETTINGS, ['1']))
+    client.wait(scanned.reduce(['1']))
     scanned.rows = scanned.rows.edit('2', {'thickness': -1.0})
     with pytest.raises(SubmitError):
-        scanned.reduce(SETTINGS, ['2'])
+        scanned.reduce(['2'])
     scanned.rows = scanned.rows.reset('2')
 
-    client.wait(scanned.reduce(SETTINGS, ['2']))
+    client.wait(scanned.reduce(['2']))
 
     assert len(staged_binding.staged) == 1
 
@@ -239,16 +311,18 @@ def test_a_stage_that_failed_is_replaced_within_one_reduce(
     scanned: Batch, client: Client, staged_binding: StagedFunction
 ) -> None:
     staged_binding.fail_next = True
-    assert client.wait(scanned.reduce(SETTINGS, ['1'])) == {'1': 'failed'}
+    assert client.wait(scanned.reduce(['1'])) == {'1': 'failed'}
 
-    records = scanned.reduce(SETTINGS, ['1', '2'])
+    records = scanned.reduce(['1', '2'])
 
     assert client.wait(records) == {'1': 'completed', '2': 'completed'}
 
 
 def test_a_rerun_becomes_the_result(scanned: Batch, client: Client) -> None:
-    client.wait(scanned.reduce(OTHER_SETTINGS, ['1']))
-    again = scanned.reduce(SETTINGS, ['1'])
+    scanned.settings = OTHER_SETTINGS
+    client.wait(scanned.reduce(['1']))
+    scanned.settings = SETTINGS
+    again = scanned.reduce(['1'])
     client.wait(again)
 
     assert scanned.state()['1'].record == again['1']
@@ -257,28 +331,31 @@ def test_a_rerun_becomes_the_result(scanned: Batch, client: Client) -> None:
 def test_an_edited_row_is_outdated_and_left_to_do(
     scanned: Batch, client: Client
 ) -> None:
-    client.wait(scanned.reduce(SETTINGS, ['1', '2']))
+    client.wait(scanned.reduce(['1', '2']))
     scanned.rows = scanned.rows.edit('1', {'thickness': 2.0})
 
-    assert remaining(scanned.state(SETTINGS)) == ['1']
+    assert remaining(scanned.state()) == ['1']
 
 
 def test_changed_settings_make_every_result_outdated(
     scanned: Batch, client: Client
 ) -> None:
-    client.wait(scanned.reduce(SETTINGS, ['1', '2']))
+    client.wait(scanned.reduce(['1', '2']))
 
-    assert remaining(scanned.state(SETTINGS)) == []
-    assert remaining(scanned.state(OTHER_SETTINGS)) == ['1', '2']
+    assert remaining(scanned.state()) == []
+    scanned.settings = OTHER_SETTINGS
+    assert remaining(scanned.state()) == ['1', '2']
 
 
 def test_changed_names_the_cell_and_the_setting_that_differ(
     scanned: Batch, client: Client
 ) -> None:
-    client.wait(scanned.reduce(SETTINGS, ['1', '2']))
+    client.wait(scanned.reduce(['1', '2']))
     scanned.rows = scanned.rows.edit('1', {'thickness': 2.0})
 
-    changed = {k: s.changed for k, s in scanned.state(OTHER_SETTINGS).items()}
+    scanned.settings = OTHER_SETTINGS
+
+    changed = {k: s.changed for k, s in scanned.state().items()}
 
     assert changed == {'1': {'binning', 'thickness'}, '2': {'binning'}}
 
@@ -286,14 +363,14 @@ def test_changed_names_the_cell_and_the_setting_that_differ(
 def test_a_second_batch_on_the_label_reads_the_same_changed(
     scanned: Batch, client: Client
 ) -> None:
-    client.wait(scanned.reduce(SETTINGS, ['1', '2']))
+    client.wait(scanned.reduce(['1', '2']))
     second = Batch(client, STAGED, columns=COLUMNS, label='scan', source=pair)
     second.scan()
     for batch in (scanned, second):
         batch.rows = batch.rows.edit('1', {'thickness': 2.0})
 
     def changed(batch: Batch) -> dict[str, frozenset[str]]:
-        return {k: s.changed for k, s in batch.state(SETTINGS).items()}
+        return {k: s.changed for k, s in batch.state().items()}
 
     assert changed(second) == changed(scanned) == {'1': {'thickness'}, '2': set()}
 
@@ -301,21 +378,23 @@ def test_a_second_batch_on_the_label_reads_the_same_changed(
 def test_a_default_written_out_and_a_file_by_name_do_not_change_a_row(
     scanned: Batch, client: Client
 ) -> None:
-    client.wait(scanned.reduce({}, ['1', '2']))
+    scanned.settings = {}
+    client.wait(scanned.reduce(['1', '2']))
     by_name = {'sample': file(run=1), 'transmission': file(run=1001), 'thickness': 1.0}
     scanned.rows = scanned.rows.edit('1', by_name)
+    scanned.settings = {'binning': {'bins': 2}, 'offset': None}
 
-    states = scanned.state({'binning': {'bins': 2}, 'offset': None})
+    states = scanned.state()
 
     assert {k: s.changed for k, s in states.items()} == {'1': set(), '2': set()}
     assert remaining(states) == []
 
 
 def test_a_cleared_cell_is_one_problem(scanned: Batch, client: Client) -> None:
-    client.wait(scanned.reduce(SETTINGS, ['1']))
+    client.wait(scanned.reduce(['1']))
     scanned.rows = scanned.rows.edit('1', {'sample': EMPTY})
 
-    state = scanned.state(SETTINGS)['1']
+    state = scanned.state()['1']
 
     assert [(e.loc, e.msg) for e in state.problems] == [(('sample',), 'empty')]
 
@@ -326,13 +405,13 @@ def test_a_file_named_before_it_is_measured_is_a_problem_until_it_is(
     row = Row('9', {'sample': file(run=9), 'transmission': file(run=1001)})
     scanned.rows = scanned.rows.add(row)
 
-    before = scanned.state(SETTINGS)
+    before = scanned.state()
     sample(9, 'oil')
-    after = scanned.state(SETTINGS)
+    after = scanned.state()
 
     assert [e.loc for e in before['9'].problems] == [('sample',)]
     assert ready(before) == ['1', '2']
-    assert scanned.state()['9'].problems == ()
+    assert scanned.results()['9'].problems == ()
     assert (after['9'].problems, after['9'].text) == ((), 'not reduced')
 
 
@@ -340,10 +419,10 @@ def test_an_older_record_that_ends_later_is_not_the_result(
     scanned: Batch, client: Client, gate: Gate
 ) -> None:
     gate.close()
-    older = scanned.reduce(SETTINGS, ['1'])['1']
+    older = scanned.reduce(['1'])['1']
     scanned.state()
     cells = {**scanned.rows['1'].values, 'thickness': 1.0}
-    request = scanned.template(SETTINGS).fill(params=cells)
+    request = scanned.template().fill(params=cells)
     newer = client.submit(request, label='scan', member='1')
     client.cancel([older])
 
@@ -355,11 +434,11 @@ def test_an_older_record_that_ends_later_is_not_the_result(
 def test_a_record_under_another_label_is_not_a_rows_result(
     scanned: Batch, client: Client
 ) -> None:
-    mine = scanned.reduce(SETTINGS, ['1'])['1']
+    mine = scanned.reduce(['1'])['1']
     client.wait(mine)
     scanned.state()
     cells = {**scanned.rows['1'].values, 'thickness': 1.0}
-    request = scanned.template(SETTINGS).fill(params=cells)
+    request = scanned.template().fill(params=cells)
 
     client.compute(request, label='other', member='1')
 
@@ -369,10 +448,10 @@ def test_a_record_under_another_label_is_not_a_rows_result(
 def test_a_cell_refused_is_a_problem_of_its_row_and_not_changed(
     scanned: Batch, client: Client
 ) -> None:
-    client.wait(scanned.reduce(SETTINGS, ['1', '2']))
+    client.wait(scanned.reduce(['1', '2']))
     scanned.rows = scanned.rows.edit('1', {'sample': file(run=99)})
 
-    state = scanned.state(SETTINGS)['1']
+    state = scanned.state()['1']
 
     assert [e.loc for e in state.problems] == [('sample',)]
     assert state.changed == frozenset()
@@ -426,7 +505,7 @@ def bound_twice(
     with local(proposal='p1', files=changing, bind=bind) as client:  # type: ignore[arg-type]
         old = Batch(client, PLAIN, columns=COLUMNS, label='s', source=pair)
         old.scan()
-        client.wait(old.reduce(SETTINGS, ['1', '2']))
+        client.wait(old.reduce(['1', '2']))
         yield client, changing
 
 
@@ -439,11 +518,13 @@ def test_settings_refused_are_raised_naming_no_row(
     batch = Batch(client, spec, columns=COLUMNS, label='s', source=pair)
     batch.scan()
 
+    batch.settings = {'binning': {'bins': 0}}
+
     with pytest.raises(SubmitError) as error:
-        batch.state({'binning': {'bins': 0}})
+        batch.state()
 
     assert [(e.entry, e.loc[0]) for e in error.value.errors] == [(None, 'binning')]
-    assert batch.state()['3'].problems == ()
+    assert batch.results()['3'].problems == ()
 
 
 def test_a_changed_setting_is_found_when_no_result_s_files_are_known(
@@ -453,8 +534,9 @@ def test_a_changed_setting_is_found_when_no_result_s_files_are_known(
     batch = Batch(client, PLAIN, columns=COLUMNS, label='s', source=pair)
     batch.scan()
     changing.names |= dict.fromkeys(r.values['sample'] for r in batch.rows)
+    batch.settings = OTHER_SETTINGS
 
-    changed = {k: s.changed for k, s in batch.state(OTHER_SETTINGS).items()}
+    changed = {k: s.changed for k, s in batch.state().items()}
 
     assert changed == {'1': {'binning'}, '2': {'binning'}}
 
@@ -469,7 +551,7 @@ def strict(files: CorrectedFiles, sample: Measure) -> Iterator[Client]:
 
 
 def problems(batch: Batch) -> dict[str, list[tuple[str | int, ...]]]:
-    return {k: [e.loc for e in s.problems] for k, s in batch.state({}).items()}
+    return {k: [e.loc for e in s.problems] for k, s in batch.state().items()}
 
 
 def strict_batch(client: Client, rows: dict[str, dict[str, Any]]) -> Batch:
@@ -526,7 +608,7 @@ def test_a_batch_reads_a_file_by_run_as_a_new_one_does_after_a_scan(
         return batch
 
     def changed(batch: Batch) -> frozenset[str]:
-        return batch.state(SETTINGS)['1'].changed
+        return batch.state()['1'].changed
 
     batch = by_run()
     before = changed(batch)
@@ -542,13 +624,13 @@ def test_a_row_naming_its_file_by_run_is_changed_only_once_its_cell_is(
     scanned: Batch, client: Client
 ) -> None:
     scanned.rows = scanned.rows.edit('1', {'sample': file(run=1)})
-    client.wait(scanned.reduce(SETTINGS, ['1']))
+    client.wait(scanned.reduce(['1']))
 
-    first, again = (scanned.state(SETTINGS)['1'].changed for _ in range(2))
+    first, again = (scanned.state()['1'].changed for _ in range(2))
     scanned.rows = scanned.rows.edit('1', {'sample': file(run=2)})
 
     assert (first, again) == (set(), set())
-    assert scanned.state(SETTINGS)['1'].changed == {'sample'}
+    assert scanned.state()['1'].changed == {'sample'}
 
 
 def test_a_result_of_another_spec_version_is_the_rows_result_and_outdated(
@@ -557,9 +639,9 @@ def test_a_result_of_another_spec_version_is_the_rows_result_and_outdated(
     client, _ = bound_twice
     new = Batch(client, PLAIN_V2, columns=COLUMNS, label='s', source=pair)
     new.scan()
-    client.wait(new.reduce(SETTINGS, ['2']))
+    client.wait(new.reduce(['2']))
 
-    states = new.state(SETTINGS)
+    states = new.state()
 
     assert [r.member for r in client.records(label='s')] == ['1', '2', '2']
     assert states['1'].record == client.records(label='s')[0]
@@ -581,11 +663,11 @@ def test_the_state_of_chosen_rows_reads_only_the_records_that_changed(
     sample(1, 'water')
     sample(2, 'sds')
     batch.scan()
-    client.wait(batch.reduce(SETTINGS, ['1', '2']))
+    client.wait(batch.reduce(['1', '2']))
     batch.state()
     counting.reads.clear()
 
-    batch.state(keys=['2'])
+    batch.state(['2'])
 
     assert counting.reads['records'] == 0
 
@@ -594,7 +676,7 @@ def test_a_row_running_is_not_submitted_twice(
     scanned: Batch, client: Client, gate: Gate
 ) -> None:
     gate.close()
-    first = scanned.reduce(SETTINGS, ready(scanned.state()))
+    first = scanned.reduce(ready(scanned.state()))
 
     assert ready(scanned.state()) == []
     gate.open()
@@ -605,20 +687,20 @@ def test_cancel_reaches_what_was_just_submitted(
     scanned: Batch, client: Client, gate: Gate
 ) -> None:
     gate.close()
-    records = scanned.reduce(SETTINGS, ['1', '2'])
+    records = scanned.reduce(['1', '2'])
 
     scanned.cancel()
     gate.open()
 
     assert client.wait(records) == {'1': 'cancelled', '2': 'cancelled'}
-    assert remaining(scanned.state(SETTINGS)) == ['1', '2']
+    assert remaining(scanned.state()) == ['1', '2']
 
 
 def test_cancel_leaves_other_rows_when_given_keys(
     scanned: Batch, client: Client, gate: Gate
 ) -> None:
     gate.close()
-    records = scanned.reduce(SETTINGS, ['1', '2'])
+    records = scanned.reduce(['1', '2'])
 
     scanned.cancel(['1'])
 
@@ -630,14 +712,14 @@ def test_cancel_leaves_other_rows_when_given_keys(
 def test_a_tweak_is_the_rows_result_and_not_remaining(
     scanned: Batch, client: Client
 ) -> None:
-    client.wait(scanned.reduce(SETTINGS, ['1']))
+    client.wait(scanned.reduce(['1']))
     row = scanned.rows['1'].values
 
     tweaked = scanned.tweak('1', {**OTHER_SETTINGS, **row})
     client.wait(tweaked)
 
     assert scanned.state()['1'].record == tweaked
-    assert remaining(scanned.state(SETTINGS)) == ['2']
+    assert remaining(scanned.state()) == ['2']
 
 
 def test_a_row_is_tweaked_until_it_is_reduced_with_the_settings(
@@ -646,7 +728,7 @@ def test_a_row_is_tweaked_until_it_is_reduced_with_the_settings(
     client.wait(scanned.tweak('1', {**OTHER_SETTINGS, **scanned.rows['1'].values}))
     tweaked = {k: s.tweaked for k, s in scanned.state().items()}
 
-    client.wait(scanned.reduce(SETTINGS, ['1']))
+    client.wait(scanned.reduce(['1']))
 
     assert tweaked == {'1': True, '2': False}
     assert not scanned.state()['1'].tweaked
@@ -657,17 +739,17 @@ def test_a_tweak_starts_from_the_rows_cells_and_its_result_or_else_the_settings(
 ) -> None:
     cells = scanned.rows['1'].values
     before = scanned.state()['1']
-    record = scanned.reduce(SETTINGS, ['1'])['1']
+    record = scanned.reduce(['1'])['1']
     client.wait(record)
     after = scanned.state()['1']
-    with_cells = {**OTHER_SETTINGS, 'sample': 'ignored', 'thickness': 9.0}
+    scanned.settings = OTHER_SETTINGS
 
-    assert scanned.tweak_params(before, with_cells) == {**OTHER_SETTINGS, **cells}
+    assert scanned.tweak_params(before) == {**OTHER_SETTINGS, **cells}
     given = record.request.params
     settings = {k: v for k, v in given.items() if k not in scanned.columns}
-    assert scanned.tweak_params(after, OTHER_SETTINGS) == {**settings, **cells}
+    assert scanned.tweak_params(after) == {**settings, **cells}
     another = replace(after, spec_changed=True)
-    assert scanned.tweak_params(another, OTHER_SETTINGS) == {**OTHER_SETTINGS, **cells}
+    assert scanned.tweak_params(another) == {**OTHER_SETTINGS, **cells}
 
 
 @pytest.fixture
@@ -696,11 +778,11 @@ def test_a_row_can_read_the_record_of_its_row_in_another_batch(
     chain: tuple[Batch, Batch], client: Client
 ) -> None:
     find, reduce = chain
-    found = find.reduce({}, ['1', '2'])  # the second batch need not wait
+    found = find.reduce(['1', '2'])  # the second batch need not wait
     for key, record in found.items():
         reduce.rows = reduce.rows.edit(key, {'offset': record.ref('offset')})
 
-    records = reduce.reduce(SETTINGS, ['1', '2'])
+    records = reduce.reduce(['1', '2'])
     client.wait(records)
 
     assert client.output(records['2'], 'total') == 4.0
@@ -712,7 +794,8 @@ def test_a_cell_reading_a_failed_record_stops_only_its_row(
     chain: tuple[Batch, Batch], client: Client
 ) -> None:
     _, reduce = chain
-    failed = reduce.reduce({'binning': {'bins': 1}}, ['1'])
+    reduce.settings = {'binning': {'bins': 1}}
+    failed = reduce.reduce(['1'])
     client.wait(failed)
     reduce.rows = reduce.rows.edit('2', {'offset': failed['1'].ref('total')})
 
@@ -723,14 +806,15 @@ def test_an_unknown_record_in_a_cell_touches_only_its_row(
     chain: tuple[Batch, Batch], client: Client
 ) -> None:
     _, reduce = chain
-    failed = reduce.reduce({'binning': {'bins': 1}}, ['1'])
+    reduce.settings = {'binning': {'bins': 1}}
+    failed = reduce.reduce(['1'])
     client.wait(failed)
     reduce.rows = reduce.rows.edit(
         '1', {'offset': OutputRef(record='nope', output='x')}
     )
     reduce.rows = reduce.rows.edit('2', {'offset': failed['1'].ref('total')})
 
-    whole, chosen = reduce.state()['2'], reduce.state(keys=['2'])['2']
+    whole, chosen = reduce.state()['2'], reduce.state(['2'])['2']
 
     assert [e.msg for e in whole.problems] == ['the record it reads is failed']
     assert chosen.problems == whole.problems
@@ -739,7 +823,7 @@ def test_an_unknown_record_in_a_cell_touches_only_its_row(
 def test_a_record_of_another_submitter_is_a_rows_result(
     scanned: Batch, client: Client, other: Client
 ) -> None:
-    client.wait(scanned.reduce(SETTINGS, ['1']))
+    client.wait(scanned.reduce(['1']))
     row = {k: scanned.rows['1'].values[k] for k in ('sample', 'transmission')}
 
     theirs = other.compute(STAGED, params={**row, **SETTINGS}, label='scan', member='1')
@@ -756,7 +840,7 @@ def test_persisting_goes_with_the_batch(files: CorrectedFiles, sample: Measure) 
             client, PLAIN, columns=COLUMNS, label='s', source=pair, persist=True
         )
         batch.scan()
-        records = batch.reduce(SETTINGS, ['1'])
+        records = batch.reduce(['1'])
         client.wait(records)
 
         assert (records['1'].id, 'total') in store
@@ -766,10 +850,10 @@ def test_a_row_running_is_refused_when_picked(
     scanned: Batch, client: Client, gate: Gate
 ) -> None:
     gate.close()
-    first = scanned.reduce(SETTINGS, ['1'])
+    first = scanned.reduce(['1'])
 
     with pytest.raises(SubmitError, match='1: still running'):
-        scanned.reduce(SETTINGS, ['1'])
+        scanned.reduce(['1'])
     with pytest.raises(SubmitError, match='1: still running'):
         scanned.tweak('1', {**SETTINGS, **scanned.rows['1'].values})
     gate.open()
@@ -780,12 +864,12 @@ def test_a_row_running_is_refused_when_picked(
 def test_a_tweak_is_outdated_once_a_cell_is_edited(
     scanned: Batch, client: Client
 ) -> None:
-    client.wait(scanned.reduce(SETTINGS, ['1']))
+    client.wait(scanned.reduce(['1']))
     client.wait(scanned.tweak('1', {**OTHER_SETTINGS, **scanned.rows['1'].values}))
-    tweaked = scanned.state(SETTINGS)['1']
+    tweaked = scanned.state()['1']
 
     scanned.rows = scanned.rows.edit('1', {'thickness': 2.0})
-    edited = scanned.state(SETTINGS)['1']
+    edited = scanned.state()['1']
 
     assert (tweaked.changed, tweaked.outdated) == ({'binning'}, False)
     assert (edited.changed, edited.outdated) == ({'binning', 'thickness'}, True)
@@ -795,7 +879,7 @@ def test_cancel_reaches_a_row_removed_since(
     scanned: Batch, client: Client, gate: Gate
 ) -> None:
     gate.close()
-    records = scanned.reduce(SETTINGS, ['1'])
+    records = scanned.reduce(['1'])
     scanned.rows = scanned.rows.remove('1')
 
     scanned.cancel()

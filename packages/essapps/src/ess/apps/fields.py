@@ -45,7 +45,7 @@ calls back (:meth:`Field.subscribe`), and gives it what a person does by setting
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, tzinfo
 from enum import Enum
@@ -407,6 +407,8 @@ class ScalarsField(Field):
             value = self._default
         if value is UNSET:
             self._elements = None
+        elif isinstance(value, str) or not isinstance(value, Sequence):
+            raise ValueError(f'{self.label}: {value!r} is not a list')
         else:
             self._resize(len(value))
             for element, item in zip(self.elements, value, strict=True):
@@ -439,6 +441,8 @@ class GroupField(Field):
         return self.tag | {n: v for n, v in given.items() if v is not UNSET}
 
     def set(self, value: Any) -> None:
+        if value is not UNSET and not isinstance(value, Mapping | BaseModel):
+            raise ValueError(f'{value!r} is not a group of values')
         given = {} if value is UNSET else dict(value)
         for name, field in self.fields.items():
             field.set(given.get(name, UNSET))
@@ -567,7 +571,10 @@ class ChoiceField(Field):
             return self.FILE
         if self._tag is None:
             return self.GIVEN
-        tag = {self._tag: dict(value)[self._tag]}
+        given = dict(value) if isinstance(value, Mapping | BaseModel) else {}
+        if self._tag not in given:
+            raise ValueError(f'{value!r}: not one of {self.offered}')
+        tag = {self._tag: given[self._tag]}
         for label, way in self.ways.items():
             if isinstance(way, GroupField) and way.tag == tag:
                 return label
@@ -911,7 +918,9 @@ class Fields:
         out is as it starts, at its default or unset, and a parameter that is
         not shown is ignored. A reference that the client may not
         read now chooses the way of a record, with no record picked; a file
-        that is not listed stays picked.
+        that is not listed stays picked. Raises ``KeyError`` for a name that
+        is not a parameter, and ``ValueError`` for a value that a field cannot
+        show.
         """
         if unknown := set(params) - self._every:
             raise KeyError(f'{self.title} has no parameters {sorted(unknown)}')
@@ -919,6 +928,29 @@ class Fields:
         with self._loads():
             for name, field in self.fields.items():
                 field.set(params.get(name, UNSET))
+
+    def set_fitting(self, params: Mapping[str, Any], listing: Listing) -> list[str]:
+        """
+        Show what fits of ``params``, parameter by parameter, as :meth:`set`
+        does, and the others as they start. Returns, for each parameter that
+        does not fit, such as one kept for another version of the model, its
+        name, its value, and why.
+        """
+        unfit = {
+            name: 'not a setting here' for name in params if name not in self.fields
+        }
+        self.refresh(listing)
+        with self._loads():
+            for name, field in self.fields.items():
+                try:
+                    field.set(params.get(name, UNSET))
+                except Exception as error:  # noqa: PERF203 - any value that does not fit
+                    unfit[name] = str(error)
+                    field.set(UNSET)
+        return [
+            f"{n} = {to_json(params[n], fallback=repr).decode()}: {why}"
+            for n, why in unfit.items()
+        ]
 
     def ways(self, name: str) -> list[str]:
         """

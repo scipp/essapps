@@ -29,7 +29,9 @@ class RunSheet:
     A table of the raw files with the fields of ``model``, and an editor.
 
     ``then`` is called after a correction, such as the ``scan`` of a batch's
-    view, so that the rows follow.
+    view, so that the rows follow. A correction of the files selected is one
+    write, so if the file source cannot keep it, none of them is corrected, and
+    :attr:`message` says why.
     """
 
     def __init__(
@@ -55,6 +57,7 @@ class RunSheet:
             ['File', *self._titles.values()], self._selected, selectable=True
         )
         self.write = write_choice(self._titles)
+        self.message = pn.pane.Markdown('')
         self._buttons = pn.Row(
             button('List files', self.list_files),
             self.write,
@@ -92,18 +95,21 @@ class RunSheet:
     def correct(self) -> None:
         """Write the fields changed in the editor to the files selected."""
         changed = changed_cells(self.form.held()[0], self._shown, self.write.value)
-        for ref in self.table.selected_keys:
-            self._files.correct(ref, **changed)
         self.write.value = ''
-        self._changed()
+        self._changed(
+            lambda: self._files.correct_each(self.table.selected_keys, **changed)
+        )
 
     def reset(self) -> None:
         """Forget the corrections of the files selected."""
-        for ref in self.table.selected_keys:
-            self._files.reset(ref)
-        self._changed()
+        self._changed(lambda: self._files.reset_each(self.table.selected_keys))
 
-    def _changed(self) -> None:
+    def _changed(self, change: Callable[[], None]) -> None:
+        try:
+            change()
+            self.message.object = ''
+        except OSError as error:
+            self.message.object = f'Not corrected, since it was not kept: {error}'
         self.list_files()
         if self._then is not None:
             self._then()
@@ -113,6 +119,7 @@ class RunSheet:
             self.table.widget,
             self.form.panel(),
             self._buttons,
+            self.message,
             scroll=True,
             sizing_mode='stretch_both',
         )

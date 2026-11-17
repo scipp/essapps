@@ -101,7 +101,9 @@ class Row(BaseModel):
     """
     One row. ``result`` says whether it has a result to show, ``current`` or
     ``outdated``. ``alone`` if that result was reduced with its own parameters;
-    ``added`` if the row was added by hand.
+    ``added`` if the row was added by hand. ``strays`` names the edits at a
+    name that is not a column, such as one kept for an older version of the
+    application, which make the row incomplete until they are taken back.
     """
 
     key: str
@@ -114,6 +116,7 @@ class Row(BaseModel):
     record: str | None
     result: Literal['current', 'outdated'] | None
     cells: dict[str, Cell]
+    strays: list[str] = []
 
 
 class Action(BaseModel):
@@ -159,8 +162,7 @@ class State(BaseModel):
     Everything the page shows but the details of one row, the plot, and the
     runs. ``start`` changes when the server starts again, ``version`` with each
     change, and ``runs`` with each change of the runs. ``notice`` says what
-    the action that answers with this state did. ``loaded`` is the name of
-    the table file whose rows stand in place of a scan, until the next scan.
+    the action that answers with this state did.
     """
 
     version: int
@@ -178,7 +180,6 @@ class State(BaseModel):
     settings: list[Node]
     settings_problem: str | None
     refused: list[Refused]
-    loaded: str | None = None
     notice: str = ''
 
 

@@ -32,6 +32,7 @@ def iofq_batch(client: Client) -> Batch:
         label='iofq',
         source=per_run,
         persist=True,
+        settings={'normalization': None},
     )
 
 
@@ -55,8 +56,9 @@ def test_e1_series_grows_reduction_follows(
         label='reflectivity',
         source=angles,
         persist=True,
+        settings={'reference': reference},
     )
-    loop = Automatic(batch, at={'runs'}, settings=lambda: {'reference': reference})
+    loop = Automatic(batch, at={'runs'})
 
     r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
     client.wait(loop.step())
@@ -84,9 +86,7 @@ def test_e2_automatic_reduction_goes_quiet(
     upgrade: Callable[..., Client], measure: toys.Measure
 ) -> None:
     upgraded = upgrade(specs=[toys.IOFQ_V2])  # a workspace without version 1
-    loop = Automatic(
-        iofq_batch(upgraded), at={'sample'}, settings=lambda: {'normalization': None}
-    )
+    loop = Automatic(iofq_batch(upgraded), at={'sample'})
     measure(1, [1.0, 1.0], role='sample')
 
     assert loop.step() == {}
@@ -97,9 +97,7 @@ def test_e2_automatic_reduction_goes_quiet(
 def test_e3_reduction_of_our_own_output(
     client: Client, measure: toys.Measure, files: FakeFiles
 ) -> None:
-    loop = Automatic(
-        iofq_batch(client), at={'sample'}, settings=lambda: {'normalization': None}
-    )
+    loop = Automatic(iofq_batch(client), at={'sample'})
     measure(1, [1.0, 2.0, 3.0, 4.0])
     (reduced,) = loop.step().values()
     pid = client.publish(reduced.ref('iofq'), 'scicat')
@@ -111,12 +109,12 @@ def test_e3_reduction_of_our_own_output(
 def test_e4_template_improved_during_a_beamtime(
     client: Client, connect: Callable[..., Client], measure: toys.Measure
 ) -> None:
-    settings = {'normalization': None}
-    loop = Automatic(iofq_batch(client), at={'sample'}, settings=lambda: settings)
+    loop = Automatic(iofq_batch(client), at={'sample'})
     first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
     (before,) = loop.step().values()
 
     settings = {'reduction': toys.Reduction(threshold=1.5), 'normalization': None}
+    loop.batch.settings = settings
     second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
     (after,) = loop.step().values()
 
@@ -127,6 +125,8 @@ def test_e4_template_improved_during_a_beamtime(
         [2.0, 7.0],
     ]
     batch = iofq_batch(user)
+    batch.settings = settings
     batch.scan()
-    outdated = [k for k, s in batch.state(settings).items() if s.outdated]
-    assert [batch.state()[k].record.request.files() for k in outdated] == [[first]]
+    states = batch.state()
+    outdated = [k for k, s in states.items() if s.outdated]
+    assert [states[k].record.request.files() for k in outdated] == [[first]]

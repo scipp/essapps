@@ -26,7 +26,7 @@ from ess.spec.testing import instance
 
 from .client import Client
 from .files import Selector
-from .records import Record
+from .records import Record, Template
 
 type Spec = WorkflowSpec[Any, Any]
 
@@ -119,7 +119,9 @@ class CountingClient:
     """
     Delegates to a client and counts the records its calls read: ``reads``
     holds the number of records that :meth:`records` returned and that
-    :meth:`status`, :meth:`readable`, and :meth:`bound` were asked for.
+    :meth:`status`, :meth:`readable`, and :meth:`bound` were asked for, and,
+    under ``resolve``, the number of calls of :meth:`resolve` with one
+    template, as a batch resolves its settings.
     """
 
     def __init__(self, client: Client) -> None:
@@ -141,6 +143,11 @@ class CountingClient:
     def readable(self, records: list[Record]) -> Any:
         self.reads['readable'] += len(records)
         return self._client.readable(records)
+
+    def resolve(self, templates: Any) -> Any:
+        if isinstance(templates, Template):
+            self.reads['resolve'] += 1
+        return self._client.resolve(templates)
 
     def bound(self, records: list[Record]) -> Any:
         self.reads['bound'] += len(records)

@@ -225,25 +225,6 @@ def test_an_empty_run_cell_left_writes_nothing_and_tab_goes_on(
     assert batch.rows.edits.get('blank', {}) == {}
 
 
-def test_a_rescan_asks_before_it_replaces_a_table_loaded(
-    page: Any, tmp_path: Path
-) -> None:
-    asked: list[str] = []
-    page.on('dialog', lambda d: (asked.append(d.message), d.accept()))
-    table = tmp_path / 'rows.csv'
-    table.write_bytes(page.request.get(f'{page.url}api/table.csv').body())
-    page.set_input_files('#pick-table', table)
-    page.wait_for_selector('#toast:has-text("Loaded 3")')
-
-    page.click('#rescan')
-
-    page.wait_for_selector('#toast:has-text("Found 3")')
-    assert asked == [
-        'The table you loaded, rows.csv, is replaced by what the runs give. '
-        'Values set by hand stay.'
-    ]
-
-
 def test_the_zoom_stays_when_the_selection_changes(page: Any, client: Client) -> None:
     page.click('#reduce')
     client.wait(client.records())

@@ -3,15 +3,30 @@
 """
 What the batch page does, without HTTP: :class:`Server`. :mod:`.api` serves it.
 
-The server holds everything a person changes: the rows of the
-:class:`~ess.apps.batch.Batch`, the settings, the form of a reduction of one
-row alone, and the corrections of runs. The page holds only what it shows: the
-selection, the filter, the tab. Each action returns the :class:`~.models.State`
-after it, and the page polls the state about once a second with the
-``version`` it has, to see results arrive. The version counts the changes made
-here and those of the client's records, which the server reads from
-``client.changes`` at each poll. ``start`` tells a page that the server started
-again, so that the same version may be another state.
+The server holds everything a person changes: the
+:class:`~ess.apps.batch.Batch` with its rows and settings, the form of the
+settings, the form of a reduction of one row alone, and the corrections of
+runs. The batch and the corrections keep their part in their definitions, if
+given them (:mod:`..definition`); a change that the definitions cannot keep is
+not made, and answers a :class:`Problem`.
+
+The form of the settings is a draft of the batch's settings: it writes them to
+the batch at each change that leaves nothing missing; while something is
+missing, the batch keeps the settings it had, and nothing is reduced and no
+settings file downloaded. Before each action, and when the state is read, the
+form shows the batch's settings again if they are not those that it last
+showed or wrote, as after an assignment by code or a change not kept
+(:meth:`Server._show_settings`). Settings that the form cannot show, such as
+those kept for another version of the spec, are named in the state's
+``settings_problem`` and kept until a person changes a setting.
+
+The page holds only what it shows: the selection, the filter, the tab. Each
+action returns the :class:`~.models.State` after it, and the page polls the
+state about once a second with the ``version`` it has, to see results arrive.
+The version counts the changes made here and those of the client's records,
+which the server reads from ``client.changes`` at each poll. ``start`` tells a
+page that the server started again, so that the same version may be another
+state.
 
 A reduction refused raises :class:`Problem` and keeps its reasons in the state
 until the value of each is changed or a reduction succeeds, so that the page
@@ -159,8 +174,12 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
     def action(*args: P.args, **kwargs: P.kwargs) -> State:
         server: Server = args[0]  # type: ignore[assignment]
         with server.lock:
+            server._show_settings()
             try:
                 notice = method(*args, **kwargs)
+            except OSError as error:  # the definitions could not keep a change
+                server._settings_shown = None  # the form shows the batch's again
+                raise Problem(f'The change was not kept: {error}') from None
             finally:
                 server.version += 1
                 server._rows = server.batch.rows
@@ -220,12 +239,14 @@ class Server:
         self._listing = Listing(batch.client)
         model, listing = batch.spec.params, self._listing
         self.settings = Fields(model, listing, fields=batch.settings_fields)
+        self._settings_shown: Mapping[str, Any] | None = None
+        self._unfit: list[str] = []
+        self._show_settings()
         self._cells = Fields(model, listing, fields=batch.columns)
         self.tweak = Fields(model, listing)
         self._tweak_of: tuple[str, Any, str | None] | None = None
         self._marks = None if marks is None or files is None else Fields(marks, listing)
         self.refused: list[FieldError] = []
-        self.loaded: str | None = None
         self.version = 1
         # Equal to the rows of the batch at the last change of the version.
         self._rows = batch.rows
@@ -240,24 +261,45 @@ class Server:
             if fields is not None:
                 fields.refresh(self._listing)
 
-    def _settings(self) -> dict[str, Any] | None:
-        try:
-            return self.settings.params
-        except SubmitError:
-            return None
+    def _show_settings(self) -> None:
+        """
+        Show the batch's settings in the form, unless they are those that it
+        last showed or wrote.
+        """
+        settings = self.batch.settings
+        if settings == self._settings_shown:
+            return
+        # Settings kept for another version of the spec may not fit the form;
+        # the batch keeps them, and the page names them, until a change.
+        self._unfit = self.settings.set_fitting(settings, self._listing)
+        self._settings_shown = settings
+
+    def _write_settings(self) -> None:
+        """Give the batch the settings of the form, unless one is missing."""
+        given, missing = self.settings.held()
+        if not missing:
+            self.batch.settings = given
+            self._settings_shown = self.batch.settings
+            self._unfit = []
+
+    def _complete(self) -> None:
+        """Raise ``SubmitError`` if the form of the settings misses something."""
+        if missing := self.settings.held()[1]:
+            raise SubmitError(missing)
 
     def _states(
         self, keys: Sequence[str] | None = None
     ) -> tuple[dict[str, RowState], tuple[FieldError, ...]]:
         """
-        The state of the rows of ``keys``, or of all, read with the settings;
-        and, if they are incomplete or refused, the reasons, and the state
-        read without them.
+        The state of the rows of ``keys``, or of all; and, if the settings are
+        incomplete or refused, the reasons, and the rows with their results
+        only (:meth:`~ess.apps.batch.Batch.results`).
         """
         try:
-            return self.batch.state(self.settings.params, keys), ()
+            self._complete()
+            return self.batch.state(keys), ()
         except SubmitError as error:
-            return self.batch.state(keys=keys), error.errors
+            return self.batch.results(keys), error.errors
 
     def _status(self, state: RowState, settings_ok: bool) -> str:
         if state.status in _ENDED and not state.problems:
@@ -294,6 +336,7 @@ class Server:
     @_locked
     def state(self, notice: str = '') -> State:
         """Everything the page shows but a row's details, the plot, and the runs."""
+        self._show_settings()
         states, unusable = self._states()
         statuses = {k: self._status(s, not unusable) for k, s in states.items()}
         failures = self._failures(states)
@@ -309,6 +352,8 @@ class Server:
         said = [
             _say(self._setting_title(e), e.msg) if e.loc else e.msg for e in unusable
         ]
+        if self._unfit:
+            said.insert(0, f'Settings that this form cannot show: {_join(self._unfit)}')
         problem = '; '.join(said) or None
         fields = self.batch.spec.params.model_fields
         return State(
@@ -342,7 +387,6 @@ class Server:
             ),
             settings_problem=problem,
             refused=[self._refused(e) for e in self.refused],
-            loaded=self.loaded,
             notice=notice,
         )
 
@@ -370,7 +414,7 @@ class Server:
             self.batch.columns if state.tweaked else self.batch.spec.params.model_fields
         )
         said = []
-        if changed := [titles.get(n, n) for n in names if n in state.changed]:
+        if changed := [titles.get(n, n) for n in names if n in (state.changed or ())]:
             said.append(f'{_join(changed)} changed.')
         if state.spec_changed:
             said.append('It was reduced by another version of the workflow.')
@@ -429,6 +473,7 @@ class Server:
             record=None if record is None else record.id,
             result=result,
             cells=cells,
+            strays=[n for n in row.values if n not in self.batch.columns],
         )
 
     def _primary(
@@ -438,7 +483,7 @@ class Server:
         blocked: str | None,
     ) -> Action:
         """What the primary button does now, and how far the rows running are."""
-        left = remaining(states)
+        left = [] if blocked else remaining(states)
         kinds = {statuses[k] for k in left}
         n = len(left)
         if blocked:
@@ -498,10 +543,7 @@ class Server:
 
     @_action
     def scan(self) -> str:
-        """
-        Make the rows from the files again, in place of a table loaded; what
-        was set by hand stays.
-        """
+        """Make the rows from the files again; what was set by hand stays."""
         self.runs_version += 1
 
         def scan() -> None:
@@ -531,7 +573,6 @@ class Server:
             # New rows may name files that the listing lacks, and a correction
             # of runs changes what it offers, even if the scan then fails.
             self._relist()
-        self.loaded = None
         changed = sum(before.get(r.key) != dict(r.values) for r in self.batch.rows)
         new = self._incomplete() - incomplete
         names = [self._named(r) for r in self.batch.rows if r.key in new]
@@ -569,7 +610,10 @@ class Server:
 
     @_action
     def revert(self, cells: Cells) -> None:
-        """Take the cells of ``column`` back to what the scan gave."""
+        """
+        Take the cells of ``column`` back to what the scan gave; for a name
+        that is not a column, forget its edit.
+        """
         rows = self.batch.rows
         for key in cells.keys:
             self._row_of(key)
@@ -636,15 +680,15 @@ class Server:
         for key in request.keys:
             self._row_of(key)
         try:
-            settings = self.settings.params
+            self._complete()
             keys = (
                 request.keys
                 if request.which == 'selected'
                 else {'remaining': remaining, 'all': ready}[request.which](
-                    self.batch.state(settings)
+                    self.batch.state()
                 )
             )
-            records = self.batch.reduce(settings, keys)
+            records = self.batch.reduce(keys)
         except SubmitError as error:
             self.refused = list(error.errors)
             raise _Refusal(self.refused) from None
@@ -666,6 +710,7 @@ class Server:
             forms.apply(self.settings, edit)
         except (KeyError, ValueError) as error:
             raise Problem(_why(error)) from None
+        self._write_settings()
         self._forget_settings(edit.path)
 
     @_action
@@ -681,6 +726,7 @@ class Server:
                 'whose settings this one does not take.'
             )
         self.settings.set(row.record.request.params, self._listing)
+        self._write_settings()
         self._forget_settings()
         return f'All {self.words.many} now use the settings {name} was reduced with.'
 
@@ -694,7 +740,7 @@ class Server:
         if self._tweak_of == source:
             return
         self._tweak_of = source
-        params = self.batch.tweak_params(row, self._settings())
+        params = self.batch.tweak_params(row)
         self.tweak.set(params, self._listing)
 
     @_locked
@@ -718,7 +764,9 @@ class Server:
         given.set(record.request.params, self._listing)
         detail.reduced_with = forms.tree(given)
         detail.created = record.created
-        detail.differs = [n for n in self.batch.settings_fields if n in state.changed]
+        detail.differs = [
+            n for n in self.batch.settings_fields if n in (state.changed or ())
+        ]
         return detail
 
     @_locked
@@ -850,9 +898,8 @@ class Server:
         """Correct a field of runs; the rows follow."""
         marks, files = self._marked()
         value = self._read(marks, edit)
-        for key in edit.keys:
-            fields = {edit.column: None if value is UNSET else value}
-            files.correct(FileRef(file=key), **fields)
+        fields = {edit.column: None if value is UNSET else value}
+        files.correct_each([FileRef(file=key) for key in edit.keys], **fields)
         changes = self._rescan()
         n = len(edit.keys)
         title = marks.titles[edit.column]
@@ -862,8 +909,7 @@ class Server:
     def revert_run(self, cells: Cells) -> str:
         """Take a field of runs back to what the files say."""
         _, files = self._marked()
-        for key in cells.keys:
-            files.reset(FileRef(file=key), cells.column)
+        files.reset_each([FileRef(file=key) for key in cells.keys], cells.column)
         return self._rescan()
 
     # Files
@@ -878,35 +924,43 @@ class Server:
     @_action
     def load_table(self, name: str, content: bytes) -> str:
         """
-        Take the rows of a table file in place of a scan, and forget what was
-        set by hand on them, so that they show what the file says.
+        Set the rows of a table file by hand (:meth:`RowTable.put`), so that
+        they show what the file says, and stay so after a scan.
         """
         batch = self.batch
-        with _file(name, content) as path:
-            try:
-                table = frames.read_table(path)
-                rows = frames.rows_of(table, batch.spec.params, batch.columns)
-            except SubmitError as error:
-                raise Problem('; '.join(map(str, error.errors))) from None
-            except (OSError, ValueError, KeyError) as error:
-                raise Problem(f'Cannot load {name}: {_why(error)}') from None
-        loaded = batch.rows.rescan(rows)
-        for row in rows:
-            loaded = loaded.reset(row.key, *batch.columns)
-        batch.rows = loaded
-        self.loaded = name
-        self._relist()
+        try:
+            if batch.source is not None:
+                try:
+                    batch.scan()  # the table is set on top of the rows of the files
+                except Exception as error:  # a source is code of the application
+                    raise Problem(
+                        f'Not loaded, since the scan failed: {error}'
+                    ) from None
+            with _file(name, content) as path:
+                try:
+                    table = frames.read_table(path)
+                    rows = frames.rows_of(table, batch.spec.params, batch.columns)
+                    batch.put(rows)
+                except SubmitError as error:
+                    raise Problem('; '.join(map(str, error.errors))) from None
+                except (OSError, ValueError, KeyError) as error:
+                    raise Problem(f'Cannot load {name}: {_why(error)}') from None
+        finally:
+            # The scan and the rows set may name files that the listing lacks,
+            # even if the table is then refused.
+            self._relist()
         return f'Loaded {self.words.count(len(rows))} from {name}.'
 
     @_locked
     def settings_file(self) -> bytes:
         """The settings as a YAML template."""
+        self._show_settings()
         try:
-            template = self.batch.template(self.settings.params)
+            self._complete()
         except SubmitError as error:
             raise Problem(f'Fill in the settings first: {error}') from None
         with _file('settings.yaml') as path:
-            write_template(template, path)
+            write_template(self.batch.template(), path)
             return path.read_bytes()
 
     @_action
@@ -924,6 +978,7 @@ class Server:
             self.settings.set(settings_of(self.batch, template), self._listing)
         except (ValueError, KeyError) as error:
             raise Problem(f'{cannot} {forms.message(_why(error))}.') from None
+        self._write_settings()
         self._forget_settings()
         return f'Loaded the settings of {name}.'
 
