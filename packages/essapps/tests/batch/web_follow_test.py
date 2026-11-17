@@ -14,14 +14,14 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
-from ess.apps import Client
+from ess.apps import Client, Status
 from ess.apps.batch import Batch, CorrectedFiles
 from ess.apps.batch.web import Server, create_app
 from ess.apps.batch.web.models import CellEdit, Cells, Edit, Reduce, State
 from ess.apps.batch.web.server import Problem
 from ess.apps.testing import FakeFiles
 
-from .toys import Gate, Measure
+from .toys import COLUMNS, STAGED, Gate, Measure, pair
 
 AT = frozenset({'sample', 'transmission'})
 BINS = ['binning', 'bins']
@@ -148,6 +148,58 @@ def test_a_step_after_a_result_finished_tells_the_page(
     shown = server.poll(running, server.start)
     assert shown is not None
     assert statuses(shown) == {'water': 'done'}
+
+
+class FinishingClient:
+    """
+    Delegates to a client, and lets the reductions in flight finish right after
+    the first read of their status that says they run: a result that finishes
+    just after the server looked.
+    """
+
+    def __init__(self, client: Client, gate: Gate) -> None:
+        self._client = client
+        self._gate = gate
+        self.finishing = False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    def status(self, records: Any) -> Any:
+        statuses = self._client.status(records)
+        if self.finishing and Status.PENDING in statuses:
+            self.finishing = False
+            self._gate.open()
+            self._client.wait(records)
+        return statuses
+
+
+def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_poll(
+    client: Client, sample: Measure, gate: Gate
+) -> None:
+    finishing = FinishingClient(client, gate)
+    batch = Batch(
+        finishing,  # type: ignore[arg-type]
+        STAGED,
+        columns=COLUMNS,
+        label='scan',
+        source=pair,
+        staged=True,
+    )
+    sample(1, 'water')
+    page = TestClient(create_app(batch, name='name', at=AT))
+    server: Server = page.app.state.server  # type: ignore[attr-defined]
+    gate.close()
+    finishing.finishing = True
+
+    server.step()
+
+    shown = page.get(
+        '/api/state', params={'after': server.version, 'start': server.start}
+    )
+    assert shown.status_code == 200
+    assert {r['status'] for r in shown.json()['rows']} == {'done'}
+    batch.close()
 
 
 def test_a_step_reduces_a_row_whose_cell_changed_at_a_column_of_at(
