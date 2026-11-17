@@ -130,7 +130,7 @@ def arrived(state, at: set[str]) -> list[str]:
             if state[key].record is None or state[key].changed & at]
 ```
 
-The page has two buttons. **Rescan** calls `batch.scan()`, which reads the files and extends the tables. **Reduce** calls `batch.reduce(settings, keys)`. Automatic reduction is a timer that presses the same two buttons:
+Two buttons of the page drive the cycle. **Rescan** calls `batch.scan()`, which reads the files and extends the tables. **Reduce** calls `batch.reduce(settings, keys)`. Automatic reduction is a timer that presses the same two buttons:
 
 ```python
 def step(batch, settings, at):
