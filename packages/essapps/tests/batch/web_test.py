@@ -108,6 +108,23 @@ def test_a_poll_sees_a_reduction_finish(
     assert [r['status'] for r in finished['rows']][:2] == ['done', 'done']
 
 
+def test_a_poll_sees_a_row_that_another_caller_scanned_without_a_record(
+    http: TestClient, batch: Batch, sample: Measure
+) -> None:
+    now = state(http)
+    after = {'after': now['version'], 'start': now['start']}
+    batch.scan()
+    assert http.get('/api/state', params=after).status_code == 204
+
+    sample(4, 'salt', partner=False)
+    batch.scan()
+    polled = http.get('/api/state', params=after).json()
+
+    salt = {row['key']: row for row in polled['rows']}['4']
+    assert salt['status'] == 'incomplete'
+    assert salt['cells']['sample']['value'].startswith('run 4')
+
+
 def test_an_action_answers_with_the_state_after_it(http: TestClient) -> None:
     after = thickness(http, ['1'], 3)
 

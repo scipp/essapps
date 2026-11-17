@@ -163,6 +163,7 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
                 notice = method(*args, **kwargs)
             finally:
                 server.version += 1
+                server._rows = server.batch.rows
             return server.state(notice=notice or '')
 
     return action
@@ -226,6 +227,8 @@ class Server:
         self.refused: list[FieldError] = []
         self.loaded: str | None = None
         self.version = 1
+        self._rows = batch.rows
+        """Equal to the rows of the batch at the last change of the version."""
         self.runs_version = 1
         self.start = uuid.uuid4().hex[:8]
 
@@ -256,9 +259,13 @@ class Server:
     @_locked
     def poll(self, after: int, start: str = '') -> State | None:
         """The state, or ``None`` if it is still that of version ``after``."""
-        if self.batch.client.changes(after=self._listing.cursor).records:
+        changes = self.batch.client.changes(after=self._listing.cursor)
+        # A scan makes a new table each time, equal if nothing changed; one
+        # that changed may name files that the listing lacks.
+        if changes.records or self.batch.rows != self._rows:
             self._relist()
             self.version += 1
+        self._rows = self.batch.rows
         if after == self.version and start == self.start:
             return None
         return self.state()
