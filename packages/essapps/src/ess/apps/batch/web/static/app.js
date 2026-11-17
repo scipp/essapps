@@ -111,7 +111,7 @@ async function refresh() {
   const at = view.state ? {after: view.state.version, start: view.state.start} : {};
   let response;
   try {
-    response = await get(`/api/state?${query(at)}`);
+    response = await get(`state?${query(at)}`);
   } catch {
     throw new Offline('The server does not answer.');
   }
@@ -207,10 +207,10 @@ function build(state) {
   const info = state.info.map((c) => ({title: c.title, field: `info.${c.name}`, minWidth: 96, headerSort: false}));
   const cells = state.columns;
   rows = new Grid($('rows'), {
-    columns: [named, ...info, ...cellColumns(cells, {revert: (key, column) => act('/api/cells/revert', {keys: [key], column}), say: showMessage}), statusColumn],
+    columns: [named, ...info, ...cellColumns(cells, {revert: (key, column) => act('cells/revert', {keys: [key], column}), say: showMessage}), statusColumn],
     edits: Object.fromEntries(cells.map((c) => [`cells.${c.name}.value`, c])),
     placeholder: `No ${many}. Rescan the runs, or load a table from the Files menu.`,
-    edit: (keys, column, value) => act('/api/cells', {keys, column, value}),
+    edit: (keys, column, value) => act('cells', {keys, column, value}),
     select: (keys) => {
       view.selected = keys;
       remember();
@@ -235,11 +235,11 @@ function downloadResults(rows, name) {
   const old = done.filter((row) => row.result === 'outdated').length;
   const question = `${old} of the ${done.length} results are outdated: the settings or their cells changed since. Download them anyway?`;
   if (old && !confirm(question)) return;
-  download('/api/results.zip', name, {keys: done.map((row) => row.key)});
+  download('results.zip', name, {keys: done.map((row) => row.key)});
 }
 
 async function loadRuns() {
-  const shown = await request('/api/runs', {kind: 'runs'});
+  const shown = await request('runs', {kind: 'runs'});
   if (!shown) return;
   view.runs = shown.version;
   $('n-runs').textContent = shown.rows.length;
@@ -250,13 +250,13 @@ async function loadRuns() {
       columns: [
         {title: 'Run', field: 'file', minWidth: 160, widthGrow: 2},
         ...cellColumns(shown.columns, {
-          revert: (key, column) => act('/api/runs/cells/revert', {keys: [key], column}),
+          revert: (key, column) => act('runs/cells/revert', {keys: [key], column}),
           say: showMessage,
         }),
       ],
       edits: Object.fromEntries(shown.columns.map((c) => [`cells.${c.name}.value`, c])),
       placeholder: 'No runs in this folder.',
-      edit: (keys, column, value) => act('/api/runs/cells', {keys, column, value}),
+      edit: (keys, column, value) => act('runs/cells', {keys, column, value}),
       select: () => {},
     });
   }
@@ -357,7 +357,7 @@ function renderSettings(state) {
   const download = document.querySelector('[data-file="settings.yaml"]');
   download.disabled = changed;
   download.title = changed ? `${action.blocked} first.` : '';
-  renderForm($('settings'), state.settings, (edit) => act('/api/settings', edit));
+  renderForm($('settings'), state.settings, (edit) => act('settings', edit));
 }
 
 // Whether to replace the changes of the settings form that are not applied.
@@ -418,7 +418,7 @@ async function renderPlot() {
   renderLegend();
   if (what === view.plotted) return;
   view.plotted = what;
-  const answer = await request('/api/plot', {body: {keys: view.selected}, kind: 'plot'});
+  const answer = await request('plot', {body: {keys: view.selected}, kind: 'plot'});
   if (!answer) return;
   const {figure, note, colors} = answer;
   view.colors = colors;
@@ -489,7 +489,7 @@ async function loadRow() {
     return;
   }
   const only = () => view.selected.length === 1 && view.selected[0] === row.key;
-  const detail = await request(`/api/row?${query({key: row.key})}`, {kind: 'row', fresh: only});
+  const detail = await request(`row?${query({key: row.key})}`, {kind: 'row', fresh: only});
   if (detail) renderRow(detail);
 }
 
@@ -501,7 +501,7 @@ function renderRow(detail) {
   view.detail = json;
   const tried = row.status === 'failed' || row.status === 'cancelled';
   const reasonClass = row.earlier ? 'info' : {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info'}[row.status];
-  const useSettings = () => replaceChanges() && act('/api/row/use-settings', {key: row.key}).then((done) => done && showTab('settings'));
+  const useSettings = () => replaceChanges() && act('row/use-settings', {key: row.key}).then((done) => done && showTab('settings'));
   const settingsNames = Object.fromEntries(view.state.settings.map((n) => [n.path[0], n.label]));
   const parts = [
     h('div', {class: 'row-head'}, h('h2', {text: row.name}), h('span', {class: `pill st-${row.status}`, text: row.status})),
@@ -513,7 +513,7 @@ function renderRow(detail) {
     row.reason && h('div', {class: `reason ${reasonClass ?? ''}`, text: row.reason}),
     // An edit at a name that is not a column is not in the table, so it is taken back here.
     ...row.strays.map((name) =>
-      h('button', {type: 'button', class: 'stray', text: `Remove the edit of ${name}`, onclick: () => act('/api/cells/revert', {keys: [row.key], column: name})}),
+      h('button', {type: 'button', class: 'stray', text: `Remove the edit of ${name}`, onclick: () => act('cells/revert', {keys: [row.key], column: name})}),
     ),
     detail.reduced_with
       ? h(
@@ -572,30 +572,30 @@ function wire() {
   // box also changes with the legend below it.
   const plot = $('plot');
   new ResizeObserver(() => plot.data && !plot.hidden && Plotly.Plots.resize(plot)).observe(plot);
-  $('reduce').onclick = () => act('/api/reduce', {which: 'remaining'});
+  $('reduce').onclick = () => act('reduce', {which: 'remaining'});
   $('reduce-more').onclick = () => openMenu($('reduce-split'));
   document.querySelectorAll('[data-reduce]').forEach((item) => {
     item.onclick = () => {
       $('reduce-split').querySelector('.menu-items').hidden = true;
-      act('/api/reduce', {which: item.dataset.reduce, keys: view.selected});
+      act('reduce', {which: item.dataset.reduce, keys: view.selected});
     };
   });
-  $('cancel').onclick = () => act('/api/cancel');
-  $('follow').querySelector('input').onchange = (event) => act('/api/follow', {on: event.target.checked});
-  $('settings-apply').onclick = () => act('/api/settings/apply');
-  $('settings-discard').onclick = () => act('/api/settings/discard');
+  $('cancel').onclick = () => act('cancel');
+  $('follow').querySelector('input').onchange = (event) => act('follow', {on: event.target.checked});
+  $('settings-apply').onclick = () => act('settings/apply');
+  $('settings-discard').onclick = () => act('settings/discard');
   $('reduce-earlier').onclick = () => {
     const n = view.state.action.earlier;
     const question = `Reduce the ${count(n)} reduced with earlier settings again, with the settings now?`;
-    if (confirm(question)) act('/api/reduce', {which: 'earlier'});
+    if (confirm(question)) act('reduce', {which: 'earlier'});
   };
-  $('rescan').onclick = () => act('/api/scan');
+  $('rescan').onclick = () => act('scan');
   $('remove').onclick = () => {
     const added = selectedRows().filter((row) => row.added).length;
     const question = `${added} of the ${count(view.selected.length)} selected ${added === 1 ? 'was' : 'were'} added by hand and cannot be brought back. Remove?`;
-    if (!added || confirm(question)) act('/api/rows/remove', {keys: view.selected});
+    if (!added || confirm(question)) act('rows/remove', {keys: view.selected});
   };
-  $('restore').onclick = () => act('/api/rows/restore');
+  $('restore').onclick = () => act('rows/restore');
   document.querySelector('#message .close').onclick = () => {
     view.dismissed = shownMessage;
     hideMessage();
@@ -615,7 +615,7 @@ function wire() {
   addForm.onsubmit = (event) => {
     event.preventDefault();
     const key = addForm.key.value.trim();
-    act('/api/rows/add', {key}).then((done) => done && rows.reveal(key));
+    act('rows/add', {key}).then((done) => done && rows.reveal(key));
     closeAdd();
   };
   addForm.querySelector('[data-cancel]').onclick = closeAdd;
@@ -644,9 +644,9 @@ function wire() {
   const actions = {
     'load-table': loadTable,
     'load-settings': () => replaceChanges() && $('pick-settings').click(),
-    'table.csv': () => download('/api/table.csv', `${words().many}.csv`),
-    'table.xlsx': () => download('/api/table.xlsx', `${words().many}.xlsx`),
-    'settings.yaml': () => download('/api/settings.yaml', 'settings.yaml'),
+    'table.csv': () => download('table.csv', `${words().many}.csv`),
+    'table.xlsx': () => download('table.xlsx', `${words().many}.xlsx`),
+    'settings.yaml': () => download('settings.yaml', 'settings.yaml'),
     'results-selected': () => downloadResults(selectedRows(), 'results-selected.zip'),
     'results-all': () => downloadResults(view.state.rows, 'results-all.zip'),
   };
@@ -656,13 +656,13 @@ function wire() {
       actions[item.dataset.file]();
     };
   });
-  for (const [input, url] of [[$('pick-table'), '/api/table'], [$('pick-settings'), '/api/settings.yaml']]) {
+  for (const [input, url] of [[$('pick-table'), 'table'], [$('pick-settings'), 'settings.yaml']]) {
     input.onchange = async () => {
       if (!input.files.length) return;
       const file = input.files[0];
       input.value = '';
       const done = await act(`${url}?${query({name: file.name})}`, file);
-      if (done && url === '/api/settings.yaml') showTab('settings');
+      if (done && url === 'settings.yaml') showTab('settings');
     };
   }
 

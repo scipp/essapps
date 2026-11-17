@@ -3,16 +3,19 @@
 """The batch page's API over HTTP, on a real in-process workspace."""
 
 import io
+import re
 import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 import numpy as np
 import pandas as pd
 import pytest
 import scipp as sc
 import yaml
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
@@ -1179,3 +1182,21 @@ def test_the_runs_of_a_sample_that_arrive_in_the_demo_show_after_a_rescan(
 
     assert [row['name'] for row in before.values()] == ['H2O buffer']
     assert [row['name'] for row in after['rows']] == ['H2O buffer', 'D2O buffer']
+
+
+def test_the_page_and_the_files_it_names_are_served_under_a_path_prefix(
+    batch: Batch,
+) -> None:
+    parent = FastAPI()
+    parent.mount('/batch', create_app(batch, name='name', draw=draw))
+    under = TestClient(parent)
+
+    page = under.get('/batch/')
+    names = re.findall(r'(?:src|href)="([^"]+)"', page.text)
+    local = [n for n in names if not n.startswith('data:') and 'vendor' not in n]
+
+    assert local
+    for name in local:
+        assert not name.startswith(('/', 'http')), name
+        assert under.get(urljoin('/batch/', name)).status_code == 200, name
+    assert under.get('/batch/api/state').status_code == 200

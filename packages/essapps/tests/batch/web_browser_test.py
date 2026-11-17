@@ -307,7 +307,7 @@ def select(page: Any, name: str) -> None:
 
 def test_the_row_tab_does_not_show_a_row_after_a_second_is_selected(page: Any) -> None:
     page.click('[data-tab=row]')
-    hold(page, '/api/row')
+    hold(page, 'api/row')
     select(page, 'water')
     held(page, 1)
     select(page, 'sds')
@@ -324,7 +324,7 @@ def test_an_older_answer_for_the_runs_does_not_replace_a_newer_one(
     key = page.evaluate(
         "fetch('api/runs').then(r => r.json()).then(b => b.rows[0].key)"
     )
-    hold(page, '/api/runs')
+    hold(page, 'api/runs')
     for n, value in enumerate(['first', 'second']):
         edit = {'keys': [key], 'column': 'role', 'value': value}
         assert page.request.post(f'{url}api/runs/cells', data=edit).ok
@@ -360,6 +360,27 @@ def test_a_request_the_server_fails_says_its_status_where_no_action_asked(
     assert len(page.errors) == 1
     assert 'status of 500' in page.errors[0]
     page.errors.clear()
+
+
+def test_the_page_loads_its_rows_under_a_path_prefix(
+    browser: Any, batch: Batch, sample: Measure
+) -> None:
+    sample(1, 'water')
+    batch.scan()
+    parent = FastAPI()
+    parent.mount('/batch', create_app(batch, name='name', draw=draw))
+    with serve(parent) as url:
+        page = browser.new_page()
+        errors: list[str] = []
+        page.on(
+            'console', lambda m: errors.append(m.text) if m.type == 'error' else None
+        )
+        page.on('pageerror', lambda e: errors.append(str(e)))
+        page.goto(f'{url}batch/')
+
+        page.wait_for_selector('#rows .tabulator-row:has-text("water")')
+        page.close()
+    assert errors == []
 
 
 def test_a_plot_of_the_keys_of_ten_thousand_rows_is_answered(
