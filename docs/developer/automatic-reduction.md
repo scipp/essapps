@@ -59,7 +59,7 @@ def arrived(state, at):    # the loop
 |---|---|---|
 | it has no result | yes | yes |
 | its result failed or was cancelled | no | yes |
-| a setting changed | no | yes |
+| a setting changed | no | yes, but for a tweak, which is `outdated` only where a column changed |
 | a cell changed at a column of `at`, such as a run that joins its list | yes | yes |
 | a cell changed at another column | no | yes |
 | its result is of another spec | at the columns of `at` the other spec lacks | yes |
@@ -67,7 +67,7 @@ def arrived(state, at):    # the loop
 Each line answers a story or a failure mode:
 
 - A failed record counts, so that a file that fails is not retried at every step. Running it again is a person's decision (D2), or follows a change at `at`.
-- A changed setting does not reduce old rows again (E4). Their records keep the settings they ran with; the rows read `outdated`, and a person reduces them if they want.
+- A changed setting does not reduce old rows again (E4). Their records keep the settings they ran with; the rows read `outdated`, and a person reduces them through the loop's batch if they want.
 - A later partner, such as a transmission run that the source pairs with rows made before, changes a cell at a column outside `at`, and does not reduce those rows again.
 - A series grows (E1): a new angle in a row's list at `at` reduces the row again with every angle so far, and an angle whose file arrives again keeps its identity and changes nothing.
 - A cell that names a file by run, `file(run=1)`, resolves to the identity that the record holds, so it is not a change.
@@ -76,25 +76,47 @@ A result of another spec, such as an older version, stays the row's result.
 `differs` counts a parameter that one of the two requests lacks as changed, so the row is reduced again if the other spec lacks a column of `at`, and is otherwise compared as any other.
 A row whose result is running is not ready. Once the record has finished, the next step compares the row with it, and reduces it if a file arrived at `at` meanwhile.
 
-A label is what a consumer group is to a stream: the records under it say which rows are reduced, and nothing else does.
-A loop on a new label starts from the first file. A person's batch under its own label does not stop the loop from reducing a row; a record that another client submits under the loop's label, with a row's key as its member, does.
+A list is compared element by element, in order, so a source gives a list cell in one order at every scan, such as sorted by run: `FileSource.list` promises no order, and a list in another order, or shorter, reduces the row again.
+
+## One label, one batch
+
+Which rows are reduced follows from the records under the label and from the cells of the loop's rows.
+The loop keeps the results under its label equal to its batch's rows at the columns of `at`.
+So a label has one batch:
+
+```python
+page = Batch(client, IOFQ, ..., label='auto/iofq', source=pair_by_sample)   # a second batch on the loop's label
+page.rows = page.rows.edit('60339', {'sample': file(run=60400)})
+page.reduce(settings, ['60339'])   # the row's result now holds run 60400 at `sample`
+loop.step()                        # differs from the loop's row at `at`: reduced again with the source's file
+```
+
+A record that another `Batch` submits under the label with other cells at `at` is replaced at the next step.
+A person who wants another file for a row edits the loop's own batch, or corrects the file's metadata so that the source gives another file.
+Two loops never share a label: if their rows differ at `at`, each replaces the other's records at every step.
+A record under the label that equals the loop's row at `at`, from any submitter, counts as the row's result.
+A loop on a new label starts from the first file. A person's batch under its own label does not touch the loop's rows.
 
 ## What the loop keeps
 
 Nothing that decides which rows run.
 A step reads the files, the batch's rows and settings, and the records under the label, and works out the rest.
 `Automatic` keeps its batch, `at`, the settings callable, and `refused`, the reasons of the last step, which no step reads.
-So a restarted loop reduces no row again, and a step that raises, in the settings, the source, or a submission, loses nothing: the next step tries again.
+So a step that raises, in the settings, the source, or a submission, loses nothing: the next step tries again.
+A restarted loop reduces no row again whose cells come from the source alone.
+An edit lives in the `Batch` and is lost at a restart, so a row that was edited at a column of `at` is reduced again with the source's cells.
+A record that was running when the workspace ended is failed at the restart, and one that had not started is cancelled unless it persists outputs ([`Workspace._restart`](../../packages/essapps/src/ess/apps/workspace.py)); the loop does not run such a row again, and a person retries it.
 This holds while the proposal's history is kept. A running loop keeps it, since its calls keep the proposal from being idle ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
 
 The `Batch` keeps what it reads of the records, the newest of each member under the label, from the proposal's changes, and how it resolved each cell until the next scan.
 Both are caches that the records and the file source rebuild.
 It also keeps which results are its own tweaks, which changes `outdated` but not `changed`, so not what `arrived` gives.
 
-## Refusals
+## Problems and refusals
 
-A row whose cell the workspace refuses, such as a thickness below zero or a file named before it is measured, is `incomplete`: `Batch.state(settings)` resolves the cells it compares, and a refused cell is one of the row's `problems`.
-So `arrived` does not give it, and the page shows why.
+A *problem* is found when the state is read, a *refusal* when a row is submitted.
+A row whose cell the workspace does not accept, such as a thickness below zero or a file named before it is measured, is `incomplete`: `Batch.state(settings)` resolves the cells it compares, and the reason is one of the row's `problems`.
+So `arrived` does not give it, the page shows why, and the loop reduces the row once the cell is accepted.
 
 `submit` checks more than `client.resolve`, which looks at values only ([`WorkspaceProtocol.resolve`](../../packages/essapps/src/ess/apps/protocol.py)).
 What only `submit` refuses, and how a batch row meets it:
@@ -117,8 +139,8 @@ A reason that names no row refuses every row of the step.
 `Automatic.refused` holds the reasons of the last step by key, for a page to show.
 Nothing is kept to spare a retry, so a refused row is submitted again at every step, and refused again until what it references changes.
 
-Settings that the workspace refuses make `Batch.state(settings)` raise, since no row can run with them.
-The step then submits nothing, and `refused` holds the reason for each ready row without a result, the rows a person would expect to run, such as `{'1': 'unknown spec sans-iofq/v1'}` after an upgrade removed the spec (E2).
+Settings that the workspace does not accept make `Batch.state(settings)` raise a `SubmitError`, since no row can run with them.
+The step then submits nothing, and `refused` holds the reason for every ready row, such as `{'1': 'unknown spec sans-iofq/v1'}` after an upgrade removed the spec (E2).
 
 ## Chains
 
@@ -159,7 +181,8 @@ state = batch.state(settings)   # per row: its problems, its cells compared with
 ```
 
 A cell of a row with a result is compared as given first, and resolved only if it differs, such as a file named by run, whose record holds its identity.
-`scan` drops what the batch kept resolved, since a file may have gained a catalogue identifier, so such a cell is resolved again at every step, at about 0.13 ms each.
+`scan` drops what the batch kept resolved, since a file may have gained a catalogue identifier, so such a cell is resolved again at every step, at about 0.13 ms each, whether its column is in `at` or not.
+This is the slow regime: 15 s per step at 100 000 rows whose transmission is named by run, against 2.8 s for the same rows with files by identity.
 A row without a result has every cell resolved, which the first step pays.
 
 | Rows (2 files each) | 10 000 | 30 000 | 100 000 |

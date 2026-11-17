@@ -690,7 +690,7 @@ Actor: instrument scientist. Goal: after an upgrade removed the spec version of 
 
 ```python
 upgraded = upgrade(specs=[IOFQ_V2])                            # version 1 is gone
-auto = Automatic(iofq_batch(upgraded), at='sample', settings=lambda: {'normalization': None})
+auto = Automatic(iofq_batch(upgraded), at={'sample'}, settings=lambda: {'normalization': None})
 measure(1, [1.0, 1.0], role='sample')
 
 assert auto.step() == {}
@@ -702,7 +702,7 @@ assert auto.refused == {'1': 'unknown spec sans-iofq/v1'}
 Actor: none; a failure mode. Goal: a published result that SciCat lists as a dataset does not make a row.
 
 ```python
-auto = Automatic(iofq_batch(client), at='sample', settings=lambda: {'normalization': None})
+auto = Automatic(iofq_batch(client), at={'sample'}, settings=lambda: {'normalization': None})
 measure(1, [1.0, 2.0, 3.0, 4.0])
 (reduced,) = auto.step().values()
 pid = client.publish(reduced.ref('iofq'), 'scicat')
@@ -719,7 +719,7 @@ Actor: instrument scientist. Goal: new runs use the improved settings; earlier r
 
 ```python
 settings = {'normalization': None}
-auto = Automatic(iofq_batch(client), at='sample', settings=lambda: settings)
+auto = Automatic(iofq_batch(client), at={'sample'}, settings=lambda: settings)
 first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
 (before,) = auto.step().values()
 

@@ -300,7 +300,7 @@ batch = Batch(client, TRANSMISSION, columns=('run',), label='transmission',
 run([Automatic(batch, at={'run'}, settings=lambda: {'empty_beam': file(run=60336)})])
 ```
 
-Which rows run follows from the files and the records under the batch's label, so a restarted loop reduces no row again.
+Which rows run follows from the files, the batch's rows, and the records under its label, so a restarted loop reduces no row again that has no edits. A label has one batch: the loop replaces a record under its label whose cells at `at` differ from its rows.
 
 ## Provenance and publication
 
