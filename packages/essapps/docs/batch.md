@@ -136,8 +136,10 @@ Two buttons of the page drive the cycle. **Rescan** calls `batch.scan()`, which 
 def step(batch, settings, at):
     batch.scan()
     state = batch.state(settings)
-    return batch.reduce(settings, arrived(state, at))
+    return batch.reduce(settings, arrived(state, at))   # less the rows the workspace refuses
 ```
+
+The state is read with the settings, since `changed` is empty without them. A row that the workspace refuses when it is submitted does not hold back the others. The step reports why, and the row is tried again at the next step, since nothing remembers it.
 
 | | Rule | Started by |
 |---|---|---|
@@ -165,7 +167,7 @@ With `at={'sample_runs', 'trans_runs'}`, the files arriving as `s1, t1, s1', t1'
 | `s2` | 2 | not reduced: `incomplete` |
 | `t2` | 2 | `sample_runs=[s2]`, `trans_runs=[t2]` |
 
-A row that is pending when a file arrives is not ready. It is reduced at the first step after its record finishes. A failed row reads `outdated` once its request changes. The timer reduces it again only for a change at a column of `at`, such as a file that arrives. Otherwise a person retries it.
+A row that is pending when a file arrives is not ready. It is reduced at the first step after its record finishes, since its request then differs from its result's at a column of `at`. A failed row reads `outdated` once its request changes. The timer reduces it again only for a change at a column of `at`, such as a file that arrives. Otherwise a person retries it.
 
 **A changed setting** is one write of the settings, `write(settings)` below:
 
