@@ -274,14 +274,19 @@ def test_an_edit_the_server_does_not_get_is_taken_back_and_said(
     page.errors.clear()
 
 
-def test_the_scroll_position_stays_when_a_row_arrives(
-    page: Any, batch: Batch, sample: Measure
-) -> None:
+@pytest.fixture
+def holder(page: Any, batch: Batch, sample: Measure) -> Any:
+    """The holder of the rows of the page, with more rows than it shows."""
     for run in range(4, 60):
         sample(run, f'r{run}')
     batch.scan()
-    holder = page.locator('#rows .tabulator-tableholder')
     page.wait_for_selector('#n-samples:text-is("59")')
+    return page.locator('#rows .tabulator-tableholder')
+
+
+def test_the_scroll_position_stays_when_a_row_arrives(
+    holder: Any, page: Any, batch: Batch, sample: Measure
+) -> None:
     holder.evaluate('h => { h.scrollTop = h.scrollHeight / 2; }')
     top = holder.evaluate(TOP_ROW)
     height = holder.evaluate('h => h.scrollHeight')
@@ -293,4 +298,24 @@ def test_the_scroll_position_stays_when_a_row_arrives(
         f'h => h.scrollHeight > {height}', arg=holder.element_handle()
     )
     assert top.startswith('r')
+    assert holder.evaluate(TOP_ROW) == top
+
+
+def test_a_click_on_a_row_mostly_shown_at_the_bottom_does_not_scroll(
+    holder: Any, page: Any
+) -> None:
+    name = holder.evaluate("""h => {
+      const bottom = h.getBoundingClientRect().bottom;
+      const row = [...h.querySelectorAll('.tabulator-row')]
+        .find((r) => r.getBoundingClientRect().bottom > bottom);
+      const hidden = row.getBoundingClientRect().bottom - bottom;
+      h.scrollTop += hidden - 0.2 * row.offsetHeight;
+      return row.querySelector('[tabulator-field=name]').textContent;
+    }""")
+    top = holder.evaluate(TOP_ROW)
+    # A click by position: the click of a locator scrolls its cell into view.
+    box = cell(page, name, 'thickness').bounding_box()
+    page.mouse.click(box['x'] + 10, box['y'] + 5)
+
+    editor(page).wait_for()
     assert holder.evaluate(TOP_ROW) == top
