@@ -67,7 +67,8 @@ Each line answers a story or a failure mode:
 - A later partner, such as a transmission run that the source pairs with rows made before, changes a cell at a column outside `at`, and does not reduce those rows again.
 - A series grows (E1): a new angle in a row's list at `at` reduces the row again with every angle so far, and an angle whose file arrives again keeps its identity and changes nothing.
 - A cell that names a file by run, `file(run=1)`, resolves to the identity that the record holds, so it is not a change.
-- A person edits a row at two cells of `at`, such as its sample run and then its transmission run. The loop does not reduce the row with half of the change; the person reduces it once both are set. A cell set back to the scan's (`reset`) follows the files again.
+- A person edits a row at two cells of `at`, such as its sample run and then its transmission run. The loop does not reduce the row with half of the change; the person reduces it once both are set.
+- A cell that a person reverts to the scan's (`reset`) is no longer set by hand, so it follows the files again at once: the next step reduces the row, with its other cells as they are. Nothing distinguishes the row then from one whose file changed. So two reverts of one row, one after the other, can reduce it twice, the first time with the scan's cell next to a cell still set by hand. `reset(key)`, or `reset(key, *columns)`, reverts several cells of a row in one write, and the row is reduced once; on the page, a revert takes one column, and removing and restoring a row reverts all its cells.
 - A correction of a file's metadata reaches the rows through the scan, so the loop reduces for it as for a file that arrives. Two corrections that belong together reduce a row twice if a step runs between them.
 
 A result of another spec, such as an older version, stays the row's result.

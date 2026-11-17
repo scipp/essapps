@@ -42,6 +42,7 @@ Follow reduces a row for what the files changed, never for what a person changed
 A row with a cell set by hand that is not reduced yet waits for **Reduce**, with or without Follow, so a row edited at two cells of `at` is reduced once, with both.
 While following, such a row says "Set by hand, so Follow leaves it to you: reduce it."
 Once reduced, the row follows the files again, with its cells set by hand.
+A cell that a person reverts follows the files again at once: the next step reduces the row with its other cells as they are, so two reverts of one row can reduce it twice.
 A correction in the Runs view reaches the rows through the scan, so Follow reduces for it as for a file that arrives; two corrections that belong together reduce a row twice if a step runs between them.
 An action submits nothing but what a person asks to reduce: Apply reduces nothing, and the next step reduces the rows without a result with the settings applied.
 Apply forgets why Follow could not reduce a row, since the next step tries again.

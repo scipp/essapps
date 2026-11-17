@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from ess.apps import Client
 from ess.apps.batch import Batch, CorrectedFiles
 from ess.apps.batch.web import Server, create_app
-from ess.apps.batch.web.models import CellEdit, Edit, Reduce, State
+from ess.apps.batch.web.models import CellEdit, Cells, Edit, Reduce, State
 from ess.apps.batch.web.server import Problem
 from ess.apps.testing import FakeFiles
 
@@ -395,6 +395,27 @@ def test_a_row_a_person_reduced_after_an_edit_follows_the_files_again(
         record.request.params['sample']
         == client.latest('scan', '2').request.params['sample']
     )
+
+
+def test_a_cell_reverted_after_a_reduction_is_followed_at_the_next_step(
+    server: Server, client: Client, sample: Measure
+) -> None:
+    sample(1, 'water')
+    sample(2, 'oil')
+    server.follow(True)
+    done(server, client)
+    for column, run in [('sample', 2), ('transmission', 1002)]:
+        value = option(server, column, run)
+        server.edit(CellEdit(keys=['1'], column=column, value=value))
+    server.reduce(Reduce(which='remaining'))
+    done(server, client)
+
+    server.revert(Cells(keys=['1'], column='sample'))
+    server.step()
+
+    water, oil = (client.latest('scan', k).request.params for k in ('1', '2'))
+    assert water['sample'] != oil['sample']  # the scan's
+    assert water['transmission'] == oil['transmission']  # still set by hand
 
 
 def test_an_edit_not_reduced_leaves_its_row_to_the_person_when_a_file_arrives(
