@@ -78,18 +78,27 @@ def file_infos(client: Client, selector: Selector | None = None) -> list[FileInf
 _NONE = object()
 
 
-def _kept(name: str, value: Any) -> tuple[str, type, Any] | None:
+def _kept(name: str, value: Any) -> tuple[str, Any] | None:
     """
     The key a resolved value is kept by, ``None`` for one that cannot be a key.
-    A list is kept by its elements, each with its type, as a value is, so that
-    ``1`` and ``1.0``, or a list and a tuple, do not share an entry.
+    The column is in it, since a value resolves per parameter: ``True`` is
+    ``1`` at an ``int`` and refused at a ``StrictInt``. The type of the value,
+    and of each element of a list or tuple, is in it too, since ``1``,
+    ``1.0`` and ``True`` are equal keys in Python but not equal values to a
+    parameter.
     """
-    key = tuple((type(v), v) for v in value) if isinstance(value, list) else value
     try:
-        hash(key)
+        return (name, _typed(value))
     except TypeError:
         return None
-    return (name, type(value), key)
+
+
+def _typed(value: Any) -> tuple[type, Any]:
+    """``value`` with its type at every level; raises ``TypeError`` if unhashable."""
+    if isinstance(value, list | tuple):
+        return (type(value), tuple(_typed(v) for v in value))
+    hash(value)
+    return (type(value), value)
 
 
 def _running(row: RowState) -> list[FieldError]:
@@ -170,7 +179,7 @@ class Batch:
         self._found: dict[str, Record] = {}
         self._unbound: set[str] = set()
         # A cell's value as a record holds it, by its column and value as given.
-        self._resolved: dict[tuple[str, type, Any], Any] = {}
+        self._resolved: dict[tuple[str, Any], Any] = {}
 
     def scan(self) -> list[FileInfo]:
         """

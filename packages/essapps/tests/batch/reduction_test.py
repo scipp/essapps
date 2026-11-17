@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import BaseModel, Field, StrictInt
 
 from ess.apps import Client, Status, SubmitError, file, local
 from ess.apps.batch import (
@@ -20,11 +21,28 @@ from ess.apps.batch import (
     remaining,
 )
 from ess.apps.testing import CountingClient, FakeStore, StagedFunction
-from ess.spec import FileRef, OutputRef, function_binding
+from ess.spec import FileRef, OutputRef, RunFile, WorkflowSpec, function_binding
 
 from .toys import COLUMNS, FIND, PLAIN, STAGED, Gate, Measure, Outputs, pair
 
 PLAIN_V2 = PLAIN.model_copy(update={'version': 2})
+
+
+class StrictParams(BaseModel):
+    sample: RunFile
+    count: StrictInt = 1
+    number: int = 1
+    counts: list[StrictInt] = Field(default_factory=lambda: [1])
+
+
+STRICT = WorkflowSpec(
+    name='strict',
+    version=1,
+    title='Strict',
+    description='A toy whose parameters tell 1, 1.0 and True apart.',
+    params=StrictParams,
+    outputs=Outputs,
+)
 
 SETTINGS: dict[str, Any] = {'binning': {'bins': 2}}
 OTHER_SETTINGS: dict[str, Any] = {'binning': {'bins': 3}}
@@ -439,6 +457,61 @@ def test_a_changed_setting_is_found_when_no_result_s_files_are_known(
     changed = {k: s.changed for k, s in batch.state(OTHER_SETTINGS).items()}
 
     assert changed == {'1': {'binning'}, '2': {'binning'}}
+
+
+@pytest.fixture
+def strict(files: CorrectedFiles, sample: Measure) -> Iterator[Client]:
+    """A client that runs STRICT, with sample run 1."""
+    sample(1, 'water')
+    bind = [function_binding(STRICT, lambda _: Outputs(total=1.0))]
+    with local(proposal='p1', files=files, bind=bind) as client:
+        yield client
+
+
+def problems(batch: Batch) -> dict[str, list[tuple[str | int, ...]]]:
+    return {k: [e.loc for e in s.problems] for k, s in batch.state({}).items()}
+
+
+def strict_batch(client: Client, rows: dict[str, dict[str, Any]]) -> Batch:
+    batch = Batch(
+        client, STRICT, columns=('sample', 'count', 'number', 'counts'), label='s'
+    )
+    batch.rows = batch.rows.rescan(
+        [Row(k, {'sample': file(run=1), **cells}) for k, cells in rows.items()]
+    )
+    return batch
+
+
+@pytest.mark.parametrize(
+    ('column', 'kept', 'given'),
+    [
+        ('count', 1, True),
+        ('count', 1, 1.0),
+        ('counts', [1], [True]),
+        ('counts', (1,), (True,)),
+    ],
+)
+def test_a_value_kept_is_not_taken_for_an_equal_one_of_another_type(
+    strict: Client, column: str, kept: Any, given: Any
+) -> None:
+    cached = strict_batch(strict, {'a': {column: kept}})
+    problems(cached)
+
+    cached.rows = cached.rows.edit('a', {column: given})
+
+    assert problems(cached)['a'] != []
+    assert problems(cached) == problems(strict_batch(strict, {'a': {column: given}}))
+
+
+def test_a_value_kept_at_one_column_is_not_taken_at_another(strict: Client) -> None:
+    rows = {'a': {'number': True}, 'b': {'count': True}}
+    cached = strict_batch(strict, {'a': rows['a']})
+    problems(cached)
+
+    cached.rows = cached.rows.add(Row('b', {'sample': file(run=1), **rows['b']}))
+
+    assert problems(cached) == problems(strict_batch(strict, rows))
+    assert problems(cached) == {'a': [], 'b': [('count',)]}
 
 
 def test_a_batch_reads_a_file_by_run_as_a_new_one_does_after_a_scan(
