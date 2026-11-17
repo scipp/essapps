@@ -277,7 +277,7 @@ A step whose omission changes what a reader must do with the output, such as its
 A default is a value that a request could write: never a reference or a file.
 A field that only a reference fills, and a file field, has no default, or `None` if typed `X | None`, or `[]` for a list.
 pydantic does not validate a default, and a binding gets it as it is, so a default is the value that validating it gives: a group's default is an instance, not a dict, an enum's is a member, not its value, and it meets the field's constraints.
-A `default_factory` takes no other values of the model.
+A `default_factory` takes no other values of the model, and gives the same value at each call, such as `list` or a group's class, not `datetime.now` or a counter: a record holds its request with the defaults filled in, and a request is compared with a record's.
 Defaults belong in the model only, not in the workflow.
 
 ## Tables: several runs
@@ -404,7 +404,7 @@ Defaults ([Defaults](#defaults)):
 - A default is the value that validating it gives: an instance of a group, not a dict; a member of an enum, not its value. It meets the field's constraints.
 - A default is not a reference and names no file.
 - A file field, and a field typed `Referenced[T]`, has no default, but `None` if typed `X | None`, or `[]` for a list.
-- A `default_factory` takes no other values of the model.
+- A `default_factory` takes no other values of the model, and gives values with the same JSON form when called twice.
 
 Files ([Files](#files)):
 

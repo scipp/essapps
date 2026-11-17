@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+import itertools
 import re
 from datetime import datetime
 from enum import Enum, IntEnum
@@ -1657,6 +1658,8 @@ class TestFields:
             (RunFile | None, None),
             (list[RunFile], []),
             (Referenced[Reduction] | None, None),
+            (list[Reduction], Field(default_factory=list)),
+            (Reduction, Field(default_factory=Reduction)),
         ],
     )
     def test_a_default_at_a_field_is_a_value(self, tp: Any, default: Any) -> None:
@@ -1678,6 +1681,12 @@ class TestFields:
                 Referenced[Reduction],
                 Reduction(),
                 r'is not a reference to an output, as the field is typed Referenced',
+            ),
+            (
+                int,
+                Field(default_factory=itertools.count().__next__),
+                r'the default_factory gives another value at each call, \d+ then \d+; '
+                'a default is a value',
             ),
         ],
     )

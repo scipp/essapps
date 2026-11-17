@@ -67,6 +67,7 @@ from typing import Any, Protocol
 
 from ess.spec import FileRef, WorkflowSpec
 
+from .errors import SubmitError
 from .files import Selector
 from .records import Changes, Record, RecordStatus, Request, Template
 
@@ -101,10 +102,10 @@ class WorkspaceProtocol(Protocol):
     If the workspace cannot log, the call that found this raises that error, and it
     stops: every call then raises ``RuntimeError``.
 
-    A call returns once it is checked and logged, and leaves reading data and
-    computing to the workers. Only :meth:`changes`, up to its timeout, and the reads
-    of values, :meth:`outputs`, :meth:`describe`, and :meth:`accumulator_outputs`,
-    wait for work to finish.
+    A call leaves reading data and computing to the workers: one that logs, such
+    as :meth:`submit`, returns once it is checked and logged. Only :meth:`changes`,
+    up to its timeout, and the reads of values, :meth:`outputs`, :meth:`describe`,
+    and :meth:`accumulator_outputs`, wait for work to finish.
 
     A *plain request* is a request that goes through no stage: a call through a
     stage, and every state of an accumulator, has one, and its record is the record
@@ -161,6 +162,64 @@ class WorkspaceProtocol(Protocol):
             ``entry`` is the request's index in
             ``entries``, or ``None`` if the reason is not about one request (see
             :class:`~ess.apps.errors.FieldError`).
+        """
+        ...
+
+    def resolve(
+        self, items: list[Request | Template]
+    ) -> list[Request | Template | SubmitError]:
+        """
+        Each request as its record would hold it, and log nothing: file names
+        resolved to identities, defaults filled in, and inline values in JSON's
+        types. A record holds its request so, and a request is compared with a
+        record's once resolved::
+
+            resolved = workspace.resolve([load_run_1, load_run_9])
+            resolved[0].params  # {'sample': FileRef(file='pid:...')}
+            resolved[1]         # SubmitError: [1]: sample: unknown file run:9
+
+        A template comes back as a template with the same blanks, holding each
+        other parameter as the record of a request filled from it would hold it,
+        so the values shared by many requests are resolved once::
+
+            workspace.resolve([Template(IOFQ, params=settings, blanks=('sample',))])
+            # [Template(..., params={every parameter but 'sample'}, blanks=('sample',))]
+
+        This differs from the template a stage holds (see :meth:`open_stage`),
+        which has only the values given, since a request through the stage must
+        give exactly these.
+
+        A value is checked as :meth:`submit` checks it, and a refusal is the
+        ``SubmitError`` that :meth:`submit` raises for it, naming the item by its
+        index in ``items``; a template is refused also for a parameter that is
+        neither given nor a blank and has no default. Each item is resolved on its
+        own, so a refused item does not hide the others.
+
+        Not looked at: whether the outputs that an item references may be read,
+        stages, ``persist``, and what shows once the workflow runs, such as a file
+        that cannot be read. So a request resolved here may still be refused by
+        :meth:`submit`.
+
+        Resolving a resolved request gives the same request, and for a record of
+        the bound spec, ``resolve([record.request]) == [record.request]``:
+
+        - a value written inline must read back from its JSON form, which
+          :func:`ess.spec.validation.validate_request_value` checks;
+        - the identity of a file resolves to itself (see :meth:`FileSource.resolve`);
+        - a default is a value, the same at each call (see
+          ``packages/essspec/docs/params.md``, Defaults).
+
+        A file that gains a catalogue identifier later gets another identity, so
+        a request that names it by run number then resolves to another value than
+        an older record holds.
+
+        Each parameter resolves the same whatever the others are, so a template
+        resolved and the values of its blanks resolved give the request filled
+        from them resolved. Each value is checked by its own field: a group's
+        validators see only the group, and the params model has no validators
+        across parameters, which :class:`~ess.spec.WorkflowSpec` refuses
+        (``packages/essspec/docs/params.md``, What ``WorkflowSpec`` refuses). The
+        rules of a table, its length and no repeated row, only refuse.
         """
         ...
 
@@ -457,7 +516,8 @@ class FileSource(Protocol):
 
     def resolve(self, name: FileRef) -> FileRef:
         """
-        The identity of the named file; raises ``KeyError`` if unknown.
+        The identity of the named file; raises ``KeyError`` if unknown. An
+        identity names its own file, so it resolves to itself.
 
         A file the catalogue lists is identified by its catalogue identifier,
         ``pid:20.500.12269/<uuid>``, the same in every file source that knows

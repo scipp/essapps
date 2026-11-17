@@ -86,3 +86,10 @@ def test_watch_waits_for_the_interval_between_listings() -> None:
     start = time.monotonic()
     assert next(watch) == ref
     assert time.monotonic() - start >= 3 * 0.01
+
+
+def test_an_identity_resolves_to_itself(files: FakeFiles) -> None:
+    files.measure(7, 7.0, pid='x')
+    for name in (file(run=1), file(run=7)):
+        identity = files.resolve(name)
+        assert files.resolve(identity) == identity

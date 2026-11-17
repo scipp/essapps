@@ -83,7 +83,9 @@ accumulator through ``make_accumulator``.
 In the *request phase*, at submission, ``checks.py`` checks what needs no data.
 The workspace adds, under its lock, what depends on history and on what it
 keeps: each reference is one that may be read, and its data fit the type of its
-field (see :data:`ess.spec.validation.OutputReads`).
+field (see :data:`ess.spec.validation.OutputReads`). :meth:`Workspace.resolve`
+gives the first part alone, the request or template as a record would hold its
+values, and logs nothing.
 
 In the *call phase*, on a worker, the workspace reads the output each reference
 names and validates each value, a row of a list on its own, by the params model
@@ -809,7 +811,7 @@ class Workspace(WorkspaceProtocol):
         docstring).
         """
         self._check_running()
-        prepared = _every(entries, self._prepare)
+        prepared = _every([e.request for e in entries], self._prepare)
         requests = [request for request, _ in prepared]
         persisted = [self._persisted(r.spec, persist) for r in requests]
         with self._changed:
@@ -879,17 +881,50 @@ class Workspace(WorkspaceProtocol):
             raise SubmitError.at((), f'{spec_id} has no outputs {lacking} to persist')
         return names
 
-    def _prepare(self, index: int, entry: Entry) -> tuple[Request, OutputReads]:
+    def resolve(
+        self, items: list[Request | Template]
+    ) -> list[Request | Template | SubmitError]:
+        """
+        Each request or template resolved (see :meth:`_resolved`), the part of
+        :meth:`submit`'s checks that reads neither history nor what the
+        workspace keeps; needs no lock.
+        """
+        self._check_running()
+        resolved: list[Request | Template | SubmitError] = []
+        for i, item in enumerate(items):
+            try:
+                resolved.append(self._resolved(i, item))
+            except SubmitError as error:  # noqa: PERF203
+                resolved.append(error)
+        return resolved
+
+    def _resolved(self, index: int, item: Request | Template) -> Request | Template:
+        """
+        A request as :meth:`_prepare` gives it, or a template with every value
+        but the blanks as :meth:`.checks.Checks.template` fixes it, defaults
+        included. A refusal names the item by ``index``.
+        """
+        if isinstance(item, Request):
+            return self._prepare(index, item)[0]
+        try:
+            self._spec(item.spec)  # an unknown spec is refused as such
+            _, fixed, _ = self._checks[item.spec].template(item, self._proposal)
+        except SubmitError as error:
+            raise _refused(index, error) from None
+        return Template(item.spec, params=fixed, blanks=item.blanks)
+
+    def _prepare(self, index: int, request: Request) -> tuple[Request, OutputReads]:
         """
         The request as the record holds it, checked as a plain request in the
         request phase, but for the records it reads, and the references to
-        outputs in it (see :meth:`_check_reads`); needs no lock.
+        outputs in it (see :meth:`_check_reads`); needs no lock. A refusal
+        names the request by ``index``.
         """
-        spec_id = entry.request.spec
+        spec_id = request.spec
         try:
             self._spec(spec_id)  # an unknown spec is refused as such
             checks = self._checks[spec_id]
-            return checks.request(entry.request, self._proposal)
+            return checks.request(request, self._proposal)
         except SubmitError as error:
             raise _refused(index, error) from None
 

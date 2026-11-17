@@ -186,6 +186,28 @@ A request is checked in two phases:
 
 Validation in the request phase never proves that a workflow will succeed.
 
+`client.resolve` gives a request as its record would hold it, with file names resolved to identities, defaults filled in, and inline values in JSON's types, and logs nothing.
+It checks values as `submit` does, each request on its own, and gives the `SubmitError` of a refused one in its place.
+It does not look at whether the outputs a request references may be read, so a request it accepts may still be refused by `submit`.
+A record holds its request in this form, so a request is compared with a record's once resolved:
+
+```python
+resolved = client.resolve({'250K': request_250k, '260K': request_260k})
+resolved['250K'] == client.latest('iofq', member='250K').request   # the record ran these values
+```
+
+A template comes back with its blanks, and every other parameter resolved, defaults filled in, so values that many requests share are resolved once:
+
+```python
+client.resolve(Template(IOFQ, params=settings, blanks=('sample',)))   # every parameter but sample
+```
+
+Each parameter resolves the same whatever the others are, since each value is checked by its own field: the template and the values of its blanks, each resolved, give the request filled from them, resolved.
+
+Resolving a resolved request gives the same request, and `client.resolve(record.request) == record.request` for a record of the bound spec.
+Three rules give this: a value written inline must read back from its JSON form (`ess.spec.validation.validate_request_value`), the identity of a file resolves to itself (`FileSource.resolve`), and a default is a value, the same at each call (`packages/essspec/docs/params.md`, Defaults).
+A file that gains a catalogue identifier later has another identity, so a request that names it by run number then resolves to another value than an older record holds.
+
 **References.** `record.ref(name)` names an output of a record.
 A reference to a pending record is allowed, so a chain is submitted without waiting, and the workspace runs the request once the record it reads has completed:
 

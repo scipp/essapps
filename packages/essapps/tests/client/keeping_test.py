@@ -254,6 +254,7 @@ def test_every_call_of_a_closed_workspace_raises(
 
     calls = [
         lambda: client.submit(toys.load_request(1)),
+        lambda: client.resolve(toys.load_request(1)),
         lambda: client.freeze(total),
         lambda: client.cancel(load),
         lambda: client.changes(),

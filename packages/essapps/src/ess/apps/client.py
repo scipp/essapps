@@ -494,6 +494,37 @@ class Client:
             raise SubmitError(_named(e, names) for e in error.errors) from None
         return _reshape(what, records)
 
+    def resolve(self, what: _Items[Request | Template]) -> Any:
+        """
+        Each request as its record would hold it, in the shape of ``what``: one
+        request or template, a list, or a dict. Nothing is logged. A refused item
+        is the ``SubmitError`` that :meth:`submit` raises for it, naming it by its
+        key or index, and does not hide the others::
+
+            resolved = client.resolve({'a': load_run_1, 'b': load_run_9})
+            resolved['a'].params['sample']  # FileRef(file='pid:...')
+            resolved['b']                   # SubmitError: b: sample: unknown file run:9
+            client.resolve(record.request) == record.request  # of the bound spec
+
+        A template comes back with its blanks, and every other parameter resolved,
+        defaults filled in: ``client.resolve(Template(IOFQ, params=settings,
+        blanks=('sample',)))``.
+
+        See :meth:`~ess.apps.protocol.WorkspaceProtocol.resolve` for what it does
+        not look at, and why resolving a resolved request gives the same request.
+        """
+        names = _names(what)
+        resolved = self._workspace.resolve(_items(what))
+        return _reshape(
+            what,
+            [
+                SubmitError(_named(e, names) for e in r.errors)
+                if isinstance(r, SubmitError)
+                else r
+                for r in resolved
+            ],
+        )
+
     @_typed_as(submit)
     def compute(self, *args: Any, **kwargs: Any) -> Any:
         """
