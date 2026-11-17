@@ -93,9 +93,10 @@ class Choices {
 // The editor of a cell, as an input that opens at what the cell holds, all
 // of it selected so that typing replaces it. Enter, Tab or leaving writes;
 // Escape, text left as it was, or an empty cell left empty writes nothing.
-// A pick shows its options below. `say` tells why a value is not taken.
-function cellEditor(column, say) {
-  const {type, options} = column.editor;
+// A pick shows its options below, as `options()` gives them when the editor
+// opens. `say` tells why a value is not taken.
+function cellEditor(column, options, say) {
+  const {type} = column.editor;
   return (cell, onRendered, success, cancel) => {
     const held = cell.getData().cells[column.name];
     const start = (type === 'select' ? held.value : held.text) || column.default || '';
@@ -132,7 +133,7 @@ function cellEditor(column, say) {
     };
     onRendered(() => {
       if (type === 'select') {
-        choices = new Choices(options, cell.getElement(), (o) => close(true, o));
+        choices = new Choices(options(), cell.getElement(), (o) => close(true, o));
         choices.show('', held.value);
       }
       // A row edited scrolls into view only if less than half of it shows.
@@ -158,9 +159,9 @@ function cellEditor(column, say) {
   };
 }
 
-const editorOf = (column, say) =>
+const editorOf = (column, options, say) =>
   ['select', 'number', 'text'].includes(column.editor?.type)
-    ? {editor: cellEditor(column, say)}
+    ? {editor: cellEditor(column, options, say)}
     : {editable: false};
 
 // What a cell shows: its text, or what empty stands for in grey; marked where
@@ -207,8 +208,10 @@ function cellTooltip(column) {
 }
 
 // A column for each cell, given {name, title, editor, default} as the server
-// sends them.
-export function cellColumns(columns, {revert, say}) {
+// sends them. `current()` gives the columns of the state shown, whose options
+// an editor offers.
+export function cellColumns(columns, {current, revert, say}) {
+  const options = (column) => () => current().find((c) => c.name === column.name).editor.options;
   return columns.map((column) => ({
     title: column.title,
     headerTooltip: column.title,
@@ -218,7 +221,7 @@ export function cellColumns(columns, {revert, say}) {
     cssClass: column.editor ? `editable ${column.editor.type}` : '',
     formatter: cellFormatter(column, revert),
     tooltip: cellTooltip(column),
-    ...editorOf(column, say),
+    ...editorOf(column, options(column), say),
   }));
 }
 

@@ -25,6 +25,7 @@ const view = {
   detail: '', // what the row tab shows, to draw it again only on a change
   dismissed: '', // the refusal whose message was closed
   runs: 0, // the version of the runs shown
+  runColumns: [], // the columns of the runs shown
 };
 let rows; // the Grid of the rows
 let runs; // the Grid of the runs
@@ -207,7 +208,7 @@ function build(state) {
   const info = state.info.map((c) => ({title: c.title, field: `info.${c.name}`, minWidth: 96, headerSort: false}));
   const cells = state.columns;
   rows = new Grid($('rows'), {
-    columns: [named, ...info, ...cellColumns(cells, {revert: (key, column) => act('cells/revert', {keys: [key], column}), say: showMessage}), statusColumn],
+    columns: [named, ...info, ...cellColumns(cells, {current: () => view.state.columns, revert: (key, column) => act('cells/revert', {keys: [key], column}), say: showMessage}), statusColumn],
     edits: Object.fromEntries(cells.map((c) => [`cells.${c.name}.value`, c])),
     placeholder: `No ${many}. Rescan the runs, or load a table from the Files menu.`,
     edit: (keys, column, value) => act('cells', {keys, column, value}),
@@ -242,6 +243,7 @@ async function loadRuns() {
   const shown = await request('runs', {kind: 'runs'});
   if (!shown) return;
   view.runs = shown.version;
+  view.runColumns = shown.columns;
   $('n-runs').textContent = shown.rows.length;
   if (!runs) {
     const fields = shown.columns.map((c) => c.title.toLowerCase()).join(' or ');
@@ -250,6 +252,7 @@ async function loadRuns() {
       columns: [
         {title: 'Run', field: 'file', minWidth: 160, widthGrow: 2},
         ...cellColumns(shown.columns, {
+          current: () => view.runColumns,
           revert: (key, column) => act('runs/cells/revert', {keys: [key], column}),
           say: showMessage,
         }),

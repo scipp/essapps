@@ -610,3 +610,15 @@ def test_html_in_a_cell_shows_as_text_in_its_tooltip(page: Any) -> None:
     page.wait_for_selector('.tabulator-tooltip')
     assert HTML in page.inner_text('.tabulator-tooltip')
     assert page.locator('.tabulator-tooltip img').count() == 0
+
+
+def test_a_run_that_arrives_can_be_chosen_in_a_cell(
+    page: Any, batch: Batch, sample: Measure
+) -> None:
+    sample(4, 'ice')
+    batch.scan()
+    page.wait_for_selector('#rows .tabulator-row:has-text("ice")')
+
+    cell(page, 'water', 'transmission').click()
+
+    page.wait_for_selector('.choices li:has-text("run 1004")')
