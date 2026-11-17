@@ -235,7 +235,7 @@ function downloadResults(rows, name) {
   const old = done.filter((row) => row.result === 'outdated').length;
   const question = `${old} of the ${done.length} results are outdated: the settings or their cells changed since. Download them anyway?`;
   if (old && !confirm(question)) return;
-  download(`/api/results.zip?${query({keys: done.map((row) => row.key)})}`, name);
+  download('/api/results.zip', name, {keys: done.map((row) => row.key)});
 }
 
 async function loadRuns() {
@@ -418,7 +418,7 @@ async function renderPlot() {
   renderLegend();
   if (what === view.plotted) return;
   view.plotted = what;
-  const answer = await request(`/api/plot?${query({keys: view.selected})}`, {kind: 'plot'});
+  const answer = await request('/api/plot', {body: {keys: view.selected}, kind: 'plot'});
   if (!answer) return;
   const {figure, note, colors} = answer;
   view.colors = colors;

@@ -340,7 +340,7 @@ def test_a_changed_setting_leaves_the_rows_done_marked_with_earlier_settings(
     assert state(http)['action']['earlier'] == 2
     detail = http.get('/api/row', params={'key': '1'}).json()
     assert detail['differs'] == ['binning']
-    plot = http.get('/api/plot', params={'keys': ['1']}).json()
+    plot = http.post('/api/plot', json={'keys': ['1']}).json()
     assert plot['figure']['outdated'] == [False]
     table = pd.read_csv(io.BytesIO(http.get('/api/table.csv').content), dtype=str)
     assert list(table['status']) == [
@@ -883,7 +883,7 @@ def test_the_results_of_the_rows_done_download_as_a_zip(
 ) -> None:
     reduced(http, client)
 
-    content = http.get('/api/results.zip', params={'keys': ['1', '3']}).content
+    content = http.post('/api/results.zip', json={'keys': ['1', '3']}).content
 
     names = zipfile.ZipFile(io.BytesIO(content)).namelist()
     assert sorted(names) == [
@@ -898,7 +898,7 @@ def test_the_plot_draws_the_results_of_the_rows_asked_for_in_their_colours(
 ) -> None:
     reduced(http, client)
 
-    plot = http.get('/api/plot', params={'keys': ['2', '3']}).json()
+    plot = http.post('/api/plot', json={'keys': ['2', '3']}).json()
 
     assert plot['figure'] == {
         'drawn': ['2'],
@@ -906,7 +906,7 @@ def test_the_plot_draws_the_results_of_the_rows_asked_for_in_their_colours(
         'outdated': [False],
     }
     assert plot['colors'] == {'2': plots.PALETTE[1]}
-    assert http.get('/api/plot').json()['figure']['drawn'] == ['1', '2']
+    assert http.post('/api/plot', json={}).json()['figure']['drawn'] == ['1', '2']
 
 
 def test_a_drawing_that_raises_says_so_in_place_of_the_figure(
@@ -920,7 +920,7 @@ def test_a_drawing_that_raises_says_so_in_place_of_the_figure(
     page.post('/api/scan')
     reduced(page, client)
 
-    plot = page.get('/api/plot').json()
+    plot = page.post('/api/plot', json={}).json()
 
     assert plot['figure'] is None
     assert 'Cannot draw: released' in plot['note']
@@ -951,8 +951,8 @@ def test_plotting_and_saving_chosen_rows_reads_their_records_only(
         call()
         return counting.reads['status']
 
-    plot = reads(lambda: page.get('/api/plot', params=chosen))
-    saved = reads(lambda: page.get('/api/results.zip', params=chosen))
+    plot = reads(lambda: page.post('/api/plot', json=chosen))
+    saved = reads(lambda: page.post('/api/results.zip', json=chosen))
 
     # the zip also asks the status of the record it exports
     assert (plot, saved) == (1, 2)

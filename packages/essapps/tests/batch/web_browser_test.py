@@ -362,6 +362,16 @@ def test_a_request_the_server_fails_says_its_status_where_no_action_asked(
     page.errors.clear()
 
 
+def test_a_plot_of_the_keys_of_ten_thousand_rows_is_answered(
+    page: Any, url: str
+) -> None:
+    keys = [f'run-{n}' for n in range(10_000)]
+
+    answer = page.request.post(f'{url}api/plot', data={'keys': keys})
+
+    assert answer.ok
+
+
 BINS = '#settings input[data-path=\'["binning","bins"]\']'
 """The input of the number of bins in the settings form."""
 

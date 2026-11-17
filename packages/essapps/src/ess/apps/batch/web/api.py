@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import Body, FastAPI, Query, Request
+from fastapi import Body, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -42,8 +42,6 @@ from .server import Draw, Problem, Server
 
 STATIC = Path(__file__).parent / 'static'
 _XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-
-type Keyed = Annotated[list[str] | None, Query()]
 
 
 def _download(content: bytes, name: str, media: str) -> Response:
@@ -157,9 +155,10 @@ def create_app(
     def runs() -> Runs:
         return server.runs()
 
-    @app.get('/api/plot')
-    def plot(keys: Keyed = None) -> Plot:
-        return server.plot(keys or [])
+    @app.post('/api/plot')
+    def plot(body: Keys) -> Plot:
+        """The plot of the results of the rows ``keys``, or of the first ones."""
+        return server.plot(body.keys)
 
     @app.get('/api/table.{suffix}', response_class=Response)
     def table_file(suffix: Literal['csv', 'xlsx']) -> Response:
@@ -179,9 +178,10 @@ def create_app(
     def load_settings(name: str, content: Annotated[bytes, Body()]) -> State:
         return server.load_settings(name, content)
 
-    @app.get('/api/results.zip', response_class=Response)
-    def results_file(keys: Keyed = None) -> Response:
-        content = server.results_file(keys or [])
+    @app.post('/api/results.zip', response_class=Response)
+    def results_file(body: Keys) -> Response:
+        """The results of the done rows among ``keys``, or of all, as a zip."""
+        content = server.results_file(body.keys)
         return _download(content, 'results.zip', 'application/zip')
 
     app.mount('/static', StaticFiles(directory=STATIC), name='static')
