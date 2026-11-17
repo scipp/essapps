@@ -4,8 +4,9 @@
 Automatic reduction: a batch reduced as its files arrive. The guide is the
 section "Automatic reduction" of ``packages/essapps/docs/batch.md``.
 
-A step presses the two buttons of a batch's page, **Rescan** and **Reduce**,
-with the rule :func:`~.state.arrived` in place of a person::
+A step does what a person does with the buttons of a batch's page to scan and
+to reduce, with the rule :func:`~.state.arrived` in place of the person's
+choice::
 
     batch.scan()
     state = batch.state(settings)
