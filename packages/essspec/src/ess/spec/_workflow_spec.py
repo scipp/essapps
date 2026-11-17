@@ -766,13 +766,30 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
     group's default is an instance, not the object of its fields, and a
     list's default keeps the length constraints of the list. A file field has
     no default but ``None`` or ``[]``: each ``Path`` in the default names a
-    file, which the resolver of files refuses.
+    file, which the resolver of files refuses. A ``default_factory`` gives
+    the same value at each call, compared by JSON form: a record holds its
+    request with the defaults filled in, and a request is compared with a
+    record's.
     """
-    default = model.model_fields[name].get_default(call_default_factory=True)
+    field = model.model_fields[name]
+    default = field.get_default(call_default_factory=True)
     try:
         held, _ = validation.validate_request_value(
             model, name, default, _no_file, _no_path
         )
+        if field.default_factory is not None:
+            again, _ = validation.validate_request_value(
+                model,
+                name,
+                field.get_default(call_default_factory=True),
+                _no_file,
+                _no_path,
+            )
+            if again != held:
+                return (
+                    f'the default_factory gives another value at each call, {held!r} '
+                    f'then {again!r}; a default is a value'
+                )
         if refs := [
             (loc, f'{ref} is a reference; a default is a value')
             for loc, ref in iter_refs({name: held})
