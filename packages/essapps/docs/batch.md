@@ -42,19 +42,20 @@ The same logic works without widgets, in a notebook or a test:
 ```python
 from ess.apps.batch import ready, remaining
 
+batch.settings = settings      # one write; nothing is reduced for it
 batch.scan()
-state = batch.state(settings)   # where each row stands
-records = batch.reduce(settings, ready(state))
-batch.reduce(settings, remaining(batch.state(settings)))
+state = batch.state()           # where each row stands
+records = batch.reduce(ready(state))
+batch.reduce(remaining(batch.state()))
 batch.cancel()
 ```
 
-`settings` is a dict of the parameters that are not columns, as `Form.params` gives it.
+`batch.settings` is a dict of the parameters that are not columns, as `Form.params` gives it. `Batch(..., settings=...)` gives the settings that a new batch starts with, such as the technique's defaults. Every state and every reduction reads them. Only an assignment of all of them changes them: `batch.settings` is a copy, so `batch.settings['q'] = ...` raises, and a change inside a value changes only the copy.
 
 ## Terms
 
 - A **column** is a parameter of the spec that differs per row, such as `sample`. The columns are the blanks of a `Template`.
-- The **settings** are all other parameters, shared by every row. They are the template's values.
+- The **settings** are all other parameters, shared by every row. They are the batch's (`batch.settings`), and the template's values.
 - A **row** has a **key**, a value per column, and read-only **info** to show with it. A cell can hold anything a request can: a file, a reference to an output, a number, a list of runs.
 - A **source** is your function from files to rows. A **scan** calls it.
 - An **edit** is a cell set by hand, by a person or by your code.
@@ -78,7 +79,7 @@ t = t.rescan([Row('a', {'x': 99, 'y': 98}), Row('b', {'x': 3}), Row('c', {'x': 5
 
 A row added by hand stays. An edited row that a scan no longer gives is not shown, and comes back with its edits if a later scan gives it. `reset(key)` forgets a row's edits and that it was removed; `reset(key, column)` forgets the edit of one cell. `EMPTY` clears a cell whatever the scan gives. None of this is stored: a new session starts from a new scan.
 
-**A row is ready if it is complete and not running.** Each column with no default has a value, no cell reads a record that failed or was cancelled, and its result is not running. An empty cell of a column with a default takes the default. Whether a value is valid, such as a thickness below zero, is checked at submission, and by `state(settings)` for a value that differs from the row's result (below).
+**A row is ready if it is complete and not running.** Each column with no default has a value, no cell reads a record that failed or was cancelled, and its result is not running. An empty cell of a column with a default takes the default. Whether a value is valid, such as a thickness below zero, is checked at submission, and by `state()` for a value that differs from the row's result (below).
 
 | Function | Gives |
 |---|---|
@@ -87,10 +88,10 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 | `arrived(states, at)` | ready rows with no result, or whose request differs from their result's at a column of `at` ([Automatic reduction](#automatic-reduction)) |
 | `summary(states)` | the number of rows in each state |
 
-**A row's state is read from its result.** `state(settings)` compares each row's request with the request of its result, and says where they differ:
+**A row's state is read from its result.** `state()` compares each row's request, its cells with the settings, with the request of its result, and says where they differ:
 
 ```python
-s = batch.state(settings)['60339']
+s = batch.state()['60339']
 s.record         # the result: the newest record under the label with member '60339'
 s.changed        # frozenset({'q'}): the parameters whose value differs from the result's
 s.spec_changed   # True if s.record is of another spec than the one bound
@@ -98,11 +99,11 @@ s.outdated       # True if either holds; for a tweak, if a column changed (below
 s.text           # 'outdated'
 ```
 
-The state is read from the records, so every `Batch` on the label, and the same one after a restart, reads the same, with one limit: a `Batch` keeps how it resolved a file name until its next `scan`. That differs from a new `Batch` only for a file that gained a catalogue identifier since: its names, its old identity among them, now resolve to the identifier. `changed` is worked out only when `state` is given the settings; `state()` alone leaves it empty, resolves nothing, and is what `reduce` reads.
+The state is read from the records, so every `Batch` on the label, and the same one after a restart, reads the same, with one limit: a `Batch` keeps how it resolved a file name until its next `scan`. That differs from a new `Batch` only for a file that gained a catalogue identifier since: its names, its old identity among them, now resolve to the identifier. `results()` gives each row with its result but without its request: it resolves nothing, so `changed` is empty, and a result is `outdated` only if it is of another spec. It is what a page shows while the settings are refused, and what `reduce` checks before it submits.
 
-A record holds its request resolved: files by identity, defaults filled in, values in their JSON form. So `state(settings)` resolves with `client.resolve` what it compares. The settings are resolved once per call, whatever the number of rows, and compared with each result. If they are refused, `state` raises the `SubmitError`, with reasons that name no row: no row can run with them. A cell of a row with a result is compared as given first, and only a cell that differs so is resolved and compared again, so writing a default out, or naming a file by run, does not make a row `changed`. Every cell of a row without a result is resolved, so a file named before it is measured shows before anything is submitted. A value resolved is kept by its column and its value, with the type of the value and of each element of a list or tuple, until the next `scan`; a value that cannot be a dictionary key, such as a dict, is resolved at each call. A cell that `resolve` refuses is not `changed`: its reason is one of the row's `problems`, so the row shows as `incomplete`, with the reason at the cell, and neither `ready` nor `remaining` gives it. It is asked again at the next call, so a file that arrives later is found.
+A record holds its request resolved: files by identity, defaults filled in, values in their JSON form. So `state()` resolves with `client.resolve` what it compares. The settings are resolved once per call, whatever the number of rows, and compared with each result. If they are refused, `state` raises the `SubmitError`, with reasons that name no row: no row can run with them. A cell of a row with a result is compared as given first, and only a cell that differs so is resolved and compared again, so writing a default out, or naming a file by run, does not make a row `changed`. Every cell of a row without a result is resolved, so a file named before it is measured shows before anything is submitted. A value resolved is kept by its column and its value, with the type of the value and of each element of a list or tuple, until the next `scan`; a value that cannot be a dictionary key, such as a dict, is resolved at each call. A cell that `resolve` refuses is not `changed`: its reason is one of the row's `problems`, so the row shows as `incomplete`, with the reason at the cell, and neither `ready` nor `remaining` gives it. It is asked again at the next call, so a file that arrives later is found.
 
-**Cost of `state(settings)`.** Measured with 30 000 rows of two files each, on an in-memory workspace with a file source that finds a name by one lookup:
+**Cost of `state()`.** Measured with 30 000 rows of two files each, on an in-memory workspace with a file source that finds a name by one lookup:
 
 | 30 000 rows | first state | later states |
 |---|---|---|
@@ -112,15 +113,15 @@ A record holds its request resolved: files by identity, defaults filled in, valu
 | without results | 6–9 s | 0.3–0.7 s |
 | 10 chosen rows (`keys`) | 0.6 ms | 0.6 ms |
 
-A first state is paid by a new `Batch` and again after each `scan`, which drops what was kept. Nearly all of it is the workspace validating each value resolved, about 0.1 ms per value. A list cell is kept too: 3 000 rows of a list of one file named by run take 0.4 s at the first state and 17 ms later. `state()` without settings resolves nothing.
+A first state is paid by a new `Batch` and again after each `scan`, which drops what was kept. Nearly all of it is the workspace validating each value resolved, about 0.1 ms per value. A list cell is kept too: 3 000 rows of a list of one file named by run take 0.4 s at the first state and 17 ms later. `results()` resolves nothing.
 
 A result of another spec stays the row's result. Its request and its outputs are read as stored data ([ADR 0009](../../../docs/developer/adr/0009-a-record-of-another-spec-stays-readable.md)), so the results of two versions of a spec can be compared until the row is reduced again.
 
-**`reduce` is strict and all-or-nothing.** The rows given are submitted in one call. If any is refused, or still running, none is submitted, and the `SubmitError` names the rows refused. `FieldError.entry` is the row's key and `loc[0]` the column. A reason about the settings appears once, with no key. So `reduce(settings, ready(state))` skips incomplete and running rows, while one invalid value refuses the whole call and names the row. The workspace checks values first and references second, so correcting the rows named can bring up more.
+**`reduce` is strict and all-or-nothing.** The rows given are submitted in one call. If any is refused, or still running, none is submitted, and the `SubmitError` names the rows refused. `FieldError.entry` is the row's key and `loc[0]` the column. A reason about the settings appears once, with no key. So `reduce(ready(state))` skips incomplete and running rows, while one invalid value refuses the whole call and names the row. The workspace checks values first and references second, so correcting the rows named can bring up more.
 
 **With `staged=True`** the rows go through a stage, and what they share is computed once. It needs a binding that makes stages. A stage is reused while the settings are the same. Whether a column can vary through a stage is the binding's to decide, and a refusal says so; a column that everything depends on saves nothing.
 
-**One row with other settings.** `tweak(key, params)` submits one request with all of its parameters, which becomes the row's result, and its state is `tweaked`; a newer record of the row ends that. While it is the row's result, `changed` names every parameter at which the row's request differs from the tweak's, as for any row, but the row is `outdated` only if one of them is a column. So a tweak that sets a column to another value than the row's cell reads `outdated` at once. Only the `Batch` that made the tweak knows it: after a restart, or on another `Batch` on the label, the tweak's result is read as any other, and the row reads `outdated` where the tweak differs from the settings. `tweak_params(state, settings)` gives the params that a form for a tweak starts from: the row's cells, and the other parameters of its result, or the settings if it has none or one of another spec, whose parameters are not this spec's. If a parameter differs for many rows, make it a column.
+**One row with other settings.** `tweak(key, params)` submits one request with all of its parameters, which becomes the row's result, and its state is `tweaked`; a newer record of the row ends that. While it is the row's result, `changed` names every parameter at which the row's request differs from the tweak's, as for any row, but the row is `outdated` only if one of them is a column. So a tweak that sets a column to another value than the row's cell reads `outdated` at once. Only the `Batch` that made the tweak knows it: after a restart, or on another `Batch` on the label, the tweak's result is read as any other, and the row reads `outdated` where the tweak differs from the settings. `tweak_params(state)` gives the params that a form for a tweak starts from: the row's cells, and the other parameters of its result, or the settings if it has none or one of another spec, whose parameters are not this spec's. If a parameter differs for many rows, make it a column.
 
 ## Writing a source
 
@@ -162,7 +163,7 @@ App(client, tabs={'I(Q)': view, 'Runs': sheet})
 A cell may read another record, also one still running, so a row can use a value computed for that row:
 
 ```python
-centres = find.reduce(settings, remaining(find.state()))
+centres = find.reduce(remaining(find.state()))
 for key, record in centres.items():
     iofq.rows = iofq.rows.edit(key, {'beam_centre': record.ref('centre')})
 ```
@@ -189,8 +190,8 @@ Automatic reduction reduces a batch as its files arrive. Its *loop*, an `Automat
 from ess.apps.batch.auto import Automatic, run
 
 batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'), label='auto/iofq',
-              source=pair_by_sample, staged=True, persist=True)
-loop = Automatic(batch, at={'sample'}, settings=lambda: settings)
+              source=pair_by_sample, staged=True, persist=True, settings=settings)
+loop = Automatic(batch, at={'sample'})
 loop.step()       # scans, and reduces the rows that arrived; their records by key
 loop.refused      # why rows of the last step were refused, by key
 run([loop])       # steps once a second, until a step raises
@@ -200,8 +201,8 @@ A step does what a person does on the page with the buttons to scan and to reduc
 
 ```python
 batch.scan()
-state = batch.state(settings)                # settings: what the callable gives at this step
-batch.reduce(settings, arrived(state, at))
+state = batch.state()                        # with the batch's settings at this step
+batch.reduce(arrived(state, at))
 
 def arrived(state, at):                      # ess.apps.batch.arrived
     return [key for key in ready(state)
@@ -244,7 +245,7 @@ Which rows a step reduces follows from the files, the batch's rows and settings,
 ```python
 page = Batch(client, IOFQ, columns=..., label='auto/iofq', source=pair_by_sample)  # a second batch on the label
 page.rows = page.rows.edit('60339', {'sample': file(run=60400)})
-page.reduce(settings, ['60339'])     # a record with run 60400 at `sample`
+page.reduce(['60339'])               # a record with run 60400 at `sample`
 loop.step()                          # reduces '60339' again with the source's file: the loop's rows win
 ```
 
@@ -387,7 +388,7 @@ One command holds the folder at a time. If a command was killed, the next one fi
 
 `BatchView` is a tab for `App`:
 
-- the settings form, the table of rows with a filter by state, and a count of each state;
+- the settings form, which writes the batch's settings at each change that leaves nothing missing, the table of rows with a filter by state, and a count of each state;
 - buttons to scan, reduce all, reduce remaining, reduce selected, cancel, and show the settings of a selected result;
 - details of a selected row, with the reason it failed;
 - an editor: select rows, change cells, and **Update selected** writes only the changed cells, to all of them. A cell with something missing is not written and is named. To write a value that equals its default to several rows, choose the column in **Write**;
@@ -412,8 +413,8 @@ The command finds the results of the app, and the app those of the command, if b
 |---|---|
 | **Load rows** | `batch.rows = batch.rows.rescan(frames.rows_of(frames.read_table(path), spec.params, batch.columns))` |
 | **Save rows** | `frames.batch_table(batch, states)`, written with `frames.write_table` |
-| **Load settings** | `text.settings_of(batch, text.load_template(path))`, refused if of another spec, another version of it, or with other blanks than the columns |
-| **Save settings** | `text.write_template(batch.template(settings), path)` |
+| **Load settings** | `batch.settings = text.settings_of(batch, text.load_template(path))`, refused if of another spec, another version of it, or with other blanks than the columns |
+| **Save settings** | `text.write_template(batch.template(), path)` |
 | **Export selected** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows selected |
 
 `reduce` refuses a table with a row that cannot run, so remove the incomplete rows before saving. A table loaded takes the place of a scan, so the edits stay on top, and **Scan files** gives the rows of the files again. The `status` of a saved table is what the view shows, such as `outdated` or `not reduced`. `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table. A relative path is relative to the working directory of the app.
