@@ -181,6 +181,34 @@ def test_an_edit_of_several_rows_writes_each_and_says_so(
     assert notice == 'Thickness set on 2 rows.'
 
 
+def test_an_edit_of_several_rows_with_one_unknown_edits_none(
+    http: TestClient, batch: Batch
+) -> None:
+    before = batch.rows
+
+    refused = http.post(
+        '/api/cells', json={'keys': ['1', '9'], 'column': 'thickness', 'value': 5}
+    )
+
+    assert 'no row 9' in refused.json()['message']
+    assert batch.rows is before
+
+
+def test_cells_of_several_rows_are_set_back_together(
+    http: TestClient, batch: Batch
+) -> None:
+    scanned = batch.rows['1'].values.get('thickness')
+    thickness(http, ['1', '2', '3'], 5.0)
+
+    http.post('/api/cells/revert', json={'keys': ['1', '2'], 'column': 'thickness'})
+
+    assert [batch.rows[k].values.get('thickness') for k in '123'] == [
+        scanned,
+        scanned,
+        5.0,
+    ]
+
+
 def test_a_file_cell_is_set_by_the_label_of_its_option(http: TestClient) -> None:
     column = next(c for c in state(http)['columns'] if c['name'] == 'transmission')
     label = next(o for o in column['editor']['options'] if o.startswith('run 1001'))

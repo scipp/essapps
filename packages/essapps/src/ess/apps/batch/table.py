@@ -160,36 +160,60 @@ class RowTable:
         until set again or :meth:`reset`. Raises ``KeyError`` if there is no such
         row.
         """
-        self[key]
-        return replace(
-            self, edits={**self.edits, key: {**self.edits.get(key, {}), **values}}
-        )
+        return self.edit_each([key], values)
+
+    def edit_each(self, keys: Iterable[str], values: Mapping[str, Any]) -> RowTable:
+        """
+        :meth:`edit` of each of ``keys`` in one pass. Raises ``KeyError``, and
+        edits none, if the table has no row for one of them.
+        """
+        keys = tuple(keys)
+        for key in keys:
+            self[key]
+        edits = dict(self.edits)
+        for key in keys:
+            edits[key] = {**edits.get(key, {}), **values}
+        return replace(self, edits=edits)
 
     def remove(self, key: str) -> RowTable:
         """
         Remove a row. One from the scan stays removed after the next scan,
         until :meth:`reset`. Raises ``KeyError`` if there is no such row.
         """
-        self[key]
-        edits = {k: v for k, v in self.edits.items() if k != key}
-        added = tuple(row for row in self.added if row.key != key)
-        in_scan = any(row.key == key for row in self.scan)
-        removed = self.removed | {key} if in_scan else self.removed
-        return replace(self, added=added, edits=edits, removed=removed)
+        return self.remove_each([key])
+
+    def remove_each(self, keys: Iterable[str]) -> RowTable:
+        """
+        :meth:`remove` of each of ``keys`` in one pass. Raises ``KeyError``, and
+        removes none, if the table has no row for one of them.
+        """
+        keys = frozenset(keys)
+        for key in keys:
+            self[key]
+        return replace(
+            self,
+            added=tuple(row for row in self.added if row.key not in keys),
+            edits={k: v for k, v in self.edits.items() if k not in keys},
+            removed=self.removed | keys.intersection(row.key for row in self.scan),
+        )
 
     def reset(self, key: str, *columns: str) -> RowTable:
         """
         Forget the edits of a row, and that it was removed, if it was. Given
         ``columns``, forget only the edits of those cells.
         """
-        if columns:
-            kept = {
-                c: v for c, v in self.edits.get(key, {}).items() if c not in columns
-            }
-            edits = {k: v for k, v in self.edits.items() if k != key}
-            return replace(self, edits={**edits, key: kept} if kept else edits)
-        return replace(
-            self,
-            edits={k: v for k, v in self.edits.items() if k != key},
-            removed=self.removed - {key},
-        )
+        return self.reset_each([key], *columns)
+
+    def reset_each(self, keys: Iterable[str], *columns: str) -> RowTable:
+        """:meth:`reset` of each of ``keys`` in one pass."""
+        keys = frozenset(keys)
+        edits = {}
+        for key, cells in self.edits.items():
+            if key not in keys:
+                edits[key] = cells
+            elif columns and (
+                kept := {c: v for c, v in cells.items() if c not in columns}
+            ):
+                edits[key] = kept
+        removed = self.removed if columns else self.removed - keys
+        return replace(self, edits=edits, removed=removed)
