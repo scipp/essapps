@@ -319,22 +319,17 @@ function renderFollow(follow) {
 }
 
 // The settings form, which holds changes until Apply; and the rows reduced
-// with earlier settings, which a person may reduce again.
+// with earlier settings, which a person may reduce again. Apply and Discard
+// are never disabled: a click on them may send the value typed first.
 let shownSettings = '';
 function renderSettings(state) {
-  const {action} = state;
-  const {changed, missing} = state.settings_draft;
+  const {action, settings_changed: changed, settings_problem: problem} = state;
   $('earlier').hidden = action.earlier === 0;
   $('earlier-hint').textContent = `${count(action.earlier)} reduced with earlier settings.`;
   $('reduce-earlier').disabled = Boolean(action.blocked);
   $('draft').classList.toggle('changed', changed);
-  $('draft-state').textContent = !changed
-    ? state.settings_problem ?? 'These settings are in force.'
-    : missing.length
-      ? `Changed, not applied: ${missing.join('; ')}.`
-      : 'Changed, not applied yet.';
-  $('settings-apply').disabled = !changed || missing.length > 0;
-  $('settings-discard').disabled = !changed;
+  const said = problem ? ` ${problem}.` : '';
+  $('draft-state').textContent = changed ? `Changed, not applied yet.${said}` : said.trim() || 'These settings are in force.';
   const json = JSON.stringify(state.settings);
   if (json === shownSettings) return;
   shownSettings = json;

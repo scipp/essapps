@@ -113,7 +113,6 @@ from .models import (
     CellEdit,
     Cells,
     Column,
-    Draft,
     Edit,
     Follow,
     Plot,
@@ -342,9 +341,19 @@ class Server:
         # What the form holds while it shows the batch's settings.
         self._shown = self.settings.held()
 
-    def _edited(self) -> bool:
-        """Whether the form holds a change of the batch's settings."""
-        return self.settings.held() != self._shown
+    def _unapplied(self) -> str | None:
+        """
+        What a person does first while the form holds a change, since a
+        reduction would use settings other than those shown; else ``None``.
+        """
+        held = self.settings.held()
+        if held == self._shown:
+            return None
+        return (
+            'Fill in or discard the settings'
+            if held[1]
+            else 'Apply or discard the settings'
+        )
 
     def _states(
         self, keys: Sequence[str] | None = None
@@ -431,16 +440,22 @@ class Server:
         counts = dict.fromkeys(_ORDER, 0)
         for status in statuses.values():
             counts[status] += 1
-        missing = self.settings.held()[1]
-        edited = self._edited()
-        said = [self._said([*missing, *unusable])] if missing or unusable else []
+        given, missing = self.settings.held()
+
+        def shown(error: FieldError) -> bool:
+            """Whether the form shows the batch's value where ``error`` is."""
+            name = str(error.loc[0]) if error.loc else ''
+            return not name or given.get(name) == self._shown[0].get(name)
+
+        # A refusal of the batch's settings is said, and marked at its field,
+        # while the form shows the value refused.
+        errors = [*missing, *filter(shown, unusable)]
+        said = [self._said(errors)] if errors else []
         if self._unfit:
             said.insert(0, f'Settings that this form cannot show: {_join(self._unfit)}')
         problem = '; '.join(said) or None
-        blocked = 'Apply or discard the changed settings' if edited else problem
-        # The refusals of the batch's settings are marked at the fields only
-        # while the form shows those settings.
-        marks = () if edited else (*unusable, *self.refused)
+        unapplied = self._unapplied()
+        marks = [e for e in (*unusable, *self.refused) if not e.entry and shown(e)]
         fields = self.batch.spec.params.model_fields
         return State(
             version=self.version,
@@ -467,13 +482,12 @@ class Server:
             rows=rows,
             counts={'all': len(states), **counts},
             removed=len(scan.keys() & self.batch.rows.removed),
-            action=self._primary(states, statuses, blocked, len(earlier)),
-            settings=forms.tree(self.settings, [e for e in marks if not e.entry]),
-            settings_problem=problem,
-            settings_draft=Draft(
-                changed=edited or bool(self._unfit),
-                missing=[self._said([e]) for e in missing],
+            action=self._primary(
+                states, statuses, unapplied or problem, len(earlier), unapplied
             ),
+            settings=forms.tree(self.settings, marks),
+            settings_problem=problem,
+            settings_changed=unapplied is not None,
             refused=[self._refused(e) for e in self.refused],
             follow=self._follow(),
             notice=notice,
@@ -599,13 +613,17 @@ class Server:
         statuses: Mapping[str, str],
         blocked: str | None,
         earlier: int,
+        label: str | None = None,
     ) -> Action:
-        """What the primary button does now, and how far the rows running are."""
+        """
+        What the primary button does now, ``label`` if given while it is
+        ``blocked``, and how far the rows running are.
+        """
         left = [] if blocked else left_to_reduce(states, self.batch.columns)
         kinds = {statuses[k] for k in left}
         n = len(left)
         if blocked:
-            label = 'Check the settings'
+            label = label or 'Check the settings'
         elif not left:
             label = 'Nothing left to reduce'
         elif kinds == {'failed'}:
@@ -800,8 +818,8 @@ class Server:
         """Submit the rows asked for, all or none."""
         for key in request.keys:
             self._row_of(key)
-        if self._edited():
-            raise Problem('Nothing was reduced: apply or discard the changed settings.')
+        if unapplied := self._unapplied():
+            raise Problem(f'Nothing was reduced: {unapplied.lower()}.')
         try:
             columns = self.batch.columns
             rules: dict[str, Callable[[Mapping[str, RowState]], list[str]]] = {
@@ -973,7 +991,9 @@ class Server:
                 'whose settings this one does not take.'
             )
         self._fill(row.record.request.params)
-        return f'The form shows the settings {name} was reduced with. Apply them.'
+        return (
+            f'The form shows the settings {name} was reduced with. Apply to use them.'
+        )
 
     # One row
 
@@ -1203,8 +1223,8 @@ class Server:
     @_locked
     def settings_file(self) -> bytes:
         """The batch's settings as a YAML template."""
-        if self._edited():
-            raise Problem('Apply or discard the changed settings first.')
+        if unapplied := self._unapplied():
+            raise Problem(f'{unapplied} first.')
         if missing := self.settings.held()[1]:
             raise Problem(f'Fill in the settings first: {SubmitError(missing)}')
         with _file('settings.yaml') as path:
