@@ -45,12 +45,15 @@ def runs(row, held):      # held: the files at `at` of the records of the row's 
 `ready` is the batch's: the row is complete, and its result is not running.
 A file at `at` is the cell's value, or an element of its list, as a series of angles gives it; a file deeper inside the value does not count.
 
-| What happened to a row | Runs |
-|---|---|
-| no record holds its file at `at` | yes |
-| its record failed or was cancelled | no |
-| a setting changed, or a cell at another column | no |
-| a new file joined its list at `at` | yes |
+| What happened to a row | Runs in the loop | In a person's `remaining` |
+|---|---|---|
+| no record holds its file at `at` | yes | yes |
+| its record failed or was cancelled | no | yes |
+| a setting changed, or a cell at another column | no | yes |
+| a new file joined its list at `at` | yes | yes |
+| its result is of another spec | no | yes |
+
+A person's `remaining` reads the row's state: a row runs if it has no result, a failed or cancelled one, or an outdated one, whose request now differs from the result's or whose result is of another spec ([batch.md](../../packages/essapps/docs/batch.md#rules)).
 
 Each line answers a story or a failure mode:
 
@@ -132,8 +135,8 @@ The numbers below are measured against that scale.
 
 A step lists every file, runs the source over all of them, and checks each row's cell at `at` against `held`.
 That is linear in the number of files.
-To submit the rows that run, the batch reads every record under the label to find the result of each of those rows, and asks for the status of those rows only.
-A loop that is made reads every record of the proposal once.
+To submit the rows that run, the batch finds the result of each of those rows among the records it keeps, the newest of each key under the label, read from the proposal's changes, and asks for the status of those rows only.
+A loop that is made reads every record of the proposal once. A batch reads every record under its label once, at its first state, and at each later state the records that the proposal's changes name since, under any label.
 
 | Files reduced | 3 000 | 30 000 | 100 000 |
 |---|---|---|---|
@@ -161,7 +164,7 @@ A cut-off that a person sets on purpose, "only the files since Tuesday", is a se
 ## Open
 
 - **New files since a position.** `FileSource.list` returns every file, so each step lists the whole proposal. A catalogue cannot be listed whole at each step; the file source needs a call that returns what is new since a position, as `client.changes` does for records.
-- **Reading the records of chosen members.** The state of the rows that run reads every record under the label (`client.records(label=...)`) and keeps those of the rows' keys. A remote client cannot read 100 000 records at each step.
+- **Reading the records of chosen members.** A batch reads every record under its label once, at its first state. Each later state reads the records that the proposal's changes name since, under any label, and keeps those under its own. A remote client would read 100 000 records when a batch is made, and every record that another batch of the proposal submits or finishes.
 - **A step below linear.** The source runs over all files because nothing says which rows a new file can touch. Two ways would say it; neither is prototyped, and a spike on LoKI's pairing and on a pairing by time would show which is better:
   - *A group per file*, declared by the author. A step makes the rows of the groups that got a file, from those files and the files shared by all groups. A source that pairs by time, such as "the can measured before", has no such group and stays linear.
 
@@ -185,7 +188,6 @@ A cut-off that a person sets on purpose, "only the files since Tuesday", is a se
   A class with state that the author writes, `add(file) -> changed rows`, is not offered. It would have to give the same rows for any order of arrival, a role corrected later, a file that arrives again, and a restart, which a function over the files gives without effort.
 - **A step that raises ends `run`.** A later step would lose nothing, but `run` does not take it: which errors a service logs and steps past, such as a lost connection, is not decided.
 - **Starting a new label at a given run.** A loop on a new label consumes from the first file. Starting it at a run needs a range in `Selector`, which matches equal values only.
-- **Old rows reduced again for a new spec version.** One more term of the predicate, from the spec of each row's result (ADR 0009): `runs(row, held) or result.spec != spec`.
-- **The files held at `at`, by key, for a page.** A page reads `Batch.state`, which counts the results of the batch's spec only. After a new version of the spec, a page shows the old rows as not reduced, while the loop holds them.
+- **Old rows reduced again for a new spec version.** One more term of the predicate, from the state of each row (ADR 0009): `runs(row, held) or state.spec_changed`.
 - **A loop that pushes into an accumulator**, for a sum that grows with each file (D7). The accumulator would be the only thing the workspace keeps for the loop, which would freeze it with `persist=` once the sum is complete.
 - **The application around the loop**: one process per instrument, a workspace per proposal, the configuration files, and a page that shows the batches. The page and the loop would use one `Batch` from two threads, and `Batch` has no lock.

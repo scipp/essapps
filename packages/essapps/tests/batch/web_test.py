@@ -4,7 +4,7 @@
 
 import io
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import numpy as np
@@ -14,13 +14,13 @@ import yaml
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
-from ess.apps import Client
+from ess.apps import Client, local
 from ess.apps.batch import Batch, CorrectedFiles
 from ess.apps.batch.web import Shown, create_app, plots
-from ess.apps.testing import FakeFiles
-from ess.spec import SampleRunFile, WorkflowSpec
+from ess.apps.testing import CountingClient, FakeFiles
+from ess.spec import SampleRunFile, WorkflowSpec, function_binding
 
-from .toys import Gate, Measure
+from .toys import COLUMNS, PLAIN, STAGED, Gate, Measure, Outputs, pair
 
 BINS = ['binning', 'bins']
 """The path of the number of bins in the settings form."""
@@ -281,6 +281,63 @@ def test_a_changed_setting_makes_the_rows_done_outdated(
     assert rows(http)['1']['reason'] == 'Binning changed.'
 
 
+def test_a_page_started_again_shows_the_rows_reduced_with_other_settings_outdated(
+    http: TestClient, client: Client
+) -> None:
+    reduced(http, client)
+    batch = Batch(client, STAGED, columns=COLUMNS, label='scan', source=pair)
+    batch.scan()
+    again = TestClient(create_app(batch, name='name'))
+
+    again.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 3})
+
+    assert statuses(again) == {'1': 'outdated', '2': 'outdated', '3': 'incomplete'}
+    assert rows(again)['1']['reason'] == 'Binning changed.'
+
+
+class Count(BaseModel):
+    count: int = Field(default=2, ge=1)
+
+
+class ParamsV2(BaseModel):
+    """The toy's params with ``binning.bins`` renamed and ``offset`` removed."""
+
+    binning: Count = Field(default_factory=Count)
+    sample: SampleRunFile
+    transmission: SampleRunFile
+    thickness: float = 1.0
+
+
+def test_a_row_reduced_by_another_spec_version_is_outdated(
+    files: CorrectedFiles, sample: Measure
+) -> None:
+    v2 = PLAIN.model_copy(update={'version': 2, 'params': ParamsV2})
+    bind = [function_binding(s, lambda _: Outputs(total=1.0)) for s in (PLAIN, v2)]
+    sample(1, 'water')
+    with local(proposal='p1', files=files, bind=bind) as client:
+        old, new = (
+            Batch(client, s, columns=COLUMNS, label='s', source=pair)
+            for s in (PLAIN, v2)
+        )
+        old.scan()
+        client.wait(old.reduce({}, ['1']))
+        new.scan()
+        page = TestClient(create_app(new))
+
+        assert statuses(page) == {'1': 'outdated'}
+        assert rows(page)['1']['reason'] == (
+            'Binning changed. It was reduced by another version of the workflow.'
+        )
+        assert state(page)['action']['label'] == 'Reduce 1 outdated'
+        detail = page.get('/api/row', params={'key': '1'}).json()
+        tweak = {tuple(n['path']): n for n in detail['tweak']}
+        assert detail['reduced_with'] is None
+        assert tweak['binning',]['child']['children'][0]['value'] == 2
+        used = page.post('/api/row/use-settings', json={'key': '1'})
+        assert used.status_code == 422
+        assert 'another version' in used.json()['message']
+
+
 def test_a_failed_row_stays_failed_when_the_settings_change(
     http: TestClient, client: Client
 ) -> None:
@@ -310,14 +367,20 @@ def test_incomplete_settings_block_reducing_and_no_result_is_current(
     assert {r['status'] for r in shown['rows'][:2]} == {'outdated'}
 
 
-def test_a_setting_refused_is_marked_at_its_field(http: TestClient) -> None:
+def test_a_setting_refused_is_marked_at_its_field_before_reducing(
+    http: TestClient, client: Client
+) -> None:
+    reduced(http, client)
+
     http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 0})
 
-    assert http.post('/api/reduce', json={'which': 'remaining'}).status_code == 422
-
-    (binning, *_) = state(http)['settings']
+    shown = state(http)
+    (binning, *_) = shown['settings']
     assert binning['child']['children'][0]['path'] == BINS
     assert 'greater than' in binning['child']['children'][0]['problem']
+    assert 'greater than' in shown['settings_problem']
+    assert statuses(http) == {'1': 'outdated', '2': 'outdated', '3': 'incomplete'}
+    assert http.post('/api/reduce', json={'which': 'remaining'}).status_code == 422
 
 
 @pytest.mark.parametrize('suffix', ['csv', 'xlsx'])
@@ -427,6 +490,30 @@ def test_no_two_curves_of_a_figure_share_a_colour() -> None:
     assert len(set(plots.colors(range(3 * n)))) == 3 * n
 
 
+def test_plotting_and_saving_chosen_rows_reads_their_records_only(
+    client: Client, sample: Measure
+) -> None:
+    counting = CountingClient(client)
+    batch = Batch(counting, STAGED, columns=COLUMNS, label='scan', source=pair)  # type: ignore[arg-type]
+    for run in (1, 2, 3):
+        sample(run, f's{run}')
+    batch.scan()
+    page = TestClient(create_app(batch, name='name', draw=draw))
+    reduced(page, client, 'all')
+    chosen = {'keys': ['1']}
+
+    def reads(call: Callable[[], object]) -> int:
+        counting.reads.clear()
+        call()
+        return counting.reads['status']
+
+    plot = reads(lambda: page.get('/api/plot', params=chosen))
+    saved = reads(lambda: page.get('/api/results.zip', params=chosen))
+
+    # the zip also asks the status of the record it exports
+    assert (plot, saved) == (1, 2)
+
+
 def test_a_row_shows_which_settings_its_result_was_reduced_with(
     http: TestClient, client: Client
 ) -> None:
@@ -444,16 +531,15 @@ def test_a_reduction_of_one_row_alone_becomes_its_result(
     http: TestClient, client: Client
 ) -> None:
     reduced(http, client)
-    edit = {'key': '1', 'path': ['thickness'], 'op': 'set', 'value': 4.0}
+    edit = {'key': '1', 'path': BINS, 'op': 'set', 'value': 4}
 
-    detail = http.post('/api/row/tweak', json=edit).json()
+    http.post('/api/row/tweak', json=edit)
     http.post('/api/row/tweak/submit', json={'key': '1'})
     client.wait(client.records())
 
-    (field,) = [n for n in detail['tweak'] if n['path'] == ['thickness']]
-    assert field['value'] == 4.0
     assert (rows(http)['1']['status'], rows(http)['1']['alone']) == ('done', True)
-    assert client.latest('scan', '1').request.params['thickness'] == 4.0
+    assert client.latest('scan', '1').request.params['binning'] == {'bins': 4}
+    assert http.get('/api/row', params={'key': '1'}).json()['differs'] == ['binning']
 
 
 def test_a_row_added_by_hand_is_gone_for_good_when_removed(

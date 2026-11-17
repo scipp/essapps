@@ -58,7 +58,8 @@ batch.cancel()
 - A **row** has a **key**, a value per column, and read-only **info** to show with it. A cell can hold anything a request can: a file, a reference to an output, a number, a list of runs.
 - A **source** is your function from files to rows. A **scan** calls it.
 - An **edit** is a cell set by hand, by a person or by your code.
-- A row's **result** is the newest record with the batch's spec and label, and the row's key as its member, whoever submitted it. So two `Batch` objects with the same spec and label are one batch: give each batch its own label. An application that wants a table per person puts the person in the label.
+- A row's **result** is the newest record with the batch's label and the row's key as its member, of any spec and whoever submitted it. So two `Batch` objects with the same label are one batch: give each batch its own label. An application that wants a table per person puts the person in the label.
+- A row's **request** is what `reduce` would submit for it now: the settings and its cells. A result is **outdated** if the row's request differs from the result's, or if the result is of another spec than the one bound ([Rules](#rules)).
 
 Choose a key that does not change from one scan to the next, such as the run number. Results and edits are found by key. Put the name of the sample in `info`, under a name that is not a column.
 
@@ -77,21 +78,48 @@ t = t.rescan([Row('a', {'x': 99, 'y': 98}), Row('b', {'x': 3}), Row('c', {'x': 5
 
 A row added by hand stays. An edited row that a scan no longer gives is not shown, and comes back with its edits if a later scan gives it. `reset(key)` forgets a row's edits and that it was removed; `reset(key, column)` forgets the edit of one cell. `EMPTY` clears a cell whatever the scan gives. None of this is stored: a new session starts from a new scan.
 
-**A row is ready if it is complete and not running.** Each column with no default has a value, no cell reads a record that failed or was cancelled, and its result is not running. An empty cell of a column with a default takes the default. Whether a value is valid, such as a thickness below zero, is checked at submission.
+**A row is ready if it is complete and not running.** Each column with no default has a value, no cell reads a record that failed or was cancelled, and its result is not running. An empty cell of a column with a default takes the default. Whether a value is valid, such as a thickness below zero, is checked at submission, and by `state(settings)` for a value that differs from the row's result (below).
 
 | Function | Gives |
 |---|---|
 | `ready(states)` | every row that can run now |
-| `remaining(states)` | ready rows with no result, a failed or cancelled one, or a stale one |
+| `remaining(states)` | ready rows with no result, a failed or cancelled one, or an outdated one |
 | `summary(states)` | the number of rows in each state |
 
-**A result is stale** if the row's cells or the settings differ from those it was submitted with. `Batch` remembers that for the rows it submitted, and works it out only when `state` is given the settings. Requests are compared as given, so writing a default out, or naming a file another way, shows a row as stale: at worst a row is offered for a rerun.
+**A row's state is read from its result.** `state(settings)` compares each row's request with the request of its result, and says where they differ:
+
+```python
+s = batch.state(settings)['60339']
+s.record         # the result: the newest record under the label with member '60339'
+s.changed        # frozenset({'q'}): the parameters whose value differs from the result's
+s.spec_changed   # True if s.record is of another spec than the one bound
+s.outdated       # True if either holds; for a tweak, if a column changed (below)
+s.text           # 'outdated'
+```
+
+The state is read from the records, so every `Batch` on the label, and the same one after a restart, reads the same, with one limit: a `Batch` keeps how it resolved a file name until its next `scan`. That differs from a new `Batch` only for a file that gained a catalogue identifier since: its names, its old identity among them, now resolve to the identifier. `changed` is worked out only when `state` is given the settings; `state()` alone leaves it empty, resolves nothing, and is what `reduce` reads.
+
+A record holds its request resolved: files by identity, defaults filled in, values in their JSON form. So `state(settings)` resolves with `client.resolve` what it compares. The settings are resolved once per call, whatever the number of rows, and compared with each result. If they are refused, `state` raises the `SubmitError`, with reasons that name no row: no row can run with them. A cell of a row with a result is compared as given first, and only a cell that differs so is resolved and compared again, so writing a default out, or naming a file by run, does not make a row `changed`. Every cell of a row without a result is resolved, so a file named before it is measured shows before anything is submitted. A value resolved is kept by its column and its value, with the type of the value and of each element of a list or tuple, until the next `scan`; a value that cannot be a dictionary key, such as a dict, is resolved at each call. A cell that `resolve` refuses is not `changed`: its reason is one of the row's `problems`, so the row shows as `incomplete`, with the reason at the cell, and neither `ready` nor `remaining` gives it. It is asked again at the next call, so a file that arrives later is found.
+
+**Cost of `state(settings)`.** Measured with 30 000 rows of two files each, on an in-memory workspace with a file source that finds a name by one lookup:
+
+| 30 000 rows | first state | later states |
+|---|---|---|
+| with results, cells as the records hold them | 0.7 s | 0.5–0.9 s |
+| with results, every row edited | 2.8 s | 0.5 s |
+| with results, files named by run | 6–7 s | 0.7–1.3 s |
+| without results | 6–9 s | 0.3–0.7 s |
+| 10 chosen rows (`keys`) | 0.6 ms | 0.6 ms |
+
+A first state is paid by a new `Batch` and again after each `scan`, which drops what was kept. Nearly all of it is the workspace validating each value resolved, about 0.1 ms per value. A list cell is kept too: 3 000 rows of a list of one file named by run take 0.4 s at the first state and 17 ms later. `state()` without settings resolves nothing.
+
+A result of another spec stays the row's result. Its request and its outputs are read as stored data ([ADR 0009](../../../docs/developer/adr/0009-a-record-of-another-spec-stays-readable.md)), so the results of two versions of a spec can be compared until the row is reduced again.
 
 **`reduce` is strict and all-or-nothing.** The rows given are submitted in one call. If any is refused, or still running, none is submitted, and the `SubmitError` names the rows refused. `FieldError.entry` is the row's key and `loc[0]` the column. A reason about the settings appears once, with no key. So `reduce(settings, ready(state))` skips incomplete and running rows, while one invalid value refuses the whole call and names the row. The workspace checks values first and references second, so correcting the rows named can bring up more.
 
 **With `staged=True`** the rows go through a stage, and what they share is computed once. It needs a binding that makes stages. A stage is reused while the settings are the same. Whether a column can vary through a stage is the binding's to decide, and a refusal says so; a column that everything depends on saves nothing.
 
-**One row with other settings.** `tweak(key, params)` submits one request with all of its parameters, which becomes the row's result. It is stale only if the row's cells change after that, and its state is `tweaked` until `reduce` submits the row with the settings. `tweak_params(key, state.record, settings)` gives the params that a form for a tweak starts from: the row's cells, and the other parameters of its result, or the settings if it has none. If a parameter differs for many rows, make it a column.
+**One row with other settings.** `tweak(key, params)` submits one request with all of its parameters, which becomes the row's result, and its state is `tweaked`; a newer record of the row ends that. While it is the row's result, `changed` names every parameter at which the row's request differs from the tweak's, as for any row, but the row is `outdated` only if one of them is a column. So a tweak that sets a column to another value than the row's cell reads `outdated` at once. Only the `Batch` that made the tweak knows it: after a restart, or on another `Batch` on the label, the tweak's result is read as any other, and the row reads `outdated` where the tweak differs from the settings. `tweak_params(state, settings)` gives the params that a form for a tweak starts from: the row's cells, and the other parameters of its result, or the settings if it has none or one of another spec, whose parameters are not this spec's. If a parameter differs for many rows, make it a column.
 
 ## Writing a source
 
@@ -171,11 +199,11 @@ run([loop])       # steps once a second, until a step raises
 
 **A row runs if its cell at `at` holds a file that no record under the label, with the row's key, holds at `at`.** Any record counts: failed, cancelled, of any spec, and of any submitter. So automatic reduction differs from a person's reduce:
 
-| A row runs if | no result | failed or cancelled | a setting or another cell changed | a new file at the trigger column |
-|---|---|---|---|---|
-| the page, "reduce remaining" | yes | yes | yes (stale) | yes |
-| `essapps-batch reduce --remaining` | yes | yes | no | no |
-| the loop | yes | no | no | yes |
+| A row runs if | no result | failed or cancelled | a setting or another cell changed | a new file at the trigger column | a result of another spec |
+|---|---|---|---|---|---|
+| the page, "reduce remaining" | yes | yes | yes (outdated) | yes | yes (outdated) |
+| `essapps-batch reduce --remaining` | yes | yes | yes | yes | yes |
+| the loop | yes | no | no | yes | no |
 
 Which rows are reduced is defined by the records under the label and by nothing else. So a loop on a batch with a new label reduces from the first file, and a person's record under the loop's label counts as a row reduced: give the loop a label of its own. A row whose key changes from one scan to the next, such as a key made from a sample name that a correction changed, is a new row, and is reduced again under its new key; so choose a key that does not change, such as the run number ([Terms](#terms)).
 
@@ -249,7 +277,7 @@ A cell that is not text is its value, and `None` or `NaN` is an empty cell, so o
 
 **A cell** is read as JSON if it is JSON, so `1.5`, `null`, and `{"x": 0, "y": 1}` are values, and anything else is text. Text that is JSON is written in quotes, such as `"12"` for a sample name at a string parameter; a `.csv` file doubles them, `"""12"""`. At a parameter that is a file field, or a list of them, a whole number names a run, text with a kind, such as `pid:...` or `path:...`, a file as the record holds it, and other text a path, relative to the working directory. A table that the batch writes holds each file as the record does, by its identity: `pid:20.500.12269/<uuid>` for a raw file the catalogue lists, and `path:masks/mask.xml`, relative to the workspace's folder, for any other file in it. A number with a leading zero, such as `0342`, is not JSON, so it is read as a path: write `342`. The same holds for the values of the template's file. A file field inside a group takes the JSON form, `{"@ref": "file", "file": "run:60339"}`. Every file is one that the workspace's file source knows.
 
-**`reduce`** returns the table with three columns, which it replaces if the table has them: `status`, the ID of the `record`, and `failure`, the reason. So its result can be its next table. With `--remaining` it leaves out the rows whose newest record under the label completed. It compares neither cells nor settings: after changing either, reduce without `--remaining`, or under another label. The `status` of a row is `completed`, `failed`, or `cancelled`.
+**`reduce`** returns the table with three columns, which it replaces if the table has them: `status`, the ID of the `record`, and `failure`, the reason. So its result can be its next table. With `--remaining` it reduces only the rows that `remaining` gives: those with no result, a failed or cancelled one, or an outdated one, whose cells or settings changed since, or whose result is of another spec ([Rules](#rules)). A row that cannot run is submitted all the same, so that the command refuses it by name. The `status` of a row is `completed`, `failed`, or `cancelled`.
 
 Ctrl-C cancels every row that has not completed, those running among them, and the command ends with a `KeyboardInterrupt` once the workflows that were running return. It writes no table; reduce again with `--remaining`.
 
@@ -308,7 +336,7 @@ $B reduce iofq.yaml runs.csv --label water-series
 
 `{'@latest': label, output: name}` is read when the command starts, as the output of the newest record under the label, of `member` if given, whoever submitted it. It is for a template, not for a cell of a table. The record of each row holds the ID that it was read as. A reference by ID is `{'@ref': output, record: ..., output: ...}`.
 
-One command holds the folder at a time. If a command was killed, the next one first finishes the rows that had not started, but fails those of a spec it does not bind with the same version and models. A row that was running fails, since its workflow may have been what ended the process. Reduce again with `--remaining` to submit every row that has not completed, the failed ones included. A command that binds another version of a spec, or the same version with changed models, reads the old results as plain scipp data, and shows the rows of another version as not reduced. Nothing removes the files of the store.
+One command holds the folder at a time. If a command was killed, the next one first finishes the rows that had not started, but fails those of a spec it does not bind with the same version and models. A row that was running fails, since its workflow may have been what ended the process. Reduce again with `--remaining` to submit every row that has not completed, the failed ones included. A command that binds another version of a spec, or the same version with changed models, reads the old results as plain scipp data, and reduces their rows again with `--remaining`. Nothing removes the files of the store.
 
 ## The UI
 
@@ -343,7 +371,7 @@ The command finds the results of the app, and the app those of the command, if b
 | **Save settings** | `text.write_template(batch.template(settings), path)` |
 | **Export selected** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows selected |
 
-`reduce` refuses a table with a row that cannot run, so remove the incomplete rows before saving. A table loaded takes the place of a scan, so the edits stay on top, and **Scan files** gives the rows of the files again. The `status` of a saved table is what the view shows, such as `stale` or `not reduced`. `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table. A relative path is relative to the working directory of the app.
+`reduce` refuses a table with a row that cannot run, so remove the incomplete rows before saving. A table loaded takes the place of a scan, so the edits stay on top, and **Scan files** gives the rows of the files again. The `status` of a saved table is what the view shows, such as `outdated` or `not reduced`. `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table. A relative path is relative to the working directory of the app.
 
 `draw(records)` gets the completed results of the rows selected, by key, and returns a Panel object.
 
@@ -385,6 +413,6 @@ Raise in the fake to make a row fail; hold it back on a `threading.Event` to kee
 ## What it does not do
 
 - Keep the table across sessions, but in a file that a person saves and loads. A new `Batch` scans again. It finds results by key in its workspace, so `local()` per session starts with none, and a result that is not persisted is gone once its workspace closes.
-- Show a stale result after a restart, or one that another `Batch` object submitted. Stale compares a row with the request that this object submitted for it. So of two people on one label, each sees the other's results as up to date, whatever their own settings.
+- Keep a tweak across sessions. After a restart a tweaked row reads `outdated` where the tweak differs from the settings, and "reduce remaining" reduces it again with the settings.
 - Free the values of replaced results. They stay until the workspace closes or they are released, unless the batch persists them (`persist=`).
 - Offer preparatory steps with a **Use** button. A `Referenced[...]` setting offers each record in the settings form.

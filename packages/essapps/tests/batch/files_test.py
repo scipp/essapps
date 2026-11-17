@@ -158,18 +158,70 @@ def test_main_returns_3_if_a_row_failed(
     assert list(read_table(out)['status']) == ['completed', 'failed']
 
 
+@pytest.mark.parametrize('remaining', [[], ['--remaining']])
+@pytest.mark.parametrize('sample', ['', '99'])
 def test_main_returns_2_and_says_why_if_a_row_cannot_run(
     command: list[str],
     cli_template: Path,
     folder: Path,
     capsys: pytest.CaptureFixture[str],
+    sample: str,
+    remaining: list[str],
 ) -> None:
-    runs = write_rows(folder, ['1', ''])
+    runs = write_rows(folder, ['1', sample])
 
-    code = main([*command, 'reduce', str(cli_template), str(runs), '-l', 'x'])
+    code = main(
+        [*command, 'reduce', str(cli_template), str(runs), '-l', 'x', *remaining]
+    )
 
     assert code == 2
     assert 'row-1' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('remaining', [[], ['--remaining']])
+def test_main_returns_2_and_says_why_if_the_settings_are_refused(
+    command: list[str],
+    folder: Path,
+    capsys: pytest.CaptureFixture[str],
+    remaining: list[str],
+) -> None:
+    template = folder / 'iofq.yaml'
+    template.write_text(
+        'spec: {name: cli-toy, version: 1}\nblanks: [sample]\n'
+        'params: {offset: {value: nope}}\n'
+    )
+    runs = write_rows(folder, ['1'])
+
+    code = main([*command, 'reduce', str(template), str(runs), '-l', 'x', *remaining])
+
+    err = capsys.readouterr().err
+    assert code == 2
+    assert 'offset' in err
+    assert 'row-0' not in err
+
+
+def test_main_with_remaining_reduces_the_rows_whose_cells_or_settings_changed(
+    command: list[str], cli_template: Path, folder: Path
+) -> None:
+    out = folder / 'results.csv'
+
+    def records(samples: list[str]) -> list[str]:
+        runs = write_rows(folder, samples)
+        args = [str(cli_template), str(runs), '-l', 'x', '--remaining', '-o', str(out)]
+        assert main([*command, 'reduce', *args]) == 0
+        return list(read_table(out)['record'])
+
+    first = records(['1', '2'])
+    cell = records(['1', '3'])
+    cli_template.write_text(
+        'spec: {name: cli-toy, version: 1}\nblanks: [sample]\n'
+        'params: {offset: {value: 1.0}}\n'
+    )
+    setting = records(['1', '3'])
+
+    assert (cell[0], cell[1] != first[1]) == (first[0], True)
+    assert not set(setting) & set(cell)
+    assert records(['1', '3']) == setting
 
 
 def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(
