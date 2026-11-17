@@ -54,6 +54,8 @@
           </div>
           <button type="button" id="cancel">Cancel</button>
           <span class="spacer"></span>
+          <span class="follow-status" id="follow-status"></span>
+          <label class="follow" id="follow" hidden><input type="checkbox"> Follow</label>
           <button type="button" class="quiet" id="rescan">↻ Rescan runs</button>
         </div>
         <div class="chips" id="chips" role="group" aria-label="Show samples that are"></div>
@@ -106,7 +108,11 @@
         <ul class="legend" id="legend" aria-label="Legend"></ul>
       </div>
       <div class="tab" id="tab-settings" hidden>
-        <p class="hint" id="settings-hint">Shared by every row. A change marks the results reduced with other settings as outdated.</p>
+        <p class="hint" id="settings-hint">Shared by every row. A change applies to the rows not reduced yet, once nothing is missing.</p>
+        <div class="apply" id="apply" hidden>
+          <button type="button" id="apply-all"></button>
+          <span class="hint" id="apply-hint"></span>
+        </div>
         <div class="form" id="settings"></div>
       </div>
       <div class="tab" id="tab-row" hidden></div>

@@ -101,9 +101,11 @@ class Row(BaseModel):
     """
     One row. ``result`` says whether it has a result to show, ``current`` or
     ``outdated``. ``alone`` if that result was reduced with its own parameters;
-    ``added`` if the row was added by hand. ``strays`` names the edits at a
-    name that is not a column, such as one kept for an older version of the
-    application, which make the row incomplete until they are taken back.
+    ``earlier`` if it was reduced with earlier settings, which differ from the
+    settings now at settings only; ``added`` if the row was added by hand.
+    ``strays`` names the edits at a name that is not a column, such as one kept
+    for an older version of the application, which make the row incomplete
+    until they are taken back.
     """
 
     key: str
@@ -113,6 +115,7 @@ class Row(BaseModel):
     reason: str
     added: bool
     alone: bool
+    earlier: bool = False
     record: str | None
     result: Literal['current', 'outdated'] | None
     cells: dict[str, Cell]
@@ -122,14 +125,17 @@ class Row(BaseModel):
 class Action(BaseModel):
     """
     What the primary button does, ``label``, or why it cannot, ``blocked``;
-    how many rows each way of reducing takes; and while rows run, how many of
-    the rows submitted with them are finished, as ``[finished, all]``.
+    how many rows each way of reducing takes: ``remaining``, ``again`` (all),
+    and ``earlier``, those reduced with earlier settings, which "Apply to all"
+    reduces; and while rows run, how many of the rows submitted with them are
+    finished, as ``[finished, all]``.
     """
 
     label: str
     blocked: str | None
     remaining: int
     again: int
+    earlier: int
     running: int
     progress: tuple[int, int] | None
 
@@ -147,6 +153,21 @@ class Refused(BaseModel):
     placed: bool
 
 
+class Follow(BaseModel):
+    """
+    Whether the server follows the files, ``on``: a step every ``interval``
+    seconds scans them and reduces the rows that arrived, or whose cells
+    changed at the columns titled ``at``. ``stepped`` is when the last step
+    ran, and ``failure`` why it raised, if it did.
+    """
+
+    on: bool
+    interval: float
+    at: list[str]
+    stepped: datetime | None
+    failure: str | None
+
+
 class Words(BaseModel):
     """What a row is called, as ``1 sample``, ``2 samples``."""
 
@@ -161,8 +182,9 @@ class State(BaseModel):
     """
     Everything the page shows but the details of one row, the plot, and the
     runs. ``start`` changes when the server starts again, ``version`` with each
-    change, and ``runs`` with each change of the runs. ``notice`` says what
-    the action that answers with this state did.
+    change, and ``runs`` with each change of the runs. ``follow`` is ``None``
+    if the page does not offer to follow the files. ``notice`` says what the
+    action that answers with this state did.
     """
 
     version: int
@@ -180,6 +202,7 @@ class State(BaseModel):
     settings: list[Node]
     settings_problem: str | None
     refused: list[Refused]
+    follow: Follow | None = None
     notice: str = ''
 
 
@@ -244,10 +267,17 @@ class CellEdit(Cells):
 
 
 class Reduce(BaseModel):
-    """Reduce the rows remaining, all that can be, or those of ``keys``."""
+    """
+    Reduce the rows remaining, those reduced with earlier settings, all that
+    can be, or those of ``keys``.
+    """
 
-    which: Literal['remaining', 'all', 'selected'] = 'remaining'
+    which: Literal['remaining', 'earlier', 'all', 'selected'] = 'remaining'
     keys: list[str] = []
+
+
+class On(BaseModel):
+    on: bool
 
 
 class RowEdit(Edit):

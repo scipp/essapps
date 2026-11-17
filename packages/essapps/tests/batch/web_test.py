@@ -271,19 +271,43 @@ def test_rows_running_show_progress_and_cancel_shows_as_cancelled(
     assert state(http)['action']['label'] == 'Retry 2 cancelled'
 
 
-def test_a_changed_setting_makes_the_rows_done_outdated(
+def test_a_changed_setting_leaves_the_rows_done_marked_with_earlier_settings(
     http: TestClient, client: Client
 ) -> None:
     reduced(http, client)
 
     http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 3})
 
-    assert statuses(http) == {'1': 'outdated', '2': 'outdated', '3': 'incomplete'}
-    assert state(http)['action']['label'] == 'Reduce 2 outdated'
-    assert rows(http)['1']['reason'] == 'Binning changed.'
+    shown = rows(http)
+    assert statuses(http) == {'1': 'done', '2': 'done', '3': 'incomplete'}
+    assert [shown[k]['earlier'] for k in ('1', '2')] == [True, True]
+    assert (
+        shown['1']['reason'] == 'Reduced with earlier settings: Binning changed since.'
+    )
+    assert state(http)['action']['label'] == 'Nothing left to reduce'
+    assert state(http)['action']['earlier'] == 2
+    detail = http.get('/api/row', params={'key': '1'}).json()
+    assert detail['differs'] == ['binning']
 
 
-def test_a_page_started_again_shows_the_rows_reduced_with_other_settings_outdated(
+def test_reduce_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_them(
+    http: TestClient, client: Client
+) -> None:
+    reduced(http, client)
+    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 3})
+    thickness(http, ['2'], 4.0)
+
+    reduced(http, client)
+    assert statuses(http)['2'] == 'done'
+    assert rows(http)['1']['earlier']
+    assert not rows(http)['2']['earlier']
+
+    reduced(http, client, which='earlier')
+    assert not rows(http)['1']['earlier']
+    assert state(http)['action']['earlier'] == 0
+
+
+def test_a_page_started_again_marks_the_rows_reduced_with_other_settings(
     http: TestClient, client: Client
 ) -> None:
     reduced(http, client)
@@ -293,8 +317,8 @@ def test_a_page_started_again_shows_the_rows_reduced_with_other_settings_outdate
 
     again.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 3})
 
-    assert statuses(again) == {'1': 'outdated', '2': 'outdated', '3': 'incomplete'}
-    assert rows(again)['1']['reason'] == 'Binning changed.'
+    assert statuses(again) == {'1': 'done', '2': 'done', '3': 'incomplete'}
+    assert rows(again)['1']['earlier']
 
 
 class Count(BaseModel):
@@ -353,7 +377,7 @@ def test_a_failed_row_stays_failed_when_the_settings_change(
     assert state(http)['action']['label'] == 'Retry 2 failed'
 
 
-def test_incomplete_settings_block_reducing_and_no_result_is_current(
+def test_incomplete_settings_block_reducing_and_are_not_applied(
     http: TestClient, client: Client
 ) -> None:
     reduced(http, client)
@@ -366,7 +390,7 @@ def test_incomplete_settings_block_reducing_and_no_result_is_current(
     shown = state(http)
     assert shown['settings_problem'] == 'Offset: choose a result'
     assert shown['action']['blocked'] == 'Offset: choose a result'
-    assert {r['status'] for r in shown['rows'][:2]} == {'outdated'}
+    assert {r['status'] for r in shown['rows'][:2]} == {'done'}
 
 
 def test_a_setting_refused_is_marked_at_its_field_before_reducing(

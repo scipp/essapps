@@ -366,17 +366,23 @@ export class Grid {
 const STATUS_ORDER = ['failed', 'incomplete', 'outdated', 'cancelled', 'ready', 'running', 'done'];
 
 // The status of a row as a pill, with a star if its result was reduced alone
-// with its own parameters; the tooltip says why.
+// with its own parameters, and a mark if with earlier settings; the tooltip
+// says why.
 export const statusColumn = {
   title: 'Status',
   field: 'status',
-  width: 112,
-  minWidth: 112,
+  width: 200,
+  minWidth: 200,
   resizable: false,
   sorter: (a, b) => STATUS_ORDER.indexOf(a) - STATUS_ORDER.indexOf(b),
   formatter: (cell) => {
     const row = cell.getData();
-    return h('span', {class: `pill st-${row.status}`}, row.status, row.alone && h('sup', {text: '*'}));
+    return h(
+      'span',
+      {class: 'status'},
+      h('span', {class: `pill st-${row.status}`}, row.status, row.alone && h('sup', {text: '*'})),
+      row.earlier && h('span', {class: 'earlier', text: 'earlier settings'}),
+    );
   },
   tooltip: (event, cell) => {
     const row = cell.getData();

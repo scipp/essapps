@@ -17,11 +17,13 @@ import socket
 import threading
 import time
 from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NoReturn
 
 import pytest
 import uvicorn
+from fastapi import FastAPI
 
 from ess.apps import Client
 from ess.apps.batch import Batch
@@ -66,7 +68,13 @@ def url(batch: Batch, sample: Measure) -> Iterator[str]:
     for run, name in enumerate(['water', 'sds', 'oil'], start=1):
         sample(run, name)
     batch.scan()
-    app = create_app(batch, name='name', draw=draw)
+    with serve(create_app(batch, name='name', draw=draw)) as url:
+        yield url
+
+
+@contextmanager
+def serve(app: FastAPI) -> Iterator[str]:
+    """The URL of ``app``, served in a thread until the test ends."""
     with socket.socket() as s:
         s.bind(('localhost', 0))
         port = s.getsockname()[1]
@@ -300,3 +308,30 @@ def test_a_click_on_a_row_mostly_shown_at_the_bottom_does_not_scroll(
 
     editor(page).wait_for()
     assert holder.evaluate(TOP_ROW) == top
+
+
+@pytest.fixture
+def following(browser: Any, batch: Batch) -> Iterator[Any]:
+    """The page of a batch with no rows yet, following its files."""
+    at = {'sample', 'transmission'}
+    app = create_app(batch, name='name', draw=draw, at=at, follow=True, interval=0.2)
+    with serve(app) as url:
+        page = browser.new_page(viewport={'width': 1440, 'height': 900})
+        errors: list[str] = []
+        page.on('pageerror', lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_selector('#follow input:checked')
+        yield page
+        page.close()
+    assert errors == []
+
+
+def test_with_follow_on_rows_appear_and_are_reduced_without_a_click(
+    following: Any, sample: Measure
+) -> None:
+    for run, name in enumerate(['water', 'sds'], start=1):
+        sample(run, name)
+
+    following.wait_for_selector('#rows .tabulator-row:has-text("sds")')
+    following.wait_for_selector('.chip.st-done .n:text-is("2")')
+    assert following.inner_text('#follow-status').startswith('Last step ')
