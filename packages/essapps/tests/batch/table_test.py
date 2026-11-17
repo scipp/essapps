@@ -162,3 +162,16 @@ def test_rows_put_show_their_cells_and_a_cell_that_was_the_same_follows_the_scan
 def test_rows_put_with_a_key_twice_are_refused(table: RowTable) -> None:
     with pytest.raises(SubmitError, match='c'):
         table.put([Row('c'), Row('c')], columns=('x',))
+
+
+def test_a_row_put_that_was_removed_is_brought_back_with_its_cells(
+    table: RowTable,
+) -> None:
+    put = table.remove('a').put([Row('a', {'x': 1, 'y': 5})], columns=('x', 'y'))
+
+    assert cells(put) == {'a': {'x': 1, 'y': 5}, 'b': {'x': 3}}
+    assert (put.removed, put.added, dict(put.edits)) == (
+        frozenset(),
+        (),
+        {'a': {'y': 5}},
+    )

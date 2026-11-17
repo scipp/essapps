@@ -245,18 +245,18 @@ def open_demo(
 ) -> tuple[Client, CorrectedFiles, FolderDefinitions]:
     """
     A client of the demo's workspace in ``directory``, its file source, and the
-    store of the definition.
+    folder's definitions.
     """
     _measure(directory)
-    store = FolderDefinitions(directory)
-    files = CorrectedFiles(folder_files(directory), store=store)
-    return open_folder(directory, BINDINGS, files=files), files, store
+    definitions = FolderDefinitions(directory)
+    files = CorrectedFiles(folder_files(directory), definitions=definitions)
+    return open_folder(directory, BINDINGS, files=files), files, definitions
 
 
 def build(
     client: Client,
     files: CorrectedFiles,
-    store: FolderDefinitions,
+    definitions: FolderDefinitions,
     folder: str = '',
 ) -> FastAPI:
     """The application on what :func:`open_demo` returns, scanned."""
@@ -268,7 +268,7 @@ def build(
         source=pair_by_sample,
         staged=True,
         persist=True,
-        store=store,
+        definitions=definitions,
     )
     batch.scan()
 
@@ -303,9 +303,9 @@ def main() -> None:
     if directory is None:
         directory = Path(tempfile.mkdtemp(prefix='essapps-web-demo-'))
     directory.mkdir(parents=True, exist_ok=True)
-    client, files, store = open_demo(directory)
+    client, files, definitions = open_demo(directory)
     with client:
-        app = build(client, files, store, folder=directory.name)
+        app = build(client, files, definitions, folder=directory.name)
         uvicorn.run(app, host='localhost', port=args.port)
 
 

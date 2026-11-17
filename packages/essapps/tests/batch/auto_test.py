@@ -45,11 +45,16 @@ def loop(batch: Batch) -> Automatic:
 
 
 def _loop(
-    client: Any, source: RowSource = pair, store: DefinitionStore | None = None
+    client: Any, source: RowSource = pair, definitions: DefinitionStore | None = None
 ) -> Automatic:
     """A loop on ``client``, which may be a fake that wraps a client."""
     batch = Batch(
-        client, PLAIN, columns=COLUMNS, label='scan', source=source, store=store
+        client,
+        PLAIN,
+        columns=COLUMNS,
+        label='scan',
+        source=source,
+        definitions=definitions,
     )
     return Automatic(batch, at={'sample'})
 
@@ -418,12 +423,12 @@ def test_with_a_store_a_row_edited_at_at_keeps_its_edit_after_a_restart(
     store = FolderDefinitions(tmp_path)
     sample(1, 'water')
     other = fake.measure(77, 7.0, role='sample', sample='other')
-    loop = _loop(client, store=store)
+    loop = _loop(client, definitions=store)
     client.wait(loop.step())
     loop.batch.rows = loop.batch.rows.edit('1', {'sample': other})
     client.wait(loop.step())
 
-    restarted = _loop(client, store=store)
+    restarted = _loop(client, definitions=store)
 
     assert restarted.step() == {}
     assert restarted.batch.rows['1'].values['sample'] == other

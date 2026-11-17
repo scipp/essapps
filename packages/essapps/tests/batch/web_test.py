@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from ess.apps import Client, local
 from ess.apps.batch import Batch, CorrectedFiles
-from ess.apps.batch.definition import settings_key
+from ess.apps.batch.definition import Key, settings_key
 from ess.apps.batch.web import Shown, create_app, demo, plots
 from ess.apps.testing import CountingClient, FakeFiles
 from ess.spec import SampleRunFile, WorkflowSpec, function_binding
@@ -432,7 +432,135 @@ def test_a_page_on_settings_kept_for_another_version_starts_and_names_them(
     with client:
         shown = state(TestClient(demo.build(client, files, store)))
 
-    assert shown['settings_problem'] == 'gone: not a parameter of demo-iofq'
+    assert shown['settings_problem'] == (
+        'Settings that this form cannot show: gone = 1: not a setting here; '
+        'gone: not a parameter of demo-iofq'
+    )
+
+
+def test_settings_kept_that_the_form_cannot_show_are_named_and_kept_until_a_change(
+    tmp_path: Path,
+) -> None:
+    client, files, definitions = demo.open_demo(tmp_path)
+    params = {'wavelength': 5.0, 'corrections': {'banks': 3, 'solid_angle': False}}
+    kept = {'spec': {'name': 'demo-iofq', 'version': 1}, 'params': params}
+    definitions.save(settings_key('demo-iofq'), kept)
+
+    with client:
+        page = TestClient(demo.build(client, files, definitions))
+        shown = state(page)
+        still = definitions.load(settings_key('demo-iofq'), lambda d: d['params'])
+        page.post(
+            '/api/settings',
+            json={'path': ['wavelength', 'start'], 'op': 'set', 'value': 3},
+        )
+        after = state(page)
+
+    assert shown['settings_problem'].startswith(
+        'Settings that this form cannot show: wavelength = 5.0: 5.0 is not a group'
+    )
+    assert (
+        'corrections = {"banks":3,"solid_angle":false}: ' in shown['settings_problem']
+    )
+    assert still == params
+    assert after['settings_problem'] is None
+
+
+class Flaky:
+    """Definitions in memory, which fail to keep anything while ``fail`` is set."""
+
+    def __init__(self) -> None:
+        self.kept: dict[Key, Any] = {}
+        self.saves = 0
+        self.fail = False
+
+    def load[T](self, key: Key, read: Callable[[Any], T]) -> T | None:
+        return read(self.kept[key]) if key in self.kept else None
+
+    def save(self, key: Key, data: Any) -> None:
+        if self.fail:
+            raise OSError('disk full')
+        self.saves += 1
+        self.kept[key] = data
+
+
+@pytest.fixture
+def flaky() -> Flaky:
+    return Flaky()
+
+
+@pytest.fixture
+def kept(client: Client, fake: FakeFiles, sample: Measure, flaky: Flaky) -> TestClient:
+    """A page on a batch and runs whose definitions are :class:`Flaky`."""
+    sample(1, 'water')
+    sample(2, 'sds')
+    batch = Batch(
+        client, STAGED, columns=COLUMNS, label='kept', source=pair, definitions=flaky
+    )
+    batch.scan()
+    files = CorrectedFiles(fake, definitions=flaky)
+    return TestClient(create_app(batch, files=files, marks=Marks))
+
+
+def test_a_change_the_definitions_cannot_keep_answers_422_and_nothing_changes(
+    kept: TestClient, flaky: Flaky
+) -> None:
+    flaky.fail = True
+
+    setting = kept.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 7})
+    cell = thickness(kept, ['1'], 3)
+    (binning, *_) = state(kept)['settings']
+
+    assert setting.status_code == 422
+    assert setting.json()['message'] == 'The change was not kept: disk full'
+    assert cell == {'message': 'The change was not kept: disk full'}
+    assert binning['child']['children'][0]['value'] == 2
+    assert not rows(kept)['1']['cells']['thickness']['edited']
+
+
+def test_a_correction_of_several_runs_is_one_write_and_all_or_none(
+    kept: TestClient, flaky: Flaky
+) -> None:
+    keys = [r['key'] for r in kept.get('/api/runs').json()['rows'][:2]]
+    edit = {'keys': keys, 'column': 'role', 'value': 'transmission'}
+
+    flaky.fail = True
+    refused = kept.post('/api/runs/cells', json=edit)
+    roles = [
+        r['cells']['role']['edited'] for r in kept.get('/api/runs').json()['rows'][:2]
+    ]
+    flaky.fail = False
+    kept.post('/api/runs/cells', json=edit)
+
+    assert refused.status_code == 422
+    assert roles == [False, False]
+    assert flaky.saves == 1
+
+
+def test_an_edit_at_a_name_that_is_not_a_column_can_be_removed(
+    http: TestClient, batch: Batch
+) -> None:
+    batch.rows = batch.rows.edit('1', {'gone': 1})
+    shown = rows(http)['1']
+
+    http.post('/api/cells/revert', json={'keys': ['1'], 'column': 'gone'})
+
+    assert (shown['status'], shown['strays']) == ('incomplete', ['gone'])
+    assert (rows(http)['1']['status'], rows(http)['1']['strays']) == ('ready', [])
+
+
+def test_a_table_loaded_on_a_page_not_scanned_is_set_on_the_scan(
+    batch: Batch, sample: Measure
+) -> None:
+    sample(1, 'water')
+    page = TestClient(create_app(batch))
+    content = b'key,sample,transmission,thickness\n1,1,1001,3\n'
+
+    loaded = page.post('/api/table', params={'name': 'rows.csv'}, content=content)
+
+    assert loaded.status_code == 200
+    assert batch.rows.added == ()
+    assert batch.rows['1'].values['thickness'] == 3.0
 
 
 def test_what_a_person_set_on_the_page_is_there_when_it_is_served_again(

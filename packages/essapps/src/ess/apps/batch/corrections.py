@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -40,20 +40,25 @@ class CorrectedFiles:
     those that read a folder or a table do. A name such as ``file(run=1)`` is
     resolved by ``source``, so a correction of ``run`` does not rename a file.
 
-    ``store`` keeps the corrections (:mod:`~.definition`): they are read here,
-    and written at each change. Without it, they are kept in memory only. A
+    ``definitions`` keep the corrections (:mod:`~.definition`): they are read
+    here, once, and written at each change, which is not made if they cannot
+    keep it. Without them, the corrections are kept in memory only. A
     correction of a file that ``source`` no longer lists stays, unused, and
     applies again if the file is listed again.
+
+    Raises ``ValueError`` if ``definitions`` hold corrections that cannot be
+    read, naming the file and the entry.
     """
 
     def __init__(
-        self, source: FileSource, *, store: DefinitionStore | None = None
+        self, source: FileSource, *, definitions: DefinitionStore | None = None
     ) -> None:
         self._source = source
-        self._store = store
+        self._definitions = definitions
         self._corrections: dict[FileRef, dict[str, Any]] = {}
-        if store is not None and (data := store.load(definition.CORRECTIONS)):
-            self._corrections = definition.corrections_of(data)
+        if definitions is not None:
+            kept = definitions.load(definition.CORRECTIONS, definition.corrections_of)
+            self._corrections = kept or {}
 
     @property
     def source(self) -> FileSource:
@@ -61,16 +66,21 @@ class CorrectedFiles:
         return self._source
 
     def _write(self, corrections: dict[FileRef, dict[str, Any]]) -> None:
-        if self._store is not None:
+        if self._definitions is not None:
             data = definition.corrections_data(corrections)
-            self._store.save(definition.CORRECTIONS, data)
+            self._definitions.save(definition.CORRECTIONS, data)
         self._corrections = corrections
 
     def correct(self, ref: FileRef, **fields: Any) -> None:
         """Set metadata fields of a file, on top of what the source says."""
-        self._write(
-            {**self._corrections, ref: {**self._corrections.get(ref, {}), **fields}}
-        )
+        self.correct_each([ref], **fields)
+
+    def correct_each(self, refs: Iterable[FileRef], **fields: Any) -> None:
+        """Set metadata fields of each of ``refs``, in one write, all or none."""
+        corrections = dict(self._corrections)
+        for ref in refs:
+            corrections[ref] = {**corrections.get(ref, {}), **fields}
+        self._write(corrections)
 
     def corrections(self, ref: FileRef) -> Mapping[str, Any]:
         """The fields of a file set by :meth:`correct`, empty if none."""
@@ -78,13 +88,23 @@ class CorrectedFiles:
 
     def reset(self, ref: FileRef, *fields: str) -> None:
         """Forget the corrections of a file, or only those of ``fields``."""
-        kept = {
-            k: v
-            for k, v in self._corrections.get(ref, {}).items()
-            if fields and k not in fields
-        }
-        others = {k: v for k, v in self._corrections.items() if k != ref}
-        self._write({**others, ref: kept} if kept else others)
+        self.reset_each([ref], *fields)
+
+    def reset_each(self, refs: Iterable[FileRef], *fields: str) -> None:
+        """
+        Forget the corrections of each of ``refs``, or only those of
+        ``fields``, in one write, all or none.
+        """
+        corrections = dict(self._corrections)
+        for ref in refs:
+            kept = {
+                k: v
+                for k, v in corrections.pop(ref, {}).items()
+                if fields and k not in fields
+            }
+            if kept:
+                corrections[ref] = kept
+        self._write(corrections)
 
     def resolve(self, name: FileRef) -> FileRef:
         return self._source.resolve(name)

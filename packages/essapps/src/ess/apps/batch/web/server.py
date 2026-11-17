@@ -6,14 +6,19 @@ What the batch page does, without HTTP: :class:`Server`. :mod:`.api` serves it.
 The server holds everything a person changes: the
 :class:`~ess.apps.batch.Batch` with its rows and settings, the form of the
 settings, the form of a reduction of one row alone, and the corrections of
-runs. The batch and the corrections keep their part in their store, if given
-one (:mod:`..definition`). The form of the settings is a draft of the batch's
-settings: it writes them to the batch at each change that leaves nothing
-missing; while something is missing, the batch keeps the settings it had, and
-nothing is reduced and no settings file downloaded. Before each action, and
-when the state is read, the form shows the batch's settings again if they are
-not those that it last showed or wrote, as after an assignment by code
-(:meth:`Server._show_settings`).
+runs. The batch and the corrections keep their part in their definitions, if
+given them (:mod:`..definition`); a change that the definitions cannot keep is
+not made, and answers a :class:`Problem`.
+
+The form of the settings is a draft of the batch's settings: it writes them to
+the batch at each change that leaves nothing missing; while something is
+missing, the batch keeps the settings it had, and nothing is reduced and no
+settings file downloaded. Before each action, and when the state is read, the
+form shows the batch's settings again if they are not those that it last
+showed or wrote, as after an assignment by code or a change not kept
+(:meth:`Server._show_settings`). Settings that the form cannot show, such as
+those kept for another version of the spec, are named in the state's
+``settings_problem`` and kept until a person changes a setting.
 
 The page holds only what it shows: the selection, the filter, the tab. Each
 action returns the :class:`~.models.State` after it, and the page polls the
@@ -47,7 +52,7 @@ import threading
 import uuid
 import zipfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -172,6 +177,9 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
             server._show_settings()
             try:
                 notice = method(*args, **kwargs)
+            except OSError as error:  # the definitions could not keep a change
+                server._settings_shown = None  # the form shows the batch's again
+                raise Problem(f'The change was not kept: {error}') from None
             finally:
                 server.version += 1
                 server._rows = server.batch.rows
@@ -232,6 +240,7 @@ class Server:
         model, listing = batch.spec.params, self._listing
         self.settings = Fields(model, listing, fields=batch.settings_fields)
         self._settings_shown: Mapping[str, Any] | None = None
+        self._unfit: list[str] = []
         self._show_settings()
         self._cells = Fields(model, listing, fields=batch.columns)
         self.tweak = Fields(model, listing)
@@ -261,9 +270,8 @@ class Server:
         if settings == self._settings_shown:
             return
         # Settings kept for another version of the spec may not fit the form;
-        # the batch keeps them, and its state refuses them until replaced.
-        with suppress(KeyError, ValueError):
-            self.settings.set(settings, self._listing)
+        # the batch keeps them, and the page names them, until a change.
+        self._unfit = self.settings.set_fitting(settings, self._listing)
         self._settings_shown = settings
 
     def _write_settings(self) -> None:
@@ -272,6 +280,7 @@ class Server:
         if not missing:
             self.batch.settings = given
             self._settings_shown = self.batch.settings
+            self._unfit = []
 
     def _complete(self) -> None:
         """Raise ``SubmitError`` if the form of the settings misses something."""
@@ -343,6 +352,8 @@ class Server:
         said = [
             _say(self._setting_title(e), e.msg) if e.loc else e.msg for e in unusable
         ]
+        if self._unfit:
+            said.insert(0, f'Settings that this form cannot show: {_join(self._unfit)}')
         problem = '; '.join(said) or None
         fields = self.batch.spec.params.model_fields
         return State(
@@ -462,6 +473,7 @@ class Server:
             record=None if record is None else record.id,
             result=result,
             cells=cells,
+            strays=[n for n in row.values if n not in self.batch.columns],
         )
 
     def _primary(
@@ -598,7 +610,10 @@ class Server:
 
     @_action
     def revert(self, cells: Cells) -> None:
-        """Take the cells of ``column`` back to what the scan gave."""
+        """
+        Take the cells of ``column`` back to what the scan gave; for a name
+        that is not a column, forget its edit.
+        """
         rows = self.batch.rows
         for key in cells.keys:
             self._row_of(key)
@@ -883,9 +898,8 @@ class Server:
         """Correct a field of runs; the rows follow."""
         marks, files = self._marked()
         value = self._read(marks, edit)
-        for key in edit.keys:
-            fields = {edit.column: None if value is UNSET else value}
-            files.correct(FileRef(file=key), **fields)
+        fields = {edit.column: None if value is UNSET else value}
+        files.correct_each([FileRef(file=key) for key in edit.keys], **fields)
         changes = self._rescan()
         n = len(edit.keys)
         title = marks.titles[edit.column]
@@ -895,8 +909,7 @@ class Server:
     def revert_run(self, cells: Cells) -> str:
         """Take a field of runs back to what the files say."""
         _, files = self._marked()
-        for key in cells.keys:
-            files.reset(FileRef(file=key), cells.column)
+        files.reset_each([FileRef(file=key) for key in cells.keys], cells.column)
         return self._rescan()
 
     # Files
@@ -915,16 +928,27 @@ class Server:
         they show what the file says, and stay so after a scan.
         """
         batch = self.batch
-        with _file(name, content) as path:
-            try:
-                table = frames.read_table(path)
-                rows = frames.rows_of(table, batch.spec.params, batch.columns)
-                batch.rows = batch.rows.put(rows, batch.columns)
-            except SubmitError as error:
-                raise Problem('; '.join(map(str, error.errors))) from None
-            except (OSError, ValueError, KeyError) as error:
-                raise Problem(f'Cannot load {name}: {_why(error)}') from None
-        self._relist()
+        try:
+            if batch.source is not None:
+                try:
+                    batch.scan()  # the table is set on top of the rows of the files
+                except Exception as error:  # a source is code of the application
+                    raise Problem(
+                        f'Not loaded, since the scan failed: {error}'
+                    ) from None
+            with _file(name, content) as path:
+                try:
+                    table = frames.read_table(path)
+                    rows = frames.rows_of(table, batch.spec.params, batch.columns)
+                    batch.put(rows)
+                except SubmitError as error:
+                    raise Problem('; '.join(map(str, error.errors))) from None
+                except (OSError, ValueError, KeyError) as error:
+                    raise Problem(f'Cannot load {name}: {_why(error)}') from None
+        finally:
+            # The scan and the rows set may name files that the listing lacks,
+            # even if the table is then refused.
+            self._relist()
         return f'Loaded {self.words.count(len(rows))} from {name}.'
 
     @_locked

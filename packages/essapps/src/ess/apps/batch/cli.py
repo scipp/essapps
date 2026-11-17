@@ -172,8 +172,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         # a workspace goes on with pending records, which need their bindings
         parser.error('--bind is required: the bindings of the workspace')
     bind = _named(args.bind)
-    store = FolderDefinitions(args.workspace)
-    files = CorrectedFiles(folder_files(args.workspace), store=store)
+    definitions = FolderDefinitions(args.workspace)
+    try:
+        files = CorrectedFiles(folder_files(args.workspace), definitions=definitions)
+    except ValueError as error:
+        sys.stderr.write(f'{error}\n')
+        return 2
     with open_folder(
         args.workspace, bind, files=files, proposal=args.proposal
     ) as client:

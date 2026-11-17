@@ -50,7 +50,7 @@ alone.
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any
@@ -147,13 +147,13 @@ class Batch:
     persist:
         As :meth:`~ess.apps.Client.submit` takes it.
     settings:
-        The settings that the batch starts with if ``store`` holds none, such
-        as the technique's defaults; none if not given, so each parameter
+        The settings that the batch starts with if ``definitions`` hold none,
+        such as the technique's defaults; none if not given, so each parameter
         takes its default.
-    store:
-        Keeps the edits and the settings of the label
-        (:mod:`~.definition`): read here, and written at each change. Without
-        it, they are kept in memory only.
+    definitions:
+        Keep the edits and the settings of the label (:mod:`~.definition`):
+        read here, and written at each change. Without them, the edits and
+        settings are kept in memory only.
 
     Raises
     ------
@@ -162,7 +162,9 @@ class Batch:
     ValueError
         If ``settings`` name a column.
     ValueError
-        If ``store`` holds edits that cannot be read, naming the row.
+        If ``definitions`` hold edits or settings that cannot be read, or
+        settings of a spec of another name, naming the file and the entry; or
+        if the label is too long to name their file.
     """
 
     def __init__(
@@ -177,7 +179,7 @@ class Batch:
         staged: bool = False,
         persist: bool | Sequence[str] = False,
         settings: Mapping[str, Any] | None = None,
-        store: DefinitionStore | None = None,
+        definitions: DefinitionStore | None = None,
     ) -> None:
         fields = spec.params.model_fields
         if unknown := sorted(set(columns) - fields.keys()):
@@ -188,11 +190,12 @@ class Batch:
         self.settings_fields = tuple(n for n in fields if n not in columns)
         self.label = label
         self.source = source
-        self._store = store
+        self._definitions = definitions
         self._rows = RowTable()
+        self._scanned = False
         self._settings = self._own(settings or {})
-        if store is not None:
-            self._load(store)
+        if definitions is not None:
+            self._load(definitions)
         self._selector = Selector() if selector is None else selector
         self._staged = staged
         self._persist = persist
@@ -207,35 +210,44 @@ class Batch:
         # A cell's value as a record holds it, by its column and value as given.
         self._resolved: dict[tuple[str, Any], Any] = {}
 
-    def _load(self, store: DefinitionStore) -> None:
-        """Take the edits and the settings that ``store`` holds, if any."""
-        if (edits := store.load(definition.edits_key(self.label))) is not None:
-            try:
-                self._rows = definition.edits_of(edits)
-            except ValueError as error:
-                raise ValueError(
-                    f'the edits of {self.label} in {store}: {error}'
-                ) from None
-        if (settings := store.load(definition.settings_key(self.label))) is not None:
-            self._settings = definition.settings_of(settings)
+    def _load(self, definitions: DefinitionStore) -> None:
+        """Take the edits and the settings that ``definitions`` hold, if any."""
+        edits = definitions.load(definition.edits_key(self.label), definition.edits_of)
+        if edits is not None:
+            self._rows = edits
+        settings = definitions.load(
+            definition.settings_key(self.label),
+            lambda data: definition.settings_of(data, self.spec),
+        )
+        if settings is not None:
+            self._settings = settings
 
     @property
     def rows(self) -> RowTable:
         """
         The rows: those of the last scan, with what was set by hand on top. An
-        assignment that changes what was set by hand is written to the store.
+        assignment is written to the definitions, if the batch has them, and
+        is not made if they cannot keep it.
         """
         return self._rows
 
     @rows.setter
     def rows(self, rows: RowTable) -> None:
-        def by_hand(t: RowTable) -> tuple[Any, ...]:
-            return (t.added, t.edits, t.removed)
-
-        if self._store is not None and by_hand(rows) != by_hand(self._rows):
+        if self._definitions is not None:
             key = definition.edits_key(self.label)
-            self._store.save(key, definition.edits_data(rows))
+            self._definitions.save(key, definition.edits_data(rows))
         self._rows = rows
+
+    def put(self, rows: Iterable[Row]) -> None:
+        """
+        Set ``rows`` by hand, as a table of them gives them
+        (:meth:`RowTable.put`). Raises ``ValueError`` if the batch has a source
+        and has not scanned, since every row would then be added, and none
+        would follow the files.
+        """
+        if self.source is not None and not self._scanned:
+            raise ValueError('scan the files first: the rows are set on top of them')
+        self.rows = self.rows.put(rows, self.columns)
 
     def scan(self) -> list[FileInfo]:
         """
@@ -245,7 +257,9 @@ class Batch:
         if self.source is None:
             raise ValueError('this batch has no source of rows')
         infos = file_infos(self.client, self._selector)
-        self.rows = self.rows.rescan(self.source(infos))
+        # What was set by hand stays, so there is nothing to write.
+        self._rows = self._rows.rescan(self.source(infos))
+        self._scanned = True
         # A file that gained a catalogue identifier is resolved to it from now
         # on, by any of its names, its old identity among them.
         self._resolved.clear()
@@ -271,10 +285,10 @@ class Batch:
     @settings.setter
     def settings(self, settings: Mapping[str, Any]) -> None:
         settings = self._own(settings)
-        if self._store is not None:
+        if self._definitions is not None:
             template = Template(self.spec, params=settings, blanks=self.columns)
             key = definition.settings_key(self.label)
-            self._store.save(key, definition.settings_data(template))
+            self._definitions.save(key, definition.settings_data(template))
         self._settings = settings
 
     def _own(self, settings: Mapping[str, Any]) -> dict[str, Any]:

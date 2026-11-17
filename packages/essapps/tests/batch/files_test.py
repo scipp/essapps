@@ -315,7 +315,7 @@ def test_the_rows_that_main_makes_from_the_files_are_a_table_to_reduce(
 def test_the_rows_that_main_makes_read_the_corrections_kept_in_the_folder(
     command: list[str], folder: Path
 ) -> None:
-    files = CorrectedFiles(folder_files(folder), store=FolderDefinitions(folder))
+    files = CorrectedFiles(folder_files(folder), definitions=FolderDefinitions(folder))
     files.correct(files.resolve(file(run=BAD)), role='sample')
     runs = folder / 'runs.csv'
 

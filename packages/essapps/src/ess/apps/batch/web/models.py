@@ -101,7 +101,9 @@ class Row(BaseModel):
     """
     One row. ``result`` says whether it has a result to show, ``current`` or
     ``outdated``. ``alone`` if that result was reduced with its own parameters;
-    ``added`` if the row was added by hand.
+    ``added`` if the row was added by hand. ``strays`` names the edits at a
+    name that is not a column, such as one kept for an older version of the
+    application, which make the row incomplete until they are taken back.
     """
 
     key: str
@@ -114,6 +116,7 @@ class Row(BaseModel):
     record: str | None
     result: Literal['current', 'outdated'] | None
     cells: dict[str, Cell]
+    strays: list[str] = []
 
 
 class Action(BaseModel):

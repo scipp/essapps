@@ -457,6 +457,10 @@ function renderRow(detail) {
       view.state.columns.map((c) => [h('dt', {text: c.title}), h('dd', {text: row.cells[c.name].text || c.default || '—'})]),
     ),
     row.reason && h('div', {class: `reason ${reasonClass ?? ''}`, text: row.reason}),
+    // An edit at a name that is not a column is not in the table, so it is taken back here.
+    ...row.strays.map((name) =>
+      h('button', {type: 'button', class: 'stray', text: `Remove the edit of ${name}`, onclick: () => act('/api/cells/revert', {keys: [row.key], column: name})}),
+    ),
     row.alone && h('p', {class: 'hint', text: 'Its result was reduced alone, with its own parameters.'}),
     detail.reduced_with
       ? h(

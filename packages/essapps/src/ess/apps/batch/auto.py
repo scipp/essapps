@@ -22,9 +22,9 @@ The loop keeps the results under its label equal to its batch's rows at the
 columns of ``at``, so a label has one batch. A record that another ``Batch``
 submits under the label with other cells at ``at`` is replaced at the next
 step. A restarted loop reduces no row again whose result equals its row at
-``at``. An edit is kept by the batch's store (:mod:`.definition`), so with
-one, an edited row is not reduced again either; without one, the edit is gone
-after a restart, and a row edited at ``at`` is reduced again with the
+``at``. An edit is kept by the batch's definitions (:mod:`.definition`), so
+with them, an edited row is not reduced again either; without them, the edit
+is gone after a restart, and a row edited at ``at`` is reduced again with the
 source's cells.
 
 A step costs the scan of all files and the state of all rows:

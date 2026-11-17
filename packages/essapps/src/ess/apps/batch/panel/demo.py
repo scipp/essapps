@@ -17,11 +17,11 @@ reduction, a thickness of zero fails one row, and a thickness below zero is
 refused. Everything but the workflows and the files is real, so a change here
 shows what an application gets.
 
-One process holds a folder, so one client serves every session, and each
-session has a batch of its own. The edits and settings of the batch, and the
-corrections of the run sheet, are kept in the folder (:mod:`..definition`), so
-a session, and a later start, begins with them. Two sessions open at once each
-write what they hold, and the last write wins.
+One process holds a folder, so one client and one batch serve every session,
+and each session has a view of its own, whose settings form is a draft of the
+batch's settings. The edits and settings of the batch, and the corrections of
+the run sheet, are kept in the folder's definitions (:mod:`..definition`), so
+a later start begins with them.
 """
 
 from __future__ import annotations
@@ -126,30 +126,35 @@ def _measure(directory: Path, samples: int) -> None:
 
 def open_demo(
     directory: Path, samples: int = 20
-) -> tuple[Client, CorrectedFiles, FolderDefinitions]:
+) -> tuple[Client, CorrectedFiles, Batch]:
     """
     A client of the demo's workspace in ``directory``, with ``samples`` samples
     on the first start, the file source that the run sheet corrects, and the
-    store of the definition.
+    batch that every session shows, all on the folder's definitions.
     """
     _measure(directory, samples)
-    store = FolderDefinitions(directory)
-    files = CorrectedFiles(folder_files(directory), store=store)
-    return open_folder(directory, BINDINGS, files=files), files, store
+    definitions = FolderDefinitions(directory)
+    files = CorrectedFiles(folder_files(directory), definitions=definitions)
+    client = open_folder(directory, BINDINGS, files=files)
+    try:
+        batch = Batch(
+            client,
+            DEMO,
+            columns=('sample', 'transmission', 'thickness'),
+            label='demo',
+            source=pair_by_sample,
+            staged=True,
+            persist=True,
+            definitions=definitions,
+        )
+    except BaseException:
+        client.close()
+        raise
+    return client, files, batch
 
 
-def build(client: Client, files: CorrectedFiles, store: FolderDefinitions) -> App:
+def build(client: Client, files: CorrectedFiles, batch: Batch) -> App:
     """The application of one session, on what :func:`open_demo` returns."""
-    batch = Batch(
-        client,
-        DEMO,
-        columns=('sample', 'transmission', 'thickness'),
-        label='demo',
-        source=pair_by_sample,
-        staged=True,
-        persist=True,
-        store=store,
-    )
 
     def draw(records: Mapping[str, Record]) -> pn.pane.Markdown:
         lines = [f'{k}: {client.output(r, "total")}' for k, r in records.items()]
@@ -169,9 +174,9 @@ def main() -> None:
         directory = Path(tempfile.mkdtemp(prefix='essapps-batch-demo-'))
     directory.mkdir(parents=True, exist_ok=True)
     pn.extension('tabulator')
-    client, files, store = open_demo(directory)
+    client, files, batch = open_demo(directory)
     with client:
-        pn.serve(lambda: build(client, files, store).panel(), port=5006, show=False)
+        pn.serve(lambda: build(client, files, batch).panel(), port=5006, show=False)
 
 
 if __name__ == '__main__':
