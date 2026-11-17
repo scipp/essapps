@@ -82,7 +82,7 @@ state    = requests joined with results on key
 
 A *correction* is a value of a file's metadata set by hand ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)). The corrections, edits, and settings are the *definition* of a batch, the part that a person makes, through a page, the command, or code. [Where the definition is kept](#where-the-definition-is-kept) says where they are stored and when they are read. A request is *resolved* as a record holds it ([Rules](#rules)). `state` is what `batch.state()` gives and a page shows: each row with its result, its status, and `changed`, the parameters at which the row's request differs from its result's ([Rules](#rules)).
 
-An edit sets only columns. A value at a name that is not a column makes its row `incomplete` (`not a column`). A row reduced with settings of its own is a *tweak* ([Rules](#rules)). Which results are tweaks is kept in memory by the `Batch` that made them (`RowState.tweaked`), not in the edits. Apart from that, a `Batch` made again on the same stored tables reads the same state.
+An edit sets only columns. A value at a name that is not a column makes its row `incomplete` (`not a column`). A `Batch` made again on the same stored tables reads the same state.
 
 ```mermaid
 flowchart TB
@@ -151,8 +151,7 @@ def text(row):                                       # RowState.text
     if row.status in (FAILED, CANCELLED):
         return str(row.status)                       # needs reducing, whether or not the request changed
     if row.outdated:          return 'outdated'      # the request or the spec differs from the result's
-    if row.outdated is None and row.status is COMPLETED and not row.tweaked:
-        return 'outdated'                            # not compared, as while the settings are refused
+    if row.outdated is None:  return 'outdated'      # not compared, as while the settings are refused
     return str(row.status)                           # 'completed'
 ```
 
@@ -221,7 +220,7 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 |---|---|
 | `ready(states)` | every row that can run now |
 | `arrived(states, at)` | ready rows with no result, or whose request differs from their result's at a column of `at`, but those changed by hand ([Automatic reduction](#automatic-reduction)) |
-| `earlier_settings(states, columns)` | ready rows whose completed result differs from their request only at settings, not at a column, and of the same spec; no tweak |
+| `earlier_settings(states, columns)` | ready rows whose completed result differs from their request only at settings, not at a column, and of the same spec |
 | `left_to_reduce(states, columns)` | ready rows with no result, a failed or cancelled one, or an outdated one, but those of `earlier_settings` |
 | `refused_again(states, at, refused)` | of the reasons `refused` by row, those of the rows of `arrived`: why the next step of a loop will be refused again |
 | `status_texts(states, columns)` | the status of each row as a table shows it: `completed, earlier settings` for a row of `earlier_settings` |
@@ -233,13 +232,13 @@ s = batch.state()['60339']
 s.record         # the result: the newest record under the label with member '60339'
 s.changed        # frozenset({'q'}): the parameters whose value differs from the result's
 s.spec_changed   # True if s.record is of another spec than the one bound
-s.outdated       # True if either holds; for a tweak, if a column changed (below)
+s.outdated       # True if either holds
 s.set_by_hand    # frozenset({'thickness'}): the columns set by hand, all of a row added
 s.changed_by_hand  # True if a cell is set by hand, and the row has no result or differs from it there
 s.text           # 'outdated'
 ```
 
-The state is read from the records, so every `Batch` on the label, and the same one after a restart, reads the same, with two limits. A `Batch` knows its own tweaks only (below). A `Batch` keeps how it resolved a file name until its next `scan`. That differs from a new `Batch` only for a file that gained a catalogue identifier since: its names, its old identity among them, now resolve to the identifier. `results()` gives each row with its result but without its request: it resolves nothing, so `changed` is empty, and a result is `outdated` only if it is of another spec. It is what a page shows while the settings are refused, and what `reduce` checks before it submits.
+The state is read from the records, so every `Batch` on the label, and the same one after a restart, reads the same, with one limit: a `Batch` keeps how it resolved a file name until its next `scan`. That differs from a new `Batch` only for a file that gained a catalogue identifier since: its names, its old identity among them, now resolve to the identifier. `results()` gives each row with its result but without its request: it resolves nothing, so `changed` is empty, and a result is `outdated` only if it is of another spec. It is what a page shows while the settings are refused, and what `reduce` checks before it submits.
 
 A record holds its request resolved: files by identity, defaults filled in, values in their JSON form. So `state()` resolves with `client.resolve` what it compares. The settings are resolved once per call, whatever the number of rows, and compared with each result. If they are refused, `state` raises the `SubmitError`, with reasons that name no row: no row can run with them. A cell of a row with a result is compared as given first, and only a cell that differs so is resolved and compared again, so writing a default out, or naming a file by run, does not make a row `changed`. Every cell of a row without a result is resolved, so a file named before it is measured shows before anything is submitted. A value resolved is kept by its column and its value, with the type of the value and of each element of a list or tuple, until the next `scan`; a value that cannot be a dictionary key, such as a dict, is resolved at each call. A cell that `resolve` refuses is not `changed`: its reason is one of the row's `problems`, so the row shows as `incomplete`, with the reason at the cell, and neither `ready` nor `left_to_reduce` gives it. It is asked again at the next call, so a file that arrives later is found.
 
@@ -261,7 +260,18 @@ A result of another spec stays the row's result. Its request and its outputs are
 
 **With `staged=True`** the rows go through a stage, and what they share is computed once. It needs a binding that makes stages. A stage is reused while the settings are the same. Whether a column can vary through a stage is the binding's to decide, and a refusal says so; a column that everything depends on saves nothing.
 
-**One row with other settings.** `tweak(key, params)` submits one request with all of its parameters, which becomes the row's result, and its state is `tweaked`; a newer record of the row ends that. While it is the row's result, `changed` names every parameter at which the row's request differs from the tweak's, as for any row, but the row is `outdated` only if one of them is a column. So a tweak that sets a column to another value than the row's cell reads `outdated` at once. Only the `Batch` that made the tweak knows it: after a restart, or on another `Batch` on the label, the tweak's result is read as any other, and the row reads `outdated` where the tweak differs from the settings. `tweak_params(state)` gives the params that a form for a tweak starts from: the row's cells, and the other parameters of its result, or the settings if it has none or one of another spec, whose parameters are not this spec's. If a parameter differs for many rows, make it a column.
+**Settings tried on one row.** A row has no settings of its own. To try settings on one row, set them, and reduce that row only:
+
+```python
+batch.settings = trial    # the completed rows are now of earlier_settings
+batch.reduce(['60339'])   # only this row is reduced with the trial
+# to keep the trial, reduce the others again:
+batch.reduce(earlier_settings(batch.state(), batch.columns))
+# or, to drop it, set the settings back: the row tried is then of earlier_settings
+batch.settings = before
+```
+
+The page does the same with **Apply** and **Reduce selected** ([the page's README](../src/ess/apps/batch/web/README.md#settings-and-follow)). If a parameter differs for many rows, make it a column.
 
 ## Writing a source
 
@@ -413,12 +423,12 @@ So the loop, the page's buttons, and the command differ:
 | A row is reduced if it has | no result | a failed or cancelled result | a result, and a setting changed | a result, and the scan changed a cell at `at` | a result, and the scan changed a cell at another column | a cell set by hand, not reduced yet |
 |---|---|---|---|---|---|---|
 | the page, "Reduce" (`left_to_reduce`) | yes | yes | no | yes | yes | yes |
-| the page, "Reduce them again" (`earlier_settings`) | no | no | yes, but for a tweak | no | no | no |
+| the page, "Reduce them again" (`earlier_settings`) | no | no | yes | no | no | no |
 | the loop (`arrived`) | yes, but for a row set by hand | no | no | yes | no | no |
 
 On the page, a change of settings applies to rows not reduced yet, and to all only when a person says so. `essapps-batch reduce --remaining` follows the page's "Reduce", and `--earlier-settings` with it adds the rows of "Reduce them again". The command is given its settings at each call, so without `--remaining` it applies them to all.
 
-A tweak is `outdated` only where a column changed ([Rules](#rules)), so neither the page nor the command reduces a tweaked row whose settings changed. A failed or cancelled result counts as any other, so a row whose reduction fails is not reduced at every step. A changed setting reduces no row again ([The model](#the-model-tables-and-one-cycle)). A person reduces those rows through the loop's batch, with **Reduce them again** on the page ([one label, one batch](#one-label-one-batch)).
+A failed or cancelled result counts as any other, so a row whose reduction fails is not reduced at every step. A changed setting reduces no row again ([The model](#the-model-tables-and-one-cycle)). A person reduces those rows through the loop's batch, with **Reduce them again** on the page ([one label, one batch](#one-label-one-batch)).
 
 A row whose result is running is not ready, and the loop does not submit it again. At the first step after its record finishes, it is reduced if a file arrived meanwhile at a column of `at`.
 
@@ -579,7 +589,7 @@ One command holds the folder at a time. If a command was killed, the next one fi
 ## The UI
 
 [The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows a batch in a browser: how to run it, its layers, and its limits.
-The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown; a reduction of one row alone uses its own parameters and is not. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. Given the columns `at`, the page offers a switch **Follow**: a step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, in the page's own process and batch, with the batch's settings, whatever the form holds. Follow leaves a row that a person changed to the person, who reduces it with **Reduce**: while following, such a row says "Set by hand, so Follow leaves it to you: reduce it." An action reduces nothing that a person did not ask for, and Apply reduces nothing either: the next step reduces the rows without a result with the settings applied. Whether the page follows belongs to its process, not to the definition: a restart starts with `--follow` or without.
+The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. Given the columns `at`, the page offers a switch **Follow**: a step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, in the page's own process and batch, with the batch's settings, whatever the form holds. Follow leaves a row that a person changed to the person, who reduces it with **Reduce**: while following, such a row says "Set by hand, so Follow leaves it to you: reduce it." An action reduces nothing that a person did not ask for, and Apply reduces nothing either: the next step reduces the rows without a result with the settings applied. Whether the page follows belongs to its process, not to the definition: a restart starts with `--follow` or without.
 
 `create_app(batch, ...)` makes the page. Its arguments name the column that names a row (`name`) and the other columns to show (`info`), draw the results (`draw`), correct the metadata of runs (`files`, `marks`), and offer Follow (`at`, `follow`, `interval`). `Server` (`ess.apps.batch.web.server`) holds what the page shows and does, and its actions return `State`, the whole of what the page shows. The browser renders `State` and sends the actions.
 
@@ -646,6 +656,6 @@ Raise in the fake to make a row fail; hold it back on a `threading.Event` to kee
 
 - Keep a result that is not persisted. A `Batch` finds results by key in its workspace, so `local()` per session starts with none, and a result that is not persisted is gone once its workspace closes.
 - Merge two writers of one definition, or lock it. Two `Batch` objects on one label each write their whole table of edits, so a change made through the other since is lost ([Where the definition is kept](#where-the-definition-is-kept)).
-- Keep a tweak across sessions. After a restart a tweak is read as a result reduced with the settings: where it differs from them only at settings, the web page marks it "earlier settings", and its **Reduce them again** or the command reduces it again.
+- Keep settings of one row apart from the others. A row's request is its cells and the batch's settings, so a parameter that differs between rows is a column.
 - Free the values of replaced results. They stay until the workspace closes or they are released, unless the batch persists them (`persist=`).
 - Offer preparatory steps with a **Use** button. A `Referenced[...]` setting offers each record in the settings form.

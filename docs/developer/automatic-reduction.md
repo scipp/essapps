@@ -112,7 +112,6 @@ This holds while the proposal's history is kept. A running loop keeps it, since 
 
 The `Batch` keeps what it reads of the records, the newest of each member under the label, from the proposal's changes, and how it resolved each cell until the next scan.
 Both are caches that the records and the file source rebuild.
-It also keeps which results are its own tweaks, which changes `outdated` but not `changed`, so not what `arrived` gives.
 
 ## Problems and refusals
 
