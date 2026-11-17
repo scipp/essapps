@@ -6,12 +6,14 @@ time, as if the instrument wrote them. It needs the extra ``[loki-app]`` and
 esssans' tutorial data, which ``ess.loki.data`` downloads at the first start::
 
     python -m ess.instruments.loki.arrivals [FOLDER] [--port 8000] [--arrive 15]
+        [--follow]
 
 ``FOLDER`` must be new or empty; a new temporary folder if not given. The can
 and its transmission run, the masks and the direct beam are there from the
 start, and the settings are filled in. Then a run arrives every ``--arrive``
 seconds, in the order of :data:`EXPERIMENT`. Press "Rescan runs" to see it, and
-"Reduce" to reduce the rows it completes.
+"Reduce" to reduce the rows it completes; or turn on "Follow", which does both
+every few seconds. ``--follow`` turns it on from the start.
 
 The data and the I(Q) workflow are real; the run numbers, the sample names and
 the roles are this module's. A run arrives as a hard link to a tutorial file
@@ -204,6 +206,7 @@ def main() -> None:
         help='a run every SECONDS',
     )
     parser.add_argument('--count', type=int, default=len(EXPERIMENT), help='runs')
+    parser.add_argument('--follow', action='store_true', help='turn Follow on')
     args = parser.parse_args()
     if not (STATIC / 'vendor').is_dir():
         parser.exit(1, f'The page needs its libraries: sh {STATIC / "vendor.sh"}\n')
@@ -215,7 +218,14 @@ def main() -> None:
     _say(f'folder {directory}; reducing the detector and the masks')
     with client:
         given = settings(client, instrument)
-        app = build(client, files, definitions, folder=directory.name, settings=given)
+        app = build(
+            client,
+            files,
+            definitions,
+            folder=directory.name,
+            settings=given,
+            follow=args.follow,
+        )
 
         def arrive(sample: str, role: str, source: int) -> None:
             ref = instrument.measure(role, sample, source)
