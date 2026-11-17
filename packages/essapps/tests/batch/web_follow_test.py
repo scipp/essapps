@@ -215,6 +215,18 @@ def test_a_step_reduces_a_row_whose_cell_changed_at_a_column_of_at(
     assert done(server, client).rows[0].record != first
 
 
+def test_a_run_that_a_step_finds_can_be_chosen_in_a_cell_without_a_runs_view(
+    batch: Batch, sample: Measure
+) -> None:
+    server = Server(batch, name='name', at=AT)
+    server.step()
+    sample(1, 'water', partner=False)  # a row that waits, so no record is made
+
+    server.step()
+
+    assert option(server, 'sample', 1) == 'run 1 (sample)'
+
+
 def test_a_step_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_them(
     server: Server, client: Client, sample: Measure
 ) -> None:

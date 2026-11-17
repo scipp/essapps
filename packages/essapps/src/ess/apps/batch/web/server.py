@@ -898,7 +898,8 @@ class Server:
         """
         A new listing, with one reading of the changes of records, and a new
         version of the runs if they changed; the forms are refreshed only if
-        either changed. Whether one did.
+        the records, the runs or the rows changed, since new rows may name
+        files that the forms do not offer yet. Whether one did.
         """
         cursor = self._listing.cursor
         self._listing = Listing(self.batch.client, previous=self._listing)
@@ -906,9 +907,10 @@ class Server:
         runs = self._runs_seen() != self._runs
         if runs:
             self._new_runs()
-        if records or runs:
+        changed = records or runs or self.batch.rows != self._rows
+        if changed:
             self._refresh()
-        return records or runs
+        return changed
 
     def tick(self) -> None:
         """A step, if following; :func:`~.api.create_app` calls it on a timer."""
