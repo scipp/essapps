@@ -5,8 +5,17 @@
 // and goes on. An edit of a
 // row that is selected along with others writes that cell to every row
 // selected.
-import {TabulatorFull as Tabulator} from './vendor/tabulator_esm.min.js';
+import {TabulatorFull as Tabulator, EditModule} from './vendor/tabulator_esm.min.js';
 import {h} from './dom.js';
+
+// Tabulator's virtual renderer scrolls the row of a cell whose editor opens
+// whole into view, even if it shows nearly all: the edit module's
+// `focusScrollAdjust` does that. The editor scrolls itself instead, and only
+// if less than half of the row shows (see `cellEditor`).
+class Edit extends EditModule {
+  focusScrollAdjust() {}
+}
+Tabulator.registerModule(Edit);
 
 const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
 
@@ -214,9 +223,6 @@ export class Grid {
       index: 'key',
       height: '100%',
       layout: 'fitColumns',
-      // Rows drawn all at once: a few hundred are cheap, and the virtual
-      // renderer scrolls a row clicked into view even if it shows nearly all.
-      renderVertical: 'basic',
       selectableRows: 'highlight',
       editTriggerEvent: 'click',
       initialSort: sort,
@@ -253,15 +259,15 @@ export class Grid {
   }
 
   // Space below the last row, so that the rows scroll by whole rows to
-  // the end, where the top row then shows whole.
+  // the end, where the top row then shows whole. A margin, since the
+  // renderer sets the padding to stand for the rows it does not draw.
   fit() {
     const holder = this.table.rowManager.element;
     const rows = holder.querySelector('.tabulator-table');
     const height = rows?.querySelector('.tabulator-row')?.offsetHeight;
     if (!height) return;
-    rows.style.paddingBottom = '0px';
     const over = rows.offsetHeight - holder.clientHeight;
-    rows.style.paddingBottom = over > 0 ? `${(height - (over % height)) % height}px` : '0px';
+    rows.style.marginBottom = over > 0 ? `${(height - (over % height)) % height}px` : '0px';
   }
 
   selected() {
@@ -296,26 +302,42 @@ export class Grid {
     await this.table.scrollToRow(key, 'nearest', false).catch(() => {});
   }
 
+  // Remove the rows gone, update those changed, and add the new ones where
+  // they stand in `rows`; the others are not drawn again. Only if the rows
+  // kept changed order is the table replaced.
   async draw(rows) {
     await this.built;
     this.pending = rows;
     if (this.editing()) return;
     this.pending = null;
-    const keys = rows.map((row) => row.key);
+    const keys = new Set(rows.map((row) => row.key));
     const before = this.table.getData().map((row) => row.key);
+    const had = new Set(before);
+    const kept = rows.filter((row) => had.has(row.key));
+    const stay = before.filter((key) => keys.has(key));
+    const gone = before.filter((key) => !keys.has(key));
     const json = new Map(rows.map((row) => [row.key, JSON.stringify(row)]));
     this.quiet = true;
     try {
-      if (keys.length === before.length && keys.every((k, i) => k === before[i])) {
-        // Draw again only the rows that changed, each whole: a cell shows
-        // more than the value Tabulator compares.
-        const changed = rows.filter((row) => this.json.get(row.key) !== json.get(row.key));
+      if (kept.every((row, i) => row.key === stay[i])) {
+        if (gone.length) await this.table.deleteRow(gone);
+        // Each row changed is drawn again whole: a cell shows more than the
+        // value Tabulator compares.
+        const changed = kept.filter((row) => this.json.get(row.key) !== json.get(row.key));
         if (changed.length) await this.table.updateData(changed);
         for (const row of changed) this.table.getRow(row.key).reformat();
+        // New rows next to each other are added at once, after the row
+        // before them, or at the top.
+        for (let i = 0, end; i < rows.length; i = end) {
+          end = i + 1;
+          if (had.has(rows[i].key)) continue;
+          while (end < rows.length && !had.has(rows[end].key)) end++;
+          await this.table.addData(rows.slice(i, end), i === 0, rows[i - 1]?.key);
+        }
       } else {
-        const kept = this.selected().filter((key) => keys.includes(key));
+        const selected = this.selected().filter((key) => keys.has(key));
         await this.table.replaceData(rows);
-        if (kept.length) this.table.selectRow(kept);
+        if (selected.length) this.table.selectRow(selected);
       }
     } finally {
       this.quiet = false;

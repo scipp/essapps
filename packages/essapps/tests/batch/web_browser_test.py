@@ -105,6 +105,16 @@ def cell(page: Any, name: str, column: str) -> Any:
     return row.locator(f'.tabulator-cell[tabulator-field="cells.{column}.value"]')
 
 
+TOP_ROW = """h => {
+  const box = h.getBoundingClientRect();
+  const at = document.elementFromPoint(box.left + 80, box.top + 1);
+  const row = at.closest('.tabulator-row');
+  const top = Math.round(row.getBoundingClientRect().top - box.top);
+  return `${row.innerText} at ${top}`;
+}"""
+"""The row at the top of a table, and where its top is, given the table's holder."""
+
+
 def editor(page: Any) -> Any:
     return page.locator('#rows .tabulator-cell.tabulator-editing input')
 
@@ -262,3 +272,25 @@ def test_an_edit_the_server_does_not_get_is_taken_back_and_said(
     assert batch.rows.edits == {}
     assert page.errors == ['Failed to load resource: net::ERR_FAILED']
     page.errors.clear()
+
+
+def test_the_scroll_position_stays_when_a_row_arrives(
+    page: Any, batch: Batch, sample: Measure
+) -> None:
+    for run in range(4, 60):
+        sample(run, f'r{run}')
+    batch.scan()
+    holder = page.locator('#rows .tabulator-tableholder')
+    page.wait_for_selector('#n-samples:text-is("59")')
+    holder.evaluate('h => { h.scrollTop = h.scrollHeight / 2; }')
+    top = holder.evaluate(TOP_ROW)
+    height = holder.evaluate('h => h.scrollHeight')
+
+    sample(60, 'r60')
+    batch.scan()
+
+    page.wait_for_function(
+        f'h => h.scrollHeight > {height}', arg=holder.element_handle()
+    )
+    assert top.startswith('r')
+    assert holder.evaluate(TOP_ROW) == top
