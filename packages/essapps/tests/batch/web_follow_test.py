@@ -343,6 +343,23 @@ def test_a_tick_does_nothing_while_not_following(
     assert server.state().rows == []
 
 
+def test_a_tick_that_waited_for_the_request_that_stops_following_does_nothing(
+    server: Server, client: Client, sample: Measure
+) -> None:
+    server.follow(True)
+    timer = threading.Thread(target=server.tick)
+
+    with server.lock:  # a request that runs while the timer fires
+        timer.start()
+        time.sleep(0.2)  # the tick waits for the lock
+        sample(1, 'water')
+        server.follow(False)
+    timer.join()
+
+    assert server.state().rows == []
+    assert client.records() == []
+
+
 @pytest.mark.parametrize('following', [True, False])
 def test_a_tweak_at_a_column_of_at_says_that_follow_reduces_it_again(
     server: Server, client: Client, sample: Measure, gate: Gate, following: bool

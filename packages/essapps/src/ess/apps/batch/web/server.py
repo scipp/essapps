@@ -923,8 +923,11 @@ class Server:
 
     def tick(self) -> None:
         """A step, if following; :func:`~.api.create_app` calls it on a timer."""
-        if self.following:
-            self.step()
+        # Under the lock, so that a tick that waited for a request sees what
+        # that request did: no step after "Stopped following".
+        with self.lock:
+            if self.following:
+                self.step()
 
     # Settings
 
