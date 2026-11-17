@@ -3,6 +3,7 @@
 `ess.apps.batch` is for applications that reduce many samples with one workflow: a table of rows, settings shared by all rows, and the result of each row.
 It is built on the client of `ess.apps`. A *spec* declares a workflow's parameters, and a *binding* connects a spec to code. [The client guide](../../../docs/developer/roles/client-authors.ipynb) explains specs, records, labels, and stages.
 Your application supplies what depends on the technique: which files make which rows, and optionally how to draw a result.
+[The model](#the-model-tables-and-one-cycle) shows a batch as stored tables, derived tables, and one cycle.
 
 ## An application
 
@@ -50,6 +51,164 @@ batch.cancel()
 ```
 
 `settings` is a dict of the parameters that are not columns, as `Form.params` gives it.
+
+## The model: tables and one cycle
+
+A batch is a set of tables. Five of them are stored, and each has one writer. All others are derived: they are computed from the stored tables at each read and stored nowhere.
+
+```python
+# stored, each with one writer
+files         # the instrument, as the file source lists them. Only grows.
+corrections   # a person: metadata of a file, set by hand
+edits         # a person: cells set, rows added or removed, by key
+settings      # a person: the parameters that are not columns
+records       # the workspace. Only grows.
+
+# derived at each read
+scan     = source(files with corrections)
+rows     = scan with edits on top
+requests = settings with each row on top, resolved
+results  = newest record per key, under the label
+state    = requests joined with results on key
+```
+
+A *correction* is a value of a file's metadata set by a person ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)). The corrections, edits, and settings are the *definition* of a batch, the part a person makes. The definition is written at each change and read when the application starts. The records are in the workspace. Nothing else is stored, so a restart loses nothing.
+
+An edit may also set a parameter that is not a column, for one row:
+
+```python
+edits = {'60339': {'sample_transmission': file(run=60340),   # replaces the cell of the scan
+                   'q': {'num_bins': 50}}}                   # replaces the setting q, for this row
+```
+
+Both lines say how the row differs from what the scan and the settings give, and both are kept with the other edits. If a parameter differs for many rows, make it a column.
+
+`state` is what the page shows: each row with its result, its status, and `changed`, the set of parameters at which the row's request differs from its result's request ([Rules](#rules)).
+
+```mermaid
+flowchart TB
+    workspace([the workspace])
+    instrument([the instrument])
+    person([a person])
+    records[(records)]
+    files[(files)]
+    corrections[(corrections)]
+    edits[(edits)]
+    settings[(settings)]
+    scan["scan = source(files with corrections)"]
+    rows["rows = scan with edits on top"]
+    requests["requests = settings with each row on top, resolved"]
+    results["results = newest record per key, under the label"]
+    state["state = requests joined with results on key"]
+    rule{{"keys = rule(state)"}}
+    submit{{"submit(keys)"}}
+    workspace ==> records ==> results ==> state ==> rule ==> submit ==> workspace
+    instrument --> files
+    person --> corrections & edits & settings
+    files & corrections --> scan --> rows
+    edits --> rows
+    rows & settings --> requests --> state
+    person -. reads the page .- state
+    classDef stored stroke:#2a9d8f,stroke-width:3px
+    classDef derived stroke:#6c8ebf,stroke-width:1px,stroke-dasharray:6 4
+    classDef cycle stroke:#d08700,stroke-width:3px
+    class files,corrections,edits,settings,records stored
+    class scan,rows,requests,results,state derived
+    class rule,submit cycle
+```
+
+Cylinders are stored tables and dashed boxes derived ones. The thick arrows are the cycle.
+
+**The cycle** is the only program that reads the state and causes a stored table to be written: `keys = rule(state)`, then `submit(keys)`. The workspace writes the records, and the results and the state follow from them. A *rule* is a function from the state to keys. Two rules cover a person and the timer:
+
+```python
+remaining(state)    # ready rows with no result, a failed or cancelled one, or an outdated one
+
+def arrived(state, at: set[str]) -> list[str]:
+    """Ready rows with no result, or whose request differs from their result's at `at`."""
+    return [key for key in ready(state)
+            if state[key].record is None or state[key].changed & at]
+```
+
+The page has two buttons. **Rescan** calls `batch.scan()`, which reads the files and extends the tables. **Reduce** calls `batch.reduce(settings, keys)`. Automatic reduction is a timer that presses the same two buttons:
+
+```python
+def step(batch, settings, at):
+    batch.scan()
+    state = batch.state(settings)
+    return batch.reduce(settings, arrived(state, at))
+```
+
+| | Rule | Started by |
+|---|---|---|
+| a person | `remaining(state)`, or the rows chosen | a click on **Reduce** |
+| automatic reduction | `arrived(state, at)` | a timer |
+
+A person is the second loop. They read the state on the page and write corrections, edits, and settings. In automatic reduction this loop is idle most of the time ([Automatic reduction](#automatic-reduction)).
+
+**`at`** is a set of columns that the technique names. It has no default, since it says which changes of a row the timer follows. Take sample and transmission runs that are repeated until the statistics suffice. The source makes a row per sample, with the lists `sample_runs` and `trans_runs`, and leaves `trans_runs` out until a transmission run arrives. A list grows when a repeated run, `s1'` or `t1'`, arrives:
+
+| `at` | A list grows (`s1'` or `t1'`) | A direct-beam run arrives later, paired with all rows | Meaning |
+|---|---|---|---|
+| `set()` | the row reads `outdated` | the rows read `outdated` | nothing is reduced again without a person |
+| `{'sample_runs', 'trans_runs'}` | reduced again | the rows read `outdated` | the columns that carry a row's own data |
+| all columns | reduced again | all rows reduced again | the table always wins |
+
+With `at={'sample_runs', 'trans_runs'}`, the files arriving as `s1, t1, s1', t1', s2, t2`, and a step after each that finishes before the next file arrives:
+
+| Arrives | Row | Reduced with |
+|---|---|---|
+| `s1` | 1 | not reduced: `trans_runs` is empty, so the row is `incomplete` |
+| `t1` | 1 | `sample_runs=[s1]`, `trans_runs=[t1]` |
+| `s1'` | 1 | `sample_runs=[s1, s1']`, `trans_runs=[t1]` |
+| `t1'` | 1 | `sample_runs=[s1, s1']`, `trans_runs=[t1, t1']` |
+| `s2` | 2 | not reduced: `incomplete` |
+| `t2` | 2 | `sample_runs=[s2]`, `trans_runs=[t2]` |
+
+A row that is pending when a file arrives is not ready. It is reduced at the first step after its record finishes. A failed row reads `outdated` once its request changes. The timer reduces it again only for a change at a column of `at`, such as a file that arrives. Otherwise a person retries it.
+
+**A changed setting** is one write of the settings, `write(settings)` below:
+
+```python
+write(settings)                                            # "apply to new": no cycle
+
+write(settings)                                            # "apply to all": the same write,
+batch.reduce(settings, remaining(batch.state(settings)))   # then one cycle
+```
+
+"Apply to new" runs no cycle. The rows reduced before read `outdated`, with the setting in `changed`, and `arrived` does not pick them, since a setting is not in `at`. "Apply to all" runs the cycle once with a person's rule. No list of settings over time is stored: each record holds the settings it was made with.
+
+**The status of a row** is `RowState.text`. It is derived from the state at each read and stored nowhere:
+
+```mermaid
+stateDiagram-v2
+    state "not reduced" as none
+    [*] --> incomplete
+    [*] --> none
+    incomplete --> none : its cells are filled
+    none --> pending : reduce
+    pending --> completed
+    pending --> failed
+    pending --> cancelled
+    completed --> outdated : its request changes
+    failed --> pending : a person
+    cancelled --> pending : a person
+    outdated --> pending : reduce
+    note left of incomplete
+        A cell is empty, refused,
+        or reads a failed record.
+        Shown in place of every
+        status but pending.
+    end note
+```
+
+An arrow labelled "reduce" is taken by both rules. `arrived` takes the one from `outdated` only for a change at a column of `at`. An arrow labelled "a person" is taken by `remaining` only. An edit that is undone turns `outdated` back into `completed`, since nothing remembers the status.
+
+**Not in this picture:**
+
+- The fixed part of a batch: the spec, the columns, and the source. It is code in the technique's package.
+- A chain: a second batch whose scan reads the results of the first ([Chains](#chains)).
+- Publishing results.
 
 ## Terms
 
