@@ -347,10 +347,18 @@ def test_a_column_chosen_is_written_to_all_selected_even_at_its_default(
     assert view.write.value == ''
 
 
-def test_changing_a_setting_shows_the_results_as_outdated(reduced: BatchView) -> None:
+def test_a_changed_setting_marks_the_results_and_reduce_remaining_leaves_them(
+    reduced: BatchView,
+) -> None:
     reduced.settings.panel().select(pn.widgets.IntInput)[0].value = 3
 
-    assert results(reduced) == {'1': 'outdated', '2': 'outdated', '3': 'incomplete'}
+    assert results(reduced) == {
+        '1': 'completed, earlier settings',
+        '2': 'completed, earlier settings',
+        '3': 'incomplete',
+    }
+    assert reduced.reduce_remaining() == {}
+    assert sorted(reduced.apply_to_all()) == ['1', '2']
 
 
 def test_nothing_changed_says_so(view: BatchView) -> None:

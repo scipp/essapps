@@ -272,8 +272,8 @@ So the loop, the page's buttons, and the command differ:
 
 | A row is reduced if it has | no result | a failed or cancelled result | a result, and a setting changed | a result, and a cell changed at `at` | a result, and a cell changed at another column |
 |---|---|---|---|---|---|
-| the page, "Reduce" (`left_to_reduce`) | yes | yes | no | yes | yes |
-| the page, "Apply to all" (`earlier_settings`) | no | no | yes, but for a tweak | no | no |
+| the page, "Reduce", and `BatchView`, "Reduce remaining" (`left_to_reduce`) | yes | yes | no | yes | yes |
+| the page, "Apply to all", and `BatchView`, "Apply settings to all" (`earlier_settings`) | no | no | yes, but for a tweak | no | no |
 | `essapps-batch reduce --remaining` (`remaining`) | yes | yes | yes, but for a tweak | yes | yes |
 | the loop (`arrived`) | yes | no | no | yes | no |
 
@@ -445,7 +445,7 @@ A change of its settings applies to the rows not reduced yet. A row reduced befo
 `BatchView` is a tab for `App`:
 
 - the settings form, which writes the batch's settings at each change that leaves nothing missing, the table of rows with a filter by state, and a count of each state;
-- buttons to scan, reduce all, reduce remaining, reduce selected, cancel, and show the settings of a selected result;
+- buttons to scan, reduce all, reduce remaining, reduce selected, cancel, and show the settings of a selected result. As on the web page, a change of settings applies to the rows not reduced yet: **Reduce remaining** leaves the rows reduced with earlier settings (`left_to_reduce`), which the table marks so, and **Apply settings to all** reduces them again (`earlier_settings`);
 - details of a selected row, with the reason it failed;
 - an editor: select rows, change cells, and **Update selected** writes only the changed cells, to all of them. A cell with something missing is not written and is named. To write a value that equals its default to several rows, choose the column in **Write**;
 - **Bring back removed rows**;
