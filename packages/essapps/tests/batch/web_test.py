@@ -1200,3 +1200,19 @@ def test_the_page_and_the_files_it_names_are_served_under_a_path_prefix(
         assert not name.startswith(('/', 'http')), name
         assert under.get(urljoin('/batch/', name)).status_code == 200, name
     assert under.get('/batch/api/state').status_code == 200
+
+
+def test_a_large_answer_is_compressed_for_a_client_that_accepts_gzip(
+    http: TestClient, sample: Measure, batch: Batch
+) -> None:
+    for run in range(10, 200):
+        sample(run, f'sample {run}')
+    batch.scan()
+
+    plain = http.get('/api/state', headers={'Accept-Encoding': 'identity'})
+    packed = http.get('/api/state', headers={'Accept-Encoding': 'gzip'})
+
+    assert 'content-encoding' not in plain.headers
+    assert packed.headers['content-encoding'] == 'gzip'
+    assert int(packed.headers['content-length']) < len(plain.content) / 3
+    assert packed.json() == plain.json()

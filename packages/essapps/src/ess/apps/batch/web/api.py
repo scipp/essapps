@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import Body, FastAPI, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -101,6 +102,8 @@ def create_app(
 
     app = FastAPI(title=f'{server.title}: batch', lifespan=lifespan)
     app.state.server = server
+    # The state is about 0.6 kB per row and repeats much.
+    app.add_middleware(GZipMiddleware)
 
     @app.exception_handler(Problem)
     def problem(_: Request, error: Problem) -> JSONResponse:
