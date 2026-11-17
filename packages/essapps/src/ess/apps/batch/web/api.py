@@ -126,6 +126,8 @@ def create_app(
     action('/api/reduce', server.reduce)
     action('/api/cancel', server.cancel)
     action('/api/settings', server.edit_settings)
+    action('/api/settings/apply', server.apply_settings)
+    action('/api/settings/discard', server.discard_settings)
     action('/api/runs/cells', server.correct)
     action('/api/runs/cells/revert', server.revert_run)
 
@@ -144,7 +146,7 @@ def create_app(
 
     @app.post('/api/row/use-settings')
     def use_settings(body: Key) -> State:
-        """Take the settings of the result of row ``key`` for all rows."""
+        """Show the settings of the result of row ``key`` in the form."""
         return server.use_settings(body.key)
 
     @app.post('/api/row/tweak/submit')

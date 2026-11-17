@@ -155,6 +155,17 @@ class Refused(BaseModel):
     text: str
 
 
+class Draft(BaseModel):
+    """
+    Whether the form of the settings differs from the batch's settings,
+    ``changed``: Apply writes it to the batch, Discard shows the batch's
+    again. ``missing`` says what the form lacks, while Apply is refused.
+    """
+
+    changed: bool
+    missing: list[str]
+
+
 class Follow(BaseModel):
     """
     Whether the server follows the files, ``on``: a step every ``interval``
@@ -183,7 +194,9 @@ class State(BaseModel):
     """
     Everything the page shows but the details of one row, the plot, and the
     runs. ``start`` changes when the server starts again, ``version`` with each
-    change, and ``runs`` with each change of the runs. ``follow`` is ``None``
+    change, and ``runs`` with each change of the runs. ``settings`` is the form
+    of the settings, which may hold changes not applied (``settings_draft``);
+    the rows read as with the batch's settings. ``follow`` is ``None``
     if the page does not offer to follow the files. ``notice`` says what the
     action that answers with this state did.
     """
@@ -202,6 +215,7 @@ class State(BaseModel):
     action: Action
     settings: list[Node]
     settings_problem: str | None
+    settings_draft: Draft
     refused: list[Refused]
     follow: Follow | None = None
     notice: str = ''

@@ -41,6 +41,12 @@ def statuses(state: State) -> dict[str, str]:
     return {row.name: row.status for row in state.rows}
 
 
+def bins(server: Server, value: int) -> None:
+    """Set the number of bins in the form, and apply it."""
+    server.edit_settings(Edit(path=BINS, op='set', value=value))
+    server.apply_settings()
+
+
 def done(server: Server, client: Client) -> State:
     client.wait(client.records())
     return server.state()
@@ -164,7 +170,7 @@ def test_a_step_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_the
     server.step()
     first = done(server, client).rows[0].record
 
-    server.edit_settings(Edit(path=BINS, op='set', value=3))
+    bins(server, 3)
     sample(2, 'oil')
     server.step()
 
@@ -179,7 +185,7 @@ def test_a_row_the_step_could_not_submit_shows_why(
     server: Server, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    server.edit_settings(Edit(path=BINS, op='set', value=0))
+    bins(server, 0)
 
     server.follow(True)
 
@@ -198,7 +204,7 @@ def test_a_done_row_reads_outdated_while_follow_is_refused_the_settings(
     server.follow(True)
     done(server, client)
     sample(2, 'oil')
-    server.edit_settings(Edit(path=BINS, op='set', value=0))
+    bins(server, 0)
 
     server.step()
 
@@ -313,22 +319,18 @@ def test_an_edit_at_a_column_of_at_is_reduced_at_once_while_following(
     gate.open()
 
 
-def test_while_the_settings_miss_something_follow_waits_and_then_reduces_at_once(
-    server: Server, client: Client, sample: Measure
+@pytest.mark.parametrize('value', [3, None], ids=['changed', 'missing'])
+def test_follow_reduces_with_the_batch_s_settings_whatever_the_form_holds(
+    server: Server, client: Client, sample: Measure, value: int | None
 ) -> None:
     server.follow(True)
-    server.edit_settings(Edit(path=BINS, op='set', value=None))
+    server.edit_settings(Edit(path=BINS, op='set', value=value))
     sample(1, 'water')
 
     server.step()
-    waiting = server.state()
-    completed = server.edit_settings(Edit(path=BINS, op='set', value=3))
 
-    assert statuses(waiting) == {'water': 'incomplete'}
-    assert (
-        waiting.rows[0].reason == 'Follow waits for the settings: Binning: give a value'
-    )
-    assert statuses(completed) == {'water': 'running'}
+    assert statuses(done(server, client)) == {'water': 'done'}
+    assert client.latest('scan', '1').request.params['binning'] == {'bins': 2}
 
 
 def test_a_step_that_raises_anywhere_is_said_and_follow_stays_on(
