@@ -59,10 +59,13 @@ Given the columns ``at``, the server offers to follow the files: while
 rows that :func:`~ess.apps.batch.arrived` gives (:mod:`ess.apps.batch.auto`),
 under the lock of every request, with the batch's settings, whatever the form
 holds. Whatever a step raises is said in the state, and the next step runs all
-the same. Each action is followed at once by the second half of a step, the
-reduction, so that what the page shows of Follow is never older than the last
-action. Whether the server follows belongs to its process, not to the
-definition: a server starts with ``follow``. :func:`~.api.create_app` owns the timer.
+the same. Follow reduces a row for what the files changed, never for what a
+person changed (:attr:`~ess.apps.batch.RowState.changed_by_hand`): a row whose
+cells a person set waits for "Reduce". So an action, but turning Follow on,
+submits only what a person asks to reduce. Apply forgets why Follow could not
+reduce rows, since its next step tries them with the settings applied. Whether
+the server follows belongs to its process, not to the definition: a server
+starts with ``follow``. :func:`~.api.create_app` owns the timer.
 """
 
 from __future__ import annotations
@@ -213,7 +216,6 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
         with server.lock:
             try:
                 notice = method(*args, **kwargs)
-                server._follow_now()
             except NotKept as error:
                 raise Problem(f'The change was not kept: {error}') from None
             finally:
@@ -920,15 +922,6 @@ class Server:
             for key, reason in self.loop.refused.items()
         }
 
-    def _follow_now(self) -> None:
-        """While following, the reduction of a step, after an action."""
-        if not self.following:
-            return
-        try:
-            self._follow_reduce()
-        except Exception as error:  # the next step tries again
-            self.step_failure = str(error) or repr(error)
-
     def tick(self) -> None:
         """A step, if following; :func:`~.api.create_app` calls it on a timer."""
         # Under the lock, so that a tick that waited for a request sees what
@@ -955,8 +948,10 @@ class Server:
             raise Problem(f'Not applied: {self._said(missing)}.')
         self.batch.settings = given
         self._show_settings()
-        # A refusal of a setting was a refusal of the settings replaced.
+        # A refusal of a setting was a refusal of the settings replaced, and
+        # Follow tries every row again with these at its next step.
         self.refused = [e for e in self.refused if e.entry]
+        self.waiting = {}
         return 'Applied the settings.'
 
     @_action

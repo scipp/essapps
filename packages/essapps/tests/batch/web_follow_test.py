@@ -197,6 +197,29 @@ def test_a_row_the_step_could_not_submit_shows_why(
     assert statuses(server.follow(False)) == {'water': 'ready'}
 
 
+def test_apply_while_following_reduces_nothing_and_the_next_step_uses_it(
+    server: Server, client: Client, sample: Measure
+) -> None:
+    sample(1, 'water')
+    server.follow(True)
+    done(server, client)
+    sample(2, 'oil')
+    bins(server, 0)
+    server.step()
+    before = ids(client)
+
+    server.edit_settings(Edit(path=BINS, op='set', value=3))
+    applied = server.apply_settings()
+
+    assert ids(client) == before
+    oil = {row.name: row for row in applied.rows}['oil']
+    assert (oil.status, oil.reason) == ('ready', '')
+    server.step()
+    shown = {row.name: row for row in done(server, client).rows}
+    assert (shown['water'].earlier, shown['oil'].status) == (True, 'done')
+    assert client.latest('scan', '2').request.params['binning'] == {'bins': 3}
+
+
 def test_a_done_row_reads_outdated_while_follow_is_refused_the_settings(
     server: Server, client: Client, sample: Measure
 ) -> None:
