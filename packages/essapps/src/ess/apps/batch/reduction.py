@@ -63,7 +63,7 @@ from ..records import Record, SpecId, Status, Template
 from . import definition, state
 from .definition import DefinitionStore
 from .state import RowState
-from .table import Row, RowTable
+from .table import Row, RowTable, Scope
 
 
 @dataclass(frozen=True)
@@ -153,6 +153,9 @@ class Batch:
         Keep the edits and the settings of the label (:mod:`~.definition`):
         read here, and written at each change. Without them, the edits and
         settings are kept in memory only.
+    scope:
+        The rows of the scan that the batch holds (:attr:`scope`); every row
+        if not given.
 
     Raises
     ------
@@ -179,6 +182,7 @@ class Batch:
         persist: bool | Sequence[str] = False,
         settings: Mapping[str, Any] | None = None,
         definitions: DefinitionStore | None = None,
+        scope: Scope | None = None,
     ) -> None:
         fields = spec.params.model_fields
         if unknown := sorted(set(columns) - fields.keys()):
@@ -195,6 +199,7 @@ class Batch:
         self._settings = self._own(settings or {})
         if definitions is not None:
             self._load(definitions)
+        self.scope = Scope() if scope is None else scope
         self._selector = Selector() if selector is None else selector
         self._staged = staged
         self._persist = persist
@@ -222,9 +227,9 @@ class Batch:
     @property
     def rows(self) -> RowTable:
         """
-        The rows: those of the last scan, with what was set by hand on top. An
-        assignment is written to the definitions, if the batch has them, and
-        is not made if they cannot keep it.
+        The rows: those of the last scan in the scope, with what was set by
+        hand on top. An assignment is written to the definitions, if the batch
+        has them, and is not made if they cannot keep it.
         """
         return self._rows
 
@@ -234,6 +239,19 @@ class Batch:
             key = definition.edits_key(self.label)
             self._definitions.save(key, definition.edits_data(rows))
         self._rows = rows
+
+    @property
+    def scope(self) -> Scope:
+        """
+        Which rows of the scan the batch holds. An assignment changes the rows
+        at once, without a scan, and writes nothing: the scope is kept by
+        whoever made the batch, such as the manager in the header.
+        """
+        return self._rows.scope
+
+    @scope.setter
+    def scope(self, scope: Scope) -> None:
+        self._rows = replace(self._rows, scope=scope)
 
     def put(self, rows: Iterable[Row]) -> None:
         """

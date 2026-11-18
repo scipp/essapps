@@ -50,6 +50,22 @@ def test_the_rows_do_not_depend_on_the_order_the_files_are_listed_in() -> None:
     assert pairs == [('2', 'uuid:11'), ('10', 'uuid:11')]
 
 
+def test_a_row_is_indexed_by_its_run_number_and_one_without_has_none() -> None:
+    rows = pair_by_sample(
+        [
+            info(60339, role='sample', sample='water'),
+            FileInfo(FileRef(file='uuid:x'), {'role': 'sample', 'sample': 'oil'}),
+            FileInfo(FileRef(file='uuid:y'), {'run': 'tmp', 'role': 'sample'}),
+        ]
+    )
+
+    assert [(r.key, r.index) for r in rows] == [
+        ('60339', 60339),
+        ('uuid:x', None),
+        ('tmp', None),
+    ]
+
+
 def test_a_sample_measured_twice_has_two_rows() -> None:
     rows = pair_by_sample(
         [info(1, role='sample', sample='w'), info(2, role='sample', sample='w')]

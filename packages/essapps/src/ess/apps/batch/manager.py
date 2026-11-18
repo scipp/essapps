@@ -8,7 +8,7 @@ removes them. The guide is the section "The batches of a workspace" of
 
 A batch is kept as three tables of the definitions (:mod:`.definition`)::
 
-    header      title, description, and the name of its registered source
+    header      title, description, the name of its registered source, scope
     settings    a template: the spec by name, the columns as its blanks
     edits       what a person set on its rows
 
@@ -50,6 +50,7 @@ from .definition import (
 )
 from .reduction import Batch, RowSource, file_infos
 from .state import RowState
+from .table import Scope
 
 
 class Words(BaseModel):
@@ -84,6 +85,9 @@ class Source:
     info:
         Other entries of :attr:`~.table.Row.info` that the page shows as
         columns.
+    index:
+        What the page calls the :attr:`~.table.Row.index` that ``rows``
+        gives, such as ``'Run'``.
     """
 
     rows: RowSource
@@ -92,6 +96,7 @@ class Source:
     words: Words = field(default_factory=Words)
     name: str | None = None
     info: tuple[str, ...] = ()
+    index: str = 'Index'
 
 
 @dataclass(frozen=True)
@@ -128,9 +133,9 @@ class Counts:
     outside:
         The rows that each registered source makes and no batch of it shows,
         by its name. A row counts as shown if any batch of the source shows
-        it, so a row removed by hand counts here only if every batch of the
-        source removed it. A source is left out if one of its batches failed,
-        or if it raised.
+        it, so a row removed by hand, or outside a scope, counts here only if
+        every batch of the source removed it or leaves it out. A source is
+        left out if one of its batches failed, or if it raised.
     """
 
     states: dict[str, dict[str, RowState]]
@@ -220,6 +225,7 @@ class BatchManager:
         source: str | None = None,
         columns: Sequence[str] = (),
         description: str = '',
+        scope: Scope | None = None,
         settings: Mapping[str, Any] | None = None,
         label: str | None = None,
     ) -> str:
@@ -241,6 +247,9 @@ class BatchManager:
             Parameters made columns, besides those the source fills.
         description:
             What a person says of the batch.
+        scope:
+            The rows of the source that the batch holds; every row if not
+            given.
         settings:
             The settings to start with, in place of the defaults of the spec.
             Those that are columns are left out.
@@ -279,7 +288,8 @@ class BatchManager:
         # The template leaves out the settings that are columns.
         template = Template(bound, params=settings, blanks=columns)
         self._definitions.save(settings_key(label), settings_data(template))
-        header = Header(title, description, source)
+        scope = Scope() if scope is None else scope
+        header = Header(title, description, source, scope)
         try:
             self._definitions.save(header_key(label), header_data(header))
         except NotKept:
@@ -337,6 +347,7 @@ class BatchManager:
             staged=self._defaults.get(spec.name, Defaults()).staged,
             persist=True,
             definitions=self._definitions,
+            scope=self._headers[label].scope,
         )
         if source is not None:
             batch.scan()
@@ -397,17 +408,28 @@ class BatchManager:
         return Counts(states, failed, outside)
 
     def edit(
-        self, label: str, *, title: str | None = None, description: str | None = None
+        self,
+        label: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        scope: Scope | None = None,
     ) -> Header:
-        """The header of ``label`` with what is given changed, as kept."""
+        """
+        The header of ``label`` with what is given changed, as kept. A scope
+        changes the rows of the batch at once, without a scan.
+        """
         header = self._headers[label]
         header = replace(
             header,
             title=header.title if title is None else title,
             description=header.description if description is None else description,
+            scope=header.scope if scope is None else scope,
         )
         self._definitions.save(header_key(label), header_data(header))
         self._headers[label] = header
+        if (batch := self._batches.get(label)) is not None:
+            batch.scope = header.scope
         return header
 
     def remove(self, label: str) -> None:

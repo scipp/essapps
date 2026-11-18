@@ -165,12 +165,19 @@ def pair(files: Sequence[FileInfo]) -> list[Row]:
             if f.metadata['sample'] in partner:
                 values['transmission'] = partner[f.metadata['sample']]
             rows.append(
-                Row(str(f.metadata['run']), values, info={'name': f.metadata['sample']})
+                Row(
+                    str(f.metadata['run']),
+                    values,
+                    info={'name': f.metadata['sample']},
+                    index=int(f.metadata['run']),
+                )
             )
     return rows
 
 
-SOURCES = {'pairs': Source(pair, columns=('sample', 'transmission'), name='name')}
+SOURCES = {
+    'pairs': Source(pair, columns=('sample', 'transmission'), name='name', index='Run')
+}
 DEFAULTS = {STAGED.name: Defaults(staged=True)}
 
 Measure = Callable[..., FileRef]

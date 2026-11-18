@@ -199,7 +199,8 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
         values = {'sample': f.ref}
         if name in transmission:
             values['transmission'] = transmission[name]
-        rows.append(Row(str(f.metadata['run']), values, info={'name': str(name)}))
+        run = f.metadata['run']
+        rows.append(Row(str(run), values, info={'name': str(name)}, index=int(run)))
     return rows
 
 
@@ -209,6 +210,7 @@ SOURCES = {
         columns=('sample', 'transmission'),
         words=Words(one='sample', many='samples'),
         name='name',
+        index='Run',
     )
 }
 """The sources of the demo's batches, by name."""

@@ -63,9 +63,9 @@ Whatever a step raises, from the files, the workflow or the workspace, is the st
 
 ## The list of batches
 
-The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, and which batch follows; the batch of the page is marked.
+The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, its scope in the source's word for the index (`Run 60339 –`, `Run 60301 – 60339`, `2 rows named`, or nothing for every row), and which batch follows; the batch of the page is marked.
 Each title is a link to the page of its batch.
-Opening the view, and **Count again**, counts the rows of each batch by status, and for each registered source the rows that no batch shows, such as a row removed by hand in every batch (`BatchManager.counts`).
+Opening the view, and **Count again**, counts the rows of each batch by status, and for each registered source the rows that no batch shows, such as a row removed by hand in every batch, or outside the scope of every batch (`BatchManager.counts`).
 The statuses are those of the chips of each batch's page, the rows that Follow could not submit `incomplete` too.
 A count is a rescan of every batch: it costs one scan per batch, under the lock of all pages, so the pages and Follow wait until it ends, and the open pages show the rows it found.
 A batch that cannot be counted, such as one whose source raises, shows why in its row, and the rows of its source in no batch are not said.

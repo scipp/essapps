@@ -20,7 +20,13 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
 from ess.apps import Client, local
-from ess.apps.batch import Batch, BatchManager, CorrectedFiles, DefinitionStore
+from ess.apps.batch import (
+    Batch,
+    BatchManager,
+    CorrectedFiles,
+    DefinitionStore,
+    Scope,
+)
 from ess.apps.batch.auto import Follow
 from ess.apps.batch.definition import Key, NotKept, settings_key
 from ess.apps.batch.web import Pages, Shown, create_app, demo, plots
@@ -715,6 +721,21 @@ def test_the_table_downloaded_and_uploaded_gives_the_same_rows(
     assert [(r.key, r.values) for r in manager.batch(other).rows] == [
         (r.key, r.values) for r in batch.rows
     ]
+
+
+def test_load_table_refuses_a_row_the_source_makes_outside_the_scope(
+    http: TestClient, manager: BatchManager
+) -> None:
+    content = http.get('/api/table.csv').content
+    manager.edit('scan', scope=Scope(start=2))
+
+    loaded = http.post('/api/table', params={'name': 'rows.csv'}, content=content)
+
+    assert loaded.status_code == 422
+    assert loaded.json()['message'] == (
+        '1: the source makes this row outside the scope'
+    )
+    assert list(rows(http)) == ['2', '3']
 
 
 def test_a_table_that_lacks_a_column_is_refused_and_the_rows_stay(
@@ -1489,6 +1510,7 @@ def test_the_batches_view_lists_every_batch_and_the_one_that_follows(
             'title': 'Other',
             'description': 'The second series',
             'words': words,
+            'scope': '',
             'follows': True,
         },
         {
@@ -1496,9 +1518,45 @@ def test_the_batches_view_lists_every_batch_and_the_one_that_follows(
             'title': 'Scan',
             'description': '',
             'words': words,
+            'scope': '',
             'follows': False,
         },
     ]
+
+
+@pytest.mark.parametrize(
+    ('scope', 'text'),
+    [
+        (Scope(), ''),
+        (Scope(start=60339), 'Run 60339 \N{EN DASH}'),
+        (Scope(stop=60339), 'Run \N{EN DASH} 60339'),
+        (Scope(start=60301, stop=60339), 'Run 60301 \N{EN DASH} 60339'),
+        (Scope(keys=frozenset({'1', '2'})), '2 rows named'),
+    ],
+)
+def test_the_batches_view_shows_the_scope_of_each_batch_in_the_words_of_its_source(
+    http: TestClient, manager: BatchManager, scope: Scope, text: str
+) -> None:
+    manager.edit('scan', scope=scope)
+
+    (listed,) = http.get('/api/batches').json()['rows']
+
+    assert listed['scope'] == text
+
+
+def test_a_page_learns_from_its_poll_that_a_scope_changed(
+    http: TestClient, manager: BatchManager
+) -> None:
+    now = state(http)
+
+    manager.edit('scan', scope=Scope(start=2))
+
+    polled = http.get(
+        '/api/state', params={'after': now['version'], 'start': now['start']}
+    )
+    assert polled.status_code == 200
+    assert polled.json()['batches'] > now['batches']
+    assert [row['key'] for row in polled.json()['rows']] == ['2', '3']
 
 
 def test_the_list_of_batches_is_the_same_from_every_page(
@@ -1590,3 +1648,24 @@ def test_counts_are_given_in_the_words_of_the_page(
         'failed': {},
         'outside': {'pairs': '0 rows'},
     }
+
+
+# The scope
+
+
+def test_a_page_shows_the_rows_of_its_scope_only(
+    http: TestClient, manager: BatchManager
+) -> None:
+    manager.edit('scan', scope=Scope(start=2))
+
+    assert list(rows(http)) == ['2', '3']
+
+
+def test_the_rows_removed_that_a_page_counts_are_those_of_its_scope(
+    http: TestClient, manager: BatchManager
+) -> None:
+    http.post('/api/rows/remove', json={'keys': ['1', '2']})
+
+    manager.edit('scan', scope=Scope(start=2))
+
+    assert state(http)['removed'] == 1

@@ -9,7 +9,7 @@ The definition is these tables, each with one writer:
     corrections   metadata of a file set by hand, by file     CorrectedFiles
     edits         cells set, rows added or removed, by key    Batch.rows
     settings      the parameters that are not columns         Batch.settings
-    header        title, description, source of a batch       the manager
+    header        title, description, source, scope           the manager
     following     the label of the batch that follows         Follow
 
 The corrections are about files, and every batch of a workspace reads the
@@ -38,7 +38,9 @@ The plain data of each table, as the functions below give and read it::
                    'cleared': {'60339': ['sample_transmission']},
                    'removed': ['60340']}
     settings      the template of the settings, as a template file holds it
-    header        {'title': 'Sample runs', 'description': '', 'source': 'sample-runs'}
+    header        {'title': 'Sample runs', 'description': '', 'source': 'sample-runs',
+                   'scope': {'start': 60339, 'stop': None}}
+                  with a scope of keys as {'keys': ['60339', '60351']}
     following     {'label': '20261118-130204'}, or {'label': None}
 
 A value is in the JSON form that a record holds, a file as
@@ -55,7 +57,7 @@ import os
 import tempfile
 from collections.abc import Callable, Mapping
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 from urllib.parse import quote, unquote
@@ -67,7 +69,7 @@ from ess.spec import FileRef, WorkflowSpec
 from ess.spec.refs import ParamsError, map_refs
 
 from ..records import Template
-from .table import EMPTY, Row, RowTable
+from .table import EMPTY, Row, RowTable, Scope
 
 type Key = tuple[str, ...]
 """Names a table: ``('corrections',)``, or ``('labels', label, part)``."""
@@ -241,11 +243,15 @@ class _Edits(TypedDict, total=False):
 
 @dataclass(frozen=True)
 class Header:
-    """What a person says of a batch: its title, and where its rows come from."""
+    """
+    What a person says of a batch: its title, where its rows come from, and
+    which of them it holds. A header kept without a scope holds every row.
+    """
 
     title: str
     description: str = ''
     source: str | None = None
+    scope: Scope = field(default_factory=Scope)
 
 
 class _Following(TypedDict):
@@ -357,8 +363,13 @@ def corrections_of(data: Any) -> dict[FileRef, dict[str, Any]]:
 
 
 def header_data(header: Header) -> dict[str, Any]:
-    """The header, as plain data."""
-    return asdict(header)
+    """The header, as plain data: its scope a slice, or the keys sorted."""
+    scope = header.scope
+    if scope.keys is None:
+        written = {'start': scope.start, 'stop': scope.stop}
+    else:
+        written = {'keys': sorted(scope.keys)}
+    return {**asdict(header), 'scope': written}
 
 
 def header_of(data: Any) -> Header:

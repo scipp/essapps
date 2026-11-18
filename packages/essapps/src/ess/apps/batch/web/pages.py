@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 from ess.spec import FileRef
 
-from .. import BatchManager, CorrectedFiles, RowState, Words, refused_again
+from .. import BatchManager, CorrectedFiles, RowState, Scope, Words, refused_again
 from ..auto import Follow
 from . import forms
 from .models import BatchCounts, Batches, BatchRow
@@ -209,12 +209,15 @@ class Pages:
                 name, sources = header.source, self.manager.sources
                 # listed even if its source is no longer registered
                 source = None if name is None else sources.get(name)
+                words = Words() if source is None else source.words
+                index = '' if source is None else source.index
                 rows.append(
                     BatchRow(
                         label=label,
                         title=header.title,
                         description=header.description,
-                        words=Words() if source is None else source.words,
+                        words=words,
+                        scope=_scope_text(header.scope, index, words),
                         follows=label == self.follow.label,
                     )
                 )
@@ -244,3 +247,16 @@ class Pages:
                     for name, n in counts.outside.items()
                 },
             )
+
+
+def _scope_text(scope: Scope, index: str, words: Words) -> str:
+    """
+    A scope as the Batches view shows it: ``Run 60339 \N{EN DASH} 60421``, with an open
+    end left out, or ``2 rows named``; empty for every row.
+    """
+    if scope.keys is not None:
+        return f'{words.count(len(scope.keys))} named'
+    if scope.start is None and scope.stop is None:
+        return ''
+    start, stop = ('' if end is None else str(end) for end in (scope.start, scope.stop))
+    return ' '.join(filter(None, [index, start, '\N{EN DASH}', stop]))

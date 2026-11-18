@@ -445,8 +445,9 @@ class Server:
         refused = self.pages.waiting(self.label, states)
         statuses = page_statuses(states, self.batch.columns, refused)
         failures = self._failures(states)
-        scan = {row.key: row for row in self.batch.rows.scan}
-        added = {row.key for row in self.batch.rows.added}
+        table = self.batch.rows
+        scan = {row.key: row for row in table.scan if table.scope.holds(row)}
+        added = {row.key for row in table.added}
         rows = [
             self._row(
                 row,
@@ -458,7 +459,7 @@ class Server:
                 scan,
                 added,
             )
-            for row in self.batch.rows
+            for row in table
         ]
         counts = dict.fromkeys(_ORDER, 0)
         for status in statuses.values():
@@ -506,7 +507,7 @@ class Server:
             ],
             rows=rows,
             counts={'all': len(states), **counts},
-            removed=len(scan.keys() & self.batch.rows.removed),
+            removed=len(scan.keys() & table.removed),
             action=self._primary(
                 states, statuses, unapplied or problem, len(earlier), unapplied
             ),

@@ -18,6 +18,7 @@ from ess.apps.batch import (
     FileInfo,
     FolderDefinitions,
     Row,
+    Scope,
 )
 from ess.apps.batch.definition import (
     CORRECTIONS,
@@ -409,6 +410,33 @@ def test_a_header_is_kept_and_read_back(folder: Path) -> None:
 
     assert store.load(header_key('a'), header_of) == header
     assert store.load(header_key('b'), header_of) is None
+
+
+def test_a_header_without_a_scope_reads_as_every_row() -> None:
+    assert header_of({'title': 'Old'}) == Header('Old', scope=Scope())
+
+
+@pytest.mark.parametrize(
+    ('scope', 'written'),
+    [
+        (Scope(start=60339), {'start': 60339, 'stop': None}),
+        (
+            Scope(start='2026-11-18T13:00', stop='2026-11-19T13:00'),
+            {'start': '2026-11-18T13:00', 'stop': '2026-11-19T13:00'},
+        ),
+        (Scope(keys=frozenset({'60351', '60339'})), {'keys': ['60339', '60351']}),
+    ],
+)
+def test_a_scope_is_written_as_a_slice_or_as_keys(
+    folder: Path, scope: Scope, written: dict[str, object]
+) -> None:
+    store = FolderDefinitions(folder)
+    data = header_data(Header('Morning', scope=scope))
+
+    store.save(header_key('a'), data)
+
+    assert data['scope'] == written
+    assert store.load(header_key('a'), header_of) == Header('Morning', scope=scope)
 
 
 def test_a_header_that_cannot_be_read_is_refused_naming_the_file_and_the_entry(

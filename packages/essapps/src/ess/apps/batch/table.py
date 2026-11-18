@@ -7,8 +7,9 @@ The table holds two layers: what the last scan gave, and what was set by hand
 since, a person's edit or a program's. A row's cells are the scan's with the
 edits on top, worked out when asked for. So a new scan replaces only its own
 layer, and no merge is needed: each rule below follows from which layer an
-operation writes. Cells are opaque; this module knows nothing of specs, files,
-or widgets.
+operation writes. The table keeps every row of the scan and shows those in its
+scope, so a change of scope needs no new scan. Cells are opaque; this module
+knows nothing of specs, files, or widgets.
 """
 
 from __future__ import annotations
@@ -30,6 +31,9 @@ class _Empty:
 EMPTY: Any = _Empty()
 """Written to a cell by :meth:`RowTable.edit` to clear it, whatever the scan gave."""
 
+type Index = int | float | str
+"""A value that orders rows, such as the run number. One source gives one type."""
+
 
 @dataclass(frozen=True)
 class Row:
@@ -39,7 +43,8 @@ class Row:
     A column left out of ``values`` is an empty cell; ``None`` is a value.
     ``key`` must stay the same from one scan to the next, so it is best derived
     from something that does not change, such as the run number, with the name
-    of the sample in ``info``.
+    of the sample in ``info``. ``index`` orders the rows for a :class:`Scope`;
+    the source gives it, and a row added by hand has none.
 
     Raises ``TypeError`` if ``key`` is not a string.
     """
@@ -47,10 +52,43 @@ class Row:
     key: str
     values: Mapping[str, Any] = field(default_factory=dict)
     info: Mapping[str, str] = field(default_factory=dict)
+    index: Index | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.key, str):
             raise TypeError(f'the key of a row is a string, not {self.key!r}')
+
+
+@dataclass(frozen=True)
+class Scope:
+    """
+    Which rows of the scan a table shows: a slice of index values, or the
+    rows of ``keys``. ``start`` is included and ``stop`` excluded, as in a
+    Python slice; ``None`` is an open end. ``Scope()`` holds every row, also
+    one without an index; a slice with an end holds no row without one.
+
+    Raises ``ValueError`` if given ``keys`` and an end.
+    """
+
+    start: Index | None = None
+    stop: Index | None = None
+    keys: frozenset[str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.keys is not None and (self.start, self.stop) != (None, None):
+            raise ValueError('a scope is a slice or keys, not both')
+
+    def holds(self, row: Row) -> bool:
+        """Whether ``row`` is in the scope."""
+        if self.keys is not None:
+            return row.key in self.keys
+        if self.start is None and self.stop is None:
+            return True
+        if row.index is None:
+            return False
+        return (self.start is None or self.start <= row.index) and (
+            self.stop is None or row.index < self.stop
+        )
 
 
 def _unique(rows: Iterable[Row]) -> tuple[Row, ...]:
@@ -65,20 +103,35 @@ def _unique(rows: Iterable[Row]) -> tuple[Row, ...]:
 @dataclass(frozen=True)
 class RowTable:
     """
-    Rows by key: those of the scan, then those added by hand. Each method
-    returns a new table. See ``packages/essapps/docs/batch.md`` for the rules.
+    Rows by key: those of the scan in ``scope``, then those added by hand.
+    Each method returns a new table. See ``packages/essapps/docs/batch.md``
+    for the rules.
     """
 
     scan: tuple[Row, ...] = ()
     added: tuple[Row, ...] = ()
     edits: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     removed: frozenset[str] = frozenset()
+    scope: Scope = field(default_factory=Scope)
 
     @cached_property
     def _rows(self) -> dict[str, Row]:
         hidden = self.removed | {row.key for row in self.added}
-        shown = [r for r in self.scan if r.key not in hidden]
+        shown = [r for r in self.scan if r.key not in hidden and self.scope.holds(r)]
         return {row.key: self._with_edits(row) for row in (*shown, *self.added)}
+
+    def _refuse_outside(self, keys: Iterable[str]) -> None:
+        """
+        Raise ``SubmitError`` for each of ``keys`` that the table does not
+        show, since the scan gives it outside the scope: added by hand, it
+        would no longer take its cells from the scan.
+        """
+        outside = {r.key for r in self.scan if not self.scope.holds(r)}
+        if refused := [k for k in keys if k in outside and k not in self]:
+            raise SubmitError(
+                FieldError(k, (), 'the source makes this row outside the scope')
+                for k in refused
+            )
 
     def _with_edits(self, row: Row) -> Row:
         edits = self.edits.get(row.key)
@@ -115,15 +168,18 @@ class RowTable:
         removed is brought back; and of a row shown, or brought back, each of
         ``columns`` whose cell differs is set, or cleared if the row given
         leaves it empty. A cell that does not differ is left as it is, so one
-        from the scan keeps following the scan. Raises ``SubmitError`` for a
-        key given twice.
+        from the scan keeps following the scan. Raises ``SubmitError``, and
+        sets none, for a key given twice, and for a key of a row that the scan
+        gives outside the scope.
         """
         columns = tuple(columns)
+        rows = _unique(rows)
+        self._refuse_outside(row.key for row in rows)
         added = list(self.added)
         edits = dict(self.edits)
         removed = set(self.removed)
         scan = {row.key: row for row in self.scan if row.key in removed}
-        for row in _unique(rows):
+        for row in rows:
             if row.key in scan:
                 removed.discard(row.key)
                 shown = self._with_edits(scan[row.key]).values
@@ -146,11 +202,13 @@ class RowTable:
 
     def add(self, row: Row) -> RowTable:
         """
-        Add a row by hand; it stays whatever a scan gives. Raises
-        ``SubmitError`` if the table has a row of that key.
+        Add a row by hand; it stays whatever a scan gives or the scope holds.
+        Raises ``SubmitError`` if the table has a row of that key, or the scan
+        gives one outside the scope.
         """
         if row.key in self:
             raise SubmitError([FieldError(row.key, (), 'a row has this key already')])
+        self._refuse_outside([row.key])
         edits = {k: v for k, v in self.edits.items() if k != row.key}
         return replace(self, added=(*self.added, row), edits=edits)
 

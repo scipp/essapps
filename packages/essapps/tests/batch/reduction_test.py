@@ -16,12 +16,13 @@ from ess.apps.batch import (
     CorrectedFiles,
     FileInfo,
     Row,
+    Scope,
     earlier_settings,
     left_to_reduce,
     ready,
 )
 from ess.apps.log import Log
-from ess.apps.testing import CountingClient, FakeStore, StagedFunction
+from ess.apps.testing import CountingClient, FakeFiles, FakeStore, StagedFunction
 from ess.spec import (
     FileRef,
     OutputRef,
@@ -118,6 +119,53 @@ def test_a_scan_returns_the_files_its_source_got(
 
     assert batch.scan() == got
     assert run in [f.ref for f in got]
+
+
+def test_a_scope_set_on_a_batch_changes_its_rows_without_a_scan(
+    scanned: Batch, sample: Measure
+) -> None:
+    sample(3, 'oil')
+
+    scanned.scope = Scope(start=2)
+    assert [row.key for row in scanned.rows] == ['2']
+    scanned.scope = Scope()
+    assert [row.key for row in scanned.rows] == ['1', '2']
+
+
+def test_a_file_listed_late_lands_in_the_batch_by_its_index(
+    client: Client, sample: Measure
+) -> None:
+    batch = Batch(
+        client,
+        PLAIN,
+        columns=COLUMNS,
+        label='scan',
+        source=pair,
+        scope=Scope(start=2, stop=10),
+    )
+    sample(5, 'water')
+    batch.scan()
+
+    sample(3, 'oil')
+    sample(12, 'sds')
+    batch.scan()
+
+    assert sorted(row.key for row in batch.rows) == ['3', '5']
+
+
+def test_a_row_in_the_scope_takes_a_partner_measured_before_it(
+    client: Client, fake: FakeFiles, sample: Measure
+) -> None:
+    before = fake.measure(1, 1.0, role='transmission', sample='water')
+    sample(5, 'water', partner=False)
+    batch = Batch(
+        client, PLAIN, columns=COLUMNS, label='scan', source=pair, scope=Scope(start=5)
+    )
+
+    batch.scan()
+
+    assert [row.key for row in batch.rows] == ['5']
+    assert batch.rows['5'].values['transmission'] == before
 
 
 def test_columns_must_be_parameters(client: Client) -> None:
