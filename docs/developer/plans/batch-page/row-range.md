@@ -4,6 +4,11 @@ The batch page shows every row of its batch. At each change the server builds ev
 This document proposes to build the page around a *range*: the rows that a person shows and edits, at most a few hundred.
 Each question below ends with a line `> Simon:` for the answer.
 
+Q1 to Q4 are answered.
+The answers to Q3 and Q4 ask who bounds a batch, which [ADR 0011](../../adr/0011-a-person-makes-the-batches-of-a-workspace.md) proposes to answer: a person makes batches, each with a scope over the rows.
+A batch bounded so has tens to hundreds of rows, so the cost per row does not arise; the cost per file (Q8) stays.
+Q3 to Q10 wait for the decision on that ADR. If it is accepted, this document is needed only for a batch without an end.
+
 Line numbers are those of commit `5216420`. Times are from a toy workflow with three columns on an in-memory workspace ([`scale.py`](scale.py)), on a shared host, so they vary by up to a factor of 2.
 
 ## What a person would see
@@ -77,7 +82,7 @@ With B, a can measured at the start, or the transmission run of a sample measure
 
 Recommendation: A. The range is a view of the rows. The source sees every file, as now; nothing in `Batch` or the source changes. A selector of the file source stays part of the batch's definition in code, not a range.
 
-> Simon:
+> Simon: I like the "view" approach as you recommend, provided that it does not block optimizations like caching in `batch.scan()` -- we sometimes have to deal with slow NFS mounts, so re-scanning thousands of files can get provibitive.
 
 ## Q2. How is a range named?
 
@@ -96,7 +101,7 @@ Order and keys, which decide between a, b and c:
 
 Recommendation: b, with the status filter of d on top, applied by the server over the whole batch. Anchored at a key, a range keeps its rows when new rows arrive and after a restart, and its open end shows what Follow adds. A status filter over the batch makes the counts outside the range something a person can act on. If row K is gone (removed, or no longer made by the scan), the page shows the newest N and says why. A range shows at most a fixed number of rows (say 500), and says so if it holds more.
 
-> Simon:
+> Simon: I'd say some sort of indexing as support by Pandas (or Scipp): and Python slice of integers, or based on values in an (index) column, which could be a date range.
 
 ## Q3. What does the page show of the rows outside the range?
 
@@ -112,7 +117,7 @@ A row that Follow leaves to the person (`RowState.changed_by_hand`, `state.py:78
 
 Recommendation: a, with one more count, "set by hand, left to you", over the batch. At thousands of rows it costs less than 0.2 s, and a failed row or a row Follow leaves to the person that nobody sees is a row nobody reduces. Only the counts are computed for the rows outside; no `Row` model, no failure reason.
 
-> Simon:
+> Simon: I am not sure we can decide this. We do not know enough about how the users will want to work. Do they think in terms of "batches", and an experiment may consist of multiple (e.g., when running different kinds of measurements)? Is one large table/batch an overly restrictive mechanism? My hunch is that we will need to allow defining manually where a "batch" start and ends, and potentially support future apps where there are multiple batch tables, each with their own settings and workflows. Maybe there will be a management widget that allows for defining which files go into a batch table, and the manager then sets up the views we have now?
 
 ## Q4. What do "Reduce", "Reduce them again" and Follow act on?
 
@@ -130,7 +135,7 @@ Cost of "range": `Server.reduce` reads `batch.state(range_keys)` (`server.py:835
 
 Recommendation: the range for a person, the batch for Follow. This forces a in Q3: a person must see the work left outside the range.
 
-> Simon:
+> Simon: See Q3. Do users run multiple "batches" per experiment, e.g., use workflow A with settings SA, then configure a new workflow B with settings SB for the runs done after lunch? Are we missing the ability to manage such tables/batches?
 
 ## Q5. Edits, files, and rows added by hand
 
