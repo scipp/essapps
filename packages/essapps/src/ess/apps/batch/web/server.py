@@ -399,6 +399,11 @@ class Server:
             raise Problem(f'There is no {self.words.one} {key}.')
         return self.batch.rows[key]
 
+    def _known(self, keys: Iterable[str]) -> None:
+        """Raise ``Problem`` unless the table has a row for each of ``keys``."""
+        for key in keys:
+            self._row_of(key)
+
     def _named(self, row: TableRow) -> str:
         return (row.info.get(self._name) if self._name else None) or row.key
 
@@ -737,11 +742,10 @@ class Server:
     def edit(self, edit: CellEdit) -> str:
         """Set one column of rows, as its field reads the value sent."""
         value = self._read(self._cells, edit)
-        rows = self.batch.rows
-        for key in edit.keys:
-            self._row_of(key)
-            rows = rows.edit(key, {edit.column: EMPTY if value is UNSET else value})
-        self.batch.rows = rows
+        self._known(edit.keys)
+        self.batch.rows = self.batch.rows.edit_each(
+            edit.keys, {edit.column: EMPTY if value is UNSET else value}
+        )
         self._forget(edit.keys, edit.column)
         if len(edit.keys) < 2:
             return ''
@@ -754,11 +758,8 @@ class Server:
         Take the cells of ``column`` back to what the scan gave; for a name
         that is not a column, forget its edit.
         """
-        rows = self.batch.rows
-        for key in cells.keys:
-            self._row_of(key)
-            rows = rows.reset(key, cells.column)
-        self.batch.rows = rows
+        self._known(cells.keys)
+        self.batch.rows = self.batch.rows.reset_each(cells.keys, cells.column)
         self._forget(cells.keys, cells.column)
 
     def _forget(self, keys: Sequence[str], column: str) -> None:
@@ -772,12 +773,9 @@ class Server:
     @_action
     def remove(self, keys: Sequence[str]) -> str:
         """Remove rows; one added by hand is gone for good."""
-        rows = self.batch.rows
-        added = {row.key for row in rows.added}
-        for key in keys:
-            self._row_of(key)
-            rows = rows.remove(key)
-        self.batch.rows = rows
+        self._known(keys)
+        added = {row.key for row in self.batch.rows.added}
+        self.batch.rows = self.batch.rows.remove_each(keys)
         notice = f'Removed {self.words.count(len(keys))}.'
         if gone := len(added.intersection(keys)):
             notice += f' {gone} added by hand cannot be brought back.'
@@ -787,9 +785,7 @@ class Server:
     def restore(self) -> None:
         """Bring back every row of the scan that was removed."""
         rows = self.batch.rows
-        for key in rows.removed:
-            rows = rows.reset(key)
-        self.batch.rows = rows
+        self.batch.rows = rows.reset_each(rows.removed)
 
     @_action
     def add(self, key: str) -> str:
@@ -809,8 +805,7 @@ class Server:
     @_action
     def reduce(self, request: Reduce) -> str:
         """Submit the rows asked for, all or none."""
-        for key in request.keys:
-            self._row_of(key)
+        self._known(request.keys)
         if unapplied := self._unapplied():
             raise Problem(f'Nothing was reduced: {unapplied.lower()}.')
         try:

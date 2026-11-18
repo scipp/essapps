@@ -87,6 +87,68 @@ def test_reset_of_a_cell_forgets_its_edit_alone(table: RowTable) -> None:
     assert reset.reset('a', 'y').edits == {}
 
 
+def test_an_edit_of_several_rows_gives_the_table_of_one_edit_after_another(
+    table: RowTable,
+) -> None:
+    table = table.add(Row('c', {'x': 7})).edit('a', {'y': 5})
+
+    many = table.edit_each(['a', 'b', 'c'], {'x': EMPTY, 'z': 1})
+
+    one_by_one = table
+    for key in 'abc':
+        one_by_one = one_by_one.edit(key, {'x': EMPTY, 'z': 1})
+    assert many == one_by_one
+    assert cells(many) == {
+        'a': {'y': 5, 'z': 1},
+        'b': {'z': 1},
+        'c': {'z': 1},
+    }
+
+
+def test_an_edit_of_several_rows_with_one_missing_edits_none(
+    table: RowTable,
+) -> None:
+    with pytest.raises(KeyError, match='nope'):
+        table.edit_each(['a', 'nope'], {'x': 1})
+
+    assert table.edits == {}
+
+
+def test_a_removal_of_several_rows_gives_the_table_of_one_after_another(
+    table: RowTable,
+) -> None:
+    table = table.add(Row('c', {'x': 7})).edit('a', {'x': 10}).edit('c', {'x': 8})
+
+    many = table.remove_each(['a', 'c'])
+
+    assert many == table.remove('a').remove('c')
+    assert cells(many) == {'b': {'x': 3}}
+    assert (many.removed, many.edits) == ({'a'}, {})
+    assert cells(many.reset_each(['a'])) == {'a': {'x': 1, 'y': 2}, 'b': {'x': 3}}
+
+
+def test_a_removal_of_several_rows_with_one_missing_removes_none(
+    table: RowTable,
+) -> None:
+    with pytest.raises(KeyError, match='nope'):
+        table.remove_each(['a', 'nope'])
+
+    assert table.removed == frozenset()
+
+
+def test_a_reset_of_several_rows_forgets_what_one_after_another_does(
+    table: RowTable,
+) -> None:
+    edited = table.edit('a', {'x': 10, 'y': 20}).edit('b', {'x': 30}).remove('b')
+
+    assert edited.reset_each(['a', 'b']) == edited.reset('a').reset('b')
+    assert cells(edited.reset_each(['a', 'b'])) == cells(table)
+    assert edited.reset_each(['a', 'b'], 'x') == edited.reset('a', 'x').reset('b', 'x')
+    assert edited.reset_each(['a', 'b'], 'x').edits == {'a': {'y': 20}}
+    assert edited.reset_each(['a', 'b'], 'x').removed == {'b'}
+    assert edited.reset_each([]) == edited
+
+
 def test_removing_a_row_added_forgets_it(table: RowTable) -> None:
     added = table.add(Row('c', {'x': 7})).edit('c', {'x': 8})
 
