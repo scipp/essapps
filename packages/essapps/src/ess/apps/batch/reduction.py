@@ -55,8 +55,8 @@ alone.
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any
 
@@ -68,7 +68,7 @@ from ..files import Selector
 from ..records import Record, SpecId, Status, Template
 from . import definition, state
 from .definition import DefinitionStore
-from .state import RowState
+from .state import RowState, earlier_settings, left_to_reduce
 from .table import Row, RowTable
 
 
@@ -245,6 +245,14 @@ class Step:
         other parameters are the settings, shared by all rows.
     label:
         The label of the records. A row's key is its member.
+    takes:
+        The column of the table that a parameter of ``columns`` takes, if not
+        the column of its name. The rows given and the states returned are in
+        the names of the columns; only the requests are in those of the
+        parameters.
+    name:
+        Names the step in a batch, and its output columns
+        ``'<name>.<output>'``; the spec's name if not given.
     staged:
         Run the rows through a stage, so that what they share is computed
         once. The spec's binding must make stages.
@@ -262,7 +270,8 @@ class Step:
     Raises
     ------
     KeyError
-        If a column is not a parameter of the spec.
+        If a column is not a parameter of the spec, or ``takes`` names a
+        parameter that is not a column.
     ValueError
         If ``settings`` name a column.
     ValueError
@@ -278,6 +287,8 @@ class Step:
         *,
         columns: Sequence[str],
         label: str,
+        takes: Mapping[str, str] | None = None,
+        name: str | None = None,
         staged: bool = False,
         persist: bool | Sequence[str] = False,
         settings: Mapping[str, Any] | None = None,
@@ -286,11 +297,16 @@ class Step:
         fields = spec.params.model_fields
         if unknown := sorted(set(columns) - fields.keys()):
             raise KeyError(f'{spec.title} has no parameters {unknown}')
+        if unknown := sorted(set(takes or {}) - set(columns)):
+            raise KeyError(f'{unknown} are not columns of {spec.title}')
         self.client = client
         self.spec = spec
         self.columns = tuple(columns)
         self.settings_fields = tuple(n for n in fields if n not in columns)
         self.label = label
+        self.name = spec.name if name is None else name
+        self.takes = {c: c for c in self.columns} | dict(takes or {})
+        self._renamed = any(p != c for p, c in self.takes.items())
         self._definitions = definitions
         self._settings = self._own(settings or {})
         if definitions is not None:
@@ -347,6 +363,50 @@ class Step:
         """The template of the settings, with the columns as its blanks."""
         return Template(self.spec, params=self._settings, blanks=self.columns)
 
+    @property
+    def outputs(self) -> dict[str, str]:
+        """The name of each output by its column, ``'<name>.<output>'``."""
+        return {f'{self.name}.{o}': o for o in self.spec.outputs.model_fields}
+
+    def _in_params(self, row: Row) -> Row:
+        """
+        ``row`` in the names of the parameters: the cell of each column taken
+        under its parameter, and any other value under its own name, so that
+        it is a problem of the row (``not a column``).
+        """
+        if not self._renamed:
+            return row
+        columns = set(self.takes.values())
+        values = {p: row.values[c] for p, c in self.takes.items() if c in row.values}
+        values |= {n: v for n, v in row.values.items() if n not in columns}
+        return replace(row, values=values)
+
+    def _column(self, name: str) -> str:
+        """The column a parameter takes; a setting keeps its name."""
+        return self.takes.get(name, name)
+
+    def _placed(self, errors: Iterable[FieldError]) -> tuple[FieldError, ...]:
+        """``errors`` at the columns that their parameters take."""
+        return tuple(
+            replace(e, loc=(self._column(str(e.loc[0])), *e.loc[1:])) if e.loc else e
+            for e in errors
+        )
+
+    def _in_columns(self, row: RowState, waits: tuple[str, ...]) -> RowState:
+        """
+        ``row`` in the names of the columns, waiting for ``waits``: a problem
+        at a column it waits for is the cell that is empty, so it is dropped.
+        """
+        if not self._renamed and not waits:
+            return row
+        problems = [
+            e for e in self._placed(row.problems) if not (e.loc and e.loc[0] in waits)
+        ]
+        changed = row.changed
+        if changed is not None:
+            changed = frozenset(map(self._column, changed))
+        return replace(row, problems=tuple(problems), changed=changed, waits=waits)
+
     def forget_resolved(self) -> None:
         """
         Resolve each cell again from now on. Called after a scan: a file that
@@ -369,25 +429,29 @@ class Step:
         self,
         rows: Sequence[Row],
         set_by_hand: Mapping[str, frozenset[str]] = MappingProxyType({}),
+        waits: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
     ) -> dict[str, RowState]:
         """
         Where each of ``rows`` stands now, read from the client: its result,
         and where its request with the settings differs from its result's
         (:attr:`RowState.changed`), with the reasons a cell is refused, as
         problems of its row. ``set_by_hand`` names the columns set by hand of
-        each row, by key.
+        each row, and ``waits`` the empty output columns it waits for, by key.
 
         Raises ``SubmitError`` if the settings are refused, with reasons that
         name no row: no row can run with them.
         """
-        found = self._results_of(rows)
-        changed, refused = self._compare(rows, found)
-        return self._states(rows, found, changed, refused, set_by_hand)
+        given = [self._in_params(r) for r in rows]
+        found = self._results_of(given)
+        changed, refused = self._compare(given, found)
+        states = self._states(given, found, changed, refused, set_by_hand)
+        return {k: self._in_columns(s, waits.get(k, ())) for k, s in states.items()}
 
     def results(
         self,
         rows: Sequence[Row],
         set_by_hand: Mapping[str, frozenset[str]] = MappingProxyType({}),
+        waits: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
     ) -> dict[str, RowState]:
         """
         Each of ``rows`` with its result, without its request: the problems of
@@ -397,8 +461,10 @@ class Step:
         :func:`~.state.left_to_reduce` and :func:`~.state.arrived` refuse these
         states.
         """
-        found = self._results_of(rows)
-        return self._states(rows, found, None, {}, set_by_hand)
+        given = [self._in_params(r) for r in rows]
+        found = self._results_of(given)
+        states = self._states(given, found, None, {}, set_by_hand)
+        return {k: self._in_columns(s, waits.get(k, ())) for k, s in states.items()}
 
     def _results_of(self, rows: Sequence[Row]) -> dict[str, Record]:
         """The result of each of ``rows`` that has one, by key."""
@@ -575,11 +641,11 @@ class Step:
         if not rows:
             return {}
         template = self.template()
-        each = {row.key: self._cells(row) for row in rows}
+        each = {row.key: self._cells(self._in_params(row)) for row in rows}
         try:
             records = self._submit(template, each)
         except SubmitError as error:
-            raise SubmitError(self._once(error.errors)) from None
+            raise SubmitError(self._placed(self._once(error.errors))) from None
         return records
 
     def _submit(
@@ -631,24 +697,87 @@ class Step:
             self._stage = None
 
 
+@dataclass
+class StepRows:
+    """
+    The rows of a batch as one of its steps takes them, at that step of the
+    walk along the chain (:meth:`Batch.walk`): the cells of the columns it
+    takes, with the output cells of the steps before it, and the output
+    columns each row waits for.
+    """
+
+    step: Step
+    rows: list[Row]
+    set_by_hand: Mapping[str, frozenset[str]]
+    waits: Mapping[str, tuple[str, ...]]
+    _state: dict[str, RowState] | None = field(default=None, init=False, repr=False)
+
+    def state(self) -> dict[str, RowState]:
+        """:meth:`Step.state` of the rows; read once until :meth:`reduce`."""
+        if self._state is None:
+            self._state = self.step.state(self.rows, self.set_by_hand, self.waits)
+        return self._state
+
+    def results(self) -> dict[str, RowState]:
+        """:meth:`Step.results` of the rows."""
+        return self.step.results(self.rows, self.set_by_hand, self.waits)
+
+    def reduce(self, keys: Sequence[str]) -> dict[str, Record]:
+        """:meth:`Step.reduce` of the rows of ``keys``."""
+        rows = {r.key: r for r in self.rows}
+        self._state = None
+        return self.step.reduce([rows[k] for k in keys])
+
+
+def _current(row: RowState, columns: Collection[str]) -> bool:
+    """
+    Whether the result of ``row`` fills its output cells: it runs or
+    completed, of the bound spec, for the cells the row has now at
+    ``columns``. Settings do not count, so a change of settings leaves the
+    results in use until a person reduces them again.
+    """
+    return (
+        row.record is not None
+        and row.status not in (Status.FAILED, Status.CANCELLED)
+        and not row.spec_changed
+        and not row.problems
+        and not row.waits
+        and row.changed is not None
+        and row.changed.isdisjoint(columns)
+    )
+
+
 class Batch:
     """
-    One spec reduced for many rows: a :class:`Table` of rows and the
-    :class:`Step` that reduces them. See ``packages/essapps/docs/batch.md``.
+    A table of rows and a chain of steps that reduce them; one step unless
+    more are added (:meth:`add`). See ``packages/essapps/docs/batch.md``.
+
+    The constructor makes the table and its first step, whose records are
+    under ``label``. An added step's records are under ``'<label>/<name>'``,
+    and each of its outputs is a column ``'<name>.<output>'``. An output cell
+    holds a reference to the step's result for the row if that result is
+    current, and is empty otherwise; a step that takes an empty output cell
+    waits (:attr:`RowState.waits`).
 
     Parameters
     ----------
     client:
         The client that submits.
     spec:
-        The spec of every row.
+        The spec of the first step.
     columns:
-        The parameters that each row gives, the blanks of the template. The
-        other parameters are the settings, shared by all rows.
+        The parameters of the first step that each row gives, the blanks of the
+        template. The other parameters are the settings, shared by all rows.
     label:
-        The label of the records. A row's key is its member.
+        The label of the first step's records, and of the definitions. A row's
+        key is its member.
+    takes:
+        The column that a parameter of ``columns`` takes, if not the column of
+        its name, such as ``{'run': 'sample'}``.
     source:
-        Makes rows from files, for :meth:`scan`.
+        Makes rows from files, for :meth:`scan`. A value at a name that no
+        step takes makes its row ``incomplete`` (``not a column``), so add the
+        steps that take its columns before the rows are reduced.
     selector:
         The files given to ``source``; raw files if not given.
     staged:
@@ -684,6 +813,7 @@ class Batch:
         *,
         columns: Sequence[str],
         label: str,
+        takes: Mapping[str, str] | None = None,
         source: RowSource | None = None,
         selector: Selector | None = None,
         staged: bool = False,
@@ -692,49 +822,157 @@ class Batch:
         definitions: DefinitionStore | None = None,
     ) -> None:
         self.client = client
-        self._step = Step(
+        self.label = label
+        self._definitions = definitions
+        first = Step(
             client,
             spec,
             columns=columns,
             label=label,
+            takes=takes,
             staged=staged,
             persist=persist,
             settings=settings,
             definitions=definitions,
         )
+        self._steps = [first]
         self._table = Table(
             client,
-            columns=columns,
+            columns=tuple(dict.fromkeys(first.takes.values())),
             label=label,
             source=source,
             selector=selector,
             definitions=definitions,
         )
+        # The columns of the first step stay when steps are removed.
+        self._first_columns = self._table.columns
 
     @property
-    def spec(self) -> WorkflowSpec[Any, Any]:
-        """The spec of every row."""
-        return self._step.spec
+    def steps(self) -> tuple[Step, ...]:
+        """The steps, in the order of the chain."""
+        return tuple(self._steps)
+
+    def step(self, name: str) -> Step:
+        """The step of ``name``; raises ``KeyError`` if there is none."""
+        for step in self._steps:
+            if step.name == name:
+                return step
+        raise KeyError(f'{self.label} has no step {name!r}')
 
     @property
     def columns(self) -> tuple[str, ...]:
-        """The parameters that each row gives."""
-        return self._step.columns
+        """The input columns, those the steps take that are not outputs."""
+        return self._table.columns
+
+    @property
+    def outputs(self) -> dict[str, Step]:
+        """The output columns, each with the step that fills it."""
+        return {c: step for step in self._steps for c in step.outputs}
+
+    def _only(self) -> Step:
+        """The step of a batch of one; raises ``ValueError`` for several."""
+        if len(self._steps) > 1:
+            raise ValueError(f'{self.label} has several steps: see Batch.steps')
+        return self._steps[0]
+
+    @property
+    def spec(self) -> WorkflowSpec[Any, Any]:
+        """The spec of every row, of a batch of one step."""
+        return self._only().spec
 
     @property
     def settings_fields(self) -> tuple[str, ...]:
-        """The parameters that are not columns, in the order of the spec."""
-        return self._step.settings_fields
-
-    @property
-    def label(self) -> str:
-        """The label of the records and of the definitions."""
-        return self._step.label
+        """The parameters that are not columns, of a batch of one step."""
+        return self._only().settings_fields
 
     @property
     def source(self) -> RowSource | None:
         """Makes rows from files, for :meth:`scan`."""
         return self._table.source
+
+    def add(
+        self,
+        spec: WorkflowSpec[Any, Any],
+        *,
+        name: str | None = None,
+        takes: Mapping[str, str] | None = None,
+        settings: Mapping[str, Any] | None = None,
+        staged: bool = False,
+        persist: bool | Sequence[str] = False,
+    ) -> Step:
+        """
+        Add a step at the end of the chain, its records under
+        ``'<label>/<name>'``, its name the spec's if not given.
+
+        A parameter takes the column that ``takes`` names, a new input column
+        if the batch has none of that name; else the column of its name, if
+        the batch has one and ``settings`` do not name it; else it is a
+        setting. The settings kept in the definitions for the step's label
+        replace ``settings``, as for the first step.
+
+        Raises ``ValueError`` if a step has the name, and ``KeyError`` if
+        ``takes`` names a parameter the spec lacks, or a column with a ``.``
+        that is not an output of an earlier step.
+        """
+        name = spec.name if name is None else name
+        if name in {s.name for s in self._steps}:
+            raise ValueError(f'{self.label} has a step {name!r}')
+        takes = dict(takes or {})
+        fields = spec.params.model_fields
+        if unknown := sorted(takes.keys() - fields.keys()):
+            raise KeyError(f'{spec.title} has no parameters {unknown}')
+        outputs = self.outputs
+        if bad := sorted(c for c in takes.values() if '.' in c and c not in outputs):
+            raise KeyError(f'{bad} are not outputs of earlier steps')
+        known = {*self.columns, *outputs}
+        for n in fields:
+            if n not in takes and n in known and n not in (settings or {}):
+                takes[n] = n
+        step = Step(
+            self.client,
+            spec,
+            columns=[n for n in fields if n in takes],
+            label=f'{self.label}/{name}',
+            takes=takes,
+            name=name,
+            staged=staged,
+            persist=persist,
+            settings=settings,
+            definitions=self._definitions,
+        )
+        new = [c for c in step.takes.values() if c not in known]
+        self._table.columns = tuple(dict.fromkeys([*self.columns, *new]))
+        self._steps.append(step)
+        return step
+
+    def remove(self, name: str) -> list[str]:
+        """
+        Remove the step of ``name``, and the columns that only it took but for
+        those of the first step; returns those columns. The edits at them go
+        too. Its records and kept settings stay.
+
+        Raises ``ValueError`` if another step takes one of its outputs, or if
+        it is the only step.
+        """
+        step = self.step(name)
+        if len(self._steps) == 1:
+            raise ValueError(f'{name!r} is the only step of {self.label}')
+        if users := [
+            s.name for s in self._steps if set(s.takes.values()) & set(step.outputs)
+        ]:
+            raise ValueError(f'{users} take the output of {name!r}')
+        self._steps.remove(step)
+        step.close()
+        taken = {c for s in self._steps for c in s.takes.values()}
+        gone = [
+            c for c in self.columns if c not in taken and c not in self._first_columns
+        ]
+        gone += list(step.outputs)
+        rows = self._table.rows
+        if edited := [k for k, cells in rows.edits.items() if set(gone) & cells.keys()]:
+            self._table.rows = rows.reset_each(edited, *gone)
+        self._table.columns = tuple(c for c in self.columns if c not in gone)
+        return gone
 
     @property
     def rows(self) -> RowTable:
@@ -764,15 +1002,17 @@ class Batch:
         files, as the source got them.
         """
         infos = self._table.scan()
-        self._step.forget_resolved()
+        for step in self._steps:
+            step.forget_resolved()
         return infos
 
     @property
     def settings(self) -> Mapping[str, Any]:
         """
-        The settings in force: a value for each parameter that is not a
-        column, where it is not left to its default. A copy, read-only at the
-        top, so that only an assignment of all of them changes the batch::
+        The settings in force, of a batch of one step: a value for each
+        parameter that is not a column, where it is not left to its default.
+        A copy, read-only at the top, so that only an assignment of all of
+        them changes the batch::
 
             batch.settings = {**batch.settings, 'q': {'num_bins': 50}}
 
@@ -780,65 +1020,148 @@ class Batch:
         ``outdated``, with the setting in :attr:`RowState.changed`. The
         workspace checks the settings when :meth:`state` resolves them, and
         refuses a name that is not a parameter. Raises ``ValueError`` for a
-        name that is a column: a column's value is a cell of each row.
+        name that is a column: a column's value is a cell of each row. The
+        settings of a step of several are :attr:`Step.settings`.
         """
-        return self._step.settings
+        return self._only().settings
 
     @settings.setter
     def settings(self, settings: Mapping[str, Any]) -> None:
-        self._step.settings = settings
+        self._only().settings = settings
 
     def template(self) -> Template:
         """The template of the settings, with the columns as its blanks."""
-        return self._step.template()
+        return self._only().template()
+
+    def walk(self, keys: Sequence[str] | None = None) -> Iterator[StepRows]:
+        """
+        The rows of ``keys``, or all, as each step takes them, in the order of
+        the chain. Between two steps the caller may reduce rows at the step
+        given; the walk then reads its state again, so that the output cells
+        that the next step takes hold the records just submitted. A reference
+        to a record that still runs fills a cell, so one walk can submit the
+        whole chain for a row.
+        """
+        rows = self._table.select(keys)
+        hand = self._table.set_by_hand()
+        outputs = self.outputs
+        known = {*self.columns, *outputs}
+        filled: dict[str, dict[str, Any]] = {r.key: {} for r in rows}
+        for i, step in enumerate(self._steps):
+            taken = set(step.takes.values())
+            given, waits = [], {}
+            for row in rows:
+                values = (
+                    {**filled[row.key], **row.values} if filled[row.key] else row.values
+                )
+                if at := tuple(
+                    c for c in step.takes.values() if c in outputs and c not in values
+                ):
+                    waits[row.key] = at
+                if other := [n for n in values if n in known and n not in taken]:
+                    values = {n: v for n, v in values.items() if n not in other}
+                changed = filled[row.key] or other
+                given.append(replace(row, values=values) if changed else row)
+            mine = {
+                k: frozenset(c for c in cells if c in taken or c not in known)
+                for k, cells in hand.items()
+            }
+            here = StepRows(step, given, mine, waits)
+            yield here
+            if i + 1 == len(self._steps):
+                return
+            try:
+                states = here.state()
+            except SubmitError:
+                continue  # the settings are refused: no output is current
+            for key, s in states.items():
+                if s.record is not None and _current(s, taken):
+                    refs = {c: s.record.ref(o) for c, o in step.outputs.items()}
+                    filled[key] |= refs
 
     def state(self, keys: Sequence[str] | None = None) -> dict[str, RowState]:
         """
-        Where each row stands now, read from the client, or the rows of
-        ``keys`` if given: its result, and where its request with the settings
-        differs from its result's (:attr:`RowState.changed`), with the reasons
-        a cell is refused, as problems of its row.
+        Where each row stands now, of a batch of one step, read from the
+        client, or the rows of ``keys`` if given: its result, and where its
+        request with the settings differs from its result's
+        (:attr:`RowState.changed`), with the reasons a cell is refused, as
+        problems of its row.
 
         Raises ``SubmitError`` if the settings are refused, with reasons that
         name no row: no row can run with them.
         """
-        return self._step.state(self._table.select(keys), self._table.set_by_hand())
+        self._only()
+        return next(self.walk(keys)).state()
+
+    def states(
+        self, keys: Sequence[str] | None = None
+    ) -> dict[str, dict[str, RowState]]:
+        """:meth:`state` of each step, by its name, along the chain."""
+        return {here.step.name: here.state() for here in self.walk(keys)}
 
     def results(self, keys: Sequence[str] | None = None) -> dict[str, RowState]:
         """
-        Each row, or each of ``keys``, with its result, without its request:
-        the problems of its cells as given, its status, and whether its result
-        is of another spec. Nothing is resolved, so :attr:`RowState.changed`
-        is ``None``, and so is :attr:`RowState.outdated` unless the result is
-        of another spec: :func:`~.state.left_to_reduce` and
-        :func:`~.state.arrived` refuse these states.
+        Each row, or each of ``keys``, with its result, without its request, of
+        a batch of one step: the problems of its cells as given, its status,
+        and whether its result is of another spec. Nothing is resolved, so
+        :attr:`RowState.changed` is ``None``, and so is
+        :attr:`RowState.outdated` unless the result is of another spec:
+        :func:`~.state.left_to_reduce` and :func:`~.state.arrived` refuse these
+        states.
 
         It is what a page shows while the settings are refused, and what
         :meth:`reduce` checks before it submits. Which rows to reduce is
         chosen from :meth:`state`.
         """
-        rows = self._table.select(keys)
-        return self._step.results(rows, self._table.set_by_hand())
+        self._only()
+        return next(self.walk(keys)).results()
 
     def reduce(self, keys: Sequence[str]) -> dict[str, Record]:
         """
-        Submit the rows of ``keys`` with the settings, all or none; their
-        records by key.
+        Submit the rows of ``keys`` with the settings, all or none, of a batch
+        of one step; their records by key.
 
         Raises ``SubmitError`` if a row cannot run or is still running, naming
         it by key and the cell by column. A reason about the settings is named
         once, without a key.
         """
-        return self._step.reduce(self._table.select(keys))
+        self._only()
+        return next(self.walk(keys)).reduce(keys)
+
+    def reduce_left(
+        self, keys: Sequence[str] | None = None, *, again: Collection[str] = ()
+    ) -> dict[str, Record]:
+        """
+        "Reduce" of a person, on the rows of ``keys`` or all: at each step in
+        order, the rows of :func:`~.state.left_to_reduce`, and at the steps
+        named in ``again`` those of :func:`~.state.earlier_settings` too. A
+        row's later steps take what its earlier ones submit, so one call
+        reduces a row to the end of the chain. Returns the last record
+        submitted for each row, which reads the others.
+
+        Raises ``SubmitError`` as :meth:`Step.reduce`, with the steps before
+        the one refused submitted.
+        """
+        records: dict[str, Record] = {}
+        for here in self.walk(keys):
+            state = here.state()
+            columns = set(here.step.takes.values())
+            chosen = left_to_reduce(state, columns)
+            if here.step.name in again:
+                chosen += earlier_settings(state, columns)
+            records |= here.reduce(chosen)
+        return records
 
     def cancel(self, keys: Sequence[str] | None = None) -> None:
         """
         Cancel the records still running that are the newest under the label
-        for their member, of the members ``keys`` if given, or of every member,
-        whether or not it is a row now.
+        of each step for their member, of the members ``keys`` if given, or of
+        every member, whether or not it is a row now.
         """
-        self._step.cancel(keys)
+        for step in self._steps:
+            step.cancel(keys)
 
     def close(self) -> None:
-        """Release the open stage, if any; what was submitted through it still runs."""
-        self._step.close()
+        """Release the open stages; what was submitted through them still runs."""
+        for step in self._steps:
+            step.close()

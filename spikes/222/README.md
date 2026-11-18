@@ -137,3 +137,132 @@ python spikes/222/trial.py   # the trial script of #222, for comparison
 - Needs `essspec`, `essapps` and `essinstruments` installed from this branch.
 - Five runs of `cases.py` gave the same output. Whether I(Q) of a row whose centre fails is submitted in the same pass depends on timing; the statuses do not.
 - Not done: staging, scope, the cache of resolved values, a page, and a real reduction with LoKI data.
+
+## Stage 2: the split
+
+Two commits on `222-workflows-on-a-table`, on top of the spike:
+
+| Commit | What it does |
+|---|---|
+| 1 `2b93eaf` | Splits `Batch` into `Table` and `Step`. `Batch` keeps its constructor and every public member, and is built from one `Table` and one `Step`. No behaviour change. No test changed. |
+| 2 (see `git log`) | Lets one batch hold several steps: `takes`, output columns, `waits for <column>`, `Batch.add/remove/walk/states/reduce_left`, and Follow over the chain. 23 tests in `tests/batch/chain_test.py`. `accept` and `per` are only in the spike. |
+
+The full suites of `packages/essapps` and `packages/essinstruments` pass after each commit: 1234 tests after commit 1, and 1257 after commit 2. `web/`, `cli.py` and `frames.py` are not touched.
+
+### 1. Size
+
+| File | Commit 1 (+/−) | Commit 2 (+/−) |
+|---|---|---|
+| `reduction.py` | +392 / −122 | +382 / −61 |
+| `state.py` | — | +11 / −3 |
+| `auto.py` | — | +38 / −18 |
+| `definition.py` | — | — |
+| `__init__.py` | — | +2 / −1 |
+| `docs/batch.md` | — | +20 |
+| `tests/batch/chain_test.py` | — | +488 (new) |
+
+`reduction.py` was 574 lines on `main` (199 of them docstrings). It is now 1167 lines (441 docstrings):
+
+| | Code and blank lines | Docstring lines |
+|---|---|---|
+| Commit 1 | +126 | +144 |
+| Commit 2 | +225 | +98 |
+
+My stage-1 estimate was "+200 net in reduction.py" for both parts together. The real figure is +593 for both commits, or +351 without docstrings.
+
+- **Commit 1:** most of its growth is the `Batch` facade. It has 13 delegating members, and each repeats the docstring of the `Table` or `Step` member it delegates to.
+- **Commit 2:** the new code is `StepRows`, the walk, `add` and `remove`, the translation between parameter and column in `Step`, and `reduce_left`.
+
+### 2. Commit 1: test changes, and what resisted the cut
+
+No test changed. The cut follows the line between "rows" and "records":
+
+| Part | Goes to | How the cut was made |
+|---|---|---|
+| source, selector, scan, `RowTable`, `put`, the edits in the definitions, `set_by_hand` | `Table` | — |
+| spec, settings and their definitions, label, records polled under the label, comparison, cache of resolved values, stage, submit, cancel, close | `Step` | `Step.state/results/reduce` take the rows (and `set_by_hand`) as arguments, so the step knows nothing of files or edits |
+| emptying the cache of resolved values when the table scans | `Batch.scan` | calls `table.scan()`, then `step.forget_resolved()` (public) |
+| the columns | both | `Table.columns` (used by `put` and for rows added by hand) and `Step.columns` (parameters) hold the same tuple when there is one step |
+
+What resisted, or did not cut cleanly:
+
+- **The cache of resolved values.** It is keyed by parameter, so it belongs to the step. The table's scan must empty it, and only `Batch` can do that. It is one explicit call.
+- **The `changes` cursor.** It stays with each step, one per label. With several steps, each one reads `client.changes` on its own. One cursor shared by the batch would cost less. Not done.
+- **The stage.** It belongs entirely to the step. No problem.
+- **Definitions.** The edits go to the table and the settings to the step, both keyed by the label. One behaviour changed that no test covers: if the edits file and the settings file are both broken, the error for the settings is raised first.
+- **Duplicated docstrings** between `Batch` and `Table`/`Step` (`rows`, `put`, `scan`, `settings`, `state`, `results`, `reduce`, `cancel`).
+
+**Is commit 1 mergeable as it is?** Yes as code. But it adds 270 lines and no feature, so it should only be merged together with something that uses the split: the chain, or the manager of ADR 0011.
+
+### 3. ADR 0011 on the two sides
+
+| Part of ADR 0011 | Side | Why |
+|---|---|---|
+| header: title, description | batch | it names what a person made: the table with its chain |
+| header: source (registered name) | table | it makes the rows |
+| index of a row | table (`Row`) | it orders rows, whatever the steps |
+| scope, applied by the scan | table | `rows = scan in scope, with edits on top` |
+| `edits.json` | table | edits are by column |
+| `settings.json` | step | one template per step: spec, settings, blanks = the parameters taken |
+| label | batch, plus a label per step for its records | see below |
+| `following.json` | application | unchanged |
+
+**Labels, as implemented in commit 2, and the scheme I propose:**
+
+```
+records of the first step       label 'b7'           (a batch of one step keeps its plain label)
+records of each added step      label 'b7/<name>'    ('b7/centre', 'b7/iofq')
+definitions/labels/b7/          header.json, edits.json, settings.json (of the first step)
+definitions/labels/b7%2Fcentre/ settings.json        (FolderDefinitions writes '/' as %2F, so a sibling folder)
+```
+
+- Each label names the records and the settings of one step. That is today's rule, one label per `Step`, so nothing in `Step` changes.
+- The batch-level files sit under the label of the first step.
+- The manager lists as batches only the labels that have a `header.json`, so `b7/centre` is not listed as a batch.
+- A batch that a person makes, rather than code, also needs `labels/b7/chain.json` = `[{name, spec, takes}]`. Not implemented: in commit 2 the chain is code, as `spec` and `columns` are today, and a restart (`test_a_batch_made_again_on_its_definitions_reads_the_same_states`) needs only the files that exist.
+- The cost of the scheme is an asymmetry: the first step has no `/<name>`. Removing the first step leaves the batch-level files under a label whose records belong to no step. `remove` allows it, and keeps the first step's input columns.
+
+### 4. Names
+
+Words that are already taken:
+
+| Word | Already means |
+|---|---|
+| step | one step of Follow: `Automatic.step()`, and "each step of Follow" in batch.md and ADR 0011 |
+| table | `RowTable`; the table files a person loads (`frames`); the "stored tables" of batch.md's model |
+| workflow | the code that a binding connects to a spec. The declaration is `WorkflowSpec`, called "spec" in every doc. In essreduce, "workflow" means the sciline pipeline |
+| reduction | a record that runs ("a long reduction starts") |
+
+Proposal:
+
+- **`Batch` is the table with its chain.** It is what a person makes, names, bounds and removes; it has the header; a page shows it.
+- **The table part is private:** `_Rows`, used only by `Batch`. Nothing outside `Batch` needs it, and keeping it private avoids a third "table" next to `RowTable` and the table files.
+- **The step part is public**, because `add`, `steps` and `step(name)` return it and a person sets its settings. I propose **`Workflow`**: it is the owner's word ("a batch holds a list of workflows"), and it pairs with `WorkflowSpec` as the use of a declaration. The cost is a clash with essreduce's "workflow" for a sciline pipeline, outside this package.
+- If that clash is too much, **`Link`** ("a link of the chain"), which clashes with nothing.
+- Either way, Follow keeps `step()`, and `StepRows` becomes `WorkflowRows` or `LinkRows`.
+
+The code still uses the working names `Table` and `Step`, so that renaming is one change.
+
+### 5. What changed when written against the real code
+
+**Simpler than in the spike:**
+
+- **The parameter–column translation** is two methods of `Step`, `_in_params` (row → request) and `_in_columns` (state → columns, refusal positions included). With `takes` the identity, both return their argument unchanged, so a batch of one step pays nothing. Everything between them is the old code, still working in parameter names.
+- **"Current"** is one 8-line function over the fields `RowState` already has (`status`, `changed`, `spec_changed`, `problems`, `waits`).
+- **"waits"** is one field of `RowState`, one line in `text`, and one in `ready`. `left_to_reduce`, `earlier_settings` and `arrived` did not change.
+- **Follow over the chain** reuses `arrived` as it is. `at` gains the output columns. The case "settings refused" is handled per step.
+- **A restart needed no new file** while the chain is code (see 3).
+
+**Harder, or found only here:**
+
+- **The columns of the source.** Under the decided rule, a parameter becomes a column only through `takes` or an existing column of its name. Today, a value at a name that no step takes reads `not a column`. Together:
+  - I(Q) must name `sample_transmission` in `takes`, although the source fills it.
+  - A batch of detector and centre over a source that fills `sample_transmission`, as LoKI's does, is `incomplete` in every row, because no step takes `sample_transmission` (test `test_a_value_of_the_source_that_no_step_takes_is_not_a_column`).
+
+  The table needs the source's columns declared. ADR 0011's registered source has them ("the columns it fills"). This is the main open point, and it is a few lines once the source declares its columns.
+- **The one-step members of `Batch`** (`spec`, `settings`, `settings_fields`, `template`, `state`, `results`, `reduce`) raise `ValueError` for several steps. The page, the command and `frames` use them, so they stay on batches of one step.
+- **Return values.** `Automatic.step()` and `reduce_left()` return, for each row, the last record submitted. It reads the earlier ones, so waiting for it waits for the chain. I chose this so that `step()` stays `dict[key, Record]` for the existing tests.
+- **Changed by hand.** It is implemented as "from the first step at which the row is changed by hand, on". The exact rule, any step, would need a full state of the chain before reducing, which doubles the cost. The two differ only for a step before the hand-set cell is taken. Such a step does not read that cell, so the difference is harmless.
+- **Cost.** The walk reads a step's state again after it reduces, so that the next step sees the new records. Otherwise the state is cached. With one step there is no second read.
+- **A refusal at a later step.** `reduce_left` is all-or-none per step. A refusal at a later step raises after the earlier steps were submitted (test `test_settings_refused_at_a_later_step_raise_after_the_earlier_ones_submit`). The same happens when a record that a cell reads fails between the state and the submission; the spike dropped such rows instead.
+- **A setting with the name of a column the same step takes** would read as a changed input. Not guarded.

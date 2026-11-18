@@ -10,7 +10,7 @@ for application developers is ``packages/essapps/docs/batch.md``.
 
 from .corrections import CorrectedFiles
 from .definition import DefinitionStore, FolderDefinitions, NotKept
-from .reduction import Batch, FileInfo, RowSource, file_infos
+from .reduction import Batch, FileInfo, RowSource, Step, file_infos
 from .state import (
     EARLIER,
     RowState,
@@ -37,6 +37,7 @@ __all__ = [
     'RowSource',
     'RowState',
     'RowTable',
+    'Step',
     'arrived',
     'compared',
     'earlier_settings',

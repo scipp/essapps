@@ -62,7 +62,9 @@ class RowState:
     bound. ``set_by_hand`` names the columns whose cells were set by hand: the
     cells edited, or every column of a row added by hand. ``outdated`` is true
     if the result is of another spec, or if the request changed; ``None`` if
-    that is not known, since the requests were not compared.
+    that is not known, since the requests were not compared. ``waits`` names
+    the output columns of earlier steps of the batch whose cells the row
+    lacks, and which it waits for (:meth:`~.reduction.Batch.walk`).
     """
 
     key: str
@@ -73,6 +75,7 @@ class RowState:
     spec_changed: bool = False
     set_by_hand: frozenset[str] = frozenset()
     outdated: bool | None = False
+    waits: tuple[str, ...] = ()
 
     @property
     def changed_by_hand(self) -> bool:
@@ -97,6 +100,8 @@ class RowState:
         """
         if self.status is Status.PENDING:
             return 'pending'
+        if self.waits:
+            return f'waits for {", ".join(self.waits)}'
         if self.problems:
             return 'incomplete'
         if self.status is None:
@@ -231,11 +236,14 @@ def _compared(states: Mapping[str, RowState]) -> dict[str, frozenset[str]]:
 
 
 def ready(states: Mapping[str, RowState]) -> list[str]:
-    """The keys of the rows that can be reduced now: complete and not running."""
+    """
+    The keys of the rows that can be reduced now: complete, waiting for no
+    earlier step, and not running.
+    """
     return [
         k
         for k, s in states.items()
-        if not s.problems and s.status is not Status.PENDING
+        if not s.problems and not s.waits and s.status is not Status.PENDING
     ]
 
 

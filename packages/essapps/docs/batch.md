@@ -146,6 +146,7 @@ A change of settings is one write of `batch.settings`, and runs no cycle. The ro
 ```python
 def text(row):                                       # RowState.text
     if row.status is PENDING: return 'pending'       # row.status: the status of the result
+    if row.waits:             return 'waits for ...' # an output cell of an earlier step is empty (Several steps)
     if row.problems:          return 'incomplete'    # a cell is empty, not a column, refused, or reads a failed record
     if row.status is None:    return 'not reduced'   # no result
     if row.status in (FAILED, CANCELLED):
@@ -378,6 +379,25 @@ def with_centre(files: Sequence[FileInfo]) -> list[Row]:
 ```
 
 Scan `find` before a batch with this source, so that its rows see the newest centres.
+
+### Several steps on one table
+
+A batch can hold a chain of steps over one table of rows. Each step maps parameters to columns (`takes`) and adds a column per output, `'<step>.<output>'`:
+
+```python
+batch = Batch(client, DETECTOR, columns=('run',), takes={'run': 'sample'}, label='b7', source=pair_by_sample)
+batch.add(CENTRE, takes={'detector': 'detector.detector'})       # records under 'b7/centre'
+batch.add(IOFQ, takes={'sample_transmission': 'sample_transmission', 'beam_centre': 'centre.centre'})
+batch.states()                  # by step name, the state of each row
+batch.reduce_left(['60339'])    # "Reduce": each step in order, to the end of the chain
+Automatic(batch, at={'sample'}).step()
+```
+
+A parameter takes the column that `takes` names, else a column of its own name if the batch has one, else it is a setting of its step (`batch.step('iofq').settings`). A value of the source at a name that no step takes is `not a column`, so add the steps that take the source's columns before the rows are reduced.
+
+An output cell holds a reference to the step's result for the row if that result is current: running or completed, of the bound spec, for the row's cells now. Settings do not count, so a change of settings leaves the results in use until a person reduces them again (`reduce_left(again={'centre'})`). Otherwise the cell is empty, and a step that takes it reads `waits for centre.centre`. So after a cell is set by hand, the steps after the first one that takes it wait, and none can be reduced with an output of the old cell. A reference to a record still running fills a cell, so one call submits the whole chain for a row.
+
+Follow (`Automatic`) walks the chain, and counts every output column in `at`. A row changed by hand at a step is left to the person from that step on. `batch.state()`, `batch.settings`, `batch.spec` and `batch.reduce()` are those of a batch of one step, and raise `ValueError` for several; the page and the command take a batch of one step.
 
 ## Automatic reduction
 

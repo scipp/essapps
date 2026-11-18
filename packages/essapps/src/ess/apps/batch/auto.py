@@ -33,6 +33,13 @@ edited row is not reduced again either, and one not reduced still waits for a
 person; without them, the edit is gone after a restart, and a row edited at
 ``at`` is reduced again with the source's cells.
 
+A batch of several steps (:meth:`~.reduction.Batch.add`) is reduced along its
+chain (:meth:`~.reduction.Batch.walk`): at each step, the rows that
+:func:`~.state.arrived` gives, with every output column counted in ``at``, so
+that a new result of one step reduces the steps that take it. A row changed by
+hand at a step is left, from that step on, to the person: the steps before it
+do not take the cell set by hand.
+
 A step costs the scan of all files and the state of all rows:
 the status of every row's result, and the comparison of every row's cells with
 its result's request, which resolves the cells that differ as given, such as a
@@ -50,7 +57,7 @@ from contextlib import contextmanager
 
 from ..errors import SubmitError
 from ..records import Record
-from .reduction import Batch
+from .reduction import Batch, StepRows
 from .state import arrived, ready
 
 
@@ -108,9 +115,10 @@ class Automatic:
     def step(self) -> dict[str, Record]:
         """
         Scan, and reduce the rows that :func:`~.state.arrived` gives, with the
-        batch's settings as they are at the step; their records by key. A row
-        whose request is refused does not hold back the others, and
-        :attr:`refused` says why.
+        batch's settings as they are at the step; their records by key, the
+        last of the chain for a row reduced at several steps, which reads the
+        others. A row whose request is refused does not hold back the others,
+        and :attr:`refused` says why.
 
         If the settings are refused, no row can run: the step reduces none,
         and :attr:`refused` gives the reason for each ready row but those
@@ -125,21 +133,33 @@ class Automatic:
         that :func:`~.state.arrived` gives now. A page that scans by itself,
         such as the batch page, calls this after its scan.
         """
-        batch = self.batch
-        try:
-            state = batch.state()
-        except SubmitError as error:
-            # Without a comparison, a row with a result may be due or not, and
-            # changed by hand or not. A row without a result that is set by
-            # hand is left to a person either way.
-            states = batch.results()
-            due = [k for k in ready(states) if not states[k].changed_by_hand]
-            self.refused = dict.fromkeys(due, str(error))
-            return {}
-        records, self.refused = self._reduce(arrived(state, self.at))
+        records: dict[str, Record] = {}
+        refused: dict[str, str] = {}
+        at = self.at | self.batch.outputs.keys()
+        by_hand: set[str] = set()
+        for here in self.batch.walk():
+            try:
+                state = here.state()
+            except SubmitError as error:
+                # Without a comparison, a row with a result may be due or not,
+                # and changed by hand or not. A row without a result that is
+                # set by hand is left to a person either way.
+                states = here.results()
+                by_hand |= {k for k, s in states.items() if s.changed_by_hand}
+                due = [k for k in ready(states) if k not in by_hand]
+                refused |= dict.fromkeys(due, str(error))
+                continue
+            by_hand |= {k for k, s in state.items() if s.changed_by_hand}
+            due = [k for k in arrived(state, at) if k not in by_hand]
+            submitted, why = self._reduce(here, due)
+            records |= submitted
+            refused |= why
+        self.refused = refused
         return records
 
-    def _reduce(self, keys: list[str]) -> tuple[dict[str, Record], dict[str, str]]:
+    def _reduce(
+        self, here: StepRows, keys: list[str]
+    ) -> tuple[dict[str, Record], dict[str, str]]:
         """
         Submit ``keys``, less those a refusal names, or none if a refusal names
         none; the records by key, and why each row was refused.
@@ -147,7 +167,7 @@ class Automatic:
         refused: dict[str, str] = {}
         while keys:
             try:
-                return self.batch.reduce(keys), refused
+                return here.reduce(keys), refused
             except SubmitError as error:  # noqa: PERF203
                 named = set(keys).intersection(e.entry for e in error.errors)
                 if not named:
