@@ -66,8 +66,14 @@ class Scope:
     rows of ``keys``. ``start`` is included and ``stop`` excluded, as in a
     Python slice; ``None`` is an open end. ``Scope()`` holds every row, also
     one without an index; a slice with an end holds no row without one.
+    ``keys`` may be any iterable of keys but a string, and is kept as a
+    ``frozenset``.
 
-    Raises ``ValueError`` if given ``keys`` and an end.
+    Raises ``TypeError`` for ``keys`` that are not strings, or an end that is
+    not an ``int``, ``float`` or ``str``, since only these are kept as they
+    are in the definitions. Raises ``ValueError`` if given ``keys`` and an
+    end, ends that do not compare, or a ``stop`` below the ``start``; a
+    ``stop`` equal to the ``start`` holds no row.
     """
 
     start: Index | None = None
@@ -75,8 +81,34 @@ class Scope:
     keys: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
-        if self.keys is not None and (self.start, self.stop) != (None, None):
-            raise ValueError('a scope is a slice or keys, not both')
+        if self.keys is not None:
+            if isinstance(self.keys, str) or not all(
+                isinstance(k, str) for k in self.keys
+            ):
+                raise TypeError(f'the keys of a scope are strings, not {self.keys!r}')
+            object.__setattr__(self, 'keys', frozenset(self.keys))
+            if (self.start, self.stop) != (None, None):
+                raise ValueError('a scope is a slice or keys, not both')
+        for end in (self.start, self.stop):
+            if end is not None and (
+                isinstance(end, bool) or not isinstance(end, int | float | str)
+            ):
+                raise TypeError(
+                    f'an end of a scope is an int, a float or a str, not {end!r}'
+                )
+        if self.start is None or self.stop is None:
+            return
+        try:
+            below = self.stop < self.start
+        except TypeError:
+            raise ValueError(
+                f'the ends of a scope do not compare: {self.start!r}, {self.stop!r}'
+            ) from None
+        if below:
+            raise ValueError(
+                f'the stop of a scope, {self.stop!r}, is below its start, '
+                f'{self.start!r}'
+            )
 
     def holds(self, row: Row) -> bool:
         """Whether ``row`` is in the scope."""
@@ -119,6 +151,16 @@ class RowTable:
         hidden = self.removed | {row.key for row in self.added}
         shown = [r for r in self.scan if r.key not in hidden and self.scope.holds(r)]
         return {row.key: self._with_edits(row) for row in (*shown, *self.added)}
+
+    @property
+    def removed_in_scope(self) -> frozenset[str]:
+        """
+        The keys of the rows removed by hand that the scan gives in the scope:
+        those a person sees as removed, and can bring back.
+        """
+        return frozenset(
+            r.key for r in self.scan if r.key in self.removed and self.scope.holds(r)
+        )
 
     def _refuse_outside(self, keys: Iterable[str]) -> None:
         """

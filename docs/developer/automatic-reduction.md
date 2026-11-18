@@ -96,7 +96,7 @@ A record that another `Batch` submits under the label with other cells at `at` i
 A person who wants another file for a row edits the loop's own batch and reduces the row, and the loop leaves the cell set by hand as it is; or the person corrects the file's metadata so that the source gives another file, which the loop reduces.
 Two loops never share a label: if their rows differ at `at`, each replaces the other's records at every step.
 A record under the label that equals the loop's row at `at`, from any submitter, counts as the row's result.
-A loop on a new label starts from the first file. A person's batch under its own label does not touch the loop's rows.
+A loop on a new label starts from the first file, or from the first row of the scope of its batch. A person's batch under its own label does not touch the loop's rows.
 
 ## What the loop keeps
 

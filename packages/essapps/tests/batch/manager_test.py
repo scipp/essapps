@@ -372,6 +372,22 @@ def test_a_header_change_that_is_refused_changes_nothing(
     assert manager.batches() == {'b': Header('Morning')}
 
 
+def test_a_scope_change_that_is_refused_leaves_the_rows_of_the_batch(
+    manager: BatchManager, refusing: Refusing, sample: Measure
+) -> None:
+    sample(1, 'water')
+    sample(2, 'oil')
+    label = manager.create('plain', title='Morning', source='pairs')
+    batch = manager.batch(label)
+    refusing.part = 'header'
+
+    with pytest.raises(NotKept):
+        manager.edit(label, scope=Scope(start=2))
+    assert batch.scope == Scope()
+    assert [row.key for row in batch.rows] == ['1', '2']
+    assert manager.batches()[label].scope == Scope()
+
+
 def test_a_batch_whose_removal_is_refused_after_its_header_is_gone_keeps_its_label(
     manager: BatchManager,
     refusing: Refusing,

@@ -16,6 +16,7 @@ from ess.apps.batch import (
     CorrectedFiles,
     FileInfo,
     Row,
+    RowTable,
     Scope,
     earlier_settings,
     left_to_reduce,
@@ -130,6 +131,15 @@ def test_a_scope_set_on_a_batch_changes_its_rows_without_a_scan(
     assert [row.key for row in scanned.rows] == ['2']
     scanned.scope = Scope()
     assert [row.key for row in scanned.rows] == ['1', '2']
+
+
+def test_a_table_assigned_keeps_the_scope_of_the_batch(scanned: Batch) -> None:
+    scanned.scope = Scope(start=2)
+
+    scanned.rows = RowTable(scan=scanned.rows.scan)
+
+    assert scanned.scope == Scope(start=2)
+    assert [row.key for row in scanned.rows] == ['2']
 
 
 def test_a_file_listed_late_lands_in_the_batch_by_its_index(

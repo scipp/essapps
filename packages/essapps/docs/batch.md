@@ -238,10 +238,10 @@ batch.scope = Scope(start=60339, stop=60421)   # the rows change at once, withou
 - `stop` is excluded, as in a Python slice, so a batch that starts where another stops leaves no gap and shares no row with it.
 - `Scope()`, the default, holds every row, also one without an index. A slice with an end holds no row without an index; a scope of keys can name it.
 - A row added by hand is in its batch whatever the scope. A batch without a source has only such rows.
-- An edit of a row that the scope leaves out is kept, and used again if the scope takes the row back.
+- An edit of a row that the scope leaves out is kept, and used again if the scope takes the row back. So is a removal: `removed_in_scope` gives the rows removed that the scope holds, which the page counts and brings back.
 - `put` and `add` refuse a row that the scan gives and the scope leaves out, with `SubmitError`: added by hand, it would no longer take its cells from the scan.
 
-The table keeps every row of the scan, so a change of scope needs no new scan. `batch.scope = ...` writes nothing; the manager keeps the scope of a batch in its header ([The batches of a workspace](#the-batches-of-a-workspace)). A source gives indices of one type, and a scope takes ends of that type: comparing a number with a text raises `TypeError` when the rows are read.
+The table keeps every row of the scan, so a change of scope needs no new scan. `batch.scope = ...` writes nothing; the manager keeps the scope of a batch in its header ([The batches of a workspace](#the-batches-of-a-workspace)). An assignment of `batch.rows` keeps the scope of the batch. A scope is checked when it is made, so that it reads back from the header as it was written: `keys` are strings, given as any iterable but a string; an end is an `int`, a `float` or a `str`; the ends compare, and `stop` is not below `start` (`start == stop` holds no row). A source gives indices of one type, and a scope takes ends of that type: comparing a number with a text raises `TypeError` when the rows are read.
 
 **A row is ready if it is complete and not running.** Each column with no default has a value, no cell reads a record that failed or was cancelled, and its result is not running. An empty cell of a column with a default takes the default. Whether a value is valid, such as a thickness below zero, is checked at submission, and by `state()` for a value that differs from the row's result (below).
 
@@ -437,7 +437,7 @@ What the manager gives the `Batch` of a label:
 - `counts` makes every batch not made yet, which scans it, and scans every other batch with a source, so the rows of each batch are those of the files now. It gives the state of each row of each batch, and the rows of each source that no batch of it shows: a row counts as shown if any batch shows it, so a row outside the scope of every batch of its source counts there. A source is called once more only if no batch of it was scanned. A batch that cannot be made or scanned, such as one whose source is no longer registered or raises, gets its reason in `failed`, and its source is left out of `outside`. It costs one scan per batch, so call it when a person asks.
 - `words`, `name` and `info` of a `Source` say what the page of a batch calls a row, which entry of `Row.info` names it, and which other entries it shows. `index` is what the page calls the index of a row, such as `'Run'`.
 
-One loop per application, `Follow`, reduces the rows of one batch as its files arrive: each step is a step of an `Automatic` on the batch that follows ([Automatic reduction](#automatic-reduction)), with `at` the columns of its source.
+One loop per application, `Follow`, reduces the rows of one batch as its files arrive: each step is a step of an `Automatic` on the batch that follows ([Automatic reduction](#automatic-reduction)), with `at` the columns of its source. It reduces the rows of the scope only, and a slice holds every row whose index is inside it, whenever its file is listed: so widening the scope of the batch that follows makes the next step reduce every row that the scope now holds and that has no result.
 
 ```python
 from ess.apps.batch.auto import Follow

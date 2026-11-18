@@ -2,7 +2,9 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The rules of a table of rows, on plain values."""
 
+import re
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
@@ -318,6 +320,40 @@ def test_a_scope_of_keys_with_ends_is_refused() -> None:
         Scope(start=1, keys=frozenset({'1'}))
 
 
+def test_keys_given_as_one_string_are_refused() -> None:
+    with pytest.raises(TypeError, match="not '60339'"):
+        Scope(keys='60339')  # type: ignore[arg-type]
+
+
+def test_keys_given_as_any_iterable_of_strings_are_kept_as_a_frozenset() -> None:
+    scope = Scope(keys=['2', '1'])  # type: ignore[arg-type]
+
+    assert scope == Scope(keys=frozenset({'1', '2'}))
+    assert isinstance(scope.keys, frozenset)
+
+
+@pytest.mark.parametrize('end', [datetime(2026, 11, 18, tzinfo=UTC), True])
+def test_an_end_that_is_not_an_int_a_float_or_a_str_is_refused(end: object) -> None:
+    with pytest.raises(TypeError, match=re.escape(repr(end))):
+        Scope(start=end)  # type: ignore[arg-type]
+
+
+def test_a_stop_below_the_start_is_refused() -> None:
+    with pytest.raises(
+        ValueError, match='the stop of a scope, 3, is below its start, 5'
+    ):
+        Scope(start=5, stop=3)
+
+
+def test_a_stop_equal_to_the_start_holds_no_row() -> None:
+    assert held(Scope(start=2, stop=2), indexed(1, 2, 3)) == []
+
+
+def test_ends_that_do_not_compare_are_refused() -> None:
+    with pytest.raises(ValueError, match="do not compare: '60339', 60421"):
+        Scope(start='60339', stop=60421)
+
+
 @pytest.fixture
 def scoped() -> RowTable:
     """Rows 1 to 4, of which the scope holds 2 and 3."""
@@ -352,6 +388,24 @@ def test_a_table_put_with_a_row_the_scan_has_outside_the_scope_is_refused(
     assert [(e.entry, e.msg) for e in refused.value.errors] == [
         ('4', 'the source makes this row outside the scope')
     ]
+
+
+def test_a_table_put_sets_a_row_added_by_hand_whose_key_the_scan_gives_outside(
+    scoped: RowTable,
+) -> None:
+    added = RowTable(scope=scoped.scope).add(Row('1', {'x': 0})).rescan(scoped.scan)
+
+    put = added.put([Row('1', {'x': 10})], columns=('x',))
+
+    assert put['1'].values == {'x': 10}
+
+
+def test_the_rows_removed_in_scope_are_those_a_person_sees_removed(
+    scoped: RowTable,
+) -> None:
+    removed = replace(scoped, scope=Scope()).remove_each(['1', '2'])
+
+    assert replace(removed, scope=scoped.scope).removed_in_scope == {'2'}
 
 
 def test_a_row_added_by_hand_with_the_key_of_a_row_outside_the_scope_is_refused(

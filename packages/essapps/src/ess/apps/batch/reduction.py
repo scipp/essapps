@@ -229,12 +229,15 @@ class Batch:
         """
         The rows: those of the last scan in the scope, with what was set by
         hand on top. An assignment is written to the definitions, if the batch
-        has them, and is not made if they cannot keep it.
+        has them, and is not made if they cannot keep it. It keeps the scope
+        of the batch, whatever the scope of the table assigned.
         """
         return self._rows
 
     @rows.setter
     def rows(self, rows: RowTable) -> None:
+        if rows.scope != self.scope:
+            rows = replace(rows, scope=self.scope)
         if self._definitions is not None:
             key = definition.edits_key(self.label)
             self._definitions.save(key, definition.edits_data(rows))

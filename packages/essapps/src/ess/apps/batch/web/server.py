@@ -446,7 +446,7 @@ class Server:
         statuses = page_statuses(states, self.batch.columns, refused)
         failures = self._failures(states)
         table = self.batch.rows
-        scan = {row.key: row for row in table.scan if table.scope.holds(row)}
+        scan = {row.key: row for row in table.scan}
         added = {row.key for row in table.added}
         rows = [
             self._row(
@@ -507,7 +507,7 @@ class Server:
             ],
             rows=rows,
             counts={'all': len(states), **counts},
-            removed=len(scan.keys() & table.removed),
+            removed=len(table.removed_in_scope),
             action=self._primary(
                 states, statuses, unapplied or problem, len(earlier), unapplied
             ),
@@ -809,9 +809,9 @@ class Server:
 
     @_action
     def restore(self) -> None:
-        """Bring back every row of the scan that was removed."""
+        """Bring back every row removed that the scope holds."""
         rows = self.batch.rows
-        self.batch.rows = rows.reset_each(rows.removed)
+        self.batch.rows = rows.reset_each(rows.removed_in_scope)
 
     @_action
     def add(self, key: str) -> str:

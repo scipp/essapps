@@ -424,7 +424,7 @@ def test_a_header_without_a_scope_reads_as_every_row() -> None:
             Scope(start='2026-11-18T13:00', stop='2026-11-19T13:00'),
             {'start': '2026-11-18T13:00', 'stop': '2026-11-19T13:00'},
         ),
-        (Scope(keys=frozenset({'60351', '60339'})), {'keys': ['60339', '60351']}),
+        (Scope(keys=['60351', '60339']), {'keys': ['60339', '60351']}),
     ],
 )
 def test_a_scope_is_written_as_a_slice_or_as_keys(

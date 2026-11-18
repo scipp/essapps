@@ -1661,6 +1661,19 @@ def test_a_page_shows_the_rows_of_its_scope_only(
     assert list(rows(http)) == ['2', '3']
 
 
+def test_bring_back_restores_only_the_rows_removed_that_the_scope_holds(
+    http: TestClient, manager: BatchManager
+) -> None:
+    http.post('/api/rows/remove', json={'keys': ['1', '2']})
+    manager.edit('scan', scope=Scope(start=2))
+
+    http.post('/api/rows/restore')
+    manager.edit('scan', scope=Scope())
+
+    assert list(rows(http)) == ['2', '3']
+    assert state(http)['removed'] == 1
+
+
 def test_the_rows_removed_that_a_page_counts_are_those_of_its_scope(
     http: TestClient, manager: BatchManager
 ) -> None:
