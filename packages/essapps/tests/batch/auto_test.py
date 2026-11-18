@@ -21,6 +21,7 @@ from ess.apps.batch import (
     DefinitionStore,
     FileInfo,
     FolderDefinitions,
+    NotKept,
     Row,
     RowSource,
 )
@@ -38,6 +39,7 @@ from .toys import (
     STAGED,
     Gate,
     Measure,
+    Refusing,
     pair,
 )
 
@@ -752,10 +754,10 @@ def test_reduce_without_a_scan_reduces_the_rows_that_arrived_at_the_last_scan(
 
 
 @pytest.fixture
-def follow(manager: BatchManager, definitions: FolderDefinitions) -> Follow:
+def follow(manager: BatchManager, refusing: Refusing) -> Follow:
     manager.create('plain', title='A', source='pairs', label='a')
     manager.create('plain', title='B', source='pairs', label='b')
-    return Follow(manager, definitions)
+    return Follow(manager, refusing)
 
 
 def _reduced(client: Client) -> list[tuple[str | None, str | None]]:
@@ -829,6 +831,35 @@ def test_follow_refuses_a_batch_without_a_source(
     with pytest.raises(KeyError):
         follow.on('d')
     assert follow.label == 'a'
+
+
+def test_follow_keeps_its_label_when_the_definitions_refuse_a_change(
+    follow: Follow, refusing: Refusing
+) -> None:
+    follow.on('a')
+    refusing.part = 'following'
+
+    with pytest.raises(NotKept):
+        follow.on('b')
+    with pytest.raises(NotKept):
+        follow.off()
+    assert follow.label == 'a'
+
+
+def test_follow_says_why_rows_of_its_last_step_were_refused_until_switched(
+    follow: Follow, manager: BatchManager, sample: Measure
+) -> None:
+    sample(1, 'water')
+    follow.on('a')
+    manager.batch('a').settings = {'binning': {'bins': 0}}
+
+    assert follow.step() == {}
+    assert list(follow.refused) == ['1']
+    follow.on('a')
+    assert follow.refused == {}
+    follow.step()
+    follow.off()
+    assert follow.refused == {}
 
 
 def test_follow_off_steps_nothing(

@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -35,6 +36,7 @@ from ..records import Template
 from .definition import (
     DefinitionStore,
     Header,
+    NotKept,
     edits_key,
     header_data,
     header_key,
@@ -115,10 +117,11 @@ class BatchManager:
     the one :class:`~.reduction.Batch` of each label. See
     ``packages/essapps/docs/batch.md``.
 
-    The headers are read when the manager is made. Each change is written to
-    the definitions first, and one that they refuse raises
-    :class:`~.definition.NotKept`, so the manager lists the batches whose
-    header the definitions keep.
+    The headers are read when the manager is made. Each change of a header is
+    written to the definitions before the manager holds it, and one that
+    they refuse raises :class:`~.definition.NotKept`, so the manager lists
+    the batches whose header the definitions keep. :meth:`create` and
+    :meth:`remove` say what they leave when a write is refused.
 
     Parameters
     ----------
@@ -163,7 +166,8 @@ class BatchManager:
         label: str | None = None,
     ) -> str:
         """
-        Make a batch and keep it; its label.
+        Make a batch and keep it; its label. If saving the header is refused,
+        the settings written before it are deleted, and ``NotKept`` raised.
 
         Parameters
         ----------
@@ -183,8 +187,9 @@ class BatchManager:
             The settings to start with, in place of the defaults of the spec.
             Those that are columns are left out.
         label:
-            The label of the batch; the time of making, ``YYYYMMDD-HHMMSS``,
-            if not given.
+            The label of the batch. If not given, the time of making,
+            ``YYYYMMDD-HHMMSS``, with ``-2``, ``-3``, ... added if that is
+            taken.
 
         Raises
         ------
@@ -192,12 +197,18 @@ class BatchManager:
             If the workspace binds no spec ``spec``, or no source ``source``
             is registered.
         ValueError
-            If the label is not one that :func:`check_label` takes, has
-            definitions or records, or a column is not a parameter of the spec.
+            If ``label`` is not one that :func:`check_label` takes, or has
+            definitions or records; or if a column is not a parameter of the
+            spec.
         """
-        label = time.strftime('%Y%m%d-%H%M%S') if label is None else label
+        if label is None:
+            stamp = time.strftime('%Y%m%d-%H%M%S')
+            label, n = stamp, 1
+            while self._taken(label):
+                n += 1
+                label = f'{stamp}-{n}'
         check_label(label)
-        if label in self._definitions.labels() or self._client.records(label=label):
+        if self._taken(label):
             raise ValueError(f'{label}: the label has definitions or records')
         bound = bound_spec(self._client, spec)
         if source is not None:
@@ -211,9 +222,21 @@ class BatchManager:
         template = Template(bound, params=settings, blanks=columns)
         self._definitions.save(settings_key(label), settings_data(template))
         header = Header(title, description, source)
-        self._definitions.save(header_key(label), header_data(header))
+        try:
+            self._definitions.save(header_key(label), header_data(header))
+        except NotKept:
+            # so that the label is not left taken by settings alone
+            with suppress(NotKept):
+                self._definitions.delete(settings_key(label))
+            raise
         self._headers[label] = header
         return label
+
+    def _taken(self, label: str) -> bool:
+        """Whether ``label`` has definitions or records."""
+        return label in self._definitions.labels() or bool(
+            self._client.records(label=label)
+        )
 
     def batches(self) -> dict[str, Header]:
         """The header of each batch, by label, sorted by label."""
@@ -223,10 +246,14 @@ class BatchManager:
         """
         The batch of ``label``, made from its definitions at the first call
         and scanned once if it has a source. If the scan raises, the batch is
-        not kept, and the next call makes it again. Raises ``KeyError`` if no
-        batch has the label, or the workspace binds no spec of its name, or
-        its source is not registered; ``ValueError`` if its definitions
-        cannot be read.
+        not kept, and the next call makes it again. Ask for the batch each
+        time it is used: one handed out before must not be used after
+        :meth:`remove`.
+
+        Raises ``KeyError`` if no batch has the label, or the workspace binds
+        no spec of its name, or its source is not registered; ``ValueError``
+        if its definitions cannot be read, or its source fills a parameter
+        that is not a column of the batch.
         """
         if (batch := self._batches.get(label)) is not None:
             return batch
@@ -234,6 +261,13 @@ class BatchManager:
         template = self._definitions.load(settings_key(label), template_of)
         if template is None:
             raise ValueError(f'{label}: the definitions hold no settings')
+        if source is not None and (
+            missing := sorted(set(source.columns) - set(template.blanks))
+        ):
+            raise ValueError(
+                f'{label}: its source fills {missing}, which are not columns of '
+                'the batch; the source registered changed since it was made'
+            )
         spec = bound_spec(self._client, template.spec.name)
         batch = Batch(
             self._client,
@@ -276,8 +310,13 @@ class BatchManager:
     def remove(self, label: str) -> None:
         """
         Forget the batch of ``label`` and remove its definitions; its records
-        stay, and those running keep running. Raises ``KeyError`` if no batch
-        has the label.
+        stay, and those running keep running. A ``Batch`` of the label handed
+        out before must not be used after: it would write its definitions
+        again. Raises ``KeyError`` if no batch has the label.
+
+        The header is deleted first, so a batch is never listed half removed.
+        If the definitions refuse a later delete, ``NotKept`` is raised, and
+        the label keeps that part and cannot be made again.
         """
         if label not in self._headers:
             raise KeyError(label)

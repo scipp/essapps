@@ -180,7 +180,8 @@ class Follow:
     interval:
         The seconds between two steps, for whoever calls :meth:`step`.
     refused:
-        :attr:`Automatic.refused` of the last step.
+        :attr:`Automatic.refused` of the last step that did not raise;
+        emptied by :meth:`on` and :meth:`off`.
     """
 
     def __init__(

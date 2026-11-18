@@ -13,7 +13,6 @@ from ess.apps.batch import (
     Batch,
     BatchManager,
     CorrectedFiles,
-    Defaults,
     FolderDefinitions,
 )
 from ess.apps.folder import open_folder
@@ -136,12 +135,15 @@ def definitions(tmp_path: Path) -> FolderDefinitions:
 
 
 @pytest.fixture
-def manager(client: Client, definitions: FolderDefinitions) -> BatchManager:
+def refusing(definitions: FolderDefinitions) -> toys.Refusing:
+    return toys.Refusing(definitions)
+
+
+@pytest.fixture
+def manager(client: Client, refusing: toys.Refusing) -> BatchManager:
+    """A manager on ``definitions``, through ``refusing``, which refuses nothing."""
     return BatchManager(
-        client,
-        sources=toys.SOURCES,
-        definitions=definitions,
-        defaults={toys.STAGED.name: Defaults(staged=True)},
+        client, sources=toys.SOURCES, definitions=refusing, defaults=toys.DEFAULTS
     )
 
 

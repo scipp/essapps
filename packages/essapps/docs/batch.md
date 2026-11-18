@@ -384,13 +384,13 @@ What the manager gives the `Batch` of a label:
 | `columns` | those of the source, then those given to `create` |
 | first `settings` | `Defaults.settings` of the spec, or `create(..., settings=...)`; those that are columns are left out |
 | `staged` | `Defaults.staged` of the spec |
-| `label` | given to `create`, or the time of making, `YYYYMMDD-HHMMSS` |
+| `label` | given to `create`, or the time of making, `YYYYMMDD-HHMMSS`, with `-2`, `-3`, ... if that is taken |
 | `persist` | always, so the workspace needs a store, as a folder has |
 | `definitions` | those of the manager |
 
 - `create` writes the settings, with the spec and the columns, then the header. The spec, the source and the columns are fixed from then on. `edit` changes the title and the description.
 - A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. `create` refuses a label that has definitions or records.
-- `remove` removes the header, the edits and the settings of a batch, and releases its stage. Its records stay, and those running keep running.
+- `remove` removes the header, the edits and the settings of a batch, and releases its stage. Its records stay, and those running keep running. A `Batch` handed out before must not be used after its removal, so ask the manager for the batch each time.
 - A `Batch` made in code without the manager has no header and is not listed.
 
 One loop per application, `Follow`, reduces the rows of one batch as its files arrive: each step is a step of an `Automatic` on the batch that follows ([Automatic reduction](#automatic-reduction)), with `at` the columns of its source.
