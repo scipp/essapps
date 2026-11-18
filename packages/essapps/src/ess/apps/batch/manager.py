@@ -11,13 +11,13 @@ with one writer::
 
     header      the spec by name, the columns, the name     BatchManager
                 of its source, title, description, scope
-    settings    a template of the settings, its spec and    Batch.settings
-                blanks a copy of the header's
+    settings    a template of the settings, its spec and    Batch.settings; the
+                blanks a copy of the header's               first by the manager
     edits       what a person set on its rows               Batch.rows
 
 so a manager made again, after a restart, makes the same ``Batch`` of a label
 from them, the registered sources and the defaults. Making a batch writes its
-first settings, through a ``Batch`` that it does not keep, then its header: a
+first settings, before any ``Batch`` of the label exists, then its header: a
 label without a header is not a batch, and a header without settings is a
 batch with the default settings of its spec. The ``Batch`` of a label is made
 at the first call of :meth:`BatchManager.batch`, and writes the settings and
@@ -40,6 +40,7 @@ from ess.spec import WorkflowSpec
 from ..client import Client
 from ..errors import SubmitError
 from ..files import Selector
+from ..records import Template
 from .definition import (
     DefinitionStore,
     Header,
@@ -49,6 +50,7 @@ from .definition import (
     header_key,
     header_of,
     settings_key,
+    template_data,
 )
 from .reduction import Batch, RowSource, file_infos
 from .state import RowState
@@ -167,11 +169,6 @@ def bound_spec(client: Client, name: str) -> WorkflowSpec[Any, Any]:
     return max(specs, key=lambda spec: spec.version)
 
 
-def _settings(given: Mapping[str, Any], columns: Sequence[str]) -> dict[str, Any]:
-    """``given`` without the parameters that are ``columns``."""
-    return {name: value for name, value in given.items() if name not in columns}
-
-
 def check_label(label: str) -> None:
     """
     Raise ``ValueError`` unless ``label`` is letters, digits, ``_``, ``.``
@@ -279,8 +276,8 @@ class BatchManager:
         ValueError
             If ``title`` is empty; if ``label`` is not one that
             :func:`check_label` takes, or has definitions or records; if a
-            column is not a parameter of the spec; or if the source fills a
-            parameter that is not among the columns.
+            column is not a parameter of the spec, or is named twice; or if
+            the source fills a parameter that is not among the columns.
         """
         if label is None:
             stamp = time.strftime('%Y%m%d-%H%M%S')
@@ -296,6 +293,8 @@ class BatchManager:
         columns = fills if columns is None else tuple(columns)
         if unknown := sorted(set(columns) - bound.params.model_fields.keys()):
             raise ValueError(f'{bound.title} has no parameters {unknown}')
+        if len(set(columns)) != len(columns):
+            raise ValueError(f'a column is named twice: {list(columns)}')
         if missing := sorted(set(fills) - set(columns)):
             raise ValueError(
                 f'the source {source} fills {missing}, which are not columns'
@@ -310,15 +309,9 @@ class BatchManager:
         )
         if settings is None:
             settings = self._defaults.get(spec, Defaults()).settings
-        # Batch.settings is the one writer of the settings.
-        first = Batch(
-            self._client,
-            bound,
-            columns=columns,
-            label=label,
-            definitions=self._definitions,
-        )
-        first.settings = _settings(settings, columns)
+        # The template leaves out the settings that are columns.
+        template = Template(bound, params=settings, blanks=columns)
+        self._definitions.save(settings_key(label), template_data(template))
         try:
             self._definitions.save(header_key(label), header_data(header))
         except NotKept:
@@ -373,7 +366,9 @@ class BatchManager:
             selector=None if source is None else source.selector,
             staged=defaults.staged,
             persist=True,
-            settings=_settings(defaults.settings, header.columns),
+            settings={
+                n: v for n, v in defaults.settings.items() if n not in header.columns
+            },
             definitions=self._definitions,
             scope=header.scope,
         )

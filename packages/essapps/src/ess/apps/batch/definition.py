@@ -4,7 +4,10 @@
 Where the definition of batches is kept: what a person makes of them, so that a
 batch made again, after a restart or in another process, has it.
 
-The definition is these tables, each with one writer:
+The definition is these tables, each with one writer. The settings of a batch
+that the manager makes are written by the manager once, when it makes the
+batch, before any ``Batch`` of it exists, and by ``Batch.settings`` from then
+on:
 
     corrections   metadata of a file set by hand, by file     CorrectedFiles
     edits         cells set, rows added or removed, by key    Batch.rows

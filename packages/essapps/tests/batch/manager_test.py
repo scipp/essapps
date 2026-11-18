@@ -35,6 +35,7 @@ from .toys import (
     PLAIN,
     SOURCES,
     STAGED,
+    FindParams,
     Measure,
     Refusing,
     pair,
@@ -120,6 +121,68 @@ def test_columns_that_lack_one_the_source_fills_are_refused(
     assert definitions.labels() == []
 
 
+def test_a_column_named_twice_is_refused(
+    manager: BatchManager, definitions: FolderDefinitions
+) -> None:
+    with pytest.raises(ValueError, match='a column is named twice'):
+        manager.create(
+            'plain', title='Morning', columns=('sample', 'transmission', 'sample')
+        )
+    assert definitions.labels() == []
+
+
+def test_settings_kept_at_a_column_of_the_batch_are_refused_naming_the_file(
+    manager: BatchManager, client: Client, definitions: FolderDefinitions
+) -> None:
+    manager.create('plain', title='Morning', source='pairs', columns=COLUMNS, label='b')
+    narrow = Batch(
+        client,
+        PLAIN,
+        columns=('sample', 'transmission'),
+        label='b',
+        definitions=definitions,
+    )
+    narrow.settings = {'thickness': 2.0}
+
+    with pytest.raises(
+        ValueError, match=r"b/settings\.json: \['thickness'\]: columns of the batch"
+    ):
+        _again(client, definitions).batch('b')
+
+
+@pytest.mark.parametrize(
+    ('bound', 'said'),
+    [
+        ('another spec', 'binds no spec plain'),
+        (
+            'fewer parameters',
+            r"Plain has no parameters \['thickness', 'transmission'\]",
+        ),
+    ],
+)
+def test_a_batch_whose_spec_is_no_longer_bound_as_it_was_made_is_refused(
+    manager: BatchManager,
+    files: CorrectedFiles,
+    staged_binding: StagedFunction,
+    definitions: FolderDefinitions,
+    bound: str,
+    said: str,
+) -> None:
+    manager.create('plain', title='Morning', columns=COLUMNS, label='b')
+    spec = (
+        STAGED
+        if bound == 'another spec'
+        else PLAIN.model_copy(update={'version': 2, 'params': FindParams})
+    )
+    bind = [function_binding(spec, staged_binding.function)]
+    workspace = Workspace(proposal='p1', files=files, bind=bind, store=FakeStore())
+    with closing(workspace):
+        client = Client(workspace, submitter='anna')
+
+        with pytest.raises(KeyError, match=said):
+            _again(client, definitions).batch('b')
+
+
 def test_a_second_batch_on_the_label_with_other_columns_changes_no_header(
     manager: BatchManager, client: Client, definitions: FolderDefinitions
 ) -> None:
@@ -162,6 +225,19 @@ def test_settings_given_to_create_replace_those_registered_but_its_columns(
     )
 
     assert with_defaults.batch(label).settings == {'offset': {'value': 1.0}}
+
+
+def test_settings_registered_later_leave_the_settings_of_a_batch_made_before(
+    with_defaults: BatchManager, client: Client, definitions: FolderDefinitions
+) -> None:
+    label = with_defaults.create('plain', title='Morning', columns=COLUMNS)
+    later = {'plain': Defaults(settings={'binning': {'bins': 7}})}
+
+    again = BatchManager(
+        client, sources=SOURCES, definitions=definitions, defaults=later
+    )
+
+    assert again.batch(label).settings == {'binning': {'bins': 3}}
 
 
 def test_a_batch_whose_settings_are_not_kept_has_the_settings_registered(
@@ -393,10 +469,14 @@ def test_a_staged_batch_removed_releases_its_stage(
     assert [type(s) for s in releases.released] == [Stage]
 
 
-def test_a_batch_whose_header_is_refused_is_not_made_and_leaves_its_label_free(
-    manager: BatchManager, refusing: Refusing, definitions: FolderDefinitions
+@pytest.mark.parametrize('part', ['settings', 'header'])
+def test_a_batch_whose_settings_or_header_is_refused_is_not_made_and_its_label_free(
+    manager: BatchManager,
+    refusing: Refusing,
+    definitions: FolderDefinitions,
+    part: str,
 ) -> None:
-    refusing.part = 'header'
+    refusing.part = part
 
     with pytest.raises(NotKept):
         manager.create('plain', title='Morning', columns=COLUMNS, label='b')

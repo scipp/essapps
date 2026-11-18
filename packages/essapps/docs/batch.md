@@ -79,7 +79,7 @@ A batch is a set of tables. Six of them are stored, and each has one writer. All
 | corrections | `CorrectedFiles` | metadata of a file set by hand | workspace folder |
 | header | `BatchManager` | the names of the spec and the source, the columns, the title, the description, the scope | label of a batch of the manager |
 | edits | `Batch.rows` | cells set, rows added or removed, by key | label |
-| settings | `Batch.settings` | the parameters that are not columns | label |
+| settings | `Batch.settings`; the first by the manager, before any `Batch` of the label exists | the parameters that are not columns | label |
 | records | the workspace | a record per submission, with its status | workspace |
 
 ```python
@@ -384,6 +384,7 @@ The edits hold only what was set by hand, so a cell from the scan follows the fi
 - An edit at a column that is gone makes its row `incomplete` (`not a column`). The page offers to remove it.
 - Settings of another version of the spec are read as they are. The settings form shows those that fit, and the page names the others with their values above it. `state()` and `reduce` refuse what the spec bound does not take. Nothing is written until a person presses **Apply**, which writes the settings of the form.
 - Settings of a spec of another name raise `ValueError` when the batch is made, naming the file and both specs.
+- Settings at a column of the batch raise `ValueError` when the batch is made, naming the file and the columns. A `Batch` on the label with fewer columns, such as one of the command, writes such settings.
 - A correction of a file no longer listed is kept, and not used.
 - A file that is not of the shape described raises `ValueError` naming the file and the entry, when the batch or the `CorrectedFiles` is made.
 
@@ -405,10 +406,10 @@ DEFAULTS = {IOFQ.name: Defaults(settings=SETTINGS, staged=True)}
 
 manager = BatchManager(client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS)
 label = manager.create(IOFQ.name, title='Afternoon', source='sample-runs',
-                       columns=('sample', 'sample_transmission', 'thickness'),
+                       columns=('sample', 'sample_transmission', 'can'),
                        scope=Scope(start=60339))
 manager.headers()      # {'20261118-130204': Header(spec='loki-iofq',
-                       #     columns=('sample', 'sample_transmission', 'thickness'),
+                       #     columns=('sample', 'sample_transmission', 'can'),
                        #     source='sample-runs', title='Afternoon', description='',
                        #     scope=Scope(start=60339))}
 counts = manager.counts()   # makes and scans every batch
@@ -429,11 +430,12 @@ What a batch is, and where each part comes from:
 | rows | name of the source | scope, edits | the `Source` |
 | computation | name of the spec, columns | settings | the version of the spec bound, `staged`, `draw`, the first settings |
 
-Each part that is kept is in one file of the label, with one writer:
+Each part that is kept is in one file of the label, with one writer at a time:
 
 ```
 header.json     BatchManager      spec, columns, source; title, description; scope
-settings.json   Batch.settings    the settings, as a template; its spec and blanks a copy of the header's
+settings.json   Batch.settings    the settings, as a template; its spec and blanks a copy of the header's;
+                                  the first written by create
 edits.json      Batch.rows        the edits
 ```
 
@@ -451,9 +453,9 @@ What the manager gives the `Batch` of a label:
 | `persist` | always, so the workspace needs a store, as a folder has |
 | `definitions` | those of the manager |
 
-- `create` takes the name of a spec. It refuses an empty title, a column that is not a parameter of the spec, and columns that lack one that the source fills; then it writes the first settings, `Defaults.settings` of the spec or `create(..., settings=...)`, through `Batch.settings`, and the header. The names of the spec and the source, and the columns, are fixed from then on. What the names stand for is read from code at each start: a later `Defaults.staged` applies to every batch, a later `Defaults.settings` only to batches made after it. `batch(label)` refuses a batch whose source now fills a column that the batch lacks.
+- `create` takes the name of a spec. It refuses an empty title, a column that is not a parameter of the spec or is named twice, and columns that lack one that the source fills; then it writes the first settings, `Defaults.settings` of the spec or `create(..., settings=...)`, and the header. The names of the spec and the source, and the columns, are fixed from then on. What the names stand for is read from code at each start: a later `Defaults.staged` applies to every batch, a later `Defaults.settings` only to batches made after it. `batch(label)` refuses a batch whose source now fills a column that the batch lacks.
 - `change` changes the title, the description and the scope, and refuses an empty title; a scope is written to the header, then given to the `Batch` of the label if it was made, whose rows change at once.
-- A header without `settings.json` is a batch with the default settings of its spec.
+- A header without `settings.json` is a batch with the default settings of its spec, as registered at each start.
 - A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. `create` refuses a label that has definitions or records.
 - `remove` removes the header, the edits and the settings of a batch, and releases its stage. Its records stay, and those running keep running. A `Batch` handed out before must not be used after its removal, so ask the manager for the batch each time.
 - A `Batch` made in code without the manager has no header and is not listed.

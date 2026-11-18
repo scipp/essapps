@@ -53,7 +53,7 @@ The definitions keep one more part per label, the *header*:
 
 ```json
 {"spec": "loki-iofq",
- "columns": ["sample", "sample_transmission", "thickness"],
+ "columns": ["sample", "sample_transmission", "can"],
  "source": "sample-runs",
  "title": "Afternoon, 2 mm cells",
  "description": "New settings: the collimation changed at 13:00.",
@@ -74,7 +74,7 @@ What code passes to `Batch` and `create_app` comes from these places for a batch
 | Argument | Comes from |
 |---|---|
 | spec | chosen from the specs the workspace binds (`client.specs()`). The name is kept; the version is the one bound, the highest if several are ([ADR 0009](0009-a-record-of-another-spec-stays-readable.md)) |
-| `source`, `selector`, `words`, `name` | chosen as one from the sources that the application registers by name, next to its bindings. A registered source is the function, the columns it fills, the index of a row (below), and these arguments |
+| `source`, `selector`, `words`, `row_name` | chosen as one from the sources that the application registers by name, next to its bindings. A registered source is the function, the columns it fills, the index of a row (below), and these arguments |
 | `columns` | those the source fills, and the parameters that the person makes columns |
 | `label` | generated from the time of making; the manager refuses a label that has definitions or records |
 | first `settings`, `staged`, `draw` | registered by the application for the spec |
@@ -124,7 +124,7 @@ Nothing checks that the batches cover every row or that they do not overlap.
 ```python
 manager = BatchManager(client, sources=SOURCES, definitions=definitions)
 label = manager.create('loki-iofq', title='Afternoon', source='sample-runs',
-                       columns=('sample', 'sample_transmission', 'thickness'),
+                       columns=('sample', 'sample_transmission', 'can'),
                        scope=Scope(start=60339))
 manager.headers()              # the header of each batch, by label
 manager.counts()               # rows per status of each batch; rows of each source in no batch
@@ -219,7 +219,7 @@ If it is built, the header, the labels and the URL change once more: a label per
 - A person looks at one batch while another runs. All batches share the workspace's queue, so a long reduction still delays the batch that follows (see Open).
 - Problem 3 stays as it is for batches made in code, and is not available for batches that a person makes.
 - `Batch` changes in two places: a row gets an index, and a batch has a scope that its scan applies and that can be set. The page of a batch stays, but for Follow.
-- Follow moves from the server of one page to a loop of the application that serves them all. The loop has the timer, and steps a batch under the lock of its page. The manager takes no part in it.
+- Follow moves from the page of one batch to a loop of the application that serves them all. The loop has the timer, and steps a batch under the lock of its page. The manager takes no part in it.
 - The definitions get two operations they lack: listing the labels, and deleting a part. The layout of `definitions/` stays, with the header added.
 - `essapps-batch reduce --label` reads the header of its label if there is one, and takes the registered sources as it takes the bindings. It looks the kept spec up by name and version today, and has to take the bound version as the manager does.
 - Two rules change. Whether a batch follows is kept; today it belongs to the process, and a restart starts with `--follow` or without. `at` gets a default, the columns of the source; today the application chooses it.
