@@ -127,7 +127,6 @@ manager.batches()              # the header of each batch, by label
 manager.counts()               # rows per status of each batch; rows of each source in no batch
 manager.batch(label)           # the Batch: state(), reduce(), cancel(), settings
 manager.edit(label, scope=Scope(start=60339, stop=60421))
-manager.follow(label)          # the one batch that follows; None for none
 manager.remove(label)
 ```
 
@@ -138,9 +137,20 @@ manager.remove(label)
 
 ### One batch follows
 
-The manager keeps which batch follows, as one value, so at most one does.
-Turning Follow on for one batch turns it off for the other, and a restart resumes.
-The manager runs the loop, and the switch of a page asks the manager.
+The manager does not run Follow.
+The application that serves the pages has one loop, which holds the label of the batch that follows, or none:
+
+```python
+follow = Follow(manager, definitions, interval=5.0)    # one per application
+follow.on(label)        # this batch follows, and no other
+follow.off()
+follow.label            # what the switch of a page shows
+```
+
+- One value means that at most one batch follows, with no rule to enforce. Turning Follow on for one batch turns it off for the other.
+- The loop keeps the value in the definitions, apart from any batch, so a restart resumes.
+- At each step the loop asks the manager for the batch of its label, and does one step of `Automatic` on it. If the batch is gone, the loop turns itself off.
+- The manager has no thread, no timer and no lock. It reads and writes definitions and hands out `Batch` objects.
 
 A batch has no state "closed".
 It receives no new rows once its scope has a `stop` at or below the newest index.
@@ -197,6 +207,7 @@ If it is built, the header, the labels and the URL change once more: a label per
 - **A slice by position.** A file listed late shifts every row after it, so a batch would hold other rows than the day before.
 - **A slice with both ends included**, as `.loc` of pandas. With times as the index, a batch that starts where another stops would share a row with it or leave a gap.
 - **Batches that split the rows between them.** It is a rule to enforce, and it forbids reducing one series with two sets of settings to compare them.
+- **Follow in the manager.** The manager would get a thread, a timer and a lock next to the definitions it keeps. Which batch follows is a fact about the running application, not about a batch.
 - **Follow as a flag of each batch.** Every open-ended batch that follows reduces every new run. A bounded one reduces its rows again when a later file changes a cell, which for the standard measured each day is not wanted. One value can become a set later; a flag per batch is hard to take back.
 
 ## Consequences
@@ -205,7 +216,7 @@ If it is built, the header, the labels and the URL change once more: a label per
 - A person looks at one batch while another runs. All batches share the workspace's queue, so a long reduction still delays the batch that follows (see Open).
 - Problem 3 stays as it is for batches made in code, and is not available for batches that a person makes.
 - `Batch` changes in two places: a row gets an index, and a batch has a scope that its scan applies and that can be set. The page of a batch stays, but for Follow.
-- Follow moves from the server of a page to the manager: the manager has the timer and the loop, and takes the lock of the batch it steps.
+- Follow moves from the server of one page to a loop of the application that serves them all. The loop has the timer, and steps a batch under the lock of its page. The manager takes no part in it.
 - The definitions get two operations they lack: listing the labels, and deleting a part. The layout of `definitions/` stays, with the header added.
 - `essapps-batch reduce --label` reads the header of its label if there is one, and takes the registered sources as it takes the bindings. It looks the kept spec up by name and version today, and has to take the bound version as the manager does.
 - Two rules change. Whether a batch follows is kept; today it belongs to the process, and a restart starts with `--follow` or without. `at` gets a default, the columns of the source; today the application chooses it.
@@ -214,7 +225,7 @@ If it is built, the header, the labels and the URL change once more: a label per
 - Only the batch that follows scans at each step of Follow, so the cost of a step does not grow with the number of batches. A cache of the metadata of each file belongs in the file source, below the batches.
 - The preparatory reductions of LoKI (detector, masks) fit as batches without a source, with one row. They are not part of the first work.
 - Order of work, each part usable alone:
-  1. The header and the manager, for batches made in code; a page per batch by URL, with the list; Follow in the manager.
+  1. The header and the manager, for batches made in code; a page per batch by URL, with the list; one loop of Follow for all of them.
   2. The index of a row, and the scope.
   3. Making, changing and removing a batch from the page, with the registered sources.
 
