@@ -9,7 +9,12 @@ What the pages of the batches of a workspace share, without HTTP:
 The pages share one lock. Every request of every page and each step of Follow
 take it, so that what the pages share, such as the corrections of runs and
 the batches of the manager, changes in one request at a time. One person
-works with the application, so a request waits for at most one step.
+works with the application, so a request waits for at most one step, or for
+the counts (:meth:`Pages.counts`), which scan every batch.
+
+The runs are the same on every page. A correction made on one page scans its
+batch at once; the page of each other batch scans its batch at its next poll
+(:attr:`Pages.corrected`).
 
 Follow is the one loop of the application
 (:class:`~ess.apps.batch.auto.Follow`). :meth:`Pages.tick` steps it, with or
@@ -21,14 +26,19 @@ timer that calls it.
 from __future__ import annotations
 
 import threading
+from collections import Counter
 from collections.abc import Mapping
 from contextlib import suppress
+from typing import Any
 
 from pydantic import BaseModel
 
-from .. import BatchManager, CorrectedFiles
+from ess.spec import FileRef
+
+from .. import BatchManager, CorrectedFiles, Words
 from ..auto import Follow
-from .server import Draw, Problem, Server
+from .models import BatchCounts, Batches, BatchRow
+from .server import Draw, Problem, Server, page_status
 
 
 class Missing(Exception):
@@ -64,6 +74,12 @@ class Pages:
     runs_version:
         Counts the changes of the runs, so that the Runs view of each page
         asks for them again.
+    batches_version:
+        Counts the changes of the list of batches, so that the Batches view
+        of each page asks for it again.
+    corrected:
+        Counts the corrections of runs, so that the page of each batch scans
+        again at its next poll after one.
     failure:
         What the last step of Follow raised, ``None`` if it raised nothing.
     """
@@ -88,6 +104,10 @@ class Pages:
         self.folder = folder
         self.lock = threading.RLock()
         self.runs_version = 1
+        # The runs, with their metadata, as listed at the last version.
+        self._runs: Mapping[FileRef, Mapping[str, Any]] = {}
+        self.batches_version = 1
+        self.corrected = 0
         self.failure: str | None = None
         self._pages: dict[str, Server] = {}
 
@@ -141,6 +161,58 @@ class Pages:
             if (label := self.follow.label) is not None:
                 self.page(label).stepped()
 
-    def new_runs(self) -> None:
-        """A new version of the runs, which the Runs view of each page asks for."""
-        self.runs_version += 1
+    def runs_listed(
+        self, runs: Mapping[FileRef, Mapping[str, Any]], *, changed: bool = False
+    ) -> None:
+        """
+        A new version of the runs, which the Runs view of each page asks for,
+        if ``runs``, as a page lists them now, differ from those of the last
+        version, or if ``changed``, as after a correction.
+        """
+        if changed or runs != self._runs:
+            self._runs = runs
+            self.runs_version += 1
+
+    def batches(self) -> Batches:
+        """The batches, as the Batches view of each page lists them."""
+        with self.lock:
+            rows = []
+            for label, header in self.manager.batches().items():
+                name, sources = header.source, self.manager.sources
+                # listed even if its source is no longer registered
+                source = None if name is None else sources.get(name)
+                rows.append(
+                    BatchRow(
+                        label=label,
+                        title=header.title,
+                        description=header.description,
+                        words=Words() if source is None else source.words,
+                        follows=label == self.follow.label,
+                    )
+                )
+            return Batches(version=self.batches_version, rows=rows)
+
+    def counts(self) -> BatchCounts:
+        """
+        The counts of the manager (:meth:`~ess.apps.batch.BatchManager.counts`)
+        in the words of the page. Every page and Follow wait while it scans.
+        """
+        with self.lock:
+            try:
+                counts = self.manager.counts()
+            except Exception as error:  # a source is code of the application
+                raise Problem(f'Cannot count the rows: {error}') from None
+            rows = {}
+            for label, texts in counts.batches.items():
+                shown: Counter[str] = Counter()
+                for text, n in texts.items():
+                    shown[page_status(text)] += n
+                rows[label] = dict(shown)
+            sources = self.manager.sources
+            return BatchCounts(
+                rows=rows,
+                outside={
+                    name: sources[name].words.count(n)
+                    for name, n in counts.outside.items()
+                },
+            )

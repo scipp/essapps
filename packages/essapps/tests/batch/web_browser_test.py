@@ -800,3 +800,41 @@ def test_a_button_of_the_row_tab_keeps_the_focus_when_the_row_changes(
         "document.querySelector('#tab-row dl').innerText.includes('9.0')"
         " && document.activeElement.textContent.startsWith('Put these settings')"
     )
+
+
+# The list of batches
+
+
+def test_the_batches_view_links_to_the_page_of_another_batch(
+    page: Any, pages: Pages, manager: BatchManager
+) -> None:
+    other = manager.create(
+        STAGED.name, title='Other', source='pairs', description='The second series'
+    )
+    pages.follow.on(other)
+    page.reload()
+
+    page.click('[data-view=batches]')
+
+    page.wait_for_selector('#batches tbody tr:has-text("Other")')
+    assert page.inner_text('#batches tr[aria-current=page] a') == 'Scan'
+    listed = page.locator('#batches tbody tr', has_text='Other').inner_text()
+    assert 'The second series' in listed
+    assert 'follows' in listed
+    page.click('#batches a:text-is("Other")')
+    page.wait_for_selector('#title:has-text("Other")')
+    assert page.url.endswith(f'/batches/{other}/')
+
+
+def test_the_batches_view_counts_the_rows_when_opened_and_again_on_request(
+    page: Any, batch: Batch, client: Client
+) -> None:
+    batch.rows = batch.rows.remove_each(['3'])
+
+    page.click('[data-view=batches]')
+
+    page.wait_for_selector('#batches .pill.st-ready:text-is("2 ready")')
+    assert page.inner_text('#outside') == '1 row of pairs in no batch.'
+    client.wait(batch.reduce(['1']))
+    page.click('#count')
+    page.wait_for_selector('#batches .pill.st-done:text-is("1 done")')

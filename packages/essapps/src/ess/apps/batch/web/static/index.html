@@ -15,6 +15,7 @@
   <header class="top">
     <h1 id="title">Batch reduction</h1>
     <nav class="views" aria-label="View">
+      <button type="button" data-view="batches" aria-pressed="false">Batches <span class="n" id="n-batches"></span></button>
       <button type="button" data-view="samples" aria-pressed="true"><span id="word-many">Rows</span> <span class="n" id="n-samples"></span></button>
       <button type="button" data-view="runs" aria-pressed="false">Runs <span class="n" id="n-runs"></span></button>
     </nav>
@@ -75,6 +76,21 @@
           <span id="selection"></span>
           <button type="button" class="quiet" id="remove" hidden>Remove selected</button>
           <button type="button" class="link" id="restore" hidden></button>
+        </div>
+      </div>
+
+      <div class="view" id="view-batches" hidden>
+        <div class="toolbar">
+          <p class="hint">Counting scans the runs of every batch. The pages wait until it ends.</p>
+          <span class="spacer"></span>
+          <button type="button" id="count">Count again</button>
+        </div>
+        <div class="list">
+          <table id="batches">
+            <thead><tr><th>Batch</th><th>Rows</th><th>Status</th><th>Follow</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <p class="hint" id="outside"></p>
         </div>
       </div>
 

@@ -27,6 +27,9 @@ const view = {
   dismissed: '', // the refusal whose message was closed
   runs: 0, // the version of the runs shown
   runData: null, // the runs last loaded, with their columns
+  batches: 0, // the version of the list of batches shown
+  batchData: null, // the list of batches last loaded
+  counts: null, // the counts of the rows of each batch, once counted
 };
 let rows; // the Grid of the rows
 let runs; // the Grid of the runs
@@ -183,6 +186,7 @@ function render(state) {
   const updated = rows.update(state.rows);
   if (!old) updated.then(() => rows.select(view.selected));
   if (state.runs !== null && state.runs !== view.runs) loadRuns();
+  if (state.batches !== view.batches) loadBatches();
   const many = state.words.many;
   $('rescan').title = `Make the ${many} from the runs again. Values set by hand stay.`;
   $('restore').hidden = state.removed === 0;
@@ -228,7 +232,7 @@ function build(state) {
   });
   rows.filter(view.filter);
   if (state.runs === null) document.querySelector('[data-view="runs"]').hidden = true;
-  showPage(state.runs === null ? 'samples' : view.page);
+  showPage(state.runs === null && view.page === 'runs' ? 'samples' : view.page);
   showTab(view.tab);
 }
 
@@ -274,6 +278,58 @@ function drawRuns() {
     });
   }
   runs.update(shown);
+}
+
+async function loadBatches() {
+  const listed = await request('batches', {kind: 'batches'});
+  if (!listed) return;
+  view.batches = listed.version;
+  view.batchData = listed;
+  $('n-batches').textContent = listed.rows.length;
+  drawBatches();
+}
+
+// Count the rows of each batch. The server scans every batch for it, so the
+// page asks only when the Batches view is opened and at "Count again".
+async function countBatches() {
+  const button = $('count');
+  if (button.disabled) return;
+  button.disabled = true;
+  button.textContent = 'Counting…';
+  const counts = await request('batches/counts');
+  button.disabled = false;
+  button.textContent = 'Count again';
+  if (counts) view.counts = counts;
+  drawBatches();
+}
+
+// The list of batches, each a link to its page, with its counts once counted;
+// the batch of this page is marked.
+function drawBatches() {
+  if (!view.batchData) return;
+  const counted = view.counts?.rows ?? {};
+  $('batches').tBodies[0].replaceChildren(
+    ...view.batchData.rows.map((batch) => {
+      const n = counted[batch.label];
+      const all = n && Object.values(n).reduce((a, b) => a + b, 0);
+      return h(
+        'tr',
+        {'aria-current': batch.label === view.state.label && 'page'},
+        h(
+          'td',
+          {},
+          h('a', {href: `../${encodeURIComponent(batch.label)}/`, text: batch.title}),
+          h('small', {text: batch.label}),
+          batch.description && h('div', {class: 'hint', text: batch.description}),
+        ),
+        h('td', {class: 'n', text: n ? `${all} ${all === 1 ? batch.words.one : batch.words.many}` : ''}),
+        h('td', {}, n && CHIPS.filter((s) => s !== 'all' && n[s]).map((s) => h('span', {class: `pill st-${s}`, text: `${n[s]} ${s}`}))),
+        h('td', {class: 'follows', text: batch.follows ? 'follows' : ''}),
+      );
+    }),
+  );
+  const outside = Object.entries(view.counts?.outside ?? {});
+  $('outside').textContent = outside.map(([source, text]) => `${text} of ${source} in no batch.`).join(' ');
 }
 
 function renderAction(action) {
@@ -586,9 +642,11 @@ function showPage(page) {
   document.querySelectorAll('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === page)));
   $('view-samples').hidden = page !== 'samples';
   $('view-runs').hidden = page !== 'runs';
+  $('view-batches').hidden = page !== 'batches';
   document.querySelector('main').classList.toggle('wide', page === 'runs');
   if (page === 'runs') drawRuns();
-  const grid = page === 'runs' ? runs : rows;
+  if (page === 'batches') countBatches();
+  const grid = {samples: rows, runs}[page];
   grid?.built.then(() => grid.table.redraw());
 }
 
@@ -624,6 +682,7 @@ function wire() {
     if (confirm(question)) act('reduce', {which: 'earlier'});
   };
   $('rescan').onclick = () => act('scan');
+  $('count').onclick = countBatches;
   $('remove').onclick = () => {
     const added = selectedRows().filter((row) => row.added).length;
     const question = `${added} of the ${count(view.selected.length)} selected ${added === 1 ? 'was' : 'were'} added by hand and cannot be brought back. Remove?`;

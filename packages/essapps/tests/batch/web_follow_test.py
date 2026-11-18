@@ -765,3 +765,19 @@ def test_a_step_that_cannot_make_its_batch_is_a_failure_that_its_page_says(
     assert pages.failure == "Follow could not step: 'sample'"
     with pytest.raises(Problem, match="Cannot show scan: 'sample'"):
         pages.page(label)
+
+
+def test_a_correction_on_another_page_moves_the_version_of_the_runs_once(
+    server: Server, pages: Pages, manager: BatchManager, sample: Measure
+) -> None:
+    sample(1, 'water')
+    other = pages.page(manager.create(STAGED.name, title='Other', source='pairs'))
+    pages.tick()
+    before = pages.runs_version
+
+    run = other.runs().rows[0].key
+    other.correct(CellEdit(keys=[run], column='sample', value='tea'))
+    pages.tick()
+    pages.tick()
+
+    assert pages.runs_version == before + 1

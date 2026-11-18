@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
@@ -33,6 +34,7 @@ from pydantic import BaseModel
 from ess.spec import WorkflowSpec
 
 from ..client import Client
+from ..errors import SubmitError
 from ..files import Selector
 from ..records import Template
 from .definition import (
@@ -47,7 +49,8 @@ from .definition import (
     settings_key,
     template_of,
 )
-from .reduction import Batch, RowSource
+from .reduction import Batch, RowSource, file_infos
+from .state import status_texts
 
 
 class Words(BaseModel):
@@ -108,6 +111,25 @@ class Defaults:
 
     settings: Mapping[str, Any] = field(default_factory=dict)
     staged: bool = False
+
+
+@dataclass(frozen=True)
+class Counts:
+    """
+    How far the batches of a workspace are, as :meth:`BatchManager.counts`
+    gives it.
+
+    Parameters
+    ----------
+    batches:
+        The rows of each batch by status, as :func:`~.state.status_texts`
+        names it, by label.
+    outside:
+        The rows of each registered source that no batch shows, by its name.
+    """
+
+    batches: dict[str, dict[str, int]]
+    outside: dict[str, int]
 
 
 def bound_spec(client: Client, name: str) -> WorkflowSpec[Any, Any]:
@@ -315,6 +337,37 @@ class BatchManager:
         """
         name = self._headers[label].source
         return None if name is None else self.sources[name]
+
+    def counts(self) -> Counts:
+        """
+        The rows of each batch by status, after a scan of each batch that has
+        a source, and the rows of each registered source that no batch shows,
+        such as a row removed by hand. While the settings of a batch are
+        refused, its rows are counted as :meth:`~.reduction.Batch.results`
+        gives them. It scans each batch and each source, so it takes as long
+        as all of them together.
+        """
+        batches = {}
+        shown: dict[str, set[str]] = {name: set() for name in self.sources}
+        for label, header in self.batches().items():
+            batch = self.batch(label)
+            if batch.source is not None:
+                batch.scan()
+            try:
+                states = batch.state()
+            except SubmitError:
+                states = batch.results()
+            batches[label] = dict(Counter(status_texts(states, batch.columns).values()))
+            if header.source is not None:
+                shown[header.source] |= {row.key for row in batch.rows}
+        outside = {
+            name: len(
+                {r.key for r in source.rows(file_infos(self._client, source.selector))}
+                - shown[name]
+            )
+            for name, source in self.sources.items()
+        }
+        return Counts(batches, outside)
 
     def edit(
         self, label: str, *, title: str | None = None, description: str | None = None

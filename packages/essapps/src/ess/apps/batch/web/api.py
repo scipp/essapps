@@ -9,10 +9,12 @@ Each action of a page is a ``POST`` that answers with the
 :class:`~.models.State` after it, or a 422 with ``{'message': ...}``; the
 reasons of a refused reduction are in the state. ``GET api/state`` with the
 ``after`` version and the ``start`` the page has answers 204 while nothing
-changed. The page and the API of a label that is no batch answer 404; the
-static files are served under any label. A row is named by its key in
-the body or the query, never in the path, since a key may hold any character;
-the keys of many rows go in the body, since a URL has a limit. A label is one
+changed. The page and the API of a label that is no batch answer 404. The
+routes of the workspace, such as ``api/batches``, are served at ``/api/...``
+and again under any label, which they ignore, so that a page asks for them as
+for its own; so are the static files. A row is named by its key in the body or
+the query, never in the path, since a key may hold any character; the keys of
+many rows go in the body, since a URL has a limit. A label is one
 segment of a path (:func:`~ess.apps.batch.manager.check_label`). The page asks
 for ``api/...`` relative to its own URL, and ``/`` redirects to a page by a
 relative URL, so the app can be mounted under a path prefix. Answers are
@@ -39,6 +41,8 @@ from fastapi.staticfiles import StaticFiles
 
 from ..auto import every
 from .models import (
+    BatchCounts,
+    Batches,
     CellEdit,
     Cells,
     Edit,
@@ -227,6 +231,20 @@ def create_app(pages: Pages) -> FastAPI:
         content = server.results_file(body.keys)
         return _download(content, 'results.zip', 'application/zip')
 
+    # The routes of the workspace, the same from every page.
+    workspace = APIRouter()
+
+    @workspace.get('/api/batches')
+    def batches() -> Batches:
+        return pages.batches()
+
+    @workspace.get('/api/batches/counts')
+    def counts() -> BatchCounts:
+        """The rows of each batch by status; it scans every batch."""
+        return pages.counts()
+
     app.include_router(page)
+    app.include_router(workspace)
+    app.include_router(workspace, prefix='/batches/{label}')
     app.mount('/batches/{label}/static', StaticFiles(directory=STATIC), name='static')
     return app

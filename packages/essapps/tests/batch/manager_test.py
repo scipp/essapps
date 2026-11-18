@@ -376,3 +376,35 @@ def test_a_batch_without_a_source_has_only_rows_added_by_hand(
     assert list(batch.rows) == []
     batch.put([Row('mine', {'sample': sample(2, 'oil')})])
     assert [r.key for r in manager.batch(label).rows] == ['mine']
+
+
+def test_the_counts_give_the_rows_per_status_of_each_batch_after_a_scan(
+    manager: BatchManager, client: Client, sample: Measure
+) -> None:
+    sample(1, 'water')
+    sample(2, 'oil', partner=False)
+    manager.create('plain', title='Morning', source='pairs', label='a')
+    manager.create('plain', title='Afternoon', source='pairs', label='b')
+    batch = manager.batch('a')
+    client.wait(batch.reduce(['1']))
+    batch.settings = {'binning': {'bins': 3}}
+    sample(3, 'sds')
+
+    counts = manager.counts()
+
+    assert counts.batches == {
+        'a': {'completed, earlier settings': 1, 'incomplete': 1, 'not reduced': 1},
+        'b': {'not reduced': 2, 'incomplete': 1},
+    }
+
+
+def test_the_counts_give_the_rows_of_each_source_that_no_batch_shows(
+    manager: BatchManager, sample: Measure
+) -> None:
+    for run, name in enumerate(['water', 'oil', 'sds'], start=1):
+        sample(run, name)
+    label = manager.create('plain', title='Morning', source='pairs')
+    batch = manager.batch(label)
+    batch.rows = batch.rows.remove_each(['2']).add(Row('mine', {}))
+
+    assert manager.counts().outside == {'pairs': 1}
