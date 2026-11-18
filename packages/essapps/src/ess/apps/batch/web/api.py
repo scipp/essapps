@@ -34,7 +34,6 @@ from .models import (
     On,
     Plot,
     RowDetail,
-    RowEdit,
     Runs,
     State,
     Words,
@@ -149,20 +148,10 @@ def create_app(
         """Show the settings of the result of row ``key`` in the form."""
         return server.use_settings(body.key)
 
-    @app.post('/api/row/tweak/submit')
-    def submit_tweak(body: Key) -> State:
-        """Reduce row ``key`` alone, with its own form."""
-        return server.submit_tweak(body.key)
-
     @app.get('/api/row')
     def row(key: str) -> RowDetail:
-        """What the result of row ``key`` was reduced with, and its own form."""
+        """What the result of row ``key`` was reduced with."""
         return server.row(key)
-
-    @app.post('/api/row/tweak')
-    def edit_tweak(edit: RowEdit) -> RowDetail:
-        """Edit the form of the reduction of row ``key`` alone."""
-        return server.edit_tweak(edit.key, edit)
 
     @app.get('/api/runs')
     def runs() -> Runs:

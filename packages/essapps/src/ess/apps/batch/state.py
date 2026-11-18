@@ -12,12 +12,8 @@ key as its member, of any spec (:func:`results`). The row's request now differs
 from its result's at the parameters that :attr:`RowState.changed` names, found
 with :func:`differs` on both as a record holds them. A result is *outdated*
 (:attr:`RowState.outdated`) if it is of another spec than the one bound
-(:attr:`RowState.spec_changed`), or if the request changed: at any parameter
-for a result reduced with the settings, at a column for a tweak, whose other
-parameters are its own (:func:`row_states`)::
-
-    changed == {'binning'}               # outdated, but a tweak is not
-    changed == {'binning', 'thickness'}  # outdated, a tweak too
+(:attr:`RowState.spec_changed`), or if the request changed at any parameter
+(:func:`row_states`).
 
 A value refused when resolved is a problem of the row, not a change: the row
 cannot run with it, and a change would offer it to :func:`left_to_reduce`.
@@ -64,12 +60,9 @@ class RowState:
     compared, as in what :meth:`~.reduction.Batch.results` gives.
     ``spec_changed`` is true if the result is of another spec than the one
     bound. ``set_by_hand`` names the columns whose cells were set by hand: the
-    cells edited, or every column of a row added by hand. ``tweaked`` is true
-    if the result came from :meth:`~.reduction.Batch.tweak` of this batch, with
-    parameters of its own, so that it does not follow the settings.
-    ``outdated`` is true if the result is of another spec, or if the request
-    changed, at a column only for a tweak; ``None`` if that is not known, since
-    the requests were not compared.
+    cells edited, or every column of a row added by hand. ``outdated`` is true
+    if the result is of another spec, or if the request changed; ``None`` if
+    that is not known, since the requests were not compared.
     """
 
     key: str
@@ -79,7 +72,6 @@ class RowState:
     changed: frozenset[str] | None = frozenset()
     spec_changed: bool = False
     set_by_hand: frozenset[str] = frozenset()
-    tweaked: bool = False
     outdated: bool | None = False
 
     @property
@@ -101,8 +93,7 @@ class RowState:
         What a table shows. A failed or cancelled result reads as its status
         whether or not the request changed since, since the row needs reducing
         either way. A completed result not compared with the settings, as while
-        they are refused, reads ``outdated``: it cannot be told to match them. A
-        tweak does not follow the settings, so it reads as its status.
+        they are refused, reads ``outdated``: it cannot be told to match them.
         """
         if self.status is Status.PENDING:
             return 'pending'
@@ -112,11 +103,7 @@ class RowState:
             return 'not reduced'
         if self.status in _RERUN:
             return str(self.status)
-        if self.outdated:
-            return 'outdated'
-        if self.outdated is None and self.status is Status.COMPLETED:
-            return str(self.status) if self.tweaked else 'outdated'
-        return str(self.status)
+        return str(self.status) if self.outdated is False else 'outdated'
 
 
 def problems(
@@ -187,7 +174,6 @@ def row_states(
     changed: Mapping[str, frozenset[str]] | None = MappingProxyType({}),
     refused: Mapping[str, tuple[FieldError, ...]] | None = None,
     spec_changed: AbstractSet[str] = frozenset(),
-    tweaked: AbstractSet[str] = frozenset(),
     set_by_hand: Mapping[str, AbstractSet[str]] = MappingProxyType({}),
 ) -> dict[str, RowState]:
     """
@@ -196,21 +182,18 @@ def row_states(
     ``changed`` the names at which a row differs from its result, ``None`` if
     the rows were not compared with their results, ``refused``
     the reasons a row's cells were refused when resolved, ``spec_changed`` the
-    keys whose result is of another spec, ``tweaked`` the keys whose result
-    is a tweak, and ``set_by_hand`` the columns set by hand of each row.
+    keys whose result is of another spec, and ``set_by_hand`` the columns set
+    by hand of each row.
     """
     refused = refused or {}
     states = {}
     for row in rows:
         record = found.get(row.key)
         names = None if changed is None else changed.get(row.key, frozenset())
-        tweak = row.key in tweaked
         if row.key in spec_changed:
             outdated: bool | None = True
-        elif names is None:
-            outdated = None
         else:
-            outdated = bool(names & set(columns) if tweak else names)
+            outdated = None if names is None else bool(names)
         states[row.key] = RowState(
             key=row.key,
             record=record,
@@ -219,7 +202,6 @@ def row_states(
             changed=names,
             spec_changed=row.key in spec_changed,
             set_by_hand=frozenset(set_by_hand.get(row.key, ())),
-            tweaked=tweak,
             outdated=outdated,
         )
     return states
@@ -262,9 +244,8 @@ def earlier_settings(
 ) -> list[str]:
     """
     The ready rows whose completed result differs from their request only at
-    settings: not at a column of ``columns``, and of the same spec. A tweak's
-    settings are its own, so a tweak is not one of them. ``changed`` is read, so
-    ``states`` are those of :meth:`~.reduction.Batch.state`; raises
+    settings: not at a column of ``columns``, and of the same spec. ``changed``
+    is read, so ``states`` are those of :meth:`~.reduction.Batch.state`; raises
     ``ValueError`` for a row that was not compared.
 
     A page that applies a change of settings to new rows only leaves these
@@ -278,7 +259,6 @@ def earlier_settings(
         and changed[k]
         and changed[k].isdisjoint(columns)
         and not states[k].spec_changed
-        and not states[k].tweaked
     ]
 
 

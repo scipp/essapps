@@ -462,7 +462,6 @@ main.wide .right { display: none; }
   line-height: 16px;
   text-align: center;
 }
-.pill sup { margin-left: 1px; font-size: 11px; line-height: 0; }
 .status { display: inline-flex; align-items: center; gap: 6px; }
 .status .earlier { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .follow { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; cursor: pointer; white-space: nowrap; }
@@ -611,12 +610,3 @@ legend { padding: 0 4px; color: var(--muted); font-weight: 600; }
 .summary dt { color: var(--muted); }
 .summary dd { margin: 0; }
 .summary .differs { color: var(--outdated); font-weight: 600; }
-.row-info { display: contents; }
-.tweak {
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-.tweak[open] { display: flex; flex-direction: column; gap: 12px; }
-.tweak summary { color: var(--accent); cursor: pointer; font-weight: 600; }
-.tweak > button { align-self: flex-start; margin-top: 4px; }

@@ -3,7 +3,6 @@
 """A batch on a real in-process workspace with fake workflows."""
 
 from collections.abc import Iterator, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -713,49 +712,6 @@ def test_cancel_leaves_other_rows_when_given_keys(
     gate.open()
 
 
-def test_a_tweak_is_the_rows_result_and_not_left_to_reduce(
-    scanned: Batch, client: Client
-) -> None:
-    client.wait(scanned.reduce(['1']))
-    row = scanned.rows['1'].values
-
-    tweaked = scanned.tweak('1', {**OTHER_SETTINGS, **row})
-    client.wait(tweaked)
-
-    assert scanned.state()['1'].record == tweaked
-    assert left_to_reduce(scanned.state(), COLUMNS) == ['2']
-
-
-def test_a_row_is_tweaked_until_it_is_reduced_with_the_settings(
-    scanned: Batch, client: Client
-) -> None:
-    client.wait(scanned.tweak('1', {**OTHER_SETTINGS, **scanned.rows['1'].values}))
-    tweaked = {k: s.tweaked for k, s in scanned.state().items()}
-
-    client.wait(scanned.reduce(['1']))
-
-    assert tweaked == {'1': True, '2': False}
-    assert not scanned.state()['1'].tweaked
-
-
-def test_a_tweak_starts_from_the_rows_cells_and_its_result_or_else_the_settings(
-    scanned: Batch, client: Client
-) -> None:
-    cells = scanned.rows['1'].values
-    before = scanned.state()['1']
-    record = scanned.reduce(['1'])['1']
-    client.wait(record)
-    after = scanned.state()['1']
-    scanned.settings = OTHER_SETTINGS
-
-    assert scanned.tweak_params(before) == {**OTHER_SETTINGS, **cells}
-    given = record.request.params
-    settings = {k: v for k, v in given.items() if k not in scanned.columns}
-    assert scanned.tweak_params(after) == {**settings, **cells}
-    another = replace(after, spec_changed=True)
-    assert scanned.tweak_params(another) == {**OTHER_SETTINGS, **cells}
-
-
 @pytest.fixture
 def chain(client: Client, sample: Measure) -> tuple[Batch, Batch]:
     """A batch that finds an offset per sample, and one that reads it per row."""
@@ -858,25 +814,9 @@ def test_a_row_running_is_refused_when_picked(
 
     with pytest.raises(SubmitError, match='1: still running'):
         scanned.reduce(['1'])
-    with pytest.raises(SubmitError, match='1: still running'):
-        scanned.tweak('1', {**SETTINGS, **scanned.rows['1'].values})
     gate.open()
     client.wait(first)
     assert len(client.records(label='scan')) == 1
-
-
-def test_a_tweak_is_outdated_once_a_cell_is_edited(
-    scanned: Batch, client: Client
-) -> None:
-    client.wait(scanned.reduce(['1']))
-    client.wait(scanned.tweak('1', {**OTHER_SETTINGS, **scanned.rows['1'].values}))
-    tweaked = scanned.state()['1']
-
-    scanned.rows = scanned.rows.edit('1', {'thickness': 2.0})
-    edited = scanned.state()['1']
-
-    assert (tweaked.changed, tweaked.outdated) == ({'binning'}, False)
-    assert (edited.changed, edited.outdated) == ({'binning', 'thickness'}, True)
 
 
 def test_cancel_reaches_a_row_removed_since(

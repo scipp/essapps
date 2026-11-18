@@ -7,16 +7,15 @@ batch can call the same actions and render the same :class:`~.models.State`.
 
 The server holds everything a person changes: the
 :class:`~ess.apps.batch.Batch` with its rows and settings, the form of the
-settings, the form of a reduction of one row alone, and the corrections of
-runs. The batch and the corrections keep their part in their definitions, if
-given them (:mod:`..definition`); a change that the definitions cannot keep is
-not made, and answers a :class:`Problem`.
+settings, and the corrections of runs. The batch and the corrections keep their
+part in their definitions, if given them (:mod:`..definition`); a change that
+the definitions cannot keep is not made, and answers a :class:`Problem`.
 
 The form of the settings is a draft of the batch's settings. An edit changes
 the form only; :meth:`Server.apply_settings` writes it to the batch, and is
 refused while something is missing; :meth:`Server.discard_settings` shows the
-batch's settings again. "Load settings" and "Use the settings of this row" fill
-the form, all or none. While the form holds a change, a reduction by a person
+batch's settings again. "Load settings" and "Put these settings in the form"
+fill the form, all or none. While the form holds a change, a reduction by a person
 and a download of the settings are refused, so that nothing is reduced or
 saved with settings other than those shown. Settings that the form cannot
 show, such as those kept for another version of the spec, are named in the
@@ -80,7 +79,7 @@ import zipfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -99,8 +98,6 @@ from .. import (
     CorrectedFiles,
     NotKept,
     RowState,
-    arrived,
-    compared,
     earlier_settings,
     frames,
     left_to_reduce,
@@ -299,8 +296,6 @@ class Server:
         self.settings = self._form()
         self._show_settings()
         self._cells = Fields(model, listing, fields=batch.columns)
-        self.tweak = Fields(model, listing)
-        self._tweak_of: tuple[str, Any, str | None] | None = None
         self._marks = None if marks is None or files is None else Fields(marks, listing)
         self.refused: list[FieldError] = []
         self.version = 1
@@ -324,7 +319,7 @@ class Server:
         self._refresh()
 
     def _refresh(self) -> None:
-        for fields in (self.settings, self._cells, self.tweak, self._marks):
+        for fields in (self.settings, self._cells, self._marks):
             if fields is not None:
                 fields.refresh(self._listing)
 
@@ -531,12 +526,8 @@ class Server:
 
     def _outdated(self, state: RowState) -> str:
         """Why the result of a row is outdated: what changed since."""
-        # a tweak is outdated by its cells only; its settings are its own
-        names = (
-            self.batch.columns if state.tweaked else self.batch.spec.params.model_fields
-        )
         said = []
-        if changed := self._changed(state, names):
+        if changed := self._changed(state, self.batch.spec.params.model_fields):
             said.append(f'{changed} changed.')
         if state.spec_changed:
             said.append('It was reduced by another version of the workflow.')
@@ -605,7 +596,6 @@ class Server:
             status=status,
             reason=reason,
             added=row.key in added,
-            alone=state.tweaked and record is not None,
             earlier=earlier,
             record=None if record is None else record.id,
             result=result,
@@ -987,76 +977,25 @@ class Server:
 
     # One row
 
-    def _load_tweak(self, key: str) -> None:
-        """Load the row's cells and what its result ran with, once per result."""
-        cells = self._row_of(key).values
-        row = self._states([key])[0][key]
-        source = (key, cells, None if row.record is None else row.record.id)
-        if self._tweak_of == source:
-            return
-        self._tweak_of = source
-        params = self.batch.tweak_params(row)
-        self.tweak.set(params, self._listing)
-
     @_locked
     def row(self, key: str) -> RowDetail:
-        """What one row was reduced with, and its form for a reduction alone."""
-        self._load_tweak(key)
+        """What the result of row ``key`` was reduced with."""
+        self._row_of(key)
         state = self._states([key])[0][key]
         record = state.record
-        detail = RowDetail(
-            key=key,
-            reduced_with=None,
-            created=None,
-            differs=[],
-            tweak=forms.tree(self.tweak),
-        )
         if record is None or state.spec_changed:
-            return detail  # another spec's params are not this one's
+            # another spec's params are not this one's
+            return RowDetail(key=key, reduced_with=None, created=None, differs=[])
         given = self._form()
         given.set(record.request.params, self._listing)
-        detail.reduced_with = forms.tree(given)
-        detail.created = record.created
-        detail.differs = [
-            n for n in self.batch.settings_fields if n in (state.changed or ())
-        ]
-        return detail
-
-    @_locked
-    def edit_tweak(self, key: str, edit: Edit) -> RowDetail:
-        self._load_tweak(key)
-        try:
-            forms.apply(self.tweak, edit)
-        except (KeyError, ValueError) as error:
-            raise Problem(_why(error)) from None
-        return self.row(key)
-
-    @_action
-    def submit_tweak(self, key: str) -> str:
-        """Reduce row ``key`` alone, with the parameters of its form."""
-        self._load_tweak(key)
-        try:
-            self.batch.tweak(key, self.tweak.params)
-        except SubmitError as error:
-            raise Problem('; '.join(map(str, error.errors))) from None
-        self._relist()
-        name = self._named(self.batch.rows[key])
-        notice = f'Reducing {name} alone.'
-        state = self._states([key])[0][key]
-        # Once the tweak is done, Follow gives the row as for any result.
-        done = {key: replace(state, status=Status.COMPLETED)}
-        if (
-            self.following
-            and self.loop
-            and compared(done)
-            and arrived(done, self.loop.at)
-        ):
-            changed = self._changed(state, self.loop.at)
-            notice += (
-                f' Its {changed} differs from its cells, so Follow reduces it'
-                ' again with its cells once this is done.'
-            )
-        return notice
+        return RowDetail(
+            key=key,
+            reduced_with=forms.tree(given),
+            created=record.created,
+            differs=[
+                n for n in self.batch.settings_fields if n in (state.changed or ())
+            ],
+        )
 
     # The result
 
