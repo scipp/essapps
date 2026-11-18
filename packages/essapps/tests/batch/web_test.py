@@ -1455,9 +1455,11 @@ def test_a_label_that_is_no_batch_answers_404(
     state(page)
 
     unknown = http.get('/batches/none/api/state')
+    action = http.post('/batches/none/api/scan')
     manager.remove(label)
 
     assert http.get('/batches/none/').status_code == 404
     assert unknown.json() == {'message': 'There is no batch none.'}
+    assert (action.status_code, action.json()) == (404, unknown.json())
     assert page.get('/').status_code == 404
     assert page.get('/api/state').status_code == 404

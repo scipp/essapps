@@ -397,6 +397,17 @@ def test_a_request_the_server_fails_says_its_status_where_no_action_asked(
     page.errors.clear()
 
 
+def test_a_poll_the_server_refuses_says_the_message_of_the_server(
+    page: Any,
+) -> None:
+    message = {'message': 'There is no batch scan.'}
+    page.route('**/api/state*', lambda route: route.fulfill(status=404, json=message))
+
+    page.wait_for_selector('#offline:has-text("There is no batch scan.")')
+    assert all('status of 404' in e for e in page.errors)
+    page.errors.clear()
+
+
 def test_the_page_loads_its_rows_under_a_path_prefix(
     browser: Any, pages: Pages, batch: Batch, sample: Measure
 ) -> None:

@@ -53,9 +53,11 @@ While following, such a row says "Set by hand, so Follow leaves it to you: reduc
 Once reduced, the row follows the files again, with its cells set by hand.
 A cell that a person reverts follows the files again at once: the next step reduces the row with its other cells as they are, so two reverts of one row can reduce it twice.
 A correction in the Runs view reaches the rows through the scan, so Follow reduces for it as for a file that arrives; two corrections that belong together reduce a row twice if a step runs between them.
+The scan of a correction is that of the page's own batch: the batch that follows gets the correction at its next step, and another batch at its **Rescan runs**.
 An action submits nothing but what a person asks to reduce: Apply reduces nothing, and the next step reduces the rows without a result with the settings applied.
 Apply forgets why Follow could not reduce a row, since the next step tries again.
-The page shows "Following, every N s", why the last step failed if it did, and, as an `incomplete` row, why a row could not be submitted.
+The page of the batch that follows shows "Following, every N s", why the last step failed if it did, and, as an `incomplete` row, why a row could not be submitted.
+If the batch that follows cannot be made, such as when its source raises at the first scan after a restart, its page says why in the bar at its top, and the next step tries again.
 Whatever a step raises, from the files, the workflow or the workspace, is the step's failure; the next step tries again.
 
 ## Layers
@@ -98,7 +100,14 @@ It also drops an answer when a newer request of the same kind was sent (`/api/ro
 An older answer of the poll is dropped by its `version`.
 Actions wait for each other in a queue, so that the server gets them in the order a person did them.
 The keys of many rows (a plot, the results as a zip) go in the body of a POST, since a URL has a limit.
-The page asks for `api/...`, relative to its own URL, and `/` redirects by a relative URL, so a parent app can mount it under a prefix: `parent.mount('/batch', create_app(pages))`, and the answers are gzipped for a client that accepts it.
+The page asks for `api/...`, relative to its own URL, and `/` redirects by a relative URL, so a parent app can mount it under a prefix, and the answers are gzipped for a client that accepts it.
+Starlette does not run the lifespan of a mounted app, which owns the timer of Follow, so the parent runs it:
+
+```python
+batch = create_app(pages)
+parent = FastAPI(lifespan=lambda _: batch.router.lifespan_context(batch))
+parent.mount('/batch', batch)
+```
 
 ## Where the definition is kept
 

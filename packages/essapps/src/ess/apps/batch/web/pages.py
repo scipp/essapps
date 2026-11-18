@@ -13,9 +13,9 @@ works with the application, so a request waits for at most one step.
 
 Follow is the one loop of the application
 (:class:`~ess.apps.batch.auto.Follow`). :meth:`Pages.tick` steps it, with or
-without a page open, through the page of the batch that follows, so that the
-page shows how the step went. :func:`~.api.create_app` owns the timer that
-calls it.
+without a page open, keeps what the step raised, and has the page of the batch
+that follows show what the step changed. :func:`~.api.create_app` owns the
+timer that calls it.
 """
 
 from __future__ import annotations
@@ -64,6 +64,8 @@ class Pages:
     runs_version:
         Counts the changes of the runs, so that the Runs view of each page
         asks for them again.
+    failure:
+        What the last step of Follow raised, ``None`` if it raised nothing.
     """
 
     def __init__(
@@ -86,6 +88,7 @@ class Pages:
         self.folder = folder
         self.lock = threading.RLock()
         self.runs_version = 1
+        self.failure: str | None = None
         self._pages: dict[str, Server] = {}
 
     def page(self, label: str) -> Server:
@@ -120,22 +123,23 @@ class Pages:
 
     def tick(self) -> None:
         """
-        A step of Follow, if a batch follows, by the page of that batch;
-        :func:`~.api.create_app` calls it on a timer. If the batch is gone,
-        no batch follows.
+        A step of Follow, then :meth:`Server.stepped <.server.Server.stepped>`
+        of the page of the batch that follows; :func:`~.api.create_app` calls
+        it on a timer. What the step raises is :attr:`failure`, and the next
+        step tries again.
         """
         # Under the lock, so that a tick that waited for a request sees what
-        # that request did: no step after "Stopped following". A step says
-        # what it raises; what it cannot say, such as an exception whose text
-        # raises, must not end the timer.
+        # that request did: no step after "Stopped following". What cannot be
+        # said, such as an exception whose text raises, or a page that cannot
+        # be made, must not end the timer.
         with self.lock, suppress(Exception):
-            label = self.follow.label
-            if label is None:
-                return
-            if label not in self.manager.batches():
-                self.follow.off()
-                return
-            self.page(label).step()
+            try:
+                self.follow.step()
+                self.failure = None
+            except Exception as error:  # the next step tries again
+                self.failure = f'Follow could not step: {str(error) or repr(error)}'
+            if (label := self.follow.label) is not None:
+                self.page(label).stepped()
 
     def new_runs(self) -> None:
         """A new version of the runs, which the Runs view of each page asks for."""

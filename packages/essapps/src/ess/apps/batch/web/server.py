@@ -58,17 +58,19 @@ outdated.
 A batch with a source offers to follow the files. The switch "Follow" makes
 the batch the one that the application's Follow steps
 (:class:`~ess.apps.batch.auto.Follow`), so no other batch follows. While it
-follows, :meth:`Pages.tick <.pages.Pages.tick>` calls :meth:`Server.step`
-every ``interval`` seconds, which scans as "Rescan runs" does and reduces the
-rows that :func:`~ess.apps.batch.arrived` gives, at the columns of the source,
-under the lock of all pages, with the batch's settings, whatever the form
-holds. Whatever a step raises is said in the state, and the next step runs all
-the same. Follow reduces a row for what the files changed, never for what a
-person changed (:attr:`~ess.apps.batch.RowState.changed_by_hand`): a row whose
-cells a person set waits for "Reduce". So an action, but turning Follow on,
-submits only what a person asks to reduce. Apply forgets why Follow could not
-reduce rows, since its next step tries them with the settings applied. Which
-batch follows is kept in the definitions, so a restart resumes.
+follows, :meth:`Pages.tick <.pages.Pages.tick>` steps it every ``interval``
+seconds, which scans as "Rescan runs" does and reduces the rows that
+:func:`~ess.apps.batch.arrived` gives, at the columns of the source, under the
+lock of all pages, with the batch's settings, whatever the form holds; then
+:meth:`Server.stepped` shows what the step changed. The page of the batch that
+follows says what the last step raised, and why rows were not reduced; the
+next step runs all the same. Follow reduces a row for what the files changed,
+never for what a person changed
+(:attr:`~ess.apps.batch.RowState.changed_by_hand`): a row whose cells a person
+set waits for "Reduce". So an action, but turning Follow on, submits only what
+a person asks to reduce. Apply forgets why Follow could not reduce rows, since
+its next step tries them with the settings applied. Which batch follows is
+kept in the definitions, so a restart resumes.
 """
 
 from __future__ import annotations
@@ -269,9 +271,6 @@ class Server:
         # The runs as listed at the last change of the runs' version.
         self._runs = self._runs_seen()
         self.start = uuid.uuid4().hex[:8]
-        # Why Follow did not reduce each row at its last reduction, by key.
-        self.waiting: dict[str, str] = {}
-        self.step_failure: str | None = None
         # What :meth:`_live` gave at the last change of the version.
         self._seen = self._live()
 
@@ -289,6 +288,13 @@ class Server:
         """Whether this batch is the one that follows."""
         return self.pages.follow.label == self.label
 
+    def _waiting(self) -> dict[str, str]:
+        """Why the last step of Follow did not reduce each row, by key."""
+        return {
+            key: f'Follow could not reduce it: {forms.message(reason)}'
+            for key, reason in self.pages.follow.refused.items()
+        }
+
     # Reading
 
     def _live(self) -> tuple[object, ...]:
@@ -297,9 +303,15 @@ class Server:
         records, the runs, which batch follows, and how the last step of
         Follow went.
         """
-        rows, records = self.batch.rows, self._listing.cursor
-        runs, follows = self.pages.runs_version, self.pages.follow.label
-        return rows, records, runs, follows, self.waiting, self.step_failure
+        pages = self.pages
+        return (
+            self.batch.rows,
+            self._listing.cursor,
+            pages.runs_version,
+            pages.follow.label,
+            pages.follow.refused,
+            pages.failure,
+        )
 
     def _moved(self) -> bool:
         """Whether what :meth:`_live` gives changed since the version moved."""
@@ -413,7 +425,7 @@ class Server:
             set() if unusable else set(earlier_settings(states, self.batch.columns))
         )
         refused = (
-            refused_again(states, self._at, self.waiting)
+            refused_again(states, self._at, self._waiting())
             if self._at is not None and self._follows()
             else {}
         )
@@ -509,7 +521,7 @@ class Server:
             other=batches[label].title if not on and label in batches else None,
             interval=self.pages.follow.interval,
             at=sorted(self._cells.titles[c] for c in self._at),
-            failure=self.step_failure if on else None,
+            failure=self.pages.failure if on else None,
         )
 
     def _failures(self, states: Mapping[str, RowState]) -> dict[str, str]:
@@ -852,46 +864,27 @@ class Server:
             self.pages.follow.off()
             return 'Stopped following.'
         self.pages.follow.on(self.label)
-        self.step()
+        self.pages.tick()
         return 'Following.'
 
-    def step(self) -> None:
+    def stepped(self) -> None:
         """
-        One step of Follow, if this batch follows: the scan of "Rescan runs",
-        then the reduction of :meth:`Automatic.reduce
-        <ess.apps.batch.auto.Automatic.reduce>`, with the batch's settings,
-        whatever the form holds. :attr:`waiting` says why each row was not
-        reduced. Whatever it raises, from the files, the workflow or the
-        workspace, is its failure, said in the state until a step runs
-        through. A step that changes nothing the page shows, such as the rows,
-        the runs, the records, what waits and why, or its failure, leaves the
-        version, so that a page polling it gets nothing new.
+        Show what a step of Follow on this batch changed: list again once, and
+        refresh the forms, since new rows may name files that they do not
+        offer yet. A step that changes nothing the page shows, such as the
+        rows, the runs, the records, what waits and why, or how it went,
+        leaves the version, so that a page polling it gets nothing new.
         """
         with self.lock:
-            if not self._follows():
-                return
-            follow = self.pages.follow
             try:
-                try:
-                    follow.step()
-                    self.waiting = {
-                        key: f'Follow could not reduce it: {forms.message(reason)}'
-                        for key, reason in follow.refused.items()
-                    }
-                finally:
-                    # One reading of the changes of records. The forms are
-                    # refreshed only if what the page shows changed, since
-                    # new rows may name files that the forms do not offer yet.
-                    self._listing = Listing(self.batch.client, previous=self._listing)
-                    if self._runs_seen() != self._runs:
-                        self._new_runs()
-                    if self._moved():
-                        self._refresh()
-                self.step_failure = None
-            except Exception as error:  # the next step tries again
-                self.step_failure = str(error) or repr(error)
-            if self._moved():
-                self._new_version()
+                self._listing = Listing(self.batch.client, previous=self._listing)
+                if self._runs_seen() != self._runs:
+                    self._new_runs()
+                if self._moved():
+                    self._refresh()
+            finally:
+                if self._moved():
+                    self._new_version()
 
     # Settings
 
@@ -914,7 +907,8 @@ class Server:
         # A refusal of a setting was a refusal of the settings replaced, and
         # Follow tries every row again with these at its next step.
         self.refused = [e for e in self.refused if e.entry]
-        self.waiting = {}
+        if self._follows():
+            self.pages.follow.forget()
         return 'Applied the settings.'
 
     @_action
@@ -1071,7 +1065,11 @@ class Server:
 
     @_action
     def correct(self, edit: CellEdit) -> str:
-        """Correct a field of runs; the rows follow."""
+        """
+        Correct a field of runs, and scan this page's batch, so that its rows
+        follow. The batch that follows gets the correction at its next step,
+        and another batch at its "Rescan runs".
+        """
         marks, files = self._marked()
         value = self._read(marks, edit)
         fields = {edit.column: None if value is UNSET else value}

@@ -181,7 +181,7 @@ class Follow:
         The seconds between two steps, for whoever calls :meth:`step`.
     refused:
         :attr:`Automatic.refused` of the last step that did not raise;
-        emptied by :meth:`on` and :meth:`off`.
+        emptied by :meth:`on`, :meth:`off` and :meth:`forget`.
     """
 
     def __init__(
@@ -214,6 +214,10 @@ class Follow:
     def off(self) -> None:
         """Let no batch follow."""
         self._keep(None)
+
+    def forget(self) -> None:
+        """Forget why rows were refused, such as after a change of settings."""
+        self.refused = {}
 
     def step(self) -> dict[str, Record]:
         """

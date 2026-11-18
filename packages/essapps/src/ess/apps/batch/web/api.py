@@ -9,7 +9,8 @@ Each action of a page is a ``POST`` that answers with the
 :class:`~.models.State` after it, or a 422 with ``{'message': ...}``; the
 reasons of a refused reduction are in the state. ``GET api/state`` with the
 ``after`` version and the ``start`` the page has answers 204 while nothing
-changed. A label that is no batch answers 404. A row is named by its key in
+changed. The page and the API of a label that is no batch answer 404; the
+static files are served under any label. A row is named by its key in
 the body or the query, never in the path, since a key may hold any character;
 the keys of many rows go in the body, since a URL has a limit. A label is one
 segment of a path (:func:`~ess.apps.batch.manager.check_label`). The page asks
@@ -76,7 +77,9 @@ def create_app(pages: Pages) -> FastAPI:
     The app owns the timer of Follow: a thread that the app's lifespan starts,
     and stops at its end once a step that runs has finished. It calls
     :meth:`Pages.tick <.pages.Pages.tick>` every ``pages.follow.interval``
-    seconds, which steps the batch that follows, if one does.
+    seconds, which steps the batch that follows, if one does. A parent app
+    that mounts this one runs its lifespan, since Starlette does not (see
+    ``README.md``).
     """
 
     @asynccontextmanager

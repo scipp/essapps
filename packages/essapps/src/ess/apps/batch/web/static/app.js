@@ -118,7 +118,7 @@ async function refresh() {
     throw new Offline('The server does not answer.');
   }
   if (response.status === 204) return;
-  if (!response.ok) throw new Offline(`The server answered ${response.status}.`);
+  if (!response.ok) throw new Offline(response.body?.message ?? `The server answered ${response.status}.`);
   render(response.body);
 }
 
@@ -367,8 +367,7 @@ function renderFollow(follow) {
   const status = $('follow-status');
   status.classList.toggle('bad', Boolean(follow.failure));
   status.textContent = follow.failure
-    ? `Last step failed: ${follow.failure}`
-    : follow.on ? `Following, every ${follow.interval} s` : `${follow.other} follows`;
+    ?? (follow.on ? `Following, every ${follow.interval} s` : `${follow.other} follows`);
   status.title = status.textContent;
 }
 

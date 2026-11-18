@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Follow on the page of a batch: a step of the server of the batch that follows
-scans as "Rescan runs" does, and reduces the rows that arrived. The tests call
-:meth:`Server.step` or :meth:`Pages.tick` in place of the timer, except one,
-which runs the app's timer.
+Follow on the page of a batch: a step of the batch that follows scans as
+"Rescan runs" does, and reduces the rows that arrived. The tests call
+:meth:`Pages.tick` in place of the timer, except one, which runs the app's
+timer.
 """
 
 import threading
@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
@@ -73,7 +74,7 @@ def test_a_step_shows_new_rows_and_runs_and_reduces_the_rows_that_arrived(
     sample(2, 'oil', partner=False)
 
     gate.close()
-    server.step()
+    server.pages.tick()
 
     after = server.state()
     assert after.version > before.version
@@ -105,14 +106,14 @@ def test_a_step_that_finds_nothing_new_changes_no_version(
     server: Server, client: Client, sample: Measure, action: Any
 ) -> None:
     sample(1, 'water')
-    server.step()
+    server.pages.tick()
     client.wait(client.records())
-    server.step()  # sees the result that finished
+    server.pages.tick()  # sees the result that finished
     action(server)
     before = versions(server)
 
-    server.step()
-    server.step()
+    server.pages.tick()
+    server.pages.tick()
 
     assert versions(server) == before
     assert server.poll(before[0], server.start) is None
@@ -137,11 +138,11 @@ def test_a_step_that_changes_one_thing_the_page_shows_tells_the_page(
     sample(1, 'water')
     server.follow(True)
     client.wait(client.records())
-    server.step()
+    server.pages.tick()
     seen = server.version
 
     changed_behind_the_page(server, what, fake)
-    server.step()
+    server.pages.tick()
 
     assert server.poll(seen, server.start) is not None
 
@@ -151,12 +152,12 @@ def test_a_step_after_a_result_finished_tells_the_page(
 ) -> None:
     sample(1, 'water')
     gate.close()
-    server.step()
+    server.pages.tick()
     running = server.state().version
     gate.open()
     client.wait(client.records())
 
-    server.step()
+    server.pages.tick()
 
     shown = server.poll(running, server.start)
     assert shown is not None
@@ -208,7 +209,7 @@ def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_p
     gate.close()
     finishing.finishing = True
 
-    server.step()
+    server.pages.tick()
 
     shown = page.get(
         '/api/state', params={'after': server.version, 'start': server.start}
@@ -221,11 +222,11 @@ def test_a_step_reduces_a_row_whose_cell_changed_at_a_column_of_at(
     server: Server, client: Client, sample: Measure, fake: FakeFiles
 ) -> None:
     sample(1, 'water')
-    server.step()
+    server.pages.tick()
     first = done(server, client).rows[0].record
 
     fake.measure(1005, 2.0, role='transmission', sample='water')
-    server.step()
+    server.pages.tick()
 
     assert done(server, client).rows[0].record != first
 
@@ -236,10 +237,10 @@ def test_a_run_that_a_step_finds_can_be_chosen_in_a_cell_without_a_runs_view(
     pages = Pages(manager, Follow(manager, refusing))
     pages.follow.on(label)
     server = pages.page(label)
-    server.step()
+    server.pages.tick()
     sample(1, 'water', partner=False)  # a row that waits, so no record is made
 
-    server.step()
+    server.pages.tick()
 
     assert option(server, 'sample', 1) == 'run 1 (sample)'
 
@@ -248,12 +249,12 @@ def test_a_step_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_the
     server: Server, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    server.step()
+    server.pages.tick()
     first = done(server, client).rows[0].record
 
     bins(server, 3)
     sample(2, 'oil')
-    server.step()
+    server.pages.tick()
 
     shown = {row.name: row for row in done(server, client).rows}
     assert (shown['water'].record, shown['water'].earlier) == (first, True)
@@ -286,7 +287,7 @@ def test_apply_while_following_reduces_nothing_and_the_next_step_uses_it(
     done(server, client)
     sample(2, 'oil')
     bins(server, 0)
-    server.step()
+    server.pages.tick()
     before = ids(client)
 
     server.edit_settings(Edit(path=BINS, op='set', value=3))
@@ -295,7 +296,7 @@ def test_apply_while_following_reduces_nothing_and_the_next_step_uses_it(
     assert ids(client) == before
     oil = {row.name: row for row in applied.rows}['oil']
     assert (oil.status, oil.reason) == ('ready', '')
-    server.step()
+    server.pages.tick()
     shown = {row.name: row for row in done(server, client).rows}
     assert (shown['water'].earlier, shown['oil'].status) == (True, 'done')
     assert client.latest('scan', '2').request.params['binning'] == {'bins': 3}
@@ -310,7 +311,7 @@ def test_a_done_row_reads_outdated_while_follow_is_refused_the_settings(
     sample(2, 'oil')
     bins(server, 0)
 
-    server.step()
+    server.pages.tick()
 
     shown = {row.name: row for row in server.state().rows}
     assert (shown['water'].status, shown['oil'].status) == ('outdated', 'incomplete')
@@ -327,13 +328,13 @@ def test_a_step_that_raises_is_said_and_the_next_step_runs(
     sample(1, 'water')
     nameless = fake.measure(7, 1.0, role='transmission')  # the source needs a name
 
-    server.step()
+    server.pages.tick()
     failed = server.state().follow
     files.correct(nameless, sample='oil')
-    server.step()
+    server.pages.tick()
 
     assert failed is not None
-    assert failed.failure == "'sample'"
+    assert failed.failure == "Follow could not step: 'sample'"
     assert server.state().follow.failure is None  # type: ignore[union-attr]
     assert statuses(done(server, client)) == {'water': 'done'}
 
@@ -345,7 +346,7 @@ def test_a_step_waits_for_a_request_that_holds_the_lock(
     stepped = threading.Event()
 
     with server.lock:
-        thread = threading.Thread(target=lambda: (server.step(), stepped.set()))
+        thread = threading.Thread(target=lambda: (server.pages.tick(), stepped.set()))
         thread.start()
         assert not stepped.wait(0.2)
         assert server.state().rows == []
@@ -423,13 +424,13 @@ def test_follow_leaves_a_row_changed_by_hand_to_the_person(
     for column, run in [('sample', 2), ('transmission', 1002)]:
         value = option(server, column, run)
         edited = server.edit(CellEdit(keys=['1'], column=column, value=value))
-        server.step()
+        server.pages.tick()
 
     assert ids(client) == before
     assert statuses(edited) == {'water': 'outdated', 'oil': 'done'}
     assert edited.action.label == 'Reduce 1 outdated'
     server.reduce(Reduce(which='remaining'))
-    server.step()
+    server.pages.tick()
     assert len(ids(client) - before) == 1
     water, oil = (client.latest('scan', k).request.params for k in ('1', '2'))
     assert (water['sample'], water['transmission']) == (
@@ -469,7 +470,7 @@ def test_a_row_a_person_reduced_after_an_edit_follows_the_files_again(
     edited = done(server, client).rows[0].record
 
     fake.measure(1005, 2.0, role='transmission', sample='water')
-    server.step()
+    server.pages.tick()
 
     assert statuses(done(server, client)) == {'water': 'done', 'oil': 'done'}
     record = client.latest('scan', '1')
@@ -494,7 +495,7 @@ def test_a_cell_reverted_after_a_reduction_is_followed_at_the_next_step(
     done(server, client)
 
     server.revert(Cells(keys=['1'], column='sample'))
-    server.step()
+    server.pages.tick()
 
     water, oil = (client.latest('scan', k).request.params for k in ('1', '2'))
     assert water['sample'] != oil['sample']  # the scan's
@@ -511,7 +512,7 @@ def test_an_edit_not_reduced_leaves_its_row_to_the_person_when_a_file_arrives(
     before = ids(client)
 
     fake.measure(1005, 2.0, role='transmission', sample='water')
-    server.step()
+    server.pages.tick()
 
     (row,) = server.state().rows
     assert ids(client) == before
@@ -530,7 +531,7 @@ def test_follow_reduces_with_the_batch_s_settings_whatever_the_form_holds(
     server.edit_settings(Edit(path=BINS, op='set', value=value))
     sample(1, 'water')
 
-    server.step()
+    server.pages.tick()
 
     assert statuses(done(server, client)) == {'water': 'done'}
     assert client.latest('scan', '1').request.params['binning'] == {'bins': 2}
@@ -646,6 +647,28 @@ def test_the_app_steps_while_following_and_stops_with_the_app(
     assert not any(t.name == 'every' for t in threading.enumerate())
 
 
+def test_a_parent_that_runs_the_lifespan_of_the_app_it_mounts_steps_follow(
+    manager: BatchManager,
+    refusing: Refusing,
+    label: str,
+    sample: Measure,
+    client: Client,
+) -> None:
+    sample(1, 'water')
+    follow = Follow(manager, refusing, interval=0.01)
+    follow.on(label)
+    batch = create_app(Pages(manager, follow))
+    parent = FastAPI(lifespan=lambda _: batch.router.lifespan_context(batch))
+    parent.mount('/batch', batch)
+
+    with TestClient(parent):
+        give_up = time.monotonic() + 10
+        while not client.records() and time.monotonic() < give_up:
+            time.sleep(0.01)
+
+    assert [(r.label, r.member) for r in client.records()] == [(label, '1')]
+
+
 # One Follow for all batches
 
 
@@ -700,3 +723,45 @@ def test_a_tick_steps_the_batch_that_follows_without_a_page_open(
 
     client.wait(client.records())
     assert [(r.label, r.member) for r in client.records()] == [('scan', '1')]
+
+
+def test_a_tick_after_follow_moved_steps_the_batch_that_follows_now(
+    server: Server, pages: Pages, manager: BatchManager, client: Client, sample: Measure
+) -> None:
+    other = manager.create(STAGED.name, title='Other', source='pairs')
+    pages.follow.on(other)
+    sample(1, 'water')
+
+    pages.tick()
+
+    client.wait(client.records())
+    assert [(r.label, r.member) for r in client.records()] == [(other, '1')]
+
+
+def test_the_failure_of_a_step_shows_on_the_page_of_the_batch_that_follows_only(
+    server: Server, pages: Pages, manager: BatchManager, fake: FakeFiles
+) -> None:
+    other = pages.page(manager.create(STAGED.name, title='Other', source='pairs'))
+    fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
+
+    pages.tick()
+
+    following, shown = server.state().follow, other.state().follow
+    assert following is not None
+    assert following.failure == 'Follow could not step: half written'
+    assert shown is not None
+    assert shown.failure is None
+
+
+def test_a_step_that_cannot_make_its_batch_is_a_failure_that_its_page_says(
+    pages: Pages, label: str, fake: FakeFiles, sample: Measure
+) -> None:
+    pages.follow.on(label)
+    sample(1, 'water')
+    fake.measure(7, 1.0, role='transmission')  # the source needs a name
+
+    pages.tick()
+
+    assert pages.failure == "Follow could not step: 'sample'"
+    with pytest.raises(Problem, match="Cannot show scan: 'sample'"):
+        pages.page(label)

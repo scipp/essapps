@@ -9,7 +9,7 @@ extra ``web``. How to run it, its layers and its limits are in
 """
 
 from .api import create_app
-from .pages import Missing, Pages
+from .pages import Pages
 from .server import Draw, Server, Shown
 
-__all__ = ['Draw', 'Missing', 'Pages', 'Server', 'Shown', 'create_app']
+__all__ = ['Draw', 'Pages', 'Server', 'Shown', 'create_app']
