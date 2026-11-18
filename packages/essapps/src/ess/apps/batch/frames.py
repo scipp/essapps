@@ -239,7 +239,8 @@ def reduce_table(
         earlier settings is left, as it is by the page's "Reduce".
     earlier_settings:
         Together with ``remaining``, reduce also the rows reduced with earlier
-        settings (:func:`~.state.earlier_settings`), as "Apply to all" does.
+        settings (:func:`~.state.earlier_settings`), as the page's "Reduce them
+        again" does.
     definitions:
         Where the batch of ``label`` is kept (:mod:`.definition`).
 

@@ -32,8 +32,6 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
 
-from pydantic_core import to_jsonable_python
-
 from ess.spec.refs import Loc
 
 from ...errors import FieldError
@@ -269,8 +267,3 @@ def read(field: Field, sent: Any) -> Any:
             raise ValueError(missing[0].msg)
         return value
     return _value(inner, sent)
-
-
-def jsonable(value: Any) -> Any:
-    """``value`` in JSON form, as a record holds it."""
-    return to_jsonable_python(value, by_alias=True)
