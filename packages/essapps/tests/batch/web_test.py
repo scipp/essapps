@@ -68,6 +68,26 @@ def thickness(http: TestClient, keys: list[str], value: Any) -> dict[str, Any]:
     return http.post('/api/cells', json=edit).json()
 
 
+def draft(http: TestClient, value: Any) -> dict[str, Any]:
+    """Set the number of bins in the form only."""
+    edit = {'path': BINS, 'op': 'set', 'value': value}
+    return http.post('/api/settings', json=edit).json()
+
+
+def bins(http: TestClient, value: Any) -> dict[str, Any]:
+    """Set the number of bins in the form, and apply it."""
+    draft(http, value)
+    applied = http.post('/api/settings/apply')
+    assert applied.status_code == 200, applied.json()
+    return applied.json()
+
+
+def form_bins(shown: dict[str, Any]) -> Any:
+    """The number of bins that the form of the settings shows."""
+    (binning, *_) = shown['settings']
+    return binning['child']['children'][0]['value']
+
+
 def reduced(http: TestClient, client: Client, which: str = 'remaining') -> None:
     assert http.post('/api/reduce', json={'which': which}).status_code == 200
     client.wait(client.records())
@@ -280,7 +300,7 @@ def test_a_changed_setting_leaves_the_rows_done_marked_with_earlier_settings(
 ) -> None:
     reduced(http, client)
 
-    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 3})
+    bins(http, 3)
 
     shown = rows(http)
     assert statuses(http) == {'1': 'done', '2': 'done', '3': 'incomplete'}
@@ -306,7 +326,7 @@ def test_reduce_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_the
     http: TestClient, client: Client
 ) -> None:
     reduced(http, client)
-    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 3})
+    bins(http, 3)
     thickness(http, ['2'], 4.0)
 
     reduced(http, client)
@@ -327,7 +347,7 @@ def test_a_page_started_again_marks_the_rows_reduced_with_other_settings(
     batch.scan()
     again = TestClient(create_app(batch, name='name'))
 
-    again.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 3})
+    bins(again, 3)
 
     assert statuses(again) == {'1': 'done', '2': 'done', '3': 'incomplete'}
     assert rows(again)['1']['earlier']
@@ -379,10 +399,10 @@ def test_a_row_reduced_by_another_spec_version_is_outdated(
 def test_a_failed_row_stays_failed_when_the_settings_change(
     http: TestClient, client: Client
 ) -> None:
-    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 1})
+    bins(http, 1)
     reduced(http, client)
 
-    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 2})
+    bins(http, 2)
 
     assert statuses(http)['1'] == 'failed'
     assert rows(http)['1']['reason'] == 'one bin'
@@ -392,10 +412,10 @@ def test_a_failed_row_stays_failed_when_the_settings_change(
 def test_a_failed_row_reads_failed_in_the_table_and_the_counts_when_settings_change(
     http: TestClient, client: Client
 ) -> None:
-    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 1})
+    bins(http, 1)
     reduced(http, client)
 
-    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 2})
+    bins(http, 2)
 
     table = pd.read_csv(io.BytesIO(http.get('/api/table.csv').content), dtype=str)
     assert list(table['status']) == ['failed', 'failed', 'incomplete']
@@ -403,19 +423,61 @@ def test_a_failed_row_reads_failed_in_the_table_and_the_counts_when_settings_cha
     assert (counts['failed'], counts['outdated']) == (2, 0)
 
 
-def test_incomplete_settings_block_reducing_and_are_not_applied(
-    http: TestClient, client: Client
+def test_an_edit_of_the_settings_changes_the_form_only(
+    http: TestClient, client: Client, batch: Batch
 ) -> None:
     reduced(http, client)
 
+    edited = draft(http, 3)
+
+    assert form_bins(edited) == 3
+    assert edited['settings_changed'] is True
+    assert batch.settings == {}
+    assert statuses(http) == {'1': 'done', '2': 'done', '3': 'incomplete'}
+    assert not rows(http)['1']['earlier']
+
+
+def test_apply_writes_the_form_to_the_batch(http: TestClient, batch: Batch) -> None:
+    draft(http, 3)
+
+    applied = http.post('/api/settings/apply').json()
+
+    assert batch.settings['binning'] == {'bins': 3}
+    assert applied['settings_changed'] is False
+    assert applied['notice'] == 'Applied the settings.'
+
+
+def test_discard_shows_the_batch_s_settings_again(
+    http: TestClient, batch: Batch
+) -> None:
+    bins(http, 3)
+    draft(http, 5)
+
+    discarded = http.post('/api/settings/discard').json()
+
+    assert form_bins(discarded) == 3
+    assert discarded['settings_changed'] is False
+    assert batch.settings['binning'] == {'bins': 3}
+
+
+def test_apply_is_refused_while_the_form_misses_something(
+    http: TestClient, client: Client, batch: Batch
+) -> None:
+    reduced(http, client)
     http.post(
         '/api/settings',
         json={'path': ['offset'], 'op': 'choose', 'value': 'From a record'},
     )
 
+    applied = http.post('/api/settings/apply')
+
+    assert applied.json() == {'message': 'Not applied: Offset: choose a result.'}
     shown = state(http)
+    assert shown['settings_changed'] is True
     assert shown['settings_problem'] == 'Offset: choose a result'
-    assert shown['action']['blocked'] == 'Offset: choose a result'
+    assert shown['action']['label'] == 'Fill in or discard the settings'
+    assert shown['action']['blocked'] == 'Fill in or discard the settings'
+    assert batch.settings == {}
     assert {r['status'] for r in shown['rows'][:2]} == {'done'}
 
 
@@ -424,7 +486,7 @@ def test_a_setting_refused_is_marked_at_its_field_before_reducing(
 ) -> None:
     reduced(http, client)
 
-    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 0})
+    bins(http, 0)
 
     shown = state(http)
     (binning, *_) = shown['settings']
@@ -433,6 +495,26 @@ def test_a_setting_refused_is_marked_at_its_field_before_reducing(
     assert 'greater than' in shown['settings_problem']
     assert statuses(http) == {'1': 'outdated', '2': 'outdated', '3': 'incomplete'}
     assert http.post('/api/reduce', json={'which': 'remaining'}).status_code == 422
+
+
+def test_a_refused_setting_is_marked_only_while_the_form_shows_it(
+    http: TestClient,
+) -> None:
+    bins(http, 0)
+
+    other = http.post(
+        '/api/settings', json={'path': ['offset'], 'op': 'choose', 'value': 'Given'}
+    ).json()
+    edited = draft(http, 3)
+    discarded = http.post('/api/settings/discard').json()
+
+    def problem(shown: dict[str, Any]) -> str | None:
+        return shown['settings'][0]['child']['children'][0]['problem']
+
+    assert 'greater than' in (problem(other) or '')
+    assert 'greater than' in (other['settings_problem'] or '')
+    assert (problem(edited), edited['settings_problem']) == (None, None)
+    assert 'greater than' in (problem(discarded) or '')
 
 
 @pytest.mark.parametrize('suffix', ['csv', 'xlsx'])
@@ -500,7 +582,7 @@ def test_a_page_on_settings_kept_for_another_version_starts_and_names_them(
     )
 
 
-def test_settings_kept_that_the_form_cannot_show_are_named_and_kept_until_a_change(
+def test_settings_kept_that_the_form_cannot_show_are_named_and_kept_until_apply(
     tmp_path: Path,
 ) -> None:
     client, files, definitions = demo.open_demo(tmp_path)
@@ -512,12 +594,9 @@ def test_settings_kept_that_the_form_cannot_show_are_named_and_kept_until_a_chan
         page = TestClient(demo.build(client, files, definitions))
         shown = state(page)
         still = definitions.load(settings_key('demo-iofq'), lambda d: d['params'])
-        page.post(
-            '/api/settings',
-            json={'path': ['wavelength', 'start'], 'op': 'set', 'value': 3},
-        )
-        after = state(page)
+        after = page.post('/api/settings/apply').json()
 
+    assert shown['settings_changed'] is False
     assert shown['settings_problem'].startswith(
         'Settings that this form cannot show: wavelength = 5.0: 5.0 is not a group'
     )
@@ -569,15 +648,29 @@ def test_a_change_the_definitions_cannot_keep_answers_422_and_nothing_changes(
 ) -> None:
     flaky.fail = True
 
-    setting = kept.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 7})
+    draft(kept, 7)
+    setting = kept.post('/api/settings/apply')
     cell = thickness(kept, ['1'], 3)
-    (binning, *_) = state(kept)['settings']
 
-    assert setting.status_code == 422
-    assert setting.json()['message'] == 'The change was not kept: disk full'
+    assert setting.json() == {'message': 'The change was not kept: disk full'}
     assert cell == {'message': 'The change was not kept: disk full'}
-    assert binning['child']['children'][0]['value'] == 2
+    assert settings_key('kept') not in flaky.kept
     assert not rows(kept)['1']['cells']['thickness']['edited']
+
+
+def test_settings_not_kept_stay_in_the_form_to_apply_again(
+    kept: TestClient, flaky: Flaky
+) -> None:
+    draft(kept, 7)
+    flaky.fail = True
+    kept.post('/api/settings/apply')
+    shown = state(kept)
+    flaky.fail = False
+
+    kept.post('/api/settings/apply')
+
+    assert (form_bins(shown), shown['settings_changed']) == (7, True)
+    assert flaky.kept[settings_key('kept')]['params']['binning'] == {'bins': 7}
 
 
 def test_a_correction_of_several_runs_is_one_write_and_all_or_none(
@@ -642,6 +735,7 @@ def test_what_a_person_set_on_the_page_is_there_when_it_is_served_again(
             '/api/settings',
             json={'path': ['wavelength', 'start'], 'op': 'set', 'value': 3},
         )
+        page.post('/api/settings/apply')
         page.post(
             '/api/runs/cells',
             json={'keys': [run], 'column': 'sample', 'value': 'moved'},
@@ -661,46 +755,80 @@ def test_what_a_person_set_on_the_page_is_there_when_it_is_served_again(
     assert {r['key']: r for r in after['rows']}['60302']['cells']['thickness']['edited']
 
 
-def test_the_settings_downloaded_and_uploaded_are_the_same(
+def test_a_settings_file_loaded_fills_the_form_until_apply(
     http: TestClient, batch: Batch
 ) -> None:
     content = http.get('/api/settings.yaml').content
-    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 9})
+    bins(http, 9)
 
-    http.post('/api/settings.yaml', params={'name': 'mine.yaml'}, content=content)
+    name = {'name': 'mine.yaml'}
+    loaded = http.post('/api/settings.yaml', params=name, content=content).json()
+    http.post('/api/settings/apply')
 
-    (binning, *_) = state(http)['settings']
-    assert binning['child']['children'][0]['value'] == 2
+    assert loaded['notice'] == (
+        'The form shows the settings of mine.yaml. Apply to use them.'
+    )
+    assert (form_bins(loaded), loaded['settings_changed']) == (2, True)
     assert batch.settings['binning'] == {'bins': 2}
 
 
-def test_settings_assigned_by_code_show_and_an_edit_of_another_keeps_them(
+def test_a_refused_settings_file_leaves_the_form_as_it_was(
     http: TestClient, batch: Batch
 ) -> None:
-    batch.settings = {'binning': {'bins': 5}, 'offset': {'value': 1.5}}
+    template = yaml.safe_load(http.get('/api/settings.yaml').content)
+    template['params'] = {'binning': {'bins': 5}, 'offset': 'nonsense'}
+    before = draft(http, 3)
 
-    (binning, *_) = state(http)['settings']
-    http.post(
-        '/api/settings', json={'path': ['offset', 'value'], 'op': 'set', 'value': 2}
+    loaded = http.post(
+        '/api/settings.yaml',
+        params={'name': 'f'},
+        content=yaml.safe_dump(template).encode(),
     )
 
-    assert binning['child']['children'][0]['value'] == 5
+    assert loaded.status_code == 422
+    assert state(http)['settings'] == before['settings']
+    assert batch.settings == {}
+
+
+def test_settings_the_batch_has_show_and_an_applied_edit_of_another_keeps_them(
+    batch: Batch,
+) -> None:
+    batch.settings = {'binning': {'bins': 5}, 'offset': {'value': 1.5}}
+    page = TestClient(create_app(batch))
+
+    shown = state(page)
+    page.post(
+        '/api/settings', json={'path': ['offset', 'value'], 'op': 'set', 'value': 2}
+    )
+    page.post('/api/settings/apply')
+
+    assert form_bins(shown) == 5
     assert batch.settings == {'binning': {'bins': 5}, 'offset': {'value': 2.0}}
 
 
-def test_settings_with_something_missing_are_not_written_reduced_or_downloaded(
-    http: TestClient, batch: Batch, client: Client
+@pytest.mark.parametrize('which', ['remaining', 'earlier', 'all', 'selected'])
+def test_while_the_form_holds_a_change_nothing_is_reduced(
+    http: TestClient, client: Client, which: str
 ) -> None:
-    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 3})
-    before = dict(batch.settings)
+    draft(http, 3)
 
-    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': None})
-    reduce = http.post('/api/reduce', json={'which': 'remaining'})
+    reduce = http.post('/api/reduce', json={'which': which, 'keys': ['1']})
+
+    assert reduce.json() == {
+        'message': 'Nothing was reduced: apply or discard the settings.'
+    }
+    assert state(http)['action']['blocked'] == 'Apply or discard the settings'
+    assert client.records(label='scan') == []
+
+
+def test_while_the_form_holds_a_change_the_settings_are_not_downloaded(
+    http: TestClient,
+) -> None:
+    draft(http, 3)
+
     download = http.get('/api/settings.yaml')
 
-    assert batch.settings == before
-    assert (reduce.status_code, download.status_code) == (422, 422)
-    assert client.records(label='scan') == []
+    assert download.json() == {'message': 'Apply or discard the settings first.'}
 
 
 @pytest.mark.parametrize(
@@ -808,13 +936,28 @@ def test_a_row_shows_which_settings_its_result_was_reduced_with(
     http: TestClient, client: Client
 ) -> None:
     reduced(http, client)
-    http.post('/api/settings', json={'path': BINS, 'op': 'set', 'value': 5})
+    bins(http, 5)
 
     detail = http.get('/api/row', params={'key': '1'}).json()
     assert detail['differs'] == ['binning']
-    http.post('/api/row/use-settings', json={'key': '1'})
 
-    assert statuses(http)['1'] == 'done'
+
+def test_the_settings_of_a_row_fill_the_form_until_apply(
+    http: TestClient, client: Client, batch: Batch
+) -> None:
+    reduced(http, client)
+    bins(http, 5)
+
+    used = http.post('/api/row/use-settings', json={'key': '1'}).json()
+    applied = http.post('/api/settings/apply').json()
+
+    assert used['notice'] == (
+        'The form shows the settings water was reduced with. Apply to use them.'
+    )
+    assert (form_bins(used), used['settings_changed']) == (2, True)
+    assert used['rows'][0]['earlier']
+    assert batch.settings['binning'] == {'bins': 2}
+    assert not applied['rows'][0]['earlier']
 
 
 def test_a_reduction_of_one_row_alone_becomes_its_result(

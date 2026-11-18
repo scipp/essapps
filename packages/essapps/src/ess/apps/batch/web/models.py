@@ -129,9 +129,9 @@ class Action(BaseModel):
     """
     What the primary button does, ``label``, or why it cannot, ``blocked``;
     how many rows each way of reducing takes: ``remaining``, ``again`` (all),
-    and ``earlier``, those reduced with earlier settings, which "Apply to all"
-    reduces; and while rows run, how many of the rows submitted with them are
-    finished, as ``[finished, all]``.
+    and ``earlier``, those reduced with earlier settings, which "Reduce them
+    again" in the Settings tab reduces; and while rows run, how many of the
+    rows submitted with them are finished, as ``[finished, all]``.
     """
 
     label: str
@@ -183,7 +183,12 @@ class State(BaseModel):
     """
     Everything the page shows but the details of one row, the plot, and the
     runs. ``start`` changes when the server starts again, ``version`` with each
-    change, and ``runs`` with each change of the runs. ``follow`` is ``None``
+    change, and ``runs`` with each change of the runs. ``settings`` is the form
+    of the settings. ``settings_changed`` says whether a person changed it and
+    has not applied the change; the rows read as with the batch's settings.
+    ``settings_problem`` names the batch's settings that the form cannot show,
+    what the form misses, and why the batch's settings are refused where the
+    form shows them. ``follow`` is ``None``
     if the page does not offer to follow the files. ``notice`` says what the
     action that answers with this state did.
     """
@@ -202,6 +207,7 @@ class State(BaseModel):
     action: Action
     settings: list[Node]
     settings_problem: str | None
+    settings_changed: bool
     refused: list[Refused]
     follow: Follow | None = None
     notice: str = ''

@@ -274,6 +274,69 @@ def test_a_row_with_a_result_arrives_for_a_change_at_a_column_of_at(
     assert arrived(found, at) == (['a'] if given else [])
 
 
+@pytest.mark.parametrize(
+    ('by_hand', 'status', 'changed', 'other', 'given'),
+    [
+        # a row of the scan, never edited
+        (set(), None, set(), {}, True),
+        (set(), Status.COMPLETED, {'sample'}, {}, True),
+        # a cell edited, and no result
+        ({'thickness'}, None, set(), {}, False),
+        # reduced with the edit, then a file changed a cell of `at`
+        ({'thickness'}, Status.COMPLETED, {'sample'}, {}, True),
+        # a result older than the edit
+        ({'sample'}, Status.COMPLETED, {'sample'}, {}, False),
+        # an edit outside `at` not reduced yet, and a file changed `at`
+        ({'thickness'}, Status.COMPLETED, {'sample', 'thickness'}, {}, False),
+        # a row added by hand: every column is set by hand
+        (set(COLUMNS), None, set(), {}, False),
+        (set(COLUMNS), Status.COMPLETED, set(), {}, False),
+        (set(COLUMNS), Status.COMPLETED, {'sample'}, {}, False),
+        # a failed result
+        ({'thickness'}, Status.FAILED, {'thickness'}, {}, False),
+        ({'thickness'}, Status.FAILED, {'sample'}, {}, True),
+        # a result of another spec, which lacks a column set by hand
+        ({'sample'}, Status.COMPLETED, {'sample'}, {'spec_changed': {'a'}}, False),
+        ({'thickness'}, Status.COMPLETED, {'sample'}, {'spec_changed': {'a'}}, True),
+    ],
+)
+def test_a_row_changed_by_hand_is_left_to_a_person(
+    by_hand: set[str],
+    status: Status | None,
+    changed: set[str],
+    other: dict[str, Any],
+    given: bool,
+) -> None:
+    found = row_states(
+        [Row('a', {'sample': 'x'})],
+        Model,
+        COLUMNS,
+        {} if status is None else {'a': record('1', 'a')},
+        {} if status is None else {'1': status},
+        changed={'a': frozenset(changed)},
+        set_by_hand={'a': by_hand},
+        **other,
+    )
+
+    assert arrived(found, {'sample'}) == (['a'] if given else [])
+    # what a person changed, the page's "Reduce" reduces
+    assert not found['a'].changed_by_hand or left_to_reduce(found, COLUMNS) == ['a']
+
+
+def test_a_row_changed_by_hand_is_not_refused_again_while_not_compared() -> None:
+    found = row_states(
+        [Row('a', {'sample': 'x'}), Row('b', {'sample': 'y'})],
+        Model,
+        COLUMNS,
+        {},
+        {},
+        changed=None,
+        set_by_hand={'a': {'thickness'}},
+    )
+
+    assert refused_again(found, {'sample'}, {'a': 'no', 'b': 'no'}) == {'b': 'no'}
+
+
 def test_a_ready_row_without_a_result_arrives_whatever_at_is() -> None:
     found = states([Row('a', {'sample': 'x'}), Row('b')])
 

@@ -24,17 +24,28 @@ The demo, the LoKI page and the LoKI arrivals take `--follow [SECONDS]`, which t
 
 ## Settings and Follow
 
+The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again.
+While a person has changed the form and not applied the change, the bar above it reads "Changed, not applied yet", and the rows still read as with the batch's settings.
+Apply is refused while the form misses something, and the bar says what; it also names the settings kept that the form cannot show, which Apply replaces.
+While the form holds a change, **Reduce**, the ways of its menu, **Reduce them again** and **Download settings** are refused, so that nothing is reduced or saved with settings other than those shown; "Reduce alone" in the row tab, which uses its own parameters, is not.
+**Load settings** and "Put these settings in the form" in the row tab fill the form, after a confirmation if it holds a change; a file that cannot be read whole leaves the form as it was.
 A change of the settings applies to the rows not reduced yet.
 A row reduced before stays `done`, marked "earlier settings", and **Reduce** leaves it (`ess.apps.batch.left_to_reduce`).
-**Apply to all** in the Settings tab reduces those rows again (`earlier_settings`), after a confirmation that names how many.
-While the form misses something, its changes are not applied: the batch keeps the settings it had.
+**Reduce them again** in the Settings tab reduces those rows (`earlier_settings`), after a confirmation that names how many.
+The page sends its actions in the order a person did them, so a value typed and Apply clicked at once are applied with one click.
+Each state replaces the form, but not while the focused input holds a value typed and not sent; Escape puts back the value sent last.
 
 **Follow** is a switch next to **Rescan runs**, offered when the application gives `create_app(..., at=...)`, the columns at which a changed cell reduces a row again.
 While it is on, a timer in the server runs a step every `interval` seconds (5 by default; `create_app(..., interval=...)`, or `--follow SECONDS`): the scan of **Rescan runs**, then a reduction of the rows that `ess.apps.batch.arrived` gives, under the lock of every request, with or without a page open.
-Follow reduces by the rule of **Reduce**: while the settings form misses something, a step scans and reduces nothing, and the rows it would reduce read `incomplete`, with "Follow waits for the settings" and what is missing.
-The rows still read as with the batch's settings.
-Each action of a person is followed at once by the reduction of a step, so an edit at a column of `at`, or settings completed, are reduced at once, and a refusal by Follow never shows after the action that removed its cause.
-Other changes wait for **Reduce**, as without Follow.
+Follow reduces with the batch's settings, whatever the form holds.
+Follow reduces a row for what the files changed, never for what a person changed.
+A row with a cell set by hand that is not reduced yet waits for **Reduce**, with or without Follow, so a row edited at two cells of `at` is reduced once, with both.
+While following, such a row says "Set by hand, so Follow leaves it to you: reduce it."
+Once reduced, the row follows the files again, with its cells set by hand.
+A cell that a person reverts follows the files again at once: the next step reduces the row with its other cells as they are, so two reverts of one row can reduce it twice.
+A correction in the Runs view reaches the rows through the scan, so Follow reduces for it as for a file that arrives; two corrections that belong together reduce a row twice if a step runs between them.
+An action submits nothing but what a person asks to reduce: Apply reduces nothing, and the next step reduces the rows without a result with the settings applied.
+Apply forgets why Follow could not reduce a row, since the next step tries again.
 The page shows "Following, every N s", why the last step failed if it did, and, as an `incomplete` row, why a row could not be submitted.
 Whatever a step raises, from the files, the workflow or the workspace, is the step's failure; the next step tries again.
 
@@ -49,8 +60,9 @@ api.py            HTTP: create_app(batch, ...); each action is a POST that
                   answers with the new State (models.py), or 422 {message}
    ▼
 server.py         Server: what the page does, without HTTP; holds the Batch,
-                  the settings form, the corrections of runs, the refusals,
-                  the loop of Follow; one lock around every request and step
+                  the settings form (a draft until Apply), the corrections of
+                  runs, the refusals, the loop of Follow; one lock around
+                  every request and step
    ▼
 ess.apps.batch    the logic: Batch, RowTable, states, CorrectedFiles;
                   shared with the command essapps-batch
@@ -70,7 +82,7 @@ The server answers 204 if nothing changed since `version`, and else the whole `S
 
 The edits of rows, the settings, and the corrections of runs are the definition of the batch.
 The demo and the LoKI page give the batch and the file source the folder's definitions, `FOLDER/definitions/` (`ess.apps.batch.FolderDefinitions`), so a restart shows the definition again; without definitions it is lost when the server stops.
-The settings form is a draft of the batch's settings: a change that leaves nothing missing is written to the batch, and so to the definitions.
+The settings form is a draft of the batch's settings: **Apply** writes it to the batch, and so to the definitions. A draft not applied is lost when the server stops.
 Results are records of the workspace, in `FOLDER/store/`.
 See [Where the definition is kept](../../../../../docs/batch.md#where-the-definition-is-kept).
 

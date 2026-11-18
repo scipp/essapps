@@ -54,9 +54,23 @@ const count = (n) => `${n} ${n === 1 ? words().one : words().many}`;
 
 // Talking to the server
 
+// Run `task` after the actions sent before it, so that the server gets them
+// in the order a person did them, such as an edit at the blur of an input and
+// the click of Apply that moved the focus.
+let queue = Promise.resolve();
+function queued(task) {
+  const done = queue.then(task);
+  queue = done.catch(() => {});
+  return done;
+}
+
 // Send an action and show the state it answers with, or what went wrong;
 // whether it was done.
-async function act(url, body) {
+function act(url, body) {
+  return queued(() => perform(url, body));
+}
+
+async function perform(url, body) {
   let response;
   try {
     response = await post(url, body);
@@ -172,7 +186,7 @@ function build(state) {
   $('word-many').textContent = title(many);
   $('tab-row-label').textContent = title(one);
   $('add-row').textContent = `+ Add ${one}`;
-  $('settings-hint').textContent = `Shared by every ${one}. A change applies to the ${many} not reduced yet, once nothing is missing.`;
+  $('settings-hint').textContent = `Shared by every ${one}. A change is in force after Apply, for the ${many} not reduced yet.`;
   const named = {
     title: 'Name',
     field: 'name',
@@ -260,7 +274,9 @@ function renderAction(action) {
       Boolean(action.blocked) || (which === 'remaining' ? action.remaining : action.again) === 0;
   }
   $('reduce-more').disabled = Boolean(action.blocked);
+  for (const id of ['reduce-more', 'reduce-earlier']) $(id).title = action.blocked ?? '';
   $('settings-badge').hidden = !action.blocked;
+  $('settings-badge').title = action.blocked ?? '';
 }
 
 const CHIPS = ['all', 'ready', 'running', 'done', 'outdated', 'failed', 'incomplete', 'cancelled'];
@@ -306,9 +322,9 @@ function renderFollow(follow) {
   $('follow').hidden = !follow;
   $('follow-status').hidden = !follow?.on;
   if (!follow) return;
-  const {many} = words();
+  const {one, many} = words();
   $('follow').querySelector('input').checked = follow.on;
-  $('follow').title = `Every ${follow.interval} s, rescan the runs and reduce the ${many} that are new or whose ${follow.at.join(' or ')} changed.`;
+  $('follow').title = `Every ${follow.interval} s, rescan the runs and reduce the ${many} that are new or whose ${follow.at.join(' or ')} changed. A ${one} set by hand is left to you to reduce.`;
   const status = $('follow-status');
   status.classList.toggle('bad', Boolean(follow.failure));
   status.textContent = follow.failure
@@ -317,17 +333,27 @@ function renderFollow(follow) {
   status.title = status.textContent;
 }
 
-let shownSettings = '';
+// The settings form, which holds changes until Apply; and the rows reduced
+// with earlier settings, which a person may reduce again. Apply and Discard
+// are never disabled: a click on them may send the value typed first.
 function renderSettings(state) {
-  const {action} = state;
-  $('apply').hidden = action.earlier === 0;
-  $('apply-all').textContent = `Apply to all (${count(action.earlier)})`;
-  $('apply-all').disabled = Boolean(action.blocked);
-  $('apply-hint').textContent = `Reduces the ${words().many} reduced with earlier settings again.`;
-  const json = JSON.stringify(state.settings);
-  if (json === shownSettings) return;
-  shownSettings = json;
+  const {action, settings_changed: changed, settings_problem: problem} = state;
+  $('earlier').hidden = action.earlier === 0;
+  $('earlier-hint').textContent = `${count(action.earlier)} reduced with earlier settings.`;
+  $('reduce-earlier').disabled = Boolean(action.blocked);
+  $('draft').classList.toggle('changed', changed);
+  const said = problem ? ` ${problem}.` : '';
+  $('draft-state').textContent = changed ? `Changed, not applied yet.${said}` : said.trim() || 'These settings are in force.';
+  // The file holds the batch's settings, so it waits for Apply or Discard.
+  const download = document.querySelector('[data-file="settings.yaml"]');
+  download.disabled = changed;
+  download.title = changed ? `${action.blocked} first.` : '';
   renderForm($('settings'), state.settings, (edit) => act('/api/settings', edit));
+}
+
+// Whether to replace the changes of the settings form that are not applied.
+function replaceChanges() {
+  return !view.state.settings_changed || confirm('The settings form holds changes that are not applied. Replace them?');
 }
 
 function selectedRows() {
@@ -466,10 +492,7 @@ function renderRow(detail) {
   view.detail = json;
   const tried = row.status === 'failed' || row.status === 'cancelled';
   const reasonClass = row.earlier ? 'info' : {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info'}[row.status];
-  const useSettings = () => {
-    const question = `Replace the settings of every ${words().one} with those that ${row.name} was reduced with? To keep a copy of the settings you have now, download them first (Files, Download settings).`;
-    if (confirm(question)) act('/api/row/use-settings', {key: row.key});
-  };
+  const useSettings = () => replaceChanges() && act('/api/row/use-settings', {key: row.key}).then((done) => done && showTab('settings'));
   const settingsNames = Object.fromEntries(view.state.settings.map((n) => [n.path[0], n.label]));
   const parts = [
     h('div', {class: 'row-head'}, h('h2', {text: row.name}), h('span', {class: `pill st-${row.status}`, text: row.status})),
@@ -493,7 +516,7 @@ function renderRow(detail) {
             h('p', {class: 'hint differs', text: `Differs from the settings now in ${detail.differs.map((n) => settingsNames[n] ?? n).join(', ')}.`}),
           summary(detail.reduced_with, detail.differs),
           detail.differs.length > 0 &&
-            h('button', {type: 'button', text: `Use these settings for every ${words().one}`, onclick: useSettings}),
+            h('button', {type: 'button', text: 'Put these settings in the form', onclick: useSettings}),
         )
       : !row.record && h('p', {class: 'hint', text: 'Not reduced yet.'}),
   ];
@@ -582,7 +605,9 @@ function wire() {
   });
   $('cancel').onclick = () => act('/api/cancel');
   $('follow').querySelector('input').onchange = (event) => act('/api/follow', {on: event.target.checked});
-  $('apply-all').onclick = () => {
+  $('settings-apply').onclick = () => act('/api/settings/apply');
+  $('settings-discard').onclick = () => act('/api/settings/discard');
+  $('reduce-earlier').onclick = () => {
     const n = view.state.action.earlier;
     const question = `Reduce the ${count(n)} reduced with earlier settings again, with the settings now?`;
     if (confirm(question)) act('/api/reduce', {which: 'earlier'});
@@ -641,7 +666,7 @@ function wire() {
   };
   const actions = {
     'load-table': loadTable,
-    'load-settings': () => $('pick-settings').click(),
+    'load-settings': () => replaceChanges() && $('pick-settings').click(),
     'table.csv': () => download('/api/table.csv', `${words().many}.csv`),
     'table.xlsx': () => download('/api/table.xlsx', `${words().many}.xlsx`),
     'settings.yaml': () => download('/api/settings.yaml', 'settings.yaml'),
@@ -659,14 +684,17 @@ function wire() {
       if (!input.files.length) return;
       const file = input.files[0];
       input.value = '';
-      const response = await upload(url, file);
-      if (response.ok) {
-        hideMessage();
-        render(response.body);
-        toast(response.body.notice);
-      } else {
-        showMessage(response.body?.message ?? `The server answered ${response.status}.`);
-      }
+      await queued(async () => {
+        const response = await upload(url, file);
+        if (response.ok) {
+          hideMessage();
+          render(response.body);
+          toast(response.body.notice);
+          if (url === '/api/settings.yaml') showTab('settings');
+        } else {
+          showMessage(response.body?.message ?? `The server answered ${response.status}.`);
+        }
+      });
     };
   }
 

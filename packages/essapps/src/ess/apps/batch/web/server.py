@@ -12,15 +12,17 @@ runs. The batch and the corrections keep their part in their definitions, if
 given them (:mod:`..definition`); a change that the definitions cannot keep is
 not made, and answers a :class:`Problem`.
 
-The form of the settings is a draft of the batch's settings: it writes them to
-the batch at each change that leaves nothing missing; while something is
-missing, the batch keeps the settings it had, and nothing is reduced and no
-settings file downloaded. Before each action, and when the state is read, the
-form shows the batch's settings again if they are not those that it last
-showed or wrote, as after an assignment by code or a change not kept
-(:meth:`Server._show_settings`). Settings that the form cannot show, such as
-those kept for another version of the spec, are named in the state's
-``settings_problem`` and kept until a person changes a setting.
+The form of the settings is a draft of the batch's settings. An edit changes
+the form only; :meth:`Server.apply_settings` writes it to the batch, and is
+refused while something is missing; :meth:`Server.discard_settings` shows the
+batch's settings again. "Load settings" and "Use the settings of this row" fill
+the form, all or none. While the form holds a change, a reduction by a person
+and a download of the settings are refused, so that nothing is reduced or
+saved with settings other than those shown. Settings that the form cannot
+show, such as those kept for another version of the spec, are named in the
+state's ``settings_problem`` and kept until Apply. The server writes the
+batch's settings only at Apply: the form does not show an assignment by code
+while the server runs.
 
 The page holds only what it shows: the selection, the filter, the tab. Each
 action returns the :class:`~.models.State` after it, and the page polls the
@@ -32,9 +34,10 @@ state.
 
 A reduction refused raises :class:`Problem`. It says the reasons that no cell
 or setting shows. The others stay in the state until the value of each is
-changed or a reduction succeeds, so that the page marks each at its cell or its
-setting. Any other request that cannot be done
-raises :class:`Problem` too, with what to tell the person. One server serves
+changed, a setting's by Apply, or a reduction succeeds, so that the page marks
+each at its cell, or at its setting while the form shows the batch's settings.
+Any other request that cannot be done raises :class:`Problem` too, with what
+to tell the person. One server serves
 one batch to one person, and takes one request at a time.
 
 Statuses are named in a scientist's words: a row that is ``not reduced`` is
@@ -43,10 +46,10 @@ Statuses are named in a scientist's words: a row that is ``not reduced`` is
 to rows not reduced yet: a done row whose result differs from its request only
 at settings (:func:`~ess.apps.batch.earlier_settings`) stays ``done``, marked
 as reduced with earlier settings, and "Reduce" leaves it
-(:func:`~ess.apps.batch.left_to_reduce`) until a person applies the settings to
-all. A failed or cancelled row stays so when the settings change, since it
-needs reducing either way. While the form of the settings misses something,
-the rows read as with the batch's settings. While the workflow refuses the
+(:func:`~ess.apps.batch.left_to_reduce`) until a person reduces it with the
+settings now. A failed or cancelled row stays so when the settings change,
+since it needs reducing either way. The rows read as with the batch's
+settings, whatever the form holds. While the workflow refuses the
 batch's settings, no result can be said to be current, so a done row is
 outdated.
 
@@ -54,13 +57,15 @@ Given the columns ``at``, the server offers to follow the files: while
 :attr:`Server.following`, a timer calls :meth:`Server.step` every
 ``interval`` seconds, which runs the scan of "Rescan runs" and reduces the
 rows that :func:`~ess.apps.batch.arrived` gives (:mod:`ess.apps.batch.auto`),
-under the lock of every request. It reduces by the rule of "Reduce": nothing
-while the form of the settings misses something. Whatever a step raises is
-said in the state, and the next step runs all the same. Each action is
-followed at once by the second half of a step, the reduction, so that what
-the page shows of Follow is never older than the last action. Whether the
-server follows belongs to its process, not to the definition: a server starts
-with ``follow``. :func:`~.api.create_app` owns the timer.
+under the lock of every request, with the batch's settings, whatever the form
+holds. Whatever a step raises is said in the state, and the next step runs all
+the same. Follow reduces a row for what the files changed, never for what a
+person changed (:attr:`~ess.apps.batch.RowState.changed_by_hand`): a row whose
+cells a person set waits for "Reduce". So an action, but turning Follow on,
+submits only what a person asks to reduce. Apply forgets why Follow could not
+reduce rows, since its next step tries them with the settings applied. Whether
+the server follows belongs to its process, not to the definition: a server
+starts with ``follow``. :func:`~.api.create_app` owns the timer.
 """
 
 from __future__ import annotations
@@ -75,7 +80,7 @@ import zipfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +99,8 @@ from .. import (
     CorrectedFiles,
     NotKept,
     RowState,
+    arrived,
+    compared,
     earlier_settings,
     frames,
     left_to_reduce,
@@ -146,6 +153,10 @@ _STATUS = {
 }
 _ORDER = ('ready', 'running', 'done', 'outdated', 'failed', 'cancelled', 'incomplete')
 _ENDED = (Status.FAILED, Status.CANCELLED)
+_BY_HAND = ('ready', 'outdated')
+"""The statuses at which a row changed by hand says that Follow leaves it."""
+_LEFT = 'Set by hand, so Follow leaves it to you: reduce it.'
+"""What a row changed by hand says while following."""
 _DRAWN = 12
 """How many results the plot shows when no row is selected."""
 
@@ -209,12 +220,9 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
     def action(*args: P.args, **kwargs: P.kwargs) -> State:
         server: Server = args[0]  # type: ignore[assignment]
         with server.lock:
-            server._show_settings()
             try:
                 notice = method(*args, **kwargs)
-                server._follow_now()
             except NotKept as error:
-                server._settings_shown = None  # the form shows the batch's again
                 raise Problem(f'The change was not kept: {error}') from None
             finally:
                 server.version += 1
@@ -249,9 +257,10 @@ class Server:
     folder:
         What the header names as the place of the data, such as a folder.
     at:
-        The columns at which a change of a row's cells makes Follow reduce the
-        row again (:class:`~ess.apps.batch.auto.Automatic`); without them, the
-        page does not offer to follow. The batch needs a source.
+        The columns at which a change of a row's cells by the scan makes
+        Follow reduce the row again (:class:`~ess.apps.batch.auto.Automatic`);
+        without them, the page does not offer to follow. The batch needs a
+        source.
     follow:
         Whether to follow from the start.
     interval:
@@ -287,9 +296,7 @@ class Server:
         self._folder = folder
         self._listing = Listing(batch.client)
         model, listing = batch.spec.params, self._listing
-        self.settings = Fields(model, listing, fields=batch.settings_fields)
-        self._settings_shown: Mapping[str, Any] | None = None
-        self._unfit: list[str] = []
+        self.settings = self._form()
         self._show_settings()
         self._cells = Fields(model, listing, fields=batch.columns)
         self.tweak = Fields(model, listing)
@@ -330,31 +337,28 @@ class Server:
         self._runs = self._runs_seen()
         self.runs_version += 1
 
+    def _form(self) -> Fields:
+        """A form of the settings, at the fields' defaults."""
+        batch = self.batch
+        return Fields(batch.spec.params, self._listing, fields=batch.settings_fields)
+
     def _show_settings(self) -> None:
-        """
-        Show the batch's settings in the form, unless they are those that it
-        last showed or wrote.
-        """
-        settings = self.batch.settings
-        if settings == self._settings_shown:
-            return
+        """Show the batch's settings in the form, which then holds no change."""
         # Settings kept for another version of the spec may not fit the form;
-        # the batch keeps them, and the page names them, until a change.
-        self._unfit = self.settings.set_fitting(settings, self._listing)
-        self._settings_shown = settings
+        # the batch keeps them, and the page names them, until Apply.
+        self._unfit = self.settings.set_fitting(self.batch.settings, self._listing)
+        # What the form holds while it shows the batch's settings.
+        self._shown = self.settings.held()
 
-    def _write_settings(self) -> None:
-        """Give the batch the settings of the form, unless one is missing."""
-        given, missing = self.settings.held()
-        if not missing:
-            self.batch.settings = given
-            self._settings_shown = self.batch.settings
-            self._unfit = []
-
-    def _complete(self) -> None:
-        """Raise ``SubmitError`` if the form of the settings misses something."""
-        if missing := self.settings.held()[1]:
-            raise SubmitError(missing)
+    def _unapplied(self) -> str | None:
+        """
+        What a person does first while the form holds a change, since a
+        reduction would use settings other than those shown; else ``None``.
+        """
+        held = self.settings.held()
+        if held == self._shown:
+            return None
+        return f'{"Fill in" if held[1] else "Apply"} or discard the settings'
 
     def _states(
         self, keys: Sequence[str] | None = None
@@ -409,7 +413,6 @@ class Server:
     @_locked
     def state(self, notice: str = '') -> State:
         """Everything the page shows but a row's details, the plot, and the runs."""
-        self._show_settings()
         states, unusable = self._states()
         # With the settings refused, the rows are not compared with them.
         earlier = (
@@ -442,11 +445,21 @@ class Server:
         counts = dict.fromkeys(_ORDER, 0)
         for status in statuses.values():
             counts[status] += 1
-        missing = self.settings.held()[1]
-        said = [self._said([*missing, *unusable])] if missing or unusable else []
+        given, missing = self.settings.held()
+
+        # A refusal of the batch's settings is said, and marked at its field,
+        # while the form shows the value refused.
+        def shown(error: FieldError) -> bool:
+            name = str(error.loc[0]) if error.loc else ''
+            return not name or given.get(name) == self._shown[0].get(name)
+
+        errors = [*missing, *filter(shown, unusable)]
+        said = [self._said(errors)] if errors else []
         if self._unfit:
             said.insert(0, f'Settings that this form cannot show: {_join(self._unfit)}')
         problem = '; '.join(said) or None
+        unapplied = self._unapplied()
+        marks = [e for e in (*unusable, *self.refused) if not e.entry and shown(e)]
         fields = self.batch.spec.params.model_fields
         return State(
             version=self.version,
@@ -473,12 +486,12 @@ class Server:
             rows=rows,
             counts={'all': len(states), **counts},
             removed=len(scan.keys() & self.batch.rows.removed),
-            action=self._primary(states, statuses, problem, len(earlier)),
-            settings=forms.tree(
-                self.settings,
-                [e for e in (*missing, *unusable, *self.refused) if not e.entry],
+            action=self._primary(
+                states, statuses, unapplied or problem, len(earlier), unapplied
             ),
+            settings=forms.tree(self.settings, marks),
             settings_problem=problem,
+            settings_changed=unapplied is not None,
             refused=[self._refused(e) for e in self.refused],
             follow=self._follow(),
             notice=notice,
@@ -567,6 +580,8 @@ class Server:
             reason = self._outdated(state)
         elif status == 'outdated':
             reason = 'The settings cannot be used, so this result may not match them.'
+        if self.following and state.changed_by_hand and status in _BY_HAND:
+            reason = f'{reason} {_LEFT}'.lstrip()
         scanned = scan.get(row.key)
         cells = {
             c: Cell(
@@ -604,13 +619,14 @@ class Server:
         statuses: Mapping[str, str],
         blocked: str | None,
         earlier: int,
+        label: str | None = None,
     ) -> Action:
-        """What the primary button does now, and how far the rows running are."""
+        """What the button does now, or ``label`` if blocked; how far rows run."""
         left = [] if blocked else left_to_reduce(states, self.batch.columns)
         kinds = {statuses[k] for k in left}
         n = len(left)
         if blocked:
-            label = 'Check the settings'
+            label = label or 'Check the settings'
         elif not left:
             label = 'Nothing left to reduce'
         elif kinds == {'failed'}:
@@ -763,14 +779,6 @@ class Server:
             if not (e.entry in keys and e.loc and str(e.loc[0]) == column)
         ]
 
-    def _forget_settings(self, path: Sequence[str | int] = ()) -> None:
-        """Forget the reasons of a refusal at the setting of ``path``, or all."""
-        self.refused = [
-            e
-            for e in self.refused
-            if e.entry or (path and tuple(e.loc[:1]) != tuple(path[:1]))
-        ]
-
     @_action
     def remove(self, keys: Sequence[str]) -> str:
         """Remove rows; one added by hand is gone for good."""
@@ -813,8 +821,9 @@ class Server:
         """Submit the rows asked for, all or none."""
         for key in request.keys:
             self._row_of(key)
+        if unapplied := self._unapplied():
+            raise Problem(f'Nothing was reduced: {unapplied.lower()}.')
         try:
-            self._complete()
             columns = self.batch.columns
             rules: dict[str, Callable[[Mapping[str, RowState]], list[str]]] = {
                 'remaining': lambda s: left_to_reduce(s, columns),
@@ -859,7 +868,7 @@ class Server:
     def step(self) -> None:
         """
         One step of Follow: the scan of "Rescan runs", then the reduction of
-        :meth:`_follow_reduce`. A step that changes nothing the page shows,
+        :meth:`Automatic.reduce`. A step that changes nothing the page shows,
         such as the rows, the runs, the records, what waits and why, or its
         failure, leaves the version, so that a page polling it gets nothing new.
         """
@@ -870,16 +879,24 @@ class Server:
 
     def _step(self) -> bool:
         """
-        A step of Follow; whether it changed what the page shows. Whatever it
-        raises, from the files, the workflow or the workspace, is its failure,
-        said in the state until a step runs through.
+        A step of Follow, with the batch's settings, whatever the form holds;
+        whether it changed what the page shows. :attr:`waiting` says why each
+        row was not reduced. Whatever it raises, from the files, the workflow
+        or the workspace, is its failure, said in the state until a step runs
+        through.
         """
         rows, waiting, failure = self._rows, self.waiting, self.step_failure
         moved = False
         try:
             try:
+                if self.loop is None:
+                    raise Problem('This page does not follow the files.')
                 self._scan()
-                self._follow_reduce()
+                self.loop.reduce()
+                self.waiting = {
+                    key: f'Follow could not reduce it: {forms.message(reason)}'
+                    for key, reason in self.loop.refused.items()
+                }
             finally:
                 moved = self._caught_up()
             self.step_failure = None
@@ -908,34 +925,6 @@ class Server:
             self._refresh()
         return records or runs
 
-    def _follow_reduce(self) -> None:
-        """
-        The reduction of a step, by the rule of "Reduce": while the form of
-        the settings misses something, none, and the rows that a step would
-        reduce wait for it; else :meth:`Automatic.reduce`. :attr:`waiting`
-        says why each row was not reduced.
-        """
-        if self.loop is None:
-            raise Problem('This page does not follow the files.')
-        if missing := self.settings.held()[1]:
-            reason = f'Follow waits for the settings: {self._said(missing)}'
-            self.waiting = dict.fromkeys((row.key for row in self.batch.rows), reason)
-            return
-        self.loop.reduce()
-        self.waiting = {
-            key: f'Follow could not reduce it: {forms.message(reason)}'
-            for key, reason in self.loop.refused.items()
-        }
-
-    def _follow_now(self) -> None:
-        """While following, the reduction of a step, after an action."""
-        if not self.following:
-            return
-        try:
-            self._follow_reduce()
-        except Exception as error:  # the next step tries again
-            self.step_failure = str(error) or repr(error)
-
     def tick(self) -> None:
         """A step, if following; :func:`~.api.create_app` calls it on a timer."""
         # Under the lock, so that a tick that waited for a request sees what
@@ -948,16 +937,40 @@ class Server:
 
     @_action
     def edit_settings(self, edit: Edit) -> None:
+        """Change the form of the settings; the batch's stay until Apply."""
         try:
             forms.apply(self.settings, edit)
         except (KeyError, ValueError) as error:
             raise Problem(_why(error)) from None
-        self._write_settings()
-        self._forget_settings(edit.path)
+
+    @_action
+    def apply_settings(self) -> str:
+        """Give the batch the settings of the form, unless one is missing."""
+        given, missing = self.settings.held()
+        if missing:
+            raise Problem(f'Not applied: {self._said(missing)}.')
+        self.batch.settings = given
+        self._show_settings()
+        # A refusal of a setting was a refusal of the settings replaced, and
+        # Follow tries every row again with these at its next step.
+        self.refused = [e for e in self.refused if e.entry]
+        self.waiting = {}
+        return 'Applied the settings.'
+
+    @_action
+    def discard_settings(self) -> None:
+        """Show the batch's settings in the form again."""
+        self._show_settings()
+
+    def _fill(self, params: Mapping[str, Any]) -> None:
+        """Show ``params`` in the form, all or none; raises as :meth:`Fields.set`."""
+        form = self._form()
+        form.set(params, self._listing)
+        self.settings = form
 
     @_action
     def use_settings(self, key: str) -> str:
-        """Take the settings that the result of row ``key`` was reduced with."""
+        """Show the settings that the result of row ``key`` was reduced with."""
         name = self._named(self._row_of(key))
         row = self._states([key])[0][key]
         if row.record is None:
@@ -967,10 +980,10 @@ class Server:
                 f'{name} was reduced by another version of the workflow, '
                 'whose settings this one does not take.'
             )
-        self.settings.set(row.record.request.params, self._listing)
-        self._write_settings()
-        self._forget_settings()
-        return f'All {self.words.many} now use the settings {name} was reduced with.'
+        self._fill(row.record.request.params)
+        return (
+            f'The form shows the settings {name} was reduced with. Apply to use them.'
+        )
 
     # One row
 
@@ -1000,9 +1013,7 @@ class Server:
         )
         if record is None or state.spec_changed:
             return detail  # another spec's params are not this one's
-        given = Fields(
-            self.batch.spec.params, self._listing, fields=self.batch.settings_fields
-        )
+        given = self._form()
         given.set(record.request.params, self._listing)
         detail.reduced_with = forms.tree(given)
         detail.created = record.created
@@ -1031,13 +1042,20 @@ class Server:
         self._relist()
         name = self._named(self.batch.rows[key])
         notice = f'Reducing {name} alone.'
-        if self.loop is not None and self.following:
-            # Follow reduces the row again where its cells differ at `at`.
-            if changed := self._changed(self._states([key])[0][key], self.loop.at):
-                notice += (
-                    f' Its {changed} differs from its cells, so Follow reduces it'
-                    ' again with its cells once this is done.'
-                )
+        state = self._states([key])[0][key]
+        # Once the tweak is done, Follow gives the row as for any result.
+        done = {key: replace(state, status=Status.COMPLETED)}
+        if (
+            self.following
+            and self.loop
+            and compared(done)
+            and arrived(done, self.loop.at)
+        ):
+            changed = self._changed(state, self.loop.at)
+            notice += (
+                f' Its {changed} differs from its cells, so Follow reduces it'
+                ' again with its cells once this is done.'
+            )
         return notice
 
     # The result
@@ -1201,19 +1219,18 @@ class Server:
 
     @_locked
     def settings_file(self) -> bytes:
-        """The settings as a YAML template."""
-        self._show_settings()
-        try:
-            self._complete()
-        except SubmitError as error:
-            raise Problem(f'Fill in the settings first: {error}') from None
+        """The batch's settings as a YAML template."""
+        if unapplied := self._unapplied():
+            raise Problem(f'{unapplied} first.')
+        if missing := self.settings.held()[1]:
+            raise Problem(f'Fill in the settings first: {SubmitError(missing)}')
         with _file('settings.yaml') as path:
             write_template(self.batch.template(), path)
             return path.read_bytes()
 
     @_action
     def load_settings(self, name: str, content: bytes) -> str:
-        """Show the settings of a YAML template."""
+        """Show the settings of a YAML template in the form, all or none."""
         cannot = f'Cannot load {name}:'
         with _file('settings.yaml', content) as path:
             try:
@@ -1223,12 +1240,10 @@ class Server:
                     f'{cannot} it is not a settings file saved from this page.'
                 ) from None
         try:
-            self.settings.set(settings_of(self.batch, template), self._listing)
+            self._fill(settings_of(self.batch, template))
         except (ValueError, KeyError) as error:
             raise Problem(f'{cannot} {forms.message(_why(error))}.') from None
-        self._write_settings()
-        self._forget_settings()
-        return f'Loaded the settings of {name}.'
+        return f'The form shows the settings of {name}. Apply to use them.'
 
     @_locked
     def results_file(self, keys: Sequence[str]) -> bytes:

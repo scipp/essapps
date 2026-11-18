@@ -13,6 +13,7 @@ import pytest
 
 from ess.apps import Client, file
 from ess.apps.batch import (
+    EMPTY,
     Batch,
     CorrectedFiles,
     DefinitionStore,
@@ -370,20 +371,89 @@ def test_a_refusal_that_names_no_row_refuses_every_row_of_the_step(
 
 
 def test_a_cell_the_workspace_does_not_accept_makes_its_row_wait(
-    loop: Automatic, batch: Batch, sample: Measure
+    client: Client, sample: Measure
 ) -> None:
+    thickness = -1.0
+
+    def thick(files: Sequence[FileInfo]) -> list[Row]:
+        return [
+            replace(row, values={**row.values, 'thickness': thickness})
+            if row.key == '2'
+            else row
+            for row in pair(files)
+        ]
+
+    loop = _loop(client, thick)
     sample(1, 'water')
     sample(2, 'sds')
-    batch.scan()
-    batch.rows = batch.rows.edit('2', {'thickness': -1.0})
 
     assert list(loop.step()) == ['1']
     assert loop.refused == {}
-    assert batch.state()['2'].text == 'incomplete'
+    assert loop.batch.state()['2'].text == 'incomplete'
 
-    batch.rows = batch.rows.edit('2', {'thickness': 1.0})
+    thickness = 1.0
 
     assert list(loop.step()) == ['2']
+
+
+def test_a_row_changed_by_hand_waits_for_a_person_then_follows_the_files(
+    client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    sample(1, 'water')
+    other = fake.measure(77, 7.0, role='sample', sample='other')
+    loop = Automatic(_loop(client).batch, at=set(COLUMNS))
+    batch = loop.batch
+    client.wait(loop.step())
+    batch.rows = batch.rows.edit('1', {'sample': other})
+
+    assert loop.step() == {}
+    assert batch.state()['1'].text == 'outdated'
+
+    client.wait(batch.reduce(['1']))
+    transmission = fake.measure(1005, 2.0, role='transmission', sample='water')
+    (record,) = loop.step().values()
+
+    assert record.request.params['sample'] == other
+    assert record.request.params['transmission'] == transmission
+
+
+@pytest.mark.parametrize(
+    ('by_hand', 'reduced'),
+    [
+        (lambda rows: rows.edit('2', {'sample': rows['2'].values['sample']}), ['1']),
+        (lambda rows: rows.edit('2', {'thickness': EMPTY}), ['1']),
+        (lambda rows: rows.add(Row('3', dict(rows['2'].values))), ['1', '2']),
+    ],
+    ids=['the value of the scan', 'cleared', 'added'],
+)
+def test_a_row_set_by_hand_without_a_result_waits_for_a_person(
+    client: Client, sample: Measure, by_hand: Any, reduced: list[str]
+) -> None:
+    loop = _loop(client)
+    sample(1, 'water')
+    sample(2, 'oil')
+    loop.batch.scan()
+    loop.batch.rows = by_hand(loop.batch.rows)
+
+    assert list(loop.step()) == reduced
+
+
+def test_a_row_reverted_to_the_scan_follows_the_files_again(
+    client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    run = sample(1, 'water')
+    other = fake.measure(77, 7.0, role='sample', sample='other')
+    loop = _loop(client)
+    batch = loop.batch
+    batch.scan()
+    batch.rows = batch.rows.edit('1', {'sample': other})
+    client.wait(batch.reduce(['1']))
+    assert loop.step() == {}
+
+    batch.rows = batch.rows.reset('1')
+    (record,) = loop.step().values()
+
+    assert record.request.params['sample'] == run
 
 
 def test_a_record_of_another_batch_on_the_label_is_replaced_if_it_differs_at_at(
@@ -410,7 +480,7 @@ def test_without_a_store_a_row_edited_at_at_is_reduced_again_after_a_restart(
     loop = _loop(client)
     client.wait(loop.step())
     loop.batch.rows = loop.batch.rows.edit('1', {'sample': other})
-    (edited,) = loop.step().values()
+    (edited,) = loop.batch.reduce(['1']).values()
     client.wait(edited)
 
     (record,) = _loop(client).step().values()
@@ -428,7 +498,7 @@ def test_with_a_store_a_row_edited_at_at_keeps_its_edit_after_a_restart(
     loop = _loop(client, definitions=store)
     client.wait(loop.step())
     loop.batch.rows = loop.batch.rows.edit('1', {'sample': other})
-    client.wait(loop.step())
+    client.wait(loop.batch.reduce(['1']))
 
     restarted = _loop(client, definitions=store)
 
@@ -481,6 +551,9 @@ def test_refused_settings_refuse_every_ready_row_until_they_change(
     client.wait(loop.step())
     sample(2, 'sds')
     sample(3, 'dmso', partner=False)
+    sample(4, 'd2o')
+    batch.scan()
+    batch.rows = batch.rows.edit('4', {'thickness': 2.0})  # left to a person
 
     batch.settings = {'binning': {'bins': 0}}
     assert loop.step() == {}

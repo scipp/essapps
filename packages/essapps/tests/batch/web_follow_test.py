@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from ess.apps import Client
 from ess.apps.batch import Batch, CorrectedFiles
 from ess.apps.batch.web import Server, create_app
-from ess.apps.batch.web.models import CellEdit, Edit, Reduce, State
+from ess.apps.batch.web.models import CellEdit, Cells, Edit, Reduce, State
 from ess.apps.batch.web.server import Problem
 from ess.apps.testing import FakeFiles
 
@@ -39,6 +39,12 @@ def server(batch: Batch, files: CorrectedFiles) -> Server:
 
 def statuses(state: State) -> dict[str, str]:
     return {row.name: row.status for row in state.rows}
+
+
+def bins(server: Server, value: int) -> None:
+    """Set the number of bins in the form, and apply it."""
+    server.edit_settings(Edit(path=BINS, op='set', value=value))
+    server.apply_settings()
 
 
 def done(server: Server, client: Client) -> State:
@@ -164,7 +170,7 @@ def test_a_step_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_the
     server.step()
     first = done(server, client).rows[0].record
 
-    server.edit_settings(Edit(path=BINS, op='set', value=3))
+    bins(server, 3)
     sample(2, 'oil')
     server.step()
 
@@ -179,7 +185,7 @@ def test_a_row_the_step_could_not_submit_shows_why(
     server: Server, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    server.edit_settings(Edit(path=BINS, op='set', value=0))
+    bins(server, 0)
 
     server.follow(True)
 
@@ -191,6 +197,29 @@ def test_a_row_the_step_could_not_submit_shows_why(
     assert statuses(server.follow(False)) == {'water': 'ready'}
 
 
+def test_apply_while_following_reduces_nothing_and_the_next_step_uses_it(
+    server: Server, client: Client, sample: Measure
+) -> None:
+    sample(1, 'water')
+    server.follow(True)
+    done(server, client)
+    sample(2, 'oil')
+    bins(server, 0)
+    server.step()
+    before = ids(client)
+
+    server.edit_settings(Edit(path=BINS, op='set', value=3))
+    applied = server.apply_settings()
+
+    assert ids(client) == before
+    oil = {row.name: row for row in applied.rows}['oil']
+    assert (oil.status, oil.reason) == ('ready', '')
+    server.step()
+    shown = {row.name: row for row in done(server, client).rows}
+    assert (shown['water'].earlier, shown['oil'].status) == (True, 'done')
+    assert client.latest('scan', '2').request.params['binning'] == {'bins': 3}
+
+
 def test_a_done_row_reads_outdated_while_follow_is_refused_the_settings(
     server: Server, client: Client, sample: Measure
 ) -> None:
@@ -198,7 +227,7 @@ def test_a_done_row_reads_outdated_while_follow_is_refused_the_settings(
     server.follow(True)
     done(server, client)
     sample(2, 'oil')
-    server.edit_settings(Edit(path=BINS, op='set', value=0))
+    bins(server, 0)
 
     server.step()
 
@@ -295,40 +324,133 @@ def test_a_refusal_of_a_running_row_is_said_once_and_not_kept(
     assert after.refused == []
 
 
-def test_an_edit_at_a_column_of_at_is_reduced_at_once_while_following(
-    server: Server, client: Client, sample: Measure, gate: Gate
+def ids(client: Client) -> set[str]:
+    return {r.id for r in client.records()}
+
+
+def test_follow_leaves_a_row_changed_by_hand_to_the_person(
+    server: Server, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
     sample(2, 'oil')
     server.follow(True)
     done(server, client)
+    before = ids(client)
 
-    other = option(server, 'transmission', 1002)
-    gate.close()
-    edited = server.edit(CellEdit(keys=['1'], column='transmission', value=other))
-    server.edit(CellEdit(keys=['2'], column='thickness', value=2.0))
+    for column, run in [('sample', 2), ('transmission', 1002)]:
+        value = option(server, column, run)
+        edited = server.edit(CellEdit(keys=['1'], column=column, value=value))
+        server.step()
 
-    assert statuses(edited) == {'water': 'running', 'oil': 'done'}
-    assert statuses(server.state()) == {'water': 'running', 'oil': 'outdated'}
-    gate.open()
+    assert ids(client) == before
+    assert statuses(edited) == {'water': 'outdated', 'oil': 'done'}
+    assert edited.action.label == 'Reduce 1 outdated'
+    server.reduce(Reduce(which='remaining'))
+    server.step()
+    assert len(ids(client) - before) == 1
+    water, oil = (client.latest('scan', k).request.params for k in ('1', '2'))
+    assert (water['sample'], water['transmission']) == (
+        oil['sample'],
+        oil['transmission'],
+    )
 
 
-def test_while_the_settings_miss_something_follow_waits_and_then_reduces_at_once(
+@pytest.mark.parametrize('following', [True, False])
+def test_a_row_set_by_hand_says_that_follow_leaves_it_to_the_person(
+    server: Server, sample: Measure, following: bool
+) -> None:
+    sample(1, 'water')
+    server.scan()
+    server.edit(CellEdit(keys=['1'], column='thickness', value=2.0))
+
+    shown = server.follow(following)
+
+    (row,) = shown.rows
+    assert row.status == 'ready'
+    assert row.reason == (
+        'Set by hand, so Follow leaves it to you: reduce it.' * following
+    )
+    assert shown.action.label == 'Reduce 1 remaining'
+
+
+def test_a_row_a_person_reduced_after_an_edit_follows_the_files_again(
+    server: Server, client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    sample(1, 'water')
+    sample(2, 'oil')
+    server.follow(True)
+    done(server, client)
+    other = option(server, 'sample', 2)
+    server.edit(CellEdit(keys=['1'], column='sample', value=other))
+    server.reduce(Reduce(which='remaining'))
+    edited = done(server, client).rows[0].record
+
+    fake.measure(1005, 2.0, role='transmission', sample='water')
+    server.step()
+
+    assert statuses(done(server, client)) == {'water': 'done', 'oil': 'done'}
+    record = client.latest('scan', '1')
+    assert record.id != edited
+    assert (
+        record.request.params['sample']
+        == client.latest('scan', '2').request.params['sample']
+    )
+
+
+def test_a_cell_reverted_after_a_reduction_is_followed_at_the_next_step(
     server: Server, client: Client, sample: Measure
 ) -> None:
+    sample(1, 'water')
+    sample(2, 'oil')
     server.follow(True)
-    server.edit_settings(Edit(path=BINS, op='set', value=None))
+    done(server, client)
+    for column, run in [('sample', 2), ('transmission', 1002)]:
+        value = option(server, column, run)
+        server.edit(CellEdit(keys=['1'], column=column, value=value))
+    server.reduce(Reduce(which='remaining'))
+    done(server, client)
+
+    server.revert(Cells(keys=['1'], column='sample'))
+    server.step()
+
+    water, oil = (client.latest('scan', k).request.params for k in ('1', '2'))
+    assert water['sample'] != oil['sample']  # the scan's
+    assert water['transmission'] == oil['transmission']  # still set by hand
+
+
+def test_an_edit_not_reduced_leaves_its_row_to_the_person_when_a_file_arrives(
+    server: Server, client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    sample(1, 'water')
+    server.follow(True)
+    done(server, client)
+    server.edit(CellEdit(keys=['1'], column='thickness', value=2.0))
+    before = ids(client)
+
+    fake.measure(1005, 2.0, role='transmission', sample='water')
+    server.step()
+
+    (row,) = server.state().rows
+    assert ids(client) == before
+    assert (row.status, row.reason) == (
+        'outdated',
+        'Transmission and Thickness changed.'
+        ' Set by hand, so Follow leaves it to you: reduce it.',
+    )
+
+
+@pytest.mark.parametrize('value', [3, None], ids=['changed', 'missing'])
+def test_follow_reduces_with_the_batch_s_settings_whatever_the_form_holds(
+    server: Server, client: Client, sample: Measure, value: int | None
+) -> None:
+    server.follow(True)
+    server.edit_settings(Edit(path=BINS, op='set', value=value))
     sample(1, 'water')
 
     server.step()
-    waiting = server.state()
-    completed = server.edit_settings(Edit(path=BINS, op='set', value=3))
 
-    assert statuses(waiting) == {'water': 'incomplete'}
-    assert (
-        waiting.rows[0].reason == 'Follow waits for the settings: Binning: give a value'
-    )
-    assert statuses(completed) == {'water': 'running'}
+    assert statuses(done(server, client)) == {'water': 'done'}
+    assert client.latest('scan', '1').request.params['binning'] == {'bins': 2}
 
 
 def test_a_step_that_raises_anywhere_is_said_and_follow_stays_on(
@@ -378,17 +500,31 @@ def test_a_tick_that_waited_for_the_request_that_stops_following_does_nothing(
     assert client.records() == []
 
 
-@pytest.mark.parametrize('following', [True, False])
-def test_a_tweak_at_a_column_of_at_says_that_follow_reduces_it_again(
-    server: Server, client: Client, sample: Measure, gate: Gate, following: bool
+@pytest.mark.parametrize(
+    ('following', 'by_hand', 'again'),
+    [(True, False, True), (False, False, False), (True, True, False)],
+    ids=['following', 'not following', 'set by hand'],
+)
+def test_a_tweak_at_a_column_of_at_says_whether_follow_reduces_it_again(
+    server: Server,
+    client: Client,
+    sample: Measure,
+    gate: Gate,
+    following: bool,
+    by_hand: bool,
+    again: bool,
 ) -> None:
     sample(1, 'water')
     sample(2, 'oil')
     server.follow(True)
     done(server, client)
     server.follow(following)
+    scanned = option(server, 'transmission', 1001)
     other = option(server, 'transmission', 1002)
-    server.edit_tweak('1', Edit(path=['transmission'], op='set', value=other))
+    if by_hand:
+        server.edit(CellEdit(keys=['1'], column='transmission', value=other))
+    tweak = scanned if by_hand else other
+    server.edit_tweak('1', Edit(path=['transmission'], op='set', value=tweak))
 
     gate.close()
     notice = server.submit_tweak('1').notice
@@ -397,7 +533,7 @@ def test_a_tweak_at_a_column_of_at_says_that_follow_reduces_it_again(
     assert notice == (
         'Reducing water alone. Its Transmission differs from its cells, so Follow'
         ' reduces it again with its cells once this is done.'
-        if following
+        if again
         else 'Reducing water alone.'
     )
 
