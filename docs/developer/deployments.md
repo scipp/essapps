@@ -51,7 +51,7 @@ This deployment is implemented.
 The page holds only what it shows, and every rule is in the Python process.
 The command `essapps-batch` opens the same folder when the application is not running.
 Two users of one proposal have two folders.
-The batch logic (`ess.apps.batch`), the command, a view in Panel, and the batch of LoKI (`ess.instruments.loki.batch`) are implemented.
+The batch logic (`ess.apps.batch`), the command, and the batch of LoKI (`ess.instruments.loki.batch`) are implemented.
 The web page (`ess.apps.batch.web`) is experimental and runs as a demo.
 
 ## Automatic reduction

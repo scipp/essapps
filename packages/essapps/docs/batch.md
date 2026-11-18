@@ -8,10 +8,11 @@ Your application supplies what depends on the technique: which files make which 
 ## An application
 
 ```python
+import uvicorn
+
 from ess.apps import local
 from ess.apps.batch import Batch, FileInfo, Row
-from ess.apps.batch.panel import BatchView
-from ess.apps.panel import App
+from ess.apps.batch.web import Shown, create_app
 
 def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
     """A row per sample run, with the transmission run of the same sample."""
@@ -30,15 +31,20 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
 client = local(proposal='p1', files=files, bind=BINDINGS)
 batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'),
               label='iofq', source=pair_by_sample, staged=True)
-view = BatchView(batch, info=('name',), draw=draw_iofq)
-view.scan()
-App(client, plots=PLOTS, tabs={'I(Q)': view}).panel().servable()
+batch.scan()
+
+def draw_iofq(shown: Sequence[Shown]) -> dict:
+    """A Plotly figure of the completed results that the page asks to draw."""
+    ...
+
+app = create_app(batch, name='name', draw=draw_iofq)   # a FastAPI app
+uvicorn.run(app, host='localhost', port=8000)
 ```
 
-`python -m ess.apps.batch.panel.demo [DIRECTORY]` serves a complete application on fake files and fake workflows, with its workspace in a folder (see [The app and the command on one folder](#the-app-and-the-command-on-one-folder)).
-`ess.instruments.loki.batch` holds a source and a `Batch` for the real LoKI workflows, without a view.
+`python -m ess.apps.batch.web.demo [DIRECTORY]` serves a complete application on fake files and fake workflows, with its workspace in a folder (see [The app and the command on one folder](#the-app-and-the-command-on-one-folder)).
+`ess.instruments.loki.batch` holds a source and a `Batch` for the real LoKI workflows, and `python -m ess.instruments.loki.web FOLDER` serves them.
 
-The same logic works without widgets, in a notebook or a test:
+The same logic works without the page, in a notebook or a test:
 
 ```python
 from ess.apps.batch import ready, remaining
@@ -124,8 +130,8 @@ Every way of reducing a batch is this cycle, with its own rule and its own trigg
 
 | Trigger | Who | Rule |
 |---|---|---|
-| **Reduce** on the page, **Reduce remaining** in `BatchView` | a person | `left_to_reduce(state, batch.columns)` |
-| **Apply to all** on the page, **Apply settings to all** in `BatchView` | a person | `earlier_settings(state, batch.columns)` |
+| **Reduce** on the page | a person | `left_to_reduce(state, batch.columns)` |
+| **Apply to all** on the page | a person | `earlier_settings(state, batch.columns)` |
 | **Reduce all**, **Reduce selected** | a person | `ready(state)`, the keys selected |
 | **Follow** on the page: a timer that scans as **Rescan runs** does, and each action of a person | the page's process | `arrived(state, at)` |
 | `Automatic.step`, which `run` calls from a timer | a process of its own | `arrived(state, at)` |
@@ -174,7 +180,7 @@ stateDiagram-v2
 | a record is written | the workspace, when the cycle submits the row | records |
 | the record finishes | the workspace | records |
 
-A failed or cancelled row reads `failed` or `cancelled` whether or not its request changed, since it needs reducing either way. A row reads `incomplete` from any state but `pending` when a cell is emptied or refused. The diagram leaves out these arrows. The pages show some states in other words. The batch page shows `not reduced` as `ready`, `pending` as `running`, and `completed` as `done`. A row of `earlier_settings` reads `outdated`, but the batch page shows it as `done`, marked "earlier settings", and `BatchView` and a table written show `completed, earlier settings` (`status_texts`).
+A failed or cancelled row reads `failed` or `cancelled` whether or not its request changed, since it needs reducing either way. A row reads `incomplete` from any state but `pending` when a cell is emptied or refused. The diagram leaves out these arrows. The batch page shows `not reduced` as `ready`, `pending` as `running`, and `completed` as `done`. A row of `earlier_settings` reads `outdated`, but the page shows it as `done`, marked "earlier settings", and a table written shows `completed, earlier settings` (`status_texts`).
 
 **Not in this picture:**
 
@@ -220,7 +226,6 @@ A row added by hand stays. An edited row that a scan no longer gives is not show
 | `left_to_reduce(states, columns)` | the rows of `remaining` but those of `earlier_settings` |
 | `refused_again(states, at, refused)` | of the reasons `refused` by row, those of the rows of `arrived`: why the next step of a loop will be refused again |
 | `status_texts(states, columns)` | the status of each row as a table shows it: `completed, earlier settings` for a row of `earlier_settings` |
-| `summary(states)` | the number of rows in each state |
 
 **A row's state is read from its result.** `state()` compares each row's request, its cells with the settings, with the request of its result, and says where they differ:
 
@@ -270,7 +275,7 @@ def test_a_sample_run_pairs_with_its_transmission_run():
 
 Group runs by giving a cell a list of files, in one order at every scan, such as sorted by run: `FileSource.list` promises no order, and a list in another order is another request, which automatic reduction reduces again ([Automatic reduction](#automatic-reduction)). Choose one of several partners by an order too, such as the last by run. Leave a cell out if a partner is missing, so the row shows as incomplete and the rest of the batch can run. A key given twice is refused with the key named, and nothing changes.
 
-Pairing is yours to write. The framework knows no technique. If a source raises, the view shows the error in its message.
+Pairing is yours to write. The framework knows no technique. If a source raises, the page shows the error in a message.
 
 ## When the metadata is wrong or missing
 
@@ -282,14 +287,13 @@ client = local(proposal='p1', files=files, bind=BINDINGS)
 files.correct(run, role='sample')       # or exclude=True, if your source reads it
 ```
 
-`RunSheet` is a table of the files in which a person does this. You choose the fields with a pydantic model:
+The page has a Runs tab, a table of the files, in which a person does this. You choose the fields with a pydantic model, and give the page the wrapper:
 
 ```python
 class Marks(BaseModel):
     role: Literal['sample', 'transmission'] | None = None
 
-sheet = RunSheet(files, client, Marks, then=view.scan)
-App(client, tabs={'I(Q)': view, 'Runs': sheet})
+app = create_app(batch, files=files, marks=Marks, name='name', draw=draw_iofq)
 ```
 
 ## Where the definition is kept
@@ -336,7 +340,7 @@ The edits hold only what was set by hand, so a cell from the scan follows the fi
 - A correction of a file no longer listed is kept, and not used.
 - A file that is not of the shape described raises `ValueError` naming the file and the entry, when the batch or the `CorrectedFiles` is made.
 
-Two `Batch` objects on one label and one folder each write their whole table of edits at each change. A change made through the other since it was made is lost, and neither sees the other's changes. A label has one `Batch` in a process: the Panel demo shows one batch in every session.
+Two `Batch` objects on one label and one folder each write their whole table of edits at each change. A change made through the other since it was made is lost, and neither sees the other's changes. A label has one `Batch` in a process: the page shows one batch to every browser that opens it.
 
 The files that a person loads and writes ([The UI](#the-ui)) are copies, for other people and other tools. The definitions are the one place that a batch is kept, for an application and for the command ([The app and the command on one folder](#the-app-and-the-command-on-one-folder)).
 
@@ -394,8 +398,8 @@ So the loop, the page's buttons, and the command differ:
 
 | A row is reduced if it has | no result | a failed or cancelled result | a result, and a setting changed | a result, and a cell changed at `at` | a result, and a cell changed at another column |
 |---|---|---|---|---|---|
-| the page, "Reduce", and `BatchView`, "Reduce remaining" (`left_to_reduce`) | yes | yes | no | yes | yes |
-| the page, "Apply to all", and `BatchView`, "Apply settings to all" (`earlier_settings`) | no | no | yes, but for a tweak | no | no |
+| the page, "Reduce" (`left_to_reduce`) | yes | yes | no | yes | yes |
+| the page, "Apply to all" (`earlier_settings`) | no | no | yes, but for a tweak | no | no |
 | `essapps-batch reduce --remaining` (`remaining`) | yes | yes | yes, but for a tweak | yes | yes |
 | the loop (`arrived`) | yes | no | no | yes | no |
 
@@ -564,43 +568,33 @@ One command holds the folder at a time. If a command was killed, the next one fi
 [The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows a batch in a browser: how to run it, its layers, and its limits.
 A change of its settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Apply to all** in the settings reduces those rows again, after a confirmation that names how many. Given the columns `at`, the page offers a switch **Follow**: a step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, in the page's own process and batch. It reduces by the rule of **Reduce**, so nothing while the settings form misses something, and each action of a person is followed at once by a step's reduction. Whether the page follows belongs to its process, not to the definition: a restart starts with `--follow` or without.
 
-`BatchView` is a tab for `App`:
+`create_app(batch, ...)` makes the page. Its arguments name the column that names a row (`name`) and the other columns to show (`info`), draw the results (`draw`), correct the metadata of runs (`files`, `marks`), and offer Follow (`at`, `follow`, `interval`). `Server` (`ess.apps.batch.web.server`) holds what the page shows and does, and its actions return `State`, the whole of what the page shows. The browser renders `State` and sends the actions.
 
-- the settings form, which writes the batch's settings at each change that leaves nothing missing, the table of rows with a filter by state, and a count of each state;
-- buttons to scan, reduce all, reduce remaining, reduce selected, cancel, and show the settings of a selected result. As on the web page, a change of settings applies to the rows not reduced yet: **Reduce remaining** leaves the rows reduced with earlier settings (`left_to_reduce`), which the table marks so, and **Apply settings to all** reduces them again (`earlier_settings`);
-- details of a selected row, with the reason it failed;
-- an editor: select rows, change cells, and **Update selected** writes only the changed cells, to all of them. A cell with something missing is not written and is named. To write a value that equals its default to several rows, choose the column in **Write**;
-- **Bring back removed rows**;
-- a form for a tweak of one row;
-- a path, and buttons that read and write the files of the command: **Load rows** and **Write rows** (a table), **Load settings** and **Write settings** (a template), and **Export selected** (a folder of outputs). The page's **Download** of a table or of the settings is what **Write** is here.
+`draw(shown)` gets the completed results of the rows selected, as `Shown` (`key`, `name`, `record`, `outdated`, `color`), and returns a Plotly figure as a dict. `ess.apps.batch.web.plots` draws curves with the page's colours.
 
 ## The app and the command on one folder
 
 A person and the command share one workspace folder (`open_folder`), and a label is one batch for both: the command keeps a batch in the folder's definitions as an app does. One process holds the folder at a time, so stop the app before the command runs:
 
 ```sh
-python -m ess.apps.batch.panel.demo ws     # Write rows: rows.csv, Write settings: settings.yaml
-B="essapps-batch -w ws --bind ess.apps.batch.panel.demo:BINDINGS"
-$B reduce settings.yaml rows.csv --label demo -o done.csv
-$B reduce --label demo --remaining           # the batch as the label keeps it
-python -m ess.apps.batch.panel.demo ws     # the rows show as completed
+python -m ess.apps.batch.web.demo ws       # Download as CSV: rows.csv, Download settings: settings.yaml
+B="essapps-batch -w ws --bind ess.apps.batch.web.demo:BINDINGS"
+$B reduce settings.yaml rows.csv --label demo-iofq -o done.csv
+$B reduce --label demo-iofq --remaining      # the batch as the label keeps it
+python -m ess.apps.batch.web.demo ws       # the rows show as done
 ```
 
-`reduce` imports what it is given into the definitions of its label, then reduces the rows of the table: the template becomes the batch's settings, and the table is set by hand as **Load rows** sets it, on the rows that `--source` makes from the files, if given, and on the edits that the label keeps. So what the command was given shows in the app afterwards, and a table older than an edit made in the app sets the cell back, as any import does. Without a template and a table, `reduce` reduces the batch that the label keeps, with the app's edits. `rows`, `files`, and `export` read the files as corrected, and keep no batch. The command finds the results of the app, and the app those of the command, if the outputs are persisted (`Batch(..., persist=True)`).
+`reduce` imports what it is given into the definitions of its label, then reduces the rows of the table: the template becomes the batch's settings, and the table is set by hand as **Load table…** sets it, on the rows that `--source` makes from the files, if given, and on the edits that the label keeps. So what the command was given shows in the app afterwards, and a table older than an edit made in the app sets the cell back, as any import does. Without a template and a table, `reduce` reduces the batch that the label keeps, with the app's edits. `rows`, `files`, and `export` read the files as corrected, and keep no batch. The command finds the results of the app, and the app those of the command, if the outputs are persisted (`Batch(..., persist=True)`).
 
-| Button | Same as |
+| Button of the page | Same as |
 |---|---|
-| **Load rows** | `batch.scan()`, then `batch.put(frames.rows_of(frames.read_table(path), spec.params, batch.columns))` |
-| **Write rows** | `frames.batch_table(batch, states)`, written with `frames.write_table` |
-| **Load settings** | `batch.settings = text.settings_of(batch, text.load_template(path))`, refused if of another spec, another version of it, or with other blanks than the columns |
-| **Write settings** | `text.write_template(batch.template(), path)` |
-| **Export selected** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows selected |
+| **Load table…** | `batch.scan()`, then `batch.put(frames.rows_of(frames.read_table(path), spec.params, batch.columns))` |
+| **Download as CSV**, **as XLSX** | `frames.batch_table(batch, states)`, written with `frames.write_table` |
+| **Load settings…** | `batch.settings = text.settings_of(batch, text.load_template(path))`, refused if of another spec, another version of it, or with other blanks than the columns |
+| **Download settings** | `text.write_template(batch.template(), path)` |
+| **Download selected**, **Download all** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows, zipped with their table |
 
-`reduce` refuses a table with a row that cannot run, so remove the incomplete rows before writing it. A table loaded is set by hand: each cell that differs from the row shown is an edit, a row the batch removed is brought back, and a row the batch does not show is added, so it stays after **Scan files**, and the definitions keep it. The `status` of a table written is what the view shows, such as `outdated`, `not reduced`, or `completed, earlier settings` (`status_texts`); the downloads of the web page write the same. `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table. A relative path is relative to the working directory of the app.
-
-`draw(records)` gets the completed results of the rows selected, by key, and returns a Panel object.
-
-Any object with `refresh(listing)` and `panel()` can be a tab (`ess.apps.panel.Tab`).
+`reduce` refuses a table with a row that cannot run, so remove the incomplete rows before writing it. A table loaded is set by hand: each cell that differs from the row shown is an edit, a row the batch removed is brought back, and a row the batch does not show is added, so it stays after **Rescan runs**, and the definitions keep it. The `status` of a table written is what the page shows, such as `outdated`, `not reduced`, or `completed, earlier settings` (`status_texts`). `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table.
 
 ## Interfaces to the framework
 
@@ -609,12 +603,12 @@ Any object with `refresh(listing)` and `panel()` can be a tab (`ess.apps.panel.T
 | your pairing and the batch | a function over plain data | there is no behaviour to abstract |
 | `Batch` and the framework | `Client`, the class | one implementation; a fake would have to redo the validation that a table shows |
 | `Form` and the framework | `Listing`, a pydantic model of the params, and `Form.held()` | `Form` needs neither `Client` nor `WorkflowSpec` |
-| a tab and `App` | the `Tab` protocol | applications write their own |
-| the logic and the widgets | the methods of `Batch` and `RowTable` | the view only places widgets and connects events |
+| the logic and the page | the methods of `Batch` and `RowTable` | `Server` holds what the page shows and does, so a rule is written once |
+| `Server` and the browser | `State` and the actions of `Server` | the browser renders `State` and sends actions; `Server` has no HTTP in it |
 
-`ess.apps` and `ess.apps.panel` import nothing from `ess.apps.batch`, and `ess.apps.batch` imports no widget library. `ess.apps.batch.panel` holds the widgets. A test enforces this.
+`ess.apps` and `ess.apps.panel` import nothing from `ess.apps.batch`, and `ess.apps.batch` imports no widget library. `ess.apps.batch.web.server` and `ess.apps.batch.web.models` import neither `fastapi` nor `starlette`; only `ess.apps.batch.web.api` does. A test enforces this.
 
-`ess.apps.batch.web` shows the same batch as a web page without Panel: a FastAPI server and plain JavaScript. It is experimental and the candidate for a hosted interface.
+`ess.apps.batch.web` shows the batch as a web page: a FastAPI server and plain JavaScript. It is experimental and the candidate for a hosted interface.
 
 ## Testing an application
 
@@ -623,7 +617,7 @@ Any object with `refresh(listing)` and `panel()` can be a tab (`ess.apps.panel.T
 | your source | plain data |
 | rules of rows and states | plain values; see `packages/essapps/tests/batch/table_test.py` and `state_test.py` |
 | submitting, stages, refusals, reruns | `local()` with `ess.apps.testing.FakeFiles` and fake workflows; a fixture starts in milliseconds |
-| a view | call its methods and read its widgets, without a browser |
+| the page | `Server`, or `create_app` with FastAPI's `TestClient`; see `packages/essapps/tests/batch/web_test.py` |
 
 ```python
 fake = FakeFiles('p1', tmp_path)

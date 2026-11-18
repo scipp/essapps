@@ -25,7 +25,6 @@ cannot run with it, and a change would offer it to :func:`remaining`.
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Collection, Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
@@ -74,12 +73,11 @@ class RowState:
     @property
     def text(self) -> str:
         """
-        What a table shows, and what :func:`summary` counts. A failed or
-        cancelled result reads as its status whether or not the request changed
-        since, since the row needs reducing either way. A completed result
-        not compared with the settings, as while they are refused, reads
-        ``outdated``: it cannot be told to match them. A tweak does not follow
-        the settings, so it reads as its status.
+        What a table shows. A failed or cancelled result reads as its status
+        whether or not the request changed since, since the row needs reducing
+        either way. A completed result not compared with the settings, as while
+        they are refused, reads ``outdated``: it cannot be told to match them. A
+        tweak does not follow the settings, so it reads as its status.
         """
         if self.status is Status.PENDING:
             return 'pending'
@@ -338,8 +336,3 @@ def status_texts(
         k: f'completed, {EARLIER}' if k in earlier else s.text
         for k, s in states.items()
     }
-
-
-def summary(states: Mapping[str, RowState]) -> dict[str, int]:
-    """The number of rows of each :attr:`RowState.text`, sorted by it."""
-    return dict(sorted(Counter(s.text for s in states.values()).items()))
