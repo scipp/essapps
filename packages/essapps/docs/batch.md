@@ -322,7 +322,7 @@ A `Source` holds the function and the columns that its rows fill. They are colum
 SAMPLE_RUNS = Source(pair_by_sample, fills=('sample', 'sample_transmission'),
                      row_name='name', index_title='Run')    # as in "An application"
 Batch(client, IOFQ, columns=('sample',), label='iofq', source=SAMPLE_RUNS)
-# ValueError: the source fills ['sample_transmission'], which are not columns
+# ValueError: iofq: the source fills ['sample_transmission'], which are not columns of the batch
 ```
 
 Give each row its index, such as the run number as a number (`Row(key, values, info, index=int(run))`), so that a batch can hold a slice of the rows ([Rules](#rules)). A row without one, such as of a file without a run number, is held only by a scope without ends or by its key.
@@ -743,7 +743,7 @@ $B reduce --label $L --remaining           # the batch as the label keeps it
 python -m ess.apps.batch.web.demo ws       # the rows show as done
 ```
 
-`reduce` imports what it is given into the definitions of its label, then reduces the rows of the table: the template becomes the batch's settings, and the table is set by hand as **Load table…** sets it, on the rows that a `Source` makes from the files, if `--source package.module:NAME` names one, and on the edits that the label keeps. So what the command was given shows in the app afterwards, and a table older than an edit made in the app sets the cell back, as any import does. Without a template and a table, `reduce` reduces the batch that the label keeps, with the app's edits. `rows`, `files`, and `export` read the files as corrected, and keep no batch. The command finds the results of the app, and the app those of the command, if the outputs are persisted (`Batch(..., persist=True)`).
+`reduce` imports what it is given into the definitions of its label, then reduces the rows of the table: the template becomes the batch's settings, and the table is set by hand as **Load table…** sets it, on the rows that a `Source` makes from the files, if `--source package.module:NAME` names one, and on the edits that the label keeps. With `--source`, the blanks of the template must include every column that the source fills, or `reduce` refuses. So what the command was given shows in the app afterwards, and a table older than an edit made in the app sets the cell back, as any import does. Without a template and a table, `reduce` reduces the batch that the label keeps, with the app's edits. `rows`, `files`, and `export` read the files as corrected, and keep no batch. The command finds the results of the app, and the app those of the command, if the outputs are persisted (`Batch(..., persist=True)`).
 
 | Button of the page | Same as |
 |---|---|

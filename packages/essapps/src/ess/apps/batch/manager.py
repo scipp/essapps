@@ -49,7 +49,7 @@ from .definition import (
     settings_key,
     template_data,
 )
-from .reduction import Batch, Source, file_infos
+from .reduction import Batch, Source, check_fills, file_infos
 from .state import RowState
 from .table import Scope
 
@@ -240,16 +240,14 @@ class BatchManager:
         if self._taken(label):
             raise ValueError(f'{label}: the label has definitions or records')
         bound = bound_spec(self._client, spec)
-        fills = () if source is None else self.sources[source].fills
+        registered = None if source is None else self.sources[source]
+        fills = () if registered is None else registered.fills
         columns = fills if columns is None else tuple(columns)
         if unknown := sorted(set(columns) - bound.params.model_fields.keys()):
             raise ValueError(f'{bound.title} has no parameters {unknown}')
         if len(set(columns)) != len(columns):
             raise ValueError(f'a column is named twice: {list(columns)}')
-        if missing := sorted(set(fills) - set(columns)):
-            raise ValueError(
-                f'the source {source} fills {missing}, which are not columns'
-            )
+        check_fills(label, registered, columns)
         header = Header(
             spec=spec,
             columns=columns,

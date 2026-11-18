@@ -446,6 +446,28 @@ def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(
     assert list(result['status']) == ['completed']
 
 
+@pytest.mark.parametrize(
+    'arguments',
+    [
+        ['rows', 'cli_toys_batch_files:pair'],
+        ['reduce', '--source', 'cli_toys_batch_files:pair', '-l', 'x'],
+    ],
+    ids=['rows', 'reduce'],
+)
+def test_main_refuses_a_source_that_is_not_a_source_before_the_folder_is_opened(
+    command: list[str],
+    folder: Path,
+    arguments: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_:
+        main([*command, *arguments])
+
+    assert exit_.value.code == 2
+    assert 'is a function, not a Source' in capsys.readouterr().err
+    assert not (folder / 'log.jsonl').exists()
+
+
 def test_main_refuses_reduce_without_a_label(
     command: list[str], cli_template: Path
 ) -> None:

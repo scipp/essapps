@@ -139,7 +139,7 @@ def test_a_scan_returns_the_files_its_source_got(
 def test_a_batch_whose_source_fills_a_column_it_lacks_is_refused(
     client: Client,
 ) -> None:
-    with pytest.raises(ValueError, match=r"the source fills \['transmission'\]"):
+    with pytest.raises(ValueError, match=r"scan: the source fills \['transmission'\]"):
         Batch(client, PLAIN, columns=('sample',), label='scan', source=PAIRS)
 
 

@@ -57,7 +57,7 @@ from . import frames
 from .corrections import CorrectedFiles
 from .definition import FolderDefinitions
 from .export import export_table
-from .reduction import file_infos
+from .reduction import Source, file_infos
 from .state import EARLIER
 from .text import load_template, with_latest
 
@@ -66,6 +66,17 @@ def _named(name: str) -> Any:
     """The object that ``package.module:name`` names."""
     module, _, attribute = name.partition(':')
     return getattr(import_module(module), attribute)
+
+
+def _source(parser: argparse.ArgumentParser, name: str) -> Source:
+    """The :class:`~.reduction.Source` that ``name`` names; exits if it is none."""
+    source = _named(name)
+    if not isinstance(source, Source):
+        parser.error(
+            f'{name} is a {type(source).__name__}, not a Source '
+            '(ess.apps.batch.Source), such as package.module:SAMPLE_RUNS'
+        )
+    return source
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -153,7 +164,7 @@ def _run(
     client: Client, args: argparse.Namespace, definitions: FolderDefinitions
 ) -> pd.DataFrame:
     if args.command == 'rows':
-        source = _named(args.source)
+        source = args.source
         return frames.table_of(source.rows(file_infos(client, source.selector)))
     if args.command == 'export':
         return export_table(client, frames.read_table(args.table), args.directory)
@@ -171,7 +182,7 @@ def _run(
         template,
         table,
         label=args.label,
-        source=None if args.source is None else _named(args.source),
+        source=args.source,
         staged=args.staged,
         persist=True,
         remaining=args.remaining,
@@ -213,6 +224,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         # a workspace goes on with pending records, which need their bindings
         parser.error('--bind is required: the bindings of the workspace')
     bind = _named(args.bind)
+    if getattr(args, 'source', None) is not None:  # rows and reduce
+        args.source = _source(parser, args.source)
     definitions = FolderDefinitions(args.workspace)
     try:
         files = CorrectedFiles(folder_files(args.workspace), definitions=definitions)

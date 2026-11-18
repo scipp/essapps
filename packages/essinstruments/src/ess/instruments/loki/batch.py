@@ -12,8 +12,8 @@ sample, and pairs the run with the transmission run of the same sample::
 
 :data:`SOURCES` and :data:`DEFAULTS` give a
 :class:`~ess.apps.batch.BatchManager` the batches of I(Q);
-:func:`iofq_batch` makes one batch without a manager, and the command takes
-the source of both as ``--source ess.instruments.loki.batch:SAMPLE_RUNS``.
+:func:`iofq_batch` makes one batch without a manager, and the command names
+the source of both as ``ess.instruments.loki.batch:SAMPLE_RUNS``.
 """
 
 import sys

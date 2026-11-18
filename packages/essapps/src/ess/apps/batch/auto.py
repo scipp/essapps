@@ -207,11 +207,14 @@ class Follow:
     def on(self, label: str) -> None:
         """
         Make the batch of ``label`` the one that follows. Raises ``KeyError``
-        if no batch has the label, and ``ValueError`` if its batch has no
-        source.
+        if no batch has the label or its source is not registered, and
+        ``ValueError`` if its batch has no source. It makes no batch.
         """
-        if self._manager.headers()[label].source is None:
+        name = self._manager.headers()[label].source
+        if name is None:
             raise ValueError(f'{label}: the batch has no source of rows')
+        if name not in self._manager.sources:
+            raise KeyError(f'{label}: the source {name} is not registered')
         self._keep(label)
 
     def off(self) -> None:

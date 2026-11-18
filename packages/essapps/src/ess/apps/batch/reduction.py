@@ -172,6 +172,17 @@ class Source:
     index_title: str = 'Index'
 
 
+def check_fills(label: str, source: Source | None, columns: Iterable[str]) -> None:
+    """
+    Raise ``ValueError`` if ``source`` fills a parameter that is not one of
+    ``columns``, those of the batch of ``label``.
+    """
+    if source is not None and (missing := sorted(set(source.fills) - set(columns))):
+        raise ValueError(
+            f'{label}: the source fills {missing}, which are not columns of the batch'
+        )
+
+
 class Batch:
     """
     One spec reduced for many rows. See ``packages/essapps/docs/batch.md``.
@@ -238,8 +249,7 @@ class Batch:
         fields = spec.params.model_fields
         if unknown := sorted(set(columns) - fields.keys()):
             raise KeyError(f'{spec.title} has no parameters {unknown}')
-        if source is not None and (missing := sorted(set(source.fills) - set(columns))):
-            raise ValueError(f'the source fills {missing}, which are not columns')
+        check_fills(label, source, columns)
         self.client = client
         self.spec = spec
         self.columns = tuple(columns)

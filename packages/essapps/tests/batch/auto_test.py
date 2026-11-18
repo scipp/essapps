@@ -40,6 +40,7 @@ from .toys import (
     REPEATED,
     SAMPLES,
     SERIES,
+    SOURCES,
     STAGED,
     Gate,
     Measure,
@@ -229,11 +230,12 @@ def test_at_is_a_set_not_a_column_name(batch: Batch) -> None:
         Automatic(batch, at='sample')  # type: ignore[arg-type]
 
 
-def test_the_batch_must_have_a_source(client: Client) -> None:
+@pytest.mark.parametrize('at', [None, {'sample'}])
+def test_the_batch_must_have_a_source(client: Client, at: set[str] | None) -> None:
     batch = Batch(client, PLAIN, columns=COLUMNS, label='scan')
 
     with pytest.raises(ValueError, match='no source'):
-        Automatic(batch)
+        Automatic(batch, at=at)
 
 
 def test_a_failed_row_is_reduced_again_only_for_a_change_at_at(
@@ -877,6 +879,22 @@ def test_follow_refuses_a_batch_without_a_source(
     with pytest.raises(KeyError):
         follow.on('d')
     assert follow.label == 'a'
+
+
+def test_follow_refuses_a_batch_whose_source_is_not_registered(
+    client: Client, definitions: FolderDefinitions
+) -> None:
+    sources = {**SOURCES, 'other': PAIRS}
+    BatchManager(client, sources=sources, definitions=definitions).create(
+        'plain', title='B', source='other', label='b'
+    )
+    follow = Follow(
+        BatchManager(client, sources=SOURCES, definitions=definitions), definitions
+    )
+
+    with pytest.raises(KeyError, match='the source other is not registered'):
+        follow.on('b')
+    assert follow.label is None
 
 
 def test_follow_keeps_its_label_when_the_definitions_refuse_a_change(

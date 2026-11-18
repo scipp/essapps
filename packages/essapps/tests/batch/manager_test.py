@@ -114,9 +114,13 @@ def test_the_columns_of_a_batch_are_those_given_else_those_its_source_fills(
 def test_columns_that_lack_one_the_source_fills_are_refused(
     manager: BatchManager, definitions: FolderDefinitions
 ) -> None:
-    with pytest.raises(ValueError, match=r"pairs fills \['transmission'\]"):
+    with pytest.raises(ValueError, match=r"b: the source fills \['transmission'\]"):
         manager.create(
-            'plain', title='Morning', source='pairs', columns=('sample', 'thickness')
+            'plain',
+            title='Morning',
+            source='pairs',
+            columns=('sample', 'thickness'),
+            label='b',
         )
     assert manager.headers() == {}
     assert definitions.labels() == []
@@ -354,7 +358,7 @@ def test_a_batch_whose_source_fills_a_column_it_lacks_is_refused(
     manager = BatchManager(client, sources=narrow, definitions=definitions)
     manager.create('plain', title='Morning', source='pairs', label='b')
 
-    with pytest.raises(ValueError, match=r"the source fills \['transmission'\]"):
+    with pytest.raises(ValueError, match=r"b: the source fills \['transmission'\]"):
         _again(client, definitions).batch('b')
 
 
