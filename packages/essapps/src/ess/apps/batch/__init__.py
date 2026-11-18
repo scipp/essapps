@@ -20,7 +20,6 @@ from .state import (
     left_to_reduce,
     ready,
     refused_again,
-    remaining,
     status_texts,
 )
 from .table import EMPTY, Row, RowTable
@@ -45,6 +44,5 @@ __all__ = [
     'left_to_reduce',
     'ready',
     'refused_again',
-    'remaining',
     'status_texts',
 ]

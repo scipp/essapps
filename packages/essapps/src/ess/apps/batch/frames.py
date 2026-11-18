@@ -195,6 +195,7 @@ def reduce_table(
     staged: bool = False,
     persist: bool | Sequence[str] = False,
     remaining: bool = False,
+    earlier_settings: bool = False,
     definitions: DefinitionStore | None = None,
 ) -> pd.DataFrame:
     """
@@ -231,9 +232,14 @@ def reduce_table(
     persist:
         As :meth:`~ess.apps.Client.submit` takes it.
     remaining:
-        Reduce only the rows that :func:`~.state.remaining` gives: those whose
-        newest record under ``label`` did not complete, or is outdated, since
-        the row's cells or the settings changed, or its spec did.
+        Reduce only the rows that :func:`~.state.left_to_reduce` gives: those
+        whose newest record under ``label`` did not complete, or is outdated
+        since the row's cells or its spec changed, or since the settings
+        changed for a row that has no result of them yet. A row reduced with
+        earlier settings is left, as it is by the page's "Reduce".
+    earlier_settings:
+        Together with ``remaining``, reduce also the rows reduced with earlier
+        settings (:func:`~.state.earlier_settings`), as "Apply to all" does.
     definitions:
         Where the batch of ``label`` is kept (:mod:`.definition`).
 
@@ -278,7 +284,18 @@ def reduce_table(
         # Records that a workspace went on with after a restart finish first.
         client.wait([s.record for s in batch.results(keys).values() if s.record])
         states = batch.state(keys)
-        left = set(state.remaining(states)) if remaining else states.keys()
+        left = (
+            set(states)
+            if not remaining
+            else set(
+                state.left_to_reduce(states, batch.columns)
+                + (
+                    state.earlier_settings(states, batch.columns)
+                    if earlier_settings
+                    else []
+                )
+            )
+        )
         # A row that cannot run is given too, so that reduce refuses it by key.
         picked = [k for k, s in states.items() if k in left or s.problems]
         client.wait(batch.reduce(picked))

@@ -30,12 +30,13 @@ The loop is a controller: it runs in a process of its own or in a notebook, neve
 
 ## Which rows run
 
-A person and the loop differ in the rule of the cycle ([batch.md](../../packages/essapps/docs/batch.md#automatic-reduction) tables each). `remaining` stands for a person here:
+A person and the loop differ in the rule of the cycle ([batch.md](../../packages/essapps/docs/batch.md#automatic-reduction) tables each). `left_to_reduce` stands for a person here:
 
 ```python
-def remaining(state):      # essapps-batch reduce --remaining; the page's Reduce leaves out earlier_settings
+def left_to_reduce(state, columns):   # the page's Reduce, and essapps-batch reduce --remaining
     return [key for key in ready(state)
-            if state[key].status in (None, FAILED, CANCELLED) or state[key].outdated]
+            if (state[key].status in (None, FAILED, CANCELLED) or state[key].outdated)
+            and key not in earlier_settings(state, columns)]
 
 def arrived(state, at):    # the loop
     return [key for key in ready(state)
@@ -49,11 +50,11 @@ def arrived(state, at):    # the loop
 `changed_by_hand` is true if the row has a cell set by hand (an edit, or any cell of a row added by hand) and has no result, or differs from its result at such a cell.
 So the loop reduces a row for what the files changed, never for what a person changed: a person reduces what they changed, with or without the loop.
 
-| What happened to a row | `arrived` | `remaining` |
+| What happened to a row | `arrived` | `left_to_reduce` |
 |---|---|---|
 | it has no result | yes, unless a cell is set by hand | yes |
 | its result failed or was cancelled | no | yes |
-| a setting changed | no | yes, but for a tweak, which is `outdated` only where a column changed |
+| a setting changed | no | no: the row is one of `earlier_settings`, which a person reduces with "Reduce them again" (`--earlier-settings`) |
 | the scan changed a cell at a column of `at`, such as a run that joins its list | yes | yes |
 | the scan changed a cell at another column | no | yes |
 | a person set a cell, and it is not reduced yet | no | yes |

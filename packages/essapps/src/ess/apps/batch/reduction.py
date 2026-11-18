@@ -331,7 +331,7 @@ class Batch:
         the problems of its cells as given, its status, and whether its result
         is of another spec. Nothing is resolved, so :attr:`RowState.changed`
         is ``None``, and so is :attr:`RowState.outdated` unless the result is
-        of another spec: :func:`~.state.remaining` and
+        of another spec: :func:`~.state.left_to_reduce` and
         :func:`~.state.arrived` refuse these states.
 
         It is what a page shows while the settings are refused, and what

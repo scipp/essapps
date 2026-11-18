@@ -12,7 +12,7 @@ import pytest
 import yaml
 
 from ess.apps import Template, file
-from ess.apps.batch import Batch, CorrectedFiles, FolderDefinitions, remaining
+from ess.apps.batch import Batch, CorrectedFiles, FolderDefinitions, left_to_reduce
 from ess.apps.batch.cli import main
 from ess.apps.batch.definition import edits_key, settings_key, template_of
 from ess.apps.batch.frames import read_table
@@ -205,7 +205,7 @@ def test_main_returns_2_and_says_why_if_the_settings_are_refused(
     assert 'row-0' not in err
 
 
-def test_main_with_remaining_reduces_the_rows_whose_cells_or_settings_changed(
+def test_main_with_remaining_reduces_the_rows_whose_cells_changed(
     command: list[str], cli_template: Path, folder: Path
 ) -> None:
     out = folder / 'results.csv'
@@ -218,15 +218,96 @@ def test_main_with_remaining_reduces_the_rows_whose_cells_or_settings_changed(
 
     first = records(['1', '2'])
     cell = records(['1', '3'])
+
+    assert (cell[0], cell[1] != first[1]) == (first[0], True)
+    assert records(['1', '3']) == cell
+
+
+@pytest.fixture
+def settings_changed(command: list[str], cli_template: Path, folder: Path) -> Path:
+    """The table of a reduction of two rows, after the template's settings changed."""
+    runs = write_rows(folder, ['1', '2'])
+    out = folder / 'results.csv'
+    assert main([*command, 'reduce', str(cli_template), str(runs), '-l', 'x']) == 0
     cli_template.write_text(
         'spec: {name: cli-toy, version: 1}\nblanks: [sample]\n'
         'params: {offset: {value: 1.0}}\n'
     )
-    setting = records(['1', '3'])
+    return out
 
-    assert (cell[0], cell[1] != first[1]) == (first[0], True)
-    assert not set(setting) & set(cell)
-    assert records(['1', '3']) == setting
+
+def test_main_with_remaining_leaves_the_rows_reduced_with_earlier_settings(
+    command: list[str],
+    cli_template: Path,
+    folder: Path,
+    settings_changed: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs = folder / 'runs.csv'
+    capsys.readouterr()
+
+    code = main(
+        [
+            *command,
+            'reduce',
+            str(cli_template),
+            str(runs),
+            '-l',
+            'x',
+            '--remaining',
+            '-o',
+            str(settings_changed),
+        ]
+    )
+
+    table = read_table(settings_changed)
+    assert list(table['status']) == ['completed, earlier settings'] * 2
+    assert code == 3
+    assert 'left 2 rows' in capsys.readouterr().err
+    with app(folder) as batch:
+        assert len(batch.client.records(label='x')) == 2
+
+
+def test_main_with_remaining_and_earlier_settings_reduces_those_rows_too(
+    command: list[str], cli_template: Path, folder: Path, settings_changed: Path
+) -> None:
+    runs = folder / 'runs.csv'
+    args = [
+        str(cli_template),
+        str(runs),
+        '-l',
+        'x',
+        '--remaining',
+        '--earlier-settings',
+    ]
+
+    code = main([*command, 'reduce', *args, '-o', str(settings_changed)])
+
+    assert code == 0
+    assert list(read_table(settings_changed)['status']) == ['completed'] * 2
+    with app(folder) as batch:
+        assert len(batch.client.records(label='x')) == 4
+
+
+def test_main_refuses_earlier_settings_without_remaining(
+    command: list[str],
+    cli_template: Path,
+    folder: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs = write_rows(folder, ['1'])
+
+    with pytest.raises(SystemExit) as exit_:
+        main(
+            [
+                *command,
+                *('reduce', str(cli_template), str(runs), '-l', 'x'),
+                '--earlier-settings',
+            ]
+        )
+
+    assert exit_.value.code == 2
+    assert '--remaining' in capsys.readouterr().err
 
 
 @contextmanager
@@ -269,7 +350,7 @@ def test_a_batch_on_the_label_reduced_has_the_settings_and_rows_of_the_files(
             'row-0': file(run=1),
             'row-1': file(run=2),
         }
-        assert remaining(batch.state()) == []
+        assert left_to_reduce(batch.state(), batch.columns) == []
 
 
 def test_an_edit_of_an_app_is_reduced_by_the_command_given_no_files(

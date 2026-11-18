@@ -22,6 +22,9 @@ definitions (:mod:`.definition`), so a label is one batch whoever works on it:
   rows that ``--source`` makes from the files, if given, and on those that
   the definitions hold. It then reduces the rows of the table. Without a
   template and a table, it reduces the batch that the definitions hold.
+  With ``--remaining`` it reduces the rows that the page's "Reduce" does
+  (:func:`.state.left_to_reduce`), and leaves those reduced with earlier
+  settings, which it says on stderr; ``--earlier-settings`` adds them.
 - ``rows`` and ``files`` write a table from the files, as corrected in the
   definitions; ``export`` writes the outputs of a table that ``reduce`` wrote.
   None of them reads or writes a batch.
@@ -29,7 +32,8 @@ definitions (:mod:`.definition`), so a label is one batch whoever works on it:
 The guide is ``packages/essapps/docs/batch.md``.
 
 Exit status: 0 if done, and every row completed; 1 for an error; 2 if the
-command or a row was refused, so that nothing ran; 3 if a row did not complete.
+command or a row was refused, so that nothing ran; 3 if a row did not complete,
+or ``--remaining`` left a row reduced with earlier settings.
 """
 
 from __future__ import annotations
@@ -53,6 +57,7 @@ from .corrections import CorrectedFiles
 from .definition import FolderDefinitions
 from .export import export_table
 from .reduction import file_infos
+from .state import EARLIER
 from .text import load_template, with_latest
 
 
@@ -107,7 +112,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     reduce.add_argument('--staged', action='store_true', help='run through a stage')
     reduce.add_argument(
-        '--remaining', action='store_true', help='leave out the rows completed'
+        '--remaining',
+        action='store_true',
+        help='reduce only the rows that the page reduces with "Reduce": '
+        'not those reduced with earlier settings',
+    )
+    reduce.add_argument(
+        '--earlier-settings',
+        action='store_true',
+        help='with --remaining, reduce the rows reduced with earlier settings too',
     )
 
     export = commands.add_parser(
@@ -160,6 +173,7 @@ def _run(
         staged=args.staged,
         persist=True,
         remaining=args.remaining,
+        earlier_settings=args.earlier_settings,
         definitions=definitions,
     )
 
@@ -191,6 +205,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         _write(files, args.output)
         return 0
+    if args.command == 'reduce' and args.earlier_settings and not args.remaining:
+        parser.error('--earlier-settings needs --remaining')
     if args.bind is None:
         # a workspace goes on with pending records, which need their bindings
         parser.error('--bind is required: the bindings of the workspace')
@@ -210,6 +226,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             sys.stderr.write(f'{error}\n')
             return 2
     _write(result, args.output)
+    if args.command == 'reduce' and args.remaining and not args.earlier_settings:
+        left = int(result['status'].str.endswith(EARLIER).sum())
+        if left:
+            sys.stderr.write(
+                f'left {left} row{"s" if left > 1 else ""} reduced with earlier '
+                'settings: add --earlier-settings to reduce them\n'
+            )
     done = args.command != 'reduce' or all(result['status'] == Status.COMPLETED)
     return 0 if done else 3
 

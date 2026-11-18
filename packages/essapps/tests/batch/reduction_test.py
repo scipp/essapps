@@ -17,8 +17,9 @@ from ess.apps.batch import (
     CorrectedFiles,
     FileInfo,
     Row,
+    earlier_settings,
+    left_to_reduce,
     ready,
-    remaining,
 )
 from ess.apps.testing import CountingClient, FakeStore, StagedFunction
 from ess.spec import FileRef, OutputRef, RunFile, WorkflowSpec, function_binding
@@ -334,7 +335,7 @@ def test_an_edited_row_is_outdated_and_left_to_do(
     client.wait(scanned.reduce(['1', '2']))
     scanned.rows = scanned.rows.edit('1', {'thickness': 2.0})
 
-    assert remaining(scanned.state()) == ['1']
+    assert left_to_reduce(scanned.state(), COLUMNS) == ['1']
 
 
 def test_changed_settings_make_every_result_outdated(
@@ -342,9 +343,12 @@ def test_changed_settings_make_every_result_outdated(
 ) -> None:
     client.wait(scanned.reduce(['1', '2']))
 
-    assert remaining(scanned.state()) == []
     scanned.settings = OTHER_SETTINGS
-    assert remaining(scanned.state()) == ['1', '2']
+
+    states = scanned.state()
+    assert [states[k].outdated for k in ('1', '2')] == [True, True]
+    assert earlier_settings(states, COLUMNS) == ['1', '2']
+    assert left_to_reduce(states, COLUMNS) == []
 
 
 def test_changed_names_the_cell_and_the_setting_that_differ(
@@ -387,7 +391,7 @@ def test_a_default_written_out_and_a_file_by_name_do_not_change_a_row(
     states = scanned.state()
 
     assert {k: s.changed for k, s in states.items()} == {'1': set(), '2': set()}
-    assert remaining(states) == []
+    assert left_to_reduce(states, COLUMNS) == []
 
 
 def test_a_cleared_cell_is_one_problem(scanned: Batch, client: Client) -> None:
@@ -646,7 +650,7 @@ def test_a_result_of_another_spec_version_is_the_rows_result_and_outdated(
     assert [r.member for r in client.records(label='s')] == ['1', '2', '2']
     assert states['1'].record == client.records(label='s')[0]
     assert (states['1'].spec_changed, states['2'].spec_changed) == (True, False)
-    assert remaining(states) == ['1']
+    assert left_to_reduce(states, COLUMNS) == ['1']
 
 
 def test_the_state_of_chosen_rows_reads_only_the_records_that_changed(
@@ -693,7 +697,7 @@ def test_cancel_reaches_what_was_just_submitted(
     gate.open()
 
     assert client.wait(records) == {'1': 'cancelled', '2': 'cancelled'}
-    assert remaining(scanned.state()) == ['1', '2']
+    assert left_to_reduce(scanned.state(), COLUMNS) == ['1', '2']
 
 
 def test_cancel_leaves_other_rows_when_given_keys(
@@ -709,7 +713,7 @@ def test_cancel_leaves_other_rows_when_given_keys(
     gate.open()
 
 
-def test_a_tweak_is_the_rows_result_and_not_remaining(
+def test_a_tweak_is_the_rows_result_and_not_left_to_reduce(
     scanned: Batch, client: Client
 ) -> None:
     client.wait(scanned.reduce(['1']))
@@ -719,7 +723,7 @@ def test_a_tweak_is_the_rows_result_and_not_remaining(
     client.wait(tweaked)
 
     assert scanned.state()['1'].record == tweaked
-    assert remaining(scanned.state()) == ['2']
+    assert left_to_reduce(scanned.state(), COLUMNS) == ['2']
 
 
 def test_a_row_is_tweaked_until_it_is_reduced_with_the_settings(
