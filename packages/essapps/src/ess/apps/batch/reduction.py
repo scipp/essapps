@@ -3,7 +3,13 @@
 """
 A batch on a client: scanning for rows, reducing them, and reading their results.
 
-:class:`Batch` is the only part of the toolbox's logic that calls the client.
+A :class:`Batch` is two parts. Its :class:`Table` holds the rows: it scans the
+files with the source, and keeps the edits. Its :class:`Step` reduces them: it
+holds the spec, the settings and the label, reads the records under the label,
+and submits. The step is given the rows it works on, so it knows nothing of
+files or edits; the table knows nothing of specs or records.
+
+This module is the only part of the toolbox's logic that calls the client.
 It needs no interface of its own over the client: tests and UI work run it on
 ``local()`` with fake workflows, which start in milliseconds and refuse and fail
 as real ones do.
@@ -11,15 +17,15 @@ as real ones do.
 A row's state is read from the records, not from what this object submitted,
 so every ``Batch`` on the label, and this one after a restart, sees the same,
 but for how it resolved a file name, which it keeps until its next scan.
-What a ``Batch`` keeps of them can be rebuilt from the records at any time:
+What a ``Step`` keeps of them can be rebuilt from the records at any time:
 the newest record of each member under the label, the IDs of the records under
 the label it has read, and which of them are not of the bound spec
 (:meth:`~ess.apps.Client.bound`), all read from ``client.changes``, so that the
 state of chosen rows does not read every record under the label.
 
-The settings are the batch's own (:attr:`Batch.settings`), so each state is
+The settings are the step's own (:attr:`Step.settings`), so each state is
 read with them, and each reduction submits them. A state that resolves
-nothing (:meth:`Batch.results`) is for showing the rows while the settings are
+nothing (:meth:`Step.results`) is for showing the rows while the settings are
 refused, and for the checks before a submission.
 
 Where a row's request differs from its result's (``RowState.changed``) is
@@ -36,7 +42,7 @@ worked out on both as a record holds them, resolving as little as it can::
 
 A parameter resolves the same whatever the other parameters are, so a cell is
 resolved on its own, and a value resolved once is kept by its column and value
-until the next scan (:meth:`Batch._resolve_cells`).
+until the next scan (:meth:`Step.forget_resolved`).
 
 A stage is opened lazily and kept with the template it was opened from, as
 given, since the stage's own holds resolved values. A refusal with no position
@@ -121,9 +127,112 @@ takes plain data and returns plain data, so it is tested on its own.
 """
 
 
-class Batch:
+class Table:
     """
-    One spec reduced for many rows. See ``packages/essapps/docs/batch.md``.
+    The rows of a batch: those of the last scan, with the edits on top.
+
+    Parameters
+    ----------
+    client:
+        The client whose files are scanned.
+    columns:
+        The columns of the rows: those that :meth:`put` sets, and those that a
+        row added by hand sets by hand.
+    label:
+        Names the edits in ``definitions``.
+    source:
+        Makes rows from files, for :meth:`scan`.
+    selector:
+        The files given to ``source``; raw files if not given.
+    definitions:
+        Keep the edits of the label (:mod:`~.definition`): read here, and
+        written at each change. Without them, the edits are kept in memory only.
+
+    Raises
+    ------
+    ValueError
+        If ``definitions`` hold edits that cannot be read, naming the file and
+        the entry; or if the label is too long to name their file.
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        *,
+        columns: Sequence[str],
+        label: str,
+        source: RowSource | None = None,
+        selector: Selector | None = None,
+        definitions: DefinitionStore | None = None,
+    ) -> None:
+        self.client = client
+        self.columns = tuple(columns)
+        self.label = label
+        self.source = source
+        self._selector = Selector() if selector is None else selector
+        self._definitions = definitions
+        self._rows = RowTable()
+        self._scanned = False
+        if definitions is not None:
+            edits = definitions.load(definition.edits_key(label), definition.edits_of)
+            if edits is not None:
+                self._rows = edits
+
+    @property
+    def rows(self) -> RowTable:
+        """
+        The rows: those of the last scan, with what was set by hand on top. An
+        assignment is written to the definitions, if the table has them, and
+        is not made if they cannot keep it.
+        """
+        return self._rows
+
+    @rows.setter
+    def rows(self, rows: RowTable) -> None:
+        if self._definitions is not None:
+            key = definition.edits_key(self.label)
+            self._definitions.save(key, definition.edits_data(rows))
+        self._rows = rows
+
+    def select(self, keys: Sequence[str] | None = None) -> list[Row]:
+        """The rows of ``keys``, or all; raises ``KeyError`` for a key not a row."""
+        return list(self._rows) if keys is None else [self._rows[k] for k in keys]
+
+    def put(self, rows: Iterable[Row]) -> None:
+        """
+        Set ``rows`` by hand, as a table of them gives them
+        (:meth:`RowTable.put`). Raises ``ValueError`` if the table has a source
+        and has not scanned, since every row would then be added, and none
+        would follow the files.
+        """
+        if self.source is not None and not self._scanned:
+            raise ValueError('scan the files first: the rows are set on top of them')
+        self.rows = self._rows.put(rows, self.columns)
+
+    def scan(self) -> list[FileInfo]:
+        """
+        Make rows from the files now; what was set by hand stays. Returns the
+        files, as the source got them.
+        """
+        if self.source is None:
+            raise ValueError('this batch has no source of rows')
+        infos = file_infos(self.client, self._selector)
+        # What was set by hand stays, so there is nothing to write.
+        self._rows = self._rows.rescan(self.source(infos))
+        self._scanned = True
+        return infos
+
+    def set_by_hand(self) -> dict[str, frozenset[str]]:
+        """The columns set by hand of each row: its edits, or all if added."""
+        rows = self._rows
+        added = dict.fromkeys((r.key for r in rows.added), frozenset(self.columns))
+        return {k: frozenset(cells) for k, cells in rows.edits.items()} | added
+
+
+class Step:
+    """
+    One spec reduced for rows that it is given: its settings, the label of its
+    records, and where each row stands against them.
 
     Parameters
     ----------
@@ -136,23 +245,19 @@ class Batch:
         other parameters are the settings, shared by all rows.
     label:
         The label of the records. A row's key is its member.
-    source:
-        Makes rows from files, for :meth:`scan`.
-    selector:
-        The files given to ``source``; raw files if not given.
     staged:
         Run the rows through a stage, so that what they share is computed
         once. The spec's binding must make stages.
     persist:
         As :meth:`~ess.apps.Client.submit` takes it.
     settings:
-        The settings that the batch starts with if ``definitions`` hold none,
+        The settings that the step starts with if ``definitions`` hold none,
         such as the technique's defaults; none if not given, so each parameter
         takes its default.
     definitions:
-        Keep the edits and the settings of the label (:mod:`~.definition`):
-        read here, and written at each change. Without them, the edits and
-        settings are kept in memory only.
+        Keep the settings of the label (:mod:`~.definition`): read here, and
+        written at each change. Without them, the settings are kept in memory
+        only.
 
     Raises
     ------
@@ -161,9 +266,9 @@ class Batch:
     ValueError
         If ``settings`` name a column.
     ValueError
-        If ``definitions`` hold edits or settings that cannot be read, or
-        settings of a spec of another name, naming the file and the entry; or
-        if the label is too long to name their file.
+        If ``definitions`` hold settings that cannot be read, or settings of a
+        spec of another name, naming the file and the entry; or if the label
+        is too long to name their file.
     """
 
     def __init__(
@@ -173,8 +278,6 @@ class Batch:
         *,
         columns: Sequence[str],
         label: str,
-        source: RowSource | None = None,
-        selector: Selector | None = None,
         staged: bool = False,
         persist: bool | Sequence[str] = False,
         settings: Mapping[str, Any] | None = None,
@@ -188,14 +291,15 @@ class Batch:
         self.columns = tuple(columns)
         self.settings_fields = tuple(n for n in fields if n not in columns)
         self.label = label
-        self.source = source
         self._definitions = definitions
-        self._rows = RowTable()
-        self._scanned = False
         self._settings = self._own(settings or {})
         if definitions is not None:
-            self._load(definitions)
-        self._selector = Selector() if selector is None else selector
+            kept = definitions.load(
+                definition.settings_key(label),
+                lambda data: definition.settings_of(data, spec),
+            )
+            if kept is not None:
+                self._settings = kept
         self._staged = staged
         self._persist = persist
         self._stage: tuple[Template, Stage] | None = None
@@ -207,69 +311,14 @@ class Batch:
         # A cell's value as a record holds it, by its column and value as given.
         self._resolved: dict[tuple[str, Any], Any] = {}
 
-    def _load(self, definitions: DefinitionStore) -> None:
-        """Take the edits and the settings that ``definitions`` hold, if any."""
-        edits = definitions.load(definition.edits_key(self.label), definition.edits_of)
-        if edits is not None:
-            self._rows = edits
-        settings = definitions.load(
-            definition.settings_key(self.label),
-            lambda data: definition.settings_of(data, self.spec),
-        )
-        if settings is not None:
-            self._settings = settings
-
-    @property
-    def rows(self) -> RowTable:
-        """
-        The rows: those of the last scan, with what was set by hand on top. An
-        assignment is written to the definitions, if the batch has them, and
-        is not made if they cannot keep it.
-        """
-        return self._rows
-
-    @rows.setter
-    def rows(self, rows: RowTable) -> None:
-        if self._definitions is not None:
-            key = definition.edits_key(self.label)
-            self._definitions.save(key, definition.edits_data(rows))
-        self._rows = rows
-
-    def put(self, rows: Iterable[Row]) -> None:
-        """
-        Set ``rows`` by hand, as a table of them gives them
-        (:meth:`RowTable.put`). Raises ``ValueError`` if the batch has a source
-        and has not scanned, since every row would then be added, and none
-        would follow the files.
-        """
-        if self.source is not None and not self._scanned:
-            raise ValueError('scan the files first: the rows are set on top of them')
-        self.rows = self.rows.put(rows, self.columns)
-
-    def scan(self) -> list[FileInfo]:
-        """
-        Make rows from the files now; what was set by hand stays. Returns the
-        files, as the source got them.
-        """
-        if self.source is None:
-            raise ValueError('this batch has no source of rows')
-        infos = file_infos(self.client, self._selector)
-        # What was set by hand stays, so there is nothing to write.
-        self._rows = self._rows.rescan(self.source(infos))
-        self._scanned = True
-        # A file that gained a catalogue identifier is resolved to it from now
-        # on, by any of its names, its old identity among them.
-        self._resolved.clear()
-        return infos
-
     @property
     def settings(self) -> Mapping[str, Any]:
         """
         The settings in force: a value for each parameter that is not a
         column, where it is not left to its default. A copy, read-only at the
-        top, so that only an assignment of all of them changes the batch::
+        top, so that only an assignment of all of them changes the step::
 
-            batch.settings = {**batch.settings, 'q': {'num_bins': 50}}
+            step.settings = {**step.settings, 'q': {'num_bins': 50}}
 
         An assignment reduces no row: the rows reduced before read
         ``outdated``, with the setting in :attr:`RowState.changed`. The
@@ -298,6 +347,14 @@ class Batch:
         """The template of the settings, with the columns as its blanks."""
         return Template(self.spec, params=self._settings, blanks=self.columns)
 
+    def forget_resolved(self) -> None:
+        """
+        Resolve each cell again from now on. Called after a scan: a file that
+        gained a catalogue identifier is resolved to it from then on, by any
+        of its names, its old identity among them.
+        """
+        self._resolved.clear()
+
     def _cells(self, row: Row) -> dict[str, Any]:
         """The value of each column of a row, the default of an empty one."""
         fields = self.spec.params.model_fields
@@ -308,50 +365,53 @@ class Batch:
             for c in self.columns
         }
 
-    def state(self, keys: Sequence[str] | None = None) -> dict[str, RowState]:
+    def state(
+        self,
+        rows: Sequence[Row],
+        set_by_hand: Mapping[str, frozenset[str]] = MappingProxyType({}),
+    ) -> dict[str, RowState]:
         """
-        Where each row stands now, read from the client, or the rows of
-        ``keys`` if given: its result, and where its request with the settings
-        differs from its result's (:attr:`RowState.changed`), with the reasons
-        a cell is refused, as problems of its row.
+        Where each of ``rows`` stands now, read from the client: its result,
+        and where its request with the settings differs from its result's
+        (:attr:`RowState.changed`), with the reasons a cell is refused, as
+        problems of its row. ``set_by_hand`` names the columns set by hand of
+        each row, by key.
 
         Raises ``SubmitError`` if the settings are refused, with reasons that
         name no row: no row can run with them.
         """
-        rows, found = self._rows_and_results(keys)
+        found = self._results_of(rows)
         changed, refused = self._compare(rows, found)
-        return self._states(rows, found, changed, refused)
+        return self._states(rows, found, changed, refused, set_by_hand)
 
-    def results(self, keys: Sequence[str] | None = None) -> dict[str, RowState]:
+    def results(
+        self,
+        rows: Sequence[Row],
+        set_by_hand: Mapping[str, frozenset[str]] = MappingProxyType({}),
+    ) -> dict[str, RowState]:
         """
-        Each row, or each of ``keys``, with its result, without its request:
-        the problems of its cells as given, its status, and whether its result
-        is of another spec. Nothing is resolved, so :attr:`RowState.changed`
-        is ``None``, and so is :attr:`RowState.outdated` unless the result is
-        of another spec: :func:`~.state.left_to_reduce` and
-        :func:`~.state.arrived` refuse these states.
-
-        It is what a page shows while the settings are refused, and what
-        :meth:`reduce` checks before it submits. Which rows to reduce is
-        chosen from :meth:`state`.
+        Each of ``rows`` with its result, without its request: the problems of
+        its cells as given, its status, and whether its result is of another
+        spec. Nothing is resolved, so :attr:`RowState.changed` is ``None``, and
+        so is :attr:`RowState.outdated` unless the result is of another spec:
+        :func:`~.state.left_to_reduce` and :func:`~.state.arrived` refuse these
+        states.
         """
-        rows, found = self._rows_and_results(keys)
-        return self._states(rows, found, None, {})
+        found = self._results_of(rows)
+        return self._states(rows, found, None, {}, set_by_hand)
 
-    def _rows_and_results(
-        self, keys: Sequence[str] | None
-    ) -> tuple[list[Row], dict[str, Record]]:
-        """The rows of ``keys``, or all, and the result of each that has one."""
+    def _results_of(self, rows: Sequence[Row]) -> dict[str, Record]:
+        """The result of each of ``rows`` that has one, by key."""
         self._poll()
-        rows = list(self.rows) if keys is None else [self.rows[k] for k in keys]
-        return rows, {r.key: self._found[r.key] for r in rows if r.key in self._found}
+        return {r.key: self._found[r.key] for r in rows if r.key in self._found}
 
     def _states(
         self,
-        rows: list[Row],
+        rows: Sequence[Row],
         found: Mapping[str, Record],
         changed: Mapping[str, frozenset[str]] | None,
         refused: Mapping[str, tuple[FieldError, ...]],
+        set_by_hand: Mapping[str, frozenset[str]],
     ) -> dict[str, RowState]:
         upstream = self._known(sorted(state.references(rows)))
         status = self._status([*found.values(), *upstream])
@@ -364,14 +424,8 @@ class Batch:
             changed,
             refused,
             self._spec_changed(found),
-            self._set_by_hand(),
+            set_by_hand,
         )
-
-    def _set_by_hand(self) -> dict[str, frozenset[str]]:
-        """The columns set by hand of each row: its edits, or all if added."""
-        rows = self.rows
-        added = dict.fromkeys((r.key for r in rows.added), frozenset(self.columns))
-        return {k: frozenset(cells) for k, cells in rows.edits.items()} | added
 
     def _poll(self) -> None:
         """
@@ -418,7 +472,7 @@ class Batch:
         }
 
     def _compare(
-        self, rows: list[Row], found: Mapping[str, Record]
+        self, rows: Sequence[Row], found: Mapping[str, Record]
     ) -> tuple[dict[str, frozenset[str]], dict[str, tuple[FieldError, ...]]]:
         """
         For each row with a result, the names at which its request with the
@@ -464,13 +518,14 @@ class Batch:
         resolved before in a template of their own, every other parameter
         blank, all rows in one call of :meth:`~ess.apps.Client.resolve`.
 
-        A value resolved is kept by its column and value until the next scan,
-        since a parameter resolves the same whatever the others are. A kept
-        value differs from one resolved now only for a file that gained a
-        catalogue identifier since, which keeps its old identity until the
-        scan, as ``resolve`` allows. A list is kept by its elements; a value
-        that cannot be a key, such as a dict, is resolved each time. A refusal
-        is not kept, so that a file that arrives later is found.
+        A value resolved is kept by its column and value until
+        :meth:`forget_resolved`, since a parameter resolves the same whatever
+        the others are. A kept value differs from one resolved now only for a
+        file that gained a catalogue identifier since, which keeps its old
+        identity until then, as ``resolve`` allows. A list is kept by its
+        elements; a value that cannot be a key, such as a dict, is resolved
+        each time. A refusal is not kept, so that a file that arrives later is
+        found.
         """
         fields = self.spec.params.model_fields
         cells: dict[str, dict[str, Any]] = {}
@@ -501,18 +556,20 @@ class Batch:
                     self._resolved[at] = result.params[name]
         return cells, refused
 
-    def reduce(self, keys: Sequence[str]) -> dict[str, Record]:
+    def reduce(self, rows: Sequence[Row]) -> dict[str, Record]:
         """
-        Submit the rows of ``keys`` with the settings, all or none; their
-        records by key.
+        Submit ``rows`` with the settings, all or none; their records by key.
 
         Raises ``SubmitError`` if a row cannot run or is still running, naming
         it by key and the cell by column. A reason about the settings is named
         once, without a key.
         """
-        states = self.results(keys)
-        rows = [self.rows[key] for key in keys]
-        refused = [e for k in keys for e in (*states[k].problems, *_running(states[k]))]
+        states = self.results(rows)
+        refused = [
+            e
+            for row in rows
+            for e in (*states[row.key].problems, *_running(states[row.key]))
+        ]
         if refused:
             raise SubmitError(refused)
         if not rows:
@@ -572,3 +629,216 @@ class Batch:
         if self._stage is not None:
             self.client.release(self._stage[1])
             self._stage = None
+
+
+class Batch:
+    """
+    One spec reduced for many rows: a :class:`Table` of rows and the
+    :class:`Step` that reduces them. See ``packages/essapps/docs/batch.md``.
+
+    Parameters
+    ----------
+    client:
+        The client that submits.
+    spec:
+        The spec of every row.
+    columns:
+        The parameters that each row gives, the blanks of the template. The
+        other parameters are the settings, shared by all rows.
+    label:
+        The label of the records. A row's key is its member.
+    source:
+        Makes rows from files, for :meth:`scan`.
+    selector:
+        The files given to ``source``; raw files if not given.
+    staged:
+        Run the rows through a stage, so that what they share is computed
+        once. The spec's binding must make stages.
+    persist:
+        As :meth:`~ess.apps.Client.submit` takes it.
+    settings:
+        The settings that the batch starts with if ``definitions`` hold none,
+        such as the technique's defaults; none if not given, so each parameter
+        takes its default.
+    definitions:
+        Keep the edits and the settings of the label (:mod:`~.definition`):
+        read here, and written at each change. Without them, the edits and
+        settings are kept in memory only.
+
+    Raises
+    ------
+    KeyError
+        If a column is not a parameter of the spec.
+    ValueError
+        If ``settings`` name a column.
+    ValueError
+        If ``definitions`` hold edits or settings that cannot be read, or
+        settings of a spec of another name, naming the file and the entry; or
+        if the label is too long to name their file.
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        spec: WorkflowSpec[Any, Any],
+        *,
+        columns: Sequence[str],
+        label: str,
+        source: RowSource | None = None,
+        selector: Selector | None = None,
+        staged: bool = False,
+        persist: bool | Sequence[str] = False,
+        settings: Mapping[str, Any] | None = None,
+        definitions: DefinitionStore | None = None,
+    ) -> None:
+        self.client = client
+        self._step = Step(
+            client,
+            spec,
+            columns=columns,
+            label=label,
+            staged=staged,
+            persist=persist,
+            settings=settings,
+            definitions=definitions,
+        )
+        self._table = Table(
+            client,
+            columns=columns,
+            label=label,
+            source=source,
+            selector=selector,
+            definitions=definitions,
+        )
+
+    @property
+    def spec(self) -> WorkflowSpec[Any, Any]:
+        """The spec of every row."""
+        return self._step.spec
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        """The parameters that each row gives."""
+        return self._step.columns
+
+    @property
+    def settings_fields(self) -> tuple[str, ...]:
+        """The parameters that are not columns, in the order of the spec."""
+        return self._step.settings_fields
+
+    @property
+    def label(self) -> str:
+        """The label of the records and of the definitions."""
+        return self._step.label
+
+    @property
+    def source(self) -> RowSource | None:
+        """Makes rows from files, for :meth:`scan`."""
+        return self._table.source
+
+    @property
+    def rows(self) -> RowTable:
+        """
+        The rows: those of the last scan, with what was set by hand on top. An
+        assignment is written to the definitions, if the batch has them, and
+        is not made if they cannot keep it.
+        """
+        return self._table.rows
+
+    @rows.setter
+    def rows(self, rows: RowTable) -> None:
+        self._table.rows = rows
+
+    def put(self, rows: Iterable[Row]) -> None:
+        """
+        Set ``rows`` by hand, as a table of them gives them
+        (:meth:`RowTable.put`). Raises ``ValueError`` if the batch has a source
+        and has not scanned, since every row would then be added, and none
+        would follow the files.
+        """
+        self._table.put(rows)
+
+    def scan(self) -> list[FileInfo]:
+        """
+        Make rows from the files now; what was set by hand stays. Returns the
+        files, as the source got them.
+        """
+        infos = self._table.scan()
+        self._step.forget_resolved()
+        return infos
+
+    @property
+    def settings(self) -> Mapping[str, Any]:
+        """
+        The settings in force: a value for each parameter that is not a
+        column, where it is not left to its default. A copy, read-only at the
+        top, so that only an assignment of all of them changes the batch::
+
+            batch.settings = {**batch.settings, 'q': {'num_bins': 50}}
+
+        An assignment reduces no row: the rows reduced before read
+        ``outdated``, with the setting in :attr:`RowState.changed`. The
+        workspace checks the settings when :meth:`state` resolves them, and
+        refuses a name that is not a parameter. Raises ``ValueError`` for a
+        name that is a column: a column's value is a cell of each row.
+        """
+        return self._step.settings
+
+    @settings.setter
+    def settings(self, settings: Mapping[str, Any]) -> None:
+        self._step.settings = settings
+
+    def template(self) -> Template:
+        """The template of the settings, with the columns as its blanks."""
+        return self._step.template()
+
+    def state(self, keys: Sequence[str] | None = None) -> dict[str, RowState]:
+        """
+        Where each row stands now, read from the client, or the rows of
+        ``keys`` if given: its result, and where its request with the settings
+        differs from its result's (:attr:`RowState.changed`), with the reasons
+        a cell is refused, as problems of its row.
+
+        Raises ``SubmitError`` if the settings are refused, with reasons that
+        name no row: no row can run with them.
+        """
+        return self._step.state(self._table.select(keys), self._table.set_by_hand())
+
+    def results(self, keys: Sequence[str] | None = None) -> dict[str, RowState]:
+        """
+        Each row, or each of ``keys``, with its result, without its request:
+        the problems of its cells as given, its status, and whether its result
+        is of another spec. Nothing is resolved, so :attr:`RowState.changed`
+        is ``None``, and so is :attr:`RowState.outdated` unless the result is
+        of another spec: :func:`~.state.left_to_reduce` and
+        :func:`~.state.arrived` refuse these states.
+
+        It is what a page shows while the settings are refused, and what
+        :meth:`reduce` checks before it submits. Which rows to reduce is
+        chosen from :meth:`state`.
+        """
+        rows = self._table.select(keys)
+        return self._step.results(rows, self._table.set_by_hand())
+
+    def reduce(self, keys: Sequence[str]) -> dict[str, Record]:
+        """
+        Submit the rows of ``keys`` with the settings, all or none; their
+        records by key.
+
+        Raises ``SubmitError`` if a row cannot run or is still running, naming
+        it by key and the cell by column. A reason about the settings is named
+        once, without a key.
+        """
+        return self._step.reduce(self._table.select(keys))
+
+    def cancel(self, keys: Sequence[str] | None = None) -> None:
+        """
+        Cancel the records still running that are the newest under the label
+        for their member, of the members ``keys`` if given, or of every member,
+        whether or not it is a row now.
+        """
+        self._step.cancel(keys)
+
+    def close(self) -> None:
+        """Release the open stage, if any; what was submitted through it still runs."""
+        self._step.close()
