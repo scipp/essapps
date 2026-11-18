@@ -28,6 +28,8 @@ from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from pydantic import BaseModel
+
 from ess.spec import WorkflowSpec
 
 from ..client import Client
@@ -48,6 +50,16 @@ from .definition import (
 from .reduction import Batch, RowSource
 
 
+class Words(BaseModel):
+    """What a row is called, as ``1 sample``, ``2 samples``."""
+
+    one: str = 'row'
+    many: str = 'rows'
+
+    def count(self, n: int) -> str:
+        return f'{n} {self.one if n == 1 else self.many}'
+
+
 @dataclass(frozen=True)
 class Source:
     """
@@ -62,11 +74,22 @@ class Source:
         it, and Follow reduces a row again for a change at them.
     selector:
         The files that ``rows`` is given; raw files if not given.
+    words:
+        What a row is called on the page of a batch.
+    name:
+        The entry of :attr:`~.table.Row.info` that names a row on the page;
+        its key if ``None``.
+    info:
+        Other entries of :attr:`~.table.Row.info` that the page shows as
+        columns.
     """
 
     rows: RowSource
     columns: tuple[str, ...]
     selector: Selector | None = None
+    words: Words = field(default_factory=Words)
+    name: str | None = None
+    info: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -27,11 +27,12 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from ess.apps import Client
-from ess.apps.batch import Batch, CorrectedFiles
-from ess.apps.batch.web import Shown, create_app
+from ess.apps.batch import Batch, BatchManager, CorrectedFiles
+from ess.apps.batch.auto import Follow
+from ess.apps.batch.web import Pages, Shown, create_app
 from ess.apps.batch.web.api import STATIC
 
-from .toys import Gate, Measure
+from .toys import STAGED, Gate, Measure, Refusing
 
 
 def unavailable(reason: str) -> NoReturn:
@@ -69,21 +70,38 @@ def browser() -> Iterator[Any]:
 
 
 @pytest.fixture
+def batch(manager: BatchManager, label: str) -> Batch:
+    """The batch of ``label``, as the manager holds it."""
+    return manager.batch(label)
+
+
+@pytest.fixture
+def pages(manager: BatchManager, refusing: Refusing, files: CorrectedFiles) -> Pages:
+    """The pages, with a step of Follow every 0.2 s while a batch follows."""
+    return Pages(
+        manager,
+        Follow(manager, refusing, interval=0.2),
+        draw={STAGED.name: draw},
+        files=files,
+        marks=Marks,
+    )
+
+
+@pytest.fixture
 def url(
-    batch: Batch, sample: Measure, files: CorrectedFiles, gate: Gate
+    pages: Pages, label: str, batch: Batch, sample: Measure, gate: Gate
 ) -> Iterator[str]:
     """
-    The URL of the page. The gate opens at the end, so that a test that fails
-    while it holds the gate closed does not stall the end of the server.
+    The URL of the page of ``label``. The gate opens at the end, so that a
+    test that fails while it holds the gate closed does not stall the end of
+    the server.
     """
     for run, name in enumerate(['water', 'sds', 'oil'], start=1):
         sample(run, name)
     batch.scan()
-    with serve(
-        create_app(batch, name='name', draw=draw, files=files, marks=Marks)
-    ) as url:
+    with serve(create_app(pages)) as root:
         try:
-            yield url
+            yield f'{root}batches/{label}/'
         finally:
             gate.open()
 
@@ -380,12 +398,12 @@ def test_a_request_the_server_fails_says_its_status_where_no_action_asked(
 
 
 def test_the_page_loads_its_rows_under_a_path_prefix(
-    browser: Any, batch: Batch, sample: Measure
+    browser: Any, pages: Pages, batch: Batch, sample: Measure
 ) -> None:
     sample(1, 'water')
     batch.scan()
     parent = FastAPI()
-    parent.mount('/batch', create_app(batch, name='name', draw=draw))
+    parent.mount('/batch', create_app(pages))
     with serve(parent) as url:
         page = browser.new_page()
         errors: list[str] = []
@@ -572,11 +590,10 @@ def test_a_click_on_a_row_mostly_shown_at_the_bottom_does_not_scroll(
 
 
 @pytest.fixture
-def following(browser: Any, batch: Batch) -> Iterator[Any]:
+def following(browser: Any, pages: Pages, label: str) -> Iterator[Any]:
     """The page of a batch with no rows yet, following its files."""
-    at = {'sample', 'transmission'}
-    app = create_app(batch, name='name', draw=draw, at=at, follow=True, interval=0.2)
-    with serve(app) as url:
+    pages.follow.on(label)
+    with serve(create_app(pages)) as url:
         page = browser.new_page(viewport={'width': 1440, 'height': 900})
         errors: list[str] = []
         page.on('pageerror', lambda e: errors.append(str(e)))
@@ -596,6 +613,17 @@ def test_with_follow_on_rows_appear_and_are_reduced_without_a_click(
     following.wait_for_selector('#rows .tabulator-row:has-text("sds")')
     following.wait_for_selector('.chip.st-done .n:text-is("2")')
     assert following.inner_text('#follow-status') == 'Following, every 0.2 s'
+
+
+def test_the_page_says_which_other_batch_follows(
+    page: Any, pages: Pages, manager: BatchManager
+) -> None:
+    other = manager.create(STAGED.name, title='Other', source='pairs')
+
+    pages.follow.on(other)
+
+    page.wait_for_selector('#follow-status:text-is("Other follows")')
+    assert not page.is_checked('#follow input')
 
 
 HTML = '<img src=x onerror="window.__xss = 1">'

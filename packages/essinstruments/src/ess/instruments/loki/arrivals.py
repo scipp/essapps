@@ -10,11 +10,11 @@ esssans' tutorial data, which ``ess.loki.data`` downloads at the first start::
 
 ``FOLDER`` must be new or empty; a new temporary folder if not given. The can
 and its transmission run, the masks and the direct beam are there from the
-start, and the settings are filled in. Then a run arrives every ``--arrive``
-seconds, in the order of :data:`EXPERIMENT`. Press "Rescan runs" to see it, and
-"Reduce" to reduce the rows it completes; or turn on "Follow", which does both
-every few seconds. ``--follow`` turns it on from the start, with a step every
-``SECONDS`` (5).
+start, and the settings of the one batch are filled in. Then a run arrives
+every ``--arrive`` seconds, in the order of :data:`EXPERIMENT`. Press "Rescan
+runs" to see it, and "Reduce" to reduce the rows it completes; or turn on
+"Follow", which does both every few seconds. ``--follow`` turns it on from the
+start, with a step every ``SECONDS`` (5).
 
 The data and the I(Q) workflow are real; the run numbers, the sample names and
 the roles are this module's. A run arrives as a hard link to a tutorial file
@@ -232,7 +232,8 @@ def main() -> None:
             definitions,
             folder=directory.name,
             settings=given,
-            follow=args.follow,
+            interval=args.follow or 5.0,
+            follow=args.follow is not None,
         )
 
         def arrive(sample: str, role: str, source: int) -> None:

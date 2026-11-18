@@ -7,16 +7,16 @@ working on the page.
 ``python -m ess.apps.batch.web.demo [DIRECTORY] [--port N]`` serves it on
 ``http://localhost:N``, with the workspace kept in ``DIRECTORY`` (see
 :mod:`ess.apps.folder`), a new temporary folder if not given. The first start
-writes the fake runs and ``files.csv`` there; a later start reuses them, with
-the results of earlier starts, and the edits, settings, and corrections kept
-in ``definitions/`` (:mod:`..definition`). The file source reads
-``files.csv`` again when it changes (:class:`~ess.apps.folder.ArrivingFiles`).
+writes the fake runs and ``files.csv`` there, and makes one batch of the
+samples; a later start reuses them, with the results of earlier starts, and
+the batches, edits, settings, corrections, and the batch that follows kept in
+``definitions/`` (:mod:`..definition`). The file source reads ``files.csv``
+again when it changes (:class:`~ess.apps.folder.ArrivingFiles`).
 
 With ``--arrive SECONDS [--count N]``, a new folder starts with the empty cell
 and the first few samples, and the runs of one more sample arrive every
-``SECONDS``, until ``N`` have arrived (all if not given). ``--follow
-[SECONDS]`` turns the switch "Follow" on from the start, with a step every
-``SECONDS`` (5).
+``SECONDS``, until ``N`` have arrived (all if not given). ``--interval
+SECONDS`` sets the time between two steps of Follow (5).
 
 Each sample run holds the size of its particles, so samples differ visibly, and
 the curve depends on the settings. Three samples have no transmission run, one
@@ -50,11 +50,19 @@ from ess.spec import (
     WorkflowSpec,
 )
 
-from .. import Batch, CorrectedFiles, FileInfo, FolderDefinitions, Row
-from ..auto import every
-from . import create_app, plots
+from .. import (
+    BatchManager,
+    CorrectedFiles,
+    Defaults,
+    FileInfo,
+    FolderDefinitions,
+    Row,
+    Source,
+    Words,
+)
+from ..auto import Follow, every
+from . import Pages, create_app, plots
 from .api import STATIC
-from .models import Words
 from .server import Shown
 
 
@@ -195,6 +203,19 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
     return rows
 
 
+SOURCES = {
+    'sample-runs': Source(
+        pair_by_sample,
+        columns=('sample', 'transmission'),
+        words=Words(one='sample', many='samples'),
+        name='name',
+    )
+}
+"""The sources of the demo's batches, by name."""
+DEFAULTS = {DEMO.name: Defaults(staged=True)}
+"""What a new batch of the demo's spec gets."""
+
+
 SAMPLES = (
     # name, particle radius in Å, contrast scale
     ('H2O buffer', 8, 0.02),
@@ -288,23 +309,20 @@ def build(
     definitions: FolderDefinitions,
     folder: str = '',
     *,
-    follow: float | None = None,
+    interval: float = 5.0,
 ) -> FastAPI:
     """
-    The application on what :func:`open_demo` returns, scanned; following the
-    files from the start, with a step every ``follow`` seconds, if given.
+    The application on what :func:`open_demo` returns, with a step of Follow
+    every ``interval`` seconds while a batch follows. A folder without a batch
+    gets one of all samples.
     """
-    batch = Batch(
-        client,
-        DEMO,
-        columns=('sample', 'transmission', 'thickness'),
-        label='demo-iofq',
-        source=pair_by_sample,
-        staged=True,
-        persist=True,
-        definitions=definitions,
+    manager = BatchManager(
+        client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS
     )
-    batch.scan()
+    if not manager.batches():
+        manager.create(
+            DEMO.name, title='Samples', source='sample-runs', columns=('thickness',)
+        )
 
     def draw(shown: Sequence[Shown]) -> dict[str, object]:
         curves = [
@@ -313,18 +331,16 @@ def build(
         ]
         return plots.figure(curves, quantity='I(Q)')
 
-    return create_app(
-        batch,
-        words=Words(one='sample', many='samples'),
-        name='name',
-        draw=draw,
+    pages = Pages(
+        manager,
+        Follow(manager, definitions, interval=interval),
+        title=DEMO.title,
+        draw={DEMO.name: draw},
         files=files,
         marks=Marks,
         folder=folder,
-        at={'sample', 'transmission'},
-        follow=follow is not None,
-        interval=follow or 5.0,
     )
+    return create_app(pages)
 
 
 def main() -> None:
@@ -336,12 +352,11 @@ def main() -> None:
     )
     parser.add_argument('--count', type=int, help='the samples that arrive')
     parser.add_argument(
-        '--follow',
+        '--interval',
         type=float,
-        nargs='?',
-        const=5.0,
+        default=5.0,
         metavar='SECONDS',
-        help='follow the files from the start, a step every SECONDS (5)',
+        help='a step of Follow every SECONDS (5)',
     )
     args = parser.parse_args()
     if args.count is not None and args.arrive is None:
@@ -357,7 +372,7 @@ def main() -> None:
     sys.stdout.write(f'folder {directory}\n')
     sys.stdout.flush()
     if args.arrive is None:
-        _serve(directory, args.port, follow=args.follow)
+        _serve(directory, args.port, interval=args.interval)
         return
     groups = measurements()
     arrived = [run for group in groups[: AT_START + 1] for run in group]
@@ -369,15 +384,16 @@ def main() -> None:
 
     plan = [partial(arrive, g) for g in groups[AT_START + 1 :][: args.count]]
     with every(args.arrive, plan):
-        _serve(directory, args.port, follow=args.follow)
+        _serve(directory, args.port, interval=args.interval)
 
 
-def _serve(directory: Path, port: int, *, follow: float | None) -> None:
+def _serve(directory: Path, port: int, *, interval: float) -> None:
     import uvicorn
 
     client, files, definitions = open_demo(directory)
     with client:
-        app = build(client, files, definitions, folder=directory.name, follow=follow)
+        folder = directory.name
+        app = build(client, files, definitions, folder=folder, interval=interval)
         uvicorn.run(app, host='localhost', port=port)
 
 

@@ -4,13 +4,15 @@
 The batch page of LoKI's I(Q) on a workspace folder, as a web page
 (:mod:`ess.apps.batch.web`). It needs the extra ``[loki-app]``::
 
-    python -m ess.instruments.loki.web FOLDER [--port 8000] [--follow [SECONDS]]
+    python -m ess.instruments.loki.web FOLDER [--port 8000] [--interval SECONDS]
 
 ``FOLDER`` is a workspace folder (:mod:`ess.apps.folder`): its ``files.csv``
 says the run, role and sample of each file, as ``essapps-batch files`` writes
 it. A row is a sample run, paired with the transmission run of its sample
-(:func:`~.batch.pair_by_sample`). The edits, the settings and the corrections
-of runs are kept in ``FOLDER/definitions/``, the results in ``FOLDER/store/``.
+(:func:`~.batch.pair_by_sample`). A folder without a batch gets one of all
+sample runs. The batches with their edits and settings, the batch that
+follows, and the corrections of runs are kept in ``FOLDER/definitions/``, the
+results in ``FOLDER/store/``.
 
 The settings name the masks by a record, so reduce the detector and the masks
 first, on the same folder, while no page runs on it. With the run of the can
@@ -36,18 +38,18 @@ The command persists the outputs, so the page then offers the masks in the
 settings, under "Masks", "From a result". ``path:`` names a file by its path in
 the folder, as ``files.csv`` lists it.
 
-The switch "Follow" of the page, or ``--follow`` from the start, with a step
-every ``SECONDS`` (5), reduces each row once both its runs are listed, and
-again when one of them changes, such as a newer transmission run of its sample
-(:data:`AT`). A row that a person changed waits for the person's "Reduce".
-Whether the page follows is not kept: a restart starts with
-``--follow`` or without.
+The switch "Follow" of the page of a batch makes it the batch that follows:
+a step every ``SECONDS`` (5) reduces each row once both its runs are listed,
+and again when one of them changes, such as a newer transmission run of its
+sample (:data:`~.batch.COLUMNS`). A row that a person changed waits for the
+person's "Reduce". The batch that follows is kept, so a restart resumes.
 """
 
 from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -55,17 +57,15 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from ess.apps import Client
-from ess.apps.batch import CorrectedFiles, FolderDefinitions
-from ess.apps.batch.web import Shown, create_app, plots
+from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions
+from ess.apps.batch.auto import Follow
+from ess.apps.batch.web import Pages, Shown, create_app, plots
 from ess.apps.batch.web.api import STATIC
-from ess.apps.batch.web.models import Words
 from ess.apps.folder import ArrivingFiles, open_folder
 
-from .batch import COLUMNS, iofq_batch
+from .batch import DEFAULTS, SOURCES
 from .bindings import BINDINGS
-
-AT = frozenset(COLUMNS)
-"""The columns at which a change reduces a row again: its runs."""
+from .specs import IOFQ
 
 
 class Marks(BaseModel):
@@ -108,29 +108,34 @@ def build(
     *,
     folder: str = '',
     settings: Mapping[str, Any] | None = None,
-    follow: float | None = None,
+    interval: float = 5.0,
+    follow: bool = False,
 ) -> FastAPI:
     """
-    The page of the I(Q) batch of ``client``, labelled ``iofq``, scanned. The
-    batch persists its results and keeps its definition in ``definitions``; it
-    starts with ``settings`` unless the definitions hold some. Given ``follow``,
-    Follow is on from the start, with a step every ``follow`` seconds.
+    The pages of the batches of I(Q) of ``client``, kept in ``definitions``,
+    with a step of Follow every ``interval`` seconds while a batch follows. A
+    new batch starts with ``settings``. If there is no batch, one of all
+    sample runs is made, which follows from the start if ``follow``.
     """
-    batch = iofq_batch(client, persist=True, settings=settings, definitions=definitions)
-    batch.scan()
-    return create_app(
-        batch,
+    defaults = {IOFQ.name: replace(DEFAULTS[IOFQ.name], settings=settings or {})}
+    manager = BatchManager(
+        client, sources=SOURCES, definitions=definitions, defaults=defaults
+    )
+    loop = Follow(manager, definitions, interval=interval)
+    if not manager.batches():
+        label = manager.create(IOFQ.name, title='Sample runs', source='sample-runs')
+        if follow:
+            loop.on(label)
+    pages = Pages(
+        manager,
+        loop,
         title='LoKI I(Q)',
-        words=Words(one='sample run', many='sample runs'),
-        name='name',
-        draw=_draw(client),
+        draw={IOFQ.name: _draw(client)},
         files=files,
         marks=Marks,
         folder=folder,
-        at=AT,
-        follow=follow is not None,
-        interval=follow or 5.0,
     )
+    return create_app(pages)
 
 
 def main() -> None:
@@ -140,12 +145,11 @@ def main() -> None:
     parser.add_argument('folder', type=Path, help='the workspace folder')
     parser.add_argument('--port', type=int, default=8000)
     parser.add_argument(
-        '--follow',
+        '--interval',
         type=float,
-        nargs='?',
-        const=5.0,
+        default=5.0,
         metavar='SECONDS',
-        help='follow the files from the start, a step every SECONDS (5)',
+        help='a step of Follow every SECONDS (5)',
     )
     args = parser.parse_args()
     if not (STATIC / 'vendor').is_dir():
@@ -153,7 +157,7 @@ def main() -> None:
     client, files, definitions = open_loki(args.folder)
     with client:
         folder = args.folder.resolve().name
-        app = build(client, files, definitions, folder=folder, follow=args.follow)
+        app = build(client, files, definitions, folder=folder, interval=args.interval)
         uvicorn.run(app, host='localhost', port=args.port)
 
 

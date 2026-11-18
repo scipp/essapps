@@ -1,48 +1,57 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The batch page over HTTP: :func:`create_app` serves a :class:`~.server.Server`
-as a JSON API, and the page that uses it.
+The pages of the batches of a workspace over HTTP: :func:`create_app` serves
+the :class:`~.server.Server` of each batch as a JSON API, and the page that
+uses it, at ``/batches/<label>/``.
 
-Each action of the page is a ``POST`` that answers with the
+Each action of a page is a ``POST`` that answers with the
 :class:`~.models.State` after it, or a 422 with ``{'message': ...}``; the
-reasons of a refused reduction are in the state. ``GET /api/state`` with the
+reasons of a refused reduction are in the state. ``GET api/state`` with the
 ``after`` version and the ``start`` the page has answers 204 while nothing
-changed. A row is named by its key in the body or the query, never in the
-path, since a key may hold any character; the keys of many rows go in the
-body, since a URL has a limit. The page asks for ``api/...`` relative to its
-own URL, so the app can be mounted under a path prefix. Answers are gzipped
-for a client that accepts it.
+changed. A label that is no batch answers 404. A row is named by its key in
+the body or the query, never in the path, since a key may hold any character;
+the keys of many rows go in the body, since a URL has a limit. A label is one
+segment of a path (:func:`~ess.apps.batch.manager.check_label`). The page asks
+for ``api/...`` relative to its own URL, and ``/`` redirects to a page by a
+relative URL, so the app can be mounted under a path prefix. Answers are
+gzipped for a client that accepts it.
 """
 
-from __future__ import annotations
-
 import itertools
-from collections.abc import AsyncIterator, Sequence
-from collections.abc import Set as AbstractSet
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
-from fastapi import Body, FastAPI, Request
+from fastapi import APIRouter, Body, Depends, FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
-from .. import Batch, CorrectedFiles
 from ..auto import every
 from .models import (
+    CellEdit,
+    Cells,
+    Edit,
     Key,
     Keys,
     On,
     Plot,
+    Reduce,
     RowDetail,
     Runs,
     State,
-    Words,
 )
-from .server import Draw, Problem, Server
+from .pages import Missing, Pages
+from .server import Problem, Server
 
 STATIC = Path(__file__).parent / 'static'
 _XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -56,55 +65,27 @@ def _download(content: bytes, name: str, media: str) -> Response:
     )
 
 
-def create_app(
-    batch: Batch,
-    *,
-    title: str | None = None,
-    words: Words | None = None,
-    name: str | None = None,
-    info: Sequence[str] = (),
-    draw: Draw | None = None,
-    files: CorrectedFiles | None = None,
-    marks: type[BaseModel] | None = None,
-    folder: str = '',
-    at: AbstractSet[str] | None = None,
-    follow: bool = False,
-    interval: float = 5.0,
-) -> FastAPI:
+def create_app(pages: Pages) -> FastAPI:
     """
-    The JSON API of ``batch`` and the page that uses it, at ``/``. The
-    arguments are those of :class:`Server`. ``/docs`` lists the API. The page
+    The JSON API of the batches of ``pages`` and the page that uses it, at
+    ``/batches/<label>/``; ``/`` redirects to the page of
+    :meth:`Pages.home <.pages.Pages.home>`. ``/docs`` lists the API. The page
     loads libraries that ``sh static/vendor.sh`` fetches into
     ``static/vendor``.
 
-    Given ``at``, the app owns the timer of Follow: a thread that the app's
-    lifespan starts, and stops at its end once a step that runs has finished.
+    The app owns the timer of Follow: a thread that the app's lifespan starts,
+    and stops at its end once a step that runs has finished. It calls
+    :meth:`Pages.tick <.pages.Pages.tick>` every ``pages.follow.interval``
+    seconds, which steps the batch that follows, if one does.
     """
-    server = Server(
-        batch,
-        title=title,
-        words=words,
-        name=name,
-        info=info,
-        draw=draw,
-        files=files,
-        marks=marks,
-        folder=folder,
-        at=at,
-        follow=follow,
-        interval=interval,
-    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        if server.loop is None:
-            yield
-            return
-        with every(server.interval, itertools.repeat(server.tick)):
+        with every(pages.follow.interval, itertools.repeat(pages.tick)):
             yield
 
-    app = FastAPI(title=f'{server.title}: batch', lifespan=lifespan)
-    app.state.server = server
+    app = FastAPI(title=pages.title or 'Batches', lifespan=lifespan)
+    app.state.pages = pages
     # The state is about 0.6 kB per row and repeats much.
     app.add_middleware(GZipMiddleware)
 
@@ -112,88 +93,137 @@ def create_app(
     def problem(_: Request, error: Problem) -> JSONResponse:
         return JSONResponse({'message': str(error)}, status_code=422)
 
-    @app.get('/api/state', responses={204: {'description': 'Nothing changed.'}})
-    def state(after: int = 0, start: str = '') -> Any:
+    @app.exception_handler(Missing)
+    def missing(_: Request, error: Missing) -> JSONResponse:
+        return JSONResponse({'message': str(error)}, status_code=404)
+
+    @app.get('/', include_in_schema=False)
+    def home() -> Response:
+        label = pages.home()
+        if label is None:
+            return PlainTextResponse('This workspace has no batch.', status_code=404)
+        return RedirectResponse(f'batches/{quote(label, safe="")}/')
+
+    # The routes of the page of one batch, by its label. FastAPI reads the
+    # annotation Page, a name of this function, so this module does not
+    # import annotations from __future__.
+    page = APIRouter(prefix='/batches/{label}')
+    Page = Annotated[Server, Depends(pages.page)]
+
+    @page.get('/', include_in_schema=False)
+    def index(_: Page) -> FileResponse:
+        return FileResponse(STATIC / 'index.html')
+
+    @page.get('/api/state', responses={204: {'description': 'Nothing changed.'}})
+    def state(server: Page, after: int = 0, start: str = '') -> Any:
         """The state, or 204 if it is that of version ``after`` of ``start``."""
         current = server.poll(after, start)
         return Response(status_code=204) if current is None else current
 
     # Each action answers with the state after it.
-    def action(path: str, method: Any) -> None:
-        app.post(path, response_model=State)(method)
 
-    action('/api/scan', server.scan)
-    action('/api/cells', server.edit)
-    action('/api/cells/revert', server.revert)
-    action('/api/rows/restore', server.restore)
-    action('/api/reduce', server.reduce)
-    action('/api/cancel', server.cancel)
-    action('/api/settings', server.edit_settings)
-    action('/api/settings/apply', server.apply_settings)
-    action('/api/settings/discard', server.discard_settings)
-    action('/api/runs/cells', server.correct)
-    action('/api/runs/cells/revert', server.revert_run)
+    @page.post('/api/scan')
+    def scan(server: Page) -> State:
+        return server.scan()
 
-    @app.post('/api/rows/remove')
-    def remove(body: Keys) -> State:
+    @page.post('/api/cells')
+    def edit(server: Page, body: CellEdit) -> State:
+        return server.edit(body)
+
+    @page.post('/api/cells/revert')
+    def revert(server: Page, body: Cells) -> State:
+        return server.revert(body)
+
+    @page.post('/api/rows/remove')
+    def remove(server: Page, body: Keys) -> State:
         return server.remove(body.keys)
 
-    @app.post('/api/rows/add')
-    def add(body: Key) -> State:
+    @page.post('/api/rows/restore')
+    def restore(server: Page) -> State:
+        return server.restore()
+
+    @page.post('/api/rows/add')
+    def add(server: Page, body: Key) -> State:
         return server.add(body.key)
 
-    @app.post('/api/follow')
-    def follow_files(body: On) -> State:
-        """Follow the files, with a step at once, or stop."""
+    @page.post('/api/reduce')
+    def reduce(server: Page, body: Reduce) -> State:
+        return server.reduce(body)
+
+    @page.post('/api/cancel')
+    def cancel(server: Page) -> State:
+        return server.cancel()
+
+    @page.post('/api/follow')
+    def follow_files(server: Page, body: On) -> State:
+        """Make this batch the one that follows, with a step at once, or stop."""
         return server.follow(body.on)
 
-    @app.post('/api/row/use-settings')
-    def use_settings(body: Key) -> State:
+    @page.post('/api/settings')
+    def edit_settings(server: Page, body: Edit) -> State:
+        return server.edit_settings(body)
+
+    @page.post('/api/settings/apply')
+    def apply_settings(server: Page) -> State:
+        return server.apply_settings()
+
+    @page.post('/api/settings/discard')
+    def discard_settings(server: Page) -> State:
+        return server.discard_settings()
+
+    @page.post('/api/runs/cells')
+    def correct(server: Page, body: CellEdit) -> State:
+        return server.correct(body)
+
+    @page.post('/api/runs/cells/revert')
+    def revert_run(server: Page, body: Cells) -> State:
+        return server.revert_run(body)
+
+    @page.post('/api/row/use-settings')
+    def use_settings(server: Page, body: Key) -> State:
         """Show the settings of the result of row ``key`` in the form."""
         return server.use_settings(body.key)
 
-    @app.get('/api/row')
-    def row(key: str) -> RowDetail:
+    @page.get('/api/row')
+    def row(server: Page, key: str) -> RowDetail:
         """What the result of row ``key`` was reduced with."""
         return server.row(key)
 
-    @app.get('/api/runs')
-    def runs() -> Runs:
+    @page.get('/api/runs')
+    def runs(server: Page) -> Runs:
         return server.runs()
 
-    @app.post('/api/plot')
-    def plot(body: Keys) -> Plot:
+    @page.post('/api/plot')
+    def plot(server: Page, body: Keys) -> Plot:
         """The plot of the results of the rows ``keys``, or of the first ones."""
         return server.plot(body.keys)
 
-    @app.get('/api/table.{suffix}', response_class=Response)
-    def table_file(suffix: Literal['csv', 'xlsx']) -> Response:
+    @page.get('/api/table.{suffix}', response_class=Response)
+    def table_file(server: Page, suffix: Literal['csv', 'xlsx']) -> Response:
         media = 'text/csv' if suffix == 'csv' else _XLSX
         name = f'{server.words.many}.{suffix}'
         return _download(server.table_file(f'.{suffix}'), name, media)
 
-    @app.post('/api/table')
-    def load_table(name: str, content: Annotated[bytes, Body()]) -> State:
+    @page.post('/api/table')
+    def load_table(server: Page, name: str, content: Annotated[bytes, Body()]) -> State:
         return server.load_table(name, content)
 
-    @app.get('/api/settings.yaml', response_class=Response)
-    def settings_file() -> Response:
+    @page.get('/api/settings.yaml', response_class=Response)
+    def settings_file(server: Page) -> Response:
         return _download(server.settings_file(), 'settings.yaml', 'application/yaml')
 
-    @app.post('/api/settings.yaml')
-    def load_settings(name: str, content: Annotated[bytes, Body()]) -> State:
+    @page.post('/api/settings.yaml')
+    def load_settings(
+        server: Page, name: str, content: Annotated[bytes, Body()]
+    ) -> State:
         return server.load_settings(name, content)
 
-    @app.post('/api/results.zip', response_class=Response)
-    def results_file(body: Keys) -> Response:
+    @page.post('/api/results.zip', response_class=Response)
+    def results_file(server: Page, body: Keys) -> Response:
         """The results of the done rows among ``keys``, or of all, as a zip."""
         content = server.results_file(body.keys)
         return _download(content, 'results.zip', 'application/zip')
 
-    app.mount('/static', StaticFiles(directory=STATIC), name='static')
-
-    @app.get('/', include_in_schema=False)
-    def page() -> FileResponse:
-        return FileResponse(STATIC / 'index.html')
-
+    app.include_router(page)
+    app.mount('/batches/{label}/static', StaticFiles(directory=STATIC), name='static')
     return app

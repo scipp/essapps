@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Follow on the batch page: a step of the server scans as "Rescan runs" does, and
-reduces the rows that arrived. The tests call :meth:`Server.step` in place of
-the timer, except one, which runs the app's timer.
+Follow on the page of a batch: a step of the server of the batch that follows
+scans as "Rescan runs" does, and reduces the rows that arrived. The tests call
+:meth:`Server.step` or :meth:`Pages.tick` in place of the timer, except one,
+which runs the app's timer.
 """
 
 import threading
@@ -15,15 +16,15 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from ess.apps import Client, Status
-from ess.apps.batch import Batch, CorrectedFiles
-from ess.apps.batch.web import Server, create_app
+from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions
+from ess.apps.batch.auto import Follow
+from ess.apps.batch.web import Pages, Server, create_app
 from ess.apps.batch.web.models import CellEdit, Cells, Edit, Reduce, State
 from ess.apps.batch.web.server import Problem
 from ess.apps.testing import FakeFiles
 
-from .toys import COLUMNS, STAGED, Gate, Measure, pair
+from .toys import COLUMNS, DEFAULTS, SOURCES, STAGED, Gate, Measure, Refusing
 
-AT = frozenset({'sample', 'transmission'})
 BINS = ['binning', 'bins']
 
 
@@ -33,8 +34,20 @@ class Marks(BaseModel):
 
 
 @pytest.fixture
-def server(batch: Batch, files: CorrectedFiles) -> Server:
-    return Server(batch, name='name', files=files, marks=Marks, at=AT)
+def pages(manager: BatchManager, refusing: Refusing, files: CorrectedFiles) -> Pages:
+    return Pages(manager, Follow(manager, refusing), files=files, marks=Marks)
+
+
+@pytest.fixture
+def server(pages: Pages, label: str) -> Server:
+    """The server of the page of ``label``, the batch that follows."""
+    pages.follow.on(label)
+    return pages.page(label)
+
+
+def opened(pages: Pages, label: str) -> TestClient:
+    """A client of the page of ``label``, which asks for ``api/...`` as it does."""
+    return TestClient(create_app(pages), base_url=f'http://testserver/batches/{label}/')
 
 
 def statuses(state: State) -> dict[str, str]:
@@ -74,7 +87,7 @@ def test_a_step_shows_new_rows_and_runs_and_reduces_the_rows_that_arrived(
 
 
 def versions(server: Server) -> tuple[int, int]:
-    return server.version, server.runs_version
+    return server.version, server.pages.runs_version
 
 
 @pytest.mark.parametrize(
@@ -175,20 +188,23 @@ class FinishingClient:
 
 
 def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_poll(
-    client: Client, sample: Measure, gate: Gate
+    client: Client, sample: Measure, gate: Gate, definitions: FolderDefinitions
 ) -> None:
     finishing = FinishingClient(client, gate)
-    batch = Batch(
+    manager = BatchManager(
         finishing,  # type: ignore[arg-type]
-        STAGED,
-        columns=COLUMNS,
-        label='scan',
-        source=pair,
-        staged=True,
+        sources=SOURCES,
+        definitions=definitions,
+        defaults=DEFAULTS,
+    )
+    label = manager.create(
+        STAGED.name, title='Scan', source='pairs', columns=('thickness',)
     )
     sample(1, 'water')
-    page = TestClient(create_app(batch, name='name', at=AT))
-    server: Server = page.app.state.server  # type: ignore[attr-defined]
+    pages = Pages(manager, Follow(manager, definitions))
+    pages.follow.on(label)
+    page = opened(pages, label)
+    server = pages.page(label)
     gate.close()
     finishing.finishing = True
 
@@ -199,7 +215,6 @@ def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_p
     )
     assert shown.status_code == 200
     assert {r['status'] for r in shown.json()['rows']} == {'done'}
-    batch.close()
 
 
 def test_a_step_reduces_a_row_whose_cell_changed_at_a_column_of_at(
@@ -216,9 +231,11 @@ def test_a_step_reduces_a_row_whose_cell_changed_at_a_column_of_at(
 
 
 def test_a_run_that_a_step_finds_can_be_chosen_in_a_cell_without_a_runs_view(
-    batch: Batch, sample: Measure
+    manager: BatchManager, refusing: Refusing, label: str, sample: Measure
 ) -> None:
-    server = Server(batch, name='name', at=AT)
+    pages = Pages(manager, Follow(manager, refusing))
+    pages.follow.on(label)
+    server = pages.page(label)
     server.step()
     sample(1, 'water', partner=False)  # a row that waits, so no record is made
 
@@ -316,7 +333,7 @@ def test_a_step_that_raises_is_said_and_the_next_step_runs(
     server.step()
 
     assert failed is not None
-    assert failed.failure == "The scan failed: 'sample'"
+    assert failed.failure == "'sample'"
     assert server.state().follow.failure is None  # type: ignore[union-attr]
     assert statuses(done(server, client)) == {'water': 'done'}
 
@@ -356,12 +373,14 @@ def test_turning_follow_on_steps_at_once_and_off_stops(
     assert statuses(off) == {'water': 'running'}
 
 
-def test_a_page_without_at_does_not_follow(batch: Batch) -> None:
-    server = Server(batch)
+def test_a_batch_without_a_source_offers_no_follow(
+    pages: Pages, manager: BatchManager
+) -> None:
+    server = pages.page(manager.create(STAGED.name, title='By hand', columns=COLUMNS))
 
     assert server.state().follow is None
-    with pytest.raises(ValueError, match='at'):
-        Server(batch, follow=True)
+    with pytest.raises(Problem, match='no source'):
+        server.follow(True)
 
 
 def option(server: Server, column: str, run: int) -> str:
@@ -518,17 +537,17 @@ def test_follow_reduces_with_the_batch_s_settings_whatever_the_form_holds(
 
 
 def test_a_step_that_raises_anywhere_is_said_and_follow_stays_on(
-    server: Server, client: Client, sample: Measure, fake: FakeFiles
+    server: Server, pages: Pages, client: Client, sample: Measure, fake: FakeFiles
 ) -> None:
     sample(1, 'water')
     listed = fake.list
     fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
 
     on = server.follow(True)
-    server.tick()
+    pages.tick()
     failed = server.state().follow
     fake.list = listed
-    server.tick()
+    pages.tick()
 
     assert on.follow is not None
     assert (on.follow.on, on.notice) == (True, 'Following.')
@@ -547,26 +566,26 @@ class Unsayable(Exception):
 
 
 def test_a_tick_whose_step_raises_what_cannot_be_said_lets_the_next_tick_run(
-    server: Server, client: Client, sample: Measure, fake: FakeFiles
+    server: Server, pages: Pages, client: Client, sample: Measure, fake: FakeFiles
 ) -> None:
     sample(1, 'water')
     listed = fake.list
     fake.list = lambda selector: (_ for _ in ()).throw(Unsayable())
-    server.following = True
 
-    server.tick()
+    pages.tick()
     fake.list = listed
-    server.tick()
+    pages.tick()
 
     assert statuses(done(server, client)) == {'water': 'done'}
 
 
 def test_a_tick_does_nothing_while_not_following(
-    server: Server, client: Client, sample: Measure
+    server: Server, pages: Pages, sample: Measure
 ) -> None:
+    pages.follow.off()
     sample(1, 'water')
 
-    server.tick()
+    pages.tick()
 
     assert server.state().rows == []
 
@@ -588,14 +607,13 @@ class WatchedLock:
 
 
 def test_a_tick_that_waited_for_the_request_that_stops_following_does_nothing(
-    server: Server, client: Client, sample: Measure
+    server: Server, pages: Pages, client: Client, sample: Measure
 ) -> None:
-    server.follow(True)
     lock = WatchedLock()
-    server.lock = lock  # type: ignore[assignment]
-    timer = threading.Thread(target=server.tick)
+    pages.lock = lock  # type: ignore[assignment]
+    timer = threading.Thread(target=pages.tick)
 
-    with server.lock:  # a request that runs while the timer fires
+    with pages.lock:  # a request that runs while the timer fires
         timer.start()
         assert lock.waited.wait(30)  # the tick waits for the lock
         sample(1, 'water')
@@ -607,12 +625,17 @@ def test_a_tick_that_waited_for_the_request_that_stops_following_does_nothing(
 
 
 def test_the_app_steps_while_following_and_stops_with_the_app(
-    batch: Batch, sample: Measure, client: Client
+    manager: BatchManager,
+    refusing: Refusing,
+    label: str,
+    sample: Measure,
+    client: Client,
 ) -> None:
     sample(1, 'water')
-    app = create_app(batch, name='name', at=AT, follow=True, interval=0.01)
+    follow = Follow(manager, refusing, interval=0.01)
+    follow.on(label)
 
-    with TestClient(app) as http:
+    with opened(Pages(manager, follow), label) as http:
         give_up = time.monotonic() + 10
         while not client.records() and time.monotonic() < give_up:
             time.sleep(0.01)
@@ -621,3 +644,59 @@ def test_the_app_steps_while_following_and_stops_with_the_app(
     assert state['follow']['on']
     assert [row['name'] for row in state['rows']] == ['water']
     assert not any(t.name == 'every' for t in threading.enumerate())
+
+
+# One Follow for all batches
+
+
+def test_follow_turned_on_on_one_page_shows_on_the_other_which_batch_follows(
+    server: Server, pages: Pages, manager: BatchManager
+) -> None:
+    other = pages.page(
+        manager.create(STAGED.name, title='Other', source='pairs', columns=COLUMNS)
+    )
+    seen = server.version
+
+    on = other.follow(True)
+
+    shown = server.poll(seen, server.start)
+    assert shown is not None
+    assert shown.follow is not None
+    assert (shown.follow.on, shown.follow.other) == (False, 'Other')
+    assert on.follow is not None
+    assert (on.follow.on, on.follow.other) == (True, None)
+    off = server.follow(False)  # a page that does not follow stops nothing
+    assert (off.notice, pages.follow.label) == ('', other.label)
+
+
+def test_follow_resumes_after_a_restart(
+    server: Server,
+    label: str,
+    client: Client,
+    sample: Measure,
+    definitions: FolderDefinitions,
+) -> None:
+    manager = BatchManager(
+        client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS
+    )
+    again = Pages(manager, Follow(manager, definitions))
+    sample(1, 'water')
+
+    again.tick()
+
+    shown = done(again.page(label), client)
+    assert shown.follow is not None
+    assert shown.follow.on
+    assert statuses(shown) == {'water': 'done'}
+
+
+def test_a_tick_steps_the_batch_that_follows_without_a_page_open(
+    pages: Pages, label: str, client: Client, sample: Measure
+) -> None:
+    pages.follow.on(label)
+    sample(1, 'water')
+
+    pages.tick()
+
+    client.wait(client.records())
+    assert [(r.label, r.member) for r in client.records()] == [('scan', '1')]

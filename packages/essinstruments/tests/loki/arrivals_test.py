@@ -36,7 +36,8 @@ def page(tmp_path: Path) -> Iterator[tuple[TestClient, Instrument, Client]]:
     with client:
         given = settings(client, instrument)
         app = build(client, files, definitions, settings=given)
-        yield TestClient(app), instrument, client
+        page = TestClient(app).get('/').url
+        yield TestClient(app, base_url=str(page)), instrument, client
 
 
 def rows(state: dict[str, Any]) -> dict[str, str]:
@@ -55,7 +56,9 @@ def test_a_sample_whose_runs_arrived_is_reduced_by_hand_or_by_a_step_of_follow(
     reduced = http.post('/api/reduce', json={'which': 'remaining'}).json()
     client.wait(client.records())
     instrument.measure(*plan[3])
-    http.app.state.server.step()  # type: ignore[attr-defined]
+    pages = http.app.state.pages  # type: ignore[attr-defined]
+    pages.follow.on(pages.home())
+    pages.tick()
     client.wait(client.records())
 
     assert rows(scanned) == {'AgBeh': 'ready', 'porous silica': 'incomplete'}

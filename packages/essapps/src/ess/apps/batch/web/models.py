@@ -18,6 +18,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from ..manager import Words
+
 
 class Way(BaseModel):
     value: str
@@ -153,48 +155,44 @@ class Refused(BaseModel):
     text: str
 
 
-class Follow(BaseModel):
+class Following(BaseModel):
     """
-    Whether the server follows the files, ``on``: a step every ``interval``
-    seconds scans them and reduces the rows that arrived, or whose cells
-    changed at the columns titled ``at``. ``failure`` says why the last step
-    raised, if it did.
+    Whether the batch of the page follows the files, ``on``: a step every
+    ``interval`` seconds scans them and reduces the rows that arrived, or whose
+    cells changed at the columns titled ``at``. ``other`` is the title of the
+    batch that follows, if another one does. ``failure`` says why the last
+    step raised, while this batch follows.
     """
 
     on: bool
+    other: str | None
     interval: float
     at: list[str]
     failure: str | None
 
 
-class Words(BaseModel):
-    """What a row is called, as ``1 sample``, ``2 samples``."""
-
-    one: str = 'row'
-    many: str = 'rows'
-
-    def count(self, n: int) -> str:
-        return f'{n} {self.one if n == 1 else self.many}'
-
-
 class State(BaseModel):
     """
-    Everything the page shows but the details of one row, the plot, and the
-    runs. ``start`` changes when the server starts again, ``version`` with each
-    change, and ``runs`` with each change of the runs. ``settings`` is the form
+    Everything the page of a batch shows but the details of one row, the plot,
+    and the runs. ``label`` names the batch and ``title`` is its title;
+    ``application`` is the title of the application. ``start`` changes when
+    the server starts again, ``version`` with each change, and ``runs`` with
+    each change of the runs. ``settings`` is the form
     of the settings. ``settings_changed`` says whether a person changed it and
     has not applied the change; the rows read as with the batch's settings.
     ``settings_problem`` names the batch's settings that the form cannot show,
     what the form misses, and why the batch's settings are refused where the
-    form shows them. ``follow`` is ``None``
-    if the page does not offer to follow the files. ``notice`` says what the
-    action that answers with this state did.
+    form shows them. ``follow`` is ``None`` if the batch has no source, so
+    cannot follow the files. ``notice`` says what the action that answers
+    with this state did.
     """
 
     version: int
     start: str
     runs: int | None
+    label: str
     title: str
+    application: str
     words: Words
     folder: str
     info: list[Column]
@@ -207,7 +205,7 @@ class State(BaseModel):
     settings_problem: str | None
     settings_changed: bool
     refused: list[Refused]
-    follow: Follow | None = None
+    follow: Following | None = None
     notice: str = ''
 
 

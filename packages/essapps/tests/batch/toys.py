@@ -170,7 +170,7 @@ def pair(files: Sequence[FileInfo]) -> list[Row]:
     return rows
 
 
-SOURCES = {'pairs': Source(pair, columns=('sample', 'transmission'))}
+SOURCES = {'pairs': Source(pair, columns=('sample', 'transmission'), name='name')}
 DEFAULTS = {STAGED.name: Defaults(staged=True)}
 
 Measure = Callable[..., FileRef]

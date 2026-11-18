@@ -30,7 +30,8 @@ def test_a_run_registered_while_the_page_runs_shows_after_a_rescan(
     register(*first)
     client, files, definitions = open_loki(tmp_path)
     with client:
-        http = TestClient(build(client, files, definitions))
+        app = build(client, files, definitions)
+        http = TestClient(app, base_url=str(TestClient(app).get('/').url))
         before = [row['name'] for row in http.get('/api/state').json()['rows']]
         register(*first, (3, 'sample', 'b'), (4, 'transmission', 'b'))
         after = [row['name'] for row in http.post('/api/scan').json()['rows']]

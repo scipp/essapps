@@ -1,15 +1,16 @@
-// The batch page. The server holds the rows, the settings, and the results;
-// this file shows the state it sends and sends what a person does. Each
-// action answers with the state after it; a poll every second sees results
-// arrive. The page keeps only what it shows: the selection, the filter, the
-// tab, the sort, and the axes, which survive a reload.
+// The page of a batch, at batches/<label>/. The server holds the rows, the
+// settings, and the results; this file shows the state it sends and sends
+// what a person does. Each action answers with the state after it; a poll
+// every second sees results arrive. The page keeps only what it shows: the
+// selection, the filter, the tab, the sort, and the axes, which survive a
+// reload of the page of the same batch.
 import {h, get, post, query, save} from './dom.js';
 import {Grid, cellColumns, statusColumn} from './tables.js';
 import {renderForm, summary} from './form.js';
 
 const $ = (id) => document.getElementById(id);
 
-const KEPT = 'batch-view';
+const KEPT = `batch-view ${location.pathname}`;
 const view = {
   state: null,
   filter: 'all',
@@ -168,8 +169,9 @@ function render(state) {
   if (old && state.version < old.version) return;
   view.state = state;
   if (!old) build(state);
-  document.title = `${state.title} · batch`;
-  $('title').textContent = state.title;
+  const named = [state.title, state.application].filter(Boolean);
+  document.title = named.join(' · ');
+  $('title').textContent = named.reverse().join(' · ');
   $('folder').textContent = state.folder;
   $('n-samples').textContent = state.counts.all;
   renderAction(state.action);
@@ -353,10 +355,11 @@ function renderRefused(refused) {
   showMessage('Nothing was reduced.', refused.map((e) => e.text), key);
 }
 
-// The switch of Follow, and why its last step failed, if it did.
+// The switch of Follow, and why its last step failed, if it did, or which
+// other batch follows.
 function renderFollow(follow) {
   $('follow').hidden = !follow;
-  $('follow-status').hidden = !follow?.on;
+  $('follow-status').hidden = !follow?.on && !follow?.other;
   if (!follow) return;
   const {one, many} = words();
   $('follow').querySelector('input').checked = follow.on;
@@ -365,7 +368,7 @@ function renderFollow(follow) {
   status.classList.toggle('bad', Boolean(follow.failure));
   status.textContent = follow.failure
     ? `Last step failed: ${follow.failure}`
-    : `Following, every ${follow.interval} s`;
+    : follow.on ? `Following, every ${follow.interval} s` : `${follow.other} follows`;
   status.title = status.textContent;
 }
 
