@@ -44,8 +44,8 @@ from .definition import (
     header_data,
     header_key,
     header_of,
-    settings_data,
     settings_key,
+    template_data,
     template_of,
 )
 from .reduction import Batch, RowSource, file_infos
@@ -72,31 +72,31 @@ class Source:
     ----------
     rows:
         Makes rows from files.
-    columns:
+    fills:
         The parameters that its rows fill. They are columns of each batch of
         it, and Follow reduces a row again for a change at them.
     selector:
         The files that ``rows`` is given; raw files if not given.
     words:
         What a row is called on the page of a batch.
-    name:
+    row_name:
         The entry of :attr:`~.table.Row.info` that names a row on the page;
         its key if ``None``.
-    info:
+    row_info:
         Other entries of :attr:`~.table.Row.info` that the page shows as
         columns.
-    index:
+    index_title:
         What the page calls the :attr:`~.table.Row.index` that ``rows``
         gives, such as ``'Run'``.
     """
 
     rows: RowSource
-    columns: tuple[str, ...]
+    fills: tuple[str, ...]
     selector: Selector | None = None
     words: Words = field(default_factory=Words)
-    name: str | None = None
-    info: tuple[str, ...] = ()
-    index: str = 'Index'
+    row_name: str | None = None
+    row_info: tuple[str, ...] = ()
+    index_title: str = 'Index'
 
 
 @dataclass(frozen=True)
@@ -279,7 +279,7 @@ class BatchManager:
             raise ValueError(f'{label}: the label has definitions or records')
         bound = bound_spec(self._client, spec)
         if source is not None:
-            columns = (*self.sources[source].columns, *columns)
+            columns = (*self.sources[source].fills, *columns)
         columns = tuple(dict.fromkeys(columns))
         if unknown := sorted(set(columns) - bound.params.model_fields.keys()):
             raise ValueError(f'{bound.title} has no parameters {unknown}')
@@ -287,7 +287,7 @@ class BatchManager:
             settings = self._defaults.get(spec, Defaults()).settings
         # The template leaves out the settings that are columns.
         template = Template(bound, params=settings, blanks=columns)
-        self._definitions.save(settings_key(label), settings_data(template))
+        self._definitions.save(settings_key(label), template_data(template))
         scope = Scope() if scope is None else scope
         header = Header(title, description, source, scope)
         try:
@@ -306,7 +306,7 @@ class BatchManager:
             self._client.records(label=label)
         )
 
-    def batches(self) -> dict[str, Header]:
+    def headers(self) -> dict[str, Header]:
         """The header of each batch, by label, sorted by label."""
         return dict(sorted(self._headers.items()))
 
@@ -330,7 +330,7 @@ class BatchManager:
         if template is None:
             raise ValueError(f'{label}: the definitions hold no settings')
         if source is not None and (
-            missing := sorted(set(source.columns) - set(template.blanks))
+            missing := sorted(set(source.fills) - set(template.blanks))
         ):
             raise ValueError(
                 f'{label}: its source fills {missing}, which are not columns of '
@@ -378,7 +378,7 @@ class BatchManager:
         failed: dict[str, str] = {}
         made: dict[str, set[str]] = {}  # the keys of the rows each source made
         shown: dict[str, set[str]] = {name: set() for name in self.sources}
-        for label, header in self.batches().items():
+        for label, header in self.headers().items():
             try:
                 new = label not in self._batches
                 batch = self.batch(label)  # scans a batch that it makes
@@ -407,7 +407,7 @@ class BatchManager:
                 outside[name] = len(made[name] - keys)
         return Counts(states, failed, outside)
 
-    def edit(
+    def change(
         self,
         label: str,
         *,

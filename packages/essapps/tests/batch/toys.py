@@ -176,7 +176,9 @@ def pair(files: Sequence[FileInfo]) -> list[Row]:
 
 
 SOURCES = {
-    'pairs': Source(pair, columns=('sample', 'transmission'), name='name', index='Run')
+    'pairs': Source(
+        pair, fills=('sample', 'transmission'), row_name='name', index_title='Run'
+    )
 }
 DEFAULTS = {STAGED.name: Defaults(staged=True)}
 

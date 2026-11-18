@@ -11,9 +11,9 @@ from pydantic import BaseModel
 from ess.apps import Client, SpecId, Template, file
 from ess.apps.batch import Batch
 from ess.apps.batch.text import (
+    checked_settings,
     named_file,
     read_cell,
-    settings_of,
     with_latest,
     with_named_files,
     write_cell,
@@ -222,7 +222,7 @@ def test_the_settings_of_a_template_have_latest_read(
     }
     template = Template(toys.STAGED, params=params, blanks=toys.COLUMNS)
 
-    assert settings_of(batch, template) == {
+    assert checked_settings(batch, template) == {
         'binning': {'bins': 3},
         'offset': found.ref('offset'),
     }
@@ -250,4 +250,4 @@ def test_a_template_that_does_not_fit_the_batch_is_refused_saying_why(
     batch: Batch, spec: Any, blanks: tuple[str, ...], message: str
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        settings_of(batch, Template(spec, blanks=blanks))
+        checked_settings(batch, Template(spec, blanks=blanks))

@@ -56,9 +56,9 @@ def test_a_batch_made_is_listed_with_its_header(
 
     header = Header('Morning', '2 mm cells', 'pairs')
     assert label == 'b'
-    assert manager.batches() == {'b': header}
+    assert manager.headers() == {'b': header}
     assert manager.source('b') is SOURCES['pairs']
-    assert _again(client, definitions).batches() == {'b': header}
+    assert _again(client, definitions).headers() == {'b': header}
 
 
 def test_a_batch_made_keeps_its_spec_and_columns_before_any_settings_are_applied(
@@ -178,7 +178,7 @@ def test_a_label_that_has_definitions_or_records_is_refused(
 
     with pytest.raises(ValueError, match='has definitions or records'):
         manager.create('plain', title='Morning', columns=COLUMNS, label='b')
-    assert manager.batches() == {}
+    assert manager.headers() == {}
 
 
 @pytest.mark.parametrize('label', ['auto/iofq', '.b', '..'])
@@ -187,13 +187,13 @@ def test_a_label_with_a_slash_or_a_leading_dot_is_refused(
 ) -> None:
     with pytest.raises(ValueError, match='a label is'):
         manager.create('plain', title='Morning', columns=COLUMNS, label=label)
-    assert manager.batches() == {}
+    assert manager.headers() == {}
 
 
 def test_a_source_that_is_not_registered_is_refused(manager: BatchManager) -> None:
     with pytest.raises(KeyError, match='runs'):
         manager.create('plain', title='Morning', source='runs')
-    assert manager.batches() == {}
+    assert manager.headers() == {}
 
 
 def test_a_source_whose_columns_the_spec_lacks_is_refused(
@@ -201,7 +201,7 @@ def test_a_source_whose_columns_the_spec_lacks_is_refused(
 ) -> None:
     with pytest.raises(ValueError, match=r"Find has no parameters \['transmission'\]"):
         manager.create(FIND.name, title='Morning', source='pairs')
-    assert manager.batches() == {}
+    assert manager.headers() == {}
 
 
 def test_a_spec_that_the_workspace_does_not_bind_is_refused(
@@ -209,7 +209,7 @@ def test_a_spec_that_the_workspace_does_not_bind_is_refused(
 ) -> None:
     with pytest.raises(KeyError, match='no spec iofq'):
         manager.create('iofq', title='Morning')
-    assert manager.batches() == {}
+    assert manager.headers() == {}
 
 
 def test_generated_labels_are_the_time_of_making_and_differ(
@@ -234,7 +234,7 @@ def test_the_batch_of_a_label_is_one_object(manager: BatchManager) -> None:
 def test_a_batch_whose_source_fills_a_column_it_lacks_is_refused(
     client: Client, definitions: FolderDefinitions
 ) -> None:
-    narrow = {'pairs': Source(pair, columns=('sample',))}
+    narrow = {'pairs': Source(pair, fills=('sample',))}
     manager = BatchManager(client, sources=narrow, definitions=definitions)
     manager.create('plain', title='Morning', source='pairs', label='b')
 
@@ -247,7 +247,7 @@ def test_a_batch_whose_source_fills_a_column_it_lacks_is_refused(
     [
         lambda m: m.batch('b'),
         lambda m: m.source('b'),
-        lambda m: m.edit('b', title='Afternoon'),
+        lambda m: m.change('b', title='Afternoon'),
         lambda m: m.remove('b'),
     ],
     ids=['batch', 'source', 'edit', 'remove'],
@@ -264,11 +264,11 @@ def test_a_title_and_description_changed_are_kept(
 ) -> None:
     label = manager.create('plain', title='Morning', source='pairs', description='a')
 
-    header = manager.edit(label, title='Afternoon')
-    header = manager.edit(label, description='b')
+    header = manager.change(label, title='Afternoon')
+    header = manager.change(label, description='b')
 
     assert header == Header('Afternoon', 'b', 'pairs')
-    assert _again(client, definitions).batches() == {label: header}
+    assert _again(client, definitions).headers() == {label: header}
 
 
 def test_a_scope_given_at_making_and_changed_is_kept(
@@ -285,11 +285,11 @@ def test_a_scope_given_at_making_and_changed_is_kept(
     batch = manager.batch(label)
     assert [row.key for row in batch.rows] == ['2', '3']
 
-    manager.edit(label, scope=Scope(start=2, stop=3))
+    manager.change(label, scope=Scope(start=2, stop=3))
 
     assert [row.key for row in batch.rows] == ['2']
     again = _again(client, definitions)
-    assert again.batches()[label].scope == Scope(start=2, stop=3)
+    assert again.headers()[label].scope == Scope(start=2, stop=3)
     assert [row.key for row in again.batch(label).rows] == ['2']
 
 
@@ -307,7 +307,7 @@ def test_a_batch_removed_is_gone_with_its_definitions_and_its_records_stay(
 
     manager.remove(label)
 
-    assert manager.batches() == {}
+    assert manager.headers() == {}
     assert definitions.labels() == []
     assert [r.member for r in client.records(label=label)] == ['1']
     with pytest.raises(KeyError):
@@ -355,7 +355,7 @@ def test_a_batch_whose_header_is_refused_is_not_made_and_leaves_its_label_free(
 
     with pytest.raises(NotKept):
         manager.create('plain', title='Morning', columns=COLUMNS, label='b')
-    assert manager.batches() == {}
+    assert manager.headers() == {}
     assert definitions.labels() == []
     refusing.part = None
     assert manager.create('plain', title='Morning', columns=COLUMNS, label='b') == 'b'
@@ -368,8 +368,8 @@ def test_a_header_change_that_is_refused_changes_nothing(
     refusing.part = 'header'
 
     with pytest.raises(NotKept):
-        manager.edit('b', title='Afternoon')
-    assert manager.batches() == {'b': Header('Morning')}
+        manager.change('b', title='Afternoon')
+    assert manager.headers() == {'b': Header('Morning')}
 
 
 def test_a_scope_change_that_is_refused_leaves_the_rows_of_the_batch(
@@ -382,10 +382,10 @@ def test_a_scope_change_that_is_refused_leaves_the_rows_of_the_batch(
     refusing.part = 'header'
 
     with pytest.raises(NotKept):
-        manager.edit(label, scope=Scope(start=2))
+        manager.change(label, scope=Scope(start=2))
     assert batch.scope == Scope()
     assert [row.key for row in batch.rows] == ['1', '2']
-    assert manager.batches()[label].scope == Scope()
+    assert manager.headers()[label].scope == Scope()
 
 
 def test_a_batch_whose_removal_is_refused_after_its_header_is_gone_keeps_its_label(
@@ -400,8 +400,8 @@ def test_a_batch_whose_removal_is_refused_after_its_header_is_gone_keeps_its_lab
     with pytest.raises(NotKept):
         manager.remove('b')
     refusing.part = None
-    assert manager.batches() == {}
-    assert _again(client, definitions).batches() == {}
+    assert manager.headers() == {}
+    assert _again(client, definitions).headers() == {}
     with pytest.raises(ValueError, match='has definitions or records'):
         manager.create('plain', title='Morning', columns=COLUMNS, label='b')
 
@@ -494,7 +494,7 @@ def test_a_batch_that_cannot_be_made_has_its_reason_and_its_source_no_outside(
     else:
         sources = {
             **SOURCES,
-            'other': Source(raising, columns=('sample', 'transmission')),
+            'other': Source(raising, fills=('sample', 'transmission')),
         }
     manager = BatchManager(client, sources=sources, definitions=definitions)
 
@@ -519,7 +519,7 @@ def test_a_count_calls_a_source_once_for_all_its_batches(
         calls.append(1)
         return pair(files)
 
-    sources = {'pairs': Source(counted, columns=('sample', 'transmission'))}
+    sources = {'pairs': Source(counted, fills=('sample', 'transmission'))}
     manager = BatchManager(client, sources=sources, definitions=definitions)
     for label in ('a', 'b'):
         manager.create('plain', title=label, source='pairs', label=label)

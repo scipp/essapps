@@ -727,7 +727,7 @@ def test_load_table_refuses_a_row_the_source_makes_outside_the_scope(
     http: TestClient, manager: BatchManager
 ) -> None:
     content = http.get('/api/table.csv').content
-    manager.edit('scan', scope=Scope(start=2))
+    manager.change('scan', scope=Scope(start=2))
 
     loaded = http.post('/api/table', params={'name': 'rows.csv'}, content=content)
 
@@ -1537,7 +1537,7 @@ def test_the_batches_view_lists_every_batch_and_the_one_that_follows(
 def test_the_batches_view_shows_the_scope_of_each_batch_in_the_words_of_its_source(
     http: TestClient, manager: BatchManager, scope: Scope, text: str
 ) -> None:
-    manager.edit('scan', scope=scope)
+    manager.change('scan', scope=scope)
 
     (listed,) = http.get('/api/batches').json()['rows']
 
@@ -1549,7 +1549,7 @@ def test_a_page_learns_from_its_poll_that_a_scope_changed(
 ) -> None:
     now = state(http)
 
-    manager.edit('scan', scope=Scope(start=2))
+    manager.change('scan', scope=Scope(start=2))
 
     polled = http.get(
         '/api/state', params={'after': now['version'], 'start': now['start']}
@@ -1656,7 +1656,7 @@ def test_counts_are_given_in_the_words_of_the_page(
 def test_a_page_shows_the_rows_of_its_scope_only(
     http: TestClient, manager: BatchManager
 ) -> None:
-    manager.edit('scan', scope=Scope(start=2))
+    manager.change('scan', scope=Scope(start=2))
 
     assert list(rows(http)) == ['2', '3']
 
@@ -1665,10 +1665,10 @@ def test_bring_back_restores_only_the_rows_removed_that_the_scope_holds(
     http: TestClient, manager: BatchManager
 ) -> None:
     http.post('/api/rows/remove', json={'keys': ['1', '2']})
-    manager.edit('scan', scope=Scope(start=2))
+    manager.change('scan', scope=Scope(start=2))
 
     http.post('/api/rows/restore')
-    manager.edit('scan', scope=Scope())
+    manager.change('scan', scope=Scope())
 
     assert list(rows(http)) == ['2', '3']
     assert state(http)['removed'] == 1
@@ -1679,6 +1679,6 @@ def test_the_rows_removed_that_a_page_counts_are_those_of_its_scope(
 ) -> None:
     http.post('/api/rows/remove', json={'keys': ['1', '2']})
 
-    manager.edit('scan', scope=Scope(start=2))
+    manager.change('scan', scope=Scope(start=2))
 
     assert state(http)['removed'] == 1

@@ -306,7 +306,7 @@ class Batch:
         if self._definitions is not None:
             template = Template(self.spec, params=settings, blanks=self.columns)
             key = definition.settings_key(self.label)
-            self._definitions.save(key, definition.settings_data(template))
+            self._definitions.save(key, definition.template_data(template))
         self._settings = settings
 
     def _own(self, settings: Mapping[str, Any]) -> dict[str, Any]:

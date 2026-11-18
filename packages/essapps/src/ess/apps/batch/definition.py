@@ -319,19 +319,19 @@ def edits_of(data: Any) -> RowTable:
         raise ValueError(f'{entry or "the edits"}: {why}') from None
 
 
-def settings_data(template: Template) -> Any:
+def template_data(template: Template) -> Any:
     """The template of the settings, as plain data that a template file holds."""
     return TypeAdapter(Template).dump_python(template, mode='json')
 
 
 def template_of(data: Any) -> Template:
-    """The template of :func:`settings_data`; ``ValueError`` names an entry."""
+    """The template of :func:`template_data`; ``ValueError`` names an entry."""
     return _checked(_TEMPLATE, data)
 
 
 def settings_of(data: Any, spec: WorkflowSpec) -> dict[str, Any]:
     """
-    The settings in the template of :func:`settings_data`, for ``spec``, of
+    The settings in the template of :func:`template_data`, for ``spec``, of
     any version of it: a value that ``spec`` does not take is refused when the
     settings are resolved, as any other. Raises ``ValueError`` if the template
     is of a spec of another name.

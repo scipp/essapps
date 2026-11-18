@@ -935,7 +935,7 @@ def test_widening_the_scope_of_the_batch_that_follows_reduces_the_rows_it_now_ho
     follow.on('a')
     client.wait(follow.step())
 
-    manager.edit('a', scope=Scope())
+    manager.change('a', scope=Scope())
     records = follow.step()
 
     client.wait(records)
