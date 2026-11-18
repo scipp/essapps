@@ -78,7 +78,7 @@ A batch is a set of tables. Six of them are stored, and each has one writer. All
 |---|---|---|---|
 | files | the instrument | the files that the file source lists, with their metadata | workspace |
 | corrections | `CorrectedFiles` | metadata of a file set by hand | workspace folder |
-| header | `BatchManager` | the names of the spec and the source, the columns, the title, the description, the scope | label of a batch of the manager |
+| header | `BatchManager`; `essapps-batch reduce` for a label without one | the names of the spec and the source, the columns, the title, the description, the scope | label of a batch of the manager |
 | edits | `Batch.rows` | cells set, rows added or removed, by key | label |
 | settings | `Batch.settings`; the first by the manager, before any `Batch` of the label exists | the parameters that are not columns | label |
 | records | the workspace | a record per submission, with its status | workspace |
@@ -376,7 +376,7 @@ What is written is what is assigned: `batch.rows = ...`, `batch.settings = ...`,
 definitions/corrections.json                    every file source of the workspace
 definitions/labels/auto%2Fiofq/edits.json       what was set by hand on the rows
 definitions/labels/auto%2Fiofq/settings.json    a template, which essapps-batch reads
-definitions/labels/auto%2Fiofq/header.json      spec, columns, source, title, description, scope; written by the manager
+definitions/labels/auto%2Fiofq/header.json      spec, columns, source, title, description, scope; written by the manager or essapps-batch
 definitions/following.json                      the label of the batch that follows; written by Follow
 ```
 
@@ -394,7 +394,7 @@ The edits hold only what was set by hand, so a cell from the scan follows the fi
 - An edit at a column that is gone makes its row `incomplete` (`not a column`). The page offers to remove it.
 - Settings of another version of the spec are read as they are. The settings form shows those that fit, and the page names the others with their values above it. `state()` and `reduce` refuse what the spec bound does not take. Nothing is written until a person presses **Apply**, which writes the settings of the form.
 - Settings of a spec of another name raise `ValueError` when the batch is made, naming the file and both specs.
-- Settings at a column of the batch raise `ValueError` when the batch is made, naming the file and the columns. A `Batch` on the label with fewer columns, such as one of the command, writes such settings.
+- Settings at a column of the batch raise `ValueError` when the batch is made, naming the file and the columns. A `Batch` made in code on the label with fewer columns writes such settings.
 - A correction of a file no longer listed is kept, and not used.
 - A file that is not of the shape described raises `ValueError` naming the file and the entry, when the batch or the `CorrectedFiles` is made.
 
@@ -444,7 +444,8 @@ What a batch is, and where each part comes from:
 Each part that is kept is in one file of the label, with one writer at a time:
 
 ```
-header.json     BatchManager      spec, columns, source; title, description; scope
+header.json     BatchManager      spec, columns, source; title, description; scope;
+                                  essapps-batch reduce, for a label without one
 settings.json   Batch.settings    the settings, as a template; its spec and blanks a copy of the header's;
                                   the first written by create
 edits.json      Batch.rows        the edits
@@ -717,6 +718,8 @@ $B reduce masks.yaml --label masks            # detector: {'@latest': detector, 
 $B reduce iofq.yaml runs.csv --label water-series
 ```
 
+Each label is then a batch in the list of batches of a page ([The app and the command on one folder](#the-app-and-the-command-on-one-folder)), the detector and the masks without a source.
+
 `{'@latest': label, output: name}` is read when the command starts, as the output of the newest record under the label, of `member` if given, whoever submitted it. It is for a template, not for a cell of a table. The record of each row holds the ID that it was read as. A reference by ID is `{'@ref': output, record: ..., output: ...}`.
 
 One command holds the folder at a time. If a command was killed, the next one first finishes the rows that had not started, but fails those of a spec it does not bind with the same version and models. A row that was running fails, since its workflow may have been what ended the process. Reduce again with `--remaining` to submit every row that has not completed, the failed ones included. A command that binds another version of a spec, or the same version with changed models, reads the old results as plain scipp data, and reduces their rows again with `--remaining`, whatever settings the template gives. Nothing removes the files of the store.
@@ -735,15 +738,20 @@ The settings form holds a change until **Apply** writes it to the batch; **Disca
 A person and the command share one workspace folder (`open_folder`), and a label is one batch for both: the command keeps a batch in the folder's definitions as an app does. One process holds the folder at a time, so stop the app before the command runs:
 
 ```sh
-python -m ess.apps.batch.web.demo ws       # Download as CSV: rows.csv, Download settings: settings.yaml
+python -m ess.apps.batch.web.demo ws       # remove the incomplete rows; Download as CSV: rows.csv,
+                                           # Download settings: settings.yaml
 L=20261118-130204                          # the label of the batch, in the URL of its page
 B="essapps-batch -w ws --bind ess.apps.batch.web.demo:BINDINGS"
-$B reduce settings.yaml rows.csv --label $L -o done.csv
-$B reduce --label $L --remaining           # the batch as the label keeps it
-python -m ess.apps.batch.web.demo ws       # the rows show as done
+S="--sources ess.apps.batch.web.demo:SOURCES"
+$B reduce $S settings.yaml rows.csv --label $L -o done.csv
+$B reduce $S --label $L --remaining        # the batch as its header and its definitions say
+$B reduce $S settings.yaml rows.csv --source sample-runs --label sds    # a new batch, sds
+python -m ess.apps.batch.web.demo ws       # the rows of $L show as done, and the list holds sds
 ```
 
-`reduce` imports what it is given into the definitions of its label, then reduces the rows of the table: the template becomes the batch's settings, and the table is set by hand as **Load table…** sets it, on the rows that a `Source` makes from the files, if `--source package.module:NAME` names one, and on the edits that the label keeps. With `--source`, the blanks of the template must include every column that the source fills, or `reduce` refuses. So what the command was given shows in the app afterwards, and a table older than an edit made in the app sets the cell back, as any import does. Without a template and a table, `reduce` reduces the batch that the label keeps, with the app's edits. `rows`, `files`, and `export` read the files as corrected, and keep no batch. The command finds the results of the app, and the app those of the command, if the outputs are persisted (`Batch(..., persist=True)`).
+`reduce` reduces the batch of its label. A label with a header, such as one made on the page, is the batch that the header says, made as the manager makes it (`ess.apps.batch.manager.header_batch`): its spec, of the version that the workspace binds, its columns, its scope, and its source, which `--sources package.module:NAME` registers by name, as the application does. A template given must be of the header's spec, with the columns as its blanks, and `--source`, if given, must name the header's source; else `reduce` refuses, and says both. A label without a header takes the spec and the columns from the template given, else from the settings that the label keeps, and the source from `--source NAME`, a name in `--sources`; the blanks must then include every column that the source fills, or `reduce` refuses. `reduce` writes the header of such a label, with the label as the title, so the page lists the batch; the label must be one segment of a URL (`check_label`). The command never changes the title, the description or the scope, and takes the version of a spec that the workspace binds, the highest if several, whatever version the template names. `--staged` runs the rows through a stage, as `Defaults.staged` does for the application, whose `Defaults` the command does not read.
+
+`reduce` imports what it is given into the definitions of its label, then reduces the rows of the table: the template becomes the batch's settings, and the table is set by hand as **Load table…** sets it, on the rows that the source makes from the files, and on the edits that the label keeps. So what the command was given shows in the app afterwards, and a table older than an edit made in the app sets the cell back, as any import does. Without a template and a table, `reduce` reduces the batch that the label keeps, with the app's edits. `rows`, `files`, and `export` read the files as corrected, and keep no batch. The command finds the results of the app, and the app those of the command, if the outputs are persisted (`Batch(..., persist=True)`).
 
 | Button of the page | Same as |
 |---|---|
@@ -756,7 +764,7 @@ python -m ess.apps.batch.web.demo ws       # the rows show as done
 | **Start the next batch here** | `manager.create(old.spec, title=..., source=old.source, columns=old.columns, scope=Scope(start=index, stop=old.scope.stop), settings=batch.settings)`, then the edits and removals of the rows that move set on the new batch's `rows`, then `manager.change(label, scope=Scope(start=old.scope.start, stop=index))`, with `old = manager.headers()[label]` and `index` that of the row selected; Follow moves to the new batch if this one follows. Rows added by hand stay, and the results of the rows that move stay under the old label, so the new batch reduces them again |
 | **Remove this batch** | `follow.off()` if it follows, then `manager.remove(label)` |
 
-`reduce` refuses a table with a row that cannot run, so remove the incomplete rows before writing it. A table loaded is set by hand: each cell that differs from the row shown is an edit, a row the batch removed is brought back, and a row the batch does not show is added, so it stays after **Rescan runs**, and the definitions keep it. A table with a row that the source makes and the scope leaves out is refused, and nothing is set. The `status` of a table written is what the page shows, such as `outdated`, `not reduced`, or `completed, earlier settings` (`status_texts`). `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table.
+`reduce` refuses a table or a batch with a row that cannot run, so remove the incomplete rows on the page first. A table loaded is set by hand: each cell that differs from the row shown is an edit, a row the batch removed is brought back, and a row the batch does not show is added, so it stays after **Rescan runs**, and the definitions keep it. A table with a row that the source makes and the scope leaves out is refused, and nothing is set. The `status` of a table written is what the page shows, such as `outdated`, `not reduced`, or `completed, earlier settings` (`status_texts`). `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table.
 
 ## Interfaces to the framework
 

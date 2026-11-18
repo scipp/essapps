@@ -9,14 +9,15 @@ removes them. The guide is the section "The batches of a workspace" of
 A batch is kept as three tables of the definitions (:mod:`.definition`), each
 with one writer::
 
-    header      the spec by name, the columns, the name     BatchManager
-                of its source, title, description, scope
+    header      the spec by name, the columns, the name     BatchManager; the
+                of its source, title, description, scope    command, if none
     settings    a template of the settings, its spec and    Batch.settings; the
                 blanks a copy of the header's               first by the manager
     edits       what a person set on its rows               Batch.rows
 
 so a manager made again, after a restart, makes the same ``Batch`` of a label
-from them, the registered sources and the defaults. Making a batch writes its
+from them, the registered sources and the defaults (:func:`header_batch`,
+which the command ``essapps-batch`` calls too). Making a batch writes its
 first settings, before any ``Batch`` of the label exists, then its header: a
 label without a header is not a batch, and a header without settings is a
 batch with the default settings of its spec. The ``Batch`` of a label is made
@@ -185,6 +186,46 @@ def check_label(label: str) -> None:
         )
 
 
+def header_batch(
+    client: Client,
+    label: str,
+    header: Header,
+    *,
+    sources: Mapping[str, Source],
+    definitions: DefinitionStore,
+    defaults: Defaults,
+) -> Batch:
+    """
+    The :class:`~.reduction.Batch` of ``label`` as ``header`` says, kept in
+    ``definitions`` and persisting what it submits, and scanned once if it has
+    a source. Its settings are those that ``definitions`` keep, else
+    ``defaults.settings`` but for the columns.
+
+    Raises ``KeyError`` if the workspace binds no spec of the header's name, or
+    its source is not in ``sources``; ``ValueError`` if the settings or edits
+    kept cannot be read, or the source fills a parameter that is not a column.
+    """
+    if (name := header.source) is not None and name not in sources:
+        raise KeyError(f'{label}: the source {name} is not registered')
+    batch = Batch(
+        client,
+        bound_spec(client, header.spec),
+        columns=header.columns,
+        label=label,
+        source=None if name is None else sources[name],
+        staged=defaults.staged,
+        persist=True,
+        settings={
+            n: v for n, v in defaults.settings.items() if n not in header.columns
+        },
+        definitions=definitions,
+        scope=header.scope,
+    )
+    if batch.source is not None:
+        batch.scan()
+    return batch
+
+
 class BatchManager:
     """
     Makes, lists, changes and removes the batches of a workspace, and holds
@@ -345,7 +386,8 @@ class BatchManager:
     def batch(self, label: str) -> Batch:
         """
         The batch of ``label``, made from its definitions at the first call
-        and scanned once if it has a source. If the scan raises, the batch is
+        and scanned once if it has a source (:func:`header_batch`), with the
+        defaults of its spec. If the scan raises, the batch is
         not kept, and the next call makes it again. Ask for the batch each
         time it is used: one handed out before must not be used after
         :meth:`remove`.
@@ -358,25 +400,14 @@ class BatchManager:
         if (batch := self._batches.get(label)) is not None:
             return batch
         header = self._headers[label]
-        if (name := header.source) is not None and name not in self.sources:
-            raise KeyError(f'{label}: the source {name} is not registered')
-        defaults = self._defaults.get(header.spec, Defaults())
-        batch = Batch(
+        batch = header_batch(
             self.client,
-            bound_spec(self.client, header.spec),
-            columns=header.columns,
-            label=label,
-            source=None if name is None else self.sources[name],
-            staged=defaults.staged,
-            persist=True,
-            settings={
-                n: v for n, v in defaults.settings.items() if n not in header.columns
-            },
+            label,
+            header,
+            sources=self.sources,
             definitions=self._definitions,
-            scope=header.scope,
+            defaults=self._defaults.get(header.spec, Defaults()),
         )
-        if batch.source is not None:
-            batch.scan()
         self._batches[label] = batch
         return batch
 
