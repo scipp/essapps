@@ -369,14 +369,12 @@ class Server:
 
     def _status(self, state: RowState, earlier: bool, refused: bool) -> str:
         """
-        The status of a row in words (see the module). A done row with its
-        result only, as while the settings are refused, reads ``outdated``
-        (:attr:`RowState.text`).
+        The status of a row in words (see the module): that of
+        :attr:`RowState.text`, but ``incomplete`` for a row that waits for
+        Follow, and ``done`` for a row of earlier settings.
         """
         if refused:
             return 'incomplete'
-        if state.status in _ENDED and not state.problems:
-            return str(state.status)
         if earlier:
             return 'done'
         return _STATUS.get(state.text, state.text)
