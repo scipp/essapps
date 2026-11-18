@@ -91,10 +91,11 @@ A start or a stop is sent as typed; the manager converts it to the type of the i
 The new batch starts with the settings that the application gives its spec (`Defaults`).
 A source that no spec fits is not offered.
 
-The form is closed until **+ New batch** is pressed, but in a workspace with no batch at all, which serves the page at `/`, without a batch: the Batches view, with the form open, and the Runs view.
+The form is closed until **+ New batch** is pressed.
+A workspace with no batch serves the page at `/` without a batch: the Batches view with the form open, and the Runs view.
 It loads both once and polls nothing; making a batch goes to its page.
 `/` answers with `Cache-Control: no-store`, so that Back and a `/` opened again ask the server, which redirects once there is a batch.
-The page of a batch that cannot be shown, such as one whose source raises, says why, and shows the Batches and Runs views as the page without a batch does.
+The page of a batch that cannot be shown, such as one whose source raises, says why, and shows the Batches and Runs views; the form is open only if there is no batch.
 So does an open page of a batch removed meanwhile, at its next poll, which the server answers 404 ("There is no batch X.").
 
 ## Changing, ending and removing a batch
@@ -106,24 +107,31 @@ What the manager refuses, such as an empty title or a stop below the start, show
 A scope that names its rows, which only code makes, is shown as "2 rows named", and Save keeps it.
 A wider scope of the batch that follows makes its next step reduce the rows it adds, so Save first asks `POST api/batch/added` how many rows the scope adds that have no result and no cell set by hand, and asks the person to confirm if there are any.
 
-**Start the next batch here** ends a series at the row selected, and goes on with the next one (`POST api/batch/next`), after asking for the title of the next batch:
+**Start the next batch here** splits the batch at the row selected: this batch ends before the row, and the next batch holds the rows of this one from the row on (`POST api/batch/next`).
+In code, with `old = manager.headers()[label]` and `index` that of the row:
 
 ```python
-old = manager.headers()[label]
 new = manager.create(old.spec, title=title, source=old.source, columns=old.columns,
-                     scope=Scope(start=index), settings=manager.batch(label).settings)
+                     scope=Scope(start=index, stop=old.scope.stop),
+                     settings=manager.batch(label).settings)
+manager.batch(new).rows = ...   # the edits and removals of the rows that move
 manager.change(label, scope=Scope(start=old.scope.start, stop=index))
 if follow.label == label:
     follow.on(new)
 ```
 
-`index` is that of the row, and the page then goes to the page of the new batch.
+What a person did to the rows that move goes with them: their cells set by hand, and their removal by hand, so Follow still leaves a row set by hand to the person.
+A row added by hand stays in this batch, since such a row is in its batch whatever the scope.
+The results of the rows that move stay under the label of this batch, as every result does, so the next batch shows those rows as not reduced, and Follow, if it moves, reduces them again.
+So the page first asks the server what moves (`POST api/batch/moved`), and asks for the title of the next batch with that said: how many rows move, how many of them have a result here, and whether Follow moves and reduces them again.
+Cancel changes nothing; otherwise the page goes to the page of the next batch.
 The next batch gets the settings in force, not a change of the settings form that is not applied.
-It needs one row selected, with an index, and a batch whose scope is a range: the page says so otherwise, and nothing changes.
-The next batch is made first, so a title that the manager refuses changes nothing; if this batch then cannot be ended, both hold the rows from `index` on, and the page says so.
+It needs one row selected, with an index, that is not the first row of this batch, and a batch whose scope is a range: the page says so otherwise, and nothing changes.
+A row of the scan without an index is in neither batch afterwards, since both scopes then have an end.
+The next batch is made first, so a title that the manager refuses changes nothing, and it is removed again if it cannot take what was set by hand; if this batch then cannot be ended, both hold the rows that move, and the page says so.
 
 **Remove this batch**, after a confirmation, removes the header, the settings and the edits of the batch (`POST api/batch/remove`, `BatchManager.remove`); its results stay in the workspace.
-If the batch follows, Follow is turned off at once.
+If the batch follows, Follow is turned off at once; if the definitions refuse the removal, the batch and Follow stay as they were.
 The page then goes to `/`, which redirects to another batch, or shows the page without a batch if none is left.
 
 ## Layers
@@ -192,7 +200,7 @@ See [Where the definition is kept](../../../../../docs/batch.md#where-the-defini
 - One `Batch` per label. Another one on the page's label writes its whole table of edits at each change, over those of the page ([Where the definition is kept](../../../../../docs/batch.md#where-the-definition-is-kept)).
 - One user. Two open pages of one batch show and edit the same state.
 - One lock for all pages: a request waits while a step of Follow runs on another batch.
-- The confirmation of a wider scope counts the rows of the last scan, and leaves out the rows with an outdated result, which Follow reduces too if a cell changed at its columns.
+- The confirmation of a wider scope counts the rows of the last scan without a result and not set by hand, incomplete ones too, which Follow does not reduce; it leaves out the rows with an outdated result, which Follow reduces too if a cell changed at its columns.
 - A batch that cannot be shown, such as one whose source raises, has no tab **Batch**, so it is removed only in code.
 - The confirmations and the title of the next batch are the browser's dialogs (`confirm`, `prompt`).
 

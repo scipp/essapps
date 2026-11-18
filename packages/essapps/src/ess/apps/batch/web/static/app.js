@@ -587,7 +587,7 @@ function renderBatch(state) {
   $('batch-named').hidden = header.keys === null;
   $('batch-named-text').textContent = header.keys && `${count(header.keys.length)} named`;
   const follows = state.follow?.on ? ' Follow moves to it.' : '';
-  $('next-hint').textContent = `Ends this batch before the ${words().one} selected, and starts the next batch there, with the same workflow, columns and settings.${follows}`;
+  $('next-hint').textContent = `Ends this batch before the ${words().one} selected. The next batch takes its ${words().many} from there on, with the same workflow, columns and settings.${follows}`;
   const form = $('batch-form');
   const shown = JSON.stringify([state.title, header]);
   if (shown === form.shown) return;
@@ -619,13 +619,23 @@ async function saveBatch(event) {
 }
 
 // End this batch at the row selected, and go to the next batch, which starts
-// there; the server says why it cannot.
+// there. The server says first what moves, or why it cannot; the title is
+// asked with that, so that Cancel changes nothing.
 async function startNext() {
   const chosen = selectedRows();
   if (chosen.length !== 1) return showMessage(`Select one ${words().one}: the next batch starts at it.`);
-  const title = prompt(`Title of the next batch, which starts at ${chosen[0].name}:`);
+  const [row] = chosen;
+  const moved = await request('batch/moved', {body: {key: row.key}});
+  if (!moved) return;
+  const follows = view.state.follow?.on;
+  const said = [`${count(moved.rows)} move to the next batch, from ${row.name} on, with the values set by hand on them.`];
+  if (moved.results) {
+    const again = follows ? ', and Follow, which moves to it, reduces them again' : '';
+    said.push(`${moved.results} of them have a result in this batch, which stays here: the next batch shows them as not reduced${again}.`);
+  } else if (follows) said.push('Follow moves to the next batch.');
+  const title = prompt(`${said.join(' ')}\n\nTitle of the next batch:`);
   if (title === null) return;
-  const made = await queued(() => request('batch/next', {body: {key: chosen[0].key, title: title.trim()}}));
+  const made = await queued(() => request('batch/next', {body: {key: row.key, title: title.trim()}}));
   if (made) location.href = batchUrl(made.label);
 }
 

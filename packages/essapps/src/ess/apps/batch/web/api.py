@@ -53,6 +53,7 @@ from .models import (
     Key,
     Keys,
     Made,
+    Moved,
     NewBatch,
     Next,
     Notice,
@@ -238,6 +239,11 @@ def create_app(pages: Pages) -> FastAPI:
     def added(page: PageOfLabel, body: Ends) -> int:
         """How many rows the scope of ``body`` adds that Follow would reduce."""
         return page.added(body)
+
+    @batch.post('/api/batch/moved')
+    def moved(page: PageOfLabel, body: Key) -> Moved:
+        """What starting the next batch at row ``key`` moves."""
+        return page.moved(body.key)
 
     @batch.post('/api/batch/next')
     def start_next(page: PageOfLabel, body: Next) -> Made:

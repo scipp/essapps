@@ -1097,11 +1097,17 @@ def test_a_person_ends_a_series_and_starts_the_next_at_a_row(
 ) -> None:
     page.click('[data-tab=batch]')
     select(page, 'sds')
-    page.once('dialog', lambda dialog: dialog.accept('Afternoon'))
+    asked: list[str] = []
 
+    def answer(dialog: Any) -> None:
+        asked.append(dialog.message)
+        dialog.accept('Afternoon')
+
+    page.once('dialog', answer)
     page.click('#next-batch')
 
     page.wait_for_selector('#title:has-text("Afternoon")')
+    assert asked[0].startswith('2 rows move to the next batch, from sds on,')
     (label,) = set(manager.headers()) - {'scan'}
     assert page.url.endswith(f'/batches/{label}/')
     assert manager.headers()['scan'].scope == Scope(stop=2)

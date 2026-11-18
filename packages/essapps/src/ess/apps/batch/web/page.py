@@ -117,6 +117,7 @@ from .. import (
     NotKept,
     RowState,
     Scope,
+    Source,
     Words,
     earlier_settings,
     frames,
@@ -141,6 +142,7 @@ from .models import (
     HeaderEdit,
     HeaderShown,
     Made,
+    Moved,
     Next,
     Plot,
     Reduce,
@@ -207,6 +209,18 @@ class Problem(Exception):
 
 class Missing(Exception):
     """No batch has the label asked for."""
+
+
+def scoped(source: Source | None, ends: Ends, said: str) -> Scope:
+    """
+    The slice from ``ends.start`` to ``ends.stop`` of the rows of ``source``
+    (:func:`~ess.apps.batch.scope_of`); a :class:`Problem` that starts with
+    ``said`` for an end that it refuses.
+    """
+    try:
+        return scope_of(source, ends.start, ends.stop)
+    except ValueError as error:
+        raise Problem(f'{said}: {why(error)}.') from None
 
 
 def _say(title: str, message: str) -> str:
@@ -990,18 +1004,14 @@ class Page:
 
     # The header
 
-    def _scope(self, ends: Ends) -> Scope | None:
+    def _scope(self, ends: Ends, said: str) -> Scope | None:
         """
-        The slice of ``ends``, converted as :func:`~ess.apps.batch.scope_of`
-        does, or ``None`` if the scope of the batch names its keys, which no
-        page changes; :class:`Problem` for an end that it refuses.
+        The scope of ``ends`` (:func:`scoped`), or ``None`` if the scope of the
+        batch names its keys, which no page changes.
         """
-        if self.pages.manager.headers()[self.label].scope.keys is not None:
+        if self.batch.scope.keys is not None:
             return None
-        try:
-            return scope_of(self.batch.source, ends.start, ends.stop)
-        except ValueError as error:
-            raise Problem(f'The batch was not changed: {why(error)}.') from None
+        return scoped(self.batch.source, ends, said)
 
     @_action
     def change(self, edit: HeaderEdit) -> str:
@@ -1011,25 +1021,26 @@ class Page:
         as it is. What the manager refuses is a :class:`Problem`, and changes
         nothing.
         """
-        scope = self._scope(edit)
+        refused = 'The batch was not changed'
+        scope = self._scope(edit, refused)
         try:
             self.pages.manager.change(
                 self.label, title=edit.title, description=edit.description, scope=scope
             )
         except (KeyError, ValueError) as error:
-            raise Problem(f'The batch was not changed: {why(error)}.') from None
+            raise Problem(f'{refused}: {why(error)}.') from None
         return 'Saved.'
 
     @_locked
     def added(self, ends: Ends) -> int:
         """
         How many rows of the last scan the scope of ``ends`` holds that the
-        batch does not, with no result and no cell set by hand: those that
-        Follow reduces at its next step (:func:`~ess.apps.batch.arrived`) if
-        the batch follows when the scope is saved. Nothing for a scope of
-        keys, which a change keeps.
+        batch does not, with no result and no cell set by hand. If the scope
+        is saved while the batch follows, Follow reduces those of them that
+        are complete at its next step (:func:`~ess.apps.batch.arrived`).
+        Nothing for a scope of keys, which a change keeps.
         """
-        if (scope := self._scope(ends)) is None:
+        if (scope := self._scope(ends, 'The scope is refused')) is None:
             return 0
         rows = self.batch.rows
         held = replace(rows, scope=scope)
@@ -1039,46 +1050,93 @@ class Page:
             for r in held
         )
 
+    def _next_scope(self, key: str) -> tuple[TableRow, Scope]:
+        """
+        Row ``key``, and the scope of the next batch if it starts there: from
+        the row's index up to the stop of this batch. :class:`Problem` if this
+        batch names its rows, if the row has no index, or if it is the first
+        row of the scan that this batch holds, which would leave it none.
+        """
+        scope = self.batch.scope
+        if scope.keys is not None:
+            raise Problem('This batch names its rows, so it has no end to set.')
+        row = self._row_of(key)
+        name = self._named(row)
+        if row.index is None:
+            source = self.batch.source
+            what = 'index' if source is None else source.index_title.lower()
+            raise Problem(f'{name} has no {what}, so no batch can start at it.')
+        before = Scope(start=scope.start, stop=row.index)
+        if not any(before.holds(r) for r in self.batch.rows.scan):
+            raise Problem(
+                f'{name} is the first {self.words.one} of this batch, which would '
+                f'then hold none: select a later one.'
+            )
+        return row, Scope(start=row.index, stop=scope.stop)
+
+    @_locked
+    def moved(self, key: str) -> Moved:
+        """
+        What "Start the next batch here" at row ``key`` moves: how many rows
+        this batch shows that the next batch holds instead, and how many of
+        them have a result here, which stays under this batch's label.
+        :class:`Problem` as :meth:`start_next` refuses.
+        """
+        _, scope = self._next_scope(key)
+        moving = [r.key for r in self.batch.rows if scope.holds(r)]
+        reduced = {r.member for r in self.batch.client.records(label=self.label)}
+        return Moved(rows=len(moving), results=len(reduced.intersection(moving)))
+
     @_locked
     def start_next(self, request: Next) -> Made:
         """
         End the batch before row ``request.key``, and start the next batch
         there, called ``request.title``, with the same spec, source, columns
-        and settings, from the row's index on. Follow moves to it if this
-        batch follows.
+        and settings, from the row's index up to this batch's stop. The cells
+        set by hand and the removals of the rows that move go with them; the
+        rows added by hand stay, and so do the results, under this batch's
+        label. Follow moves to the next batch if this batch follows.
 
         The next batch is made first, so a refusal of the manager, such as of
-        an empty title, changes nothing. If this batch then cannot be ended,
-        both hold the rows from that index on, Follow stays where it is, and
-        the :class:`Problem` says so.
+        an empty title, changes nothing, and it is removed again if what was
+        set by hand cannot be given to it. If this batch then cannot be ended,
+        both hold the rows that move, Follow stays where it is, and the
+        :class:`Problem` says so.
         """
         manager = self.pages.manager
-        old = manager.headers()[self.label]
-        if old.scope.keys is not None:
-            raise Problem('This batch names its rows, so it has no end to set.')
-        row = self._row_of(request.key)
-        if (index := row.index) is None:
-            source = self.batch.source
-            what = 'index' if source is None else source.index_title.lower()
-            name = self._named(row)
-            raise Problem(f'{name} has no {what}, so no batch can start at it.')
+        row, scope = self._next_scope(request.key)
+        rows = self.batch.rows
+        moving = {r.key for r in rows.scan if scope.holds(r)}
         try:
             label = manager.create(
-                old.spec,
+                self.batch.spec.name,
                 title=request.title,
-                source=old.source,
-                columns=old.columns,
-                scope=Scope(start=index),
+                source=manager.headers()[self.label].source,
+                columns=self.batch.columns,
+                scope=scope,
                 settings=self.batch.settings,
             )
         except (KeyError, ValueError, NotKept) as error:
             raise Problem(f'The next batch was not made: {why(error)}.') from None
         try:
-            manager.change(self.label, scope=Scope(start=old.scope.start, stop=index))
+            following = manager.batch(label)  # scanned
+            following.rows = replace(
+                following.rows,
+                edits={k: v for k, v in rows.edits.items() if k in moving},
+                removed=rows.removed & moving,
+            )
+        except Exception as error:  # the scan runs code of the application
+            with suppress(NotKept):
+                manager.remove(label)
+            raise Problem(f'The next batch was not made: {why(error)}.') from None
+        try:
+            manager.change(
+                self.label, scope=Scope(start=self.batch.scope.start, stop=row.index)
+            )
         except NotKept as error:
             raise Problem(
                 f'{request.title} was made, but this batch was not ended, so both '
-                f'hold the {self.words.many} from {index} on: {error}'
+                f'hold the {self.words.many} that move: {error}'
             ) from None
         if self._follows():
             try:
