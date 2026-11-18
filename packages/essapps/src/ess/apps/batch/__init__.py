@@ -10,8 +10,8 @@ for application developers is ``packages/essapps/docs/batch.md``.
 
 from .corrections import CorrectedFiles
 from .definition import DefinitionStore, FolderDefinitions, Header, NotKept
-from .manager import BatchManager, Counts, Defaults, Source, Words, bound_spec
-from .reduction import Batch, FileInfo, RowSource, file_infos
+from .manager import BatchManager, Counts, Defaults, bound_spec
+from .reduction import Batch, FileInfo, RowSource, Source, Words, file_infos
 from .state import (
     EARLIER,
     RowState,

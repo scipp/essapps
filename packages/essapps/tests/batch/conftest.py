@@ -122,7 +122,7 @@ def batch(client: Client) -> Iterator[Batch]:
         toys.STAGED,
         columns=toys.COLUMNS,
         label='scan',
-        source=toys.pair,
+        source=toys.PAIRS,
         staged=True,
     )
     yield batch

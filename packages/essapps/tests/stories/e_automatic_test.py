@@ -9,7 +9,7 @@ from collections.abc import Callable, Sequence
 import pytest
 
 from ess.apps import Client
-from ess.apps.batch import Batch, FileInfo, Row
+from ess.apps.batch import Batch, FileInfo, Row, Source
 from ess.apps.batch.auto import Automatic
 from ess.apps.testing import FakeFiles
 from ess.spec import FileRef
@@ -30,7 +30,7 @@ def iofq_batch(client: Client) -> Batch:
         toys.IOFQ,
         columns=('sample',),
         label='iofq',
-        source=per_run,
+        source=Source(per_run, fills=('sample',)),
         persist=True,
         settings={'normalization': None},
     )
@@ -54,11 +54,11 @@ def test_e1_series_grows_reduction_follows(
         toys.STITCH,
         columns=('runs',),
         label='reflectivity',
-        source=angles,
+        source=Source(angles, fills=('runs',)),
         persist=True,
         settings={'reference': reference},
     )
-    loop = Automatic(batch, at={'runs'})
+    loop = Automatic(batch)
 
     r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
     client.wait(loop.step())
@@ -86,7 +86,7 @@ def test_e2_automatic_reduction_goes_quiet(
     upgrade: Callable[..., Client], measure: toys.Measure
 ) -> None:
     upgraded = upgrade(specs=[toys.IOFQ_V2])  # a workspace without version 1
-    loop = Automatic(iofq_batch(upgraded), at={'sample'})
+    loop = Automatic(iofq_batch(upgraded))
     measure(1, [1.0, 1.0], role='sample')
 
     assert loop.step() == {}
@@ -97,7 +97,7 @@ def test_e2_automatic_reduction_goes_quiet(
 def test_e3_reduction_of_our_own_output(
     client: Client, measure: toys.Measure, files: FakeFiles
 ) -> None:
-    loop = Automatic(iofq_batch(client), at={'sample'})
+    loop = Automatic(iofq_batch(client))
     measure(1, [1.0, 2.0, 3.0, 4.0])
     (reduced,) = loop.step().values()
     pid = client.publish(reduced.ref('iofq'), 'scicat')
@@ -109,7 +109,7 @@ def test_e3_reduction_of_our_own_output(
 def test_e4_template_improved_during_a_beamtime(
     client: Client, connect: Callable[..., Client], measure: toys.Measure
 ) -> None:
-    loop = Automatic(iofq_batch(client), at={'sample'})
+    loop = Automatic(iofq_batch(client))
     first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
     (before,) = loop.step().values()
 

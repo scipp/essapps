@@ -25,6 +25,7 @@ from ess.apps.batch import (
     Row,
     RowSource,
     Scope,
+    Source,
 )
 from ess.apps.batch.auto import Automatic, Follow, every
 from ess.apps.folder import open_folder
@@ -34,8 +35,10 @@ from ess.spec import Binding, FileRef, function_binding
 from .toys import (
     COLUMNS,
     FIND,
+    PAIRS,
     PLAIN,
     REPEATED,
+    SAMPLES,
     SERIES,
     STAGED,
     Gate,
@@ -49,11 +52,11 @@ SETTINGS: dict[str, Any] = {'binning': {'bins': 2}}
 
 @pytest.fixture
 def loop(batch: Batch) -> Automatic:
-    return Automatic(batch, at={'sample'})
+    return Automatic(batch)
 
 
 def _loop(
-    client: Any, source: RowSource = pair, definitions: DefinitionStore | None = None
+    client: Any, rows: RowSource = pair, definitions: DefinitionStore | None = None
 ) -> Automatic:
     """A loop on ``client``, which may be a fake that wraps a client."""
     batch = Batch(
@@ -61,10 +64,10 @@ def _loop(
         PLAIN,
         columns=COLUMNS,
         label='scan',
-        source=source,
+        source=replace(PAIRS, rows=rows),
         definitions=definitions,
     )
-    return Automatic(batch, at={'sample'})
+    return Automatic(batch)
 
 
 def _angles(files: Sequence[FileInfo]) -> list[Row]:
@@ -75,10 +78,13 @@ def _angles(files: Sequence[FileInfo]) -> list[Row]:
     return [Row(name, {'runs': refs}) for name, refs in runs.items()]
 
 
+ANGLES = Source(_angles, fills=('runs',))
+
+
 @pytest.fixture
 def series(client: Client) -> Automatic:
-    batch = Batch(client, SERIES, columns=('runs',), label='series', source=_angles)
-    return Automatic(batch, at={'runs'})
+    batch = Batch(client, SERIES, columns=('runs',), label='series', source=ANGLES)
+    return Automatic(batch)
 
 
 def _per_sample(files: Sequence[FileInfo]) -> list[Row]:
@@ -99,7 +105,7 @@ def _repeated(client: Client, at: set[str]) -> Automatic:
         REPEATED,
         columns=('sample_runs', 'trans_runs'),
         label='repeated',
-        source=_per_sample,
+        source=Source(_per_sample, fills=('sample_runs', 'trans_runs')),
     )
     return Automatic(batch, at=at)
 
@@ -192,11 +198,24 @@ def test_each_new_row_is_reduced_once(
     sample(2, 'sds')
     first = loop.step()
     client.wait(first)
-    sample(3, 'water')
+    sample(3, 'water', partner=False)
 
     assert list(first) == ['1', '2']
     assert list(loop.step()) == ['3']
     assert loop.step() == {}
+
+
+def test_without_at_a_row_is_reduced_again_for_a_change_at_what_the_source_fills(
+    loop: Automatic, client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    sample(1, 'water')
+    client.wait(loop.step())
+
+    transmission = fake.measure(1005, 2.0, role='transmission', sample='water')
+    (record,) = loop.step().values()
+
+    assert loop.at == {'sample', 'transmission'}
+    assert record.request.params['transmission'] == transmission
 
 
 @pytest.mark.parametrize('at', [{'offset', 'sample'}, {'offset'}])
@@ -214,7 +233,7 @@ def test_the_batch_must_have_a_source(client: Client) -> None:
     batch = Batch(client, PLAIN, columns=COLUMNS, label='scan')
 
     with pytest.raises(ValueError, match='no source'):
-        Automatic(batch, at={'sample'})
+        Automatic(batch)
 
 
 def test_a_failed_row_is_reduced_again_only_for_a_change_at_at(
@@ -266,8 +285,8 @@ def test_a_new_loop_of_any_submitter_reduces_only_the_rows_without_a_result(
     client.wait(loop.step())
     sample(2, 'sds')
 
-    batch = Batch(other, STAGED, columns=COLUMNS, label='scan', source=pair)
-    restarted = Automatic(batch, at={'sample'})
+    batch = Batch(other, STAGED, columns=COLUMNS, label='scan', source=PAIRS)
+    restarted = Automatic(batch)
 
     assert list(restarted.step()) == ['2']
 
@@ -291,10 +310,10 @@ def test_a_restart_on_the_same_folder_reduces_nothing_again(
             PLAIN,
             columns=COLUMNS,
             label='auto',
-            source=_with_first_transmission,
+            source=replace(PAIRS, rows=_with_first_transmission),
             persist=True,
         )
-        return Automatic(batch, at=set(COLUMNS))
+        return Automatic(batch)
 
     with open_folder(folder, folder_bindings) as first:
         reduced = loop(first).step()
@@ -322,9 +341,13 @@ def test_refusals_that_only_submit_finds_are_tried_again_at_every_step(
         ]
 
     batch = Batch(
-        client, PLAIN, columns=(*COLUMNS, 'offset'), label='scan', source=with_offset
+        client,
+        PLAIN,
+        columns=(*COLUMNS, 'offset'),
+        label='scan',
+        source=Source(with_offset, fills=(*PAIRS.fills, 'offset')),
     )
-    loop = Automatic(batch, at={'sample'})
+    loop = Automatic(batch)
     for run, name in [(2, 'sds'), (3, 'dmso'), (4, 'd2o')]:
         sample(run, name)
     refused = {
@@ -363,9 +386,9 @@ def test_a_refusal_that_names_no_row_refuses_every_row_of_the_step(
     with closing(Workspace(proposal='p1', files=files, bind=bind)) as storeless:
         submits = Submits(Client(storeless, submitter='anna'))
         batch = Batch(
-            submits, PLAIN, columns=COLUMNS, label='scan', source=pair, persist=True
+            submits, PLAIN, columns=COLUMNS, label='scan', source=PAIRS, persist=True
         )
-        loop = Automatic(batch, at={'sample'})
+        loop = Automatic(batch)
         sample(1, 'water')
         sample(2, 'sds')
 
@@ -407,7 +430,7 @@ def test_a_row_changed_by_hand_waits_for_a_person_then_follows_the_files(
 ) -> None:
     sample(1, 'water')
     other = fake.measure(77, 7.0, role='sample', sample='other')
-    loop = Automatic(_loop(client).batch, at=set(COLUMNS))
+    loop = _loop(client)
     batch = loop.batch
     client.wait(loop.step())
     batch.rows = batch.rows.edit('1', {'sample': other})
@@ -468,7 +491,7 @@ def test_a_record_of_another_batch_on_the_label_is_replaced_if_it_differs_at_at(
     run = sample(1, 'water')
     client.wait(loop.step())
     other = fake.measure(77, 7.0, role='sample', sample='other')
-    page = Batch(client, STAGED, columns=COLUMNS, label='scan', source=pair)
+    page = Batch(client, STAGED, columns=COLUMNS, label='scan', source=PAIRS)
     page.scan()
     page.rows = page.rows.edit('1', {'sample': other})
     client.wait(page.reduce(['1']))
@@ -537,8 +560,14 @@ def test_a_list_at_at_in_another_order_reduces_the_row_again(
         ordered = sorted(files, key=lambda f: f.metadata['run'], reverse=reverse)
         return [Row('si', {'runs': [f.ref for f in ordered]})]
 
-    batch = Batch(client, SERIES, columns=('runs',), label='series', source=runs)
-    loop = Automatic(batch, at={'runs'})
+    batch = Batch(
+        client,
+        SERIES,
+        columns=('runs',),
+        label='series',
+        source=Source(runs, fills=('runs',)),
+    )
+    loop = Automatic(batch)
     fake.measure(1, 1.0, sample='si')
     fake.measure(2, 2.0, sample='si')
     client.wait(loop.step())
@@ -552,7 +581,7 @@ def test_a_list_at_at_in_another_order_reduces_the_row_again(
 def test_refused_settings_refuse_every_ready_row_until_they_change(
     batch: Batch, client: Client, sample: Measure
 ) -> None:
-    loop = Automatic(batch, at={'sample'})
+    loop = Automatic(batch)
     sample(1, 'water')
     client.wait(loop.step())
     sample(2, 'sds')
@@ -575,7 +604,7 @@ def test_refused_settings_refuse_every_ready_row_until_they_change(
 def test_a_changed_setting_reduces_no_row_again_and_its_rows_read_outdated(
     batch: Batch, client: Client, sample: Measure
 ) -> None:
-    loop = Automatic(batch, at={'sample'})
+    loop = Automatic(batch)
     sample(1, 'water')
     client.wait(loop.step())
 
@@ -623,18 +652,10 @@ def test_a_result_of_another_spec_counts_at_the_columns_it_holds(
     assert list(loop.step()) == reduced
 
 
-def _samples(files: Sequence[FileInfo]) -> list[Row]:
-    return [
-        Row(str(f.metadata['run']), {'sample': f.ref})
-        for f in files
-        if f.metadata.get('role') == 'sample'
-    ]
-
-
 def test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before(
     client: Client, sample: Measure
 ) -> None:
-    find = Batch(client, FIND, columns=('sample',), label='find', source=_samples)
+    find = Batch(client, FIND, columns=('sample',), label='find', source=SAMPLES)
 
     def with_offset(files: Sequence[FileInfo]) -> list[Row]:
         found = {k: s.record for k, s in find.state().items() if s.record}
@@ -646,12 +667,13 @@ def test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before(
         ]
 
     reduce = Batch(
-        client, PLAIN, columns=(*COLUMNS, 'offset'), label='reduce', source=with_offset
+        client,
+        PLAIN,
+        columns=(*COLUMNS, 'offset'),
+        label='reduce',
+        source=Source(with_offset, fills=(*PAIRS.fills, 'offset')),
     )
-    loops = [
-        Automatic(find, at={'sample'}),
-        Automatic(reduce, at={'sample'}),
-    ]
+    loops = [Automatic(find), Automatic(reduce)]
     sample(1, 'water')
 
     found, reduced = (loop.step() for loop in loops)
@@ -709,8 +731,14 @@ def test_a_step_that_raises_as_a_running_record_finishes_loses_nothing(
     client: Client, fake: FakeFiles, gate: Gate
 ) -> None:
     source = Raising(_angles)
-    batch = Batch(client, SERIES, columns=('runs',), label='series', source=source)
-    loop = Automatic(batch, at={'runs'})
+    batch = Batch(
+        client,
+        SERIES,
+        columns=('runs',),
+        label='series',
+        source=replace(ANGLES, rows=source),
+    )
+    loop = Automatic(batch)
     gate.close()
     fake.measure(1, 1.0, sample='si')
     first = loop.step()
@@ -755,9 +783,9 @@ def test_a_loop_reduces_the_rows_of_the_scope_and_those_arriving_in_it(
     client: Client, sample: Measure
 ) -> None:
     batch = Batch(
-        client, PLAIN, columns=COLUMNS, label='scan', source=pair, scope=Scope(start=2)
+        client, PLAIN, columns=COLUMNS, label='scan', source=PAIRS, scope=Scope(start=2)
     )
-    loop = Automatic(batch, at={'sample'})
+    loop = Automatic(batch)
     sample(1, 'water')
     sample(2, 'oil')
 

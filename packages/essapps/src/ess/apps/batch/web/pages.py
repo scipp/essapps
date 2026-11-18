@@ -192,7 +192,7 @@ class Pages:
         Why Follow could not submit each row of ``states`` that its next step
         would submit again, by key; none unless the batch of ``label`` follows.
         """
-        source = self.manager.source(label)
+        source = self.manager.batch(label).source
         if source is None or self.follow.label != label:
             return {}
         reasons = {

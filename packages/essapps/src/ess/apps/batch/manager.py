@@ -33,13 +33,10 @@ from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from pydantic import BaseModel
-
 from ess.spec import WorkflowSpec
 
 from ..client import Client
 from ..errors import SubmitError
-from ..files import Selector
 from ..records import Template
 from .definition import (
     DefinitionStore,
@@ -52,55 +49,9 @@ from .definition import (
     settings_key,
     template_data,
 )
-from .reduction import Batch, RowSource, file_infos
+from .reduction import Batch, Source, file_infos
 from .state import RowState
 from .table import Scope
-
-
-class Words(BaseModel):
-    """What a row is called, as ``1 sample``, ``2 samples``."""
-
-    one: str = 'row'
-    many: str = 'rows'
-
-    def count(self, n: int) -> str:
-        return f'{n} {self.one if n == 1 else self.many}'
-
-
-@dataclass(frozen=True)
-class Source:
-    """
-    A source of rows that an application registers by name.
-
-    Parameters
-    ----------
-    rows:
-        Makes rows from files.
-    fills:
-        The parameters that its rows fill. They are columns of each batch of
-        it, and Follow reduces a row again for a change at them.
-    selector:
-        The files that ``rows`` is given; raw files if not given.
-    words:
-        What a row is called on the page of a batch.
-    row_name:
-        The entry of :attr:`~.table.Row.info` that names a row on the page;
-        its key if ``None``.
-    row_info:
-        Other entries of :attr:`~.table.Row.info` that the page shows as
-        columns.
-    index_title:
-        What the page calls the :attr:`~.table.Row.index` that ``rows``
-        gives, such as ``'Run'``.
-    """
-
-    rows: RowSource
-    fills: tuple[str, ...]
-    selector: Selector | None = None
-    words: Words = field(default_factory=Words)
-    row_name: str | None = None
-    row_info: tuple[str, ...] = ()
-    index_title: str = 'Index'
 
 
 @dataclass(frozen=True)
@@ -348,22 +299,15 @@ class BatchManager:
         if (batch := self._batches.get(label)) is not None:
             return batch
         header = self._headers[label]
-        source = self.source(label)
-        if source is not None and (
-            missing := sorted(set(source.fills) - set(header.columns))
-        ):
-            raise ValueError(
-                f'{label}: its source fills {missing}, which are not columns of '
-                'the batch; the source registered changed since it was made'
-            )
+        if (name := header.source) is not None and name not in self.sources:
+            raise KeyError(f'{label}: the source {name} is not registered')
         defaults = self._defaults.get(header.spec, Defaults())
         batch = Batch(
             self._client,
             bound_spec(self._client, header.spec),
             columns=header.columns,
             label=label,
-            source=None if source is None else source.rows,
-            selector=None if source is None else source.selector,
+            source=None if name is None else self.sources[name],
             staged=defaults.staged,
             persist=True,
             settings={
@@ -372,20 +316,10 @@ class BatchManager:
             definitions=self._definitions,
             scope=header.scope,
         )
-        if source is not None:
+        if batch.source is not None:
             batch.scan()
         self._batches[label] = batch
         return batch
-
-    def source(self, label: str) -> Source | None:
-        """
-        The registered source of the batch of ``label``, ``None`` if it has
-        none. Raises ``KeyError`` if no batch has the label.
-        """
-        name = self._headers[label].source
-        if name is not None and name not in self.sources:
-            raise KeyError(f'{label}: the source {name} is not registered')
-        return None if name is None else self.sources[name]
 
     def counts(self) -> Counts:
         """

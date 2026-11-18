@@ -36,6 +36,7 @@ from ess.spec import FileRef, SampleRunFile, WorkflowSpec, function_binding
 from .toys import (
     COLUMNS,
     DEFAULTS,
+    PAIRS,
     PLAIN,
     SOURCES,
     STAGED,
@@ -43,7 +44,6 @@ from .toys import (
     Measure,
     Outputs,
     Refusing,
-    pair,
 )
 
 BINS = ['binning', 'bins']
@@ -568,7 +568,7 @@ def test_a_row_reduced_by_another_spec_version_is_outdated(
         label = pages.manager.create(
             PLAIN.name, title='New', source='pairs', columns=COLUMNS
         )
-        old = Batch(client, PLAIN, columns=COLUMNS, label=label, source=pair)
+        old = Batch(client, PLAIN, columns=COLUMNS, label=label, source=PAIRS)
         old.scan()
         client.wait(old.reduce(['1']))
         page = opened(pages, label)

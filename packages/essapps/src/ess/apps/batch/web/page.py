@@ -271,20 +271,18 @@ class Page:
         What the pages share: the manager of the batch, Follow, the lock, and
         what the application gives every page.
     label:
-        The label of the batch. Its registered source says what a row is
+        The label of the batch. The source of the batch says what a row is
         called, and which entries of :attr:`Row.info` name and describe it.
     """
 
     def __init__(self, pages: Pages, label: str) -> None:
         self.pages = pages
         self.label = label
-        source = pages.manager.source(label)
+        batch = self.batch
+        source = batch.source
         self.words = Words() if source is None else source.words
         self._name = None if source is None else source.row_name
         self._info = () if source is None else source.row_info
-        # The columns at which Follow reduces a row again; None without a source.
-        self._at = None if source is None else frozenset(source.fills)
-        batch = self.batch
         self._listing = Listing(batch.client)
         model, listing = batch.spec.params, self._listing
         self.settings = self._form()
@@ -526,7 +524,7 @@ class Page:
         )
 
     def _follow(self) -> Following | None:
-        if self._at is None:
+        if (source := self.batch.source) is None:
             return None
         label, headers = self.pages.follow.label, self.pages.manager.headers()
         on = label == self.label
@@ -534,7 +532,7 @@ class Page:
             on=on,
             other=headers[label].title if not on and label in headers else None,
             interval=self.pages.follow.interval,
-            at=sorted(self._cells.titles[c] for c in self._at),
+            at=sorted(self._cells.titles[c] for c in source.fills),
             failure=self.pages.failure if on else None,
         )
 
@@ -871,7 +869,7 @@ class Page:
         Make this batch the one that follows, with a first step at once; or,
         if it follows, let none follow.
         """
-        if self._at is None:
+        if self.batch.source is None:
             raise Problem('This batch has no source, so it cannot follow the files.')
         if not on:
             if not self._follows():

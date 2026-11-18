@@ -3,6 +3,7 @@
 """A batch on a real in-process workspace with fake workflows."""
 
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,18 @@ from ess.spec import (
     function_binding,
 )
 
-from .toys import COLUMNS, FIND, PLAIN, STAGED, Gate, Measure, Outputs, pair
+from .toys import (
+    COLUMNS,
+    FIND,
+    PAIRS,
+    PLAIN,
+    SAMPLES,
+    STAGED,
+    Gate,
+    Measure,
+    Outputs,
+    pair,
+)
 
 PLAIN_V2 = PLAIN.model_copy(update={'version': 2})
 
@@ -94,7 +106,7 @@ def test_the_state_of_chosen_rows_asks_the_status_of_their_records_only(
         STAGED,
         columns=COLUMNS,
         label='scan',
-        source=pair,
+        source=PAIRS,
     )
     sample(1, 'water')
     sample(2, 'sds')
@@ -115,11 +127,20 @@ def test_a_scan_returns_the_files_its_source_got(
         got.extend(files)
         return pair(files)
 
-    batch = Batch(client, PLAIN, columns=COLUMNS, label='scan', source=source)
+    batch = Batch(
+        client, PLAIN, columns=COLUMNS, label='scan', source=replace(PAIRS, rows=source)
+    )
     run = sample(1, 'water')
 
     assert batch.scan() == got
     assert run in [f.ref for f in got]
+
+
+def test_a_batch_whose_source_fills_a_column_it_lacks_is_refused(
+    client: Client,
+) -> None:
+    with pytest.raises(ValueError, match=r"the source fills \['transmission'\]"):
+        Batch(client, PLAIN, columns=('sample',), label='scan', source=PAIRS)
 
 
 def test_a_scope_set_on_a_batch_changes_its_rows_without_a_scan(
@@ -150,7 +171,7 @@ def test_a_file_listed_late_lands_in_the_batch_by_its_index(
         PLAIN,
         columns=COLUMNS,
         label='scan',
-        source=pair,
+        source=PAIRS,
         scope=Scope(start=2, stop=10),
     )
     sample(5, 'water')
@@ -169,7 +190,7 @@ def test_a_row_in_the_scope_takes_a_partner_measured_before_it(
     before = fake.measure(1, 1.0, role='transmission', sample='water')
     sample(5, 'water', partner=False)
     batch = Batch(
-        client, PLAIN, columns=COLUMNS, label='scan', source=pair, scope=Scope(start=5)
+        client, PLAIN, columns=COLUMNS, label='scan', source=PAIRS, scope=Scope(start=5)
     )
 
     batch.scan()
@@ -194,7 +215,7 @@ def test_a_batch_starts_with_a_copy_of_the_settings_given(
     sample(1, 'water')
     given = {'binning': {'bins': 3}}
     batch = Batch(
-        client, PLAIN, columns=COLUMNS, label='s', source=pair, settings=given
+        client, PLAIN, columns=COLUMNS, label='s', source=PAIRS, settings=given
     )
     batch.scan()
     given['binning']['bins'] = 4
@@ -228,7 +249,7 @@ def test_a_reduction_compares_no_row_and_a_state_resolves_the_settings_once(
         PLAIN,
         columns=COLUMNS,
         label='scan',
-        source=pair,
+        source=PAIRS,
     )
     sample(1, 'water')
     batch.scan()
@@ -315,7 +336,7 @@ def test_a_reason_about_the_settings_is_named_once_without_a_key(
     sample(1, 'water')
     sample(2, 'sds')
     batch = Batch(
-        client, spec, columns=COLUMNS, label='s', source=pair, staged=spec is STAGED
+        client, spec, columns=COLUMNS, label='s', source=PAIRS, staged=spec is STAGED
     )
     batch.scan()
 
@@ -332,7 +353,7 @@ def test_a_binding_without_stages_works_with_staged_off(
     client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    batch = Batch(client, PLAIN, columns=COLUMNS, label='plain', source=pair)
+    batch = Batch(client, PLAIN, columns=COLUMNS, label='plain', source=PAIRS)
     batch.scan()
 
     records = batch.reduce(['1'])
@@ -433,7 +454,7 @@ def test_a_second_batch_on_the_label_reads_the_same_changed(
     scanned: Batch, client: Client
 ) -> None:
     client.wait(scanned.reduce(['1', '2']))
-    second = Batch(client, STAGED, columns=COLUMNS, label='scan', source=pair)
+    second = Batch(client, STAGED, columns=COLUMNS, label='scan', source=PAIRS)
     second.scan()
     for batch in (scanned, second):
         batch.rows = batch.rows.edit('1', {'thickness': 2.0})
@@ -572,7 +593,7 @@ def bound_twice(
     sample(1, 'water')
     sample(2, 'sds')
     with local(proposal='p1', files=changing, bind=bind) as client:  # type: ignore[arg-type]
-        old = Batch(client, PLAIN, columns=COLUMNS, label='s', source=pair)
+        old = Batch(client, PLAIN, columns=COLUMNS, label='s', source=PAIRS)
         old.scan()
         client.wait(old.reduce(['1', '2']))
         yield client, changing
@@ -584,7 +605,7 @@ def test_settings_refused_are_raised_naming_no_row(
 ) -> None:
     client, _ = bound_twice
     sample(3, 'oil')
-    batch = Batch(client, spec, columns=COLUMNS, label='s', source=pair)
+    batch = Batch(client, spec, columns=COLUMNS, label='s', source=PAIRS)
     batch.scan()
 
     batch.settings = {'binning': {'bins': 0}}
@@ -600,7 +621,7 @@ def test_a_changed_setting_is_found_when_no_result_s_files_are_known(
     bound_twice: tuple[Client, Changing],
 ) -> None:
     client, changing = bound_twice
-    batch = Batch(client, PLAIN, columns=COLUMNS, label='s', source=pair)
+    batch = Batch(client, PLAIN, columns=COLUMNS, label='s', source=PAIRS)
     batch.scan()
     changing.names |= dict.fromkeys(r.values['sample'] for r in batch.rows)
     batch.settings = OTHER_SETTINGS
@@ -671,7 +692,7 @@ def test_a_batch_reads_a_file_by_run_as_a_new_one_does_after_a_scan(
     client, changing = bound_twice
 
     def by_run() -> Batch:
-        batch = Batch(client, PLAIN, columns=COLUMNS, label='s', source=pair)
+        batch = Batch(client, PLAIN, columns=COLUMNS, label='s', source=PAIRS)
         batch.scan()
         batch.rows = batch.rows.edit('1', {'sample': file(run=1)})
         return batch
@@ -706,7 +727,7 @@ def test_a_result_of_another_spec_version_is_the_rows_result_and_outdated(
     bound_twice: tuple[Client, Changing],
 ) -> None:
     client, _ = bound_twice
-    new = Batch(client, PLAIN_V2, columns=COLUMNS, label='s', source=pair)
+    new = Batch(client, PLAIN_V2, columns=COLUMNS, label='s', source=PAIRS)
     new.scan()
     client.wait(new.reduce(['2']))
 
@@ -740,7 +761,7 @@ def test_a_result_of_a_spec_of_the_same_version_but_another_definition_is_outdat
         log=Log(kept),
     )
     with Client(reduced, submitter='anna', on_close=reduced.close) as client:
-        old = Batch(client, PLAIN, columns=COLUMNS, label='s', source=pair)
+        old = Batch(client, PLAIN, columns=COLUMNS, label='s', source=PAIRS)
         old.scan()
         client.wait(old.reduce(['1']))
     again = Workspace(
@@ -750,7 +771,7 @@ def test_a_result_of_a_spec_of_the_same_version_but_another_definition_is_outdat
         log=Log(kept),
     )
     with Client(again, submitter='anna', on_close=again.close) as client:
-        new = Batch(client, redefined, columns=COLUMNS, label='s', source=pair)
+        new = Batch(client, redefined, columns=COLUMNS, label='s', source=PAIRS)
         new.scan()
 
         state = new.state()['1']
@@ -768,7 +789,7 @@ def test_the_state_of_chosen_rows_reads_only_the_records_that_changed(
         STAGED,
         columns=COLUMNS,
         label='scan',
-        source=pair,
+        source=PAIRS,
     )
     sample(1, 'water')
     sample(2, 'sds')
@@ -824,21 +845,13 @@ def chain(client: Client, sample: Measure) -> tuple[Batch, Batch]:
     """A batch that finds an offset per sample, and one that reads it per row."""
     sample(1, 'water')
     sample(2, 'sds')
-    find = Batch(client, FIND, columns=('sample',), label='find', source=_samples)
+    find = Batch(client, FIND, columns=('sample',), label='find', source=SAMPLES)
     reduce = Batch(
-        client, PLAIN, columns=(*COLUMNS, 'offset'), label='reduce', source=pair
+        client, PLAIN, columns=(*COLUMNS, 'offset'), label='reduce', source=PAIRS
     )
     find.scan()
     reduce.scan()
     return find, reduce
-
-
-def _samples(files: Sequence[FileInfo]) -> list[Row]:
-    return [
-        Row(str(f.metadata['run']), {'sample': f.ref})
-        for f in files
-        if f.metadata.get('role') == 'sample'
-    ]
 
 
 def test_a_row_can_read_the_record_of_its_row_in_another_batch(
@@ -921,7 +934,7 @@ def test_persisting_goes_with_the_batch(files: CorrectedFiles, sample: Measure) 
     sample(1, 'water')
     with local(proposal='p1', files=files, bind=[binding], store=store) as client:
         batch = Batch(
-            client, PLAIN, columns=COLUMNS, label='s', source=pair, persist=True
+            client, PLAIN, columns=COLUMNS, label='s', source=PAIRS, persist=True
         )
         batch.scan()
         records = batch.reduce(['1'])
