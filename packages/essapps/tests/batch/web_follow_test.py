@@ -78,8 +78,8 @@ def test_a_step_shows_new_rows_and_runs_and_reduces_the_rows_that_arrived(
 
     after = page.state()
     assert after.version > before.version
-    assert page.runs().version > before.runs  # type: ignore[operator]
-    assert len(page.runs().rows) == 3
+    assert page.pages.runs().version > before.runs  # type: ignore[operator]
+    assert len(page.pages.runs().rows) == 3
     assert statuses(after) == {'water': 'running', 'oil': 'incomplete'}
     assert after.follow is not None
     assert after.follow.failure is None
@@ -97,7 +97,7 @@ def versions(page: Page) -> tuple[int, int]:
         lambda page: None,
         lambda page: page.scan(),
         lambda page: page.correct(
-            CellEdit(keys=[page.runs().rows[0].key], column='sample', value='tea')
+            CellEdit(keys=[page.pages.runs().rows[0].key], column='sample', value='tea')
         ),
     ],
     ids=['nothing', 'rescan', 'correction'],
@@ -771,7 +771,7 @@ def test_a_correction_on_another_page_moves_the_version_of_the_runs_once(
     pages.tick()
     before = pages.runs_version
 
-    run = other.runs().rows[0].key
+    run = pages.runs().rows[0].key
     other.correct(CellEdit(keys=[run], column='sample', value='tea'))
     pages.tick()
     pages.tick()

@@ -16,7 +16,7 @@ python -m ess.instruments.loki.arrivals [FOLDER] --arrive 15 [--count N] # LoKI'
 python -m ess.instruments.loki.arrivals --follow 2                      # the same, following the files, a step every 2 s
 ```
 
-Open `http://localhost:8000/`: it redirects to the page of the batch that follows, else of the last label.
+Open `http://localhost:8000/`: it redirects to the page of the batch that follows, else of the last label; with no batch at all, it shows the list of batches, to make one (see [Making a batch](#making-a-batch)).
 Each `FOLDER` is a workspace folder (`ess.apps.folder`); the demos make a temporary one if none is given, and say which.
 A folder without a batch gets one, of all sample runs; the batches and the batch that follows are kept in the folder.
 The demo needs the extra `essapps[web]`, the LoKI modules `essinstruments[loki-app]`.
@@ -72,6 +72,27 @@ A batch that cannot be counted, such as one whose source raises, shows why in it
 No poll counts, so the counts shown are those of the last count; a count that fails shows none.
 The list and the Runs view are the same on every page.
 
+## Making a batch
+
+**+ New batch** in the Batches view opens a form above the list:
+
+| Field | What it is |
+|---|---|
+| Title, Description | the header of the batch; the title is required |
+| Source | a source that the application registers (`BatchManager(sources=...)`), or "none: rows added by hand" |
+| Workflow | a spec that the workspace binds and that fits the source: a parameter for each column that the source fills; any spec without a source |
+| Columns | the columns that the source fills, fixed; the other parameters of the spec, to tick |
+| Scope | "From run … up to, not including, run …", in the source's word for the index; either end empty for no limit; not offered without a source |
+
+**Make** sends the form to `POST api/batches`, and the page goes to the page of the new batch.
+The choices come from `GET api/sources`; what can be made is decided by `BatchManager.create`, and what it refuses, such as an empty title or a stop below the start, shows at the form, with nothing made.
+A start or a stop is sent as a number if it reads as one, else as text.
+The new batch starts with the settings that the application gives its spec (`Defaults`).
+A source that no spec fits is not offered.
+
+A workspace with no batch at all serves the page at `/`, without a batch: the Batches view, with the form open, and the Runs view, which shows the runs and corrects none.
+It loads both once and polls nothing; making a batch goes to its page.
+
 ## Layers
 
 ```
@@ -85,8 +106,8 @@ api.py            HTTP: create_app(pages); each action is a POST that
    ▼
 pages.py          Pages: what the pages share, without HTTP: the manager,
                   Follow and its tick, the corrections of runs, the list of
-                  batches and its counts, one lock around every request and
-                  step
+                  batches and its counts, the runs, making a batch, one lock
+                  around every request and step
 page.py           Page: what the page of one batch does, without HTTP: the
                   settings form (a draft until Apply), the refusals, how the
                   last step of Follow went
@@ -105,7 +126,7 @@ The server answers 204 if nothing changed since `version`, and else the whole `S
 `start` is new at each start of the server; a page that sees another one loads again.
 `State.runs` counts the changes of the runs, which all pages share; the Runs view asks for `api/runs` when it moves.
 `State.batches` moves when the headers of the batches or the batch that follows change, whoever changed them; the Batches view asks for `api/batches` when it moves.
-`api/batches` and `api/batches/counts` belong to the workspace: they answer the same under any label, and at `/api/...`.
+`api/batches`, `api/batches/counts`, `api/sources` and `api/runs` belong to the workspace: they answer the same under any label, and at `/api/...`.
 
 ## How the page asks
 

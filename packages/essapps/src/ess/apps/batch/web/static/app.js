@@ -3,12 +3,17 @@
 // what a person does. Each action answers with the state after it; a poll
 // every second sees results arrive. The page keeps only what it shows: the
 // selection, the filter, the tab, the sort, and the axes, which survive a
-// reload of the page of the same batch.
+// reload of the page of the same batch. A workspace without a batch serves
+// the page at its root, without a batch (see `showWorkspace`).
 import {h, get, post, query, save} from './dom.js';
 import {Grid, cellColumns, statusColumn} from './tables.js';
 import {renderForm, summary} from './form.js';
 
 const $ = (id) => document.getElementById(id);
+
+const inBatch = /\/batches\/[^/]+\/$/.test(location.pathname);
+// The URL of the page of a batch, relative to this page.
+const batchUrl = (label) => `${inBatch ? '../' : 'batches/'}${encodeURIComponent(label)}/`;
 
 const KEPT = `batch-view ${location.pathname}`;
 const view = {
@@ -68,22 +73,22 @@ function queued(task) {
 }
 
 // Ask the server, with a body for a POST. The answer is the parsed body, or
-// null after the message of what went wrong is shown. The answer of a request
-// is also dropped, without a message, if a newer request of its `kind` was sent
-// meanwhile, or if `fresh()` says that what it was for has changed.
+// null after `say` showed the message of what went wrong. The answer of a
+// request is also dropped, without a message, if a newer request of its `kind`
+// was sent meanwhile, or if `fresh()` says that what it was for has changed.
 const sent = {};
-async function request(url, {body, kind, fresh = () => true} = {}) {
+async function request(url, {body, kind, fresh = () => true, say = showMessage} = {}) {
   const asked = kind && (sent[kind] = (sent[kind] ?? 0) + 1);
   let response;
   try {
     response = body === undefined ? await get(url) : await post(url, body);
   } catch {
-    showMessage('The server does not answer, so this was not done. Try again when it is back.');
+    say('The server does not answer, so this was not done. Try again when it is back.');
     return null;
   }
   if ((kind && sent[kind] !== asked) || !fresh()) return null;
   if (response.ok) return response.body;
-  showMessage(response.body?.message ?? `The server answered ${response.status}.`);
+  say(response.body?.message ?? `The server answered ${response.status}.`);
   return null;
 }
 
@@ -264,13 +269,17 @@ function drawRuns() {
   if (!shown) return;
   if (!runs) {
     const fields = columns.map((c) => c.title.toLowerCase()).join(' or ');
-    $('runs-hint').textContent = `Correct the ${fields} of a run. The ${words().one} table follows at once.`;
+    $('runs-hint').textContent = inBatch
+      ? `Correct the ${fields} of a run. The ${words().one} table follows at once.`
+      : `Correct the ${fields} of a run on the page of a batch.`;
+    // Without a batch, a correction would have no rows to follow, so none is offered.
+    const cells = inBatch ? columns : columns.map((c) => ({...c, editor: null}));
     runs = new Grid($('runs'), {
       columns: [
         {title: 'Run', field: 'file', minWidth: 160, widthGrow: 2},
-        ...cellColumns(columns, {
+        ...cellColumns(cells, {
           current: () => view.runData.columns,
-          revert: (key, column) => act('runs/cells/revert', {keys: [key], column}),
+          revert: inBatch ? (key, column) => act('runs/cells/revert', {keys: [key], column}) : null,
           say: showMessage,
         }),
       ],
@@ -310,18 +319,20 @@ async function countBatches() {
 function drawBatches() {
   if (!view.batchData) return;
   const counted = view.counts?.rows ?? {};
+  const none = h('tr', {}, h('td', {class: 'hint', colspan: 5, text: 'No batch yet.'}));
   $('batches').tBodies[0].replaceChildren(
+    ...(view.batchData.rows.length ? [] : [none]),
     ...view.batchData.rows.map((batch) => {
       const n = counted[batch.label];
       const failed = view.counts?.failed[batch.label];
       const all = n && Object.values(n).reduce((a, b) => a + b, 0);
       return h(
         'tr',
-        {'aria-current': batch.label === view.state.label && 'page'},
+        {'aria-current': batch.label === view.state?.label && 'page'},
         h(
           'td',
           {},
-          h('a', {href: `../${encodeURIComponent(batch.label)}/`, text: batch.title}),
+          h('a', {href: batchUrl(batch.label), text: batch.title}),
           h('small', {text: batch.label}),
           batch.description && h('div', {class: 'hint', text: batch.description}),
         ),
@@ -338,6 +349,87 @@ function drawBatches() {
   );
   const outside = Object.entries(view.counts?.outside ?? {});
   $('outside').textContent = outside.map(([source, text]) => `${text} of ${source} in no batch.`).join(' ');
+}
+
+// The form "New batch". The server says what a batch can be made with
+// (api/sources) and decides what can be made: a refusal shows at the form.
+let choices = []; // what a new batch can be made with, as last loaded
+
+async function openNewBatch() {
+  const form = $('new-batch');
+  const loaded = await request('sources');
+  if (!loaded) return;
+  choices = loaded;
+  form.reset();
+  form.elements.source.replaceChildren(
+    ...choices.map((c, i) => h('option', {value: i, text: c.name ?? 'none: rows added by hand'})),
+  );
+  chooseSource();
+  $('new-problem').textContent = '';
+  form.hidden = false;
+  $('new-batch-open').hidden = true;
+  form.elements.title.focus();
+}
+
+function closeNewBatch() {
+  $('new-batch').hidden = true;
+  $('new-batch-open').hidden = false;
+}
+
+const chosenSource = () => choices[$('new-batch').elements.source.value];
+const chosenSpec = () => chosenSource().specs[$('new-batch').elements.spec.value];
+
+// The workflows that fit the source chosen, and the scope in its words. A batch
+// without a source has only rows added by hand, which no scope leaves out.
+function chooseSource() {
+  const source = chosenSource();
+  $('new-batch').elements.spec.replaceChildren(...source.specs.map((s, i) => h('option', {value: i, text: s.title})));
+  const index = source.index_title.toLowerCase();
+  $('new-from').textContent = `From ${index}`;
+  $('new-to').textContent = `up to, not including, ${index}`;
+  $('new-scope').hidden = source.name === null;
+  $('new-settings').textContent = `The others are settings, shared by every ${source.words.one}.`;
+  chooseSpec();
+}
+
+// The parameters of the workflow chosen: those that the source fills are
+// columns, the others a person may make columns.
+function chooseSpec() {
+  const {name, fills} = chosenSource();
+  $('new-columns').replaceChildren(
+    ...(chosenSpec()?.params ?? []).map((p) => {
+      const fixed = fills.includes(p.name);
+      const box = h('input', {type: 'checkbox', name: 'column', value: p.name, checked: fixed, disabled: fixed});
+      return h('label', {title: fixed ? `Filled by ${name}` : null}, box, p.title);
+    }),
+  );
+}
+
+// An end of the scope as the index of a source holds it: a number if the text
+// reads as one, else the text; null for no limit.
+function scopeEnd(input) {
+  const text = input.value.trim();
+  if (!text) return null;
+  return Number.isFinite(Number(text)) ? Number(text) : text;
+}
+
+async function makeBatch(event) {
+  event.preventDefault();
+  const form = $('new-batch');
+  const {elements} = form;
+  const source = chosenSource();
+  const scoped = source.name !== null;
+  const body = {
+    title: elements.title.value.trim(),
+    description: elements.description.value.trim(),
+    source: source.name,
+    spec: chosenSpec()?.name ?? '',
+    columns: [...form.querySelectorAll('[name=column]:checked')].map((box) => box.value),
+    start: scoped ? scopeEnd(elements.start) : null,
+    stop: scoped ? scopeEnd(elements.stop) : null,
+  };
+  const made = await request('batches', {body, say: (text) => ($('new-problem').textContent = text)});
+  if (made) location.href = batchUrl(made.label);
 }
 
 function renderAction(action) {
@@ -691,6 +783,13 @@ function wire() {
   };
   $('rescan').onclick = () => act('scan');
   $('count').onclick = countBatches;
+  const newBatch = $('new-batch');
+  $('new-batch-open').onclick = openNewBatch;
+  newBatch.onsubmit = makeBatch;
+  newBatch.elements.source.onchange = chooseSource;
+  newBatch.elements.spec.onchange = chooseSpec;
+  newBatch.querySelector('[data-cancel]').onclick = closeNewBatch;
+  newBatch.addEventListener('keydown', (event) => event.key === 'Escape' && closeNewBatch());
   $('remove').onclick = () => {
     const added = selectedRows().filter((row) => row.added).length;
     const question = `${added} of the ${count(view.selected.length)} selected ${added === 1 ? 'was' : 'were'} added by hand and cannot be brought back. Remove?`;
@@ -777,5 +876,21 @@ function wire() {
   });
 }
 
+// The page at the root of a workspace without a batch: the Batches view, with
+// the form "New batch" open, and the Runs view, each loaded once. Nothing
+// polls: making a batch goes to its page.
+async function showWorkspace() {
+  document.body.classList.add('no-batch');
+  showPage('batches');
+  openNewBatch();
+  await loadBatches();
+  if (!view.batchData) return;
+  const {application, runs} = view.batchData;
+  if (application) document.title = $('title').textContent = application;
+  document.querySelector('[data-view="runs"]').hidden = runs === null;
+  if (runs !== null) loadRuns();
+}
+
 wire();
-poll();
+if (inBatch) poll();
+else showWorkspace();

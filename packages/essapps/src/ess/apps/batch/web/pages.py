@@ -12,9 +12,15 @@ the batches of the manager, changes in one request at a time. One person
 works with the application, so a request waits for at most one step, or for
 the counts (:meth:`Pages.counts`), which scan every batch.
 
-The runs are the same on every page. A correction made on one page scans its
-batch at once; the page of each other batch scans its batch at its next poll
-(:attr:`Pages.corrected`), and says once if that scan fails.
+The runs are the same on every page (:meth:`Pages.runs`). A correction made
+on one page scans its batch at once; the page of each other batch scans its
+batch at its next poll (:attr:`Pages.corrected`), and says once if that scan
+fails.
+
+A person makes a batch from the list of batches, of the sources and specs
+that :meth:`Pages.sources` offers (:meth:`Pages.create`); the manager decides
+what can be made. With no batch at all, the page is served without one: it
+shows the list of batches and the runs.
 
 Follow is the one loop of the application
 (:class:`~ess.apps.batch.auto.Follow`). :meth:`Pages.tick` steps it, with or
@@ -27,19 +33,44 @@ from __future__ import annotations
 
 import threading
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from typing import Any
 
 from pydantic import BaseModel
 
-from ess.spec import FileRef
+from ess.spec import FileRef, WorkflowSpec, field_types
 
-from .. import BatchManager, CorrectedFiles, RowState, Scope, Words, refused_again
+from ...fields import UNSET, Fields
+from ...files import Selector
+from ...listing import Listing
+from .. import (
+    BatchManager,
+    CorrectedFiles,
+    NotKept,
+    RowState,
+    Scope,
+    Words,
+    bound_spec,
+    refused_again,
+)
 from ..auto import Follow
 from . import forms
-from .models import BatchCounts, Batches, BatchRow
-from .page import Draw, Page, Problem, page_statuses
+from .models import (
+    BatchCounts,
+    Batches,
+    BatchRow,
+    Cell,
+    Column,
+    Made,
+    NewBatch,
+    Param,
+    RunRow,
+    Runs,
+    SourceChoice,
+    SpecChoice,
+)
+from .page import Draw, Page, Problem, page_statuses, why
 
 
 class Missing(Exception):
@@ -104,6 +135,8 @@ class Pages:
         self.runs_version = 1
         # The runs, with their metadata, as listed at the last version.
         self._runs: Mapping[FileRef, Mapping[str, Any]] = {}
+        # What the Runs view names files and values by, listed again for each.
+        self._listing: Listing | None = None
         # The batches and the label that follows, as listed at the last version.
         self._batches: tuple[object, ...] = ()
         self._batches_version = 0
@@ -173,6 +206,48 @@ class Pages:
             self._runs = runs
             self.runs_version += 1
 
+    def runs(self) -> Runs:
+        """
+        The runs, with what a person corrected of each, as the Runs view of
+        every page shows them, and that of the page without a batch. Raises
+        :class:`~.page.Problem` if the application corrects no runs.
+        """
+        with self.lock:
+            if self.marks is None or self.files is None:
+                raise Problem('This application corrects no runs.')
+            files = self.files
+            listing = Listing(self.manager.client, previous=self._listing)
+            self._listing = listing
+            marks = Fields(self.marks, listing)
+
+            def text(value: Any) -> str:
+                return '' if value is UNSET else listing.text(value)
+
+            rows = []
+            for ref in files.list(Selector()):
+                metadata = files.metadata(ref)
+                original = files.source.metadata(ref)
+                corrected = files.corrections(ref)
+                cells = {
+                    name: Cell(
+                        value=forms.cell(field, metadata.get(name, UNSET)),
+                        text=text(metadata.get(name, UNSET)),
+                        edited=name in corrected,
+                        scanned=text(original.get(name, UNSET)),
+                    )
+                    for name, field in marks.fields.items()
+                }
+                label = listing.file_label(ref)
+                rows.append(RunRow(key=ref.file, file=label, cells=cells))
+            return Runs(
+                version=self.runs_version,
+                columns=[
+                    Column(name=n, title=marks.titles[n], editor=forms.editor(f))
+                    for n, f in marks.fields.items()
+                ],
+                rows=rows,
+            )
+
     def batches_version(self) -> int:
         """
         The version of the list of batches, so that the Batches view of each
@@ -221,7 +296,71 @@ class Pages:
                         follows=label == self.follow.label,
                     )
                 )
-            return Batches(version=self.batches_version(), rows=rows)
+            return Batches(
+                version=self.batches_version(),
+                application=self.title,
+                runs=(
+                    None
+                    if self.marks is None or self.files is None
+                    else self.runs_version
+                ),
+                rows=rows,
+            )
+
+    def sources(self) -> list[SourceChoice]:
+        """
+        What a new batch can be made with: each registered source that a spec
+        fits, then no source, which every spec fits, each with the specs that
+        fit it. The specs are those that the workspace binds, of the version
+        that :meth:`~ess.apps.batch.BatchManager.create` takes.
+        """
+        with self.lock:
+            client = self.manager.client
+            names = dict.fromkeys(spec.name for spec in client.specs())
+            specs = [bound_spec(client, name) for name in names]
+
+            def choice(
+                name: str | None, fills: Sequence[str], words: Words, index_title: str
+            ) -> SourceChoice:
+                fit = [
+                    _spec_choice(spec, fills)
+                    for spec in specs
+                    if set(fills) <= spec.params.model_fields.keys()
+                ]
+                return SourceChoice(
+                    name=name,
+                    fills=list(fills),
+                    words=words,
+                    index_title=index_title,
+                    specs=fit,
+                )
+
+            given = [
+                choice(name, s.fills, s.words, s.index_title)
+                for name, s in self.manager.sources.items()
+            ]
+            return [c for c in given if c.specs] + [choice(None, (), Words(), '')]
+
+    def create(self, new: NewBatch) -> Made:
+        """
+        Make the batch of ``new`` with the manager
+        (:meth:`~ess.apps.batch.BatchManager.create`), with the settings that
+        the application gives its spec. Raises :class:`~.page.Problem` with
+        what the manager refuses.
+        """
+        with self.lock:
+            try:
+                label = self.manager.create(
+                    new.spec,
+                    title=new.title,
+                    source=new.source,
+                    columns=new.columns,
+                    description=new.description,
+                    scope=Scope(start=new.start, stop=new.stop),
+                )
+            except (KeyError, ValueError, NotKept) as error:
+                raise Problem(f'The batch was not made: {why(error)}.') from None
+            return Made(label=label)
 
     def counts(self) -> BatchCounts:
         """
@@ -247,6 +386,17 @@ class Pages:
                     for name, n in counts.outside.items()
                 },
             )
+
+
+def _spec_choice(spec: WorkflowSpec[Any, Any], fills: Sequence[str]) -> SpecChoice:
+    """``spec`` as a choice of the source that fills ``fills``."""
+    fields = spec.params.model_fields
+    names = [*fills, *(n for n in fields if n not in fills)]
+    return SpecChoice(
+        name=spec.name,
+        title=spec.title,
+        params=[Param(name=n, title=field_types.title(n, fields[n])) for n in names],
+    )
 
 
 def _scope_text(scope: Scope, index: str, words: Words) -> str:

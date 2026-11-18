@@ -19,6 +19,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from ..reduction import Words
+from ..table import Index
 
 
 class Way(BaseModel):
@@ -252,8 +253,48 @@ class BatchRow(BaseModel):
 
 
 class Batches(BaseModel):
+    """
+    The batches; and for the page without a batch, the title of the
+    application, and the version of the runs, as :class:`State` has them.
+    """
+
     version: int
+    application: str
+    runs: int | None
     rows: list[BatchRow]
+
+
+class Param(BaseModel):
+    """A parameter of a spec, by name, with its title."""
+
+    name: str
+    title: str
+
+
+class SpecChoice(BaseModel):
+    """
+    A spec that a new batch can be of, by name, with its title, and its
+    parameters, those that the source fills first.
+    """
+
+    name: str
+    title: str
+    params: list[Param]
+
+
+class SourceChoice(BaseModel):
+    """
+    A source that a new batch can be made with, by name, ``None`` for rows
+    added by hand only; the parameters that it fills, which are columns of
+    every batch of it; what it calls a row, and the index of a row; and the
+    specs that fit it, those that have a parameter for each that it fills.
+    """
+
+    name: str | None
+    fills: list[str]
+    words: Words
+    index_title: str
+    specs: list[SpecChoice]
 
 
 class BatchCounts(BaseModel):
@@ -317,3 +358,25 @@ class Reduce(BaseModel):
 
 class On(BaseModel):
     on: bool
+
+
+class NewBatch(BaseModel):
+    """
+    Make a batch, as :meth:`~ess.apps.batch.BatchManager.create` takes it:
+    ``columns`` are all columns, and ``start`` and ``stop`` the ends of its
+    scope, ``None`` for an open end.
+    """
+
+    title: str
+    description: str = ''
+    source: str | None = None
+    spec: str
+    columns: list[str]
+    start: Index | None = None
+    stop: Index | None = None
+
+
+class Made(BaseModel):
+    """The label of the batch made."""
+
+    label: str

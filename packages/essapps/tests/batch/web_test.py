@@ -24,8 +24,11 @@ from ess.apps.batch import (
     Batch,
     BatchManager,
     CorrectedFiles,
+    Defaults,
     DefinitionStore,
+    Header,
     Scope,
+    Source,
 )
 from ess.apps.batch.auto import Follow
 from ess.apps.batch.definition import Key, NotKept, settings_key
@@ -44,6 +47,7 @@ from .toys import (
     Measure,
     Outputs,
     Refusing,
+    pair,
 )
 
 BINS = ['binning', 'bins']
@@ -1303,6 +1307,7 @@ def form(files: CorrectedFiles, definitions: DefinitionStore) -> Iterator[TestCl
 def test_a_correction_whose_scan_fails_says_that_it_was_kept(
     http: TestClient, files: CorrectedFiles, fake: FakeFiles
 ) -> None:
+    state(http)  # the page is made while the files can be listed
     (run, *_) = http.get('/api/runs').json()['rows']
     fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
 
@@ -1452,14 +1457,12 @@ def test_the_root_redirects_to_the_batch_that_follows_else_the_last(
 ) -> None:
     http = TestClient(create_app(pages), follow_redirects=False)
 
-    empty = http.get('/')
     for label in ('a', 'b'):
         manager.create(STAGED.name, title=label, source='pairs', label=label)
     last = http.get('/')
     pages.follow.on('a')
     following = http.get('/')
 
-    assert empty.status_code == 404
     assert (last.status_code, last.headers['location']) == (307, 'batches/b/')
     assert following.headers['location'] == 'batches/a/'
 
@@ -1678,3 +1681,157 @@ def test_the_rows_removed_that_a_page_counts_are_those_of_its_scope(
     manager.change('scan', scope=Scope(start=2))
 
     assert state(http)['removed'] == 1
+
+
+# Making a batch
+
+STAGED_PARAMS = [
+    {'name': 'sample', 'title': 'Sample'},
+    {'name': 'transmission', 'title': 'Transmission'},
+    {'name': 'binning', 'title': 'Binning'},
+    {'name': 'thickness', 'title': 'Thickness'},
+    {'name': 'offset', 'title': 'Offset'},
+]
+
+
+def new_batch(**given: Any) -> dict[str, Any]:
+    """What the form "New batch" sends for a batch of the rows of ``pairs``."""
+    return {
+        'title': 'Afternoon',
+        'source': 'pairs',
+        'spec': STAGED.name,
+        'columns': ['sample', 'transmission'],
+    } | given
+
+
+def test_the_sources_offer_the_specs_that_fit_and_their_parameters(
+    pages: Pages,
+) -> None:
+    pairs, none = TestClient(create_app(pages)).get('/api/sources').json()
+
+    assert pairs == {
+        'name': 'pairs',
+        'fills': ['sample', 'transmission'],
+        'words': {'one': 'row', 'many': 'rows'},
+        'index_title': 'Run',
+        'specs': [
+            {'name': 'staged', 'title': 'Staged', 'params': STAGED_PARAMS},
+            {'name': 'plain', 'title': 'Plain', 'params': STAGED_PARAMS},
+        ],
+    }
+    assert (none['name'], none['fills'], none['index_title']) == (None, [], '')
+    assert [s['name'] for s in none['specs']] == [
+        'staged',
+        'plain',
+        'find',
+        'series',
+        'repeated',
+    ]
+    assert [p['name'] for p in none['specs'][0]['params']] == [
+        'binning',
+        'sample',
+        'transmission',
+        'thickness',
+        'offset',
+    ]
+
+
+def test_a_source_that_no_spec_fits_is_not_offered_and_no_source_always_is(
+    client: Client, definitions: DefinitionStore
+) -> None:
+    odd = Source(pair, fills=('sample', 'background'))
+    manager = BatchManager(client, sources={'odd': odd}, definitions=definitions)
+
+    pages = Pages(manager, Follow(manager, definitions))
+    offered = TestClient(create_app(pages)).get('/api/sources').json()
+
+    assert [s['name'] for s in offered] == [None]
+
+
+def test_a_batch_made_from_the_page_is_listed_with_what_the_form_sent(
+    http: TestClient, pages: Pages, manager: BatchManager
+) -> None:
+    before = state(http)['batches']
+    sent = new_batch(
+        description='Thicker cells',
+        columns=['sample', 'transmission', 'thickness'],
+        start=2,
+        stop=3,
+    )
+
+    made = http.post('/api/batches', json=sent).json()
+
+    assert manager.headers()[made['label']] == Header(
+        spec=STAGED.name,
+        columns=('sample', 'transmission', 'thickness'),
+        source='pairs',
+        title='Afternoon',
+        description='Thicker cells',
+        scope=Scope(start=2, stop=3),
+    )
+    assert list(rows(opened(pages, made['label']))) == ['2']
+    assert state(http)['batches'] > before
+
+
+def test_a_batch_made_from_the_page_starts_with_the_settings_of_its_spec(
+    client: Client, definitions: DefinitionStore
+) -> None:
+    defaults = {STAGED.name: Defaults(settings={'binning': {'bins': 5}})}
+    manager = BatchManager(
+        client, sources=SOURCES, definitions=definitions, defaults=defaults
+    )
+    pages = Pages(manager, Follow(manager, definitions))
+
+    made = TestClient(create_app(pages)).post('/api/batches', json=new_batch())
+
+    assert form_bins(state(opened(pages, made.json()['label']))) == 5
+
+
+def test_a_batch_without_a_source_is_made_with_the_columns_sent(
+    pages: Pages, manager: BatchManager
+) -> None:
+    sent = new_batch(source=None, spec='find', columns=['sample'])
+
+    made = TestClient(create_app(pages)).post('/api/batches', json=sent).json()
+
+    header = manager.headers()[made['label']]
+    assert (header.source, header.spec, header.columns) == (None, 'find', ('sample',))
+
+
+@pytest.mark.parametrize(
+    ('given', 'said'),
+    [
+        ({'title': ''}, 'a batch has a title that is not empty'),
+        ({'start': 5, 'stop': 2}, 'the stop of a scope, 2, is below its start, 5'),
+        ({'start': 5, 'stop': 'b'}, 'the ends of a scope do not compare: 5, '),
+        ({'columns': ['sample']}, 'the source fills'),
+        ({'columns': ['sample', 'transmission', 'mass']}, 'no parameters'),
+        ({'spec': 'find', 'columns': ['sample', 'transmission']}, 'no parameters'),
+        ({'spec': 'other'}, 'the workspace binds no spec other'),
+    ],
+    ids=['title', 'stop', 'compare', 'fills', 'column', 'fit', 'spec'],
+)
+def test_what_the_manager_refuses_answers_422_and_makes_no_batch(
+    pages: Pages, manager: BatchManager, given: dict[str, Any], said: str
+) -> None:
+    answer = TestClient(create_app(pages)).post('/api/batches', json=new_batch(**given))
+
+    assert answer.status_code == 422
+    assert answer.json()['message'].startswith('The batch was not made: ')
+    assert said in answer.json()['message']
+    assert manager.headers() == {}
+
+
+def test_the_root_without_a_batch_serves_the_page_and_the_routes_of_the_workspace(
+    pages: Pages, sample: Measure
+) -> None:
+    sample(1, 'water')
+    http = TestClient(create_app(pages))
+
+    page = http.get('/')
+
+    assert page.status_code == 200
+    assert page.headers['content-type'].startswith('text/html')
+    assert http.get('/static/app.js').status_code == 200
+    assert http.get('/api/batches').json()['rows'] == []
+    assert len(http.get('/api/runs').json()['rows']) == 2

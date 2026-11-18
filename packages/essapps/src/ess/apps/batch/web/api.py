@@ -17,8 +17,9 @@ the query, never in the path, since a key may hold any character; the keys of
 many rows go in the body, since a URL has a limit. A label is one
 segment of a path (:func:`~ess.apps.batch.manager.check_label`). The page asks
 for ``api/...`` relative to its own URL, and ``/`` redirects to a page by a
-relative URL, so the app can be mounted under a path prefix. Answers are
-gzipped for a client that accepts it.
+relative URL, so the app can be mounted under a path prefix. With no batch,
+``/`` is the page without a batch, which asks for the routes of the
+workspace only. Answers are gzipped for a client that accepts it.
 """
 
 import itertools
@@ -33,7 +34,6 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
-    PlainTextResponse,
     RedirectResponse,
     Response,
 )
@@ -48,11 +48,14 @@ from .models import (
     Edit,
     Key,
     Keys,
+    Made,
+    NewBatch,
     On,
     Plot,
     Reduce,
     RowDetail,
     Runs,
+    SourceChoice,
     State,
 )
 from .page import Page, Problem
@@ -74,7 +77,8 @@ def create_app(pages: Pages) -> FastAPI:
     """
     The JSON API of the batches of ``pages`` and the page that uses it, at
     ``/batches/<label>/``; ``/`` redirects to the page of
-    :meth:`Pages.home <.pages.Pages.home>`. ``/docs`` lists the API. The page
+    :meth:`Pages.home <.pages.Pages.home>`, or is the page without a batch if
+    there is none. ``/docs`` lists the API. The page
     loads libraries that ``sh static/vendor.sh`` fetches into
     ``static/vendor``.
 
@@ -108,7 +112,7 @@ def create_app(pages: Pages) -> FastAPI:
     def home() -> Response:
         label = pages.home()
         if label is None:
-            return PlainTextResponse('This workspace has no batch.', status_code=404)
+            return FileResponse(STATIC / 'index.html')
         return RedirectResponse(f'batches/{quote(label, safe="")}/')
 
     # The routes of the page of one batch, by its label. FastAPI reads the
@@ -196,10 +200,6 @@ def create_app(pages: Pages) -> FastAPI:
         """What the result of row ``key`` was reduced with."""
         return page.row(key)
 
-    @batch.get('/api/runs')
-    def runs(page: PageOfLabel) -> Runs:
-        return page.runs()
-
     @batch.post('/api/plot')
     def plot(page: PageOfLabel, body: Keys) -> Plot:
         """The plot of the results of the rows ``keys``, or of the first ones."""
@@ -245,8 +245,22 @@ def create_app(pages: Pages) -> FastAPI:
         """The rows of each batch by status; it scans every batch."""
         return pages.counts()
 
+    @workspace.post('/api/batches')
+    def create(body: NewBatch) -> Made:
+        return pages.create(body)
+
+    @workspace.get('/api/sources')
+    def sources() -> list[SourceChoice]:
+        """What a new batch can be made with."""
+        return pages.sources()
+
+    @workspace.get('/api/runs')
+    def runs() -> Runs:
+        return pages.runs()
+
     app.include_router(batch)
     app.include_router(workspace)
     app.include_router(workspace, prefix='/batches/{label}')
     app.mount('/batches/{label}/static', StaticFiles(directory=STATIC), name='static')
+    app.mount('/static', StaticFiles(directory=STATIC), name='static-home')
     return app

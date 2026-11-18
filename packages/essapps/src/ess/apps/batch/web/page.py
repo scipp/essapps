@@ -134,8 +134,6 @@ from .models import (
     Refused,
     Row,
     RowDetail,
-    RunRow,
-    Runs,
     State,
 )
 
@@ -204,7 +202,7 @@ def _say(title: str, message: str) -> str:
     return f'{title}: {message}'
 
 
-def _why(error: Exception) -> str:
+def why(error: Exception) -> str:
     """What an exception of a request says, without its type or quotes."""
     if isinstance(error, ValidationError):
         return '; '.join(
@@ -760,7 +758,7 @@ class Page:
         try:
             return forms.read(fields.fields[edit.column], edit.value)
         except (KeyError, ValueError) as error:
-            raise Problem(_say(fields.titles[edit.column], _why(error))) from None
+            raise Problem(_say(fields.titles[edit.column], why(error))) from None
 
     @_action
     def edit(self, edit: CellEdit) -> str:
@@ -906,7 +904,7 @@ class Page:
         try:
             forms.apply(self.settings, edit)
         except (KeyError, ValueError) as error:
-            raise Problem(_why(error)) from None
+            raise Problem(why(error)) from None
 
     @_action
     def apply_settings(self) -> str:
@@ -1035,35 +1033,6 @@ class Page:
             raise Problem('This application corrects no runs.')
         return self._marks, self.pages.files
 
-    @_locked
-    def runs(self) -> Runs:
-        """The runs, with what a person corrected of each."""
-        marks, files = self._marked()
-        rows = []
-        for ref in files.list(Selector()):
-            metadata = files.metadata(ref)
-            original = files.source.metadata(ref)
-            corrected = files.corrections(ref)
-            cells = {
-                name: Cell(
-                    value=forms.cell(field, metadata.get(name, UNSET)),
-                    text=self._text(metadata.get(name, UNSET)),
-                    edited=name in corrected,
-                    scanned=self._text(original.get(name, UNSET)),
-                )
-                for name, field in marks.fields.items()
-            }
-            label = self._listing.file_label(ref)
-            rows.append(RunRow(key=ref.file, file=label, cells=cells))
-        return Runs(
-            version=self.pages.runs_version,
-            columns=[
-                Column(name=n, title=marks.titles[n], editor=forms.editor(f))
-                for n, f in marks.fields.items()
-            ],
-            rows=rows,
-        )
-
     def _rescan(self) -> str:
         """
         Show the runs as corrected now, and the rows made from them; say what
@@ -1132,7 +1101,7 @@ class Page:
                 except NotKept:
                     raise  # a fault of the definitions, not of the file
                 except (OSError, ValueError, KeyError) as error:
-                    raise Problem(f'Cannot load {name}: {_why(error)}') from None
+                    raise Problem(f'Cannot load {name}: {why(error)}') from None
         finally:
             # The scan and the rows set may name files that the listing lacks,
             # even if the table is then refused.
@@ -1164,7 +1133,7 @@ class Page:
         try:
             self._fill(checked_settings(self.batch, template))
         except (ValueError, KeyError) as error:
-            raise Problem(f'{cannot} {forms.message(_why(error))}.') from None
+            raise Problem(f'{cannot} {forms.message(why(error))}.') from None
         return f'The form shows the settings of {name}. Apply to use them.'
 
     @_locked

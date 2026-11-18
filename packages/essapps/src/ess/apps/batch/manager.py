@@ -166,7 +166,7 @@ class BatchManager:
         definitions: DefinitionStore,
         defaults: Mapping[str, Defaults] | None = None,
     ) -> None:
-        self._client = client
+        self.client = client
         self.sources = sources
         self._definitions = definitions
         self._defaults = {} if defaults is None else defaults
@@ -239,7 +239,7 @@ class BatchManager:
         check_label(label)
         if self._taken(label):
             raise ValueError(f'{label}: the label has definitions or records')
-        bound = bound_spec(self._client, spec)
+        bound = bound_spec(self.client, spec)
         registered = None if source is None else self.sources[source]
         fills = () if registered is None else registered.fills
         columns = fills if columns is None else tuple(columns)
@@ -274,7 +274,7 @@ class BatchManager:
     def _taken(self, label: str) -> bool:
         """Whether ``label`` has definitions or records."""
         return label in self._definitions.labels() or bool(
-            self._client.records(label=label)
+            self.client.records(label=label)
         )
 
     def headers(self) -> dict[str, Header]:
@@ -301,8 +301,8 @@ class BatchManager:
             raise KeyError(f'{label}: the source {name} is not registered')
         defaults = self._defaults.get(header.spec, Defaults())
         batch = Batch(
-            self._client,
-            bound_spec(self._client, header.spec),
+            self.client,
+            bound_spec(self.client, header.spec),
             columns=header.columns,
             label=label,
             source=None if name is None else self.sources[name],
@@ -356,7 +356,7 @@ class BatchManager:
             source = self.sources[name]
             if name not in made:
                 with suppress(Exception):  # a source is code of the application
-                    infos = file_infos(self._client, source.selector)
+                    infos = file_infos(self.client, source.selector)
                     made[name] = {row.key for row in source.rows(infos)}
             if name in made:
                 outside[name] = len(made[name] - keys)

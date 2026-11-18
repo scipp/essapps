@@ -869,3 +869,79 @@ def test_a_batch_that_could_not_be_counted_shows_why_in_its_row(page: Any) -> No
     page.click('[data-view=batches]')
 
     page.wait_for_selector('#batches td.bad:text-is("half written")')
+
+
+# Making a batch
+
+
+def fill_new_batch(page: Any, title: str, start: str = '', stop: str = '') -> None:
+    """Fill the form "New batch", open, for a batch with the column Thickness."""
+    page.fill('#new-title', title)
+    page.check('#new-columns input[value=thickness]')
+    page.fill('#new-start', start)
+    page.fill('#new-batch [name=stop]', stop)
+
+
+def test_a_person_makes_a_batch_and_lands_on_its_page(
+    page: Any, manager: BatchManager
+) -> None:
+    page.click('[data-view=batches]')
+    page.click('#new-batch-open')
+    assert page.is_checked('#new-columns input[value=sample]')
+    assert page.is_disabled('#new-columns input[value=sample]')
+
+    fill_new_batch(page, 'Afternoon', start='2')
+    page.click('#new-batch [type=submit]')
+
+    page.wait_for_selector('#title:has-text("Afternoon")')
+    (label,) = (k for k, h in manager.headers().items() if h.title == 'Afternoon')
+    assert page.url.endswith(f'/batches/{label}/')
+    header = manager.headers()[label]
+    assert header.columns == ('sample', 'transmission', 'thickness')
+    assert header.scope == Scope(start=2)
+
+
+def test_a_refusal_of_the_manager_shows_at_the_form_and_makes_nothing(
+    page: Any, manager: BatchManager
+) -> None:
+    page.click('[data-view=batches]')
+    page.click('#new-batch-open')
+
+    fill_new_batch(page, 'Backwards', start='3', stop='2')
+    page.click('#new-batch [type=submit]')
+
+    page.wait_for_selector('#new-problem:has-text("below its start")')
+    assert page.is_hidden('#message')
+    assert [h.title for h in manager.headers().values()] == ['Scan']
+    assert all('status of 422' in e for e in page.errors)
+    page.errors.clear()
+
+
+@pytest.fixture
+def no_batch(browser: Any, pages: Pages, sample: Measure) -> Iterator[Any]:
+    """The page at the root of a workspace without a batch."""
+    sample(1, 'water')
+    with serve(create_app(pages)) as url:
+        page = browser.new_page(viewport={'width': 1440, 'height': 900})
+        errors: list[str] = []
+        page.on('pageerror', lambda e: errors.append(str(e)))
+        page.goto(url)
+        page.wait_for_selector('#new-batch:not([hidden])')
+        yield page
+        page.close()
+    assert errors == []
+
+
+def test_the_root_without_a_batch_shows_the_batches_and_runs_and_makes_one(
+    no_batch: Any, manager: BatchManager
+) -> None:
+    assert no_batch.is_hidden('[data-view=samples]')
+    assert no_batch.is_hidden('.right')
+    no_batch.wait_for_selector('[data-view=runs] .n:text-is("2")')
+
+    fill_new_batch(no_batch, 'First')
+    no_batch.click('#new-batch [type=submit]')
+
+    no_batch.wait_for_selector('#rows .tabulator-row:has-text("water")')
+    (label,) = manager.headers()
+    assert no_batch.url.endswith(f'/batches/{label}/')

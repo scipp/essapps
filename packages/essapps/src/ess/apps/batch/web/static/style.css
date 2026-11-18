@@ -432,6 +432,29 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .list .follows { color: var(--done); font-weight: 600; }
 .list .bad { color: var(--bad); }
 #outside { padding: 8px; }
+.new-batch {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+  background: #f7f8fa;
+}
+.new-batch .field > :first-child { color: var(--muted); }
+.new-batch .field > input, .new-batch .field > select { max-width: 420px; }
+.new-batch .field > small { grid-column: 2; }
+.new-batch .problem { margin: 0 0 0 162px; color: var(--bad); }
+.new-batch .problem:empty { display: none; }
+.new-batch .buttons { display: flex; gap: 8px; margin-left: 162px; }
+.columns { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.columns label { display: inline-flex; align-items: center; gap: 4px; }
+.scope { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.scope input { width: 100px; }
+
+/* The page without a batch: the Batches and Runs views only */
+
+.no-batch [data-view="samples"], .no-batch #files, .no-batch main .right { display: none; }
+.no-batch main { grid-template-columns: minmax(0, 1fr); }
 
 /* The right region */
 
