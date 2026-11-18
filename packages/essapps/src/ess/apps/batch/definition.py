@@ -4,23 +4,29 @@
 Where the definition of batches is kept: what a person makes of them, so that a
 batch made again, after a restart or in another process, has it.
 
-The definition is three tables, each with one writer:
+The definition is these tables, each with one writer:
 
     corrections   metadata of a file set by hand, by file     CorrectedFiles
     edits         cells set, rows added or removed, by key    Batch.rows
     settings      the parameters that are not columns         Batch.settings
+    header        the title, description and source of a batch  the manager
+    following     the label of the batch that follows         the manager
 
 The corrections are about files, and every batch of a workspace reads the
 files through one :class:`~.corrections.CorrectedFiles`, so a workspace has
-one table of them. The edits and the settings are of a label. A
-:class:`DefinitionStore`, *the definitions*, keeps each table as plain data
-under a key::
+one table of them. The following label is the workspace's too. The edits, the
+settings and the header are of a label. A :class:`DefinitionStore`, *the
+definitions*, keeps each table as plain data under a key::
 
     ('corrections',)
+    ('following',)
     ('labels', label, 'edits')
     ('labels', label, 'settings')
+    ('labels', label, 'header')
 
 and its writer saves it whole at each change, and reads it when it is made.
+It can forget a table (``delete``) and list the labels that have a table
+(``labels``).
 Only :class:`FolderDefinitions` knows that the definitions are files. A batch
 and a file source without definitions keep their tables in memory.
 
@@ -32,6 +38,8 @@ The plain data of each table, as the functions below give and read it::
                    'cleared': {'60339': ['sample_transmission']},
                    'removed': ['60340']}
     settings      the template of the settings, as a template file holds it
+    header        {'title': 'Sample runs', 'description': '', 'source': 'sample-runs'}
+    following     {'label': '20261118-130204'}, or {'label': None}
 
 A value is in the JSON form that a record holds, a file as
 ``{'@ref': 'file', 'file': 'pid:...'}``. The edits hold only what was set by
@@ -46,9 +54,11 @@ from __future__ import annotations
 import os
 import tempfile
 from collections.abc import Callable, Mapping
+from contextlib import suppress
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from pydantic import TypeAdapter, ValidationError
 from pydantic_core import from_json, to_json
@@ -63,6 +73,7 @@ type Key = tuple[str, ...]
 """Names a table: ``('corrections',)``, or ``('labels', label, part)``."""
 
 CORRECTIONS: Key = ('corrections',)
+FOLLOWING: Key = ('following',)
 
 
 def edits_key(label: str) -> Key:
@@ -71,6 +82,10 @@ def edits_key(label: str) -> Key:
 
 def settings_key(label: str) -> Key:
     return ('labels', label, 'settings')
+
+
+def header_key(label: str) -> Key:
+    return ('labels', label, 'header')
 
 
 class NotKept(OSError):
@@ -91,6 +106,14 @@ class DefinitionStore(Protocol):
 
     def save(self, key: Key, data: Any) -> None: ...
 
+    def delete(self, key: Key) -> None:
+        """Forget the table of ``key``; nothing if none is kept."""
+        ...
+
+    def labels(self) -> list[str]:
+        """The labels that have at least one table kept, sorted."""
+        ...
+
 
 _NAME_MAX = 255
 """The bytes of a file name, on the file systems of Linux and macOS."""
@@ -104,6 +127,8 @@ class FolderDefinitions:
         definitions/corrections.json
         definitions/labels/auto%2Fiofq/edits.json
         definitions/labels/auto%2Fiofq/settings.json
+        definitions/labels/auto%2Fiofq/header.json
+        definitions/following.json
 
     Each name of a key is a folder or a file, with ``/``, ``%`` and ``.``
     written as ``%2F``, ``%25`` and ``%2E``, so that no label reaches out of
@@ -166,6 +191,28 @@ class FolderDefinitions:
         except OSError as error:
             raise NotKept(f'{path}: {error.strerror or error}') from error
 
+    def delete(self, key: Key) -> None:
+        path = self.path(key)
+        try:
+            path.unlink(missing_ok=True)
+            for left in path.parent.glob(f'.{path.name}.*'):
+                left.unlink(missing_ok=True)
+        except OSError as error:
+            raise NotKept(f'{path}: {error.strerror or error}') from error
+        if path.parent != self._root:
+            with suppress(OSError):  # not empty: another part is kept
+                path.parent.rmdir()
+
+    def labels(self) -> list[str]:
+        folder = self._root / 'labels'
+        if not folder.is_dir():
+            return []
+        return sorted(
+            unquote(p.name)
+            for p in folder.iterdir()
+            if any(not f.name.startswith('.') for f in p.iterdir())
+        )
+
 
 def _checked[T](adapter: TypeAdapter[T], data: Any) -> T:
     """``data`` as ``adapter`` validates it; ``ValueError`` names each entry."""
@@ -192,7 +239,22 @@ class _Edits(TypedDict, total=False):
     removed: list[str]
 
 
+@dataclass(frozen=True)
+class Header:
+    """What a person says of a batch: its title, and where its rows come from."""
+
+    title: str
+    description: str = ''
+    source: str | None = None
+
+
+class _Following(TypedDict):
+    label: str | None
+
+
 _EDITS = TypeAdapter(_Edits)
+_HEADER = TypeAdapter(Header)
+_FOLLOWING = TypeAdapter(_Following)
 _CORRECTIONS = TypeAdapter(dict[str, dict[str, Any]])
 _TEMPLATE = TypeAdapter(Template)
 
@@ -292,3 +354,23 @@ def corrections_of(data: Any) -> dict[FileRef, dict[str, Any]]:
     return {
         FileRef(file=f): fields for f, fields in _checked(_CORRECTIONS, data).items()
     }
+
+
+def header_data(header: Header) -> dict[str, Any]:
+    """The header, as plain data."""
+    return asdict(header)
+
+
+def header_of(data: Any) -> Header:
+    """The header of :func:`header_data`; ``ValueError`` names an entry."""
+    return _checked(_HEADER, data)
+
+
+def following_data(label: str | None) -> dict[str, Any]:
+    """The label that follows, or ``None`` if none does, as plain data."""
+    return {'label': label}
+
+
+def following_of(data: Any) -> str | None:
+    """The label of :func:`following_data`; ``ValueError`` names an entry."""
+    return _checked(_FOLLOWING, data)['label']
