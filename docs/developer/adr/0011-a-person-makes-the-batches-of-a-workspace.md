@@ -34,7 +34,7 @@ A person cannot do three things:
 2. **Work on two sets of runs.** A person wants to reduce yesterday's runs again while the runs measured now are reduced as they arrive, and to look at one without stopping the other.
 3. **Give each row the output of another workflow.** A beam centre per sample needs two batches and a source written for the pair (`with_centre` in batch.md, "Chains").
 
-A batch also grows with its proposal: at 30 000 rows a state of the page takes 1.6 s and 18 MB ([row-range.md](../plans/batch-page/row-range.md)).
+A batch also grows with its proposal: at 30 000 rows a state of the page takes 1.6 s and 18 MB ([#223](https://github.com/scipp/essapps/issues/223)).
 
 How visiting users will organise an experiment is not known (see Open).
 So this decision restricts a person as little as it can.
@@ -191,7 +191,7 @@ If it is built, the header, the labels and the URL change once more: a label per
 
 ## Alternatives considered
 
-- **One batch per workspace, with a range of rows shown** ([row-range.md](../plans/batch-page/row-range.md)). It bounds the cost of the page and solves neither problem 1 nor 2: the batch still has one set of settings.
+- **One batch per workspace, with a range of rows shown** ([#223](https://github.com/scipp/essapps/issues/223)). It bounds the cost of the page and solves neither problem 1 nor 2: the batch still has one set of settings.
 - **Each row keeps settings of its own.** A page would have to show and edit settings per row. A batch per series gives the same with the settings a batch already has.
 - **The scope cuts the files given to the source.** A partner outside the scope is not found, and its rows wait for ever.
 - **A slice by position.** A file listed late shifts every row after it, so a batch would hold other rows than the day before.
@@ -209,7 +209,7 @@ If it is built, the header, the labels and the URL change once more: a label per
 - The definitions get two operations they lack: listing the labels, and deleting a part. The layout of `definitions/` stays, with the header added.
 - `essapps-batch reduce --label` reads the header of its label if there is one, and takes the registered sources as it takes the bindings. It looks the kept spec up by name and version today, and has to take the bound version as the manager does.
 - Two rules change. Whether a batch follows is kept; today it belongs to the process, and a restart starts with `--follow` or without. `at` gets a default, the columns of the source; today the application chooses it.
-- A batch that a person bounds has tens to hundreds of rows, so the cost per row of row-range.md does not arise. The cost per file stays whatever the scope: at 60 000 files the options of the file cells are 3.1 MB of each state, a new listing takes 1.4 s, and the Runs view 1.8 s.
+- A batch that a person bounds has tens to hundreds of rows, so the cost per row does not arise ([#223](https://github.com/scipp/essapps/issues/223)). The cost per file stays whatever the scope: at 60 000 files the options of the file cells are 3.1 MB of each state, a new listing takes 1.4 s, and the Runs view 1.8 s.
 - A batch without a `stop` remains, and is what an automatic reduction with no person has. Its page can show only its newest rows.
 - Only the batch that follows scans at each step of Follow, so the cost of a step does not grow with the number of batches. A cache of the metadata of each file belongs in the file source, below the batches.
 - The preparatory reductions of LoKI (detector, masks) fit as batches without a source, with one row. They are not part of the first work.
