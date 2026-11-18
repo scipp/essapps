@@ -12,15 +12,17 @@ the batches of the manager, changes in one request at a time. One person
 works with the application, so a request waits for at most one step, or for
 the counts (:meth:`Pages.counts`), which scan every batch.
 
-The runs are the same on every page (:meth:`Pages.runs`). A correction made
-on one page scans its batch at once; the page of each other batch scans its
-batch at its next poll (:attr:`Pages.corrected`), and says once if that scan
-fails.
+The runs are the same on every page (:meth:`Pages.runs`), and a person
+corrects them on any page, with or without a batch (:meth:`Pages.correct`).
+The page of each batch scans its batch at its next poll after a correction
+(:attr:`Pages.corrected`), and says once if that scan fails; the page the
+correction was made on polls at once.
 
 A person makes a batch from the list of batches, of the sources and specs
 that :meth:`Pages.sources` offers (:meth:`Pages.create`); the manager decides
 what can be made. With no batch at all, the page is served without one: it
-shows the list of batches and the runs.
+shows the list of batches and the runs. So is the page of a batch that cannot
+be shown (:meth:`Pages.page`), with the reason.
 
 Follow is the one loop of the application
 (:class:`~ess.apps.batch.auto.Follow`). :meth:`Pages.tick` steps it, with or
@@ -33,13 +35,13 @@ from __future__ import annotations
 
 import threading
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from typing import Any
 
 from pydantic import BaseModel
 
-from ess.spec import FileRef, WorkflowSpec, field_types
+from ess.spec import FileRef, WorkflowSpec
 
 from ...fields import UNSET, Fields
 from ...files import Selector
@@ -50,9 +52,12 @@ from .. import (
     NotKept,
     RowState,
     Scope,
+    Source,
     Words,
     bound_spec,
+    fits,
     refused_again,
+    scope_of,
 )
 from ..auto import Follow
 from . import forms
@@ -61,16 +66,19 @@ from .models import (
     Batches,
     BatchRow,
     Cell,
+    CellEdit,
+    Cells,
     Column,
     Made,
     NewBatch,
+    Notice,
     Param,
     RunRow,
     Runs,
     SourceChoice,
     SpecChoice,
 )
-from .page import Draw, Page, Problem, page_statuses, why
+from .page import Draw, Page, Problem, page_statuses, read, why
 
 
 class Missing(Exception):
@@ -128,14 +136,15 @@ class Pages:
         self.follow = follow
         self.title = title
         self.draw = {} if draw is None else draw
-        self.files = files
-        self.marks = marks
+        # What a person corrects of a run, and where; None if nothing.
+        self._marking = None if marks is None or files is None else (marks, files)
         self.folder = folder
         self.lock = threading.RLock()
         self.runs_version = 1
         # The runs, with their metadata, as listed at the last version.
         self._runs: Mapping[FileRef, Mapping[str, Any]] = {}
-        # What the Runs view names files and values by, listed again for each.
+        # What the runs, their corrections and a new batch are read with,
+        # listed again for each.
         self._listing: Listing | None = None
         # The batches and the label that follows, as listed at the last version.
         self._batches: tuple[object, ...] = ()
@@ -158,6 +167,9 @@ class Pages:
             if (page := self._pages.get(label)) is None:
                 try:
                     page = Page(self, label)
+                    # The rows can be read: an end of a scope kept that does
+                    # not compare with the index of the source raises here.
+                    len(page.batch.rows)
                 except Exception as error:  # a source is code of the application
                     raise Problem(f'Cannot show {label}: {error}') from None
                 self._pages[label] = page
@@ -206,6 +218,28 @@ class Pages:
             self._runs = runs
             self.runs_version += 1
 
+    @property
+    def corrects_runs(self) -> bool:
+        """Whether the application corrects runs: it gives their marks and files."""
+        return self._marking is not None
+
+    def _relisted(self) -> Listing:
+        """What the client lists now."""
+        self._listing = Listing(self.manager.client, previous=self._listing)
+        return self._listing
+
+    def _marked(self) -> tuple[Fields, CorrectedFiles, Listing]:
+        """
+        The form of what a person corrects of a run, the files to correct,
+        and what the client lists now, which the form reads;
+        :class:`~.page.Problem` if the application corrects no runs.
+        """
+        if self._marking is None:
+            raise Problem('This application corrects no runs.')
+        marks, files = self._marking
+        listing = self._relisted()
+        return Fields(marks, listing), files, listing
+
     def runs(self) -> Runs:
         """
         The runs, with what a person corrected of each, as the Runs view of
@@ -213,12 +247,7 @@ class Pages:
         :class:`~.page.Problem` if the application corrects no runs.
         """
         with self.lock:
-            if self.marks is None or self.files is None:
-                raise Problem('This application corrects no runs.')
-            files = self.files
-            listing = Listing(self.manager.client, previous=self._listing)
-            self._listing = listing
-            marks = Fields(self.marks, listing)
+            marks, files, listing = self._marked()
 
             def text(value: Any) -> str:
                 return '' if value is UNSET else listing.text(value)
@@ -247,6 +276,57 @@ class Pages:
                 ],
                 rows=rows,
             )
+
+    def correct(self, edit: CellEdit) -> Notice:
+        """
+        Correct a field of the runs ``edit.keys``, as its field reads the
+        value. The page of each batch scans its batch at its next poll, and
+        Follow the batch that follows at its next step.
+        """
+        with self.lock:
+            marks, files, _ = self._marked()
+            value = read(marks, edit)
+            fields = {edit.column: None if value is UNSET else value}
+            self._kept(
+                lambda: files.correct_each(
+                    [FileRef(file=key) for key in edit.keys], **fields
+                )
+            )
+            n = len(edit.keys)
+            title = marks.titles[edit.column]
+            return Notice(notice=f'{title} corrected on {n} run{"s" * (n > 1)}.')
+
+    def revert_run(self, cells: Cells) -> Notice:
+        """Take a field of runs back to what the files say, as :meth:`correct`."""
+        with self.lock:
+            marks, files, _ = self._marked()
+            self._kept(
+                lambda: files.reset_each(
+                    [FileRef(file=key) for key in cells.keys], cells.column
+                )
+            )
+            n = len(cells.keys)
+            title = marks.titles.get(cells.column, cells.column)
+            return Notice(notice=f'{title} set back on {n} run{"s" * (n > 1)}.')
+
+    def _kept(self, correction: Callable[[], None]) -> None:
+        """
+        Make ``correction``, then have the pages scan their batches and show
+        the runs again. Raises :class:`~.page.Problem` if the definitions do
+        not keep it, or if the runs cannot be listed after it.
+        """
+        try:
+            correction()
+        except NotKept as error:
+            raise Problem(f'The change was not kept: {error}') from None
+        self.corrected += 1
+        try:
+            runs = self._relisted().listed(Selector())
+        except Exception as error:  # the file source of the application
+            raise Problem(
+                f'Corrected, but the runs cannot be listed: {error}'
+            ) from None
+        self.runs_listed(runs, changed=True)
 
     def batches_version(self) -> int:
         """
@@ -299,64 +379,64 @@ class Pages:
             return Batches(
                 version=self.batches_version(),
                 application=self.title,
-                runs=(
-                    None
-                    if self.marks is None or self.files is None
-                    else self.runs_version
-                ),
+                runs=self.runs_version if self.corrects_runs else None,
                 rows=rows,
             )
 
     def sources(self) -> list[SourceChoice]:
         """
         What a new batch can be made with: each registered source that a spec
-        fits, then no source, which every spec fits, each with the specs that
-        fit it. The specs are those that the workspace binds, of the version
-        that :meth:`~ess.apps.batch.BatchManager.create` takes.
+        fits (:func:`~ess.apps.batch.fits`), then no source, which every spec
+        fits, each with the specs that fit it. The specs are those that the
+        workspace binds, of the version that
+        :meth:`~ess.apps.batch.BatchManager.create` takes. The parameters
+        offered as columns are those that the source fills, and the others
+        whose cell the page edits.
         """
         with self.lock:
             client = self.manager.client
             names = dict.fromkeys(spec.name for spec in client.specs())
             specs = [bound_spec(client, name) for name in names]
+            listing = self._relisted()
 
-            def choice(
-                name: str | None, fills: Sequence[str], words: Words, index_title: str
-            ) -> SourceChoice:
-                fit = [
-                    _spec_choice(spec, fills)
-                    for spec in specs
-                    if set(fills) <= spec.params.model_fields.keys()
-                ]
+            def choice(name: str | None, source: Source | None) -> SourceChoice:
+                fills = () if source is None else source.fills
                 return SourceChoice(
                     name=name,
                     fills=list(fills),
-                    words=words,
-                    index_title=index_title,
-                    specs=fit,
+                    words=Words() if source is None else source.words,
+                    index_title='' if source is None else source.index_title,
+                    specs=[
+                        _spec_choice(spec, fills, listing)
+                        for spec in specs
+                        if fits(spec, source)
+                    ],
                 )
 
-            given = [
-                choice(name, s.fills, s.words, s.index_title)
-                for name, s in self.manager.sources.items()
-            ]
-            return [c for c in given if c.specs] + [choice(None, (), Words(), '')]
+            given = [choice(n, s) for n, s in self.manager.sources.items()]
+            return [c for c in given if c.specs] + [choice(None, None)]
 
     def create(self, new: NewBatch) -> Made:
         """
         Make the batch of ``new`` with the manager
         (:meth:`~ess.apps.batch.BatchManager.create`), with the settings that
-        the application gives its spec. Raises :class:`~.page.Problem` with
-        what the manager refuses.
+        the application gives its spec, and its scope with the ends converted
+        to the type of the index of its source
+        (:func:`~ess.apps.batch.scope_of`). Raises :class:`~.page.Problem`
+        with what the manager refuses.
         """
         with self.lock:
             try:
+                source = (
+                    None if new.source is None else self.manager.sources[new.source]
+                )
                 label = self.manager.create(
                     new.spec,
                     title=new.title,
                     source=new.source,
                     columns=new.columns,
                     description=new.description,
-                    scope=Scope(start=new.start, stop=new.stop),
+                    scope=scope_of(source, new.start, new.stop),
                 )
             except (KeyError, ValueError, NotKept) as error:
                 raise Problem(f'The batch was not made: {why(error)}.') from None
@@ -388,14 +468,20 @@ class Pages:
             )
 
 
-def _spec_choice(spec: WorkflowSpec[Any, Any], fills: Sequence[str]) -> SpecChoice:
-    """``spec`` as a choice of the source that fills ``fills``."""
-    fields = spec.params.model_fields
-    names = [*fills, *(n for n in fields if n not in fills)]
+def _spec_choice(
+    spec: WorkflowSpec[Any, Any], fills: Sequence[str], listing: Listing
+) -> SpecChoice:
+    """
+    ``spec`` as a choice of the source that fills ``fills``: those first,
+    then each other parameter whose cell the page edits.
+    """
+    form = Fields(spec.params, listing)
+    edited = [n for n, f in form.fields.items() if forms.editor(f) is not None]
+    names = [*fills, *(n for n in edited if n not in fills)]
     return SpecChoice(
         name=spec.name,
         title=spec.title,
-        params=[Param(name=n, title=field_types.title(n, fields[n])) for n in names],
+        params=[Param(name=n, title=form.titles[n]) for n in names],
     )
 
 

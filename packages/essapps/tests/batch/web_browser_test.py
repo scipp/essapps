@@ -27,12 +27,12 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from ess.apps import Client
-from ess.apps.batch import Batch, BatchManager, CorrectedFiles, Scope
+from ess.apps.batch import Batch, BatchManager, CorrectedFiles, Scope, Source
 from ess.apps.batch.auto import Follow
 from ess.apps.batch.web import Pages, Shown, create_app
 from ess.apps.batch.web.api import STATIC
 
-from .toys import STAGED, Gate, Measure, Refusing
+from .toys import PAIRS, STAGED, Gate, Measure, Refusing
 
 
 def unavailable(reason: str) -> NoReturn:
@@ -132,22 +132,31 @@ def serve(app: FastAPI) -> Iterator[str]:
     thread.join()
 
 
-@pytest.fixture
-def page(browser: Any, url: str) -> Iterator[Any]:
+def watched(browser: Any) -> Any:
     """
-    The page, loaded; a test fails on any error in the browser's console that
-    it does not take from ``page.errors``.
+    A new page that collects each error in the browser's console, and each
+    exception, in ``page.errors``.
     """
     page = browser.new_page(viewport={'width': 1440, 'height': 900})
     errors: list[str] = []
     page.errors = errors
     page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
     page.on('pageerror', lambda e: errors.append(str(e)))
+    return page
+
+
+@pytest.fixture
+def page(browser: Any, url: str) -> Iterator[Any]:
+    """
+    The page, loaded; a test fails on any error in the browser's console that
+    it does not take from ``page.errors``.
+    """
+    page = watched(browser)
     page.goto(url)
     page.wait_for_selector('#rows .tabulator-row')
     yield page
     page.close()
-    assert errors == []
+    assert page.errors == []
 
 
 def cell(page: Any, name: str, column: str) -> Any:
@@ -746,6 +755,25 @@ def test_a_run_corrected_while_the_runs_are_hidden_shows_when_they_are_opened(
     page.wait_for_selector('#runs .tabulator-cell:has-text("corrected")')
 
 
+def correct_first_sample(page: Any, role: str) -> None:
+    """Correct the role of the first sample run in the Runs view."""
+    page.click('[data-view=runs]')
+    cells = '#runs .tabulator-cell[tabulator-field="cells.role.value"]'
+    page.locator(f'{cells}:has-text("sample")').first.click()
+    page.keyboard.type(role)
+    page.keyboard.press('Enter')
+
+
+def test_the_rows_of_the_batch_follow_a_run_corrected_on_its_page(page: Any) -> None:
+    correct_first_sample(page, 'background')
+
+    page.wait_for_selector('#toast:has-text("Role corrected on 1 run.")')
+    page.click('[data-view=samples]')
+    page.wait_for_function(
+        "document.querySelectorAll('#rows .tabulator-row').length === 2"
+    )
+
+
 def active(page: Any) -> str:
     """The tag and the class of the element that has the keyboard focus."""
     return page.evaluate(
@@ -912,9 +940,27 @@ def test_a_refusal_of_the_manager_shows_at_the_form_and_makes_nothing(
 
     page.wait_for_selector('#new-problem:has-text("below its start")')
     assert page.is_hidden('#message')
+    assert page.is_enabled('#new-batch [type=submit]')
     assert [h.title for h in manager.headers().values()] == ['Scan']
-    assert all('status of 422' in e for e in page.errors)
+    assert len(page.errors) == 1
+    assert 'status of 422' in page.errors[0]
     page.errors.clear()
+
+
+def test_a_double_click_on_make_makes_one_batch(
+    page: Any, url: str, manager: BatchManager
+) -> None:
+    page.click('[data-view=batches]')
+    page.click('#new-batch-open')
+    sent: list[str] = []
+    page.on('request', lambda r: sent.append(r.url) if r.method == 'POST' else None)
+
+    fill_new_batch(page, 'Once')
+    page.dblclick('#new-batch [type=submit]')
+
+    page.wait_for_selector('#title:has-text("Once")')
+    assert [u for u in sent if u.endswith('/api/batches')] == [f'{url}api/batches']
+    assert sorted(h.title for h in manager.headers().values()) == ['Once', 'Scan']
 
 
 @pytest.fixture
@@ -922,14 +968,12 @@ def no_batch(browser: Any, pages: Pages, sample: Measure) -> Iterator[Any]:
     """The page at the root of a workspace without a batch."""
     sample(1, 'water')
     with serve(create_app(pages)) as url:
-        page = browser.new_page(viewport={'width': 1440, 'height': 900})
-        errors: list[str] = []
-        page.on('pageerror', lambda e: errors.append(str(e)))
+        page = watched(browser)
         page.goto(url)
         page.wait_for_selector('#new-batch:not([hidden])')
         yield page
         page.close()
-    assert errors == []
+    assert page.errors == []
 
 
 def test_the_root_without_a_batch_shows_the_batches_and_runs_and_makes_one(
@@ -945,3 +989,42 @@ def test_the_root_without_a_batch_shows_the_batches_and_runs_and_makes_one(
     no_batch.wait_for_selector('#rows .tabulator-row:has-text("water")')
     (label,) = manager.headers()
     assert no_batch.url.endswith(f'/batches/{label}/')
+
+
+def test_a_run_is_corrected_without_a_batch(no_batch: Any) -> None:
+    correct_first_sample(no_batch, 'background')
+
+    no_batch.wait_for_selector('#toast:has-text("Role corrected on 1 run.")')
+    no_batch.wait_for_selector('#runs .tabulator-cell.edited:has-text("background")')
+
+
+def test_a_batch_that_cannot_be_shown_says_why_and_shows_the_list(
+    browser: Any,
+    client: Client,
+    refusing: Refusing,
+    files: CorrectedFiles,
+    sample: Measure,
+) -> None:
+    def raising(files: Sequence[Any]) -> NoReturn:
+        raise RuntimeError('the table is half written')
+
+    sample(1, 'water')
+    sources = {'pairs': PAIRS, 'broken': Source(raising, fills=('sample',))}
+    manager = BatchManager(client, sources=sources, definitions=refusing)
+    manager.create(STAGED.name, title='Good', source='pairs', label='good')
+    manager.create(STAGED.name, title='Broken', source='broken', label='broken')
+    pages = Pages(manager, Follow(manager, refusing), files=files, marks=Marks)
+    with serve(create_app(pages)) as url:
+        page = watched(browser)
+        page.goto(f'{url}batches/broken/')
+
+        page.wait_for_selector('#message:has-text("Cannot show broken: the table")')
+        page.wait_for_selector('#batches tbody tr:has-text("Good")')
+        page.wait_for_selector('[data-view=runs] .n:text-is("2")')
+        assert len(page.errors) == 1
+        assert 'status of 422' in page.errors[0]
+        page.errors.clear()
+        page.click('#batches a:text-is("Good")')
+        page.wait_for_selector('#rows .tabulator-row:has-text("water")')
+        page.close()
+    assert page.errors == []

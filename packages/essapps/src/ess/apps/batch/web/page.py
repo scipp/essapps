@@ -107,7 +107,6 @@ from .. import (
     EARLIER,
     EMPTY,
     Batch,
-    CorrectedFiles,
     NotKept,
     RowState,
     Words,
@@ -202,6 +201,16 @@ def _say(title: str, message: str) -> str:
     return f'{title}: {message}'
 
 
+def read(fields: Fields, edit: CellEdit) -> Any:
+    """The value of ``edit`` as the field of its column reads it."""
+    if edit.column not in fields.fields:
+        raise Problem(f'There is no column {edit.column}.')
+    try:
+        return forms.read(fields.fields[edit.column], edit.value)
+    except (KeyError, ValueError) as error:
+        raise Problem(_say(fields.titles[edit.column], why(error))) from None
+
+
 def why(error: Exception) -> str:
     """What an exception of a request says, without its type or quotes."""
     if isinstance(error, ValidationError):
@@ -286,8 +295,6 @@ class Page:
         self.settings = self._form()
         self._show_settings()
         self._cells = Fields(model, listing, fields=batch.columns)
-        marks, files = pages.marks, pages.files
-        self._marks = None if marks is None or files is None else Fields(marks, listing)
         self.refused: list[FieldError] = []
         self.version = 1
         pages.runs_listed(self._runs_seen())
@@ -344,13 +351,12 @@ class Page:
         self._refresh()
 
     def _refresh(self) -> None:
-        for fields in (self.settings, self._cells, self._marks):
-            if fields is not None:
-                fields.refresh(self._listing)
+        for fields in (self.settings, self._cells):
+            fields.refresh(self._listing)
 
     def _runs_seen(self) -> dict[FileRef, dict[str, Any]]:
         """The runs that the Runs view lists, with their metadata."""
-        return {} if self._marks is None else self._listing.listed(Selector())
+        return self._listing.listed(Selector()) if self.pages.corrects_runs else {}
 
     def _form(self) -> Fields:
         """A form of the settings, at the fields' defaults."""
@@ -393,15 +399,16 @@ class Page:
         """
         The state, or ``None`` if it is still that of version ``after``.
 
-        After a correction of runs on another page, the batch is scanned
-        first. If that scan fails, the rows stay as they are, the state says
-        why in its notice, and no later poll scans again for that correction;
-        "Rescan runs" tries again.
+        After a correction of runs (:meth:`Pages.correct
+        <.pages.Pages.correct>`), the batch is scanned first. If that scan
+        fails, the rows stay as they are, the state says why in its notice,
+        and no later poll scans again for that correction; "Rescan runs" tries
+        again.
         """
         notice = ''
         if self._corrected != self.pages.corrected:
             try:
-                self._scan('Runs were corrected on another page, but the scan failed')
+                self._scan('Runs were corrected, but the scan failed')
             except Problem as error:
                 notice = str(error)
         changes = self.batch.client.changes(after=self._listing.cursor)
@@ -479,7 +486,7 @@ class Page:
         return State(
             version=self.version,
             start=self.start,
-            runs=None if self._marks is None else self.pages.runs_version,
+            runs=self.pages.runs_version if self.pages.corrects_runs else None,
             batches=self.pages.batches_version(),
             label=self.label,
             title=self.pages.manager.headers()[self.label].title,
@@ -699,11 +706,11 @@ class Page:
     @_action
     def scan(self) -> str:
         """Make the rows from the files again; what was set by hand stays."""
-        changes = self._scanned(self._scan)
+        changes = self._scanned()
         return f'Found {self.words.count(len(self.batch.rows))}. {changes}'.strip()
 
     def _scan(self, failed: str = 'The scan failed') -> None:
-        """The scan of "Rescan runs" and of a correction of runs."""
+        """The scan of "Rescan runs" and after a correction of runs."""
         self._corrected = self.pages.corrected
         try:
             self.batch.scan()
@@ -717,22 +724,21 @@ class Page:
 
     def _renew_listing(self) -> None:
         """
-        List again: new rows may name files that the listing lacks, and a
-        correction of runs changes what the Runs view offers, even if the scan
-        then fails.
+        List again: new rows may name files that the listing lacks, and the
+        Runs view shows the runs found, even if the scan then fails.
         """
         self._relist()
-        self.pages.runs_listed(self._runs_seen(), changed=True)
+        self.pages.runs_listed(self._runs_seen())
 
-    def _scanned(self, scan: Callable[[], None]) -> str:
+    def _scanned(self) -> str:
         """
-        Call ``scan``, which makes the rows again, and say how many rows
-        changed and which it left incomplete.
+        Scan, and say how many rows changed and which the scan left
+        incomplete.
         """
         before = {r.key: dict(r.values) for r in self.batch.rows}
         incomplete = self._incomplete()
         try:
-            scan()
+            self._scan()
         except Problem:
             # The listing may fail for the reason that the scan failed; the
             # failure of the scan is what to say.
@@ -752,18 +758,10 @@ class Page:
             said.append(f'{self.words.count(len(names))} are now incomplete.')
         return ' '.join(filter(None, said))
 
-    def _read(self, fields: Fields, edit: CellEdit) -> Any:
-        if edit.column not in fields.fields:
-            raise Problem(f'There is no column {edit.column}.')
-        try:
-            return forms.read(fields.fields[edit.column], edit.value)
-        except (KeyError, ValueError) as error:
-            raise Problem(_say(fields.titles[edit.column], why(error))) from None
-
     @_action
     def edit(self, edit: CellEdit) -> str:
         """Set one column of rows, as its field reads the value sent."""
-        value = self._read(self._cells, edit)
+        value = read(self._cells, edit)
         self._known(edit.keys)
         self.batch.rows = self.batch.rows.edit_each(
             edit.keys, {edit.column: EMPTY if value is UNSET else value}
@@ -1025,47 +1023,6 @@ class Page:
             )
         except Exception as error:  # a drawing is code of the application
             return Plot(figure=None, note=f'Cannot draw: {error}')
-
-    # Runs
-
-    def _marked(self) -> tuple[Fields, CorrectedFiles]:
-        if self._marks is None or self.pages.files is None:
-            raise Problem('This application corrects no runs.')
-        return self._marks, self.pages.files
-
-    def _rescan(self) -> str:
-        """
-        Show the runs as corrected now, and the rows made from them; say what
-        changed.
-        """
-        return self._scanned(
-            functools.partial(self._scan, 'Corrected, but the scan failed')
-        )
-
-    @_action
-    def correct(self, edit: CellEdit) -> str:
-        """
-        Correct a field of runs, and scan this page's batch, so that its rows
-        follow. The page of each other batch scans its batch at its next poll,
-        and Follow the batch that follows at its next step.
-        """
-        marks, files = self._marked()
-        value = self._read(marks, edit)
-        fields = {edit.column: None if value is UNSET else value}
-        files.correct_each([FileRef(file=key) for key in edit.keys], **fields)
-        self.pages.corrected += 1
-        changes = self._rescan()
-        n = len(edit.keys)
-        title = marks.titles[edit.column]
-        return f'{title} corrected on {n} run{"s" * (n > 1)}. {changes}'.strip()
-
-    @_action
-    def revert_run(self, cells: Cells) -> str:
-        """Take a field of runs back to what the files say, as :meth:`correct`."""
-        _, files = self._marked()
-        files.reset_each([FileRef(file=key) for key in cells.keys], cells.column)
-        self.pages.corrected += 1
-        return self._rescan()
 
     # Files
 

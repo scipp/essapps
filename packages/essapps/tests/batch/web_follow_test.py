@@ -91,14 +91,19 @@ def versions(page: Page) -> tuple[int, int]:
     return page.version, page.pages.runs_version
 
 
+def correct_and_poll(page: Page) -> None:
+    """Correct a run, and poll the page at once, as the page does after one."""
+    run = page.pages.runs().rows[0].key
+    page.pages.correct(CellEdit(keys=[run], column='sample', value='tea'))
+    page.poll(page.version, page.start)
+
+
 @pytest.mark.parametrize(
     'action',
     [
         lambda page: None,
         lambda page: page.scan(),
-        lambda page: page.correct(
-            CellEdit(keys=[page.pages.runs().rows[0].key], column='sample', value='tea')
-        ),
+        lambda page: correct_and_poll(page),
     ],
     ids=['nothing', 'rescan', 'correction'],
 )
@@ -772,7 +777,8 @@ def test_a_correction_on_another_page_moves_the_version_of_the_runs_once(
     before = pages.runs_version
 
     run = pages.runs().rows[0].key
-    other.correct(CellEdit(keys=[run], column='sample', value='tea'))
+    pages.correct(CellEdit(keys=[run], column='sample', value='tea'))
+    other.poll(other.version, other.start)
     pages.tick()
     pages.tick()
 

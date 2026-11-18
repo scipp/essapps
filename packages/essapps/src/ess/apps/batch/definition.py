@@ -252,7 +252,8 @@ class Header:
     """
     A batch as the manager keeps it: what it computes, where its rows come
     from and which of them it holds, and what it is called. A header kept
-    without a scope holds every row. Raises ``ValueError`` for an empty title.
+    without a scope holds every row. Raises ``ValueError`` for a title that
+    is empty or only spaces.
 
     Parameters
     ----------
@@ -278,7 +279,7 @@ class Header:
     scope: Scope = field(default_factory=Scope)
 
     def __post_init__(self) -> None:
-        if not self.title:
+        if not self.title.strip():
             raise ValueError('a batch has a title that is not empty')
 
 

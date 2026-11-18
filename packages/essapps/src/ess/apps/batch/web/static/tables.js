@@ -183,7 +183,6 @@ function cellFormatter(column, revert) {
       {class: 'cell'},
       shown,
       c.edited &&
-        revert &&
         h('button', {
           type: 'button',
           class: 'revert',
@@ -210,7 +209,7 @@ function cellTooltip(column) {
 
 // A column for each cell, given {name, title, editor, default} as the server
 // sends them. `current()` gives the columns of the state shown, whose options
-// an editor offers. Without `revert`, a cell set by hand has no button back.
+// an editor offers.
 export function cellColumns(columns, {current, revert, say}) {
   const options = (column) => () => current().find((c) => c.name === column.name).editor.options;
   return columns.map((column) => ({

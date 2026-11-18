@@ -53,7 +53,7 @@ While following, such a row says "Set by hand, so Follow leaves it to you: reduc
 Once reduced, the row follows the files again, with its cells set by hand.
 A cell that a person reverts follows the files again at once: the next step reduces the row with its other cells as they are, so two reverts of one row can reduce it twice.
 A correction in the Runs view reaches the rows through the scan, so Follow reduces for it as for a file that arrives; two corrections that belong together reduce a row twice if a step runs between them.
-A correction scans the batch of its page at once; every other page scans its batch at its next poll, and Follow scans the batch that follows at its next step.
+A correction is an action of the workspace, made in the Runs view of any page, also of the page without a batch (`POST api/runs/cells`). The page it was made on asks for its state at once, which scans its batch; every other page scans its batch at its next poll, and Follow scans the batch that follows at its next step.
 If the scan at a poll fails, that poll says why once, and the rows stay as they are until **Rescan runs**.
 An action submits nothing but what a person asks to reduce: Apply reduces nothing, and the next step reduces the rows without a result with the settings applied.
 Apply forgets why Follow could not reduce a row, since the next step tries again.
@@ -81,17 +81,20 @@ The list and the Runs view are the same on every page.
 | Title, Description | the header of the batch; the title is required |
 | Source | a source that the application registers (`BatchManager(sources=...)`), or "none: rows added by hand" |
 | Workflow | a spec that the workspace binds and that fits the source: a parameter for each column that the source fills; any spec without a source |
-| Columns | the columns that the source fills, fixed; the other parameters of the spec, to tick |
+| Columns | the columns that the source fills, fixed; the other parameters of the spec whose cell the page edits, to tick (a group of fields, such as a Q binning, stays a setting) |
 | Scope | "From run … up to, not including, run …", in the source's word for the index; either end empty for no limit; not offered without a source |
 
 **Make** sends the form to `POST api/batches`, and the page goes to the page of the new batch.
 The choices come from `GET api/sources`; what can be made is decided by `BatchManager.create`, and what it refuses, such as an empty title or a stop below the start, shows at the form, with nothing made.
-A start or a stop is sent as a number if it reads as one, else as text.
+A start or a stop is sent as typed; the manager converts it to the type of the index of the source (`Source.index_type`, `ess.apps.batch.scope_of`) and refuses what does not convert, such as `abc` for a run number.
+**Make** is disabled while it is sent, so a double click makes one batch.
 The new batch starts with the settings that the application gives its spec (`Defaults`).
 A source that no spec fits is not offered.
 
-A workspace with no batch at all serves the page at `/`, without a batch: the Batches view, with the form open, and the Runs view, which shows the runs and corrects none.
+A workspace with no batch at all serves the page at `/`, without a batch: the Batches view, with the form open, and the Runs view.
 It loads both once and polls nothing; making a batch goes to its page.
+`/` answers with `Cache-Control: no-store`, so that Back and a `/` opened again ask the server, which redirects once there is a batch.
+The page of a batch that cannot be shown, such as one whose source raises, says why, and shows the Batches and Runs views as the page without a batch does.
 
 ## Layers
 
@@ -126,7 +129,7 @@ The server answers 204 if nothing changed since `version`, and else the whole `S
 `start` is new at each start of the server; a page that sees another one loads again.
 `State.runs` counts the changes of the runs, which all pages share; the Runs view asks for `api/runs` when it moves.
 `State.batches` moves when the headers of the batches or the batch that follows change, whoever changed them; the Batches view asks for `api/batches` when it moves.
-`api/batches`, `api/batches/counts`, `api/sources` and `api/runs` belong to the workspace: they answer the same under any label, and at `/api/...`.
+`api/batches`, `api/batches/counts`, `api/sources`, `api/runs` and the corrections of runs (`api/runs/cells`, `api/runs/cells/revert`) belong to the workspace: they answer the same under any label, and at `/api/...`.
 
 ## How the page asks
 

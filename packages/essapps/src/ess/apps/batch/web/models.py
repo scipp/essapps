@@ -364,7 +364,8 @@ class NewBatch(BaseModel):
     """
     Make a batch, as :meth:`~ess.apps.batch.BatchManager.create` takes it:
     ``columns`` are all columns, and ``start`` and ``stop`` the ends of its
-    scope, ``None`` for an open end.
+    scope as typed, converted to the type of the index of the source
+    (:func:`~ess.apps.batch.scope_of`), ``None`` for an open end.
     """
 
     title: str
@@ -380,3 +381,9 @@ class Made(BaseModel):
     """The label of the batch made."""
 
     label: str
+
+
+class Notice(BaseModel):
+    """What an action of the workspace did, in words."""
+
+    notice: str

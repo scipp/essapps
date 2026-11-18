@@ -4,7 +4,8 @@
 // every second sees results arrive. The page keeps only what it shows: the
 // selection, the filter, the tab, the sort, and the axes, which survive a
 // reload of the page of the same batch. A workspace without a batch serves
-// the page at its root, without a batch (see `showWorkspace`).
+// the page at its root without one, and the page of a batch that cannot be
+// shown is shown so too (see `showWorkspace`).
 import {h, get, post, query, save} from './dom.js';
 import {Grid, cellColumns, statusColumn} from './tables.js';
 import {renderForm, summary} from './form.js';
@@ -116,6 +117,7 @@ async function download(url, name, body) {
 }
 
 class Offline extends Error {}
+class Unshown extends Error {}
 
 async function refresh() {
   const at = view.state ? {after: view.state.version, start: view.state.start} : {};
@@ -126,7 +128,10 @@ async function refresh() {
     throw new Offline('The server does not answer.');
   }
   if (response.status === 204) return;
-  if (!response.ok) throw new Offline(response.body?.message ?? `The server answered ${response.status}.`);
+  if (!response.ok) {
+    const message = response.body?.message ?? `The server answered ${response.status}.`;
+    throw view.state ? new Offline(message) : new Unshown(message);
+  }
   render(response.body);
   // A poll says only what failed without an action, such as a scan after a
   // correction made on another page.
@@ -134,16 +139,23 @@ async function refresh() {
 }
 
 // Ask for the state every second; say so while the server does not give it.
+// A batch whose first state the server refuses cannot be shown: the page
+// says why, and shows the batches and the runs.
 async function poll() {
+  let again = true;
   try {
     await refresh();
     $('offline').hidden = true;
   } catch (error) {
-    if (!(error instanceof Offline)) throw error;
-    $('offline').textContent = `${error.message} The page tries again every second; what it shows may be old.`;
-    $('offline').hidden = false;
+    if (error instanceof Unshown) {
+      again = false;
+      showWorkspace(error.message);
+    } else if (error instanceof Offline) {
+      $('offline').textContent = `${error.message} The page tries again every second; what it shows may be old.`;
+      $('offline').hidden = false;
+    } else throw error;
   } finally {
-    setTimeout(poll, 1000);
+    if (again) setTimeout(poll, 1000);
   }
 }
 
@@ -269,27 +281,37 @@ function drawRuns() {
   if (!shown) return;
   if (!runs) {
     const fields = columns.map((c) => c.title.toLowerCase()).join(' or ');
-    $('runs-hint').textContent = inBatch
-      ? `Correct the ${fields} of a run. The ${words().one} table follows at once.`
-      : `Correct the ${fields} of a run on the page of a batch.`;
-    // Without a batch, a correction would have no rows to follow, so none is offered.
-    const cells = inBatch ? columns : columns.map((c) => ({...c, editor: null}));
+    $('runs-hint').textContent = `Correct the ${fields} of a run. The rows of each batch follow.`;
     runs = new Grid($('runs'), {
       columns: [
         {title: 'Run', field: 'file', minWidth: 160, widthGrow: 2},
-        ...cellColumns(cells, {
+        ...cellColumns(columns, {
           current: () => view.runData.columns,
-          revert: inBatch ? (key, column) => act('runs/cells/revert', {keys: [key], column}) : null,
+          revert: (key, column) => correctRuns('runs/cells/revert', {keys: [key], column}),
           say: showMessage,
         }),
       ],
       edits: Object.fromEntries(columns.map((c) => [`cells.${c.name}.value`, c])),
       placeholder: 'No runs in this folder.',
-      edit: (keys, column, value) => act('runs/cells', {keys, column, value}),
+      edit: (keys, column, value) => correctRuns('runs/cells', {keys, column, value}),
       select: () => {},
     });
   }
   runs.update(shown);
+}
+
+// Correct runs, an action of the workspace; whether it was done. The page of
+// a batch then asks for its state at once, which scans the batch and brings
+// the runs; a page without a batch asks for the runs.
+function correctRuns(url, body) {
+  return queued(async () => {
+    const done = await request(url, {body});
+    if (!done) return false;
+    toast(done.notice);
+    if (view.state) await refresh().catch(() => {});
+    else await loadRuns();
+    return true;
+  });
 }
 
 async function loadBatches() {
@@ -405,31 +427,29 @@ function chooseSpec() {
   );
 }
 
-// An end of the scope as the index of a source holds it: a number if the text
-// reads as one, else the text; null for no limit.
-function scopeEnd(input) {
-  const text = input.value.trim();
-  if (!text) return null;
-  return Number.isFinite(Number(text)) ? Number(text) : text;
-}
-
+// Make the batch of the form, once at a time: the server converts the ends of
+// the scope to the type of the index of the source.
 async function makeBatch(event) {
   event.preventDefault();
   const form = $('new-batch');
+  const button = form.querySelector('[type=submit]');
+  if (button.disabled) return;
   const {elements} = form;
   const source = chosenSource();
-  const scoped = source.name !== null;
+  const end = (input) => (source.name === null ? null : input.value.trim() || null);
   const body = {
     title: elements.title.value.trim(),
     description: elements.description.value.trim(),
     source: source.name,
     spec: chosenSpec()?.name ?? '',
     columns: [...form.querySelectorAll('[name=column]:checked')].map((box) => box.value),
-    start: scoped ? scopeEnd(elements.start) : null,
-    stop: scoped ? scopeEnd(elements.stop) : null,
+    start: end(elements.start),
+    stop: end(elements.stop),
   };
+  button.disabled = true;
   const made = await request('batches', {body, say: (text) => ($('new-problem').textContent = text)});
   if (made) location.href = batchUrl(made.label);
+  else button.disabled = false;
 }
 
 function renderAction(action) {
@@ -876,12 +896,14 @@ function wire() {
   });
 }
 
-// The page at the root of a workspace without a batch: the Batches view, with
-// the form "New batch" open, and the Runs view, each loaded once. Nothing
-// polls: making a batch goes to its page.
-async function showWorkspace() {
+// The page at the root of a workspace without a batch, or of a batch that
+// cannot be shown, saying why: the Batches view, with the form "New batch"
+// open, and the Runs view, each loaded once. Nothing polls: making a batch
+// goes to its page.
+async function showWorkspace(why = '') {
   document.body.classList.add('no-batch');
   showPage('batches');
+  if (why) showMessage(why);
   openNewBatch();
   await loadBatches();
   if (!view.batchData) return;

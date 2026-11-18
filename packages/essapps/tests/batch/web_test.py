@@ -1268,7 +1268,7 @@ def test_a_correction_of_a_run_reaches_the_rows_and_can_be_taken_back(
     ).json()
     assert statuses(http)['3'] == 'incomplete'
     # Run 4 is a sample again: of a row of its own, also named oil.
-    assert reverted['notice'] == '2 rows changed. oil and oil are now incomplete.'
+    assert reverted == {'notice': 'Role set back on 1 run.'}
 
 
 # Forms, on a spec with a list and an optional group
@@ -1316,7 +1316,12 @@ def test_a_correction_whose_scan_fails_says_that_it_was_kept(
 
     assert dict(files.corrections(FileRef(file=run['key']))) == {'role': 'sample'}
     assert answer.status_code == 422
-    assert answer.json()['message'].startswith('Corrected, but the scan failed')
+    assert answer.json()['message'] == (
+        'Corrected, but the runs cannot be listed: half written'
+    )
+    assert state(http)['notice'] == (
+        'Runs were corrected, but the scan failed: half written'
+    )
 
 
 def settings(form: TestClient, edit: dict[str, Any]) -> dict[str, Any]:
@@ -1467,7 +1472,7 @@ def test_the_root_redirects_to_the_batch_that_follows_else_the_last(
     assert following.headers['location'] == 'batches/a/'
 
 
-def test_a_label_that_is_no_batch_answers_404(
+def test_a_label_that_is_no_batch_answers_404_and_its_page_says_so(
     pages: Pages, manager: BatchManager, label: str
 ) -> None:
     http = TestClient(create_app(pages))
@@ -1478,10 +1483,10 @@ def test_a_label_that_is_no_batch_answers_404(
     action = http.post('/batches/none/api/scan')
     manager.remove(label)
 
-    assert http.get('/batches/none/').status_code == 404
+    # The page is served, and shows the batches with the message of its state.
+    assert http.get('/batches/none/').status_code == 200
     assert unknown.json() == {'message': 'There is no batch none.'}
     assert (action.status_code, action.json()) == (404, unknown.json())
-    assert page.get('/').status_code == 404
     assert page.get('/api/state').status_code == 404
 
 
@@ -1623,13 +1628,13 @@ def test_a_scan_after_a_correction_that_fails_is_said_once_by_the_next_poll(
 
     # As a transmission without a sample name, the run makes the source raise.
     edit = {'keys': [key], 'column': 'role', 'value': 'transmission'}
-    assert http.post('/api/runs/cells', json=edit).status_code == 422
+    assert http.post('/api/runs/cells', json=edit).json() == {
+        'notice': 'Role corrected on 1 run.'
+    }
 
     at = {'after': now['version'], 'start': now['start']}
     polled = other.get('/api/state', params=at).json()
-    assert polled['notice'] == (
-        "Runs were corrected on another page, but the scan failed: 'sample'"
-    )
+    assert polled['notice'] == "Runs were corrected, but the scan failed: 'sample'"
     at['after'] = polled['version']
     assert other.get('/api/state', params=at).status_code == 204
 
@@ -1688,10 +1693,9 @@ def test_the_rows_removed_that_a_page_counts_are_those_of_its_scope(
 STAGED_PARAMS = [
     {'name': 'sample', 'title': 'Sample'},
     {'name': 'transmission', 'title': 'Transmission'},
-    {'name': 'binning', 'title': 'Binning'},
     {'name': 'thickness', 'title': 'Thickness'},
-    {'name': 'offset', 'title': 'Offset'},
 ]
+"""The parameters of the spec offered as columns: binning and offset are groups."""
 
 
 def new_batch(**given: Any) -> dict[str, Any]:
@@ -1704,7 +1708,7 @@ def new_batch(**given: Any) -> dict[str, Any]:
     } | given
 
 
-def test_the_sources_offer_the_specs_that_fit_and_their_parameters(
+def test_the_sources_offer_the_specs_that_fit_and_the_parameters_a_cell_edits(
     pages: Pages,
 ) -> None:
     pairs, none = TestClient(create_app(pages)).get('/api/sources').json()
@@ -1728,11 +1732,9 @@ def test_the_sources_offer_the_specs_that_fit_and_their_parameters(
         'repeated',
     ]
     assert [p['name'] for p in none['specs'][0]['params']] == [
-        'binning',
         'sample',
         'transmission',
         'thickness',
-        'offset',
     ]
 
 
@@ -1755,8 +1757,8 @@ def test_a_batch_made_from_the_page_is_listed_with_what_the_form_sent(
     sent = new_batch(
         description='Thicker cells',
         columns=['sample', 'transmission', 'thickness'],
-        start=2,
-        stop=3,
+        start='2',
+        stop='10',
     )
 
     made = http.post('/api/batches', json=sent).json()
@@ -1767,9 +1769,9 @@ def test_a_batch_made_from_the_page_is_listed_with_what_the_form_sent(
         source='pairs',
         title='Afternoon',
         description='Thicker cells',
-        scope=Scope(start=2, stop=3),
+        scope=Scope(start=2, stop=10),
     )
-    assert list(rows(opened(pages, made['label']))) == ['2']
+    assert list(rows(opened(pages, made['label']))) == ['2', '3']
     assert state(http)['batches'] > before
 
 
@@ -1802,14 +1804,26 @@ def test_a_batch_without_a_source_is_made_with_the_columns_sent(
     ('given', 'said'),
     [
         ({'title': ''}, 'a batch has a title that is not empty'),
-        ({'start': 5, 'stop': 2}, 'the stop of a scope, 2, is below its start, 5'),
-        ({'start': 5, 'stop': 'b'}, 'the ends of a scope do not compare: 5, '),
+        ({'title': '  '}, 'a batch has a title that is not empty'),
+        ({'start': '5', 'stop': '2'}, 'the stop of a scope, 2, is below its start, 5'),
+        ({'start': '5', 'stop': 'b'}, "Run 'b' is not a whole number"),
+        ({'source': None, 'start': '2'}, 'no start or stop'),
         ({'columns': ['sample']}, 'the source fills'),
         ({'columns': ['sample', 'transmission', 'mass']}, 'no parameters'),
         ({'spec': 'find', 'columns': ['sample', 'transmission']}, 'no parameters'),
         ({'spec': 'other'}, 'the workspace binds no spec other'),
     ],
-    ids=['title', 'stop', 'compare', 'fills', 'column', 'fit', 'spec'],
+    ids=[
+        'title',
+        'blank',
+        'stop',
+        'index',
+        'unindexed',
+        'fills',
+        'column',
+        'fit',
+        'spec',
+    ],
 )
 def test_what_the_manager_refuses_answers_422_and_makes_no_batch(
     pages: Pages, manager: BatchManager, given: dict[str, Any], said: str
@@ -1835,3 +1849,53 @@ def test_the_root_without_a_batch_serves_the_page_and_the_routes_of_the_workspac
     assert http.get('/static/app.js').status_code == 200
     assert http.get('/api/batches').json()['rows'] == []
     assert len(http.get('/api/runs').json()['rows']) == 2
+
+
+def test_the_root_is_not_kept_by_the_browser_with_or_without_a_batch(
+    pages: Pages, manager: BatchManager
+) -> None:
+    http = TestClient(create_app(pages), follow_redirects=False)
+
+    page = http.get('/')
+    manager.create(STAGED.name, title='First', source='pairs')
+    redirect = http.get('/')
+
+    assert (page.status_code, redirect.status_code) == (200, 307)
+    assert page.headers['cache-control'] == 'no-store'
+    assert redirect.headers['cache-control'] == 'no-store'
+
+
+def test_runs_are_corrected_without_a_batch(pages: Pages, sample: Measure) -> None:
+    sample(1, 'water')
+    http = TestClient(create_app(pages))
+    (run, *_) = http.get('/api/runs').json()['rows']
+    edit = {'keys': [run['key']], 'column': 'role', 'value': 'background'}
+
+    answer = http.post('/api/runs/cells', json=edit)
+
+    assert answer.json() == {'notice': 'Role corrected on 1 run.'}
+    (shown, *_) = http.get('/api/runs').json()['rows']
+    assert (shown['cells']['role']['text'], shown['cells']['role']['edited']) == (
+        'background',
+        True,
+    )
+
+
+def test_a_batch_whose_rows_cannot_be_read_answers_422_and_the_list_stays(
+    client: Client, definitions: DefinitionStore, sample: Measure
+) -> None:
+    sample(1, 'water')
+    # The index of the rows is a number, the source says text.
+    texts = Source(pair, fills=('sample', 'transmission'), index_type=str)
+    manager = BatchManager(client, sources={'texts': texts}, definitions=definitions)
+    label = manager.create(
+        STAGED.name, title='Odd', source='texts', scope=Scope(start='a')
+    )
+    pages = Pages(manager, Follow(manager, definitions))
+
+    shown = opened(pages, label).get('/api/state')
+
+    assert shown.status_code == 422
+    assert shown.json()['message'].startswith(f'Cannot show {label}: ')
+    listed = opened(pages, label).get('/api/batches').json()['rows']
+    assert [b['title'] for b in listed] == ['Odd']

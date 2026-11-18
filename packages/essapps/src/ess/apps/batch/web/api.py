@@ -9,7 +9,9 @@ Each action of a page is a ``POST`` that answers with the
 :class:`~.models.State` after it, or a 422 with ``{'message': ...}``; the
 reasons of a refused reduction are in the state. ``GET api/state`` with the
 ``after`` version and the ``start`` the page has answers 204 while nothing
-changed. The page and the API of a label that is no batch answer 404. The
+changed. The API of a label that is no batch answers 404, and of a batch
+that cannot be made 422; the page is served for any label, and shows the
+batches with that message instead. The
 routes of the workspace, such as ``api/batches``, are served at ``/api/...``
 and again under any label, which they ignore, so that a page asks for them as
 for its own; so are the static files. A row is named by its key in the body or
@@ -50,6 +52,7 @@ from .models import (
     Keys,
     Made,
     NewBatch,
+    Notice,
     On,
     Plot,
     Reduce,
@@ -110,10 +113,12 @@ def create_app(pages: Pages) -> FastAPI:
 
     @app.get('/', include_in_schema=False)
     def home() -> Response:
-        label = pages.home()
+        # The answer depends on the batches, so the browser keeps none, not
+        # even for Back.
+        label, kept = pages.home(), {'Cache-Control': 'no-store'}
         if label is None:
-            return FileResponse(STATIC / 'index.html')
-        return RedirectResponse(f'batches/{quote(label, safe="")}/')
+            return FileResponse(STATIC / 'index.html', headers=kept)
+        return RedirectResponse(f'batches/{quote(label, safe="")}/', headers=kept)
 
     # The routes of the page of one batch, by its label. FastAPI reads the
     # annotation PageOfLabel, a name of this function, so this module does not
@@ -121,8 +126,10 @@ def create_app(pages: Pages) -> FastAPI:
     batch = APIRouter(prefix='/batches/{label}')
     PageOfLabel = Annotated[Page, Depends(pages.page)]
 
+    # The page of any label: its first request of the state says if the batch
+    # cannot be shown, and the page then shows the batches instead.
     @batch.get('/', include_in_schema=False)
-    def index(_: PageOfLabel) -> FileResponse:
+    def index() -> FileResponse:
         return FileResponse(STATIC / 'index.html')
 
     @batch.get('/api/state', responses={204: {'description': 'Nothing changed.'}})
@@ -181,14 +188,6 @@ def create_app(pages: Pages) -> FastAPI:
     @batch.post('/api/settings/discard')
     def discard_settings(page: PageOfLabel) -> State:
         return page.discard_settings()
-
-    @batch.post('/api/runs/cells')
-    def correct(page: PageOfLabel, body: CellEdit) -> State:
-        return page.correct(body)
-
-    @batch.post('/api/runs/cells/revert')
-    def revert_run(page: PageOfLabel, body: Cells) -> State:
-        return page.revert_run(body)
 
     @batch.post('/api/row/use-settings')
     def use_settings(page: PageOfLabel, body: Key) -> State:
@@ -257,6 +256,15 @@ def create_app(pages: Pages) -> FastAPI:
     @workspace.get('/api/runs')
     def runs() -> Runs:
         return pages.runs()
+
+    @workspace.post('/api/runs/cells')
+    def correct(body: CellEdit) -> Notice:
+        """Correct runs; the page of each batch scans at its next poll."""
+        return pages.correct(body)
+
+    @workspace.post('/api/runs/cells/revert')
+    def revert_run(body: Cells) -> Notice:
+        return pages.revert_run(body)
 
     app.include_router(batch)
     app.include_router(workspace)
