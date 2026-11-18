@@ -155,6 +155,29 @@ def test_a_poll_sees_a_row_that_another_caller_scanned_without_a_record(
     assert salt['cells']['sample']['value'].startswith('run 4')
 
 
+@pytest.mark.parametrize(
+    'act',
+    [
+        lambda page: thickness(page, ['1'], 3),
+        lambda page: draft(page, 3),
+        lambda page: page.post('/api/rows/remove', json={'keys': ['1']}),
+    ],
+    ids=['a cell', 'the settings form', 'a row removed'],
+)
+def test_an_action_of_one_page_reaches_another_at_its_next_poll(
+    http: TestClient, act: Callable[[TestClient], Any]
+) -> None:
+    now = state(http)
+    after = {'after': now['version'], 'start': now['start']}
+    assert http.get('/api/state', params=after).status_code == 204
+
+    act(http)
+
+    polled = http.get('/api/state', params=after)
+    assert polled.status_code == 200
+    assert polled.json()['version'] > now['version']
+
+
 def test_a_rescan_offers_the_files_it_found_at_the_new_rows(
     http: TestClient, sample: Measure
 ) -> None:
@@ -290,6 +313,58 @@ def test_a_refused_value_stays_marked_until_it_is_edited(http: TestClient) -> No
     assert state(http)['refused'] == []
 
 
+def refuse_thickness_of_water(http: TestClient) -> None:
+    thickness(http, ['1'], -1)
+    refused = http.post('/api/reduce', json={'which': 'selected', 'keys': ['1']})
+    assert refused.status_code == 422
+
+
+def test_a_refusal_goes_when_a_reduction_succeeds(http: TestClient) -> None:
+    refuse_thickness_of_water(http)
+    assert state(http)['refused'] != []
+
+    reduce = http.post('/api/reduce', json={'which': 'selected', 'keys': ['2']})
+
+    assert reduce.status_code == 200
+    assert reduce.json()['refused'] == []
+
+
+def test_a_refusal_stays_when_another_cell_of_its_row_is_edited(
+    http: TestClient,
+) -> None:
+    refuse_thickness_of_water(http)
+    column = next(c for c in state(http)['columns'] if c['name'] == 'transmission')
+    label = next(o for o in column['editor']['options'] if o.startswith('run 1002'))
+
+    http.post(
+        '/api/cells', json={'keys': ['1'], 'column': 'transmission', 'value': label}
+    )
+
+    assert [r['entry'] for r in state(http)['refused']] == ['1']
+
+
+def test_a_refusal_of_a_cell_stays_when_other_settings_are_applied(
+    http: TestClient,
+) -> None:
+    refuse_thickness_of_water(http)
+
+    applied = bins(http, 3)
+
+    assert [r['entry'] for r in applied['refused']] == ['1']
+
+
+def test_a_refusal_of_a_setting_goes_when_settings_are_applied(
+    http: TestClient,
+) -> None:
+    bins(http, 0)
+    assert http.post('/api/reduce', json={'which': 'remaining'}).status_code == 422
+    assert [r['entry'] for r in state(http)['refused']] == [None]
+
+    applied = bins(http, 3)
+
+    assert applied['refused'] == []
+
+
 def test_reduce_then_the_state_shows_the_rows_done(
     http: TestClient, client: Client
 ) -> None:
@@ -324,6 +399,39 @@ def test_rows_running_show_progress_and_cancel_shows_as_cancelled(
 
     assert statuses(http) == {'1': 'cancelled', '2': 'cancelled', '3': 'incomplete'}
     assert state(http)['action']['label'] == 'Retry 2 cancelled'
+
+
+def test_the_action_counts_the_rows_running_and_the_rows_that_can_be_reduced_again(
+    http: TestClient, client: Client, gate: Gate
+) -> None:
+    def counts() -> dict[str, int]:
+        action = state(http)['action']
+        return {k: action[k] for k in ('remaining', 'again', 'running')}
+
+    before = counts()
+    gate.close()
+    http.post('/api/reduce', json={'which': 'remaining'})
+    running = counts()
+    gate.open()
+    client.wait(client.records())
+
+    assert before == {'remaining': 2, 'again': 2, 'running': 0}
+    assert running == {'remaining': 0, 'again': 0, 'running': 2}
+    assert counts() == {'remaining': 0, 'again': 2, 'running': 0}
+
+
+def test_a_row_says_whether_its_result_is_current_or_outdated(
+    http: TestClient, client: Client
+) -> None:
+    assert rows(http)['1']['result'] is None
+    reduced(http, client)
+    thickness(http, ['1'], 3)
+
+    shown = rows(http)
+
+    assert (shown['1']['status'], shown['1']['result']) == ('outdated', 'outdated')
+    assert (shown['2']['status'], shown['2']['result']) == ('done', 'current')
+    assert shown['3']['result'] is None
 
 
 def test_a_changed_setting_leaves_the_rows_done_marked_with_earlier_settings(

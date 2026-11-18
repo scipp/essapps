@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, Field, StrictInt
 
-from ess.apps import Client, Status, SubmitError, file, local
+from ess.apps import Client, Status, SubmitError, Workspace, file, local
 from ess.apps.batch import (
     EMPTY,
     Batch,
@@ -20,8 +20,16 @@ from ess.apps.batch import (
     left_to_reduce,
     ready,
 )
+from ess.apps.log import Log
 from ess.apps.testing import CountingClient, FakeStore, StagedFunction
-from ess.spec import FileRef, OutputRef, RunFile, WorkflowSpec, function_binding
+from ess.spec import (
+    FileRef,
+    OutputRef,
+    RunFile,
+    SampleRunFile,
+    WorkflowSpec,
+    function_binding,
+)
 
 from .toys import COLUMNS, FIND, PLAIN, STAGED, Gate, Measure, Outputs, pair
 
@@ -652,6 +660,47 @@ def test_a_result_of_another_spec_version_is_the_rows_result_and_outdated(
     assert left_to_reduce(states, COLUMNS) == ['1']
 
 
+class Redefined(BaseModel):
+    """The params of ``PLAIN`` with another definition of its binning."""
+
+    count: int = 2
+    sample: SampleRunFile
+    transmission: SampleRunFile
+    thickness: float = 1.0
+
+
+def test_a_result_of_a_spec_of_the_same_version_but_another_definition_is_outdated(
+    files: CorrectedFiles, sample: Measure, tmp_path: Path
+) -> None:
+    redefined = PLAIN.model_copy(update={'params': Redefined})
+    sample(1, 'water')
+    kept = tmp_path / 'log'
+    reduced = Workspace(
+        proposal='p1',
+        files=files,
+        bind=[function_binding(PLAIN, lambda _: Outputs(total=1.0))],
+        log=Log(kept),
+    )
+    with Client(reduced, submitter='anna', on_close=reduced.close) as client:
+        old = Batch(client, PLAIN, columns=COLUMNS, label='s', source=pair)
+        old.scan()
+        client.wait(old.reduce(['1']))
+    again = Workspace(
+        proposal='p1',
+        files=files,
+        bind=[function_binding(redefined, lambda _: Outputs(total=1.0))],
+        log=Log(kept),
+    )
+    with Client(again, submitter='anna', on_close=again.close) as client:
+        new = Batch(client, redefined, columns=COLUMNS, label='s', source=pair)
+        new.scan()
+
+        state = new.state()['1']
+
+        assert (state.status, state.spec_changed) == (Status.COMPLETED, True)
+        assert state.text == 'outdated'
+
+
 def test_the_state_of_chosen_rows_reads_only_the_records_that_changed(
     client: Client, sample: Measure
 ) -> None:
@@ -760,6 +809,23 @@ def test_a_cell_reading_a_failed_record_stops_only_its_row(
     reduce.rows = reduce.rows.edit('2', {'offset': failed['1'].ref('total')})
 
     assert ready(reduce.state()) == ['1']
+
+
+def test_a_cell_reading_a_cancelled_record_stops_only_its_row(
+    chain: tuple[Batch, Batch], client: Client, gate: Gate
+) -> None:
+    _, reduce = chain
+    gate.close()
+    cancelled = reduce.reduce(['1'])
+    reduce.cancel(['1'])
+    gate.open()
+    client.wait(cancelled)
+    reduce.rows = reduce.rows.edit('2', {'offset': cancelled['1'].ref('total')})
+
+    states = reduce.state()
+
+    assert ready(states) == ['1']
+    assert [e.msg for e in states['2'].problems] == ['the record it reads is cancelled']
 
 
 def test_an_unknown_record_in_a_cell_touches_only_its_row(

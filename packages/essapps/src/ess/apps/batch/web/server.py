@@ -222,8 +222,7 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
             except NotKept as error:
                 raise Problem(f'The change was not kept: {error}') from None
             finally:
-                server.version += 1
-                server._rows = server.batch.rows
+                server._new_version()
             return server.state(notice=notice or '')
 
     return action
@@ -299,8 +298,6 @@ class Server:
         self._marks = None if marks is None or files is None else Fields(marks, listing)
         self.refused: list[FieldError] = []
         self.version = 1
-        # Equal to the rows of the batch at the last change of the version.
-        self._rows = batch.rows
         self.runs_version = 1
         # The runs as listed at the last change of the runs' version.
         self._runs = self._runs_seen()
@@ -311,8 +308,26 @@ class Server:
         # Why Follow did not reduce each row at its last reduction, by key.
         self.waiting: dict[str, str] = {}
         self.step_failure: str | None = None
+        # What :meth:`_live` gave at the last change of the version.
+        self._seen = self._live()
 
     # Reading
+
+    def _live(self) -> tuple[object, ...]:
+        """
+        What the page shows that changes without an action: the rows, the
+        records, the runs, and how the last step of Follow went.
+        """
+        rows, records = self.batch.rows, self._listing.cursor
+        return rows, records, self.runs_version, self.waiting, self.step_failure
+
+    def _moved(self) -> bool:
+        """Whether what :meth:`_live` gives changed since the version moved."""
+        return self._live() != self._seen
+
+    def _new_version(self) -> None:
+        self.version += 1
+        self._seen = self._live()
 
     def _relist(self) -> None:
         self._listing = Listing(self.batch.client, previous=self._listing)
@@ -386,10 +401,9 @@ class Server:
         changes = self.batch.client.changes(after=self._listing.cursor)
         # A scan makes a new table each time, equal if nothing changed; one
         # that changed may name files that the listing lacks.
-        if changes.records or self.batch.rows != self._rows:
+        if changes.records or self._moved():
             self._relist()
-            self.version += 1
-        self._rows = self.batch.rows
+            self._new_version()
         if after == self.version and start == self.start:
             return None
         return self.state()
@@ -847,74 +861,53 @@ class Server:
         self.following = on
         if not on:
             return 'Stopped following.'
-        self._step()
+        self.step()
         return 'Following.'
 
     def step(self) -> None:
         """
         One step of Follow: the scan of "Rescan runs", then the reduction of
-        :meth:`Automatic.reduce`. A step that changes nothing the page shows,
-        such as the rows, the runs, the records, what waits and why, or its
-        failure, leaves the version, so that a page polling it gets nothing new.
+        :meth:`Automatic.reduce`, with the batch's settings, whatever the form
+        holds. :attr:`waiting` says why each row was not reduced. Whatever it
+        raises, from the files, the workflow or the workspace, is its failure,
+        said in the state until a step runs through. A step that changes
+        nothing the page shows, such as the rows, the runs, the records, what
+        waits and why, or its failure, leaves the version, so that a page
+        polling it gets nothing new.
         """
         with self.lock:
-            if self._step():
-                self.version += 1
-            self._rows = self.batch.rows
-
-    def _step(self) -> bool:
-        """
-        A step of Follow, with the batch's settings, whatever the form holds;
-        whether it changed what the page shows. :attr:`waiting` says why each
-        row was not reduced. Whatever it raises, from the files, the workflow
-        or the workspace, is its failure, said in the state until a step runs
-        through.
-        """
-        rows, waiting, failure = self._rows, self.waiting, self.step_failure
-        moved = False
-        try:
             try:
-                if self.loop is None:
-                    raise Problem('This page does not follow the files.')
-                self._scan()
-                self.loop.reduce()
-                self.waiting = {
-                    key: f'Follow could not reduce it: {forms.message(reason)}'
-                    for key, reason in self.loop.refused.items()
-                }
-            finally:
-                moved = self._caught_up()
-            self.step_failure = None
-        except Exception as error:  # the next step tries again
-            self.step_failure = str(error) or repr(error)
-        return (
-            moved
-            or self.batch.rows != rows
-            or self.waiting != waiting
-            or self.step_failure != failure
-        )
-
-    def _caught_up(self) -> bool:
-        """
-        A new listing, with one reading of the changes of records, and a new
-        version of the runs if they changed; the forms are refreshed only if
-        either changed. Whether one did.
-        """
-        cursor = self._listing.cursor
-        self._listing = Listing(self.batch.client, previous=self._listing)
-        records = self._listing.cursor != cursor
-        runs = self._runs_seen() != self._runs
-        if runs:
-            self._new_runs()
-        if records or runs:
-            self._refresh()
-        return records or runs
+                try:
+                    if self.loop is None:
+                        raise Problem('This page does not follow the files.')
+                    self._scan()
+                    self.loop.reduce()
+                    self.waiting = {
+                        key: f'Follow could not reduce it: {forms.message(reason)}'
+                        for key, reason in self.loop.refused.items()
+                    }
+                finally:
+                    # One reading of the changes of records. The forms are
+                    # refreshed only if what the page shows changed, since
+                    # new rows may name files that the forms do not offer yet.
+                    self._listing = Listing(self.batch.client, previous=self._listing)
+                    if self._runs_seen() != self._runs:
+                        self._new_runs()
+                    if self._moved():
+                        self._refresh()
+                self.step_failure = None
+            except Exception as error:  # the next step tries again
+                self.step_failure = str(error) or repr(error)
+            if self._moved():
+                self._new_version()
 
     def tick(self) -> None:
         """A step, if following; :func:`~.api.create_app` calls it on a timer."""
         # Under the lock, so that a tick that waited for a request sees what
-        # that request did: no step after "Stopped following".
-        with self.lock:
+        # that request did: no step after "Stopped following". A step says
+        # what it raises; what it cannot say, such as an exception whose text
+        # raises, must not end the timer.
+        with self.lock, suppress(Exception):
             if self.following:
                 self.step()
 

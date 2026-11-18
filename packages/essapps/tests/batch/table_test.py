@@ -199,6 +199,27 @@ def test_a_row_added_takes_no_edit_left_from_a_row_gone() -> None:
     assert orphan.add(Row('a', {'x': 5, 'y': 7}))['a'].values == {'x': 5, 'y': 7}
 
 
+def test_a_row_put_takes_no_edit_left_from_a_row_gone() -> None:
+    orphan = RowTable().rescan([Row('a', {'x': 1})]).edit('a', {'x': 9}).rescan([])
+
+    put = orphan.put([Row('a', {'x': 5, 'y': 7})], columns=('x', 'y'))
+
+    assert put['a'].values == {'x': 5, 'y': 7}
+    assert put.edits == {}
+
+
+def test_a_row_added_stands_where_the_added_rows_do_when_the_scan_gives_its_key(
+    table: RowTable,
+) -> None:
+    added = table.add(Row('c', {'x': 7}, {'name': 'by hand'}))
+
+    rescanned = added.rescan([Row('c', {'x': 0}, {'name': 'scan'}), Row('a', {'x': 1})])
+
+    assert [row.key for row in rescanned] == ['a', 'c']
+    assert rescanned['c'].info == {'name': 'by hand'}
+    assert len(rescanned) == 2
+
+
 def test_a_row_given_with_empty_has_that_cell_empty() -> None:
     t = RowTable().rescan([Row('a', {'x': EMPTY, 'y': 1})]).add(Row('b', {'x': EMPTY}))
 

@@ -14,14 +14,14 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
-from ess.apps import Client
+from ess.apps import Client, Status
 from ess.apps.batch import Batch, CorrectedFiles
 from ess.apps.batch.web import Server, create_app
 from ess.apps.batch.web.models import CellEdit, Cells, Edit, Reduce, State
 from ess.apps.batch.web.server import Problem
 from ess.apps.testing import FakeFiles
 
-from .toys import Gate, Measure
+from .toys import COLUMNS, STAGED, Gate, Measure, pair
 
 AT = frozenset({'sample', 'transmission'})
 BINS = ['binning', 'bins']
@@ -150,6 +150,58 @@ def test_a_step_after_a_result_finished_tells_the_page(
     assert statuses(shown) == {'water': 'done'}
 
 
+class FinishingClient:
+    """
+    Delegates to a client, and lets the reductions in flight finish right after
+    the first read of their status that says they run: a result that finishes
+    just after the server looked.
+    """
+
+    def __init__(self, client: Client, gate: Gate) -> None:
+        self._client = client
+        self._gate = gate
+        self.finishing = False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    def status(self, records: Any) -> Any:
+        statuses = self._client.status(records)
+        if self.finishing and Status.PENDING in statuses:
+            self.finishing = False
+            self._gate.open()
+            self._client.wait(records)
+        return statuses
+
+
+def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_poll(
+    client: Client, sample: Measure, gate: Gate
+) -> None:
+    finishing = FinishingClient(client, gate)
+    batch = Batch(
+        finishing,  # type: ignore[arg-type]
+        STAGED,
+        columns=COLUMNS,
+        label='scan',
+        source=pair,
+        staged=True,
+    )
+    sample(1, 'water')
+    page = TestClient(create_app(batch, name='name', at=AT))
+    server: Server = page.app.state.server  # type: ignore[attr-defined]
+    gate.close()
+    finishing.finishing = True
+
+    server.step()
+
+    shown = page.get(
+        '/api/state', params={'after': server.version, 'start': server.start}
+    )
+    assert shown.status_code == 200
+    assert {r['status'] for r in shown.json()['rows']} == {'done'}
+    batch.close()
+
+
 def test_a_step_reduces_a_row_whose_cell_changed_at_a_column_of_at(
     server: Server, client: Client, sample: Measure, fake: FakeFiles
 ) -> None:
@@ -161,6 +213,18 @@ def test_a_step_reduces_a_row_whose_cell_changed_at_a_column_of_at(
     server.step()
 
     assert done(server, client).rows[0].record != first
+
+
+def test_a_run_that_a_step_finds_can_be_chosen_in_a_cell_without_a_runs_view(
+    batch: Batch, sample: Measure
+) -> None:
+    server = Server(batch, name='name', at=AT)
+    server.step()
+    sample(1, 'water', partner=False)  # a row that waits, so no record is made
+
+    server.step()
+
+    assert option(server, 'sample', 1) == 'run 1 (sample)'
 
 
 def test_a_step_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_them(
@@ -473,6 +537,30 @@ def test_a_step_that_raises_anywhere_is_said_and_follow_stays_on(
     assert statuses(done(server, client)) == {'water': 'done'}
 
 
+class Unsayable(Exception):
+    """An exception that cannot be put in words."""
+
+    def __str__(self) -> str:
+        raise ValueError('no words')
+
+    __repr__ = __str__
+
+
+def test_a_tick_whose_step_raises_what_cannot_be_said_lets_the_next_tick_run(
+    server: Server, client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    sample(1, 'water')
+    listed = fake.list
+    fake.list = lambda selector: (_ for _ in ()).throw(Unsayable())
+    server.following = True
+
+    server.tick()
+    fake.list = listed
+    server.tick()
+
+    assert statuses(done(server, client)) == {'water': 'done'}
+
+
 def test_a_tick_does_nothing_while_not_following(
     server: Server, client: Client, sample: Measure
 ) -> None:
@@ -483,15 +571,33 @@ def test_a_tick_does_nothing_while_not_following(
     assert server.state().rows == []
 
 
+class WatchedLock:
+    """A re-entrant lock that says when a thread has to wait to take it."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self.waited = threading.Event()
+
+    def __enter__(self) -> None:
+        if not self._lock.acquire(blocking=False):
+            self.waited.set()
+            self._lock.acquire()
+
+    def __exit__(self, *_: object) -> None:
+        self._lock.release()
+
+
 def test_a_tick_that_waited_for_the_request_that_stops_following_does_nothing(
     server: Server, client: Client, sample: Measure
 ) -> None:
     server.follow(True)
+    lock = WatchedLock()
+    server.lock = lock  # type: ignore[assignment]
     timer = threading.Thread(target=server.tick)
 
     with server.lock:  # a request that runs while the timer fires
         timer.start()
-        time.sleep(0.2)  # the tick waits for the lock
+        assert lock.waited.wait(30)  # the tick waits for the lock
         sample(1, 'water')
         server.follow(False)
     timer.join()
