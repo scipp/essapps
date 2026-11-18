@@ -788,9 +788,15 @@ def test_a_change_the_definitions_cannot_keep_answers_422_and_nothing_changes(
     draft(kept, 7)
     setting = kept.post('/api/settings/apply')
     cell = thickness(kept, ['1'], 3)
+    table = kept.post(
+        '/api/table',
+        params={'name': 'rows.csv'},
+        content=b'key,sample,transmission,thickness\n1,1,1001,3\n',
+    )
 
     assert setting.json() == {'message': 'The change was not kept: disk full'}
     assert cell == {'message': 'The change was not kept: disk full'}
+    assert table.json() == {'message': 'The change was not kept: disk full'}
     assert settings_key('kept') not in flaky.kept
     assert not rows(kept)['1']['cells']['thickness']['edited']
 

@@ -1136,6 +1136,8 @@ class Server:
                     batch.put(rows)
                 except SubmitError as error:
                     raise Problem('; '.join(map(str, error.errors))) from None
+                except NotKept:
+                    raise  # a fault of the definitions, not of the file
                 except (OSError, ValueError, KeyError) as error:
                     raise Problem(f'Cannot load {name}: {_why(error)}') from None
         finally:

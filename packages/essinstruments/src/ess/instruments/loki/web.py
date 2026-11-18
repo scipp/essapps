@@ -39,7 +39,8 @@ the folder, as ``files.csv`` lists it.
 The switch "Follow" of the page, or ``--follow`` from the start, with a step
 every ``SECONDS`` (5), reduces each row once both its runs are listed, and
 again when one of them changes, such as a newer transmission run of its sample
-(:data:`AT`). Whether the page follows is not kept: a restart starts with
+(:data:`AT`). A row that a person changed waits for the person's "Reduce".
+Whether the page follows is not kept: a restart starts with
 ``--follow`` or without.
 """
 
