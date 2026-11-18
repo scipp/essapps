@@ -55,6 +55,13 @@ settings, whatever the form holds. While the workflow refuses the
 batch's settings, no result can be said to be current, so a done row is
 outdated.
 
+The tab "Batch" shows the header of the batch, and changes its title,
+description and scope with the manager (:meth:`Page.change`), which decides
+what can be changed. :meth:`Page.start_next` ends the batch at a row and makes
+the next one from there. Removing a batch is :meth:`Pages.remove
+<.pages.Pages.remove>`; a request to a page of a batch removed answers
+:class:`Missing`.
+
 A batch with a source offers to follow the files. The switch "Follow" makes
 the batch the one that the application's Follow steps
 (:class:`~ess.apps.batch.auto.Follow`), so no other batch follows. While it
@@ -90,7 +97,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import AbstractContextManager, contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -109,11 +116,13 @@ from .. import (
     Batch,
     NotKept,
     RowState,
+    Scope,
     Words,
     earlier_settings,
     frames,
     left_to_reduce,
     ready,
+    scope_of,
     status_texts,
 )
 from .. import Row as TableRow
@@ -127,7 +136,12 @@ from .models import (
     Cells,
     Column,
     Edit,
+    Ends,
     Following,
+    HeaderEdit,
+    HeaderShown,
+    Made,
+    Next,
     Plot,
     Reduce,
     Refused,
@@ -191,6 +205,10 @@ class Problem(Exception):
     """A request that cannot be done, with what to tell the person."""
 
 
+class Missing(Exception):
+    """No batch has the label asked for."""
+
+
 def _say(title: str, message: str) -> str:
     """A reason at the field ``title``, as a sentence."""
     message = forms.message(message)
@@ -240,7 +258,7 @@ def _file(name: str, content: bytes | None = None) -> Iterator[Path]:
 def _locked[**P, T](method: Callable[P, T]) -> Callable[P, T]:
     @functools.wraps(method)
     def locked(*args: P.args, **kwargs: P.kwargs) -> T:
-        with args[0].lock:  # type: ignore[attr-defined]
+        with args[0]._held():  # type: ignore[attr-defined]
             return method(*args, **kwargs)
 
     return locked
@@ -255,7 +273,7 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
     @functools.wraps(method)
     def action(*args: P.args, **kwargs: P.kwargs) -> State:
         page: Page = args[0]  # type: ignore[assignment]
-        with page.lock:
+        with page._held():
             try:
                 notice = method(*args, **kwargs)
             except NotKept as error:
@@ -314,6 +332,19 @@ class Page:
     def lock(self) -> AbstractContextManager[object]:
         """The lock of all pages."""
         return self.pages.lock
+
+    @contextmanager
+    def _held(self) -> Iterator[None]:
+        """
+        The lock of all pages, taken for a request; raises :class:`Missing`
+        if the batch was removed since the page was handed out, such as by a
+        request that ran between this one's check of the label and its
+        action.
+        """
+        with self.lock:
+            if self.label not in self.pages.manager.headers():
+                raise Missing(f'There is no batch {self.label}.')
+            yield
 
     def _follows(self) -> bool:
         """Whether this batch is the one that follows."""
@@ -483,13 +514,23 @@ class Page:
         unapplied = self._unapplied()
         marks = [e for e in (*unusable, *self.refused) if not e.entry and shown(e)]
         fields = self.batch.spec.params.model_fields
+        header, source = self.pages.manager.headers()[self.label], self.batch.source
         return State(
             version=self.version,
             start=self.start,
             runs=self.pages.runs_version if self.pages.corrects_runs else None,
             batches=self.pages.batches_version(),
             label=self.label,
-            title=self.pages.manager.headers()[self.label].title,
+            title=header.title,
+            header=HeaderShown(
+                workflow=self.batch.spec.title,
+                source=header.source,
+                index_title='' if source is None else source.index_title,
+                description=header.description,
+                start=header.scope.start,
+                stop=header.scope.stop,
+                keys=None if header.scope.keys is None else sorted(header.scope.keys),
+            ),
             application=self.pages.title,
             words=self.words,
             folder=self.pages.folder,
@@ -946,6 +987,108 @@ class Page:
         return (
             f'The form shows the settings {name} was reduced with. Apply to use them.'
         )
+
+    # The header
+
+    def _scope(self, ends: Ends) -> Scope | None:
+        """
+        The slice of ``ends``, converted as :func:`~ess.apps.batch.scope_of`
+        does, or ``None`` if the scope of the batch names its keys, which no
+        page changes; :class:`Problem` for an end that it refuses.
+        """
+        if self.pages.manager.headers()[self.label].scope.keys is not None:
+            return None
+        try:
+            return scope_of(self.batch.source, ends.start, ends.stop)
+        except ValueError as error:
+            raise Problem(f'The batch was not changed: {why(error)}.') from None
+
+    @_action
+    def change(self, edit: HeaderEdit) -> str:
+        """
+        Give the batch the title, description and scope of ``edit``
+        (:meth:`~ess.apps.batch.BatchManager.change`); a scope of keys stays
+        as it is. What the manager refuses is a :class:`Problem`, and changes
+        nothing.
+        """
+        scope = self._scope(edit)
+        try:
+            self.pages.manager.change(
+                self.label, title=edit.title, description=edit.description, scope=scope
+            )
+        except (KeyError, ValueError) as error:
+            raise Problem(f'The batch was not changed: {why(error)}.') from None
+        return 'Saved.'
+
+    @_locked
+    def added(self, ends: Ends) -> int:
+        """
+        How many rows of the last scan the scope of ``ends`` holds that the
+        batch does not, with no result and no cell set by hand: those that
+        Follow reduces at its next step (:func:`~ess.apps.batch.arrived`) if
+        the batch follows when the scope is saved. Nothing for a scope of
+        keys, which a change keeps.
+        """
+        if (scope := self._scope(ends)) is None:
+            return 0
+        rows = self.batch.rows
+        held = replace(rows, scope=scope)
+        reduced = {r.member for r in self.batch.client.records(label=self.label)}
+        return sum(
+            r.key not in rows and r.key not in reduced and r.key not in rows.edits
+            for r in held
+        )
+
+    @_locked
+    def start_next(self, request: Next) -> Made:
+        """
+        End the batch before row ``request.key``, and start the next batch
+        there, called ``request.title``, with the same spec, source, columns
+        and settings, from the row's index on. Follow moves to it if this
+        batch follows.
+
+        The next batch is made first, so a refusal of the manager, such as of
+        an empty title, changes nothing. If this batch then cannot be ended,
+        both hold the rows from that index on, Follow stays where it is, and
+        the :class:`Problem` says so.
+        """
+        manager = self.pages.manager
+        old = manager.headers()[self.label]
+        if old.scope.keys is not None:
+            raise Problem('This batch names its rows, so it has no end to set.')
+        row = self._row_of(request.key)
+        if (index := row.index) is None:
+            source = self.batch.source
+            what = 'index' if source is None else source.index_title.lower()
+            name = self._named(row)
+            raise Problem(f'{name} has no {what}, so no batch can start at it.')
+        try:
+            label = manager.create(
+                old.spec,
+                title=request.title,
+                source=old.source,
+                columns=old.columns,
+                scope=Scope(start=index),
+                settings=self.batch.settings,
+            )
+        except (KeyError, ValueError, NotKept) as error:
+            raise Problem(f'The next batch was not made: {why(error)}.') from None
+        try:
+            manager.change(self.label, scope=Scope(start=old.scope.start, stop=index))
+        except NotKept as error:
+            raise Problem(
+                f'{request.title} was made, but this batch was not ended, so both '
+                f'hold the {self.words.many} from {index} on: {error}'
+            ) from None
+        if self._follows():
+            try:
+                self.pages.follow.on(label)
+            except NotKept as error:
+                raise Problem(
+                    f'{request.title} was made and this batch ended, but Follow '
+                    f'stays on this batch: {error}'
+                ) from None
+        return Made(label=label)
 
     # One row
 

@@ -125,11 +125,13 @@ class Gate:
 class Refusing:
     """
     Definitions that refuse to save or delete the tables named ``part``, such
-    as ``'header'``, and keep the others in the definitions they wrap.
+    as ``'header'``, or the table of the key ``part``, such as
+    ``('labels', 'scan', 'header')``, and keep the others in the definitions
+    they wrap.
     """
 
     def __init__(self, definitions: DefinitionStore) -> None:
-        self.part: str | None = None
+        self.part: str | Key | None = None
         self._definitions = definitions
 
     def load[T](self, key: Key, read: Callable[[Any], T]) -> T | None:
@@ -147,7 +149,7 @@ class Refusing:
         return self._definitions.labels()
 
     def _check(self, key: Key) -> None:
-        if key[-1] == self.part:
+        if self.part in (key[-1], key):
             raise NotKept(f'{key}: refused')
 
 

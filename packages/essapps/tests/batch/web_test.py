@@ -31,8 +31,9 @@ from ess.apps.batch import (
     Source,
 )
 from ess.apps.batch.auto import Follow
-from ess.apps.batch.definition import Key, NotKept, settings_key
+from ess.apps.batch.definition import Key, NotKept, header_key, settings_key
 from ess.apps.batch.web import Pages, Shown, create_app, demo, plots
+from ess.apps.batch.web.page import Missing
 from ess.apps.testing import CountingClient, FakeFiles
 from ess.spec import FileRef, SampleRunFile, WorkflowSpec, function_binding
 
@@ -1899,3 +1900,279 @@ def test_a_batch_whose_rows_cannot_be_read_answers_422_and_the_list_stays(
     assert shown.json()['message'].startswith(f'Cannot show {label}: ')
     listed = opened(pages, label).get('/api/batches').json()['rows']
     assert [b['title'] for b in listed] == ['Odd']
+
+
+# The tab "Batch"
+
+
+def save_header(http: TestClient, **given: Any) -> Any:
+    """Save the header of the page's batch, as the tab "Batch" sends it."""
+    sent = {'title': 'Scan', 'description': '', 'start': None, 'stop': None}
+    return http.post('/api/batch', json=sent | given)
+
+
+def test_the_state_shows_what_the_batch_was_made_with(http: TestClient) -> None:
+    assert state(http)['header'] == {
+        'workflow': 'Staged',
+        'source': 'pairs',
+        'index_title': 'Run',
+        'description': '',
+        'start': None,
+        'stop': None,
+        'keys': None,
+    }
+
+
+def test_a_title_description_and_scope_saved_on_the_page_are_kept(
+    http: TestClient, manager: BatchManager
+) -> None:
+    saved = save_header(http, title='Morning', description='1 mm cells', start='2')
+
+    assert manager.headers()['scan'] == Header(
+        spec=STAGED.name,
+        columns=COLUMNS,
+        source='pairs',
+        title='Morning',
+        description='1 mm cells',
+        scope=Scope(start=2),
+    )
+    shown = saved.json()
+    assert (shown['title'], shown['notice']) == ('Morning', 'Saved.')
+    assert (shown['header']['description'], shown['header']['start']) == (
+        '1 mm cells',
+        2,
+    )
+    assert [row['key'] for row in shown['rows']] == ['2', '3']
+
+
+@pytest.mark.parametrize(
+    ('given', 'said'),
+    [
+        ({'title': ' '}, 'a batch has a title that is not empty'),
+        ({'start': '5', 'stop': '2'}, 'the stop of a scope, 2, is below its start, 5'),
+        ({'start': 'b'}, "Run 'b' is not a whole number"),
+    ],
+    ids=['title', 'stop', 'index'],
+)
+def test_a_header_the_manager_refuses_answers_422_and_changes_nothing(
+    http: TestClient, manager: BatchManager, given: dict[str, Any], said: str
+) -> None:
+    before = manager.headers()
+
+    answer = save_header(http, **given)
+
+    assert answer.status_code == 422
+    assert answer.json()['message'] == f'The batch was not changed: {said}.'
+    assert manager.headers() == before
+
+
+def test_a_scope_that_names_rows_is_shown_and_kept_when_the_title_is_saved(
+    http: TestClient, manager: BatchManager
+) -> None:
+    manager.change('scan', scope=Scope(keys={'2', '1'}))
+
+    shown = save_header(http, title='Named').json()
+
+    assert manager.headers()['scan'].scope == Scope(keys={'1', '2'})
+    assert shown['header']['keys'] == ['1', '2']
+    assert http.post('/api/batch/added', json={}).json() == 0
+
+
+def test_the_rows_a_wider_scope_adds_are_those_with_no_result_and_not_set_by_hand(
+    http: TestClient,
+    manager: BatchManager,
+    batch: Batch,
+    client: Client,
+    sample: Measure,
+) -> None:
+    sample(4, 'dmso')
+    sample(5, 'thf')
+    batch.scan()
+    client.wait(batch.reduce(['2']))
+    thickness(http, ['3'], 2)
+    manager.change('scan', scope=Scope(stop=2))
+
+    added = http.post('/api/batch/added', json={'start': None, 'stop': '5'})
+
+    assert added.json() == 1  # 4: 2 has a result and 3 a cell set by hand
+    assert http.post('/api/batch/added', json={'stop': 'x'}).status_code == 422
+
+
+def next_batch(http: TestClient, key: str, title: str = 'Afternoon') -> Any:
+    return http.post('/api/batch/next', json={'key': key, 'title': title})
+
+
+def test_the_next_batch_starts_at_the_row_with_the_same_header_and_settings(
+    http: TestClient, pages: Pages, manager: BatchManager
+) -> None:
+    bins(http, 5)
+
+    made = next_batch(http, '2').json()
+
+    old, new = manager.headers()['scan'], manager.headers()[made['label']]
+    assert old.scope == Scope(stop=2)
+    assert new == Header(
+        spec=STAGED.name,
+        columns=COLUMNS,
+        source='pairs',
+        title='Afternoon',
+        scope=Scope(start=2),
+    )
+    assert list(rows(http)) == ['1']
+    following = opened(pages, made['label'])
+    assert list(rows(following)) == ['2', '3']
+    assert form_bins(state(following)) == 5
+
+
+@pytest.mark.parametrize(
+    ('follows', 'after'), [('scan', 'new'), ('other', 'other'), (None, None)]
+)
+def test_the_next_batch_takes_follow_from_the_batch_that_followed(
+    http: TestClient,
+    pages: Pages,
+    manager: BatchManager,
+    follows: str | None,
+    after: str | None,
+) -> None:
+    manager.create(STAGED.name, title='Other', source='pairs', label='other')
+    if follows is not None:
+        pages.follow.on(follows)
+
+    made = next_batch(http, '2').json()
+
+    assert pages.follow.label == (made['label'] if after == 'new' else after)
+
+
+@pytest.mark.parametrize(
+    ('key', 'title', 'scope', 'said'),
+    [
+        ('added', 'Next', Scope(), 'added has no run, so no batch can start at it.'),
+        ('9', 'Next', Scope(), 'There is no row 9.'),
+        ('2', ' ', Scope(), 'The next batch was not made: a batch has a title'),
+        (
+            '2',
+            'Next',
+            Scope(keys={'1', '2'}),
+            'This batch names its rows, so it has no end to set.',
+        ),
+    ],
+    ids=['unindexed', 'unknown', 'title', 'keys'],
+)
+def test_the_next_batch_is_refused_and_nothing_changes(
+    http: TestClient,
+    manager: BatchManager,
+    key: str,
+    title: str,
+    scope: Scope,
+    said: str,
+) -> None:
+    http.post('/api/rows/add', json={'key': 'added'})
+    manager.change('scan', scope=scope)
+    before = manager.headers()
+
+    answer = next_batch(http, key, title)
+
+    assert answer.status_code == 422
+    assert answer.json()['message'].startswith(said)
+    assert manager.headers() == before
+
+
+def test_a_batch_not_ended_after_the_next_was_made_says_both_hold_the_rows(
+    http: TestClient, manager: BatchManager, refusing: Refusing
+) -> None:
+    refusing.part = header_key('scan')
+
+    answer = next_batch(http, '2')
+
+    assert answer.status_code == 422
+    assert answer.json()['message'].startswith(
+        'Afternoon was made, but this batch was not ended, so both hold the rows '
+        'from 2 on: '
+    )
+    (new,) = set(manager.headers()) - {'scan'}
+    assert manager.headers()['scan'].scope == Scope()
+    assert manager.headers()[new].scope == Scope(start=2)
+
+
+def test_a_batch_removed_from_its_page_is_gone_and_its_results_stay(
+    http: TestClient, manager: BatchManager, batch: Batch, client: Client
+) -> None:
+    client.wait(batch.reduce(['1']))
+
+    removed = http.post('/api/batch/remove')
+
+    assert removed.status_code == 200
+    assert manager.headers() == {}
+    assert client.records(label='scan') != []
+    gone = http.get('/api/state')
+    assert (gone.status_code, gone.json()) == (
+        404,
+        {'message': 'There is no batch scan.'},
+    )
+
+
+def test_removing_the_batch_that_follows_turns_follow_off(
+    http: TestClient, pages: Pages
+) -> None:
+    pages.follow.on('scan')
+
+    http.post('/api/batch/remove')
+
+    assert pages.follow.label is None
+
+
+def test_a_removal_the_definitions_refuse_answers_422_and_the_batch_stays(
+    http: TestClient, manager: BatchManager, refusing: Refusing
+) -> None:
+    refusing.part = 'header'
+
+    answer = http.post('/api/batch/remove')
+
+    assert answer.status_code == 422
+    assert answer.json()['message'] == (
+        "The batch was not removed: ('labels', 'scan', 'header'): refused"
+    )
+    assert list(manager.headers()) == ['scan']
+
+
+def test_another_page_of_a_removed_batch_answers_404_at_its_next_poll(
+    http: TestClient, pages: Pages
+) -> None:
+    other = opened(pages, 'scan')
+    now = state(other)
+
+    http.post('/api/batch/remove')
+
+    at = {'after': now['version'], 'start': now['start']}
+    polled = other.get('/api/state', params=at)
+    assert (polled.status_code, polled.json()) == (
+        404,
+        {'message': 'There is no batch scan.'},
+    )
+
+
+def test_a_page_handed_out_before_its_batch_is_removed_answers_missing(
+    http: TestClient, pages: Pages
+) -> None:
+    # As a request does that found the batch, then waited for the lock while
+    # another removed it.
+    page = pages.page('scan')
+
+    pages.remove('scan')
+
+    with pytest.raises(Missing, match=r'There is no batch scan\.'):
+        page.poll(0)
+    with pytest.raises(Missing):
+        page.scan()
+
+
+def test_a_batch_made_again_under_a_removed_label_gets_a_new_page(
+    http: TestClient, pages: Pages, manager: BatchManager
+) -> None:
+    page = pages.page('scan')
+
+    pages.remove('scan')
+    manager.create(STAGED.name, title='Again', source='pairs', label='scan')
+
+    assert pages.page('scan') is not page
+    assert state(http)['title'] == 'Again'
