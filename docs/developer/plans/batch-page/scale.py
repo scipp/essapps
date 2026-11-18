@@ -30,7 +30,7 @@ from ess.apps.batch.web import Server
 from ess.apps.batch.web.models import CellEdit, Reduce
 from ess.apps.testing import FakeFiles, StagedFunction, read_file
 
-TOYS = Path(__file__).resolve().parents[6] / 'packages/essapps/tests/batch/toys.py'
+TOYS = Path(__file__).resolve().parents[4] / 'packages/essapps/tests/batch/toys.py'
 AT = frozenset({'sample', 'transmission'})
 
 

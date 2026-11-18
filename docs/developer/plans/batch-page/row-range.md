@@ -4,7 +4,7 @@ The batch page shows every row of its batch. At each change the server builds ev
 This document proposes to build the page around a *range*: the rows that a person shows and edits, at most a few hundred.
 Each question below ends with a line `> Simon:` for the answer.
 
-Line numbers are those of commit `5216420`. Times are from a toy workflow with three columns on an in-memory workspace (`probes/scale/scale.py`), on a shared host, so they vary by up to a factor of 2.
+Line numbers are those of commit `5216420`. Times are from a toy workflow with three columns on an in-memory workspace ([`scale.py`](scale.py)), on a shared host, so they vary by up to a factor of 2.
 
 ## What a person would see
 
@@ -106,7 +106,7 @@ b. 300 of 30 000 samples                                        # the number onl
 c. nothing
 ```
 
-Cost: a needs the state of every row at each new version: `batch.state()`, 12 ms at 1 000 rows, 0.17 s at 10 000 (`README.md`, section 5), 0.51 s at 30 000. `results()` is not enough: without the comparison it cannot tell done from outdated or earlier settings (`state.py:106`). With Follow on, each step computes this state anyway (`auto.py:129`), and could keep it for the next State. b and c need `batch.state(range_keys)` only: a few milliseconds.
+Cost: a needs the state of every row at each new version: `batch.state()`, 12 ms at 1 000 rows, 0.17 s at 10 000, 0.51 s at 30 000. `results()` is not enough: without the comparison it cannot tell done from outdated or earlier settings (`state.py:106`). With Follow on, each step computes this state anyway (`auto.py:129`), and could keep it for the next State. b and c need `batch.state(range_keys)` only: a few milliseconds.
 
 A row that Follow leaves to the person (`RowState.changed_by_hand`, `state.py:78`) waits for "Reduce". Outside the range, a person sees it only through a count. Such rows come from "Load table…" or from an edit made while another range was shown.
 
