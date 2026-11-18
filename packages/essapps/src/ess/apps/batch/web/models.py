@@ -142,15 +142,14 @@ class Action(BaseModel):
 
 class Refused(BaseModel):
     """
-    A reason a reduction was refused, kept until the next change. ``placed`` if
-    a cell or a setting shows it; ``text`` says it whole.
+    A reason a reduction was refused that a cell or a setting shows, kept until
+    its value changes; ``text`` says it whole.
     """
 
     entry: str | None
     loc: list[str | int]
     message: str
     text: str
-    placed: bool
 
 
 class Follow(BaseModel):

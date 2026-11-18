@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from ess.apps import Client, Listing, Record, Selector, Template
 from ess.apps.batch import Batch, CorrectedFiles, FolderDefinitions, cli
-from ess.apps.batch.definition import Key, settings_key
+from ess.apps.batch.definition import Key, NotKept, settings_key
 from ess.apps.batch.frames import RESULT, read_table, rows_of, write_table
 from ess.apps.batch.panel import BatchView, RunSheet
 from ess.apps.batch.panel.demo import build, open_demo
@@ -466,7 +466,7 @@ class Failing:
         return None
 
     def save(self, key: Key, data: Any) -> None:
-        raise OSError('disk full')
+        raise NotKept('disk full')
 
 
 def test_a_correction_on_the_run_sheet_that_cannot_be_kept_says_so(

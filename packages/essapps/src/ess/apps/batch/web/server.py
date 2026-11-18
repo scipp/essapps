@@ -28,9 +28,10 @@ which the server reads from ``client.changes`` at each poll. ``start`` tells a
 page that the server started again, so that the same version may be another
 state.
 
-A reduction refused raises :class:`Problem` and keeps its reasons in the state
-until the value of each is changed or a reduction succeeds, so that the page
-marks each at its cell or its setting. Any other request that cannot be done
+A reduction refused raises :class:`Problem`. It says the reasons that no cell
+or setting shows. The others stay in the state until the value of each is
+changed or a reduction succeeds, so that the page marks each at its cell or its
+setting. Any other request that cannot be done
 raises :class:`Problem` too, with what to tell the person. One server serves
 one batch to one person, and takes one request at a time.
 
@@ -71,7 +72,7 @@ import uuid
 import zipfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -89,6 +90,7 @@ from .. import (
     EMPTY,
     Batch,
     CorrectedFiles,
+    NotKept,
     RowState,
     earlier_settings,
     frames,
@@ -209,7 +211,7 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
             try:
                 notice = method(*args, **kwargs)
                 server._follow_now()
-            except OSError as error:  # the definitions could not keep a change
+            except NotKept as error:
                 server._settings_shown = None  # the form shows the batch's again
                 raise Problem(f'The change was not kept: {error}') from None
             finally:
@@ -658,7 +660,6 @@ class Server:
             loc=list(error.loc),
             message=error.msg,
             text=text,
-            placed=self._placed(error),
         )
 
     # The rows
@@ -681,6 +682,15 @@ class Server:
     def _incomplete(self) -> set[str]:
         return {k for k, s in self._states()[0].items() if s.problems}
 
+    def _renew_listing(self) -> None:
+        """
+        List again: new rows may name files that the listing lacks, and a
+        correction of runs changes what the Runs view offers, even if the scan
+        then fails.
+        """
+        self._relist()
+        self._new_runs()
+
     def _scanned(self, scan: Callable[[], None]) -> str:
         """
         Call ``scan``, which makes the rows again, and say how many rows
@@ -690,11 +700,13 @@ class Server:
         incomplete = self._incomplete()
         try:
             scan()
-        finally:
-            # New rows may name files that the listing lacks, and a correction
-            # of runs changes what it offers, even if the scan then fails.
-            self._relist()
-            self._new_runs()
+        except Problem:
+            # The listing may fail for the reason that the scan failed; the
+            # failure of the scan is what to say.
+            with suppress(Exception):
+                self._renew_listing()
+            raise
+        self._renew_listing()
         changed = sum(before.get(r.key) != dict(r.values) for r in self.batch.rows)
         new = self._incomplete() - incomplete
         names = [self._named(r) for r in self.batch.rows if r.key in new]
@@ -816,8 +828,11 @@ class Server:
             )
             records = self.batch.reduce(keys)
         except SubmitError as error:
-            self.refused = list(error.errors)
-            raise _Refusal(self.refused) from None
+            self.refused = [e for e in error.errors if self._placed(e)]
+            unplaced = [e for e in error.errors if e not in self.refused]
+            raise _Refusal(
+                [self._refused(e).text for e in unplaced], len(self.refused)
+            ) from None
         self.refused = []
         self._relist()
         n = len(records)
@@ -1236,14 +1251,19 @@ class Server:
 
 
 class _Refusal(Problem):
-    """A reduction refused; its reasons are in the state."""
+    """
+    A reduction refused. It says the reasons that no cell or setting shows,
+    such as a row still running; those that one shows are in the state.
+    """
 
-    def __init__(self, errors: Sequence[FieldError]) -> None:
-        n = len(errors)
-        super().__init__(
-            'Nothing was reduced: '
-            + ('one value is refused.' if n == 1 else f'{n} values are refused.')
-        )
+    def __init__(self, said: list[str], placed: int) -> None:
+        if placed:
+            said.append(
+                'one value is refused.'
+                if placed == 1
+                else f'{placed} values are refused.'
+            )
+        super().__init__(f'Nothing was reduced: {"; ".join(said)}')
 
 
 def _join(words: Sequence[str]) -> str:
