@@ -10,7 +10,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field
 
-from ess.apps.batch import FileInfo, Row
+from ess.apps.batch import FileInfo, Row, Source
 from ess.spec import FileRef, Referenced, RunFile, WorkflowSpec
 
 
@@ -132,5 +132,7 @@ def pair(files: Sequence[FileInfo]) -> list[Row]:
             )
     return rows
 
+
+SOURCES = {'pairs': Source(pair, columns=('sample', 'transmission'))}
 
 Measure = Callable[..., FileRef]

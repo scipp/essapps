@@ -9,7 +9,8 @@ for application developers is ``packages/essapps/docs/batch.md``.
 """
 
 from .corrections import CorrectedFiles
-from .definition import DefinitionStore, FolderDefinitions, NotKept
+from .definition import DefinitionStore, FolderDefinitions, Header, NotKept
+from .manager import BatchManager, Defaults, Source, bound_spec
 from .reduction import Batch, FileInfo, RowSource, file_infos
 from .state import (
     EARLIER,
@@ -28,16 +29,21 @@ __all__ = [
     'EARLIER',
     'EMPTY',
     'Batch',
+    'BatchManager',
     'CorrectedFiles',
+    'Defaults',
     'DefinitionStore',
     'FileInfo',
     'FolderDefinitions',
+    'Header',
     'NotKept',
     'Row',
     'RowSource',
     'RowState',
     'RowTable',
+    'Source',
     'arrived',
+    'bound_spec',
     'compared',
     'earlier_settings',
     'file_infos',

@@ -3,6 +3,9 @@
 """
 Automatic reduction: a batch reduced as its files arrive. The guide is the
 section "Automatic reduction" of ``packages/essapps/docs/batch.md``.
+:class:`Follow` is the one loop of an application over the batches of a
+:class:`~.manager.BatchManager`: it steps an :class:`Automatic` on the batch
+that follows.
 
 A step does what a person does with the buttons of a batch's page to scan and
 to reduce, with the rule :func:`~.state.arrived` in place of the person's
@@ -50,6 +53,8 @@ from contextlib import contextmanager
 
 from ..errors import SubmitError
 from ..records import Record
+from .definition import FOLLOWING, DefinitionStore, following_data, following_of
+from .manager import BatchManager
 from .reduction import Batch
 from .state import arrived, ready
 
@@ -157,6 +162,86 @@ class Automatic:
                     refused[key] = str(SubmitError(errors))
                 keys = [k for k in keys if k not in named]
         return {}, refused
+
+
+class Follow:
+    """
+    The one loop of an application over the batches of a manager: at each
+    step, the batch of :attr:`label` does one step of :class:`Automatic`,
+    with ``at`` the columns of its source. See
+    ``packages/essapps/docs/batch.md``.
+
+    The label is kept in ``definitions`` and read when the loop is made, so a
+    loop made again after a restart resumes. The loop has no thread: whoever
+    owns the timer calls :meth:`step` every :attr:`interval` seconds.
+
+    Attributes
+    ----------
+    interval:
+        The seconds between two steps, for whoever calls :meth:`step`.
+    refused:
+        :attr:`Automatic.refused` of the last step.
+    """
+
+    def __init__(
+        self,
+        manager: BatchManager,
+        definitions: DefinitionStore,
+        *,
+        interval: float = 5.0,
+    ) -> None:
+        self.interval = interval
+        self.refused: dict[str, str] = {}
+        self._manager = manager
+        self._definitions = definitions
+        self._label = definitions.load(FOLLOWING, following_of)
+
+    @property
+    def label(self) -> str | None:
+        """The label of the batch that follows, ``None`` if none does."""
+        return self._label
+
+    def on(self, label: str) -> None:
+        """
+        Make the batch of ``label`` the one that follows. Raises ``KeyError``
+        if no batch has the label, and ``ValueError`` if its batch has no
+        source.
+        """
+        self._at(label)
+        self._keep(label)
+
+    def off(self) -> None:
+        """Let no batch follow."""
+        self._keep(None)
+
+    def step(self) -> dict[str, Record]:
+        """
+        One step of :class:`Automatic` on the batch that follows; the records
+        by key. Nothing if none follows; if its batch is gone, the loop turns
+        itself off. Raises what the step raises.
+        """
+        label = self._label
+        if label is None:
+            return {}
+        if label not in self._manager.batches():
+            self.off()
+            return {}
+        loop = Automatic(self._manager.batch(label), at=self._at(label))
+        records = loop.step()
+        self.refused = loop.refused
+        return records
+
+    def _at(self, label: str) -> set[str]:
+        """The columns of the source of ``label``'s batch; ``ValueError`` if none."""
+        source = self._manager.source(label)
+        if source is None:
+            raise ValueError(f'{label}: the batch has no source of rows')
+        return set(source.columns)
+
+    def _keep(self, label: str | None) -> None:
+        self._definitions.save(FOLLOWING, following_data(label))
+        self._label = label
+        self.refused = {}
 
 
 def run(loops: Sequence[Automatic], interval: float = 1.0) -> None:

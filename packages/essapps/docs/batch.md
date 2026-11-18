@@ -353,9 +353,60 @@ The edits hold only what was set by hand, so a cell from the scan follows the fi
 - A correction of a file no longer listed is kept, and not used.
 - A file that is not of the shape described raises `ValueError` naming the file and the entry, when the batch or the `CorrectedFiles` is made.
 
-Two `Batch` objects on one label and one folder each write their whole table of edits at each change. A change made through the other since it was made is lost, and neither sees the other's changes. A label has one `Batch` in a process: the page shows one batch to every browser that opens it.
+Two `Batch` objects on one label and one folder each write their whole table of edits at each change. A change made through the other since it was made is lost, and neither sees the other's changes. So a label has one `Batch` in a process: the manager holds one per label ([The batches of a workspace](#the-batches-of-a-workspace)), and the page shows one batch to every browser that opens it.
 
 The files that a person loads and writes ([The UI](#the-ui)) are copies, for other people and other tools. The definitions are the one place that a batch is kept, for an application and for the command ([The app and the command on one folder](#the-app-and-the-command-on-one-folder)).
+
+## The batches of a workspace
+
+A `BatchManager`, *the manager*, makes, lists, changes and removes the batches of a workspace, and holds the one `Batch` of each label. It keeps each batch in the definitions, so a manager made again after a restart lists the same batches and makes the same `Batch` of each. The application registers its sources by name, and what a new batch of a spec gets:
+
+```python
+from ess.apps.batch import BatchManager, Defaults, Source
+
+SOURCES = {'sample-runs': Source(pair_by_sample, columns=('sample', 'sample_transmission'))}
+DEFAULTS = {IOFQ.name: Defaults(settings=SETTINGS, staged=True)}
+
+manager = BatchManager(client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS)
+label = manager.create(IOFQ.name, title='Afternoon', source='sample-runs', columns=('thickness',))
+manager.batches()      # {'20261118-130204': Header(title='Afternoon', description='', source='sample-runs')}
+batch = manager.batch(label)   # the Batch, made and scanned at the first call
+manager.edit(label, title='Afternoon, 2 mm cells')
+manager.remove(label)
+```
+
+What the manager gives the `Batch` of a label:
+
+| Argument | Comes from |
+|---|---|
+| `spec` | `bound_spec(client, name)`: the spec of the name kept that the workspace binds, the highest version if several |
+| `source`, `selector` | the `Source` registered under the name given to `create` |
+| `columns` | those of the source, then those given to `create` |
+| first `settings` | `Defaults.settings` of the spec, or `create(..., settings=...)`; those that are columns are left out |
+| `staged` | `Defaults.staged` of the spec |
+| `label` | given to `create`, or the time of making, `YYYYMMDD-HHMMSS` |
+| `persist` | always, so the workspace needs a store, as a folder has |
+| `definitions` | those of the manager |
+
+- `create` writes the settings, with the spec and the columns, then the header. The spec, the source and the columns are fixed from then on. `edit` changes the title and the description.
+- A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. `create` refuses a label that has definitions or records.
+- `remove` removes the header, the edits and the settings of a batch, and releases its stage. Its records stay, and those running keep running.
+- A `Batch` made in code without the manager has no header and is not listed.
+
+One loop per application, `Follow`, reduces the rows of one batch as its files arrive: each step is a step of an `Automatic` on the batch that follows ([Automatic reduction](#automatic-reduction)), with `at` the columns of its source.
+
+```python
+from ess.apps.batch.auto import Follow
+
+follow = Follow(manager, definitions, interval=5.0)
+follow.on(label)       # this batch follows, and no other; ValueError for a batch without a source
+follow.label           # the label of the batch that follows, or None
+while True:
+    follow.step()      # its records by key; follow.refused says why rows were refused
+    time.sleep(follow.interval)
+```
+
+`follow.on` and `follow.off` write `following.json`, so a `Follow` made again after a restart resumes. If the batch that follows is removed, the next step turns `Follow` off. `Follow` has no thread, and the manager none either: whoever owns the timer calls `step`.
 
 ## Chains
 

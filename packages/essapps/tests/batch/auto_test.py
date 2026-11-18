@@ -5,16 +5,18 @@
 import functools
 import threading
 from collections.abc import Sequence
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from ess.apps import Client, file
+from ess.apps import Client, Workspace, file
 from ess.apps.batch import (
     EMPTY,
     Batch,
+    BatchManager,
     CorrectedFiles,
     DefinitionStore,
     FileInfo,
@@ -22,10 +24,10 @@ from ess.apps.batch import (
     Row,
     RowSource,
 )
-from ess.apps.batch.auto import Automatic, every
+from ess.apps.batch.auto import Automatic, Follow, every
 from ess.apps.folder import open_folder
-from ess.apps.testing import FakeFiles
-from ess.spec import Binding, FileRef
+from ess.apps.testing import FakeFiles, StagedFunction
+from ess.spec import Binding, FileRef, function_binding
 
 from .toys import (
     COLUMNS,
@@ -352,22 +354,23 @@ class Submits:
 
 
 def test_a_refusal_that_names_no_row_refuses_every_row_of_the_step(
-    client: Client, sample: Measure
+    files: CorrectedFiles, staged_binding: StagedFunction, sample: Measure
 ) -> None:
-    submits = Submits(client)
-    # The workspace of the tests has no store.
-    batch = Batch(
-        submits, PLAIN, columns=COLUMNS, label='scan', source=pair, persist=True
-    )
-    loop = Automatic(batch, at={'sample'})
-    sample(1, 'water')
-    sample(2, 'sds')
+    bind = [function_binding(PLAIN, staged_binding.function)]
+    with closing(Workspace(proposal='p1', files=files, bind=bind)) as storeless:
+        submits = Submits(Client(storeless, submitter='anna'))
+        batch = Batch(
+            submits, PLAIN, columns=COLUMNS, label='scan', source=pair, persist=True
+        )
+        loop = Automatic(batch, at={'sample'})
+        sample(1, 'water')
+        sample(2, 'sds')
 
-    assert loop.step() == {}
-    assert loop.refused == dict.fromkeys(
-        ['1', '2'], 'persisting needs a store, which this workspace lacks'
-    )
-    assert submits.calls == 1
+        assert loop.step() == {}
+        assert loop.refused == dict.fromkeys(
+            ['1', '2'], 'persisting needs a store, which this workspace lacks'
+        )
+        assert submits.calls == 1
 
 
 def test_a_cell_the_workspace_does_not_accept_makes_its_row_wait(
@@ -743,6 +746,101 @@ def test_reduce_without_a_scan_reduces_the_rows_that_arrived_at_the_last_scan(
 
     assert list(records) == ['1']
     client.wait(list(records.values()))
+
+
+# One loop of Follow
+
+
+@pytest.fixture
+def follow(manager: BatchManager, definitions: FolderDefinitions) -> Follow:
+    manager.create('plain', title='A', source='pairs', label='a')
+    manager.create('plain', title='B', source='pairs', label='b')
+    return Follow(manager, definitions)
+
+
+def _reduced(client: Client) -> list[tuple[str | None, str | None]]:
+    return [(r.label, r.member) for r in client.records()]
+
+
+def test_follow_steps_only_the_batch_that_follows(
+    follow: Follow, client: Client, sample: Measure
+) -> None:
+    sample(1, 'water')
+    follow.on('a')
+
+    client.wait(follow.step())
+
+    assert _reduced(client) == [('a', '1')]
+
+
+def test_turning_follow_on_for_one_batch_turns_it_off_for_the_other(
+    follow: Follow, client: Client, sample: Measure
+) -> None:
+    sample(1, 'water')
+    follow.on('a')
+    follow.on('b')
+
+    client.wait(follow.step())
+
+    assert follow.label == 'b'
+    assert _reduced(client) == [('b', '1')]
+
+
+def test_the_batch_that_follows_is_kept_and_a_follow_made_again_resumes(
+    follow: Follow,
+    manager: BatchManager,
+    definitions: FolderDefinitions,
+    client: Client,
+    sample: Measure,
+) -> None:
+    follow.on('b')
+    sample(1, 'water')
+
+    again = Follow(manager, definitions)
+    client.wait(again.step())
+
+    assert again.label == 'b'
+    assert _reduced(client) == [('b', '1')]
+
+
+def test_follow_turns_itself_off_when_its_batch_is_removed(
+    follow: Follow,
+    manager: BatchManager,
+    definitions: FolderDefinitions,
+    sample: Measure,
+) -> None:
+    follow.on('a')
+    manager.remove('a')
+    sample(1, 'water')
+
+    assert follow.step() == {}
+    assert follow.label is None
+    assert Follow(manager, definitions).label is None
+
+
+def test_follow_refuses_a_batch_without_a_source(
+    follow: Follow, manager: BatchManager
+) -> None:
+    follow.on('a')
+    manager.create('plain', title='C', columns=COLUMNS, label='c')
+
+    with pytest.raises(ValueError, match='no source'):
+        follow.on('c')
+    with pytest.raises(KeyError):
+        follow.on('d')
+    assert follow.label == 'a'
+
+
+def test_follow_off_steps_nothing(
+    follow: Follow, client: Client, sample: Measure
+) -> None:
+    follow.on('a')
+    follow.off()
+    sample(1, 'water')
+
+    assert follow.step() == {}
+    assert follow.label is None
+    assert _reduced(client) == []
 
 
 def test_every_calls_the_actions_in_turn_until_the_block_ends() -> None:
