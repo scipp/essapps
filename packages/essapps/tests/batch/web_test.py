@@ -1543,6 +1543,40 @@ def test_a_correction_on_one_page_shows_in_the_runs_view_and_the_rows_of_another
     assert statuses(other)['3'] == 'ready'
 
 
+def test_a_correction_taken_back_on_one_page_reaches_the_rows_of_another(
+    http: TestClient, pages: Pages, manager: BatchManager, fake: FakeFiles
+) -> None:
+    key = fake.measure(4, 1.0, role='sample', sample='oil').file
+    other = opened(pages, manager.create(STAGED.name, title='Other', source='pairs'))
+    edit = {'keys': [key], 'column': 'role', 'value': 'transmission'}
+    http.post('/api/runs/cells', json=edit)
+    assert statuses(other)['3'] == 'ready'
+
+    http.post('/api/runs/cells/revert', json={'keys': [key], 'column': 'role'})
+
+    assert statuses(other)['3'] == 'incomplete'
+
+
+def test_a_scan_after_a_correction_that_fails_is_said_once_by_the_next_poll(
+    http: TestClient, pages: Pages, manager: BatchManager, fake: FakeFiles
+) -> None:
+    key = fake.measure(7, 1.0, role='background').file  # no sample name
+    other = opened(pages, manager.create(STAGED.name, title='Other', source='pairs'))
+    now = state(other)
+
+    # As a transmission without a sample name, the run makes the source raise.
+    edit = {'keys': [key], 'column': 'role', 'value': 'transmission'}
+    assert http.post('/api/runs/cells', json=edit).status_code == 422
+
+    at = {'after': now['version'], 'start': now['start']}
+    polled = other.get('/api/state', params=at).json()
+    assert polled['notice'] == (
+        "Runs were corrected on another page, but the scan failed: 'sample'"
+    )
+    at['after'] = polled['version']
+    assert other.get('/api/state', params=at).status_code == 204
+
+
 def test_counts_are_given_in_the_words_of_the_page(
     http: TestClient, batch: Batch, client: Client
 ) -> None:
@@ -1553,5 +1587,6 @@ def test_counts_are_given_in_the_words_of_the_page(
 
     assert counted == {
         'rows': {'scan': {'done': 1, 'ready': 1, 'incomplete': 1}},
+        'failed': {},
         'outside': {'pairs': '0 rows'},
     }

@@ -123,6 +123,9 @@ async function refresh() {
   if (response.status === 204) return;
   if (!response.ok) throw new Offline(response.body?.message ?? `The server answered ${response.status}.`);
   render(response.body);
+  // A poll says only what failed without an action, such as a scan after a
+  // correction made on another page.
+  if (response.body.notice) showMessage(response.body.notice);
 }
 
 // Ask for the state every second; say so while the server does not give it.
@@ -296,21 +299,21 @@ async function countBatches() {
   if (button.disabled) return;
   button.disabled = true;
   button.textContent = 'Counting…';
-  const counts = await request('batches/counts');
+  view.counts = await request('batches/counts'); // none rather than old ones
   button.disabled = false;
   button.textContent = 'Count again';
-  if (counts) view.counts = counts;
   drawBatches();
 }
 
-// The list of batches, each a link to its page, with its counts once counted;
-// the batch of this page is marked.
+// The list of batches, each a link to its page, with its counts once counted,
+// or why it could not be counted; the batch of this page is marked.
 function drawBatches() {
   if (!view.batchData) return;
   const counted = view.counts?.rows ?? {};
   $('batches').tBodies[0].replaceChildren(
     ...view.batchData.rows.map((batch) => {
       const n = counted[batch.label];
+      const failed = view.counts?.failed[batch.label];
       const all = n && Object.values(n).reduce((a, b) => a + b, 0);
       return h(
         'tr',
@@ -323,7 +326,11 @@ function drawBatches() {
           batch.description && h('div', {class: 'hint', text: batch.description}),
         ),
         h('td', {class: 'n', text: n ? `${all} ${all === 1 ? batch.words.one : batch.words.many}` : ''}),
-        h('td', {}, n && CHIPS.filter((s) => s !== 'all' && n[s]).map((s) => h('span', {class: `pill st-${s}`, text: `${n[s]} ${s}`}))),
+        h(
+          'td',
+          {class: failed ? 'bad' : null, text: failed ?? ''},
+          n && CHIPS.filter((s) => s !== 'all' && n[s]).map((s) => h('span', {class: `pill st-${s}`, text: `${n[s]} ${s}`})),
+        ),
         h('td', {class: 'follows', text: batch.follows ? 'follows' : ''}),
       );
     }),

@@ -42,6 +42,10 @@
 
   <main>
     <section class="left">
+      <div class="message" id="message" hidden>
+        <div class="message-text"></div>
+        <button type="button" class="quiet close" aria-label="Dismiss">×</button>
+      </div>
       <div class="view" id="view-samples">
         <div class="toolbar">
           <div class="split" id="reduce-split">
@@ -60,10 +64,6 @@
           <button type="button" class="quiet" id="rescan">↻ Rescan runs</button>
         </div>
         <div class="chips" id="chips" role="group" aria-label="Show samples that are"></div>
-        <div class="message" id="message" hidden>
-          <div class="message-text"></div>
-          <button type="button" class="quiet close" aria-label="Dismiss">×</button>
-        </div>
         <div class="grid" id="rows"></div>
         <div class="table-foot">
           <button type="button" class="quiet" id="add-row">+ Add</button>

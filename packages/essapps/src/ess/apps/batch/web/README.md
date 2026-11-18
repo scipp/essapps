@@ -54,6 +54,7 @@ Once reduced, the row follows the files again, with its cells set by hand.
 A cell that a person reverts follows the files again at once: the next step reduces the row with its other cells as they are, so two reverts of one row can reduce it twice.
 A correction in the Runs view reaches the rows through the scan, so Follow reduces for it as for a file that arrives; two corrections that belong together reduce a row twice if a step runs between them.
 A correction scans the batch of its page at once; every other page scans its batch at its next poll, and Follow scans the batch that follows at its next step.
+If the scan at a poll fails, that poll says why once, and the rows stay as they are until **Rescan runs**.
 An action submits nothing but what a person asks to reduce: Apply reduces nothing, and the next step reduces the rows without a result with the settings applied.
 Apply forgets why Follow could not reduce a row, since the next step tries again.
 The page of the batch that follows shows "Following, every N s", why the last step failed if it did, and, as an `incomplete` row, why a row could not be submitted.
@@ -64,9 +65,11 @@ Whatever a step raises, from the files, the workflow or the workspace, is the st
 
 The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, and which batch follows; the batch of the page is marked.
 Each title is a link to the page of its batch.
-Opening the view, and **Count again**, counts the rows of each batch by status, and for each registered source the rows that no batch shows, such as a row removed by hand (`BatchManager.counts`).
-Counting scans every batch and every source, under the lock of all pages, so the pages and Follow wait until it ends: seconds at tens of batches with thousands of runs.
-No poll counts, so the counts shown are those of the last count.
+Opening the view, and **Count again**, counts the rows of each batch by status, and for each registered source the rows that no batch shows, such as a row removed by hand in every batch (`BatchManager.counts`).
+The statuses are those of the chips of each batch's page, the rows that Follow could not submit `incomplete` too.
+A count is a rescan of every batch: it costs one scan per batch, under the lock of all pages, so the pages and Follow wait until it ends, and the open pages show the rows it found.
+A batch that cannot be counted, such as one whose source raises, shows why in its row, and the rows of its source in no batch are not said.
+No poll counts, so the counts shown are those of the last count; a count that fails shows none.
 The list and the Runs view are the same on every page.
 
 ## Layers
@@ -101,7 +104,7 @@ The server answers 204 if nothing changed since `version`, and else the whole `S
 `version` counts each action, each step of Follow that changes what the page shows (the rows, the runs, the records, the refusals, or its failure), each change of the batch that follows, and each change of the workspace's records, such as a reduction that finished.
 `start` is new at each start of the server; a page that sees another one loads again.
 `State.runs` counts the changes of the runs, which all pages share; the Runs view asks for `api/runs` when it moves.
-`State.batches` counts the changes of the list of batches, such as which batch follows; the Batches view asks for `api/batches` when it moves.
+`State.batches` moves when the headers of the batches or the batch that follows change, whoever changed them; the Batches view asks for `api/batches` when it moves.
 `api/batches` and `api/batches/counts` belong to the workspace: they answer the same under any label, and at `/api/...`.
 
 ## How the page asks

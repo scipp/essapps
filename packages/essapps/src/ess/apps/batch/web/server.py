@@ -81,7 +81,14 @@ import re
 import tempfile
 import uuid
 import zipfile
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import (
+    Callable,
+    Collection,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -108,7 +115,7 @@ from .. import (
     frames,
     left_to_reduce,
     ready,
-    refused_again,
+    status_texts,
 )
 from .. import Row as TableRow
 from ..export import export_table
@@ -166,12 +173,21 @@ _DRAWN = 12
 """How many results the plot shows when no row is selected."""
 
 
-def page_status(text: str) -> str:
+def page_statuses(
+    states: Mapping[str, RowState],
+    columns: Collection[str],
+    waiting: Collection[str] = (),
+) -> dict[str, str]:
     """
-    A status as :func:`~ess.apps.batch.status_texts` names it, in the words of
-    the page (see the module).
+    The status of each row in the words of the page (see the module), by key:
+    that of :func:`~ess.apps.batch.status_texts`, but ``incomplete`` for a row
+    of ``waiting``, which Follow could not submit, and ``done`` for a row of
+    earlier settings. The page and the counts of the batches both use it.
     """
-    return _STATUS.get(text, text)
+    return {
+        key: 'incomplete' if key in waiting else _STATUS.get(text, text)
+        for key, text in status_texts(states, columns).items()
+    }
 
 
 class Problem(Exception):
@@ -300,13 +316,6 @@ class Server:
         """Whether this batch is the one that follows."""
         return self.pages.follow.label == self.label
 
-    def _waiting(self) -> dict[str, str]:
-        """Why the last step of Follow did not reduce each row, by key."""
-        return {
-            key: f'Follow could not reduce it: {forms.message(reason)}'
-            for key, reason in self.pages.follow.refused.items()
-        }
-
     # Reading
 
     def _live(self) -> tuple[object, ...]:
@@ -320,7 +329,7 @@ class Server:
             self.batch.rows,
             self._listing.cursor,
             pages.runs_version,
-            pages.batches_version,
+            pages.batches_version(),
             pages.follow.label,
             pages.follow.refused,
             pages.failure,
@@ -383,37 +392,31 @@ class Server:
         except SubmitError as error:
             return self.batch.results(keys), error.errors
 
-    def _status(self, state: RowState, earlier: bool, refused: bool) -> str:
-        """
-        The status of a row in words (see the module): that of
-        :attr:`RowState.text`, but ``incomplete`` for a row that waits for
-        Follow, and ``done`` for a row of earlier settings.
-        """
-        if refused:
-            return 'incomplete'
-        if earlier:
-            return 'done'
-        return page_status(state.text)
-
     @_locked
     def poll(self, after: int, start: str = '') -> State | None:
         """
-        The state, or ``None`` if it is still that of version ``after``. After
-        a correction of runs on any page, the batch is scanned first; if the
-        scan fails, the rows stay as they are, and "Rescan runs" says why.
+        The state, or ``None`` if it is still that of version ``after``.
+
+        After a correction of runs on another page, the batch is scanned
+        first. If that scan fails, the rows stay as they are, the state says
+        why in its notice, and no later poll scans again for that correction;
+        "Rescan runs" tries again.
         """
+        notice = ''
         if self._corrected != self.pages.corrected:
-            with suppress(Problem):
-                self._scan()
+            try:
+                self._scan('Runs were corrected on another page, but the scan failed')
+            except Problem as error:
+                notice = str(error)
         changes = self.batch.client.changes(after=self._listing.cursor)
         # A scan makes a new table each time, equal if nothing changed; one
         # that changed may name files that the listing lacks.
         if changes.records or self._moved():
             self._relist()
             self._new_version()
-        if after == self.version and start == self.start:
+        if not notice and after == self.version and start == self.start:
             return None
-        return self.state()
+        return self.state(notice=notice)
 
     def _row_of(self, key: str) -> TableRow:
         if key not in self.batch.rows:
@@ -439,14 +442,8 @@ class Server:
         earlier = (
             set() if unusable else set(earlier_settings(states, self.batch.columns))
         )
-        refused = (
-            refused_again(states, self._at, self._waiting())
-            if self._at is not None and self._follows()
-            else {}
-        )
-        statuses = {
-            k: self._status(s, k in earlier, k in refused) for k, s in states.items()
-        }
+        refused = self.pages.waiting(self.label, states)
+        statuses = page_statuses(states, self.batch.columns, refused)
         failures = self._failures(states)
         scan = {row.key: row for row in self.batch.rows.scan}
         added = {row.key for row in self.batch.rows.added}
@@ -486,7 +483,7 @@ class Server:
             version=self.version,
             start=self.start,
             runs=None if self._marks is None else self.pages.runs_version,
-            batches=self.pages.batches_version,
+            batches=self.pages.batches_version(),
             label=self.label,
             title=self.pages.manager.batches()[self.label].title,
             application=self.pages.title,
@@ -879,10 +876,8 @@ class Server:
             if not self._follows():
                 return ''  # another batch follows, or none
             self.pages.follow.off()
-            self.pages.batches_version += 1
             return 'Stopped following.'
         self.pages.follow.on(self.label)
-        self.pages.batches_version += 1
         self.pages.tick()
         return 'Following.'
 
@@ -988,14 +983,12 @@ class Server:
         results if none is given, and a note of what it shows.
         """
         order = {row.key: i for i, row in enumerate(self.batch.rows)}
-        states, unusable = self._states(
+        states, _ = self._states(
             sorted({k for k in keys if k in order}, key=order.__getitem__)
             if keys
             else None
         )
-        earlier = (
-            set() if unusable else set(earlier_settings(states, self.batch.columns))
-        )
+        statuses = page_statuses(states, self.batch.columns)
         done = [
             s
             for s in states.values()
@@ -1021,7 +1014,7 @@ class Server:
                 s.key,
                 self._named(self.batch.rows[s.key]),
                 s.record,
-                self._status(s, s.key in earlier, refused=False) == 'outdated',
+                statuses[s.key] == 'outdated',
                 c,
             )
             for s, c in zip(chosen, colors, strict=True)

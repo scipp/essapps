@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import re
 import time
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
@@ -50,7 +49,7 @@ from .definition import (
     template_of,
 )
 from .reduction import Batch, RowSource, file_infos
-from .state import status_texts
+from .state import RowState
 
 
 class Words(BaseModel):
@@ -116,20 +115,34 @@ class Defaults:
 @dataclass(frozen=True)
 class Counts:
     """
-    How far the batches of a workspace are, as :meth:`BatchManager.counts`
-    gives it.
+    What :meth:`BatchManager.counts` gives: where the rows of each batch
+    stand, and how many rows of each source no batch shows.
 
     Parameters
     ----------
-    batches:
-        The rows of each batch by status, as :func:`~.state.status_texts`
-        names it, by label.
+    states:
+        The state of each row, by key, of each batch that could be made and
+        scanned, by label. Count them with :func:`~.state.status_texts`.
+    failed:
+        Why each other batch could not be made or scanned, by label.
     outside:
-        The rows of each registered source that no batch shows, by its name.
+        The rows that each registered source makes and no batch of it shows,
+        by its name. A row counts as shown if any batch of the source shows
+        it, so a row removed by hand counts here only if every batch of the
+        source removed it. A source is left out if one of its batches failed,
+        or if it raised.
     """
 
-    batches: dict[str, dict[str, int]]
+    states: dict[str, dict[str, RowState]]
+    failed: dict[str, str]
     outside: dict[str, int]
+
+
+def _said(error: Exception) -> str:
+    """What an exception says, without the quotes of a ``KeyError``."""
+    if isinstance(error, KeyError) and error.args:
+        return str(error.args[0])
+    return str(error) or repr(error)
 
 
 def bound_spec(client: Client, name: str) -> WorkflowSpec[Any, Any]:
@@ -336,38 +349,52 @@ class BatchManager:
         none. Raises ``KeyError`` if no batch has the label.
         """
         name = self._headers[label].source
+        if name is not None and name not in self.sources:
+            raise KeyError(f'{label}: the source {name} is not registered')
         return None if name is None else self.sources[name]
 
     def counts(self) -> Counts:
         """
-        The rows of each batch by status, after a scan of each batch that has
-        a source, and the rows of each registered source that no batch shows,
-        such as a row removed by hand. While the settings of a batch are
-        refused, its rows are counted as :meth:`~.reduction.Batch.results`
-        gives them. It scans each batch and each source, so it takes as long
-        as all of them together.
+        Where the rows of every batch stand, and the rows of each registered
+        source that no batch shows (see :class:`Counts`). It makes every batch
+        not made yet, which scans it, and scans every other batch with a
+        source, so the rows of each batch are those of the files now. While
+        the settings of a batch are refused, its rows are as
+        :meth:`~.reduction.Batch.results` gives them. A source is called once
+        more only if no batch of it was scanned.
         """
-        batches = {}
+        states: dict[str, dict[str, RowState]] = {}
+        failed: dict[str, str] = {}
+        made: dict[str, set[str]] = {}  # the keys of the rows each source made
         shown: dict[str, set[str]] = {name: set() for name in self.sources}
         for label, header in self.batches().items():
-            batch = self.batch(label)
-            if batch.source is not None:
-                batch.scan()
             try:
-                states = batch.state()
-            except SubmitError:
-                states = batch.results()
-            batches[label] = dict(Counter(status_texts(states, batch.columns).values()))
-            if header.source is not None:
+                new = label not in self._batches
+                batch = self.batch(label)  # scans a batch that it makes
+                if not new and batch.source is not None:
+                    batch.scan()
+                try:
+                    states[label] = batch.state()
+                except SubmitError:
+                    states[label] = batch.results()
+            except Exception as error:  # a source is code of the application
+                failed[label] = _said(error)
+                if header.source is not None:  # its rows shown are not known
+                    shown.pop(header.source, None)
+                continue
+            if header.source is not None and header.source in shown:
+                made[header.source] = {row.key for row in batch.rows.scan}
                 shown[header.source] |= {row.key for row in batch.rows}
-        outside = {
-            name: len(
-                {r.key for r in source.rows(file_infos(self._client, source.selector))}
-                - shown[name]
-            )
-            for name, source in self.sources.items()
-        }
-        return Counts(batches, outside)
+        outside = {}
+        for name, keys in shown.items():
+            source = self.sources[name]
+            if name not in made:
+                with suppress(Exception):  # a source is code of the application
+                    infos = file_infos(self._client, source.selector)
+                    made[name] = {row.key for row in source.rows(infos)}
+            if name in made:
+                outside[name] = len(made[name] - keys)
+        return Counts(states, failed, outside)
 
     def edit(
         self, label: str, *, title: str | None = None, description: str | None = None

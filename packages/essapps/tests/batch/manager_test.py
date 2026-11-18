@@ -14,12 +14,14 @@ from ess.apps.batch import (
     Batch,
     BatchManager,
     CorrectedFiles,
+    Counts,
     Defaults,
     FolderDefinitions,
     Header,
     NotKept,
     Row,
     Source,
+    status_texts,
 )
 from ess.apps.testing import FakeStore, StagedFunction
 from ess.spec import function_binding
@@ -378,7 +380,15 @@ def test_a_batch_without_a_source_has_only_rows_added_by_hand(
     assert [r.key for r in manager.batch(label).rows] == ['mine']
 
 
-def test_the_counts_give_the_rows_per_status_of_each_batch_after_a_scan(
+def statuses(manager: BatchManager, counts: Counts) -> dict[str, dict[str, str]]:
+    """The status of each row of each batch counted, as a table names it."""
+    return {
+        label: status_texts(states, manager.batch(label).columns)
+        for label, states in counts.states.items()
+    }
+
+
+def test_the_counts_give_the_state_of_each_row_of_each_batch_after_a_scan(
     manager: BatchManager, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
@@ -392,19 +402,80 @@ def test_the_counts_give_the_rows_per_status_of_each_batch_after_a_scan(
 
     counts = manager.counts()
 
-    assert counts.batches == {
-        'a': {'completed, earlier settings': 1, 'incomplete': 1, 'not reduced': 1},
-        'b': {'not reduced': 2, 'incomplete': 1},
+    assert statuses(manager, counts) == {
+        'a': {
+            '1': 'completed, earlier settings',
+            '2': 'incomplete',
+            '3': 'not reduced',
+        },
+        'b': {'1': 'not reduced', '2': 'incomplete', '3': 'not reduced'},
     }
+    assert counts.failed == {}
 
 
-def test_the_counts_give_the_rows_of_each_source_that_no_batch_shows(
+def test_a_row_counts_as_shown_if_any_batch_of_its_source_shows_it(
     manager: BatchManager, sample: Measure
 ) -> None:
-    for run, name in enumerate(['water', 'oil', 'sds'], start=1):
+    for run, name in enumerate(['water', 'oil', 'sds', 'salt'], start=1):
         sample(run, name)
-    label = manager.create('plain', title='Morning', source='pairs')
-    batch = manager.batch(label)
-    batch.rows = batch.rows.remove_each(['2']).add(Row('mine', {}))
+    for label, removed in [('a', ['2', '3']), ('b', ['3'])]:
+        manager.create('plain', title=label, source='pairs', label=label)
+        batch = manager.batch(label)
+        batch.rows = batch.rows.remove_each(removed).add(Row(f'mine-{label}', {}))
 
-    assert manager.counts().outside == {'pairs': 1}
+    assert manager.counts().outside == {'pairs': 1}  # row 3, removed in both
+
+
+@pytest.mark.parametrize('broken', ['not registered', 'raises'])
+def test_a_batch_that_cannot_be_made_has_its_reason_and_its_source_no_outside(
+    client: Client, definitions: FolderDefinitions, sample: Measure, broken: str
+) -> None:
+    sample(1, 'water')
+    sources = {**SOURCES, 'other': SOURCES['pairs']}
+    first = BatchManager(client, sources=sources, definitions=definitions)
+    first.create('plain', title='Fine', source='pairs', label='a')
+    first.create('plain', title='Broken', source='other', label='b')
+
+    def raising(files: Any) -> list[Row]:
+        raise OSError('half written')
+
+    if broken == 'not registered':
+        sources = SOURCES
+    else:
+        sources = {
+            **SOURCES,
+            'other': Source(raising, columns=('sample', 'transmission')),
+        }
+    manager = BatchManager(client, sources=sources, definitions=definitions)
+
+    counts = manager.counts()
+
+    reason = {
+        'not registered': 'b: the source other is not registered',
+        'raises': 'half written',
+    }[broken]
+    assert list(counts.states) == ['a']
+    assert counts.failed == {'b': reason}
+    assert counts.outside == {'pairs': 0}
+
+
+def test_a_count_calls_a_source_once_for_all_its_batches(
+    client: Client, definitions: FolderDefinitions, sample: Measure
+) -> None:
+    sample(1, 'water')
+    calls = []
+
+    def counted(files: Any) -> list[Row]:
+        calls.append(1)
+        return pair(files)
+
+    sources = {'pairs': Source(counted, columns=('sample', 'transmission'))}
+    manager = BatchManager(client, sources=sources, definitions=definitions)
+    for label in ('a', 'b'):
+        manager.create('plain', title=label, source='pairs', label=label)
+
+    manager.counts()  # makes both batches, which scans each once
+    first = len(calls)
+    manager.counts()
+
+    assert (first, len(calls)) == (2, 4)

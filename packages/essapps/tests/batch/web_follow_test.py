@@ -781,3 +781,35 @@ def test_a_correction_on_another_page_moves_the_version_of_the_runs_once(
     pages.tick()
 
     assert pages.runs_version == before + 1
+
+
+def test_the_counts_of_the_batch_that_follows_are_the_chips_of_its_page(
+    server: Server, pages: Pages, client: Client, sample: Measure
+) -> None:
+    sample(1, 'water')
+    server.follow(True)
+    done(server, client)
+    sample(2, 'oil')
+    bins(server, 0)
+    pages.tick()  # Follow cannot submit oil with these settings
+
+    counted = pages.counts().rows[server.label]
+
+    chips = {s: n for s, n in server.state().counts.items() if n and s != 'all'}
+    assert counted == chips == {'outdated': 1, 'incomplete': 1}
+
+
+def test_follow_turning_itself_off_moves_the_version_of_the_list_of_batches(
+    server: Server, pages: Pages, manager: BatchManager
+) -> None:
+    other = manager.create(STAGED.name, title='Other', source='pairs')
+    pages.follow.on(other)
+    manager.remove(other)
+    seen = server.state()
+
+    pages.tick()  # Follow finds its batch gone
+
+    polled = server.poll(seen.version, server.start)
+    assert pages.follow.label is None
+    assert polled is not None
+    assert polled.batches > seen.batches

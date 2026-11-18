@@ -838,3 +838,29 @@ def test_the_batches_view_counts_the_rows_when_opened_and_again_on_request(
     client.wait(batch.reduce(['1']))
     page.click('#count')
     page.wait_for_selector('#batches .pill.st-done:text-is("1 done")')
+
+
+def test_a_count_that_fails_says_why_in_the_batches_view_and_shows_no_counts(
+    page: Any,
+) -> None:
+    page.click('[data-view=batches]')
+    page.wait_for_selector('#batches .pill')
+    refused = {'message': 'Cannot count.'}
+    page.route('**/api/batches/counts', lambda r: r.fulfill(status=422, json=refused))
+
+    page.click('#count')
+
+    page.wait_for_selector('#message:has-text("Cannot count.")')
+    assert page.is_visible('#message')
+    assert page.locator('#batches .pill').count() == 0
+    assert all('status of 422' in e for e in page.errors)
+    page.errors.clear()
+
+
+def test_a_batch_that_could_not_be_counted_shows_why_in_its_row(page: Any) -> None:
+    counted = {'rows': {}, 'failed': {'scan': 'half written'}, 'outside': {}}
+    page.route('**/api/batches/counts', lambda r: r.fulfill(json=counted))
+
+    page.click('[data-view=batches]')
+
+    page.wait_for_selector('#batches td.bad:text-is("half written")')

@@ -255,12 +255,15 @@ class Batches(BaseModel):
 
 class BatchCounts(BaseModel):
     """
-    The rows of each batch by status, in the words of the page, by label; and
-    the rows of each registered source that no batch shows, in its words, such
-    as ``3 samples``, by its name.
+    The rows of each batch by status, in the words of the page, by label; why
+    each other batch could not be counted, by label; and the rows of each
+    registered source that no batch shows, in its words, such as
+    ``3 samples``, by its name. A source of a batch that could not be counted
+    is left out of ``outside``.
     """
 
     rows: dict[str, dict[str, int]]
+    failed: dict[str, str]
     outside: dict[str, str]
 
 

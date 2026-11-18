@@ -14,7 +14,7 @@ the counts (:meth:`Pages.counts`), which scan every batch.
 
 The runs are the same on every page. A correction made on one page scans its
 batch at once; the page of each other batch scans its batch at its next poll
-(:attr:`Pages.corrected`).
+(:attr:`Pages.corrected`), and says once if that scan fails.
 
 Follow is the one loop of the application
 (:class:`~ess.apps.batch.auto.Follow`). :meth:`Pages.tick` steps it, with or
@@ -35,10 +35,11 @@ from pydantic import BaseModel
 
 from ess.spec import FileRef
 
-from .. import BatchManager, CorrectedFiles, Words
+from .. import BatchManager, CorrectedFiles, RowState, Words, refused_again
 from ..auto import Follow
+from . import forms
 from .models import BatchCounts, Batches, BatchRow
-from .server import Draw, Problem, Server, page_status
+from .server import Draw, Problem, Server, page_statuses
 
 
 class Missing(Exception):
@@ -74,9 +75,6 @@ class Pages:
     runs_version:
         Counts the changes of the runs, so that the Runs view of each page
         asks for them again.
-    batches_version:
-        Counts the changes of the list of batches, so that the Batches view
-        of each page asks for it again.
     corrected:
         Counts the corrections of runs, so that the page of each batch scans
         again at its next poll after one.
@@ -106,7 +104,9 @@ class Pages:
         self.runs_version = 1
         # The runs, with their metadata, as listed at the last version.
         self._runs: Mapping[FileRef, Mapping[str, Any]] = {}
-        self.batches_version = 1
+        # The batches and the label that follows, as listed at the last version.
+        self._batches: tuple[object, ...] = ()
+        self._batches_version = 0
         self.corrected = 0
         self.failure: str | None = None
         self._pages: dict[str, Server] = {}
@@ -173,6 +173,34 @@ class Pages:
             self._runs = runs
             self.runs_version += 1
 
+    def batches_version(self) -> int:
+        """
+        The version of the list of batches, so that the Batches view of each
+        page asks for it again. It moves when the headers of the batches or
+        the label that follows differ from those of the last version, whoever
+        changed them.
+        """
+        with self.lock:
+            listed = (tuple(self.manager.batches().items()), self.follow.label)
+            if listed != self._batches:
+                self._batches = listed
+                self._batches_version += 1
+            return self._batches_version
+
+    def waiting(self, label: str, states: Mapping[str, RowState]) -> dict[str, str]:
+        """
+        Why Follow could not submit each row of ``states`` that its next step
+        would submit again, by key; none unless the batch of ``label`` follows.
+        """
+        source = self.manager.source(label)
+        if source is None or self.follow.label != label:
+            return {}
+        reasons = {
+            key: f'Follow could not reduce it: {forms.message(reason)}'
+            for key, reason in self.follow.refused.items()
+        }
+        return refused_again(states, source.columns, reasons)
+
     def batches(self) -> Batches:
         """The batches, as the Batches view of each page lists them."""
         with self.lock:
@@ -190,27 +218,27 @@ class Pages:
                         follows=label == self.follow.label,
                     )
                 )
-            return Batches(version=self.batches_version, rows=rows)
+            return Batches(version=self.batches_version(), rows=rows)
 
     def counts(self) -> BatchCounts:
         """
         The counts of the manager (:meth:`~ess.apps.batch.BatchManager.counts`)
-        in the words of the page. Every page and Follow wait while it scans.
+        in the words of the page: the statuses are those of the page of each
+        batch (:func:`~.server.page_statuses`). Every page and Follow wait
+        while it scans.
         """
         with self.lock:
-            try:
-                counts = self.manager.counts()
-            except Exception as error:  # a source is code of the application
-                raise Problem(f'Cannot count the rows: {error}') from None
+            counts = self.manager.counts()
             rows = {}
-            for label, texts in counts.batches.items():
-                shown: Counter[str] = Counter()
-                for text, n in texts.items():
-                    shown[page_status(text)] += n
-                rows[label] = dict(shown)
+            for label, states in counts.states.items():
+                columns = self.manager.batch(label).columns
+                waiting = self.waiting(label, states)
+                statuses = page_statuses(states, columns, waiting)
+                rows[label] = dict(Counter(statuses.values()))
             sources = self.manager.sources
             return BatchCounts(
                 rows=rows,
+                failed=counts.failed,
                 outside={
                     name: sources[name].words.count(n)
                     for name, n in counts.outside.items()
