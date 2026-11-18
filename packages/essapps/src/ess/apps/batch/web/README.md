@@ -82,6 +82,16 @@ The server answers 204 if nothing changed since `version`, and else the whole `S
 `start` is new at each start of the server; a page that sees another one loads again.
 `State.runs` counts the changes of the runs; the Runs view asks for `/api/runs` when it moves.
 
+## How the page asks
+
+One function of `app.js` makes every request of the page, other than the poll.
+It answers the body, or shows the message of the failure (the server's `message` for a 422, "The server answered 500.", or that the server does not answer) and answers nothing.
+It also drops an answer when a newer request of the same kind was sent (`/api/row`, `/api/runs`, `/api/plot`), or when what it was for changed, such as a row that is no longer the only one selected.
+An older answer of the poll is dropped by its `version`.
+Actions wait for each other in a queue, so that the server gets them in the order a person did them.
+The keys of many rows (a plot, the results as a zip) go in the body of a POST, since a URL has a limit.
+The page asks for `api/...`, relative to its own URL, so a parent app can mount it under a prefix: `parent.mount('/batch', create_app(batch))`, and the answers are gzipped for a client that accepts it.
+
 ## Where the definition is kept
 
 The edits of rows, the settings, and the corrections of runs are the definition of the batch.

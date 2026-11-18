@@ -24,9 +24,10 @@ from typing import Any, NoReturn
 import pytest
 import uvicorn
 from fastapi import FastAPI
+from pydantic import BaseModel
 
 from ess.apps import Client
-from ess.apps.batch import Batch
+from ess.apps.batch import Batch, CorrectedFiles
 from ess.apps.batch.web import Shown, create_app
 from ess.apps.batch.web.api import STATIC
 
@@ -47,6 +48,10 @@ if not (STATIC / 'vendor').is_dir():
     unavailable(f'needs the libraries of the page: sh {STATIC / "vendor.sh"}')
 
 
+class Marks(BaseModel):
+    role: str | None = None
+
+
 def draw(shown: Sequence[Shown]) -> dict[str, Any]:
     return {'data': [{'y': [1, 2], 'name': s.name} for s in shown], 'layout': {}}
 
@@ -64,11 +69,13 @@ def browser() -> Iterator[Any]:
 
 
 @pytest.fixture
-def url(batch: Batch, sample: Measure) -> Iterator[str]:
+def url(batch: Batch, sample: Measure, files: CorrectedFiles) -> Iterator[str]:
     for run, name in enumerate(['water', 'sds', 'oil'], start=1):
         sample(run, name)
     batch.scan()
-    with serve(create_app(batch, name='name', draw=draw)) as url:
+    with serve(
+        create_app(batch, name='name', draw=draw, files=files, marks=Marks)
+    ) as url:
         yield url
 
 
@@ -263,6 +270,129 @@ def test_an_edit_the_server_does_not_get_is_taken_back_and_said(
     page.errors.clear()
 
 
+HOLD = """part => {
+  window.held = [];
+  const fetched = window.fetch;
+  window.fetch = async (url, init) => {
+    const response = await fetched(url, init);
+    if (!String(url).includes(part)) return response;
+    const copy = new Response(await response.blob(), response);
+    return new Promise((release) => window.held.push(() => release(copy)));
+  };
+}"""
+RELEASE = """async i => {
+  window.held[i]();
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+}"""
+
+
+def hold(page: Any, part: str) -> None:
+    """Keep the answers of the requests whose URL holds ``part`` until released."""
+    page.evaluate(HOLD, part)
+
+
+def held(page: Any, n: int) -> None:
+    """Wait until ``n`` answers are held."""
+    page.wait_for_function(f'window.held.length === {n}')
+
+
+def release(page: Any, i: int) -> None:
+    """Give the page the ``i``-th held answer, and wait until it has handled it."""
+    page.evaluate(RELEASE, i)
+
+
+def select(page: Any, name: str) -> None:
+    page.locator('#rows .tabulator-row', has_text=name).locator('input').click()
+
+
+def test_the_row_tab_does_not_show_a_row_after_a_second_is_selected(page: Any) -> None:
+    page.click('[data-tab=row]')
+    hold(page, 'api/row')
+    select(page, 'water')
+    held(page, 1)
+    select(page, 'sds')
+
+    release(page, 0)
+
+    assert 'Select only one' in page.inner_text('#tab-row')
+
+
+def test_an_older_answer_for_the_runs_does_not_replace_a_newer_one(
+    page: Any, url: str
+) -> None:
+    page.click('[data-view=runs]')
+    key = page.evaluate(
+        "fetch('api/runs').then(r => r.json()).then(b => b.rows[0].key)"
+    )
+    hold(page, 'api/runs')
+    for n, value in enumerate(['first', 'second']):
+        edit = {'keys': [key], 'column': 'role', 'value': value}
+        assert page.request.post(f'{url}api/runs/cells', data=edit).ok
+        held(page, n + 1)
+
+    release(page, 1)
+    release(page, 0)
+
+    assert 'second' in page.inner_text('#runs')
+    assert 'first' not in page.inner_text('#runs')
+
+
+def test_a_request_the_server_does_not_answer_says_so_where_no_action_asked(
+    page: Any,
+) -> None:
+    page.route('**/api/plot*', lambda route: route.abort())
+
+    select(page, 'water')
+
+    page.wait_for_selector('#message:has-text("The server does not answer")')
+    assert page.errors == ['Failed to load resource: net::ERR_FAILED']
+    page.errors.clear()
+
+
+def test_a_request_the_server_fails_says_its_status_where_no_action_asked(
+    page: Any,
+) -> None:
+    page.route('**/api/plot*', lambda route: route.fulfill(status=500))
+
+    select(page, 'water')
+
+    page.wait_for_selector('#message:has-text("The server answered 500.")')
+    assert len(page.errors) == 1
+    assert 'status of 500' in page.errors[0]
+    page.errors.clear()
+
+
+def test_the_page_loads_its_rows_under_a_path_prefix(
+    browser: Any, batch: Batch, sample: Measure
+) -> None:
+    sample(1, 'water')
+    batch.scan()
+    parent = FastAPI()
+    parent.mount('/batch', create_app(batch, name='name', draw=draw))
+    with serve(parent) as url:
+        page = browser.new_page()
+        errors: list[str] = []
+        page.on(
+            'console', lambda m: errors.append(m.text) if m.type == 'error' else None
+        )
+        page.on('pageerror', lambda e: errors.append(str(e)))
+        page.goto(f'{url}batch/')
+
+        page.wait_for_selector('#rows .tabulator-row:has-text("water")')
+        page.close()
+    assert errors == []
+
+
+def test_a_plot_of_the_keys_of_ten_thousand_rows_is_answered(
+    page: Any, url: str
+) -> None:
+    keys = [f'run-{n}' for n in range(10_000)]
+
+    answer = page.request.post(f'{url}api/plot', data={'keys': keys})
+
+    assert answer.ok
+
+
 BINS = '#settings input[data-path=\'["binning","bins"]\']'
 """The input of the number of bins in the settings form."""
 
@@ -449,3 +579,168 @@ def test_with_follow_on_rows_appear_and_are_reduced_without_a_click(
     following.wait_for_selector('#rows .tabulator-row:has-text("sds")')
     following.wait_for_selector('.chip.st-done .n:text-is("2")')
     assert following.inner_text('#follow-status') == 'Following, every 0.2 s'
+
+
+HTML = '<img src=x onerror="window.__xss = 1">'
+
+
+def test_html_in_the_name_of_a_row_shows_as_text_in_its_tooltip(page: Any) -> None:
+    page.click('#add-row')
+    page.keyboard.type(HTML)
+    page.keyboard.press('Enter')
+    name = page.locator('#rows .tabulator-cell[tabulator-field=name]', has_text='<img')
+
+    name.hover()
+
+    page.wait_for_selector('.tabulator-tooltip')
+    assert page.inner_text('.tabulator-tooltip') == HTML
+    assert page.locator('.tabulator-tooltip img').count() == 0
+
+
+def test_html_in_a_cell_shows_as_text_in_its_tooltip(page: Any) -> None:
+    page.click('[data-view=runs]')
+    role = page.locator('#runs .tabulator-cell[tabulator-field="cells.role.value"]')
+    role.first.click()
+    page.keyboard.type(HTML)
+    page.keyboard.press('Enter')
+    edited = page.locator('#runs .tabulator-cell.edited').first
+
+    edited.hover()
+
+    page.wait_for_selector('.tabulator-tooltip')
+    assert HTML in page.inner_text('.tabulator-tooltip')
+    assert page.locator('.tabulator-tooltip img').count() == 0
+
+
+def test_a_run_that_arrives_can_be_chosen_in_a_cell(
+    page: Any, batch: Batch, sample: Measure
+) -> None:
+    sample(4, 'ice')
+    batch.scan()
+    page.wait_for_selector('#rows .tabulator-row:has-text("ice")')
+
+    cell(page, 'water', 'transmission').click()
+
+    page.wait_for_selector('.choices li:has-text("run 1004")')
+
+
+def pills(page: Any) -> list[str]:
+    return page.evaluate(PILLS)
+
+
+PILLS = """[...document.querySelectorAll('#rows .tabulator-row')].map(
+  (r) => r.querySelector('.pill').textContent
+)"""
+"""The status of each row shown, from the top."""
+
+
+def reduce_rows(page: Any, url: str, client: Client, *keys: str) -> None:
+    """Reduce the rows of ``keys`` and wait until the page shows them done."""
+    answer = page.request.post(
+        f'{url}api/reduce', data={'which': 'selected', 'keys': keys}
+    )
+    assert answer.ok
+    client.wait(client.records())
+    page.wait_for_selector(f'.chip.st-done .n:text-is("{len(keys)}")')
+
+
+def test_a_row_that_changes_is_filtered_out_again(
+    page: Any, url: str, client: Client
+) -> None:
+    page.click('.chip.st-ready')
+    assert pills(page) == ['ready'] * 3
+
+    reduce_rows(page, url, client, '2')
+
+    page.wait_for_function(f'{PILLS}.length === 2')
+    assert pills(page) == ['ready'] * 2
+
+
+def test_a_row_that_changes_moves_to_where_the_sort_puts_it(
+    page: Any, url: str, client: Client
+) -> None:
+    page.click('#rows .tabulator-col[tabulator-field=status]')
+    assert pills(page) == ['ready'] * 3
+
+    reduce_rows(page, url, client, '1')
+
+    page.wait_for_function(f'{PILLS}[2] === "done"')
+    assert pills(page) == ['ready', 'ready', 'done']
+
+
+def test_the_runs_are_shown_when_the_view_is_first_opened(page: Any) -> None:
+    page.click('[data-view=runs]')
+
+    page.wait_for_selector('#runs .tabulator-row')
+    assert page.locator('#runs .tabulator-row').count() == 6
+
+
+def test_a_run_corrected_while_the_runs_are_hidden_shows_when_they_are_opened(
+    page: Any, url: str
+) -> None:
+    key = page.evaluate(
+        "fetch('api/runs').then(r => r.json()).then(b => b.rows[0].key)"
+    )
+    edit = {'keys': [key], 'column': 'role', 'value': 'corrected'}
+    with page.expect_response('**/api/runs'):
+        assert page.request.post(f'{url}api/runs/cells', data=edit).ok
+
+    page.click('[data-view=runs]')
+
+    page.wait_for_selector('#runs .tabulator-cell:has-text("corrected")')
+
+
+def active(page: Any) -> str:
+    """The tag and the class of the element that has the keyboard focus."""
+    return page.evaluate(
+        '`${document.activeElement.tagName}.${document.activeElement.className}`'
+    )
+
+
+def test_a_chip_of_the_filter_keeps_the_focus_when_the_state_changes(
+    page: Any, url: str, client: Client
+) -> None:
+    page.focus('.chip.st-ready')
+
+    reduce_rows(page, url, client, '2')
+
+    assert active(page) == 'BUTTON.chip st-ready'
+
+
+def test_the_button_that_reverts_a_cell_can_be_focused_and_keeps_the_focus(
+    page: Any, url: str
+) -> None:
+    edit = {'keys': ['2'], 'column': 'thickness', 'value': 2.0}
+    assert page.request.post(f'{url}api/cells', data=edit).ok
+    revert = page.locator('#rows .tabulator-row', has_text='sds').locator('.revert')
+    revert.focus()
+    assert active(page) == 'BUTTON.revert'
+
+    assert page.request.post(f'{url}api/cells', data=edit | {'value': 3.0}).ok
+
+    page.wait_for_function(
+        "document.querySelector('.tabulator-cell.edited').innerText.includes('3.0')"
+        " && document.activeElement.classList.contains('revert')"
+    )
+
+
+def test_a_button_of_the_row_tab_keeps_the_focus_when_the_row_changes(
+    page: Any, url: str, client: Client
+) -> None:
+    reduce_rows(page, url, client, '1')
+    change = {'path': ['binning', 'bins'], 'op': 'set', 'value': 5}
+    assert page.request.post(f'{url}api/settings', data=change).ok
+    assert page.request.post(f'{url}api/settings/apply').ok
+    page.click('[data-tab=row]')
+    select(page, 'water')
+    button = page.locator('#tab-row button', has_text='Put these settings')
+    button.focus()
+    assert active(page) == 'BUTTON.'
+
+    edit = {'keys': ['1'], 'column': 'thickness', 'value': 9.0}
+    assert page.request.post(f'{url}api/cells', data=edit).ok
+
+    page.wait_for_function(
+        "document.querySelector('#tab-row dl').innerText.includes('9.0')"
+        " && document.activeElement.textContent.startsWith('Put these settings')"
+    )

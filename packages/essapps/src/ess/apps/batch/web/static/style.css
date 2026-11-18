@@ -381,7 +381,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
   vertical-align: 2px;
 }
 .tabulator-cell .revert {
-  visibility: hidden;
+  opacity: 0;
   height: 20px;
   padding: 0 4px;
   border: 0;
@@ -389,7 +389,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
   color: var(--accent);
   font-size: 13px;
 }
-.tabulator-row:hover .revert { visibility: visible; }
+.tabulator-row:hover .revert,
+.tabulator-cell .revert:focus-visible { opacity: 1; }
 .tabulator-row .tabulator-cell.bad {
   box-shadow: inset 2px 0 0 var(--bad);
   background: var(--bad-soft);

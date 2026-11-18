@@ -3,16 +3,19 @@
 """The batch page's API over HTTP, on a real in-process workspace."""
 
 import io
+import re
 import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 import numpy as np
 import pandas as pd
 import pytest
 import scipp as sc
 import yaml
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
@@ -340,7 +343,7 @@ def test_a_changed_setting_leaves_the_rows_done_marked_with_earlier_settings(
     assert state(http)['action']['earlier'] == 2
     detail = http.get('/api/row', params={'key': '1'}).json()
     assert detail['differs'] == ['binning']
-    plot = http.get('/api/plot', params={'keys': ['1']}).json()
+    plot = http.post('/api/plot', json={'keys': ['1']}).json()
     assert plot['figure']['outdated'] == [False]
     table = pd.read_csv(io.BytesIO(http.get('/api/table.csv').content), dtype=str)
     assert list(table['status']) == [
@@ -883,7 +886,7 @@ def test_the_results_of_the_rows_done_download_as_a_zip(
 ) -> None:
     reduced(http, client)
 
-    content = http.get('/api/results.zip', params={'keys': ['1', '3']}).content
+    content = http.post('/api/results.zip', json={'keys': ['1', '3']}).content
 
     names = zipfile.ZipFile(io.BytesIO(content)).namelist()
     assert sorted(names) == [
@@ -898,7 +901,7 @@ def test_the_plot_draws_the_results_of_the_rows_asked_for_in_their_colours(
 ) -> None:
     reduced(http, client)
 
-    plot = http.get('/api/plot', params={'keys': ['2', '3']}).json()
+    plot = http.post('/api/plot', json={'keys': ['2', '3']}).json()
 
     assert plot['figure'] == {
         'drawn': ['2'],
@@ -906,7 +909,7 @@ def test_the_plot_draws_the_results_of_the_rows_asked_for_in_their_colours(
         'outdated': [False],
     }
     assert plot['colors'] == {'2': plots.PALETTE[1]}
-    assert http.get('/api/plot').json()['figure']['drawn'] == ['1', '2']
+    assert http.post('/api/plot', json={}).json()['figure']['drawn'] == ['1', '2']
 
 
 def test_a_drawing_that_raises_says_so_in_place_of_the_figure(
@@ -920,7 +923,7 @@ def test_a_drawing_that_raises_says_so_in_place_of_the_figure(
     page.post('/api/scan')
     reduced(page, client)
 
-    plot = page.get('/api/plot').json()
+    plot = page.post('/api/plot', json={}).json()
 
     assert plot['figure'] is None
     assert 'Cannot draw: released' in plot['note']
@@ -951,8 +954,8 @@ def test_plotting_and_saving_chosen_rows_reads_their_records_only(
         call()
         return counting.reads['status']
 
-    plot = reads(lambda: page.get('/api/plot', params=chosen))
-    saved = reads(lambda: page.get('/api/results.zip', params=chosen))
+    plot = reads(lambda: page.post('/api/plot', json=chosen))
+    saved = reads(lambda: page.post('/api/results.zip', json=chosen))
 
     # the zip also asks the status of the record it exports
     assert (plot, saved) == (1, 2)
@@ -1179,3 +1182,37 @@ def test_the_runs_of_a_sample_that_arrive_in_the_demo_show_after_a_rescan(
 
     assert [row['name'] for row in before.values()] == ['H2O buffer']
     assert [row['name'] for row in after['rows']] == ['H2O buffer', 'D2O buffer']
+
+
+def test_the_page_and_the_files_it_names_are_served_under_a_path_prefix(
+    batch: Batch,
+) -> None:
+    parent = FastAPI()
+    parent.mount('/batch', create_app(batch, name='name', draw=draw))
+    under = TestClient(parent)
+
+    page = under.get('/batch/')
+    names = re.findall(r'(?:src|href)="([^"]+)"', page.text)
+    local = [n for n in names if not n.startswith('data:') and 'vendor' not in n]
+
+    assert local
+    for name in local:
+        assert not name.startswith(('/', 'http')), name
+        assert under.get(urljoin('/batch/', name)).status_code == 200, name
+    assert under.get('/batch/api/state').status_code == 200
+
+
+def test_a_large_answer_is_compressed_for_a_client_that_accepts_gzip(
+    http: TestClient, sample: Measure, batch: Batch
+) -> None:
+    for run in range(10, 200):
+        sample(run, f'sample {run}')
+    batch.scan()
+
+    plain = http.get('/api/state', headers={'Accept-Encoding': 'identity'})
+    packed = http.get('/api/state', headers={'Accept-Encoding': 'gzip'})
+
+    assert 'content-encoding' not in plain.headers
+    assert packed.headers['content-encoding'] == 'gzip'
+    assert int(packed.headers['content-length']) < len(plain.content) / 3
+    assert packed.json() == plain.json()
