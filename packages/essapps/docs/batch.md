@@ -333,7 +333,7 @@ definitions/corrections.json                    every file source of the workspa
 definitions/labels/auto%2Fiofq/edits.json       what was set by hand on the rows
 definitions/labels/auto%2Fiofq/settings.json    a template, which essapps-batch reads
 definitions/labels/auto%2Fiofq/header.json      title, description and source; written by the manager
-definitions/following.json                      the label that follows; written by the manager
+definitions/following.json                      the label of the batch that follows; written by Follow
 ```
 
 ```json

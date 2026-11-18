@@ -9,8 +9,8 @@ The definition is these tables, each with one writer:
     corrections   metadata of a file set by hand, by file     CorrectedFiles
     edits         cells set, rows added or removed, by key    Batch.rows
     settings      the parameters that are not columns         Batch.settings
-    header        the title, description and source of a batch  the manager
-    following     the label of the batch that follows         the manager
+    header        title, description, source of a batch       the manager
+    following     the label of the batch that follows         Follow
 
 The corrections are about files, and every batch of a workspace reads the
 files through one :class:`~.corrections.CorrectedFiles`, so a workspace has
