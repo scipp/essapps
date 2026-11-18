@@ -198,9 +198,7 @@ def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_p
         definitions=definitions,
         defaults=DEFAULTS,
     )
-    label = manager.create(
-        STAGED.name, title='Scan', source='pairs', columns=('thickness',)
-    )
+    label = manager.create(STAGED.name, title='Scan', source='pairs', columns=COLUMNS)
     sample(1, 'water')
     pages = Pages(manager, Follow(manager, definitions))
     pages.follow.on(label)

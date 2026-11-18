@@ -6,17 +6,22 @@ removes them. The guide is the section "The batches of a workspace" of
 ``packages/essapps/docs/batch.md``; the decision is
 ``docs/developer/adr/0011-a-person-makes-the-batches-of-a-workspace.md``.
 
-A batch is kept as three tables of the definitions (:mod:`.definition`)::
+A batch is kept as three tables of the definitions (:mod:`.definition`), each
+with one writer::
 
-    header      title, description, the name of its registered source, scope
-    settings    a template: the spec by name, the columns as its blanks
-    edits       what a person set on its rows
+    header      the spec by name, the columns, the name     BatchManager
+                of its source, title, description, scope
+    settings    a template of the settings, its spec and    Batch.settings
+                blanks a copy of the header's
+    edits       what a person set on its rows               Batch.rows
 
 so a manager made again, after a restart, makes the same ``Batch`` of a label
 from them, the registered sources and the defaults. Making a batch writes its
-settings, then its header: a label without a header is not a batch. The
-``Batch`` is made at the first call of :meth:`BatchManager.batch`, and writes
-the settings and the edits from then on.
+first settings, through a ``Batch`` that it does not keep, then its header: a
+label without a header is not a batch, and a header without settings is a
+batch with the default settings of its spec. The ``Batch`` of a label is made
+at the first call of :meth:`BatchManager.batch`, and writes the settings and
+the edits from then on.
 """
 
 from __future__ import annotations
@@ -35,7 +40,6 @@ from ess.spec import WorkflowSpec
 from ..client import Client
 from ..errors import SubmitError
 from ..files import Selector
-from ..records import Template
 from .definition import (
     DefinitionStore,
     Header,
@@ -45,8 +49,6 @@ from .definition import (
     header_key,
     header_of,
     settings_key,
-    template_data,
-    template_of,
 )
 from .reduction import Batch, RowSource, file_infos
 from .state import RowState
@@ -107,10 +109,14 @@ class Defaults:
     Parameters
     ----------
     settings:
-        The settings that a new batch starts with; those that are columns of
-        the batch are left out.
+        The settings that a new batch starts with, copied once when it is
+        made, so a change of them leaves the batches made before as they are.
+        Those that are columns of the batch are left out. A batch whose
+        settings are not kept starts with them too.
     staged:
         Run the rows through a stage, as :class:`~.reduction.Batch` takes it.
+        It is read at every start, and so applies to the batches made before
+        too.
     """
 
     settings: Mapping[str, Any] = field(default_factory=dict)
@@ -159,6 +165,11 @@ def bound_spec(client: Client, name: str) -> WorkflowSpec[Any, Any]:
     if not specs:
         raise KeyError(f'the workspace binds no spec {name}')
     return max(specs, key=lambda spec: spec.version)
+
+
+def _settings(given: Mapping[str, Any], columns: Sequence[str]) -> dict[str, Any]:
+    """``given`` without the parameters that are ``columns``."""
+    return {name: value for name, value in given.items() if name not in columns}
 
 
 def check_label(label: str) -> None:
@@ -223,7 +234,7 @@ class BatchManager:
         *,
         title: str,
         source: str | None = None,
-        columns: Sequence[str] = (),
+        columns: Sequence[str] | None = None,
         description: str = '',
         scope: Scope | None = None,
         settings: Mapping[str, Any] | None = None,
@@ -232,6 +243,7 @@ class BatchManager:
         """
         Make a batch and keep it; its label. If saving the header is refused,
         the settings written before it are deleted, and ``NotKept`` raised.
+        Nothing is written if a check fails.
 
         Parameters
         ----------
@@ -244,7 +256,8 @@ class BatchManager:
             The name of a registered source; without one, a batch has only
             rows added by hand.
         columns:
-            Parameters made columns, besides those the source fills.
+            All parameters that each row gives; those that the source fills if
+            not given.
         description:
             What a person says of the batch.
         scope:
@@ -264,9 +277,10 @@ class BatchManager:
             If the workspace binds no spec ``spec``, or no source ``source``
             is registered.
         ValueError
-            If ``label`` is not one that :func:`check_label` takes, or has
-            definitions or records; or if a column is not a parameter of the
-            spec.
+            If ``title`` is empty; if ``label`` is not one that
+            :func:`check_label` takes, or has definitions or records; if a
+            column is not a parameter of the spec; or if the source fills a
+            parameter that is not among the columns.
         """
         if label is None:
             stamp = time.strftime('%Y%m%d-%H%M%S')
@@ -278,18 +292,33 @@ class BatchManager:
         if self._taken(label):
             raise ValueError(f'{label}: the label has definitions or records')
         bound = bound_spec(self._client, spec)
-        if source is not None:
-            columns = (*self.sources[source].fills, *columns)
-        columns = tuple(dict.fromkeys(columns))
+        fills = () if source is None else self.sources[source].fills
+        columns = fills if columns is None else tuple(columns)
         if unknown := sorted(set(columns) - bound.params.model_fields.keys()):
             raise ValueError(f'{bound.title} has no parameters {unknown}')
+        if missing := sorted(set(fills) - set(columns)):
+            raise ValueError(
+                f'the source {source} fills {missing}, which are not columns'
+            )
+        header = Header(
+            spec=spec,
+            columns=columns,
+            source=source,
+            title=title,
+            description=description,
+            scope=Scope() if scope is None else scope,
+        )
         if settings is None:
             settings = self._defaults.get(spec, Defaults()).settings
-        # The template leaves out the settings that are columns.
-        template = Template(bound, params=settings, blanks=columns)
-        self._definitions.save(settings_key(label), template_data(template))
-        scope = Scope() if scope is None else scope
-        header = Header(title, description, source, scope)
+        # Batch.settings is the one writer of the settings.
+        first = Batch(
+            self._client,
+            bound,
+            columns=columns,
+            label=label,
+            definitions=self._definitions,
+        )
+        first.settings = _settings(settings, columns)
         try:
             self._definitions.save(header_key(label), header_data(header))
         except NotKept:
@@ -320,34 +349,33 @@ class BatchManager:
 
         Raises ``KeyError`` if no batch has the label, or the workspace binds
         no spec of its name, or its source is not registered; ``ValueError``
-        if its definitions cannot be read, or its source fills a parameter
-        that is not a column of the batch.
+        if its settings or edits cannot be read, or its source fills a
+        parameter that is not a column of the batch.
         """
         if (batch := self._batches.get(label)) is not None:
             return batch
+        header = self._headers[label]
         source = self.source(label)
-        template = self._definitions.load(settings_key(label), template_of)
-        if template is None:
-            raise ValueError(f'{label}: the definitions hold no settings')
         if source is not None and (
-            missing := sorted(set(source.fills) - set(template.blanks))
+            missing := sorted(set(source.fills) - set(header.columns))
         ):
             raise ValueError(
                 f'{label}: its source fills {missing}, which are not columns of '
                 'the batch; the source registered changed since it was made'
             )
-        spec = bound_spec(self._client, template.spec.name)
+        defaults = self._defaults.get(header.spec, Defaults())
         batch = Batch(
             self._client,
-            spec,
-            columns=template.blanks,
+            bound_spec(self._client, header.spec),
+            columns=header.columns,
             label=label,
             source=None if source is None else source.rows,
             selector=None if source is None else source.selector,
-            staged=self._defaults.get(spec.name, Defaults()).staged,
+            staged=defaults.staged,
             persist=True,
+            settings=_settings(defaults.settings, header.columns),
             definitions=self._definitions,
-            scope=self._headers[label].scope,
+            scope=header.scope,
         )
         if source is not None:
             batch.scan()
@@ -417,7 +445,9 @@ class BatchManager:
     ) -> Header:
         """
         The header of ``label`` with what is given changed, as kept. A scope
-        changes the rows of the batch at once, without a scan.
+        changes the rows of the batch at once, without a scan. Raises
+        ``KeyError`` if no batch has the label, and ``ValueError`` for an
+        empty title.
         """
         header = self._headers[label]
         header = replace(

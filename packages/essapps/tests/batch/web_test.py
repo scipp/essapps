@@ -566,7 +566,7 @@ def test_a_row_reduced_by_another_spec_version_is_outdated(
     with local(proposal='p1', files=files, bind=bind) as client:
         pages = started(client, definitions)
         label = pages.manager.create(
-            PLAIN.name, title='New', source='pairs', columns=('thickness',)
+            PLAIN.name, title='New', source='pairs', columns=COLUMNS
         )
         old = Batch(client, PLAIN, columns=COLUMNS, label=label, source=pair)
         old.scan()
@@ -855,7 +855,7 @@ def kept(client: Client, fake: FakeFiles, sample: Measure, flaky: Flaky) -> Test
     sample(2, 'sds')
     manager = BatchManager(client, sources=SOURCES, definitions=flaky)
     label = manager.create(
-        STAGED.name, title='Kept', source='pairs', columns=('thickness',), label='kept'
+        STAGED.name, title='Kept', source='pairs', columns=COLUMNS, label='kept'
     )
     files = CorrectedFiles(fake, definitions=flaky)
     return opened(
@@ -1146,9 +1146,7 @@ def test_plotting_and_saving_chosen_rows_reads_their_records_only(
 ) -> None:
     counting = CountingClient(client)
     manager = BatchManager(counting, sources=SOURCES, definitions=definitions)  # type: ignore[arg-type]
-    label = manager.create(
-        STAGED.name, title='Scan', source='pairs', columns=('thickness',)
-    )
+    label = manager.create(STAGED.name, title='Scan', source='pairs', columns=COLUMNS)
     for run in (1, 2, 3):
         sample(run, f's{run}')
     pages = Pages(manager, Follow(manager, definitions), draw={STAGED.name: draw})
@@ -1435,9 +1433,7 @@ def test_a_large_answer_is_compressed_for_a_client_that_accepts_gzip(
 def test_each_batch_has_its_page_at_its_label(
     http: TestClient, manager: BatchManager, pages: Pages
 ) -> None:
-    other = manager.create(
-        STAGED.name, title='Other', source='pairs', columns=('thickness',)
-    )
+    other = manager.create(STAGED.name, title='Other', source='pairs', columns=COLUMNS)
     page = opened(pages, other)
 
     bins(page, 5)

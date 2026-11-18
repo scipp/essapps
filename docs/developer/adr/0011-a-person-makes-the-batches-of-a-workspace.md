@@ -1,6 +1,6 @@
 # ADR 0011: A person makes the batches of a workspace, each with a scope over the rows of a source
 
-- Status: accepted. Several workflows on one batch are described below and not decided.
+- Status: accepted. Several workflows on one batch are described below and not decided. Amended 2026-11-18: the header holds the spec and the columns.
 - Deciders: Simon
 - Date: 2026-11-18
 
@@ -52,20 +52,22 @@ Problem 3 is not decided (see "Not decided").
 The definitions keep one more part per label, the *header*:
 
 ```json
-{"title": "Afternoon, 2 mm cells",
- "description": "New settings: the collimation changed at 13:00.",
+{"spec": "loki-iofq",
+ "columns": ["sample", "sample_transmission", "thickness"],
  "source": "sample-runs",
+ "title": "Afternoon, 2 mm cells",
+ "description": "New settings: the collimation changed at 13:00.",
  "scope": {"start": 60339, "stop": null}}
 ```
 
 ```
-definitions/labels/20261118-130204/header.json     title, description, source, scope
+definitions/labels/20261118-130204/header.json     spec, columns, source, title, description, scope
 definitions/labels/20261118-130204/edits.json      cells set, rows added or removed
-definitions/labels/20261118-130204/settings.json   a template: the spec, the columns, the settings
+definitions/labels/20261118-130204/settings.json   a template: the settings, with a copy of the spec and the columns
 definitions/following.json                         the label of the batch that follows, or none
 ```
 
-Making a batch writes its header and its settings, so the spec and the columns are kept from the start.
+Making a batch writes its header and its first settings; the header keeps the spec and the columns.
 A batch has one spec, and a column is a parameter of it.
 What code passes to `Batch` and `create_app` comes from these places for a batch that a person makes:
 
@@ -84,7 +86,7 @@ A source is written for the parameter names of a spec.
 So a batch can be made only with a source whose columns are parameters of its spec: `sample-runs` fills `sample` and `sample_transmission`, and fits `loki-iofq`.
 
 A person changes the title, the description and the scope.
-The spec, the source and the columns are fixed when the batch is made.
+The names of the spec and the source, and the columns, are fixed when the batch is made.
 
 ### The scope picks rows, never files
 
@@ -121,12 +123,13 @@ Nothing checks that the batches cover every row or that they do not overlap.
 
 ```python
 manager = BatchManager(client, sources=SOURCES, definitions=definitions)
-label = manager.create(IOFQ, title='Afternoon', source='sample-runs',
-                       columns=('thickness',), scope=Scope(start=60339))
-manager.batches()              # the header of each batch, by label
+label = manager.create('loki-iofq', title='Afternoon', source='sample-runs',
+                       columns=('sample', 'sample_transmission', 'thickness'),
+                       scope=Scope(start=60339))
+manager.headers()              # the header of each batch, by label
 manager.counts()               # rows per status of each batch; rows of each source in no batch
 manager.batch(label)           # the Batch: state(), reduce(), cancel(), settings
-manager.edit(label, scope=Scope(start=60339, stop=60421))
+manager.change(label, scope=Scope(start=60339, stop=60421))
 manager.remove(label)
 ```
 

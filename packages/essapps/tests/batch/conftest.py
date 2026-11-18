@@ -154,7 +154,7 @@ def label(manager: BatchManager) -> str:
         toys.STAGED.name,
         title='Scan',
         source='pairs',
-        columns=('thickness',),
+        columns=toys.COLUMNS,
         label='scan',
     )
 

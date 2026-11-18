@@ -24,6 +24,7 @@ from ess.apps.batch import (
     Source,
     status_texts,
 )
+from ess.apps.batch.definition import settings_key
 from ess.apps.testing import FakeStore, StagedFunction
 from ess.spec import function_binding
 
@@ -51,26 +52,25 @@ def test_a_batch_made_is_listed_with_its_header(
     manager: BatchManager, client: Client, definitions: FolderDefinitions
 ) -> None:
     label = manager.create(
-        'plain', title='Morning', source='pairs', description='2 mm cells', label='b'
+        'plain',
+        title='Morning',
+        source='pairs',
+        columns=COLUMNS,
+        description='2 mm cells',
+        label='b',
     )
 
-    header = Header('Morning', '2 mm cells', 'pairs')
+    header = Header(
+        spec='plain',
+        columns=COLUMNS,
+        source='pairs',
+        title='Morning',
+        description='2 mm cells',
+    )
     assert label == 'b'
     assert manager.headers() == {'b': header}
     assert manager.source('b') is SOURCES['pairs']
     assert _again(client, definitions).headers() == {'b': header}
-
-
-def test_a_batch_made_keeps_its_spec_and_columns_before_any_settings_are_applied(
-    manager: BatchManager, client: Client, definitions: FolderDefinitions
-) -> None:
-    label = manager.create(
-        'plain', title='Morning', source='pairs', columns=('thickness',)
-    )
-
-    again = _again(client, definitions).batch(label)
-    assert again.spec == PLAIN
-    assert again.columns == ('sample', 'transmission', 'thickness')
 
 
 def test_a_manager_made_again_on_the_definitions_hands_out_the_batch_as_it_was(
@@ -81,7 +81,7 @@ def test_a_manager_made_again_on_the_definitions_hands_out_the_batch_as_it_was(
 ) -> None:
     water = sample(1, 'water')
     label = manager.create(
-        'staged', title='Morning', source='pairs', columns=('thickness',), label='b'
+        'staged', title='Morning', source='pairs', columns=COLUMNS, label='b'
     )
     batch = manager.batch(label)
     batch.settings = {'binning': {'bins': 3}}
@@ -96,14 +96,41 @@ def test_a_manager_made_again_on_the_definitions_hands_out_the_batch_as_it_was(
     assert list(again.rows) == list(batch.rows)
 
 
-def test_the_columns_of_a_batch_are_those_of_its_source_and_those_the_person_adds(
+def test_the_columns_of_a_batch_are_those_given_else_those_its_source_fills(
     manager: BatchManager,
 ) -> None:
-    label = manager.create(
-        'plain', title='Morning', source='pairs', columns=('thickness', 'sample')
-    )
+    given = ('thickness', 'transmission', 'sample')
+    filled = manager.create('plain', title='Morning', source='pairs')
+    chosen = manager.create('plain', title='Evening', source='pairs', columns=given)
 
-    assert manager.batch(label).columns == ('sample', 'transmission', 'thickness')
+    assert manager.headers()[filled].columns == ('sample', 'transmission')
+    assert manager.batch(filled).columns == ('sample', 'transmission')
+    assert manager.headers()[chosen].columns == given
+    assert manager.batch(chosen).columns == given
+
+
+def test_columns_that_lack_one_the_source_fills_are_refused(
+    manager: BatchManager, definitions: FolderDefinitions
+) -> None:
+    with pytest.raises(ValueError, match=r"pairs fills \['transmission'\]"):
+        manager.create(
+            'plain', title='Morning', source='pairs', columns=('sample', 'thickness')
+        )
+    assert manager.headers() == {}
+    assert definitions.labels() == []
+
+
+def test_a_second_batch_on_the_label_with_other_columns_changes_no_header(
+    manager: BatchManager, client: Client, definitions: FolderDefinitions
+) -> None:
+    manager.create('plain', title='Morning', source='pairs', label='b')
+    other = Batch(client, PLAIN, columns=COLUMNS, label='b', definitions=definitions)
+    other.settings = {}
+
+    again = _again(client, definitions)
+
+    assert again.headers()['b'].columns == ('sample', 'transmission')
+    assert again.batch('b').columns == ('sample', 'transmission')
 
 
 @pytest.fixture
@@ -135,6 +162,18 @@ def test_settings_given_to_create_replace_those_registered_but_its_columns(
     )
 
     assert with_defaults.batch(label).settings == {'offset': {'value': 1.0}}
+
+
+def test_a_batch_whose_settings_are_not_kept_has_the_settings_registered(
+    with_defaults: BatchManager, definitions: FolderDefinitions
+) -> None:
+    label = with_defaults.create(
+        'plain', title='Morning', columns=COLUMNS, settings={'offset': {'value': 1.0}}
+    )
+
+    definitions.delete(settings_key(label))
+
+    assert with_defaults.batch(label).settings == {'binning': {'bins': 3}}
 
 
 def test_a_batch_is_of_the_highest_version_of_its_spec_that_the_workspace_binds(
@@ -250,7 +289,7 @@ def test_a_batch_whose_source_fills_a_column_it_lacks_is_refused(
         lambda m: m.change('b', title='Afternoon'),
         lambda m: m.remove('b'),
     ],
-    ids=['batch', 'source', 'edit', 'remove'],
+    ids=['batch', 'source', 'change', 'remove'],
 )
 def test_a_label_that_is_no_batch_is_refused(
     manager: BatchManager, call: Callable[[BatchManager], Any]
@@ -267,7 +306,13 @@ def test_a_title_and_description_changed_are_kept(
     header = manager.change(label, title='Afternoon')
     header = manager.change(label, description='b')
 
-    assert header == Header('Afternoon', 'b', 'pairs')
+    assert header == Header(
+        spec='plain',
+        columns=('sample', 'transmission'),
+        source='pairs',
+        title='Afternoon',
+        description='b',
+    )
     assert _again(client, definitions).headers() == {label: header}
 
 
@@ -369,7 +414,22 @@ def test_a_header_change_that_is_refused_changes_nothing(
 
     with pytest.raises(NotKept):
         manager.change('b', title='Afternoon')
-    assert manager.headers() == {'b': Header('Morning')}
+    assert manager.headers() == {
+        'b': Header(spec='plain', columns=COLUMNS, title='Morning')
+    }
+
+
+def test_an_empty_title_is_refused(
+    manager: BatchManager, definitions: FolderDefinitions
+) -> None:
+    with pytest.raises(ValueError, match='a title that is not empty'):
+        manager.create('plain', title='', columns=COLUMNS)
+    assert definitions.labels() == []
+    label = manager.create('plain', title='Morning', columns=COLUMNS)
+
+    with pytest.raises(ValueError, match='a title that is not empty'):
+        manager.change(label, title='')
+    assert manager.headers()[label].title == 'Morning'
 
 
 def test_a_scope_change_that_is_refused_leaves_the_rows_of_the_batch(

@@ -71,12 +71,13 @@ batch.cancel()
 
 ## The model: tables and one cycle
 
-A batch is a set of tables. Five of them are stored, and each has one writer. All others are derived: they are computed from the stored tables at each read and stored nowhere.
+A batch is a set of tables. Six of them are stored, and each has one writer. All others are derived: they are computed from the stored tables at each read and stored nowhere.
 
 | Stored table | Written by | Holds | One table per |
 |---|---|---|---|
 | files | the instrument | the files that the file source lists, with their metadata | workspace |
 | corrections | `CorrectedFiles` | metadata of a file set by hand | workspace folder |
+| header | `BatchManager` | the names of the spec and the source, the columns, the title, the description, the scope | label of a batch of the manager |
 | edits | `Batch.rows` | cells set, rows added or removed, by key | label |
 | settings | `Batch.settings` | the parameters that are not columns | label |
 | records | the workspace | a record per submission, with its status | workspace |
@@ -90,7 +91,7 @@ results  = newest record per key, under the label
 state    = requests joined with results on key
 ```
 
-A *correction* is a value of a file's metadata set by hand ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)). The corrections, edits, and settings are the *definition* of a batch, the part that a person makes, through a page, the command, or code. [Where the definition is kept](#where-the-definition-is-kept) says where they are stored and when they are read. A request is *resolved* as a record holds it ([Rules](#rules)). `state` is what `batch.state()` gives and a page shows: each row with its result, its status, and `changed`, the parameters at which the row's request differs from its result's ([Rules](#rules)).
+A *correction* is a value of a file's metadata set by hand ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)). The corrections, header, edits, and settings are the *definition* of a batch, the part that a person makes, through a page, the command, or code. [Where the definition is kept](#where-the-definition-is-kept) says where they are stored and when they are read. A request is *resolved* as a record holds it ([Rules](#rules)). `state` is what `batch.state()` gives and a page shows: each row with its result, its status, and `changed`, the parameters at which the row's request differs from its result's ([Rules](#rules)).
 
 An edit sets only columns. A value at a name that is not a column makes its row `incomplete` (`not a column`). A `Batch` made again on the same stored tables reads the same state.
 
@@ -102,6 +103,7 @@ flowchart TB
     records[(records)]
     files[(files)]
     corrections[("corrections<br>per workspace folder")]
+    header[("header<br>per label")]
     edits[("edits<br>per label")]
     settings[("settings<br>per label")]
     scan["scan = source(files with corrections)"]
@@ -113,15 +115,15 @@ flowchart TB
     submit{{"batch.reduce(keys)"}}
     workspace ==> records ==> results ==> state ==> rule ==> submit ==> workspace
     instrument --> files
-    person --> corrections & edits & settings
+    person --> corrections & header & edits & settings
     files & corrections --> scan --> rows
-    edits --> rows
+    header & edits --> rows
     rows & settings --> requests --> state
     person -. reads the page .- state
     classDef stored stroke:#2a9d8f,stroke-width:3px
     classDef derived stroke:#6c8ebf,stroke-width:1px,stroke-dasharray:6 4
     classDef cycle stroke:#d08700,stroke-width:3px
-    class files,corrections,edits,settings,records stored
+    class files,corrections,header,edits,settings,records stored
     class scan,rows,requests,results,state derived
     class rule,submit cycle
 ```
@@ -193,7 +195,7 @@ A failed or cancelled row reads `failed` or `cancelled` whether or not its reque
 
 **Not in this picture:**
 
-- The fixed part of a batch: the spec, the columns, and the source. It is code in the technique's package.
+- What the names in the header stand for. The names of the spec and of the source are fixed when a batch is made; the version of the spec that the workspace binds, and the function of the source, are code in the technique's package, read at each start ([The batches of a workspace](#the-batches-of-a-workspace)).
 - A chain: a second batch whose scan reads the results of the first ([Chains](#chains)).
 - Publishing results.
 
@@ -341,7 +343,7 @@ app = create_app(pages)
 
 ## Where the definition is kept
 
-The *definition* of a batch is the corrections, the edits, and the settings ([The model](#the-model-tables-and-one-cycle)). Give the batch and the file source the *definitions* of the workspace, and a batch made again, after a restart or in another process, starts with them:
+The *definition* of a batch is the corrections, the header, the edits, and the settings ([The model](#the-model-tables-and-one-cycle)). Give the batch and the file source the *definitions* of the workspace, and a batch made again, after a restart or in another process, starts with them:
 
 ```python
 from ess.apps.batch import FolderDefinitions
@@ -354,7 +356,7 @@ batch = Batch(client, IOFQ, columns=..., label='auto/iofq', source=pair_by_sampl
 batch.scan()                                                 # the scan, with the edits kept on top
 ```
 
-Without definitions, all three stay in memory. The edits and settings are read when the `Batch` is made, the corrections when the `CorrectedFiles` is made, and nothing reads them again while these live. Each change is written to the definitions before it is made, so a change that they refuse raises `NotKept` (an `OSError`) and changes nothing; the page answers it with a message, and its settings form keeps what it holds, to apply again. A scan writes nothing.
+Without definitions, the corrections, the edits and the settings stay in memory. The edits and settings are read when the `Batch` is made, the corrections when the `CorrectedFiles` is made, and nothing reads them again while these live. Each change is written to the definitions before it is made, so a change that they refuse raises `NotKept` (an `OSError`) and changes nothing; the page answers it with a message, and its settings form keeps what it holds, to apply again. A scan writes nothing.
 
 What is written is what is assigned: `batch.rows = ...`, `batch.settings = ...`, `batch.put(...)`, and `files.correct(...)`, `files.correct_each(...)`, `files.reset(...)`. `batch.settings` is a read-only copy, so a change inside it changes nothing, and settings that name a column raise `ValueError`. The methods of `RowTable` return a new table. Its `edits` and a row's `values` are plain dicts, though: a change made in them is not written and is lost at a restart, so never change them in place.
 
@@ -364,7 +366,7 @@ What is written is what is assigned: `batch.rows = ...`, `batch.settings = ...`,
 definitions/corrections.json                    every file source of the workspace
 definitions/labels/auto%2Fiofq/edits.json       what was set by hand on the rows
 definitions/labels/auto%2Fiofq/settings.json    a template, which essapps-batch reads
-definitions/labels/auto%2Fiofq/header.json      title, description, source and scope; written by the manager
+definitions/labels/auto%2Fiofq/header.json      spec, columns, source, title, description, scope; written by the manager
 definitions/following.json                      the label of the batch that follows; written by Follow
 ```
 
@@ -402,10 +404,13 @@ SOURCES = {'sample-runs': Source(pair_by_sample, fills=('sample', 'sample_transm
 DEFAULTS = {IOFQ.name: Defaults(settings=SETTINGS, staged=True)}
 
 manager = BatchManager(client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS)
-label = manager.create(IOFQ.name, title='Afternoon', source='sample-runs', columns=('thickness',),
+label = manager.create(IOFQ.name, title='Afternoon', source='sample-runs',
+                       columns=('sample', 'sample_transmission', 'thickness'),
                        scope=Scope(start=60339))
-manager.headers()      # {'20261118-130204': Header(title='Afternoon', description='',
-                       #                            source='sample-runs', scope=Scope(start=60339))}
+manager.headers()      # {'20261118-130204': Header(spec='loki-iofq',
+                       #     columns=('sample', 'sample_transmission', 'thickness'),
+                       #     source='sample-runs', title='Afternoon', description='',
+                       #     scope=Scope(start=60339))}
 counts = manager.counts()   # makes and scans every batch
 counts.states          # {label: {key: RowState}} of each batch counted; status_texts(...) names their statuses
 counts.failed          # {label: reason} of each batch that could not be made or scanned
@@ -416,21 +421,39 @@ manager.change(label, scope=Scope(start=60339, stop=60421))   # the series ends
 manager.remove(label)
 ```
 
+What a batch is, and where each part comes from:
+
+| | fixed at making | changed by a person | from code, by name |
+|---|---|---|---|
+| naming | label | title, description | |
+| rows | name of the source | scope, edits | the `Source` |
+| computation | name of the spec, columns | settings | the version of the spec bound, `staged`, `draw`, the first settings |
+
+Each part that is kept is in one file of the label, with one writer:
+
+```
+header.json     BatchManager      spec, columns, source; title, description; scope
+settings.json   Batch.settings    the settings, as a template; its spec and blanks a copy of the header's
+edits.json      Batch.rows        the edits
+```
+
 What the manager gives the `Batch` of a label:
 
 | Argument | Comes from |
 |---|---|
-| `spec` | `bound_spec(client, name)`: the spec of the name kept that the workspace binds, the highest version if several |
-| `source`, `selector` | the `Source` registered under the name given to `create` |
-| `columns` | those of the source, then those given to `create` |
-| first `settings` | `Defaults.settings` of the spec, or `create(..., settings=...)`; those that are columns are left out |
+| `spec` | `bound_spec(client, header.spec)`: the spec of that name that the workspace binds, the highest version if several |
+| `source`, `selector` | the `Source` registered under `header.source` |
+| `columns` | `header.columns`: those given to `create`, else those that the source fills |
+| `settings` | `settings.json`; else `Defaults.settings` of the spec, those that are columns left out |
 | `staged` | `Defaults.staged` of the spec |
 | `label` | given to `create`, or the time of making, `YYYYMMDD-HHMMSS`, with `-2`, `-3`, ... if that is taken |
-| `scope` | the header: `create(..., scope=...)`, then `change(..., scope=...)` |
+| `scope` | `header.scope`: `create(..., scope=...)`, then `change(..., scope=...)` |
 | `persist` | always, so the workspace needs a store, as a folder has |
 | `definitions` | those of the manager |
 
-- `create` writes the settings, with the spec and the columns, then the header. The spec, the source and the columns are fixed from then on. `change` changes the title, the description and the scope; a scope is written to the header, then given to the `Batch` of the label if it was made, whose rows change at once.
+- `create` takes the name of a spec. It refuses an empty title, a column that is not a parameter of the spec, and columns that lack one that the source fills; then it writes the first settings, `Defaults.settings` of the spec or `create(..., settings=...)`, through `Batch.settings`, and the header. The names of the spec and the source, and the columns, are fixed from then on. What the names stand for is read from code at each start: a later `Defaults.staged` applies to every batch, a later `Defaults.settings` only to batches made after it. `batch(label)` refuses a batch whose source now fills a column that the batch lacks.
+- `change` changes the title, the description and the scope, and refuses an empty title; a scope is written to the header, then given to the `Batch` of the label if it was made, whose rows change at once.
+- A header without `settings.json` is a batch with the default settings of its spec.
 - A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. `create` refuses a label that has definitions or records.
 - `remove` removes the header, the edits and the settings of a batch, and releases its stage. Its records stay, and those running keep running. A `Batch` handed out before must not be used after its removal, so ask the manager for the batch each time.
 - A `Batch` made in code without the manager has no header and is not listed.

@@ -323,7 +323,10 @@ def build(
     )
     if not manager.headers():
         manager.create(
-            DEMO.name, title='Samples', source='sample-runs', columns=('thickness',)
+            DEMO.name,
+            title='Samples',
+            source='sample-runs',
+            columns=('sample', 'transmission', 'thickness'),
         )
 
     def draw(shown: Sequence[Shown]) -> dict[str, object]:
