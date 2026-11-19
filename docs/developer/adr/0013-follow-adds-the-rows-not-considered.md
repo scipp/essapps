@@ -1,6 +1,6 @@
 # ADR 0013: Follow adds the rows that a batch has not considered
 
-- Status: proposed (#236)
+- Status: accepted (#236)
 - Deciders: Simon
 - Date: 2026-11-19
 
@@ -26,8 +26,8 @@ To do the third, a batch has to know who wrote each cell. To do the first withou
 **A batch made from a source keeps the name of the source and the keys it has considered. A step of Follow adds the rows of the source whose keys are not considered, once the source has filled them, and never changes a row that the table has.**
 
 ```python
-def step(batch, source, files, considered):
-    given = table_of(source.rows(files))                   # every row the source makes from the files now
+def step(batch, source, considered):
+    given = rows_of(batch.client, source)                  # every row the source makes from the files now
     table = batch.frame()
     filled = [c for c in source.fills if c in table.columns]
     is_new = ~given.index.isin(considered) & ~given.index.isin(table.index)

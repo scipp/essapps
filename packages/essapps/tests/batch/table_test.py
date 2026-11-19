@@ -1,15 +1,31 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""The rules of a table of rows, on plain values."""
+"""The rules of a table of rows, on plain values; the table as a frame."""
 
 import re
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any, Literal
 
+import pandas as pd
 import pytest
+from pydantic import BaseModel
+from pydantic_core import from_json, to_json
 
 from ess.apps import SubmitError
 from ess.apps.batch import EMPTY, Row, RowTable, Scope
+from ess.apps.batch.table import (
+    KEY,
+    as_request,
+    cell_of,
+    data_of,
+    dtypes,
+    frame_of,
+    typed,
+)
+from ess.spec import FileRef, OutputRef, Referenced, RunFile
+
+from . import toys
 
 
 def cells(table: RowTable) -> dict[str, dict[str, object]]:
@@ -378,3 +394,185 @@ def test_a_row_added_by_hand_with_the_key_of_a_row_outside_the_scope_is_refused(
 ) -> None:
     with pytest.raises(SubmitError, match='outside the scope'):
         scoped.add(Row('1'))
+
+
+# The table as a frame
+
+
+class Kinds(BaseModel):
+    count: int = 1
+    flag: bool = False
+    word: str = ''
+    choice: Literal['a', 'b'] = 'a'
+    level: Literal[1, 2] = 1
+    when: datetime | None = None
+    scale: float | None = None
+    either: int | str = 0
+    centre: Referenced[toys.Offset] | None = None
+    source: RunFile | Referenced[toys.Offset] | None = None
+
+
+def test_a_column_has_the_dtype_of_its_parameter() -> None:
+    assert dtypes(Kinds) == {
+        'count': 'Int64',
+        'flag': 'boolean',
+        'word': 'string',
+        'choice': 'string',
+        'level': 'object',
+        'when': 'string',
+        'scale': 'Float64',
+        'either': 'object',
+        'centre': 'string',
+        'source': 'string',
+    }
+
+
+def test_the_columns_of_the_toy_have_the_dtypes_of_their_parameters() -> None:
+    assert dtypes(toys.Params) == {
+        'binning': 'object',
+        'sample': 'string',
+        'transmission': 'string',
+        'thickness': 'Float64',
+        'offset': 'object',
+    }
+    assert dtypes(toys.SeriesParams) == {'runs': 'object'}
+
+
+def test_typed_names_the_index_and_casts_parameters_and_notes() -> None:
+    frame = pd.DataFrame(
+        {
+            'sample': ['run:1', None],
+            'thickness': [2, None],
+            'binning': [{'bins': 3}, float('nan')],
+            'run': [1.0, None],
+            'name': ['water', None],
+        },
+        index=['0342', 'b'],
+    )
+
+    table = typed(frame, toys.Params)
+
+    assert table.index.name == KEY
+    assert list(table.index) == ['0342', 'b']
+    assert table.index.dtype == 'string'
+    assert table.dtypes.astype(str).to_dict() == {
+        'sample': 'string',
+        'thickness': 'Float64',
+        'binning': 'object',
+        'run': 'Int64',
+        'name': 'string',
+    }
+    assert table.loc['b', 'binning'] is None
+
+
+@pytest.mark.parametrize(
+    ('index', 'columns', 'message'),
+    [
+        (['a', 'a'], {}, "the key 'a' is given twice"),
+        (['a', ''], {}, 'a key is empty'),
+        ([60339], {}, r'not a number such as 60339; .*frame.index.astype\(str\)'),
+        (['a', 'b'], {'scale': [1.0, 'thick']}, "row 'b', column 'scale': 'thick'"),
+        (['a', 'b'], {'word': ['run:1', 60339.0]}, "row 'b', column 'word': 60339.0"),
+        (['a'], {'count': [2.5]}, "row 'a', column 'count': 2.5 is not a whole"),
+        (['a'], {'flag': ['yes']}, "row 'a', column 'flag': 'yes' is not true"),
+    ],
+)
+def test_typed_refuses_a_key_or_a_cell_and_names_it(
+    index: list[Any], columns: dict[str, list[Any]], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        typed(pd.DataFrame(columns, index=index), Kinds)
+
+
+@pytest.fixture
+def exact() -> pd.DataFrame:
+    key = pd.Index(['a', 'b', '0342'], name=KEY, dtype='string')
+    return pd.DataFrame(
+        {
+            'x': pd.array([0.1 + 0.2, None, 6.02214076e23], dtype='Float64'),
+            'n': pd.array([2**53 + 1, None, 1], dtype='Int64'),
+            'f': pd.array([True, None, False], dtype='boolean'),
+            's': pd.array(['run:1', None, 'r17.centre'], dtype='string'),
+            'o': pd.Series([['run:1'], None, {'v': 0.1 + 0.2}], index=key),
+        },
+        index=key,
+    )
+
+
+def test_the_data_of_a_table_read_back_as_json_give_the_table_exactly(
+    exact: pd.DataFrame,
+) -> None:
+    back = frame_of(from_json(to_json(data_of(exact))))
+
+    pd.testing.assert_frame_equal(back, exact)
+    assert back.loc['a', 'x'] == 0.1 + 0.2
+    assert back.loc['a', 'n'] == 2**53 + 1
+
+
+def test_the_data_of_a_table_without_rows_give_its_columns_and_dtypes(
+    exact: pd.DataFrame,
+) -> None:
+    empty = exact.iloc[:0]
+
+    pd.testing.assert_frame_equal(frame_of(data_of(empty)), empty)
+
+
+@pytest.mark.parametrize(
+    ('change', 'message'),
+    [
+        (lambda d: d.pop('schema'), 'not a table'),
+        (lambda d: d['data'][1].pop(KEY), "data\\[1\\]: not an object with a 'key'"),
+        (lambda d: d['data'][2].update(y=1), 'data\\[2\\]: no field y'),
+        (lambda d: d['data'][0].update(n=2.5), "column 'n'"),
+        (lambda d: d['data'][1].update(key='a'), "the key 'a' is given twice"),
+    ],
+)  # fmt: skip
+def test_data_that_are_not_a_table_are_refused_by_entry(
+    exact: pd.DataFrame, change: Any, message: str
+) -> None:
+    data = from_json(to_json(data_of(exact)))
+    change(data)
+
+    with pytest.raises(ValueError, match=message):
+        frame_of(data)
+
+
+class Either(BaseModel):
+    source: RunFile | Referenced[toys.Offset]
+    centre: Referenced[toys.Offset]
+
+
+def output(record: str, name: str, key: str | None = None) -> OutputRef:
+    return OutputRef(record=record, output=name, key=key)
+
+
+@pytest.mark.parametrize(
+    ('model', 'cells', 'request_values'),
+    [
+        (toys.Params, {'sample': 'run:60339'}, {'sample': FileRef(file='run:60339')}),
+        (toys.Params, {'sample': 'path:a.nxs'}, {'sample': FileRef(file='path:a.nxs')}),
+        (toys.Params, {'offset': 'r17.offset'}, {'offset': output('r17', 'offset')}),
+        (toys.Params, {'binning': {'bins': 3}}, {'binning': {'bins': 3}}),
+        (Either, {'centre': 'r18.slices[2]'}, {'centre': output('r18', 'slices', '2')}),
+        (Either, {'source': 'run:1'}, {'source': FileRef(file='run:1')}),
+        (Either, {'source': 'r17.offset'}, {'source': output('r17', 'offset')}),
+        (
+            toys.SeriesParams,
+            {'runs': ['run:1', 'run:2']},
+            {'runs': [FileRef(file='run:1'), FileRef(file='run:2')]},
+        ),
+    ],
+)
+def test_a_cell_is_converted_to_what_a_request_takes_and_back(
+    model: type[BaseModel], cells: dict[str, Any], request_values: dict[str, Any]
+) -> None:
+    converted = as_request(model, cells)
+
+    assert converted == request_values
+    assert {name: cell_of(v) for name, v in converted.items()} == cells
+
+
+def test_a_whole_number_at_a_file_is_a_run() -> None:
+    assert as_request(toys.SeriesParams, {'runs': [60339, 'run:2']}) == {
+        'runs': [FileRef(file='run:60339'), FileRef(file='run:2')]
+    }

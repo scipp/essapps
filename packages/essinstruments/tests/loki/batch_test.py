@@ -8,15 +8,37 @@ from pathlib import Path
 import pytest
 from ess.instruments.loki.batch import iofq_batch, pair_by_sample
 from ess.instruments.loki.bindings import BINDINGS
-from ess.instruments.loki.specs import CALIBRATED_DETECTOR, MASKS, BeamCentre
+from ess.instruments.loki.specs import (
+    CALIBRATED_DETECTOR,
+    MASKS,
+    BeamCentre,
+    IofQParams,
+)
 
 from ess.apps import Client, FolderFiles, file, local
 from ess.apps.batch import FileInfo, left_to_reduce, ready
+from ess.apps.batch.table import dtypes
 from ess.spec import FileRef
 
 
 def info(run: int, **metadata: object) -> FileInfo:
     return FileInfo(FileRef(file=f'uuid:{run}'), {'run': run, **metadata})
+
+
+def test_a_column_of_iofq_has_the_dtype_of_its_parameter() -> None:
+    assert dtypes(IofQParams) == {
+        'sample': 'string',
+        'sample_transmission': 'string',
+        'can': 'string',
+        'can_transmission': 'string',
+        'empty_beam': 'string',
+        'direct_beam': 'string',
+        'masks': 'string',
+        'beam_centre': 'object',
+        'wavelength': 'object',
+        'q': 'object',
+        'corrections': 'object',
+    }
 
 
 def test_a_sample_run_pairs_with_the_last_transmission_run_of_its_sample() -> None:
