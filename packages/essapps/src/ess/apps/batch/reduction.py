@@ -162,9 +162,8 @@ class Source:
         What the page calls the :attr:`~.table.Row.index` that ``rows``
         gives, such as ``'Run'``.
     index_type:
-        The type of that index: ``int``, ``float`` or ``str``. The ends of a
-        scope of a batch of the source are of this type
-        (:func:`~.manager.scope_of`).
+        The type of that index: ``int``, ``float`` or ``str``. The manager
+        converts the ends of a scope of a batch of the source to this type.
     """
 
     rows: RowSource

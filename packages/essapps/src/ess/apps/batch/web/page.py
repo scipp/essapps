@@ -119,7 +119,6 @@ from .. import (
     NotKept,
     RowState,
     Scope,
-    Source,
     Words,
     earlier_settings,
     frames,
@@ -211,18 +210,6 @@ class Problem(Exception):
 
 class Missing(Exception):
     """No batch has the label asked for."""
-
-
-def scoped(source: Source | None, ends: Ends, said: str) -> Scope:
-    """
-    The slice from ``ends.start`` to ``ends.stop`` of the rows of ``source``
-    (:func:`~ess.apps.batch.scope_of`); a :class:`Problem` that starts with
-    ``said`` for an end that it refuses.
-    """
-    try:
-        return scope_of(source, ends.start, ends.stop)
-    except ValueError as error:
-        raise Problem(f'{said}: {why(error)}.') from None
 
 
 def _say(title: str, message: str) -> str:
@@ -1012,14 +999,15 @@ class Page:
         (:meth:`~ess.apps.batch.BatchManager.change`). What the manager
         refuses is a :class:`Problem`, and changes nothing.
         """
-        refused = 'The batch was not changed'
-        scope = scoped(self.batch.source, edit, refused)
         try:
             self.pages.manager.change(
-                self.label, title=edit.title, description=edit.description, scope=scope
+                self.label,
+                title=edit.title,
+                description=edit.description,
+                scope=Scope(start=edit.start, stop=edit.stop),
             )
         except (KeyError, ValueError) as error:
-            raise Problem(f'{refused}: {why(error)}.') from None
+            raise Problem(f'The batch was not changed: {why(error)}.') from None
         return 'Saved.'
 
     @_locked
@@ -1030,7 +1018,10 @@ class Page:
         is saved while the batch follows, Follow reduces those of them that
         are complete at its next step (:func:`~ess.apps.batch.arrived`).
         """
-        scope = scoped(self.batch.source, ends, 'The scope is refused')
+        try:
+            scope = scope_of(self.batch.source, Scope(start=ends.start, stop=ends.stop))
+        except ValueError as error:
+            raise Problem(f'The scope is refused: {why(error)}.') from None
         rows = self.batch.rows
         held = replace(rows, scope=scope)
         reduced = {r.member for r in self.batch.client.records(label=self.label)}

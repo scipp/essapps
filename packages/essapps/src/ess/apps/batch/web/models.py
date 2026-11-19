@@ -380,9 +380,8 @@ class On(BaseModel):
 
 class Ends(BaseModel):
     """
-    The ends of the scope of a batch as typed, converted to the type of the
-    index of its source (:func:`~ess.apps.batch.scope_of`); ``None`` is an
-    open end.
+    The ends of the scope of a batch as typed; the manager converts them to
+    the type of the index of its source. ``None`` is an open end.
     """
 
     start: Index | None = None

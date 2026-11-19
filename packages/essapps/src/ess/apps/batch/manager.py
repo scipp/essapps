@@ -132,17 +132,17 @@ def fits(spec: WorkflowSpec[Any, Any], source: Source | None) -> bool:
 _KINDS = {int: 'a whole number', float: 'a number', str: 'text'}
 
 
-def scope_of(source: Source | None, start: Any = None, stop: Any = None) -> Scope:
+def scope_of(source: Source | None, scope: Scope) -> Scope:
     """
-    The slice of the rows of ``source`` from ``start`` to ``stop``, each end
-    converted to the type of its index (:attr:`~.reduction.Source.index_type`),
-    such as ``'60339'`` to ``60339``; ``None`` is an open end. Raises
-    ``ValueError`` for an end that does not convert, naming it, and for an
-    end without a source: a batch without one has only rows added by hand,
-    which have no index.
+    ``scope`` as a slice of the rows of ``source``: each end converted to the
+    type of its index (:attr:`~.reduction.Source.index_type`), such as
+    ``'60339'`` to ``60339``. Raises ``ValueError`` for an end that does not
+    convert, naming it; for an end without a source, since a batch without
+    one has only rows added by hand, which have no index; and for a ``stop``
+    below the ``start``.
     """
-    if start is None and stop is None:
-        return Scope()
+    if scope == Scope():
+        return scope
     if source is None:
         raise ValueError(
             'a batch without a source has only rows added by hand, which have '
@@ -159,12 +159,13 @@ def scope_of(source: Source | None, start: Any = None, stop: Any = None) -> Scop
             kind = _KINDS[source.index_type]
             raise ValueError(f'{source.index_title} {value!r} is not {kind}') from None
 
-    return Scope(start=end(start), stop=end(stop))
-
-
-def _typed(source: Source | None, scope: Scope) -> Scope:
-    """``scope`` with its ends converted as :func:`scope_of` does."""
-    return scope_of(source, scope.start, scope.stop)
+    scope = Scope(start=end(scope.start), stop=end(scope.stop))
+    start, stop = scope.start, scope.stop
+    if start is not None and stop is not None and stop < start:  # type: ignore[operator]
+        raise ValueError(
+            f'the stop of a scope, {scope.stop!r}, is below its start, {scope.start!r}'
+        )
+    return scope
 
 
 def check_label(label: str) -> None:
@@ -258,8 +259,8 @@ class BatchManager:
             What a person says of the batch.
         scope:
             The rows of the source that the batch holds; every row if not
-            given. The ends of a slice are converted to the type of the
-            index of the source (:func:`scope_of`).
+            given. Its ends are converted to the type of the index of the
+            source (:func:`scope_of`).
         settings:
             The settings to start with, in place of the defaults of the spec.
             Those that are columns are left out.
@@ -311,7 +312,7 @@ class BatchManager:
             source=source,
             title=title,
             description=description,
-            scope=_typed(registered, Scope() if scope is None else scope),
+            scope=scope_of(registered, Scope() if scope is None else scope),
         )
         if settings is None:
             settings = self._defaults.get(spec, Defaults()).settings
@@ -429,8 +430,8 @@ class BatchManager:
     ) -> Header:
         """
         The header of ``label`` with what is given changed, as kept. A scope
-        changes the rows of the batch at once, without a scan; the ends of a
-        slice are converted as :func:`scope_of` does. Raises ``KeyError`` if
+        changes the rows of the batch at once, without a scan; its ends are
+        converted as :func:`scope_of` does. Raises ``KeyError`` if
         no batch has the label, or a scope is given and the source of the
         batch is not registered; ``ValueError`` for an empty title, and for
         an end of the scope that :func:`scope_of` refuses.
@@ -438,7 +439,7 @@ class BatchManager:
         header = self._headers[label]
         if scope is not None:
             source = None if header.source is None else self.sources[header.source]
-            scope = _typed(source, scope)
+            scope = scope_of(source, scope)
         header = replace(
             header,
             title=header.title if title is None else title,
@@ -461,12 +462,12 @@ class BatchManager:
         """
         batch = self.batch(label)
         scope = batch.scope
-        before = Scope(start=scope.start, stop=index)
+        before = scope_of(batch.source, Scope(start=scope.start, stop=index))
         if not any(before.holds(row) for row in batch.rows.scan):
             raise ValueError(
                 f'the batch holds no row before {index}, so it would then hold none'
             )
-        return Scope(start=index, stop=scope.stop)
+        return scope_of(batch.source, Scope(start=index, stop=scope.stop))
 
     def start_next(self, label: str, index: Index, *, title: str) -> str:
         """

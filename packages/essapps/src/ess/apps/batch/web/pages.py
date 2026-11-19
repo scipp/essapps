@@ -85,7 +85,6 @@ from .page import (
     Problem,
     page_statuses,
     read,
-    scoped,
     why,
 )
 
@@ -426,27 +425,21 @@ class Pages:
         """
         Make the batch of ``new`` with the manager
         (:meth:`~ess.apps.batch.BatchManager.create`), with the settings that
-        the application gives its spec, and its scope with the ends converted
-        to the type of the index of its source
-        (:func:`~ess.apps.batch.scope_of`). Raises :class:`~.page.Problem`
-        with what the manager refuses.
+        the application gives its spec, and the ends of its scope as typed.
+        Raises :class:`~.page.Problem` with what the manager refuses.
         """
         with self.lock:
-            refused = 'The batch was not made'
             try:
-                source = (
-                    None if new.source is None else self.manager.sources[new.source]
-                )
                 label = self.manager.create(
                     new.spec,
                     title=new.title,
                     source=new.source,
                     columns=new.columns,
                     description=new.description,
-                    scope=scoped(source, new, refused),
+                    scope=Scope(start=new.start, stop=new.stop),
                 )
             except (KeyError, ValueError, NotKept) as error:
-                raise Problem(f'{refused}: {why(error)}.') from None
+                raise Problem(f'The batch was not made: {why(error)}.') from None
             return Made(label=label)
 
     def remove(self, label: str) -> None:

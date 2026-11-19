@@ -23,7 +23,6 @@ from ess.apps.batch import (
     Row,
     Scope,
     Source,
-    scope_of,
     status_texts,
 )
 from ess.apps.batch.definition import header_key, settings_key
@@ -420,6 +419,16 @@ def test_a_scope_given_at_making_and_changed_is_kept(
     assert [row.key for row in again.batch(label).rows] == ['2']
 
 
+def _typed(
+    client: Client, definitions: FolderDefinitions, index_type: type
+) -> BatchManager:
+    """A manager with the source ``typed``, whose index is of ``index_type``."""
+    source = Source(
+        pair, fills=('sample', 'transmission'), index_title='Run', index_type=index_type
+    )
+    return BatchManager(client, sources={'typed': source}, definitions=definitions)
+
+
 @pytest.mark.parametrize(
     ('index_type', 'given', 'end'),
     [
@@ -430,12 +439,19 @@ def test_a_scope_given_at_making_and_changed_is_kept(
     ],
 )
 def test_an_end_of_a_scope_takes_the_type_of_the_index_of_its_source(
-    index_type: type, given: Any, end: Any
+    client: Client,
+    definitions: FolderDefinitions,
+    index_type: type,
+    given: Any,
+    end: Any,
 ) -> None:
-    source = Source(pair, fills=('sample',), index_type=index_type)
+    manager = _typed(client, definitions, index_type)
 
-    scope = scope_of(source, start=given)
+    label = manager.create(
+        'plain', title='Morning', source='typed', scope=Scope(start=given)
+    )
 
+    scope = manager.headers()[label].scope
     assert scope == Scope(start=end)
     assert type(scope.start) is index_type
 
@@ -451,12 +467,19 @@ def test_an_end_of_a_scope_takes_the_type_of_the_index_of_its_source(
     ],
 )
 def test_an_end_of_a_scope_that_is_not_of_the_type_of_the_index_is_refused(
-    index_type: type, given: Any, said: str
+    client: Client,
+    definitions: FolderDefinitions,
+    index_type: type,
+    given: Any,
+    said: str,
 ) -> None:
-    source = Source(pair, fills=('sample',), index_title='Run', index_type=index_type)
+    manager = _typed(client, definitions, index_type)
 
     with pytest.raises(ValueError, match=re.escape(said)):
-        scope_of(source, stop=given)
+        manager.create(
+            'plain', title='Morning', source='typed', scope=Scope(stop=given)
+        )
+    assert manager.headers() == {}
 
 
 def test_the_manager_converts_the_ends_of_a_scope_and_refuses_those_that_do_not(
@@ -474,9 +497,13 @@ def test_the_manager_converts_the_ends_of_a_scope_and_refuses_those_that_do_not(
 
     with pytest.raises(ValueError, match="Run 'x' is not a whole number"):
         manager.change(label, scope=Scope(stop='x'))
-    manager.change(label, scope=Scope(start='1', stop='3'))
+    with pytest.raises(
+        ValueError, match='the stop of a scope, 2, is below its start, 3'
+    ):
+        manager.change(label, scope=Scope(start='3', stop='2'))
+    manager.change(label, scope=Scope(start='2', stop='10'))  # '10' < '2' as text
 
-    assert manager.headers()[label].scope == Scope(start=1, stop=3)
+    assert manager.headers()[label].scope == Scope(start=2, stop=10)
     assert [row.key for row in manager.batch(label).rows] == ['2']
 
 

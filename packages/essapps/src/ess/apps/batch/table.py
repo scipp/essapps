@@ -65,12 +65,12 @@ class Scope:
     Which rows of the scan a table shows: a slice of index values. ``start``
     is included and ``stop`` excluded, as in a Python slice; ``None`` is an
     open end. ``Scope()`` holds every row, also one without an index; a
-    slice with an end holds no row without one.
+    slice with an end holds no row without one, and a ``stop`` equal to the
+    ``start`` holds no row. The manager converts the ends to the type of the
+    index of a source, and refuses a ``stop`` below the ``start``.
 
     Raises ``TypeError`` for an end that is not an ``int``, ``float`` or
     ``str``, since only these are kept as they are in the definitions.
-    Raises ``ValueError`` for ends that do not compare, or a ``stop`` below
-    the ``start``; a ``stop`` equal to the ``start`` holds no row.
     """
 
     start: Index | None = None
@@ -84,19 +84,6 @@ class Scope:
                 raise TypeError(
                     f'an end of a scope is an int, a float or a str, not {end!r}'
                 )
-        if self.start is None or self.stop is None:
-            return
-        try:
-            below = self.stop < self.start
-        except TypeError:
-            raise ValueError(
-                f'the ends of a scope do not compare: {self.start!r}, {self.stop!r}'
-            ) from None
-        if below:
-            raise ValueError(
-                f'the stop of a scope, {self.stop!r}, is below its start, '
-                f'{self.start!r}'
-            )
 
     def holds(self, row: Row) -> bool:
         """Whether ``row`` is in the scope."""

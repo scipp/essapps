@@ -315,20 +315,8 @@ def test_an_end_that_is_not_an_int_a_float_or_a_str_is_refused(end: object) -> N
         Scope(start=end)  # type: ignore[arg-type]
 
 
-def test_a_stop_below_the_start_is_refused() -> None:
-    with pytest.raises(
-        ValueError, match='the stop of a scope, 3, is below its start, 5'
-    ):
-        Scope(start=5, stop=3)
-
-
 def test_a_stop_equal_to_the_start_holds_no_row() -> None:
     assert held(Scope(start=2, stop=2), indexed(1, 2, 3)) == []
-
-
-def test_ends_that_do_not_compare_are_refused() -> None:
-    with pytest.raises(ValueError, match="do not compare: '60339', 60421"):
-        Scope(start='60339', stop=60421)
 
 
 @pytest.fixture
