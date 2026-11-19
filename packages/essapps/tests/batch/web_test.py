@@ -5,7 +5,7 @@
 import io
 import re
 import zipfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -20,13 +20,25 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
 from ess.apps import Client, local
-from ess.apps.batch import Batch, CorrectedFiles
+from ess.apps.batch import Batch, BatchManager, CorrectedFiles, DefinitionStore
+from ess.apps.batch.auto import Follow
 from ess.apps.batch.definition import Key, NotKept, settings_key
-from ess.apps.batch.web import Shown, create_app, demo, plots
+from ess.apps.batch.web import Pages, Shown, create_app, demo, plots
 from ess.apps.testing import CountingClient, FakeFiles
 from ess.spec import FileRef, SampleRunFile, WorkflowSpec, function_binding
 
-from .toys import COLUMNS, PLAIN, STAGED, Gate, Measure, Outputs, pair
+from .toys import (
+    COLUMNS,
+    DEFAULTS,
+    PLAIN,
+    SOURCES,
+    STAGED,
+    Gate,
+    Measure,
+    Outputs,
+    Refusing,
+    pair,
+)
 
 BINS = ['binning', 'bins']
 """The path of the number of bins in the settings form."""
@@ -45,13 +57,49 @@ def draw(shown: Sequence[Shown]) -> dict[str, Any]:
 
 
 @pytest.fixture
-def http(batch: Batch, files: CorrectedFiles, sample: Measure) -> TestClient:
+def batch(manager: BatchManager, label: str) -> Batch:
+    """The batch of ``label``, as the manager holds it."""
+    return manager.batch(label)
+
+
+@pytest.fixture
+def pages(manager: BatchManager, refusing: Refusing, files: CorrectedFiles) -> Pages:
+    return Pages(
+        manager,
+        Follow(manager, refusing),
+        draw={STAGED.name: draw},
+        files=files,
+        marks=Marks,
+    )
+
+
+def opened(pages: Pages, label: str) -> TestClient:
+    """A client of the page of ``label``, which asks for ``api/...`` as it does."""
+    return TestClient(create_app(pages), base_url=f'http://testserver/batches/{label}/')
+
+
+def home(app: FastAPI) -> TestClient:
+    """A client of the page that ``/`` of ``app`` redirects to."""
+    page = TestClient(app).get('/')
+    assert page.status_code == 200
+    return TestClient(app, base_url=str(page.url))
+
+
+def started(client: Client, definitions: DefinitionStore) -> Pages:
+    """The pages of a manager made on ``definitions``, as after a restart."""
+    manager = BatchManager(
+        client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS
+    )
+    return Pages(manager, Follow(manager, definitions))
+
+
+@pytest.fixture
+def http(pages: Pages, label: str, batch: Batch, sample: Measure) -> TestClient:
     sample(1, 'water')
     sample(2, 'sds')
     sample(3, 'oil', partner=False)
     batch.scan()
-    app = create_app(batch, name='name', draw=draw, files=files, marks=Marks)
-    return TestClient(app)
+    return opened(pages, label)
 
 
 def state(http: TestClient) -> dict[str, Any]:
@@ -479,12 +527,10 @@ def test_reduce_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_the
 
 
 def test_a_page_started_again_marks_the_rows_reduced_with_other_settings(
-    http: TestClient, client: Client
+    http: TestClient, client: Client, definitions: DefinitionStore, label: str
 ) -> None:
     reduced(http, client)
-    batch = Batch(client, STAGED, columns=COLUMNS, label='scan', source=pair)
-    batch.scan()
-    again = TestClient(create_app(batch, name='name'))
+    again = opened(started(client, definitions), label)
 
     bins(again, 3)
 
@@ -506,20 +552,20 @@ class ParamsV2(BaseModel):
 
 
 def test_a_row_reduced_by_another_spec_version_is_outdated(
-    files: CorrectedFiles, sample: Measure
+    files: CorrectedFiles, sample: Measure, definitions: DefinitionStore
 ) -> None:
     v2 = PLAIN.model_copy(update={'version': 2, 'params': ParamsV2})
     bind = [function_binding(s, lambda _: Outputs(total=1.0)) for s in (PLAIN, v2)]
     sample(1, 'water')
     with local(proposal='p1', files=files, bind=bind) as client:
-        old, new = (
-            Batch(client, s, columns=COLUMNS, label='s', source=pair)
-            for s in (PLAIN, v2)
+        pages = started(client, definitions)
+        label = pages.manager.create(
+            PLAIN.name, title='New', source='pairs', columns=('thickness',)
         )
+        old = Batch(client, PLAIN, columns=COLUMNS, label=label, source=pair)
         old.scan()
         client.wait(old.reduce(['1']))
-        new.scan()
-        page = TestClient(create_app(new))
+        page = opened(pages, label)
 
         assert statuses(page) == {'1': 'outdated'}
         assert rows(page)['1']['reason'] == (
@@ -656,17 +702,17 @@ def test_a_refused_setting_is_marked_only_while_the_form_shows_it(
 
 @pytest.mark.parametrize('suffix', ['csv', 'xlsx'])
 def test_the_table_downloaded_and_uploaded_gives_the_same_rows(
-    http: TestClient, batch: Batch, client: Client, suffix: str
+    http: TestClient, batch: Batch, manager: BatchManager, pages: Pages, suffix: str
 ) -> None:
     thickness(http, ['2'], 4)
     content = http.get(f'/api/table.{suffix}').content
-    other = Batch(client, batch.spec, columns=batch.columns, label='other')
+    other = manager.create(STAGED.name, title='Other', columns=COLUMNS)
 
-    TestClient(create_app(other)).post(
+    opened(pages, other).post(
         '/api/table', params={'name': f'rows.{suffix}'}, content=content
     )
 
-    assert [(r.key, r.values) for r in other.rows] == [
+    assert [(r.key, r.values) for r in manager.batch(other).rows] == [
         (r.key, r.values) for r in batch.rows
     ]
 
@@ -703,15 +749,22 @@ def test_a_table_loaded_is_set_by_hand_and_stays_after_a_rescan(
     assert not rows(http)['2']['cells']['thickness']['edited']
 
 
+def kept_settings(store: DefinitionStore, params: dict[str, Any]) -> None:
+    """Keep ``params`` as the settings of the one batch in ``store``."""
+    (label,) = store.labels()
+    kept = store.load(settings_key(label), dict)
+    store.save(settings_key(label), {**kept, 'params': params})
+
+
 def test_a_page_on_settings_kept_for_another_version_starts_and_names_them(
     tmp_path: Path,
 ) -> None:
     client, files, store = demo.open_demo(tmp_path)
-    kept = {'spec': {'name': 'demo-iofq', 'version': 1}, 'params': {'gone': 1}}
-    store.save(settings_key('demo-iofq'), kept)
 
     with client:
-        shown = state(TestClient(demo.build(client, files, store)))
+        demo.build(client, files, store)
+        kept_settings(store, {'gone': 1})
+        shown = state(home(demo.build(client, files, store)))
 
     assert shown['settings_problem'] == (
         'Settings that this form cannot show: gone = 1: not a setting here; '
@@ -724,13 +777,14 @@ def test_settings_kept_that_the_form_cannot_show_are_named_and_kept_until_apply(
 ) -> None:
     client, files, definitions = demo.open_demo(tmp_path)
     params = {'wavelength': 5.0, 'corrections': {'banks': 3, 'solid_angle': False}}
-    kept = {'spec': {'name': 'demo-iofq', 'version': 1}, 'params': params}
-    definitions.save(settings_key('demo-iofq'), kept)
 
     with client:
-        page = TestClient(demo.build(client, files, definitions))
+        demo.build(client, files, definitions)
+        kept_settings(definitions, params)
+        page = home(demo.build(client, files, definitions))
         shown = state(page)
-        still = definitions.load(settings_key('demo-iofq'), lambda d: d['params'])
+        (label,) = definitions.labels()
+        still = definitions.load(settings_key(label), lambda d: d['params'])
         after = page.post('/api/settings/apply').json()
 
     assert shown['settings_changed'] is False
@@ -778,17 +832,20 @@ def kept(client: Client, fake: FakeFiles, sample: Measure, flaky: Flaky) -> Test
     """A page on a batch and runs whose definitions are :class:`Flaky`."""
     sample(1, 'water')
     sample(2, 'sds')
-    batch = Batch(
-        client, STAGED, columns=COLUMNS, label='kept', source=pair, definitions=flaky
+    manager = BatchManager(client, sources=SOURCES, definitions=flaky)
+    label = manager.create(
+        STAGED.name, title='Kept', source='pairs', columns=('thickness',), label='kept'
     )
-    batch.scan()
     files = CorrectedFiles(fake, definitions=flaky)
-    return TestClient(create_app(batch, files=files, marks=Marks))
+    return opened(
+        Pages(manager, Follow(manager, flaky), files=files, marks=Marks), label
+    )
 
 
 def test_a_change_the_definitions_cannot_keep_answers_422_and_nothing_changes(
     kept: TestClient, flaky: Flaky
 ) -> None:
+    before = dict(flaky.kept)
     flaky.fail = True
 
     draft(kept, 7)
@@ -803,7 +860,7 @@ def test_a_change_the_definitions_cannot_keep_answers_422_and_nothing_changes(
     assert setting.json() == {'message': 'The change was not kept: disk full'}
     assert cell == {'message': 'The change was not kept: disk full'}
     assert table.json() == {'message': 'The change was not kept: disk full'}
-    assert settings_key('kept') not in flaky.kept
+    assert flaky.kept == before
     assert not rows(kept)['1']['cells']['thickness']['edited']
 
 
@@ -827,6 +884,7 @@ def test_a_correction_of_several_runs_is_one_write_and_all_or_none(
 ) -> None:
     keys = [r['key'] for r in kept.get('/api/runs').json()['rows'][:2]]
     edit = {'keys': keys, 'column': 'role', 'value': 'transmission'}
+    saves = flaky.saves
 
     flaky.fail = True
     refused = kept.post('/api/runs/cells', json=edit)
@@ -838,7 +896,7 @@ def test_a_correction_of_several_runs_is_one_write_and_all_or_none(
 
     assert refused.status_code == 422
     assert roles == [False, False]
-    assert flaky.saves == 1
+    assert flaky.saves == saves + 1
 
 
 def test_an_edit_at_a_name_that_is_not_a_column_can_be_removed(
@@ -853,11 +911,11 @@ def test_an_edit_at_a_name_that_is_not_a_column_can_be_removed(
     assert (rows(http)['1']['status'], rows(http)['1']['strays']) == ('ready', [])
 
 
-def test_a_table_loaded_on_a_page_not_scanned_is_set_on_the_scan(
-    batch: Batch, sample: Measure
+def test_a_table_loaded_is_set_on_the_rows_of_a_new_scan(
+    pages: Pages, label: str, batch: Batch, sample: Measure
 ) -> None:
-    sample(1, 'water')
-    page = TestClient(create_app(batch))
+    sample(1, 'water')  # after the scan of the batch made
+    page = opened(pages, label)
     content = b'key,sample,transmission,thickness\n1,1,1001,3\n'
 
     loaded = page.post('/api/table', params={'name': 'rows.csv'}, content=content)
@@ -872,7 +930,7 @@ def test_what_a_person_set_on_the_page_is_there_when_it_is_served_again(
 ) -> None:
     def served() -> tuple[Client, TestClient]:
         client, files, store = demo.open_demo(tmp_path)
-        return client, TestClient(demo.build(client, files, store))
+        return client, home(demo.build(client, files, store))
 
     client, page = served()
     with client:
@@ -940,10 +998,10 @@ def test_a_refused_settings_file_leaves_the_form_as_it_was(
 
 
 def test_settings_the_batch_has_show_and_an_applied_edit_of_another_keeps_them(
-    batch: Batch,
+    pages: Pages, label: str, batch: Batch
 ) -> None:
     batch.settings = {'binning': {'bins': 5}, 'offset': {'value': 1.5}}
-    page = TestClient(create_app(batch))
+    page = opened(pages, label)
 
     shown = state(page)
     page.post(
@@ -1033,13 +1091,18 @@ def test_the_plot_draws_the_results_of_the_rows_asked_for_in_their_colours(
 
 
 def test_a_drawing_that_raises_says_so_in_place_of_the_figure(
-    batch: Batch, client: Client, sample: Measure
+    manager: BatchManager,
+    refusing: Refusing,
+    label: str,
+    client: Client,
+    sample: Measure,
 ) -> None:
     def broken(_: Sequence[Shown]) -> Any:
         raise RuntimeError('released')
 
     sample(1, 'water')
-    page = TestClient(create_app(batch, draw=broken))
+    pages = Pages(manager, Follow(manager, refusing), draw={STAGED.name: broken})
+    page = opened(pages, label)
     page.post('/api/scan')
     reduced(page, client)
 
@@ -1058,14 +1121,17 @@ def test_no_two_curves_of_a_figure_share_a_colour() -> None:
 
 
 def test_plotting_and_saving_chosen_rows_reads_their_records_only(
-    client: Client, sample: Measure
+    client: Client, sample: Measure, definitions: DefinitionStore
 ) -> None:
     counting = CountingClient(client)
-    batch = Batch(counting, STAGED, columns=COLUMNS, label='scan', source=pair)  # type: ignore[arg-type]
+    manager = BatchManager(counting, sources=SOURCES, definitions=definitions)  # type: ignore[arg-type]
+    label = manager.create(
+        STAGED.name, title='Scan', source='pairs', columns=('thickness',)
+    )
     for run in (1, 2, 3):
         sample(run, f's{run}')
-    batch.scan()
-    page = TestClient(create_app(batch, name='name', draw=draw))
+    pages = Pages(manager, Follow(manager, definitions), draw={STAGED.name: draw})
+    page = opened(pages, label)
     reduced(page, client, 'all')
     chosen = {'keys': ['1']}
 
@@ -1207,9 +1273,12 @@ FORMS = WorkflowSpec(
 
 
 @pytest.fixture
-def form(client: Client) -> TestClient:
-    batch = Batch(client, FORMS, columns=('sample',), label='forms')
-    return TestClient(create_app(batch))
+def form(files: CorrectedFiles, definitions: DefinitionStore) -> Iterator[TestClient]:
+    bind = [function_binding(FORMS, lambda _: BaseModel())]
+    with local(proposal='p1', files=files, bind=bind) as client:
+        pages = started(client, definitions)
+        label = pages.manager.create(FORMS.name, title='Forms', columns=('sample',))
+        yield opened(pages, label)
 
 
 def test_a_correction_whose_scan_fails_says_that_it_was_kept(
@@ -1295,7 +1364,7 @@ def test_the_runs_of_a_sample_that_arrive_in_the_demo_show_after_a_rescan(
     client, files, definitions = demo.open_demo(tmp_path)
 
     with client:
-        page = TestClient(demo.build(client, files, definitions))
+        page = home(demo.build(client, files, definitions))
         before = rows(page)
         demo.measure(tmp_path, groups[0] + groups[1] + groups[2])
         after = page.post('/api/scan').json()
@@ -1305,21 +1374,22 @@ def test_the_runs_of_a_sample_that_arrive_in_the_demo_show_after_a_rescan(
 
 
 def test_the_page_and_the_files_it_names_are_served_under_a_path_prefix(
-    batch: Batch,
+    pages: Pages, label: str
 ) -> None:
     parent = FastAPI()
-    parent.mount('/batch', create_app(batch, name='name', draw=draw))
+    parent.mount('/batch', create_app(pages))
     under = TestClient(parent)
 
     page = under.get('/batch/')
     names = re.findall(r'(?:src|href)="([^"]+)"', page.text)
     local = [n for n in names if not n.startswith('data:') and 'vendor' not in n]
 
+    assert page.url == 'http://testserver/batch/batches/scan/'
     assert local
     for name in local:
         assert not name.startswith(('/', 'http')), name
-        assert under.get(urljoin('/batch/', name)).status_code == 200, name
-    assert under.get('/batch/api/state').status_code == 200
+        assert under.get(urljoin(str(page.url), name)).status_code == 200, name
+    assert under.get(urljoin(str(page.url), 'api/state')).status_code == 200
 
 
 def test_a_large_answer_is_compressed_for_a_client_that_accepts_gzip(
@@ -1336,3 +1406,60 @@ def test_a_large_answer_is_compressed_for_a_client_that_accepts_gzip(
     assert packed.headers['content-encoding'] == 'gzip'
     assert int(packed.headers['content-length']) < len(plain.content) / 3
     assert packed.json() == plain.json()
+
+
+# Batches by URL
+
+
+def test_each_batch_has_its_page_at_its_label(
+    http: TestClient, manager: BatchManager, pages: Pages
+) -> None:
+    other = manager.create(
+        STAGED.name, title='Other', source='pairs', columns=('thickness',)
+    )
+    page = opened(pages, other)
+
+    bins(page, 5)
+    thickness(page, ['1'], 3)
+
+    mine, theirs = state(http), state(page)
+    assert (mine['label'], mine['title']) == ('scan', 'Scan')
+    assert (theirs['label'], theirs['title']) == (other, 'Other')
+    assert (form_bins(mine), form_bins(theirs)) == (2, 5)
+    assert not rows(http)['1']['cells']['thickness']['edited']
+    assert rows(page)['1']['cells']['thickness']['edited']
+
+
+def test_the_root_redirects_to_the_batch_that_follows_else_the_last(
+    pages: Pages, manager: BatchManager
+) -> None:
+    http = TestClient(create_app(pages), follow_redirects=False)
+
+    empty = http.get('/')
+    for label in ('a', 'b'):
+        manager.create(STAGED.name, title=label, source='pairs', label=label)
+    last = http.get('/')
+    pages.follow.on('a')
+    following = http.get('/')
+
+    assert empty.status_code == 404
+    assert (last.status_code, last.headers['location']) == (307, 'batches/b/')
+    assert following.headers['location'] == 'batches/a/'
+
+
+def test_a_label_that_is_no_batch_answers_404(
+    pages: Pages, manager: BatchManager, label: str
+) -> None:
+    http = TestClient(create_app(pages))
+    page = opened(pages, label)
+    state(page)
+
+    unknown = http.get('/batches/none/api/state')
+    action = http.post('/batches/none/api/scan')
+    manager.remove(label)
+
+    assert http.get('/batches/none/').status_code == 404
+    assert unknown.json() == {'message': 'There is no batch none.'}
+    assert (action.status_code, action.json()) == (404, unknown.json())
+    assert page.get('/').status_code == 404
+    assert page.get('/api/state').status_code == 404

@@ -862,6 +862,22 @@ def test_follow_says_why_rows_of_its_last_step_were_refused_until_switched(
     assert follow.refused == {}
 
 
+def test_follow_forgets_why_rows_were_refused_until_its_next_step(
+    follow: Follow, manager: BatchManager, sample: Measure
+) -> None:
+    sample(1, 'water')
+    follow.on('a')
+    manager.batch('a').settings = {'binning': {'bins': 0}}
+    follow.step()
+
+    follow.forget()
+
+    assert follow.refused == {}
+    assert follow.label == 'a'
+    follow.step()
+    assert list(follow.refused) == ['1']
+
+
 def test_follow_off_steps_nothing(
     follow: Follow, client: Client, sample: Measure
 ) -> None:

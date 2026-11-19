@@ -1,15 +1,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What the batch page does, without HTTP: :class:`Server`. :mod:`.api` serves it.
-This module imports neither ``fastapi`` nor ``starlette``, so another view of a
-batch can call the same actions and render the same :class:`~.models.State`.
+What the page of one batch does, without HTTP: :class:`Server`. :mod:`.api`
+serves it. This module imports neither ``fastapi`` nor ``starlette``, so
+another view of a batch can call the same actions and render the same
+:class:`~.models.State`.
 
-The server holds everything a person changes: the
-:class:`~ess.apps.batch.Batch` with its rows and settings, the form of the
-settings, and the corrections of runs. The batch and the corrections keep their
-part in their definitions, if given them (:mod:`..definition`); a change that
-the definitions cannot keep is not made, and answers a :class:`Problem`.
+The server of a page holds what a person changes on it: the form of the
+settings and the refusals. It asks :class:`~.pages.Pages` for the rest: the
+:class:`~ess.apps.batch.Batch` of its label with its rows and settings, kept
+by the manager, the corrections of runs, and Follow. The batch and the
+corrections keep their part in their definitions, if given them
+(:mod:`..definition`); a change that the definitions cannot keep is not made,
+and answers a :class:`Problem`.
 
 The form of the settings is a draft of the batch's settings. An edit changes
 the form only; :meth:`Server.apply_settings` writes it to the batch, and is
@@ -36,8 +39,8 @@ or setting shows. The others stay in the state until the value of each is
 changed, a setting's by Apply, or a reduction succeeds, so that the page marks
 each at its cell, or at its setting while the form shows the batch's settings.
 Any other request that cannot be done raises :class:`Problem` too, with what
-to tell the person. One server serves
-one batch to one person, and takes one request at a time.
+to tell the person. A server serves one batch to one person, and takes one
+request at a time, under the lock of all pages.
 
 Statuses are named in a scientist's words: a row that is ``not reduced`` is
 ``ready``, a ``pending`` one ``running``, and a ``completed`` one ``done``;
@@ -52,19 +55,22 @@ settings, whatever the form holds. While the workflow refuses the
 batch's settings, no result can be said to be current, so a done row is
 outdated.
 
-Given the columns ``at``, the server offers to follow the files: while
-:attr:`Server.following`, a timer calls :meth:`Server.step` every
-``interval`` seconds, which runs the scan of "Rescan runs" and reduces the
-rows that :func:`~ess.apps.batch.arrived` gives (:mod:`ess.apps.batch.auto`),
-under the lock of every request, with the batch's settings, whatever the form
-holds. Whatever a step raises is said in the state, and the next step runs all
-the same. Follow reduces a row for what the files changed, never for what a
-person changed (:attr:`~ess.apps.batch.RowState.changed_by_hand`): a row whose
-cells a person set waits for "Reduce". So an action, but turning Follow on,
-submits only what a person asks to reduce. Apply forgets why Follow could not
-reduce rows, since its next step tries them with the settings applied. Whether
-the server follows belongs to its process, not to the definition: a server
-starts with ``follow``. :func:`~.api.create_app` owns the timer.
+A batch with a source offers to follow the files. The switch "Follow" makes
+the batch the one that the application's Follow steps
+(:class:`~ess.apps.batch.auto.Follow`), so no other batch follows. While it
+follows, :meth:`Pages.tick <.pages.Pages.tick>` steps it every ``interval``
+seconds, which scans as "Rescan runs" does and reduces the rows that
+:func:`~ess.apps.batch.arrived` gives, at the columns of the source, under the
+lock of all pages, with the batch's settings, whatever the form holds; then
+:meth:`Server.stepped` shows what the step changed. The page of the batch that
+follows says what the last step raised, and why rows were not reduced; the
+next step runs all the same. Follow reduces a row for what the files changed,
+never for what a person changed
+(:attr:`~ess.apps.batch.RowState.changed_by_hand`): a row whose cells a person
+set waits for "Reduce". So an action, but turning Follow on, submits only what
+a person asks to reduce. Apply forgets why Follow could not reduce rows, since
+its next step tries them with the settings applied. Which batch follows is
+kept in the definitions, so a restart resumes.
 """
 
 from __future__ import annotations
@@ -73,17 +79,15 @@ import functools
 import io
 import re
 import tempfile
-import threading
 import uuid
 import zipfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from collections.abc import Set as AbstractSet
-from contextlib import contextmanager, suppress
+from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from ess.spec import FileRef
 
@@ -98,6 +102,7 @@ from .. import (
     CorrectedFiles,
     NotKept,
     RowState,
+    Words,
     earlier_settings,
     frames,
     left_to_reduce,
@@ -105,7 +110,6 @@ from .. import (
     refused_again,
 )
 from .. import Row as TableRow
-from ..auto import Automatic
 from ..export import export_table
 from ..text import load_template, settings_of, write_template
 from . import forms, plots
@@ -116,7 +120,7 @@ from .models import (
     Cells,
     Column,
     Edit,
-    Follow,
+    Following,
     Plot,
     Reduce,
     Refused,
@@ -125,8 +129,10 @@ from .models import (
     RunRow,
     Runs,
     State,
-    Words,
 )
+
+if TYPE_CHECKING:
+    from .pages import Pages
 
 
 @dataclass(frozen=True)
@@ -230,96 +236,82 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
 
 class Server:
     """
-    What the API does, without HTTP. See the module for the rules.
+    What the API does for the page of one batch, without HTTP. See the module
+    for the rules.
 
     Parameters
     ----------
-    batch:
-        The batch, scanned or not.
-    title:
-        The title of the page; the title of the spec if not given.
-    words:
-        What a row is called.
-    name:
-        The entry of :attr:`Row.info` that names a row; its key if ``None``.
-    info:
-        Other entries of :attr:`Row.info` to show as columns.
-    draw:
-        Draws results (see :data:`Draw`).
-    files:
-        The file source of the client, to correct runs in.
-    marks:
-        The fields of a run that a person corrects, as a pydantic model.
-    folder:
-        What the header names as the place of the data, such as a folder.
-    at:
-        The columns at which a change of a row's cells by the scan makes
-        Follow reduce the row again (:class:`~ess.apps.batch.auto.Automatic`);
-        without them, the page does not offer to follow. The batch needs a
-        source.
-    follow:
-        Whether to follow from the start.
-    interval:
-        The seconds between two steps of Follow.
+    pages:
+        What the pages share: the manager of the batch, Follow, the lock, and
+        what the application gives every page.
+    label:
+        The label of the batch. Its registered source says what a row is
+        called, and which entries of :attr:`Row.info` name and describe it.
     """
 
-    def __init__(
-        self,
-        batch: Batch,
-        *,
-        title: str | None = None,
-        words: Words | None = None,
-        name: str | None = None,
-        info: Sequence[str] = (),
-        draw: Draw | None = None,
-        files: CorrectedFiles | None = None,
-        marks: type[BaseModel] | None = None,
-        folder: str = '',
-        at: AbstractSet[str] | None = None,
-        follow: bool = False,
-        interval: float = 5.0,
-    ) -> None:
-        if follow and at is None:
-            raise ValueError('to follow from the start, give the columns at')
-        self.lock = threading.RLock()
-        self.batch = batch
-        self.title = title or batch.spec.title
-        self.words = words or Words()
-        self._name = name
-        self._info = tuple(info)
-        self._draw = draw
-        self._files = files
-        self._folder = folder
+    def __init__(self, pages: Pages, label: str) -> None:
+        self.pages = pages
+        self.label = label
+        source = pages.manager.source(label)
+        self.words = Words() if source is None else source.words
+        self._name = None if source is None else source.name
+        self._info = () if source is None else source.info
+        # The columns at which Follow reduces a row again; None without a source.
+        self._at = None if source is None else frozenset(source.columns)
+        batch = self.batch
         self._listing = Listing(batch.client)
         model, listing = batch.spec.params, self._listing
         self.settings = self._form()
         self._show_settings()
         self._cells = Fields(model, listing, fields=batch.columns)
+        marks, files = pages.marks, pages.files
         self._marks = None if marks is None or files is None else Fields(marks, listing)
         self.refused: list[FieldError] = []
         self.version = 1
-        self.runs_version = 1
         # The runs as listed at the last change of the runs' version.
         self._runs = self._runs_seen()
         self.start = uuid.uuid4().hex[:8]
-        self.loop = None if at is None else Automatic(batch, at=at)
-        self.following = follow
-        self.interval = interval
-        # Why Follow did not reduce each row at its last reduction, by key.
-        self.waiting: dict[str, str] = {}
-        self.step_failure: str | None = None
         # What :meth:`_live` gave at the last change of the version.
         self._seen = self._live()
+
+    @property
+    def batch(self) -> Batch:
+        """The batch, asked of the manager at each use."""
+        return self.pages.manager.batch(self.label)
+
+    @property
+    def lock(self) -> AbstractContextManager[object]:
+        """The lock of all pages."""
+        return self.pages.lock
+
+    def _follows(self) -> bool:
+        """Whether this batch is the one that follows."""
+        return self.pages.follow.label == self.label
+
+    def _waiting(self) -> dict[str, str]:
+        """Why the last step of Follow did not reduce each row, by key."""
+        return {
+            key: f'Follow could not reduce it: {forms.message(reason)}'
+            for key, reason in self.pages.follow.refused.items()
+        }
 
     # Reading
 
     def _live(self) -> tuple[object, ...]:
         """
         What the page shows that changes without an action: the rows, the
-        records, the runs, and how the last step of Follow went.
+        records, the runs, which batch follows, and how the last step of
+        Follow went.
         """
-        rows, records = self.batch.rows, self._listing.cursor
-        return rows, records, self.runs_version, self.waiting, self.step_failure
+        pages = self.pages
+        return (
+            self.batch.rows,
+            self._listing.cursor,
+            pages.runs_version,
+            pages.follow.label,
+            pages.follow.refused,
+            pages.failure,
+        )
 
     def _moved(self) -> bool:
         """Whether what :meth:`_live` gives changed since the version moved."""
@@ -343,9 +335,9 @@ class Server:
         return {} if self._marks is None else self._listing.listed(Selector())
 
     def _new_runs(self) -> None:
-        """A new version of the runs, which the Runs view then asks for."""
+        """A new version of the runs, which the Runs view of each page asks for."""
         self._runs = self._runs_seen()
-        self.runs_version += 1
+        self.pages.new_runs()
 
     def _form(self) -> Fields:
         """A form of the settings, at the fields' defaults."""
@@ -433,8 +425,8 @@ class Server:
             set() if unusable else set(earlier_settings(states, self.batch.columns))
         )
         refused = (
-            refused_again(states, self.loop.at, self.waiting)
-            if self.loop is not None and self.following
+            refused_again(states, self._at, self._waiting())
+            if self._at is not None and self._follows()
             else {}
         )
         statuses = {
@@ -478,10 +470,12 @@ class Server:
         return State(
             version=self.version,
             start=self.start,
-            runs=None if self._marks is None else self.runs_version,
-            title=self.title,
+            runs=None if self._marks is None else self.pages.runs_version,
+            label=self.label,
+            title=self.pages.manager.batches()[self.label].title,
+            application=self.pages.title,
             words=self.words,
-            folder=self._folder,
+            folder=self.pages.folder,
             info=[
                 Column(name=n, title=n.replace('_', ' ').capitalize())
                 for n in self._info
@@ -517,14 +511,17 @@ class Server:
             _say(self._setting_title(e), e.msg) if e.loc else e.msg for e in errors
         )
 
-    def _follow(self) -> Follow | None:
-        if self.loop is None:
+    def _follow(self) -> Following | None:
+        if self._at is None:
             return None
-        return Follow(
-            on=self.following,
-            interval=self.interval,
-            at=sorted(self._cells.titles[c] for c in self.loop.at),
-            failure=self.step_failure,
+        label, batches = self.pages.follow.label, self.pages.manager.batches()
+        on = label == self.label
+        return Following(
+            on=on,
+            other=batches[label].title if not on and label in batches else None,
+            interval=self.pages.follow.interval,
+            at=sorted(self._cells.titles[c] for c in self._at),
+            failure=self.pages.failure if on else None,
         )
 
     def _failures(self, states: Mapping[str, RowState]) -> dict[str, str]:
@@ -590,7 +587,7 @@ class Server:
             reason = self._outdated(state)
         elif status == 'outdated':
             reason = 'The settings cannot be used, so this result may not match them.'
-        if self.following and state.changed_by_hand and status in _BY_HAND:
+        if self._follows() and state.changed_by_hand and status in _BY_HAND:
             reason = f'{reason} {_LEFT}'.lstrip()
         scanned = scan.get(row.key)
         cells = {
@@ -696,7 +693,7 @@ class Server:
         return f'Found {self.words.count(len(self.batch.rows))}. {changes}'.strip()
 
     def _scan(self, failed: str = 'The scan failed') -> None:
-        """The scan of "Rescan runs", of a correction of runs, and of Follow."""
+        """The scan of "Rescan runs" and of a correction of runs."""
         try:
             self.batch.scan()
         except SubmitError as error:
@@ -855,61 +852,39 @@ class Server:
 
     @_action
     def follow(self, on: bool) -> str:
-        """Follow the files, with a first step at once, or stop."""
-        if self.loop is None:
-            raise Problem('This page does not follow the files.')
-        self.following = on
+        """
+        Make this batch the one that follows, with a first step at once; or,
+        if it follows, let none follow.
+        """
+        if self._at is None:
+            raise Problem('This batch has no source, so it cannot follow the files.')
         if not on:
+            if not self._follows():
+                return ''  # another batch follows, or none
+            self.pages.follow.off()
             return 'Stopped following.'
-        self.step()
+        self.pages.follow.on(self.label)
+        self.pages.tick()
         return 'Following.'
 
-    def step(self) -> None:
+    def stepped(self) -> None:
         """
-        One step of Follow: the scan of "Rescan runs", then the reduction of
-        :meth:`Automatic.reduce`, with the batch's settings, whatever the form
-        holds. :attr:`waiting` says why each row was not reduced. Whatever it
-        raises, from the files, the workflow or the workspace, is its failure,
-        said in the state until a step runs through. A step that changes
-        nothing the page shows, such as the rows, the runs, the records, what
-        waits and why, or its failure, leaves the version, so that a page
-        polling it gets nothing new.
+        Show what a step of Follow on this batch changed: list again once, and
+        refresh the forms, since new rows may name files that they do not
+        offer yet. A step that changes nothing the page shows, such as the
+        rows, the runs, the records, what waits and why, or how it went,
+        leaves the version, so that a page polling it gets nothing new.
         """
         with self.lock:
             try:
-                try:
-                    if self.loop is None:
-                        raise Problem('This page does not follow the files.')
-                    self._scan()
-                    self.loop.reduce()
-                    self.waiting = {
-                        key: f'Follow could not reduce it: {forms.message(reason)}'
-                        for key, reason in self.loop.refused.items()
-                    }
-                finally:
-                    # One reading of the changes of records. The forms are
-                    # refreshed only if what the page shows changed, since
-                    # new rows may name files that the forms do not offer yet.
-                    self._listing = Listing(self.batch.client, previous=self._listing)
-                    if self._runs_seen() != self._runs:
-                        self._new_runs()
-                    if self._moved():
-                        self._refresh()
-                self.step_failure = None
-            except Exception as error:  # the next step tries again
-                self.step_failure = str(error) or repr(error)
-            if self._moved():
-                self._new_version()
-
-    def tick(self) -> None:
-        """A step, if following; :func:`~.api.create_app` calls it on a timer."""
-        # Under the lock, so that a tick that waited for a request sees what
-        # that request did: no step after "Stopped following". A step says
-        # what it raises; what it cannot say, such as an exception whose text
-        # raises, must not end the timer.
-        with self.lock, suppress(Exception):
-            if self.following:
-                self.step()
+                self._listing = Listing(self.batch.client, previous=self._listing)
+                if self._runs_seen() != self._runs:
+                    self._new_runs()
+                if self._moved():
+                    self._refresh()
+            finally:
+                if self._moved():
+                    self._new_version()
 
     # Settings
 
@@ -932,7 +907,8 @@ class Server:
         # A refusal of a setting was a refusal of the settings replaced, and
         # Follow tries every row again with these at its next step.
         self.refused = [e for e in self.refused if e.entry]
-        self.waiting = {}
+        if self._follows():
+            self.pages.follow.forget()
         return 'Applied the settings.'
 
     @_action
@@ -1018,7 +994,8 @@ class Server:
             )
             if len(done) > _DRAWN:
                 note = f'The first {_DRAWN} of {len(done)}. Select {many} to choose.'
-        if not chosen or self._draw is None:
+        draw = self.pages.draw.get(self.batch.spec.name)
+        if not chosen or draw is None:
             return Plot(figure=None, note=note)
         colors = plots.colors([order[s.key] for s in chosen])
         shown = [
@@ -1034,7 +1011,7 @@ class Server:
         ]
         try:
             return Plot(
-                figure=self._draw(shown),
+                figure=draw(shown),
                 note=note,
                 colors={s.key: s.color for s in shown},
             )
@@ -1044,9 +1021,9 @@ class Server:
     # Runs
 
     def _marked(self) -> tuple[Fields, CorrectedFiles]:
-        if self._marks is None or self._files is None:
+        if self._marks is None or self.pages.files is None:
             raise Problem('This application corrects no runs.')
-        return self._marks, self._files
+        return self._marks, self.pages.files
 
     @_locked
     def runs(self) -> Runs:
@@ -1069,7 +1046,7 @@ class Server:
             label = self._listing.file_label(ref)
             rows.append(RunRow(key=ref.file, file=label, cells=cells))
         return Runs(
-            version=self.runs_version,
+            version=self.pages.runs_version,
             columns=[
                 Column(name=n, title=marks.titles[n], editor=forms.editor(f))
                 for n, f in marks.fields.items()
@@ -1088,7 +1065,11 @@ class Server:
 
     @_action
     def correct(self, edit: CellEdit) -> str:
-        """Correct a field of runs; the rows follow."""
+        """
+        Correct a field of runs, and scan this page's batch, so that its rows
+        follow. The batch that follows gets the correction at its next step,
+        and another batch at its "Rescan runs".
+        """
         marks, files = self._marked()
         value = self._read(marks, edit)
         fields = {edit.column: None if value is UNSET else value}

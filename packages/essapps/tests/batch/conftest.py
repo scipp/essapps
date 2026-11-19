@@ -147,6 +147,18 @@ def manager(client: Client, refusing: toys.Refusing) -> BatchManager:
     )
 
 
+@pytest.fixture
+def label(manager: BatchManager) -> str:
+    """A batch of ``manager`` with the spec, columns and label of ``batch``."""
+    return manager.create(
+        toys.STAGED.name,
+        title='Scan',
+        source='pairs',
+        columns=('thickness',),
+        label='scan',
+    )
+
+
 # A workspace kept in a folder of toy files, for batches from tables
 
 BAD = 4

@@ -9,6 +9,10 @@ sample, and pairs the run with the transmission run of the same sample::
 
     {'file': 'run-1.nxs', 'run': 1, 'role': 'sample', 'sample': 'water'}
     {'file': 'run-2.nxs', 'run': 2, 'role': 'transmission', 'sample': 'water'}
+
+:data:`SOURCES` and :data:`DEFAULTS` give a
+:class:`~ess.apps.batch.BatchManager` the batches of I(Q);
+:func:`iofq_batch` makes one batch without a manager.
 """
 
 import sys
@@ -16,7 +20,15 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ess.apps import Client
-from ess.apps.batch import Batch, DefinitionStore, FileInfo, Row
+from ess.apps.batch import (
+    Batch,
+    Defaults,
+    DefinitionStore,
+    FileInfo,
+    Row,
+    Source,
+    Words,
+)
 from ess.spec import FileRef
 
 from .specs import IOFQ
@@ -58,6 +70,19 @@ def _measured(f: FileInfo) -> tuple[int, str]:
     """The order measured: by run number; a file without one last, by identity."""
     run = str(f.metadata.get('run', ''))
     return (int(run), '') if run.isdigit() else (sys.maxsize, f.ref.file)
+
+
+SOURCES = {
+    'sample-runs': Source(
+        pair_by_sample,
+        columns=COLUMNS,
+        words=Words(one='sample run', many='sample runs'),
+        name='name',
+    )
+}
+"""The sources of LoKI's batches, by name."""
+DEFAULTS = {IOFQ.name: Defaults(staged=True)}
+"""A batch of I(Q) runs through one stage, so that the can is reduced once."""
 
 
 def iofq_batch(

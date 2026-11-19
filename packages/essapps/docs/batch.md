@@ -10,9 +10,10 @@ Your application supplies what depends on the technique: which files make which 
 ```python
 import uvicorn
 
-from ess.apps import local
-from ess.apps.batch import Batch, FileInfo, Row
-from ess.apps.batch.web import Shown, create_app
+from ess.apps.batch import BatchManager, Defaults, FileInfo, FolderDefinitions, Row, Source
+from ess.apps.batch.auto import Follow
+from ess.apps.batch.web import Pages, Shown, create_app
+from ess.apps.folder import open_folder
 
 def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
     """A row per sample run, with the transmission run of the same sample."""
@@ -28,27 +29,35 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
             rows.append(Row(str(f.metadata['run']), values, info={'name': str(name)}))
     return rows
 
-client = local(proposal='p1', files=files, bind=BINDINGS)
-batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'),
-              label='iofq', source=pair_by_sample, staged=True)
-batch.scan()
+SOURCES = {'sample-runs': Source(pair_by_sample, columns=('sample', 'sample_transmission'),
+                                 name='name')}
+
+client = open_folder(folder, BINDINGS)
+definitions = FolderDefinitions(folder)
+manager = BatchManager(client, sources=SOURCES, definitions=definitions,
+                       defaults={IOFQ.name: Defaults(staged=True)})
+if not manager.batches():                  # a new folder: one batch to start with
+    manager.create(IOFQ.name, title='Sample runs', source='sample-runs')
 
 def draw_iofq(shown: Sequence[Shown]) -> dict:
     """A Plotly figure of the completed results that the page asks to draw."""
     ...
 
-app = create_app(batch, name='name', draw=draw_iofq)   # a FastAPI app
+pages = Pages(manager, Follow(manager, definitions), title='I(Q)', draw={IOFQ.name: draw_iofq})
+app = create_app(pages)   # a FastAPI app: the page of each batch at /batches/<label>/
 uvicorn.run(app, host='localhost', port=8000)
 ```
 
 `python -m ess.apps.batch.web.demo [DIRECTORY]` serves a complete application on fake files and fake workflows, with its workspace in a folder (see [The app and the command on one folder](#the-app-and-the-command-on-one-folder)).
-`ess.instruments.loki.batch` holds a source and a `Batch` for the real LoKI workflows, and `python -m ess.instruments.loki.web FOLDER` serves them.
+`ess.instruments.loki.batch` holds the sources and a `Batch` for the real LoKI workflows, and `python -m ess.instruments.loki.web FOLDER` serves them.
 
-The same logic works without the page, in a notebook or a test:
+The same logic works without the page, in a notebook or a test, with a `Batch` of the manager or one made in code:
 
 ```python
-from ess.apps.batch import left_to_reduce, ready
+from ess.apps.batch import Batch, left_to_reduce, ready
 
+batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'),
+              label='iofq', source=pair_by_sample, staged=True)   # or manager.batch(label)
 batch.settings = settings      # one write; nothing is reduced for it
 batch.scan()
 state = batch.state()           # where each row stands
@@ -133,7 +142,7 @@ Every way of reducing a batch is this cycle, with its own rule and its own trigg
 | **Reduce** on the page | a person | `left_to_reduce(state, batch.columns)` |
 | **Reduce them again** on the page | a person | `earlier_settings(state, batch.columns)` |
 | **Reduce all**, **Reduce selected** | a person | `ready(state)`, the keys selected |
-| **Follow** on the page: a timer that scans as **Rescan runs** does | the page's process | `arrived(state, at)` |
+| **Follow** on the page of a batch: the application's loop, a timer that scans as **Rescan runs** does | the application's process | `arrived(state, at)`, `at` the columns of the source |
 | `Automatic.step`, which `run` calls from a timer | a process of its own | `arrived(state, at)` |
 | `essapps-batch reduce` | a person or a script | every row of the table; with `--remaining`, `left_to_reduce(state, batch.columns)`, and with `--earlier-settings` too, `earlier_settings(state, batch.columns)` |
 
@@ -304,7 +313,8 @@ The page has a Runs tab, a table of the files, in which a person does this. You 
 class Marks(BaseModel):
     role: Literal['sample', 'transmission'] | None = None
 
-app = create_app(batch, files=files, marks=Marks, name='name', draw=draw_iofq)
+pages = Pages(manager, follow, files=files, marks=Marks, draw={IOFQ.name: draw_iofq})
+app = create_app(pages)
 ```
 
 ## Where the definition is kept
@@ -362,9 +372,10 @@ The files that a person loads and writes ([The UI](#the-ui)) are copies, for oth
 A `BatchManager`, *the manager*, makes, lists, changes and removes the batches of a workspace, and holds the one `Batch` of each label. It keeps each batch in the definitions, so a manager made again after a restart lists the same batches and makes the same `Batch` of each. The application registers its sources by name, and what a new batch of a spec gets:
 
 ```python
-from ess.apps.batch import BatchManager, Defaults, Source
+from ess.apps.batch import BatchManager, Defaults, Source, Words
 
-SOURCES = {'sample-runs': Source(pair_by_sample, columns=('sample', 'sample_transmission'))}
+SOURCES = {'sample-runs': Source(pair_by_sample, columns=('sample', 'sample_transmission'),
+                                 words=Words(one='sample run', many='sample runs'), name='name')}
 DEFAULTS = {IOFQ.name: Defaults(settings=SETTINGS, staged=True)}
 
 manager = BatchManager(client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS)
@@ -392,6 +403,7 @@ What the manager gives the `Batch` of a label:
 - A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. `create` refuses a label that has definitions or records.
 - `remove` removes the header, the edits and the settings of a batch, and releases its stage. Its records stay, and those running keep running. A `Batch` handed out before must not be used after its removal, so ask the manager for the batch each time.
 - A `Batch` made in code without the manager has no header and is not listed.
+- `words`, `name` and `info` of a `Source` say what the page of a batch calls a row, which entry of `Row.info` names it, and which other entries it shows.
 
 One loop per application, `Follow`, reduces the rows of one batch as its files arrive: each step is a step of an `Automatic` on the batch that follows ([Automatic reduction](#automatic-reduction)), with `at` the columns of its source.
 
@@ -406,7 +418,7 @@ while True:
     time.sleep(follow.interval)
 ```
 
-`follow.on` and `follow.off` write `following.json`, so a `Follow` made again after a restart resumes. If the batch that follows is removed, the next step turns `Follow` off. `Follow` has no thread, and the manager none either: whoever owns the timer calls `step`.
+`follow.on` and `follow.off` write `following.json`, so a `Follow` made again after a restart resumes. If the batch that follows is removed, the next step turns `Follow` off. `Follow` has no thread, and the manager none either: whoever owns the timer calls `step`. For the pages, `create_app` owns it ([The UI](#the-ui)).
 
 ## Chains
 
@@ -491,7 +503,7 @@ A result of another spec, such as an older version, stays the row's result ([Rul
 
 A row whose key changes from one scan to the next, such as a key made from a sample name that a correction changed, is a new row, and is reduced again under its new key; so choose a key that does not change, such as the run number ([Terms](#terms)).
 
-The batch page holds a loop of its own: its switch "Follow" steps it on the page's batch ([The UI](#the-ui)). In a chain, step the loop of the batch that is read first: `run([Automatic(find, ...), Automatic(iofq, ...)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
+The page of a batch has a switch "Follow", which makes its batch the one that the application's `Follow` steps ([The UI](#the-ui)). In a chain, step the loop of the batch that is read first: `run([Automatic(find, ...), Automatic(iofq, ...)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
 
 ### One label, one batch
 
@@ -641,10 +653,10 @@ One command holds the folder at a time. If a command was killed, the next one fi
 
 ## The UI
 
-[The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows a batch in a browser: how to run it, its layers, and its limits.
-The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. Given the columns `at`, the page offers a switch **Follow**: a step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, in the page's own process and batch, with the batch's settings, whatever the form holds. Follow leaves a row that a person changed to the person, who reduces it with **Reduce**: while following, such a row says "Set by hand, so Follow leaves it to you: reduce it." An action reduces nothing that a person did not ask for, and Apply reduces nothing either: the next step reduces the rows without a result with the settings applied. Whether the page follows belongs to its process, not to the definition: a restart starts with `--follow` or without.
+[The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows each batch in a browser: how to run it, its layers, and its limits.
+The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. The page of a batch with a source offers a switch **Follow**: it makes the batch the one that the application's `Follow` steps, so no other batch follows, and the page of another batch says which one does. A step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, at the columns of the source, with the batch's settings, whatever the form holds. Follow leaves a row that a person changed to the person, who reduces it with **Reduce**: while following, such a row says "Set by hand, so Follow leaves it to you: reduce it." An action reduces nothing that a person did not ask for, and Apply reduces nothing either: the next step reduces the rows without a result with the settings applied. The batch that follows is kept in `following.json`, so a restart resumes.
 
-`create_app(batch, ...)` makes the page. Its arguments name the column that names a row (`name`) and the other columns to show (`info`), draw the results (`draw`), correct the metadata of runs (`files`, `marks`), and offer Follow (`at`, `follow`, `interval`). `Server` (`ess.apps.batch.web.server`) holds what the page shows and does, and its actions return `State`, the whole of what the page shows. The browser renders `State` and sends the actions.
+`create_app(pages)` makes the app: the page of each batch of the manager at `/batches/<label>/`, and `/`, which redirects to the page of the batch that follows, else of the last label. `Pages(manager, follow, ...)` (`ess.apps.batch.web.pages`) holds what the pages share: the title of the application (`title`), how to draw the results of each spec (`draw`, by the name of the spec), the correction of the metadata of runs (`files`, `marks`), `Follow` and its timer, and one lock that every request of every page and each step of Follow take. What a page calls a row and shows of it are the `words`, `name` and `info` of the batch's `Source`. `Server` (`ess.apps.batch.web.server`) holds what the page of one batch shows and does, and its actions return `State`, the whole of what the page shows. The browser renders `State` and sends the actions.
 
 `draw(shown)` gets the completed results of the rows selected, as `Shown` (`key`, `name`, `record`, `outdated`, `color`), and returns a Plotly figure as a dict. `ess.apps.batch.web.plots` draws curves with the page's colours.
 
@@ -654,9 +666,10 @@ A person and the command share one workspace folder (`open_folder`), and a label
 
 ```sh
 python -m ess.apps.batch.web.demo ws       # Download as CSV: rows.csv, Download settings: settings.yaml
+L=20261118-130204                          # the label of the batch, in the URL of its page
 B="essapps-batch -w ws --bind ess.apps.batch.web.demo:BINDINGS"
-$B reduce settings.yaml rows.csv --label demo-iofq -o done.csv
-$B reduce --label demo-iofq --remaining      # the batch as the label keeps it
+$B reduce settings.yaml rows.csv --label $L -o done.csv
+$B reduce --label $L --remaining           # the batch as the label keeps it
 python -m ess.apps.batch.web.demo ws       # the rows show as done
 ```
 
@@ -679,12 +692,12 @@ python -m ess.apps.batch.web.demo ws       # the rows show as done
 | your pairing and the batch | a function over plain data | there is no behaviour to abstract |
 | `Batch` and the framework | `Client`, the class | one implementation; a fake would have to redo the validation that a table shows |
 | `Form` and the framework | `Listing`, a pydantic model of the params, and `Form.held()` | `Form` needs neither `Client` nor `WorkflowSpec` |
-| the logic and the page | the methods of `Batch` and `RowTable` | `Server` holds what the page shows and does, so a rule is written once |
+| the logic and the page | the methods of `BatchManager`, `Follow`, `Batch` and `RowTable` | `Pages` and `Server` hold what the pages show and do, so a rule is written once |
 | `Server` and the browser | `State` and the actions of `Server` | the browser renders `State` and sends actions; `Server` has no HTTP in it |
 
-`ess.apps` and `ess.apps.panel` import nothing from `ess.apps.batch`, and `ess.apps.batch` imports no widget library. `ess.apps.batch.web.server` and `ess.apps.batch.web.models` import neither `fastapi` nor `starlette`; only `ess.apps.batch.web.api` does. A test enforces this.
+`ess.apps` and `ess.apps.panel` import nothing from `ess.apps.batch`, and `ess.apps.batch` imports no widget library and nothing of `ess.apps.batch.web`. `ess.apps.batch.web.server`, `ess.apps.batch.web.pages` and `ess.apps.batch.web.models` import neither `fastapi` nor `starlette`; only `ess.apps.batch.web.api` does. A test enforces this.
 
-`ess.apps.batch.web` shows the batch as a web page: a FastAPI server and plain JavaScript. It is experimental and the candidate for a hosted interface.
+`ess.apps.batch.web` shows the batches as web pages: a FastAPI server and plain JavaScript. It is experimental and the candidate for a hosted interface.
 
 ## Testing an application
 
@@ -693,7 +706,7 @@ python -m ess.apps.batch.web.demo ws       # the rows show as done
 | your source | plain data |
 | rules of rows and states | plain values; see `packages/essapps/tests/batch/table_test.py` and `state_test.py` |
 | submitting, stages, refusals, reruns | `local()` with `ess.apps.testing.FakeFiles` and fake workflows; a fixture starts in milliseconds |
-| the page | `Server`, or `create_app` with FastAPI's `TestClient`; see `packages/essapps/tests/batch/web_test.py` |
+| the page | `Pages` and the `Server` of `pages.page(label)`, or `create_app(pages)` with FastAPI's `TestClient(app, base_url=f'http://testserver/batches/{label}/')`; see `packages/essapps/tests/batch/web_test.py` |
 
 ```python
 fake = FakeFiles('p1', tmp_path)
