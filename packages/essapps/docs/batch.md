@@ -458,7 +458,7 @@ What the manager gives the `Batch` of a label:
 
 | Argument | Comes from |
 |---|---|
-| `spec` | `bound_spec(client, header.spec)`: the spec of that name that the workspace binds, the highest version if several |
+| `spec` | `client.spec_named(header.spec)`: the spec of that name that the workspace binds, the highest version if several |
 | `source` | the `Source` registered under `header.source` |
 | `columns` | `header.columns`: those given to `create`, else those that the source fills |
 | `settings` | `settings.json`; else `Defaults.settings` of the spec, those that are columns left out |

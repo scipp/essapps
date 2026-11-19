@@ -56,7 +56,6 @@ from .. import (
     Scope,
     Source,
     Words,
-    bound_spec,
     fits,
     refused_again,
 )
@@ -403,7 +402,7 @@ class Pages:
         with self.lock:
             client = self.manager.client
             names = dict.fromkeys(spec.name for spec in client.specs())
-            specs = [bound_spec(client, name) for name in names]
+            specs = [client.spec_named(name) for name in names]
             listing = self._relisted()
 
             def choice(name: str | None, source: Source | None) -> SourceChoice:

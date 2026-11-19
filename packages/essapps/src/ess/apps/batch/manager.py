@@ -119,17 +119,6 @@ def _said(error: Exception) -> str:
     return str(error) or repr(error)
 
 
-def bound_spec(client: Client, name: str) -> WorkflowSpec[Any, Any]:
-    """
-    The spec of ``name`` that the workspace binds, the highest version if it
-    binds several; raises ``KeyError`` if it binds none.
-    """
-    specs = [spec for spec in client.specs() if spec.name == name]
-    if not specs:
-        raise KeyError(f'the workspace binds no spec {name}')
-    return max(specs, key=lambda spec: spec.version)
-
-
 def fits(spec: WorkflowSpec[Any, Any], source: Source | None) -> bool:
     """
     Whether a batch of ``spec`` can be made with ``source``: whether each
@@ -303,7 +292,7 @@ class BatchManager:
         check_label(label)
         if self._taken(label):
             raise ValueError(f'{label}: the label has definitions or records')
-        bound = bound_spec(self.client, spec)
+        bound = self.client.spec_named(spec)
         registered = None if source is None else self.sources[source]
         fills = () if registered is None else registered.fills
         if not fits(bound, registered):
@@ -372,7 +361,7 @@ class BatchManager:
         defaults = self._defaults.get(header.spec, Defaults())
         batch = Batch(
             self.client,
-            bound_spec(self.client, header.spec),
+            self.client.spec_named(header.spec),
             columns=header.columns,
             label=label,
             source=None if name is None else self.sources[name],

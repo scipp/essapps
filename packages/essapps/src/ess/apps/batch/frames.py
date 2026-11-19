@@ -33,7 +33,6 @@ from pydantic import BaseModel
 from ..client import Client
 from ..records import Template
 from . import state
-from .manager import bound_spec
 from .reduction import Batch
 from .state import RowState
 from .table import Row
@@ -202,7 +201,7 @@ def reduce_table(
     Reduce each row of ``table`` with ``template``, wait, and return the table
     with what came of each row (see :func:`reduce_batch`). The batch is of the
     spec of the template's name that the workspace binds, the highest version
-    if it binds several (:func:`~.manager.bound_spec`). It keeps nothing in
+    if it binds several (:meth:`~ess.apps.Client.spec_named`). It keeps nothing in
     definitions, so no manager lists it.
 
     Parameters
@@ -233,7 +232,7 @@ def reduce_table(
     """
     batch = Batch(
         client,
-        bound_spec(client, template.spec.name),
+        client.spec_named(template.spec.name),
         columns=template.blanks,
         label=label,
         staged=staged,

@@ -69,7 +69,7 @@ from . import frames
 from .corrections import CorrectedFiles
 from .definition import FolderDefinitions
 from .export import export_table
-from .manager import BatchManager, Defaults, bound_spec
+from .manager import BatchManager, Defaults
 from .reduction import Source, file_infos
 from .state import EARLIER
 from .text import load_template, with_latest
@@ -234,7 +234,7 @@ def _reduce(
     else:
         spec, source, columns = template.spec.name, args.source, template.blanks
     try:
-        bound_spec(client, spec)
+        client.spec_named(spec)
     except KeyError as error:  # a spec that the bindings given lack
         raise ValueError(error.args[0]) from None
     table = None

@@ -324,6 +324,16 @@ class Client:
                 return spec
         raise KeyError(f'unknown spec {spec_id}')
 
+    def spec_named(self, name: str) -> WorkflowSpec[Any, Any]:
+        """
+        The spec named ``name`` that the workspace binds, the highest version
+        if it binds several; raises ``KeyError`` if it binds none.
+        """
+        specs = [spec for spec in self.specs() if spec.name == name]
+        if not specs:
+            raise KeyError(f'the workspace binds no spec {name}')
+        return max(specs, key=lambda spec: spec.version)
+
     def specs(self) -> list[WorkflowSpec[Any, Any]]:
         """
         The specs the workspace runs, one for each binding, in the order bound.
