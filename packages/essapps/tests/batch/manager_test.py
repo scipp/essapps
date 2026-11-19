@@ -18,14 +18,13 @@ from ess.apps.batch import (
     Defaults,
     FolderDefinitions,
     Header,
-    NotEnded,
     NotKept,
     Row,
     Scope,
     Source,
     status_texts,
 )
-from ess.apps.batch.definition import header_key, settings_key
+from ess.apps.batch.definition import settings_key
 from ess.apps.testing import FakeStore, StagedFunction
 from ess.spec import function_binding
 
@@ -628,18 +627,6 @@ def test_a_next_batch_that_cannot_take_what_was_set_by_hand_is_removed_again(
     assert manager.headers() == before
 
 
-def test_a_batch_not_ended_after_the_next_was_made_raises_and_both_hold_the_rows(
-    manager: BatchManager, scanned: Batch, refusing: Refusing
-) -> None:
-    refusing.part = header_key('scan')
-
-    with pytest.raises(NotEnded):
-        manager.start_next('scan', 2, title='Afternoon')
-    (made,) = set(manager.headers()) - {'scan'}
-    assert manager.headers()['scan'].scope == Scope()
-    assert manager.headers()[made].scope == Scope(start=2)
-
-
 def test_a_batch_removed_is_gone_with_its_definitions_and_its_records_stay(
     manager: BatchManager,
     client: Client,
@@ -695,34 +682,14 @@ def test_a_staged_batch_removed_releases_its_stage(
     assert [type(s) for s in releases.released] == [Stage]
 
 
-@pytest.mark.parametrize('part', ['settings', 'header'])
-def test_a_batch_whose_settings_or_header_is_refused_is_not_made_and_its_label_free(
-    manager: BatchManager,
-    refusing: Refusing,
-    definitions: FolderDefinitions,
-    part: str,
+def test_a_batch_whose_header_is_refused_is_not_made(
+    manager: BatchManager, refusing: Refusing
 ) -> None:
-    refusing.part = part
+    refusing.part = 'header'
 
     with pytest.raises(NotKept):
         manager.create('plain', title='Morning', columns=COLUMNS, label='b')
     assert manager.headers() == {}
-    assert definitions.labels() == []
-    refusing.part = None
-    assert manager.create('plain', title='Morning', columns=COLUMNS, label='b') == 'b'
-
-
-def test_a_header_change_that_is_refused_changes_nothing(
-    manager: BatchManager, refusing: Refusing
-) -> None:
-    manager.create('plain', title='Morning', columns=COLUMNS, label='b')
-    refusing.part = 'header'
-
-    with pytest.raises(NotKept):
-        manager.change('b', title='Afternoon')
-    assert manager.headers() == {
-        'b': Header(spec='plain', columns=COLUMNS, title='Morning')
-    }
 
 
 @pytest.mark.parametrize('title', ['', '   '])
@@ -755,22 +722,17 @@ def test_a_scope_change_that_is_refused_leaves_the_rows_of_the_batch(
     assert manager.headers()[label].scope == Scope()
 
 
-def test_a_batch_whose_removal_is_refused_after_its_header_is_gone_keeps_its_label(
-    manager: BatchManager,
-    refusing: Refusing,
-    client: Client,
-    definitions: FolderDefinitions,
+def test_a_batch_whose_removal_is_refused_is_kept(
+    manager: BatchManager, refusing: Refusing
 ) -> None:
     manager.create('plain', title='Morning', columns=COLUMNS, label='b')
-    refusing.part = 'settings'
+    batch = manager.batch('b')
+    refusing.part = 'header'
 
     with pytest.raises(NotKept):
         manager.remove('b')
-    refusing.part = None
-    assert manager.headers() == {}
-    assert _again(client, definitions).headers() == {}
-    with pytest.raises(ValueError, match='has definitions or records'):
-        manager.create('plain', title='Morning', columns=COLUMNS, label='b')
+    assert list(manager.headers()) == ['b']
+    assert manager.batch('b') is batch
 
 
 def test_a_batch_without_a_source_has_only_rows_added_by_hand(

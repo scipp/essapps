@@ -451,28 +451,18 @@ class Pages:
         at once, rather than at its next step, so that a batch made later
         under the label does not follow. Raises :class:`~.page.Missing` if no batch
         has the label, and :class:`~.page.Problem` if the definitions refuse
-        a part, saying whether the batch is still listed.
+        a write.
         """
         with self.lock:
             if label not in self.manager.headers():
                 raise Missing(f'There is no batch {label}.')
             try:
                 self.manager.remove(label)
+                self._pages.pop(label, None)
+                if self.follow.label == label:
+                    self.follow.off()
             except NotKept as error:
-                said = (
-                    'not removed'
-                    if label in self.manager.headers()
-                    else 'removed, but part of its definitions stays'
-                )
-                raise Problem(f'The batch was {said}: {error}') from None
-            finally:
-                # The batch is gone once its header is; a refusal before
-                # leaves its page and Follow as they were.
-                if label not in self.manager.headers():
-                    self._pages.pop(label, None)
-                    if self.follow.label == label:
-                        with suppress(NotKept):  # else its next step does
-                            self.follow.off()
+                raise Problem(f'The change was not kept: {error}') from None
 
     def counts(self) -> BatchCounts:
         """

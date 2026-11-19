@@ -44,7 +44,6 @@ from ..records import Template
 from .definition import (
     DefinitionStore,
     Header,
-    NotKept,
     edits_key,
     header_data,
     header_key,
@@ -103,13 +102,6 @@ class Counts:
     states: dict[str, dict[str, RowState]]
     failed: dict[str, str]
     outside: dict[str, int]
-
-
-class NotEnded(NotKept):
-    """
-    :meth:`BatchManager.start_next` made the next batch, but the definitions
-    refused to end the batch before it, so both hold the rows that move.
-    """
 
 
 def _said(error: Exception) -> str:
@@ -195,11 +187,10 @@ class BatchManager:
     the application, such as a source that raises.
 
     The headers are read when the manager is made. Each change of a header is
-    written to the definitions before the manager holds it, and one that
-    they refuse raises :class:`~.definition.NotKept`, so the manager lists
-    the batches whose header the definitions keep. :meth:`create`,
-    :meth:`start_next` and :meth:`remove` say what they leave when a write is
-    refused.
+    written to the definitions before the manager holds it, so the manager
+    lists the batches whose header the definitions keep. A write that they
+    refuse raises :class:`~.definition.NotKept`, and what was written before
+    it in the same call stays written.
 
     Parameters
     ----------
@@ -245,9 +236,9 @@ class BatchManager:
         label: str | None = None,
     ) -> str:
         """
-        Make a batch and keep it; its label. If saving the header is refused,
-        the settings written before it are deleted, and ``NotKept`` raised.
-        Nothing is written if a check fails.
+        Make a batch and keep it; its label. Nothing is written if a check
+        fails. The first settings are written before the header, so a label
+        without a header is no batch.
 
         Parameters
         ----------
@@ -323,13 +314,7 @@ class BatchManager:
         # The template leaves out the settings that are columns.
         template = Template(bound, params=settings, blanks=columns)
         self._definitions.save(settings_key(label), template_data(template))
-        try:
-            self._definitions.save(header_key(label), header_data(header))
-        except NotKept:
-            # so that the label is not left taken by settings alone
-            with suppress(NotKept):
-                self._definitions.delete(settings_key(label))
-            raise
+        self._definitions.save(header_key(label), header_data(header))
         self._headers[label] = header
         return label
 
@@ -490,11 +475,10 @@ class BatchManager:
         ``ValueError`` if ``index`` is below the start or above the stop of
         the scope of the batch, or if the batch holds no row of the scan
         before ``index``, which would leave it none; with the batch of
-        ``label`` as it was. The next batch is made first; if its
-        scan raises, or the definitions refuse what was set by hand on it, it
-        is removed again (:meth:`remove`) and the error raised. If the batch
-        of ``label`` then cannot be ended, :class:`NotEnded` is raised, and
-        both batches hold the rows that move.
+        ``label`` as it was. The next batch is made first; if its scan
+        raises, or it cannot take what was set by hand, it is removed again
+        (:meth:`remove`) and the error raised, since a batch that cannot be
+        shown cannot be removed on a page.
         """
         batch = self.batch(label)
         header = self._headers[label]
@@ -522,13 +506,9 @@ class BatchManager:
                 removed=rows.removed & moving,
             )
         except Exception:
-            with suppress(NotKept):
-                self.remove(made)
+            self.remove(made)
             raise
-        try:
-            self.change(label, scope=ended)
-        except NotKept as error:
-            raise NotEnded(str(error)) from error
+        self.change(label, scope=ended)
         return made
 
     def remove(self, label: str) -> None:
@@ -539,8 +519,6 @@ class BatchManager:
         again. Raises ``KeyError`` if no batch has the label.
 
         The header is deleted first, so a batch is never listed half removed.
-        If the definitions refuse a later delete, ``NotKept`` is raised, and
-        the label keeps that part and cannot be made again.
         """
         if label not in self._headers:
             raise KeyError(label)

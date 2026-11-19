@@ -31,7 +31,7 @@ from ess.apps.batch import (
     Source,
 )
 from ess.apps.batch.auto import Follow
-from ess.apps.batch.definition import Key, NotKept, header_key, settings_key
+from ess.apps.batch.definition import Key, NotKept, settings_key
 from ess.apps.batch.web import Pages, Shown, create_app, demo, plots
 from ess.apps.batch.web.page import Missing
 from ess.apps.testing import CountingClient, FakeFiles
@@ -2059,22 +2059,6 @@ def test_a_next_batch_without_a_title_says_it_was_not_made(
     )
 
 
-def test_a_batch_not_ended_after_the_next_was_made_says_both_hold_the_rows(
-    http: TestClient, pages: Pages, refusing: Refusing
-) -> None:
-    pages.follow.on('scan')
-    refusing.part = header_key('scan')
-
-    answer = next_batch(http, '2')
-
-    assert answer.status_code == 422
-    assert answer.json()['message'].startswith(
-        'Afternoon was made, but this batch was not ended, so both hold the rows '
-        'that move: '
-    )
-    assert pages.follow.label == 'scan'
-
-
 def test_a_batch_removed_from_its_page_is_gone_and_its_results_stay(
     http: TestClient, manager: BatchManager, batch: Batch, client: Client
 ) -> None:
@@ -2111,22 +2095,9 @@ def test_a_removal_the_definitions_refuse_answers_422_and_the_batch_stays(
 
     assert answer.status_code == 422
     assert answer.json()['message'] == (
-        "The batch was not removed: ('labels', 'scan', 'header'): refused"
+        "The change was not kept: ('labels', 'scan', 'header'): refused"
     )
     assert list(manager.headers()) == ['scan']
-
-
-def test_a_removal_the_definitions_refuse_leaves_follow_and_the_page(
-    http: TestClient, pages: Pages, refusing: Refusing
-) -> None:
-    pages.follow.on('scan')
-    page = pages.page('scan')
-    refusing.part = 'header'
-
-    http.post('/api/batch/remove')
-
-    assert pages.follow.label == 'scan'
-    assert pages.page('scan') is page
 
 
 def test_another_page_of_a_removed_batch_answers_404_at_its_next_poll(

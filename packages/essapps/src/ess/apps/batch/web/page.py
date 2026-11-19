@@ -114,7 +114,6 @@ from .. import (
     EARLIER,
     EMPTY,
     Batch,
-    NotEnded,
     NotKept,
     RowState,
     Scope,
@@ -1013,9 +1012,7 @@ class Page:
         there, called ``request.title``
         (:meth:`~ess.apps.batch.BatchManager.start_next`). Follow moves to the
         next batch if this batch follows. What the manager refuses is a
-        :class:`Problem`. If the next batch was made but this batch not ended,
-        both hold the rows that move, Follow stays where it is, and the
-        :class:`Problem` says so.
+        :class:`Problem`.
         """
         row = self._row_of(request.key)
         if row.index is None:
@@ -1028,22 +1025,12 @@ class Page:
             label = self.pages.manager.start_next(
                 self.label, row.index, title=request.title
             )
-
-        except NotEnded as error:
-            raise Problem(
-                f'{request.title} was made, but this batch was not ended, so both '
-                f'hold the {self.words.many} that move: {error}'
-            ) from None
+            if self._follows():
+                self.pages.follow.on(label)
+        except NotKept as error:
+            raise Problem(f'The change was not kept: {error}') from None
         except Exception as error:  # the scan runs code of the application
             raise Problem(f'The next batch was not made: {why(error)}.') from None
-        if self._follows():
-            try:
-                self.pages.follow.on(label)
-            except NotKept as error:
-                raise Problem(
-                    f'{request.title} was made and this batch ended, but Follow '
-                    f'stays on this batch: {error}'
-                ) from None
         return Made(label=label)
 
     # One row

@@ -125,10 +125,10 @@ The next batch gets the settings in force, not a change of the settings form tha
 It needs one row selected, with an index; the manager refuses the first row of this batch.
 The page says why, and nothing changes.
 A row of the scan without an index is in neither batch afterwards, since both scopes then have an end.
-The next batch is made first, so a title that the manager refuses changes nothing, and it is removed again if it cannot take what was set by hand; if this batch then cannot be ended, both hold the rows that move, Follow stays where it is, and the page says so.
+The next batch is made first, so a title that the manager refuses changes nothing, and it is removed again if its scan raises or it cannot take what was set by hand.
 
 **Remove this batch**, after a confirmation, removes the header, the settings and the edits of the batch (`POST api/batch/remove`, `BatchManager.remove`); its results stay in the workspace.
-If the batch follows, Follow is turned off at once; if the definitions refuse the removal, the batch and Follow stay as they were.
+If the batch follows, Follow is turned off at once.
 The page then goes to `/`, which redirects to the batch that follows or the only batch left, or shows the page without a batch.
 
 ## Layers
