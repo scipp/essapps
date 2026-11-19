@@ -341,7 +341,7 @@ class Pages:
     def waiting(self, label: str, states: Mapping[str, RowState]) -> dict[str, str]:
         """
         Why Follow could not submit each row of ``states`` that its next step
-        would submit again, by key; none unless the batch of ``label`` follows.
+        would try again, by key; none unless the batch of ``label`` follows.
         """
         source, (of, refused) = self.manager.batch(label).source, self.refused
         if source is None or self.manager.following != label or of != label:
@@ -350,7 +350,7 @@ class Pages:
             key: f'Follow could not reduce it: {forms.message(reason)}'
             for key, reason in refused.items()
         }
-        return refused_again(states, source.fills, reasons)
+        return refused_again(states, reasons)
 
     def batches(self) -> Batches:
         """The batches, as the Batches view of each page lists them."""

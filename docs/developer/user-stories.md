@@ -115,7 +115,7 @@ The stories use these calls:
 batch = Batch(client, SPEC, columns=(...), label=..., source=Source(rows_of_files, fills=(...)),
               persist=True)
 auto = Automatic(batch)   # reads batch.settings at each step
-auto.step()       # scans, and reduces the rows that arrived; their records by key
+auto.step()       # scans, and reduces the ready rows without a result; their records by key
 auto.refused      # why rows of the last step were refused by submit, by key
 ```
 
@@ -656,6 +656,8 @@ def iofq_batch(client):
 
 Actor: reflectometry user during a beamtime. Goal: after each angle, the stitched curve grows by one angle; one curve per sample, not one per arrival.
 
+This story is not met, and its test is marked `xfail`. A step of Follow reduces only the rows that have no result ([ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md), "What a step reduces"), so the row of `si` is reduced once, with the first angle, and never again as angles arrive. It is open whether ADR 0013 is amended for a source whose rows grow, or this story changes.
+
 ```python
 reference = measure(1, [1.0, 1.0], role='reference')
 
@@ -744,7 +746,7 @@ outdated = [k for k, s in states.items() if s.outdated]
 assert [states[k].record.request.files() for k in outdated] == [[first]]   # to reprocess, if the user wants
 ```
 
-The loop reduces a row with a result again only for a change at a column of `at`, `sample` here, so a changed setting does not reduce run 1 again. A restarted loop reads the same from the records. A row's state, read from its newest record, names the setting that changed since (`s.changed == {'reduction'}`), for any `Batch` on the label.
+A step reduces only the rows without a result, so a changed setting does not reduce run 1 again. A restarted loop reads the same from the records. A row's state, read from its newest record, names the setting that changed since (`s.changed == {'reduction'}`), for any `Batch` on the label.
 
 ## F. Publication and provenance
 

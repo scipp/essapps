@@ -12,9 +12,9 @@ from ess.apps import Record, Request, SpecId, Status
 from ess.apps.batch import (
     Row,
     RowState,
-    arrived,
     earlier_settings,
     left_to_reduce,
+    not_reduced,
     ready,
     refused_again,
     status_texts,
@@ -212,8 +212,8 @@ def test_a_table_marks_the_rows_of_earlier_settings_as_completed() -> None:
 def test_refused_again_keeps_the_reasons_of_the_rows_a_step_submits_again() -> None:
     refused = {'a': 'no', 'b': 'no either'}
 
-    assert refused_again(earlier_and_new(), {'sample'}, refused) == {'b': 'no either'}
-    assert refused_again(not_compared(), {'sample'}, {'a': 'no'}) == {}
+    assert refused_again(earlier_and_new(), refused) == {'b': 'no either'}
+    assert refused_again(not_compared(), {'a': 'no'}) == {}
 
 
 def test_a_row_without_a_result_is_left_to_reduce() -> None:
@@ -223,20 +223,19 @@ def test_a_row_without_a_result_is_left_to_reduce() -> None:
 
 
 @pytest.mark.parametrize(
-    ('status', 'changed', 'at', 'given'),
+    ('status', 'other'),
     [
-        (Status.COMPLETED, {'sample'}, {'sample'}, True),
-        (Status.COMPLETED, {'sample', 'shared'}, {'thickness'}, False),
-        (Status.COMPLETED, {'sample'}, set(), False),
-        (Status.COMPLETED, set(), {'sample', 'thickness'}, False),
-        (Status.FAILED, set(), {'sample'}, False),
-        (Status.FAILED, {'sample'}, {'sample'}, True),
-        (Status.CANCELLED, {'shared'}, {'sample'}, False),
-        (Status.PENDING, {'sample'}, {'sample'}, False),
+        (Status.COMPLETED, {}),
+        (Status.COMPLETED, {'changed': {'a': frozenset({'sample'})}}),
+        (Status.COMPLETED, {'spec_changed': {'a'}}),
+        (Status.COMPLETED, {'changed': None}),
+        (Status.FAILED, {}),
+        (Status.CANCELLED, {}),
+        (Status.PENDING, {}),
     ],
 )
-def test_a_row_with_a_result_arrives_for_a_change_at_a_column_of_at(
-    status: Status, changed: set[str], at: set[str], given: bool
+def test_a_row_with_a_result_is_not_reduced_by_a_step(
+    status: Status, other: dict[str, Any]
 ) -> None:
     found = row_states(
         [Row('a', {'sample': 'x'})],
@@ -244,79 +243,21 @@ def test_a_row_with_a_result_arrives_for_a_change_at_a_column_of_at(
         COLUMNS,
         {'a': record('1', 'a')},
         {'1': status},
-        changed={'a': frozenset(changed)},
-    )
-
-    assert arrived(found, at) == (['a'] if given else [])
-
-
-@pytest.mark.parametrize(
-    ('by_hand', 'status', 'changed', 'other', 'given'),
-    [
-        # a row of the scan, never edited
-        (set(), None, set(), {}, True),
-        (set(), Status.COMPLETED, {'sample'}, {}, True),
-        # a cell edited, and no result
-        ({'thickness'}, None, set(), {}, False),
-        # reduced with the edit, then a file changed a cell of `at`
-        ({'thickness'}, Status.COMPLETED, {'sample'}, {}, True),
-        # a result older than the edit
-        ({'sample'}, Status.COMPLETED, {'sample'}, {}, False),
-        # an edit outside `at` not reduced yet, and a file changed `at`
-        ({'thickness'}, Status.COMPLETED, {'sample', 'thickness'}, {}, False),
-        # a row added by hand: every column is set by hand
-        (set(COLUMNS), None, set(), {}, False),
-        (set(COLUMNS), Status.COMPLETED, set(), {}, False),
-        (set(COLUMNS), Status.COMPLETED, {'sample'}, {}, False),
-        # a failed result
-        ({'thickness'}, Status.FAILED, {'thickness'}, {}, False),
-        ({'thickness'}, Status.FAILED, {'sample'}, {}, True),
-        # a result of another spec, which lacks a column set by hand
-        ({'sample'}, Status.COMPLETED, {'sample'}, {'spec_changed': {'a'}}, False),
-        ({'thickness'}, Status.COMPLETED, {'sample'}, {'spec_changed': {'a'}}, True),
-    ],
-)
-def test_a_row_changed_by_hand_is_left_to_a_person(
-    by_hand: set[str],
-    status: Status | None,
-    changed: set[str],
-    other: dict[str, Any],
-    given: bool,
-) -> None:
-    found = row_states(
-        [Row('a', {'sample': 'x'})],
-        Model,
-        COLUMNS,
-        {} if status is None else {'a': record('1', 'a')},
-        {} if status is None else {'1': status},
-        changed={'a': frozenset(changed)},
-        set_by_hand={'a': by_hand},
         **other,
     )
 
-    assert arrived(found, {'sample'}) == (['a'] if given else [])
-    # what a person changed, the page's "Reduce" reduces
-    assert not found['a'].changed_by_hand or left_to_reduce(found, COLUMNS) == ['a']
+    assert not_reduced(found) == []
 
 
-def test_a_row_changed_by_hand_is_not_refused_again_while_not_compared() -> None:
+@pytest.mark.parametrize('changed', [{}, None])
+def test_a_ready_row_without_a_result_is_reduced_by_a_step(
+    changed: dict[str, frozenset[str]] | None,
+) -> None:
     found = row_states(
-        [Row('a', {'sample': 'x'}), Row('b', {'sample': 'y'})],
-        Model,
-        COLUMNS,
-        {},
-        {},
-        changed=None,
-        set_by_hand={'a': {'thickness'}},
+        [Row('a', {'sample': 'x'}), Row('b')], Model, COLUMNS, {}, {}, changed=changed
     )
 
-    assert refused_again(found, {'sample'}, {'a': 'no', 'b': 'no'}) == {'b': 'no'}
-
-
-def test_a_ready_row_without_a_result_arrives_whatever_at_is() -> None:
-    found = states([Row('a', {'sample': 'x'}), Row('b')])
-
-    assert arrived(found, set()) == ['a']
+    assert not_reduced(found) == ['a']
 
 
 def test_a_refused_value_is_a_problem_of_its_row() -> None:
@@ -353,6 +294,10 @@ def test_a_value_differs_if_either_side_lacks_it() -> None:
     ]
 
 
+def test_a_list_in_another_order_differs() -> None:
+    assert differs({'runs': ['b', 'a']}, {'runs': ['a', 'b']}, ['runs']) == ['runs']
+
+
 def not_compared() -> dict[str, RowState]:
     return row_states(
         [Row('a', {'sample': 'x'})],
@@ -371,7 +316,6 @@ def test_a_completed_row_not_compared_reads_outdated() -> None:
 @pytest.mark.parametrize(
     'rule',
     [
-        lambda s: arrived(s, {'sample'}),
         lambda s: earlier_settings(s, COLUMNS),
         lambda s: left_to_reduce(s, COLUMNS),
     ],

@@ -83,7 +83,7 @@ A person sees what they take, so the rows taken may be incomplete or waiting. No
 
 ### What a step reduces
 
-The rows that are ready and have no record under the label of the batch. A row with a result is never reduced by a step, also not one that is outdated; a person reduces it. A row that failed has a record and is left to a person, as today.
+The rows that are ready and have no record under the label of the batch. A row with a result is never reduced by a step, also not one that is outdated; a person reduces it. A row whose record failed or was cancelled, also by a restart, has a record and is left to a person, as today.
 
 The rule is on the state of the rows, as in ADR 0011. So in a batch that follows, a row that a person adds is reduced as soon as it is complete.
 

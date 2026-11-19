@@ -36,6 +36,12 @@ def iofq_batch(client: Client) -> Batch:
     )
 
 
+@pytest.mark.xfail(
+    reason=(
+        'ADR 0013: a step of Follow never changes a row that the table has, '
+        'and never reduces again a row that has a result'
+    )
+)
 def test_e1_series_grows_reduction_follows(
     client: Client, connect: Callable[..., Client], measure: toys.Measure
 ) -> None:

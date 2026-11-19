@@ -159,8 +159,8 @@ class Refused(BaseModel):
 class Following(BaseModel):
     """
     Whether the batch of the page follows the files, ``on``: a step every
-    ``interval`` seconds scans them and reduces the rows that arrived, or whose
-    cells changed at the columns titled ``at``. ``other`` is the title of the
+    ``interval`` seconds scans them and reduces the rows not reduced yet:
+    ready and without a result. ``other`` is the title of the
     batch that follows, if another one does. ``failure`` says why the last
     step raised, while this batch follows.
     """
@@ -168,7 +168,6 @@ class Following(BaseModel):
     on: bool
     other: str | None
     interval: float
-    at: list[str]
     failure: str | None
 
 

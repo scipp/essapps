@@ -44,16 +44,14 @@ With Follow on, the settings applied for the trial are also those of the rows th
 The page sends its actions in the order a person did them, so a value typed and Apply clicked at once are applied with one click.
 Each state replaces the form, but not while the focused input holds a value typed and not sent; Escape puts back the value sent last.
 
-**Follow** is a switch next to **Rescan runs**, offered for a batch with a source; the columns that the source fills are those at which a changed cell reduces a row again.
+**Follow** is a switch next to **Rescan runs**, offered for a batch with a source.
 Turning the switch on makes this batch the one that follows, and no other (`BatchManager.follow`); the page of another batch then says which batch follows.
-While a batch follows, a timer in the server runs a step every `interval` seconds (5 by default; `Pages(manager, interval=...)`, or `--interval SECONDS`): the scan of **Rescan runs**, then a reduction of the rows that `ess.apps.batch.arrived` gives, under the lock of every request, with or without a page open.
+While a batch follows, a timer in the server runs a step every `interval` seconds (5 by default; `Pages(manager, interval=...)`, or `--interval SECONDS`): the scan of **Rescan runs**, then a reduction of the rows that `ess.apps.batch.not_reduced` gives, under the lock of every request, with or without a page open.
 Follow reduces with the batch's settings, whatever the form holds.
-Follow reduces by a rule on the state, not on who changed it: the rows that have no result, or whose request differs from their result's at a column of `at`, less the rows with a cell set by hand that is not reduced yet.
-A row with a cell set by hand that is not reduced yet waits for **Reduce**, with or without Follow, so a row edited at two cells of `at` is reduced once, with both.
-While following, such a row says "Set by hand, so Follow leaves it to you: reduce it."
-Once reduced, the row follows the files again, with its cells set by hand.
-A cell that a person reverts follows the files again at once: the next step reduces the row with its other cells as they are, so two reverts of one row can reduce it twice.
-A correction in the Runs view reaches the rows through the scan, so Follow reduces for it as for a file that arrives; two corrections that belong together reduce a row twice if a step runs between them.
+Follow reduces by a rule on the state, not on who changed it: the ready rows that have no result.
+A row with a result waits for **Reduce**, also one that is outdated or failed.
+A row that a person adds, or edits before it has a result, is reduced by the next step once it is complete.
+A correction in the Runs view reaches the rows through the scan, so Follow reduces a row that it completes or gives a new key.
 A correction is an action of the workspace, made in the Runs view of any page, also of the page without a batch (`POST api/runs/cells`). The page it was made on asks for its state at once, which scans its batch; every other page scans its batch at its next poll, and Follow scans the batch that follows at its next step.
 If the scan at a poll fails, that poll says why once, and the rows stay as they are until **Rescan runs**.
 An action submits only what a person asks to reduce; the next step reduces what the rule gives after it. Apply submits nothing, and the next step reduces the rows without a result with the settings applied.

@@ -146,13 +146,13 @@ Every way of reducing a batch is this cycle, with its own rule and its own trigg
 | **Reduce** on the page | a person | `left_to_reduce(state, batch.columns)` |
 | **Reduce them again** on the page | a person | `earlier_settings(state, batch.columns)` |
 | **Reduce all**, **Reduce selected** | a person | `ready(state)`, the keys selected |
-| **Follow** on the page of a batch: a step on the batch that follows, from a timer, that scans as **Rescan runs** does | the application's process | `arrived(state, at)`, `at` the columns that the source fills |
-| `Automatic.step`, which `run` calls from a timer | a process of its own | `arrived(state, at)` |
+| **Follow** on the page of a batch: a step on the batch that follows, from a timer, that scans as **Rescan runs** does | the application's process | `not_reduced(state)` |
+| `Automatic.step`, which `run` calls from a timer | a process of its own | `not_reduced(state)` |
 | `essapps-batch reduce` | a person or a script | every row of the table; with `--remaining`, `left_to_reduce(state, batch.columns)`, and with `--earlier-settings` too, `earlier_settings(state, batch.columns)` |
 
 So a person and automatic reduction differ in the rule and in the trigger only. [Rules](#rules) defines each rule, and [Automatic reduction](#automatic-reduction) compares the rows they give. A person is a second loop: they read the state on the page and write the definition. In automatic reduction this loop is idle most of the time.
 
-A change of settings is one write of `batch.settings`, and runs no cycle. The rows reduced before keep their results, and `changed` names the setting. `left_to_reduce` and `arrived` leave these rows, and `earlier_settings` gives them. No history of the settings is stored: each record holds the settings it was made with.
+A change of settings is one write of `batch.settings`, and runs no cycle. The rows reduced before keep their results, and `changed` names the setting. `left_to_reduce` and `not_reduced` leave these rows, and `earlier_settings` gives them. No history of the settings is stored: each record holds the settings it was made with.
 
 **The status of a row** is a function of the row's request and the status of its result, both read from stored tables. The batch stores no status of a row:
 
@@ -253,10 +253,10 @@ The table keeps every row of the scan, so a change of scope needs no new scan. `
 | Function | Gives |
 |---|---|
 | `ready(states)` | every row that can run now |
-| `arrived(states, at)` | ready rows with no result, or whose request differs from their result's at a column of `at`, but those changed by hand ([Automatic reduction](#automatic-reduction)) |
+| `not_reduced(states)` | ready rows with no result ([Automatic reduction](#automatic-reduction)) |
 | `earlier_settings(states, columns)` | ready rows whose completed result differs from their request only at settings, not at a column, and of the same spec |
 | `left_to_reduce(states, columns)` | ready rows with no result, a failed or cancelled one, or an outdated one, but those of `earlier_settings` |
-| `refused_again(states, at, refused)` | of the reasons `refused` by row, those of the rows of `arrived`: why the next step of a loop will be refused again |
+| `refused_again(states, refused)` | of the reasons `refused` by row, those of the rows of `not_reduced`: why the next step of a loop will be refused again |
 | `status_texts(states, columns)` | the status of each row as a table shows it: `completed, earlier settings` for a row of `earlier_settings` |
 
 **A row's state is read from its result.** `state()` compares each row's request, its cells with the settings, with the request of its result, and says where they differ:
@@ -267,8 +267,6 @@ s.record         # the result: the newest record under the label with member '60
 s.changed        # frozenset({'q'}): the parameters whose value differs from the result's
 s.spec_changed   # True if s.record is of another spec than the one bound
 s.outdated       # True if either holds
-s.set_by_hand    # frozenset({'thickness'}): the columns set by hand, all of a row added
-s.changed_by_hand  # True if a cell is set by hand, and the row has no result or differs from it there
 s.text           # 'outdated'
 ```
 
@@ -318,7 +316,7 @@ def test_a_sample_run_pairs_with_its_transmission_run():
     assert rows[0].values['sample_transmission'] == ref(2)
 ```
 
-A `Source` holds the function and the columns that its rows fill. They are columns of each batch of it, and `Automatic` reduces a row again for a change at them, unless given other columns. `selector=` names the files that the function is given; raw files if not given. A `Batch` refuses a source that fills a column it lacks:
+A `Source` holds the function and the columns that its rows fill. They are columns of each batch of it. `selector=` names the files that the function is given; raw files if not given. A `Batch` refuses a source that fills a column it lacks:
 
 ```python
 SAMPLE_RUNS = Source(pair_by_sample, fills=('sample', 'sample_transmission'),
@@ -329,7 +327,7 @@ Batch(client, IOFQ, columns=('sample',), label='iofq', source=SAMPLE_RUNS)
 
 Give each row its index, such as the run number as a number (`Row(key, values, info, index=int(run))`), so that a batch can hold a slice of the rows ([Rules](#rules)). A row without one, such as of a file without a run number, is held only by a scope without ends or by its key.
 
-Group runs by giving a cell a list of files, in one order at every scan, such as sorted by run: `FileSource.list` promises no order, and a list in another order is another request, which automatic reduction reduces again ([Automatic reduction](#automatic-reduction)). Choose one of several partners by an order too, such as the last by run. Leave a cell out if a partner is missing, so the row shows as incomplete and the rest of the batch can run. A key given twice is refused with the key named, and nothing changes.
+Group runs by giving a cell a list of files, in one order at every scan, such as sorted by run: `FileSource.list` promises no order, and a list in another order is another request, so the row reads `outdated`. Choose one of several partners by an order too, such as the last by run. Leave a cell out if a partner is missing, so the row shows as incomplete and the rest of the batch can run. A key given twice is refused with the key named, and nothing changes.
 
 Pairing is yours to write. The framework knows no technique. If a source raises, the page shows the error in a message.
 
@@ -458,7 +456,7 @@ What the manager refuses raises `ValueError`, with a message for a person; `KeyE
 
 - `create` takes the name of a spec. It refuses an empty title, a column that is not a parameter of the spec or is named twice, and columns that lack one that the source fills; then it writes the first settings, those given to the manager for the spec or `create(..., settings=...)`, and the header. The names of the spec and the source, and the columns, are fixed from then on. What the names stand for is read from code at each start: a later `staged` applies to every batch, later `settings` only to batches made after them.
 - `change` changes the title, the description and the scope, and refuses an empty title. A scope changes the rows of the `Batch` at once.
-- A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. A label is used once: `create` refuses a label that has definitions or records, so the label of a removed batch that had results is never a batch again. Code may still submit under the label of a batch, and Follow replaces such records ([One label, one batch](#one-label-one-batch)).
+- A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. A label is used once: `create` refuses a label that has definitions or records, so the label of a removed batch that had results is never a batch again. Code may still submit under the label of a batch, and such a record is the result of its row ([The records of a label are the results](#the-records-of-a-label-are-the-results)).
 - `start_next` ends a batch before an index and makes the next batch from there up to the old stop, with the same spec, source, columns and settings. The cells set by hand and the removals of the rows that move go with them; the rows added by hand stay, and so do the results, under the old label, so the next batch reduces those rows again. It refuses an index with no row of the scan before it, which would leave the batch none. Which batch follows does not change.
 - `follow(label)` makes a batch the one that follows, and no other; `follow(None)` lets none follow. It refuses a batch without a source, or whose source is not registered. `following` is the label, or `None`.
 - `remove` removes the header, the edits and the settings of a batch, and releases its stage; if the batch follows, none follows from then on. Its records stay, and those running keep running. A `Batch` handed out before must not be used after its removal, so ask the manager for the batch each time.
@@ -466,7 +464,7 @@ What the manager refuses raises `ValueError`, with a message for a person; `KeyE
 
 A restart keeps what a person gave: the batches, their settings and edits, the corrections, and which batch follows. It loses a draft of settings not applied on a page, and why Follow refused rows. A row that was running reads as failed, and Follow leaves a failed row to a person.
 
-Follow reduces the rows of the batch that follows as its files arrive. A step is one step of an `Automatic` on it ([Automatic reduction](#automatic-reduction)), with `at` the columns that its source fills:
+Follow reduces the rows of the batch that follows as its files arrive. A step is one step of an `Automatic` on it ([Automatic reduction](#automatic-reduction)):
 
 ```python
 from ess.apps.batch.auto import Automatic
@@ -513,86 +511,66 @@ from ess.apps.batch.auto import Automatic, run
 
 batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'), label='auto/iofq',
               source=SAMPLE_RUNS, staged=True, persist=True, settings=settings)
-loop = Automatic(batch)   # at: the columns that the source fills
-loop.step()       # scans, and reduces the rows that arrived; their records by key
+loop = Automatic(batch)
+loop.step()       # scans, and reduces the ready rows without a result; their records by key
 loop.refused      # why rows of the last step were refused, by key
 run([loop])       # steps once a second, until a step raises
 ```
 
-A step is [the cycle](#the-model-tables-and-one-cycle) with a scan and the rule `arrived`: `batch.reduce(arrived(batch.state(), at))`, with the batch's settings as they are at the step.
-
-`at` is a set of columns, by default those that the source fills; `Automatic(batch, at={'sample'})` names others. A row with no result is reduced whatever `at` is. A row with a result is reduced again only if its request differs from its result's at a column of `at`. Take a source that makes a row per sample, with the lists `sample_runs` and `trans_runs`, and leaves `trans_runs` out until a transmission run arrives. The files arrive as `s1, t1, s1', t1'`, where `s1'` repeats `s1`, and each step finishes before the next file arrives:
-
-| Arrives | `at={'sample_runs', 'trans_runs'}` | `at={'sample_runs'}` | `at=set()` |
-|---|---|---|---|
-| `s1` | nothing: row 1 is `incomplete` | nothing | nothing |
-| `t1` | row 1, `[s1]`, `[t1]` | row 1, `[s1]`, `[t1]` | row 1, `[s1]`, `[t1]` |
-| `s1'` | row 1, `[s1, s1']`, `[t1]` | row 1, `[s1, s1']`, `[t1]` | nothing: row 1 reads `outdated` |
-| `t1'` | row 1, `[s1, s1']`, `[t1, t1']` | nothing: row 1 reads `outdated` | nothing |
-
-The rule is on the state, not on who changed it. `arrived` gives the rows that are ready and have no result under the label, or whose request differs from their result's at a column of `at`, less the rows with a cell set by hand ([Rules](#rules)) that is not reduced yet:
+A step is [the cycle](#the-model-tables-and-one-cycle) with a scan and the rule `not_reduced`: `batch.reduce(not_reduced(batch.state(not_reduced(batch.results()))))`, with the batch's settings as they are at the step. Only the rows without a result are compared, so the rows with a result cost a step no resolving.
 
 ```python
-def arrived(state, at):
-    return [key for key in ready(state)
-            if not state[key].changed_by_hand   # a cell set by hand, not reduced yet
-            and (state[key].record is None or state[key].changed & at)]
+def not_reduced(state):
+    return [key for key in ready(state) if state[key].record is None]
 ```
 
-So a cell that a person sets waits for the person to reduce its row. Other actions of a person change the state so that the next step reduces rows:
+A row with a result is never reduced by a step: not one that is outdated, not one that failed or was cancelled. A person reduces it. Take a source that makes a row per sample, with the lists `sample_runs` and `trans_runs`, and leaves `trans_runs` out until a transmission run arrives. The files arrive as `s1, t1, s1', t1'`, where `s1'` repeats `s1`, and each step finishes before the next file arrives:
 
-- turning Follow on for a batch: the rows that the rule gives at once, such as each row without a result;
+| Arrives | A step reduces |
+|---|---|
+| `s1` | nothing: row 1 is `incomplete` |
+| `t1` | row 1, `[s1]`, `[t1]` |
+| `s1'` | nothing: row 1 reads `outdated` |
+| `t1'` | nothing |
+
+The rule is on the state, not on who changed it. A row that a person adds, or edits before it has a result, is reduced by the next step once it is complete, as a row of the scan is. So other actions of a person change the state so that the next step reduces rows:
+
+- turning Follow on for a batch: each ready row without a result;
 - widening the scope: the rows that the scope then holds and that have no result;
-- a correction of a file's metadata: the rows whose cells it changes at `at`;
-- a revert of a cell to the scan's: its row, unless its request then equals its result's at `at`;
-- bringing a removed row back: the row, as for a revert of all its cells.
-
-Every cell of a row added by hand is set by hand. A row edited at two cells of `at`, such as its sample run and then its transmission run, waits until a person reduces it with both. Once reduced, a cell set by hand equals its result's, so a file that arrives later at another cell of `at` reduces the row again, with the cell set by hand. A correction of a file's metadata ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)) reaches the rows through the scan, so the loop reduces for it as for a file that arrives: two corrections that belong together reduce a row twice if a step runs between them.
-
-A cell that a person reverts to the scan's (`reset`) is no longer set by hand, so it follows the files again at once: the next step reduces the row, with its other cells as they are. Nothing distinguishes the row then from one whose file changed. So two reverts of one row, one after the other, can reduce it twice, the first time with the scan's cell next to a cell still set by hand. `reset(key)`, or `reset(key, *columns)`, reverts several cells of a row in one write, and the row is reduced once; on the page, a revert takes one column, and removing and restoring a row reverts all its cells.
+- a correction of a file's metadata that changes the key of a row, or completes a row without a result;
+- bringing a removed row back that has no result.
 
 So the loop, the page's buttons, and the command differ:
 
-| A row is reduced if it has | no result | a failed or cancelled result | a result, and a setting changed | a result, and the scan changed a cell at `at` | a result, and the scan changed a cell at another column | a cell set by hand, not reduced yet |
-|---|---|---|---|---|---|---|
-| the page, "Reduce" (`left_to_reduce`) | yes | yes | no | yes | yes | yes |
-| the page, "Reduce them again" (`earlier_settings`) | no | no | yes | no | no | no |
-| the loop (`arrived`) | yes, but for a row set by hand | no | no | yes | no | no |
+| A row is reduced if it has | no result | a failed or cancelled result | a result, and a setting changed | a result, and a cell changed |
+|---|---|---|---|---|
+| the page, "Reduce" (`left_to_reduce`) | yes | yes | no | yes |
+| the page, "Reduce them again" (`earlier_settings`) | no | no | yes | no |
+| the loop (`not_reduced`) | yes | no | no | no |
 
 On the page, a change of settings applies to rows not reduced yet, and to all only when a person says so. `essapps-batch reduce --remaining` follows the page's "Reduce", and `--earlier-settings` with it adds the rows of "Reduce them again". The command is given its settings at each call, so without `--remaining` it applies them to all.
 
-A failed or cancelled result counts as any other, so a row whose reduction fails is not reduced at every step. A changed setting reduces no row again ([The model](#the-model-tables-and-one-cycle)). A person reduces those rows through the loop's batch, with **Reduce them again** on the page ([one label, one batch](#one-label-one-batch)).
+A failed or cancelled result counts as any other, so a row whose reduction fails is not reduced at every step. A changed setting reduces no row again ([The model](#the-model-tables-and-one-cycle)). A person reduces those rows through the loop's batch, with **Reduce them again** on the page ([The records of a label are the results](#the-records-of-a-label-are-the-results)).
 
-A row whose result is running is not ready, and the loop does not submit it again. At the first step after its record finishes, it is reduced if a file arrived meanwhile at a column of `at`.
+A row whose result is running is not ready, and the loop does not submit it again.
 
-`state` compares requests resolved. So a cell that names a file by run, `file(run=60339)`, equals the identity that the record holds, and its row is reduced once. A file that gained a catalogue identifier since its row was reduced resolves to another identity, and its row is reduced again if the cell is at a column of `at`. A list is compared element by element, in order: a list at `at` in another order, or shorter, reduces the row again. So a source gives a list in one order at every scan ([Writing a source](#writing-a-source)).
-
-A result of another spec, such as an older version, stays the row's result ([Rules](#rules)). Its request differs from the row's at each parameter that the other spec lacks, so the loop reduces the row again only if a column of `at` is among them, or a file arrives there.
+A result of another spec, such as an older version, stays the row's result ([Rules](#rules)), so the loop does not reduce the row again.
 
 A row whose key changes from one scan to the next, such as a key made from a sample name that a correction changed, is a new row, and is reduced again under its new key; so choose a key that does not change, such as the run number ([Terms](#terms)).
 
 The page of a batch has a switch "Follow", which makes its batch the one that follows ([The UI](#the-ui)). In a chain, step the loop of the batch that is read first: `run([Automatic(find), Automatic(iofq)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
 
-### One label, one batch
+### The records of a label are the results
 
-Which rows a step reduces follows from the files, the batch's rows and settings, and the records under its label. The loop keeps nothing else, so a step that raises, in the settings, the source, or a submission, loses nothing. For the rows with no change by hand that is not reduced yet, the loop keeps the results under its label equal to its batch's rows at the columns of `at`:
+Which rows a step reduces follows from the files, the batch's rows and settings, and the records under its label. The loop keeps nothing else, so a step that raises, in the settings, the source, or a submission, loses nothing. A record under the label with a row's key as its member, from any submitter or any `Batch`, is the row's result, so the step leaves the row to a person. Two `Batch`es on one label share their results: what one reduces, the other does not.
 
-```python
-page = Batch(client, IOFQ, columns=..., label='auto/iofq', source=SAMPLE_RUNS)  # a second Batch on the label
-page.rows = page.rows.edit('60339', {'sample': file(run=60400)})
-page.reduce(['60339'])               # a record with run 60400 at `sample`
-loop.step()                          # reduces '60339' again with the source's file: the loop's rows win
-```
-
-The edit is in another `Batch`, so the loop's row still has the scan's cell. So a label has one `Batch`. A person who wants another file for a row edits the loop's own `Batch` and reduces the row, and the loop leaves the cell set by hand as it is; or the person corrects the file's metadata so that the source gives the row another file ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)), which the loop reduces. Two loops never share a label: if their rows differ at `at`, each replaces the other's records at every step. A record under the label that equals the loop's row at `at`, from any submitter, counts as the row's result.
-
-A restart starts from a new scan, with the edits that the batch's definitions kept. So after a restart, a row is not reduced again unless the files changed it at `at`. Without definitions the edits are gone, and a row that was edited at a column of `at` is reduced again with the source's cells. A record that was running when the workspace ended is failed at the restart; the loop does not run a failed row again, and a person retries it.
+A restart starts from a new scan, with the edits that the batch's definitions kept, and reduces no row again that has a result. A record that was running when the workspace ended is failed at the restart; the loop does not run a failed row again, and a person retries it.
 
 ### Problems and refusals
 
-A row with an empty cell, or a cell that the workspace does not accept when the state is read, such as a thickness below zero or a file named before it is measured, is `incomplete`. The reason is one of the row's `problems`, `arrived` does not give the row, and the loop reduces it once the scan fills the cell or the workspace accepts it. A cell that a person fills is set by hand, so the person reduces that row.
+A row with an empty cell, or a cell that the workspace does not accept when the state is read, such as a thickness below zero or a file named before it is measured, is `incomplete`. The reason is one of the row's `problems`, `not_reduced` does not give the row, and the loop reduces it once the scan or a person fills the cell, or the workspace accepts it.
 
-`submit` checks a few things that `state` does not, such as a reference to an output that the workspace no longer keeps, and refuses the rows with a `SubmitError`. The step drops the rows that the error names, submits the others, and `refused` holds the reasons by key until the next step. Such a row is submitted again at every step. A reason that names no row refuses every row of the step. If the settings are refused, no row can run: the step submits nothing, and `refused` holds the reason for every ready row but those without a result that are set by hand, `{'1': 'unknown spec sans-iofq/v1'}`. No row is compared with its result then, so a row with a result counts whether or not a person changed it.
+`submit` checks a few things that `state` does not, such as a reference to an output that the workspace no longer keeps, and refuses the rows with a `SubmitError`. The step drops the rows that the error names, submits the others, and `refused` holds the reasons by key until the next step. Such a row is submitted again at every step. A reason that names no row refuses every row of the step. If the settings are refused, no row can run: the step submits nothing, and `refused` holds the reason for every row without a result that is ready as given, `{'1': 'unknown spec sans-iofq/v1'}`. No cell is resolved while the settings are refused, so a row whose cell the workspace would refuse is named too.
 
 ## From files, and from the command line
 
@@ -705,7 +683,7 @@ run,role,sample
 ,direct_beam,          <- with a column file: a file that is no run
 ```
 
-`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. A file that cannot be read is left out, with a warning. Two files of one run are refused. Running `files` again after files gained a `pid` changes their identity: the loop of automatic reduction reduces them again, and earlier records name files the folder no longer knows.
+`read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. A file that cannot be read is left out, with a warning. Two files of one run are refused. Running `files` again after files gained a `pid` changes their identity: the rows reduced before read `outdated`, and earlier records name files the folder no longer knows.
 
 A file says its kind, its run, and perhaps its sample, but not what a run is for. A source that pairs runs reads the `role`, and a field such as the direct beam requires it. The run table gives it (`frames.described`): a row describes the file of its `run`, or the file at its `file` if it has no run. A run of the table that has no file in the folder is ignored, so the table may cover more than the folder holds. A file that no row describes keeps what it says of itself, and where both have a column, a cell of the run table that is not empty wins. Two rows for one run are refused. Without `--with`, the roles are typed into `files.csv`, so `files` then refuses to write over a table that exists.
 
@@ -726,7 +704,7 @@ One command holds the folder at a time. If a command was killed, the next one fi
 ## The UI
 
 [The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows each batch in a browser: how to run it, its layers, and its limits.
-The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. The page of a batch with a source offers a switch **Follow**: it makes the batch the one that follows (`manager.follow`), so no other batch follows, and the page of another batch says which one does. A step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, at the columns that the source fills, with the batch's settings, whatever the form holds. Follow leaves a row with a cell set by hand that is not reduced yet to the person, who reduces it with **Reduce**: while following, such a row says "Set by hand, so Follow leaves it to you: reduce it." An action submits only what a person asks to reduce, and Apply submits nothing; the next step reduces what the rule gives after the action, such as the rows without a result, with the settings applied ([Automatic reduction](#automatic-reduction)). The batch that follows is kept in `following.json`, so a restart resumes.
+The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. The page of a batch with a source offers a switch **Follow**: it makes the batch the one that follows (`manager.follow`), so no other batch follows, and the page of another batch says which one does. A step every few seconds does what **Rescan runs** does and reduces the rows that `not_reduced` gives, the ready rows without a result, with the batch's settings, whatever the form holds. Follow leaves a row with a result to the person, who reduces it with **Reduce**. An action submits only what a person asks to reduce, and Apply submits nothing; the next step reduces what the rule gives after the action, such as the rows without a result, with the settings applied ([Automatic reduction](#automatic-reduction)). The batch that follows is kept in `following.json`, so a restart resumes.
 
 `create_app(pages)` makes the app: the page of each batch of the manager at `/batches/<label>/`, and `/`, which redirects to the page of the batch that follows, else of the only batch, and otherwise lists the batches. `Pages(manager, interval=5.0, ...)` (`ess.apps.batch.web.pages`) holds what the pages share: the title of the application (`title`), how to draw the results of each spec (`draw`, by the name of the spec), the correction of the metadata of runs (`files`, `marks`), the step of Follow (`Pages.tick`) and the seconds between two steps (`interval`), and one lock that every request of every page and each step of Follow take. What a page calls a row and shows of it are the `words`, `row_name` and `row_info` of the batch's `Source`. Every page has a view **Batches**, which lists the batches of the manager, each a link to its page, with its scope, and counts their rows by status when it is opened (`Pages.counts`, which scans every batch), with the statuses of the page of each batch; a person makes a batch there. The tab **Batch** of a page changes the title, description and scope of its batch, starts the next batch at a row, and removes the batch. `Page` (`ess.apps.batch.web.page`) holds what the page of one batch shows and does, and its actions return `State`, the whole of what the page shows. The browser renders `State` and sends the actions.
 

@@ -47,8 +47,8 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
     has an empty transmission cell.
 
     The files are sorted by run number, since a file source lists them in no
-    promised order, and a row whose transmission run changed from one scan to
-    the next would be reduced again.
+    promised order, and "the last measured" transmission run must not depend
+    on it.
     """
     files = sorted(files, key=_measured)
     transmissions: dict[object, FileRef] = {}

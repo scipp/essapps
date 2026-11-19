@@ -146,8 +146,7 @@ class Source:
         Makes rows from files.
     fills:
         The parameters that its rows fill. They are columns of each batch of
-        it, and :class:`~.auto.Automatic` reduces a row again for a change at
-        them, unless given other columns.
+        it.
     selector:
         The files that ``rows`` is given; raw files if not given.
     words:
@@ -417,8 +416,7 @@ class Batch:
         the problems of its cells as given, its status, and whether its result
         is of another spec. Nothing is resolved, so :attr:`RowState.changed`
         is ``None``, and so is :attr:`RowState.outdated` unless the result is
-        of another spec: :func:`~.state.left_to_reduce` and
-        :func:`~.state.arrived` refuse these states.
+        of another spec: :func:`~.state.left_to_reduce` refuses these states.
 
         It is what a page shows while the settings are refused, and what
         :meth:`reduce` checks before it submits. Which rows to reduce is
@@ -453,14 +451,7 @@ class Batch:
             changed,
             refused,
             self._spec_changed(found),
-            self._set_by_hand(),
         )
-
-    def _set_by_hand(self) -> dict[str, frozenset[str]]:
-        """The columns set by hand of each row: its edits, or all if added."""
-        rows = self.rows
-        added = dict.fromkeys((r.key for r in rows.added), frozenset(self.columns))
-        return {k: frozenset(cells) for k, cells in rows.edits.items()} | added
 
     def _poll(self) -> None:
         """
