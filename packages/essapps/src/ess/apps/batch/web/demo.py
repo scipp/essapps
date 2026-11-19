@@ -53,7 +53,6 @@ from ess.spec import (
 from .. import (
     BatchManager,
     CorrectedFiles,
-    Defaults,
     FileInfo,
     FolderDefinitions,
     Row,
@@ -214,8 +213,8 @@ SOURCES = {
     )
 }
 """The sources of the demo's batches, by name."""
-DEFAULTS = {DEMO.name: Defaults(staged=True)}
-"""What a new batch of the demo's spec gets."""
+STAGED = frozenset({DEMO.name})
+"""The specs whose batches run through a stage: the demo's."""
 
 
 SAMPLES = (
@@ -319,7 +318,7 @@ def build(
     gets one of all samples.
     """
     manager = BatchManager(
-        client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS
+        client, sources=SOURCES, definitions=definitions, staged=STAGED
     )
     if not manager.headers():
         manager.create(

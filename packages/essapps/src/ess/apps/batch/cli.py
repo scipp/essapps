@@ -70,7 +70,7 @@ from . import frames
 from .corrections import CorrectedFiles
 from .definition import FolderDefinitions, NotKept
 from .export import export_table
-from .manager import BatchManager, Defaults
+from .manager import BatchManager
 from .reduction import Source, file_infos
 from .state import EARLIER
 from .text import checked_settings, load_template
@@ -202,12 +202,11 @@ def _reduce(
     """
     label = args.label
     template = None if args.template is None else load_template(args.template)
-    staged = Defaults(staged=args.staged)
     manager = BatchManager(
         client,
         sources=args.sources,
         definitions=definitions,
-        defaults={bound.name: staged for bound in client.specs()},
+        staged={bound.name for bound in client.specs()} if args.staged else (),
     )
     if (header := manager.headers().get(label)) is None:
         if template is None:

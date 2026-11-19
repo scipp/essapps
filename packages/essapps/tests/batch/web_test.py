@@ -24,7 +24,6 @@ from ess.apps.batch import (
     Batch,
     BatchManager,
     CorrectedFiles,
-    Defaults,
     DefinitionStore,
     FolderDefinitions,
     Header,
@@ -41,11 +40,11 @@ from ess.spec import FileRef, SampleRunFile, WorkflowSpec, function_binding
 
 from .toys import (
     COLUMNS,
-    DEFAULTS,
     PAIRS,
     PLAIN,
     SOURCES,
     STAGED,
+    STAGED_NAMES,
     Gate,
     Measure,
     Outputs,
@@ -101,7 +100,7 @@ def home(app: FastAPI) -> TestClient:
 def started(client: Client, definitions: DefinitionStore) -> Pages:
     """The pages of a manager made on ``definitions``, as after a restart."""
     manager = BatchManager(
-        client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS
+        client, sources=SOURCES, definitions=definitions, staged=STAGED_NAMES
     )
     return Pages(manager, Follow(manager, definitions))
 
@@ -1901,9 +1900,9 @@ def test_a_batch_made_from_the_page_is_listed_with_what_the_form_sent(
 def test_a_batch_made_from_the_page_starts_with_the_settings_of_its_spec(
     client: Client, definitions: DefinitionStore
 ) -> None:
-    defaults = {STAGED.name: Defaults(settings={'binning': {'bins': 5}})}
+    settings = {STAGED.name: {'binning': {'bins': 5}}}
     manager = BatchManager(
-        client, sources=SOURCES, definitions=definitions, defaults=defaults
+        client, sources=SOURCES, definitions=definitions, settings=settings
     )
     pages = Pages(manager, Follow(manager, definitions))
 

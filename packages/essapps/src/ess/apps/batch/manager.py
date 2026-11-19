@@ -17,10 +17,10 @@ with one writer::
     edits       what a person set on its rows               Batch.rows
 
 so a manager made again, after a restart, makes the same ``Batch`` of a label
-from them, the registered sources and the defaults. Making a batch writes its
-first settings, before any ``Batch`` of the label exists, then its header: a
-label without a header is not a batch, and a header without settings is a
-batch with the default settings of its spec. The ``Batch`` of a label is made
+from them, the registered sources and the specs that run staged. Making a
+batch writes its first settings, before any ``Batch`` of the label exists,
+then its header: a label without a header is not a batch. The ``Batch`` of a
+label is made
 at the first call of :meth:`BatchManager.batch`, and writes the settings and
 the edits from then on.
 """
@@ -29,8 +29,8 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
@@ -51,28 +51,6 @@ from .definition import (
 )
 from .reduction import Batch, Source, check_fills
 from .table import Index, Scope
-
-
-@dataclass(frozen=True)
-class Defaults:
-    """
-    What an application gives a new batch of one spec.
-
-    Parameters
-    ----------
-    settings:
-        The settings that a new batch starts with, copied once when it is
-        made, so a change of them leaves the batches made before as they are.
-        Those that are columns of the batch are left out. A batch whose
-        settings are not kept starts with them too.
-    staged:
-        Run the rows through a stage, as :class:`~.reduction.Batch` takes it.
-        It is read at every start, and so applies to the batches made before
-        too.
-    """
-
-    settings: Mapping[str, Any] = field(default_factory=dict)
-    staged: bool = False
 
 
 def fits(spec: WorkflowSpec[Any, Any], source: Source | None) -> bool:
@@ -164,9 +142,16 @@ class BatchManager:
         The sources that a batch can be made with, by name.
     definitions:
         Where the batches are kept.
-    defaults:
-        What a new batch of a spec gets, by the spec's name; ``Defaults()``
-        for a spec not named.
+    settings:
+        The settings that a new batch of a spec starts with, by the name of
+        the spec; none for a spec not named. They are copied when a batch is
+        made, so a change of them leaves the batches made before as they are.
+        Those that are columns of the batch are left out.
+    staged:
+        The names of the specs whose batches run their rows through a stage,
+        as :class:`~.reduction.Batch` takes it. It is read each time the
+        manager makes the ``Batch`` of a label, so it applies to the batches
+        made before too.
     """
 
     def __init__(
@@ -175,12 +160,14 @@ class BatchManager:
         *,
         sources: Mapping[str, Source],
         definitions: DefinitionStore,
-        defaults: Mapping[str, Defaults] | None = None,
+        settings: Mapping[str, Mapping[str, Any]] | None = None,
+        staged: Collection[str] = (),
     ) -> None:
         self.client = client
         self.sources = sources
         self._definitions = definitions
-        self._defaults = {} if defaults is None else defaults
+        self._settings = {} if settings is None else settings
+        self._staged = staged
         self._headers: dict[str, Header] = {}
         for label in definitions.labels():
             if (header := definitions.load(header_key(label), header_of)) is not None:
@@ -224,8 +211,8 @@ class BatchManager:
             given. Its ends are converted to the type of the index of the
             source, such as ``'60339'`` to ``60339``.
         settings:
-            The settings to start with, in place of the defaults of the spec.
-            Those that are columns are left out.
+            The settings to start with, in place of those that the manager
+            was given for the spec. Those that are columns are left out.
         label:
             The label of the batch. If not given, the time of making,
             ``YYYYMMDD-HHMMSS``, with ``-2``, ``-3``, ... added if that is
@@ -274,7 +261,7 @@ class BatchManager:
             scope=_scope_of(registered, Scope() if scope is None else scope),
         )
         if settings is None:
-            settings = self._defaults.get(spec, Defaults()).settings
+            settings = self._settings.get(spec, {})
         # The template leaves out the settings that are columns.
         template = Template(bound, params=settings, blanks=columns)
         self._definitions.save(settings_key(label), template_data(template))
@@ -333,18 +320,14 @@ class BatchManager:
             return batch
         header = self._headers[label]
         source = self._source(header.source)
-        defaults = self._defaults.get(header.spec, Defaults())
         batch = Batch(
             self.client,
             self._bound(header.spec, header.columns),
             columns=header.columns,
             label=label,
             source=source,
-            staged=defaults.staged,
+            staged=header.spec in self._staged,
             persist=True,
-            settings={
-                n: v for n, v in defaults.settings.items() if n not in header.columns
-            },
             definitions=self._definitions,
             scope=header.scope,
         )

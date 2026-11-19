@@ -24,7 +24,7 @@ from ess.apps.batch.web.models import CellEdit, Cells, Edit, Reduce, State
 from ess.apps.batch.web.page import Problem
 from ess.apps.testing import FakeFiles
 
-from .toys import COLUMNS, DEFAULTS, SOURCES, STAGED, Gate, Measure, Refusing
+from .toys import COLUMNS, SOURCES, STAGED, STAGED_NAMES, Gate, Measure, Refusing
 
 BINS = ['binning', 'bins']
 
@@ -201,7 +201,7 @@ def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_p
         finishing,  # type: ignore[arg-type]
         sources=SOURCES,
         definitions=definitions,
-        defaults=DEFAULTS,
+        staged=STAGED_NAMES,
     )
     label = manager.create(STAGED.name, title='Scan', source='pairs', columns=COLUMNS)
     sample(1, 'water')
@@ -701,7 +701,7 @@ def test_follow_resumes_after_a_restart(
     definitions: FolderDefinitions,
 ) -> None:
     manager = BatchManager(
-        client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS
+        client, sources=SOURCES, definitions=definitions, staged=STAGED_NAMES
     )
     again = Pages(manager, Follow(manager, definitions))
     sample(1, 'water')

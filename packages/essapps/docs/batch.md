@@ -10,7 +10,7 @@ Your application supplies what depends on the technique: which files make which 
 ```python
 import uvicorn
 
-from ess.apps.batch import BatchManager, Defaults, FileInfo, FolderDefinitions, Row, Source
+from ess.apps.batch import BatchManager, FileInfo, FolderDefinitions, Row, Source
 from ess.apps.batch.auto import Follow
 from ess.apps.batch.web import Pages, Shown, create_app
 from ess.apps.folder import open_folder
@@ -37,7 +37,7 @@ SOURCES = {'sample-runs': SAMPLE_RUNS}
 client = open_folder(folder, BINDINGS)
 definitions = FolderDefinitions(folder)
 manager = BatchManager(client, sources=SOURCES, definitions=definitions,
-                       defaults={IOFQ.name: Defaults(staged=True)})
+                       staged={IOFQ.name})
 if not manager.headers():                  # a new folder: one batch to start with
     manager.create(IOFQ.name, title='Sample runs', source='sample-runs')
 
@@ -408,15 +408,16 @@ The files that a person loads and writes ([The UI](#the-ui)) are copies, for oth
 A `BatchManager`, *the manager*, makes, lists, changes and removes the batches of a workspace, and holds the one `Batch` of each label. It keeps each batch in the definitions, so a manager made again after a restart lists the same batches and makes the same `Batch` of each. The application registers its sources by name, and what a new batch of a spec gets:
 
 ```python
-from ess.apps.batch import BatchManager, Defaults, Scope, Source, Words
+from ess.apps.batch import BatchManager, Scope, Source, Words
 
 SAMPLE_RUNS = Source(pair_by_sample, fills=('sample', 'sample_transmission'),
                      words=Words(one='sample run', many='sample runs'),
                      row_name='name', index_title='Run')
 SOURCES = {'sample-runs': SAMPLE_RUNS}
-DEFAULTS = {IOFQ.name: Defaults(settings=SETTINGS, staged=True)}
 
-manager = BatchManager(client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS)
+manager = BatchManager(client, sources=SOURCES, definitions=definitions,
+                       settings={IOFQ.name: SETTINGS},   # what a new batch of a spec starts with
+                       staged={IOFQ.name})               # the specs whose batches run staged
 label = manager.create(IOFQ.name, title='Afternoon', source='sample-runs',
                        columns=('sample', 'sample_transmission', 'can'),
                        scope=Scope(start=60339))
@@ -455,16 +456,15 @@ What the manager gives the `Batch` of a label:
 | `spec` | `client.spec_named(header.spec)`: the spec of that name that the workspace binds, the highest version if several |
 | `source` | the `Source` registered under `header.source` |
 | `columns` | `header.columns`: those given to `create`, else those that the source fills |
-| `settings` | `settings.json`; else `Defaults.settings` of the spec, those that are columns left out |
-| `staged` | `Defaults.staged` of the spec |
+| `settings` | `settings.json` |
+| `staged` | whether the spec is in `staged` of the manager |
 | `label` | given to `create`, or the time of making, `YYYYMMDD-HHMMSS`, with `-2`, `-3`, ... if that is taken |
 | `scope` | `header.scope`: `create(..., scope=...)`, then `change(..., scope=...)` |
 | `persist` | always, so the workspace needs a store, as a folder has |
 | `definitions` | those of the manager |
 
-- `create` takes the name of a spec. It refuses an empty title, a column that is not a parameter of the spec or is named twice, and columns that lack one that the source fills; then it writes the first settings, `Defaults.settings` of the spec or `create(..., settings=...)`, and the header. The names of the spec and the source, and the columns, are fixed from then on. What the names stand for is read from code at each start: a later `Defaults.staged` applies to every batch, a later `Defaults.settings` only to batches made after it. `Batch` refuses a source that fills a column it lacks, so `batch(label)` refuses a batch whose source now fills one.
+- `create` takes the name of a spec. It refuses an empty title, a column that is not a parameter of the spec or is named twice, and columns that lack one that the source fills; then it writes the first settings, those given to the manager for the spec or `create(..., settings=...)`, and the header. The names of the spec and the source, and the columns, are fixed from then on. What the names stand for is read from code at each start: a later `staged` applies to every batch, later `settings` only to batches made after them. `Batch` refuses a source that fills a column it lacks, so `batch(label)` refuses a batch whose source now fills one.
 - `change` changes the title, the description and the scope, and refuses an empty title; a scope is written to the header, then given to the `Batch` of the label if it was made, whose rows change at once.
-- A header without `settings.json` is a batch with the default settings of its spec, as registered at each start.
 - A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. `create` refuses a label that has definitions or records.
 - `start_next` ends a batch before an index and makes the next batch from there up to the old stop, with the same spec, source, columns and settings. The cells set by hand and the removals of the rows that move go with them; the rows added by hand stay, and so do the results, under the old label, so the next batch reduces those rows again. It refuses an index with no row of the scan before it, which would leave the batch none.
  The next batch is made first, so a refusal of `create` changes nothing, and it is removed again if its scan raises or it cannot take what was set by hand. `Follow` is the caller's to move.
@@ -751,8 +751,7 @@ python -m ess.apps.batch.web.demo ws       # / lists $L and sds; the rows of $L 
 
 Each `reduce` exits 3: the demo's run 60345 holds no neutron events, so its row fails, and `--remaining` reduces it again.
 
-`reduce` makes and reads the batch of its label with a `BatchManager`, as the page does, with the sources that `--sources package.module:NAME` names. A label with a batch, such as one made on the page, is reduced as its header says: its spec, of the version that the workspace binds, its columns, its scope, and its source. A template given must be of its spec and its version, with its columns as the blanks, as **Load settings…** checks it (`text.checked_settings`), and `--source`, if given, must name its source; else `reduce` refuses, and says why. For a label without a batch, `reduce` needs a template, and the manager makes the batch (`create`) of the template's spec, with its blanks as the columns, the source of `--source NAME`, and the label as the title, so the page lists it. `create` refuses what it refuses on the page, such as a label with `/` or with definitions or records, or blanks without a column that the source fills. A batch made so is removed again if the run raises before a row of it was submitted, so a refused first run leaves the label as it was. The command never changes the title, the description or the scope, and takes the version of a spec that the workspace binds, the highest if several; a template of another version is refused, as on the page.
- `--staged` runs the rows through a stage, as `Defaults.staged` does for the application, whose `Defaults` the command does not read.
+`reduce` makes and reads the batch of its label with a `BatchManager`, as the page does, with the sources that `--sources package.module:NAME` names. A label with a batch, such as one made on the page, is reduced as its header says: its spec, of the version that the workspace binds, its columns, its scope, and its source. A template given must be of its spec and its version, with its columns as the blanks, as **Load settings…** checks it (`text.checked_settings`), and `--source`, if given, must name its source; else `reduce` refuses, and says why. For a label without a batch, `reduce` needs a template, and the manager makes the batch (`create`) of the template's spec, with its blanks as the columns, the source of `--source NAME`, and the label as the title, so the page lists it. `create` refuses what it refuses on the page, such as a label with `/` or with definitions or records, or blanks without a column that the source fills. A batch made so is removed again if the run raises before a row of it was submitted, so a refused first run leaves the label as it was. The command never changes the title, the description or the scope, and takes the version of a spec that the workspace binds, the highest if several; a template of another version is refused, as on the page. `--staged` runs the rows through a stage, as `staged` of the manager does for the application, which the command does not read.
 
 `reduce` imports what it is given into the definitions of its label, then reduces the rows of the table: the template becomes the batch's settings, and the table is set by hand as **Load table…** sets it, on the rows that the source makes from the files, and on the edits that the label keeps. Both are checked before either is written, so a table refused changes nothing; a `SubmitError`, such as for settings that the workspace refuses, leaves both imported, as **Apply** and a refused **Reduce** on the page do. So what the command was given shows in the app afterwards, and a table older than an edit made in the app sets the cell back, as any import does. Without a table, `reduce` reduces the rows of the batch, with the app's edits; given a template, a batch without a source gets one row keyed by the label, as the detector and the masks above do. `rows`, `files`, and `export` read the files as corrected, and keep no batch. The command finds the results of the app, and the app those of the command, if the outputs are persisted (`Batch(..., persist=True)`).
 

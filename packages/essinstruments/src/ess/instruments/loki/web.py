@@ -51,7 +51,6 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -65,7 +64,7 @@ from ess.apps.batch.web import Pages, Shown, create_app, plots
 from ess.apps.batch.web.api import STATIC
 from ess.apps.folder import ArrivingFiles, open_folder
 
-from .batch import DEFAULTS, SOURCES
+from .batch import SOURCES, STAGED
 from .bindings import BINDINGS
 from .specs import IOFQ
 
@@ -122,10 +121,14 @@ def build(
     has batches, so a person makes the batch of I(Q) with "New batch"; one
     that a person removed is not made again.
     """
-    defaults = {IOFQ.name: replace(DEFAULTS[IOFQ.name], settings=settings or {})}
     manager = BatchManager(
-        client, sources=SOURCES, definitions=definitions, defaults=defaults
+        client,
+        sources=SOURCES,
+        definitions=definitions,
+        settings={IOFQ.name: settings or {}},
+        staged=STAGED,
     )
+
     loop = Follow(manager, definitions, interval=interval)
     if not manager.headers():
         label = manager.create(IOFQ.name, title='Sample runs', source='sample-runs')

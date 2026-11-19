@@ -14,7 +14,6 @@ from ess.apps.batch import (
     Batch,
     BatchManager,
     CorrectedFiles,
-    Defaults,
     FolderDefinitions,
     Header,
     NotKept,
@@ -22,18 +21,17 @@ from ess.apps.batch import (
     Scope,
     Source,
 )
-from ess.apps.batch.definition import settings_key
 from ess.apps.testing import FakeStore, StagedFunction
 from ess.spec import function_binding
 
 from .toys import (
     COLUMNS,
-    DEFAULTS,
     FIND,
     PAIRS,
     PLAIN,
     SOURCES,
     STAGED,
+    STAGED_NAMES,
     FindParams,
     Measure,
     Refusing,
@@ -44,7 +42,7 @@ from .toys import (
 def _again(client: Client, definitions: FolderDefinitions) -> BatchManager:
     """The manager of the fixture made again on ``definitions``, as after a restart."""
     return BatchManager(
-        client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS
+        client, sources=SOURCES, definitions=definitions, staged=STAGED_NAMES
     )
 
 
@@ -207,7 +205,7 @@ def with_defaults(client: Client, definitions: FolderDefinitions) -> BatchManage
         client,
         sources=SOURCES,
         definitions=definitions,
-        defaults={'plain': Defaults(settings=settings)},
+        settings={'plain': settings},
     )
 
 
@@ -234,25 +232,13 @@ def test_settings_registered_later_leave_the_settings_of_a_batch_made_before(
     with_defaults: BatchManager, client: Client, definitions: FolderDefinitions
 ) -> None:
     label = with_defaults.create('plain', title='Morning', columns=COLUMNS)
-    later = {'plain': Defaults(settings={'binning': {'bins': 7}})}
+    later = {'plain': {'binning': {'bins': 7}}}
 
     again = BatchManager(
-        client, sources=SOURCES, definitions=definitions, defaults=later
+        client, sources=SOURCES, definitions=definitions, settings=later
     )
 
     assert again.batch(label).settings == {'binning': {'bins': 3}}
-
-
-def test_a_batch_whose_settings_are_not_kept_has_the_settings_registered(
-    with_defaults: BatchManager, definitions: FolderDefinitions
-) -> None:
-    label = with_defaults.create(
-        'plain', title='Morning', columns=COLUMNS, settings={'offset': {'value': 1.0}}
-    )
-
-    definitions.delete(settings_key(label))
-
-    assert with_defaults.batch(label).settings == {'binning': {'bins': 3}}
 
 
 def test_a_batch_is_of_the_highest_version_of_its_spec_that_the_workspace_binds(
@@ -669,7 +655,7 @@ def test_a_staged_batch_removed_releases_its_stage(
         releases,  # type: ignore[arg-type]
         sources=SOURCES,
         definitions=definitions,
-        defaults=DEFAULTS,
+        staged=STAGED_NAMES,
     )
     sample(1, 'water')
     label = manager.create('staged', title='Morning', source='pairs')

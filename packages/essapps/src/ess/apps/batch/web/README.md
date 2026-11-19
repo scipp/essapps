@@ -89,7 +89,7 @@ The list and the Runs view are the same on every page.
 The choices come from `GET api/sources`; what can be made is decided by `BatchManager.create`, and what it refuses, such as an empty title or a stop below the start, shows at the form, with nothing made.
 A start or a stop is sent as typed; the manager converts it to the type of the index of the source (`Source.index_type`) and refuses what does not convert, such as `abc` for a run number.
 **Make** is disabled while it is sent, so a double click makes one batch.
-The new batch starts with the settings that the application gives its spec (`Defaults`).
+The new batch starts with the settings that the application gives its spec (`BatchManager(settings=...)`).
 A source that no spec fits is not offered.
 
 The form is closed until **+ New batch** is pressed.
