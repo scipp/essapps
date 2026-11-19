@@ -49,7 +49,7 @@ key     run    name         sample      sample_transmission
 water   <NA>   by hand      run:60012   run:60013
 ```
 
-This decides what a batch is when it is made once and then changed by a person. How a batch is amended from the files, Follow included, is decided after it and on top of it (see "Not decided here").
+This decides what a batch is when it is made once and then changed by a person. How a batch is amended from the files, Follow included, is decided on top of it, in [ADR 0013](0013-follow-adds-the-rows-not-considered.md).
 
 ### Keys, columns, cells
 
@@ -209,12 +209,12 @@ A source does three things to a batch today after it is made:
 | fills a cell that was empty | a sample run measured before its transmission run |
 | changes a cell that has a value | a transmission run measured again: the source gives the rows of its sample the last one |
 
-Whether each is wanted, and how it is done, gets its own ADR. Two conditions for it follow from this one:
+Whether each is wanted, and how it is done, is decided in [ADR 0013](0013-follow-adds-the-rows-not-considered.md). Two conditions for it follow from this one:
 
 - **What amends a batch uses the table as a person does**: it adds a row or sets a cell with `put`.
-- **What it needs to know is its own state, next to the batch**: which source, which range of rows, which rows a person removed. None of it is a column of `rows` or a field of every row.
+- **What it needs to know is its own state, next to the batch**: which source, and which rows it has considered. None of it is a column of `rows` or a field of every row.
 
-Until then the parts of ADR 0011 on the source, the scope and Follow stand, and the code of this ADR waits for that decision, since Follow is in use. Several workflows on one batch (#222) are the same kind of question: something other than a person fills cells.
+The code of this ADR and of ADR 0013 is written together, since Follow is in use. Several workflows on one batch (#222) are the same kind of question: something other than a person fills cells.
 
 ## Alternatives considered
 
@@ -237,7 +237,7 @@ Until then the parts of ADR 0011 on the source, the scope and Follow stand, and 
 - A row that only wrong metadata made stays until a person removes it, and a correction of a run changes no batch (the example above).
 - The command and the page need no translation of a table: a table file is the table.
 - `put` writes the whole table. At 3000 rows that is tens of milliseconds.
-- What ADR 0011 says of the spec and the columns in the header and of `edits.json` is replaced by this. What it says of the source, the scope and Follow stands until the ADR on amending.
+- What ADR 0011 says of the spec and the columns in the header and of `edits.json` is replaced by this. What it says of the source, the scope and Follow is replaced by ADR 0013.
 
 ## Open
 
