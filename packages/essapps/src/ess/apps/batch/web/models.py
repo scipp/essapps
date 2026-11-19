@@ -18,9 +18,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from ..reduction import Words
-from ..table import Index
-
 
 class Way(BaseModel):
     value: str
@@ -92,8 +89,9 @@ class Column(BaseModel):
 class Cell(BaseModel):
     """
     One cell: ``value`` is where its editor starts, ``text`` what it shows.
-    ``edited`` if set by hand, with ``scanned`` the text it had before.
-    ``problem`` is why the row cannot be reduced, if it is this cell.
+    ``problem`` is why the row cannot be reduced, if it is this cell. A cell
+    of a run is ``edited`` if a person corrected it, with ``scanned`` the text
+    that the file gives.
     """
 
     value: Any = None
@@ -105,25 +103,22 @@ class Cell(BaseModel):
 
 class Row(BaseModel):
     """
-    One row. ``result`` says whether it has a result to show, ``current`` or
-    ``outdated``. ``earlier`` if it was reduced with earlier settings, which
-    differ from the settings now at settings only; ``added`` if the row was
-    added by hand. ``strays`` names the edits at a name that is not a column,
-    such as one kept for an older version of the application, which make the
-    row incomplete until they are taken back.
+    One row: its key, its ``name`` (its note ``name``, else its key), the
+    text of each of its other notes by column, and a :class:`Cell` per
+    parameter column. ``result`` says whether it has a result to show,
+    ``current`` or ``outdated``. ``earlier`` if it was reduced with earlier
+    settings, which differ from the settings now at settings only.
     """
 
     key: str
     name: str
-    info: dict[str, str]
+    notes: dict[str, str]
     status: str
     reason: str
-    added: bool
     earlier: bool = False
     record: str | None
     result: Literal['current', 'outdated'] | None
     cells: dict[str, Cell]
-    strays: list[str] = []
 
 
 class Action(BaseModel):
@@ -158,34 +153,31 @@ class Refused(BaseModel):
 
 class Following(BaseModel):
     """
-    Whether the batch of the page follows the files, ``on``: a step every
-    ``interval`` seconds scans them and reduces the rows not reduced yet:
-    ready and without a result. ``other`` is the title of the
-    batch that follows, if another one does. ``failure`` says why the last
-    step raised, while this batch follows.
+    Whether the batch of the page follows its source, ``on``: a step every
+    ``interval`` seconds adds the rows of the source that are new and filled,
+    and reduces the rows not reduced yet: ready and without a result.
+    ``other`` is the title of the batch that follows, if another one does.
+    While this batch follows, ``failure`` says why the last step raised, and
+    ``waiting`` counts the rows of the source that the last step did not add
+    since they are not filled yet.
     """
 
     on: bool
     other: str | None
     interval: float
     failure: str | None
+    waiting: int = 0
 
 
 class HeaderShown(BaseModel):
     """
-    The header of the batch of a page, as the tab "Batch" shows it, but its
-    title and columns, which :class:`State` has: the title of its
-    ``workflow``, the name of its ``source``, ``None`` for rows added by hand
-    only, and what the source calls the index of a row; its description; and
-    its scope, from ``start`` up to ``stop`` (``None`` an open end).
+    The batch of a page, as the tab "Batch" shows it, but its title and
+    columns, which :class:`State` has: the title of its ``workflow``, and its
+    description.
     """
 
     workflow: str
-    source: str | None
-    index_title: str
     description: str
-    start: Index | None
-    stop: Index | None
 
 
 class State(BaseModel):
@@ -196,14 +188,15 @@ class State(BaseModel):
     application. ``start`` changes when
     the server starts again, ``version`` with each change, and ``runs`` with
     each change of the runs. ``batches`` lists the batches of the workspace,
-    as :class:`Batches` has them. ``settings`` is the form
+    as :class:`Batches` has them. ``notes`` are the columns of the table that
+    are not parameters, but ``name``, and ``columns`` the parameter columns;
+    both change when the table does. ``settings`` is the form
     of the settings. ``settings_changed`` says whether a person changed it and
     has not applied the change; the rows read as with the batch's settings.
     ``settings_problem`` names the batch's settings that the form cannot show,
     what the form misses, and why the batch's settings are refused where the
-    form shows them. ``follow`` is ``None`` if the batch has no source, so
-    cannot follow the files. ``notice`` says what the action that answers
-    with this state did.
+    form shows them. ``notice`` says what the action that answers with this
+    state did.
     """
 
     version: int
@@ -214,19 +207,17 @@ class State(BaseModel):
     title: str
     header: HeaderShown
     application: str
-    words: Words
     folder: str
-    info: list[Column]
+    notes: list[Column]
     columns: list[Column]
     rows: list[Row]
     counts: dict[str, int]
-    removed: int
     action: Action
     settings: list[Node]
     settings_problem: str | None
     settings_changed: bool
     refused: list[Refused]
-    follow: Following | None = None
+    follow: Following
     notice: str = ''
 
 
@@ -256,16 +247,13 @@ class Runs(BaseModel):
 
 class BatchRow(BaseModel):
     """
-    A batch of the workspace: its label, title and description, what its
-    rows are called, its scope as text, such as ``Run 60339 \N{EN DASH}``,
-    empty if it holds every row, and whether it is the one that follows.
+    A batch of the workspace: its label, title and description, and whether
+    it is the one that follows.
     """
 
     label: str
     title: str
     description: str
-    words: Words
-    scope: str
     follows: bool
 
 
@@ -300,31 +288,28 @@ class SpecChoice(BaseModel):
 
 class SourceChoice(BaseModel):
     """
-    A source that a new batch can be made with, by name, ``None`` for rows
-    added by hand only; the parameters that it fills, which are columns of
-    every batch of it; what it calls a row, and the index of a row; and the
-    specs that fit it, those that have a parameter for each that it fills.
+    A source that a new batch can be made with, by name, ``None`` for a batch
+    without rows; the parameters that it fills, which are columns of every
+    batch made from it; and the specs that fit it, those that have a
+    parameter for each that it fills.
     """
 
     name: str | None
     fills: list[str]
-    words: Words
-    index_title: str
     specs: list[SpecChoice]
 
 
 class BatchCounts(BaseModel):
     """
     The rows of each batch by status, in the words of the page, by label; why
-    each other batch could not be counted, by label; and the rows of each
-    registered source that no batch shows, in its words, such as
-    ``3 samples``, by its name. A source of a batch that could not be counted
-    is left out of ``outside``.
+    each other batch could not be counted, by label; and how many rows of
+    each registered source no table of a batch has, by its name. ``outside``
+    is empty while a batch could not be counted, since its rows are not known.
     """
 
     rows: dict[str, dict[str, int]]
     failed: dict[str, str]
-    outside: dict[str, str]
+    outside: dict[str, int]
 
 
 class Plot(BaseModel):
@@ -376,21 +361,11 @@ class On(BaseModel):
     on: bool
 
 
-class Ends(BaseModel):
+class NewBatch(BaseModel):
     """
-    The ends of the scope of a batch as typed; the manager converts them to
-    the type of the index of its source. ``None`` is an open end.
-    """
-
-    start: Index | None = None
-    stop: Index | None = None
-
-
-class NewBatch(Ends):
-    """
-    Make a batch, as :meth:`~ess.apps.batch.BatchManager.create` takes it:
-    ``columns`` are all columns, and ``start`` and ``stop`` the ends of its
-    scope.
+    Make a batch of ``spec``: with a ``source``, of every row that the source
+    gives now; without, of no rows. ``columns`` are the parameter columns,
+    those that the source fills among them.
     """
 
     title: str
@@ -400,21 +375,11 @@ class NewBatch(Ends):
     columns: list[str]
 
 
-class HeaderEdit(Ends):
-    """
-    The title, description and scope of the batch of a page, as a person
-    saves them.
-    """
+class HeaderEdit(BaseModel):
+    """The title and description of the batch of a page, as a person saves them."""
 
     title: str
     description: str = ''
-
-
-class Next(BaseModel):
-    """Start the next batch at row ``key``, called ``title``."""
-
-    key: str
-    title: str
 
 
 class Made(BaseModel):
