@@ -545,7 +545,6 @@ class Page:
                 description=header.description,
                 start=header.scope.start,
                 stop=header.scope.stop,
-                keys=None if header.scope.keys is None else sorted(header.scope.keys),
             ),
             application=self.pages.title,
             words=self.words,
@@ -1006,25 +1005,15 @@ class Page:
 
     # The header
 
-    def _scope(self, ends: Ends, said: str) -> Scope | None:
-        """
-        The scope of ``ends`` (:func:`scoped`), or ``None`` if the scope of the
-        batch names its keys, which no page changes.
-        """
-        if self.batch.scope.keys is not None:
-            return None
-        return scoped(self.batch.source, ends, said)
-
     @_action
     def change(self, edit: HeaderEdit) -> str:
         """
         Give the batch the title, description and scope of ``edit``
-        (:meth:`~ess.apps.batch.BatchManager.change`); a scope of keys stays
-        as it is. What the manager refuses is a :class:`Problem`, and changes
-        nothing.
+        (:meth:`~ess.apps.batch.BatchManager.change`). What the manager
+        refuses is a :class:`Problem`, and changes nothing.
         """
         refused = 'The batch was not changed'
-        scope = self._scope(edit, refused)
+        scope = scoped(self.batch.source, edit, refused)
         try:
             self.pages.manager.change(
                 self.label, title=edit.title, description=edit.description, scope=scope
@@ -1040,10 +1029,8 @@ class Page:
         batch does not, with no result and no cell set by hand. If the scope
         is saved while the batch follows, Follow reduces those of them that
         are complete at its next step (:func:`~ess.apps.batch.arrived`).
-        Nothing for a scope of keys, which a change keeps.
         """
-        if (scope := self._scope(ends, 'The scope is refused')) is None:
-            return 0
+        scope = scoped(self.batch.source, ends, 'The scope is refused')
         rows = self.batch.rows
         held = replace(rows, scope=scope)
         reduced = {r.member for r in self.batch.client.records(label=self.label)}

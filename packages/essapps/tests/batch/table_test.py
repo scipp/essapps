@@ -302,34 +302,11 @@ def test_two_slices_that_meet_share_no_row_and_leave_none_out() -> None:
     ]
 
 
-def test_a_scope_of_keys_holds_the_rows_named() -> None:
-    rows = [*indexed(1, 2, 3), Row('none')]
-
-    assert held(Scope(keys=frozenset({'3', 'none'})), rows) == ['3', 'none']
-
-
 def test_a_row_without_an_index_is_held_only_by_a_scope_without_ends() -> None:
     rows = [*indexed(1), Row('none')]
 
     assert held(Scope(), rows) == ['1', 'none']
     assert held(Scope(start=0), rows) == ['1']
-
-
-def test_a_scope_of_keys_with_ends_is_refused() -> None:
-    with pytest.raises(ValueError, match='a slice or keys, not both'):
-        Scope(start=1, keys=frozenset({'1'}))
-
-
-def test_keys_given_as_one_string_are_refused() -> None:
-    with pytest.raises(TypeError, match="not '60339'"):
-        Scope(keys='60339')  # type: ignore[arg-type]
-
-
-def test_keys_given_as_any_iterable_of_strings_are_kept_as_a_frozenset() -> None:
-    scope = Scope(keys=['2', '1'])  # type: ignore[arg-type]
-
-    assert scope == Scope(keys=frozenset({'1', '2'}))
-    assert isinstance(scope.keys, frozenset)
 
 
 @pytest.mark.parametrize('end', [datetime(2026, 11, 18, tzinfo=UTC), True])

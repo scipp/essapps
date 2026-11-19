@@ -64,7 +64,7 @@ Whatever a step raises, from the files, the workflow or the workspace, is the st
 
 ## The list of batches
 
-The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, its scope in the source's word for the index (`Run 60339 –`, `Run 60301 – 60339`, `2 rows named`, or nothing for every row), and which batch follows; the batch of the page is marked.
+The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, its scope in the source's word for the index (`Run 60339 –`, `Run 60301 – 60339`, or nothing for every row), and which batch follows; the batch of the page is marked.
 Each title is a link to the page of its batch.
 Opening the view, and **Count again**, counts the rows of each batch by status, and for each registered source the rows that no batch shows, such as a row removed by hand in every batch, or outside the scope of every batch (`BatchManager.counts`).
 The statuses are those of the chips of each batch's page, the rows that Follow could not submit `incomplete` too.
@@ -105,7 +105,6 @@ The tab **Batch**, next to **Result**, **Settings** and the row tab, shows the h
 Its workflow, source, columns and label are fixed when the batch is made, and shown as text.
 Its title, description and scope are a form, which **Save** sends to `POST api/batch` (`BatchManager.change`); the scope is written as in the form "New batch".
 What the manager refuses, such as an empty title or a stop below the start, shows at the form, and nothing changes.
-A scope that names its rows, which only code makes, is shown as "2 rows named", and Save keeps it.
 A wider scope of the batch that follows makes its next step reduce the rows it adds, so Save first asks `POST api/batch/added` how many rows the scope adds that have no result and no cell set by hand, and asks the person to confirm if there are any.
 
 **Start the next batch here** splits the batch at the row selected: this batch ends before the row, and the next batch holds the rows of this one from the row on (`POST api/batch/next`).

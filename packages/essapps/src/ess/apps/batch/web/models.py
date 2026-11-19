@@ -178,8 +178,7 @@ class HeaderShown(BaseModel):
     title and columns, which :class:`State` has: the title of its
     ``workflow``, the name of its ``source``, ``None`` for rows added by hand
     only, and what the source calls the index of a row; its description; and
-    its scope, from ``start`` up to ``stop`` (``None`` an open end), or the
-    ``keys`` of the rows it names.
+    its scope, from ``start`` up to ``stop`` (``None`` an open end).
     """
 
     workflow: str
@@ -188,7 +187,6 @@ class HeaderShown(BaseModel):
     description: str
     start: Index | None
     stop: Index | None
-    keys: list[str] | None
 
 
 class State(BaseModel):
@@ -260,9 +258,8 @@ class Runs(BaseModel):
 class BatchRow(BaseModel):
     """
     A batch of the workspace: its label, title and description, what its
-    rows are called, its scope as text, such as ``Run 60339 \N{EN DASH}`` or
-    ``2 rows named``, empty if it holds every row, and whether it is the one
-    that follows.
+    rows are called, its scope as text, such as ``Run 60339 \N{EN DASH}``,
+    empty if it holds every row, and whether it is the one that follows.
     """
 
     label: str
@@ -409,7 +406,7 @@ class NewBatch(Ends):
 class HeaderEdit(Ends):
     """
     The title, description and scope of the batch of a page, as a person
-    saves them; a scope of keys stays as it is whatever the ends say.
+    saves them.
     """
 
     title: str

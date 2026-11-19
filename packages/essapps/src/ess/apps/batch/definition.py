@@ -45,7 +45,6 @@ The plain data of each table, as the functions below give and read it::
     header        {'spec': 'loki-iofq', 'columns': ['sample', 'sample_transmission'],
                    'source': 'sample-runs', 'title': 'Sample runs', 'description': '',
                    'scope': {'start': 60339, 'stop': None}}
-                  with a scope of keys as {'keys': ['60339', '60351']}
     following     {'label': '20261118-130204'}, or {'label': None}
 
 A value is in the JSON form that a record holds, a file as
@@ -392,13 +391,8 @@ def corrections_of(data: Any) -> dict[FileRef, dict[str, Any]]:
 
 
 def header_data(header: Header) -> dict[str, Any]:
-    """The header, as plain data: its scope a slice, or the keys sorted."""
-    scope = header.scope
-    if scope.keys is None:
-        written = {'start': scope.start, 'stop': scope.stop}
-    else:
-        written = {'keys': sorted(scope.keys)}
-    return {**asdict(header), 'scope': written}
+    """The header, as plain data."""
+    return asdict(header)
 
 
 def header_of(data: Any) -> Header:

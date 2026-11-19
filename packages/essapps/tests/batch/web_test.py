@@ -1558,7 +1558,6 @@ def test_the_batches_view_lists_every_batch_and_the_one_that_follows(
         (Scope(start=60339), 'Run 60339 \N{EN DASH}'),
         (Scope(stop=60339), 'Run \N{EN DASH} 60339'),
         (Scope(start=60301, stop=60339), 'Run 60301 \N{EN DASH} 60339'),
-        (Scope(keys=frozenset({'1', '2'})), '2 rows named'),
     ],
 )
 def test_the_batches_view_shows_the_scope_of_each_batch_in_the_words_of_its_source(
@@ -1941,7 +1940,6 @@ def test_the_state_shows_what_the_batch_was_made_with(http: TestClient) -> None:
         'description': '',
         'start': None,
         'stop': None,
-        'keys': None,
     }
 
 
@@ -1986,18 +1984,6 @@ def test_a_header_the_manager_refuses_answers_422_and_changes_nothing(
     assert answer.status_code == 422
     assert answer.json()['message'] == f'The batch was not changed: {said}.'
     assert manager.headers() == before
-
-
-def test_a_scope_that_names_rows_is_shown_and_kept_when_the_title_is_saved(
-    http: TestClient, manager: BatchManager
-) -> None:
-    manager.change('scan', scope=Scope(keys={'2', '1'}))
-
-    shown = save_header(http, title='Named').json()
-
-    assert manager.headers()['scan'].scope == Scope(keys={'1', '2'})
-    assert shown['header']['keys'] == ['1', '2']
-    assert http.post('/api/batch/added', json={}).json() == 0
 
 
 def test_the_rows_a_wider_scope_adds_are_those_with_no_result_and_not_set_by_hand(

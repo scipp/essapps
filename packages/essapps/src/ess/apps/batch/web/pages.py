@@ -378,7 +378,7 @@ class Pages:
                         title=header.title,
                         description=header.description,
                         words=words,
-                        scope=_scope_text(header.scope, index, words),
+                        scope=_scope_text(header.scope, index),
                         follows=label == self.follow.label,
                     )
                 )
@@ -524,13 +524,11 @@ def _spec_choice(
     )
 
 
-def _scope_text(scope: Scope, index: str, words: Words) -> str:
+def _scope_text(scope: Scope, index: str) -> str:
     """
     A scope as the Batches view shows it: ``Run 60339 \N{EN DASH} 60421``, with an open
-    end left out, or ``2 rows named``; empty for every row.
+    end left out; empty for every row.
     """
-    if scope.keys is not None:
-        return f'{words.count(len(scope.keys))} named'
     if scope.start is None and scope.stop is None:
         return ''
     start, stop = ('' if end is None else str(end) for end in (scope.start, scope.stop))

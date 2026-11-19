@@ -94,7 +94,6 @@ A source gives each row an *index*: a value that orders the rows, such as the ru
 
 ```python
 {'start': 60339, 'stop': None}     # index values; start included, stop excluded, None is open
-{'keys': ['60339', '60351']}       # the rows named
 ```
 
 ```python
@@ -238,7 +237,7 @@ If it is built, the header, the labels and the URL change once more: a label per
 - **Whether a `stop` also cuts the files.** The source of a batch could get only the files measured before its `stop`, so that no later file changes its rows. That needs the index on files as well as rows.
 - **Which request runs first.** A workspace runs its requests on one pool of threads, one thread for a folder unless told otherwise, in the order submitted. A priority at submission would be a change of the workspace. To be measured with real runs first.
 - **When the manager lets go of a batch.** Each `Batch` it holds keeps its stage and its page's state until closed. What hundreds of them cost is not measured.
-- **A row without an index**, such as a file without a run number. It is in no slice; a list of keys can name it.
+- **A row without an index**, such as a file without a run number. A scope is a slice, so such a row is held only by a batch without a start and a stop. Naming rows by key is not built.
 - **A label with a `/`** in the path of a URL. Generated labels have none, and the manager refuses one; code may give one to a `Batch` made without the manager.
 - **Results of removed batches on disk.** Their records stay, and so do their persisted outputs. Nothing releases them.
 - **Many batches.** The list has no order but that of making, and no archive.

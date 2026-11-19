@@ -559,11 +559,6 @@ def test_what_was_set_by_hand_on_the_rows_that_move_goes_with_them(
 @pytest.mark.parametrize(
     ('scope', 'index', 'said'),
     [
-        (
-            Scope(keys={'1', '2'}),
-            2,
-            'the batch names its rows, so it has no end to set',
-        ),
         (Scope(), 1, 'the batch holds no row before 1, so it would then hold none'),
         (
             Scope(start=2),
@@ -573,7 +568,7 @@ def test_what_was_set_by_hand_on_the_rows_that_move_goes_with_them(
         (Scope(start=2), 1, 'the stop of a scope, 1, is below its start, 2'),
         (Scope(stop=2), 3, 'the stop of a scope, 2, is below its start, 3'),
     ],
-    ids=['keys', 'first', 'first-of-scope', 'below', 'above'],
+    ids=['first', 'first-of-scope', 'below', 'above'],
 )
 def test_the_next_batch_is_refused_at_such_an_index_and_nothing_changes(
     manager: BatchManager, scanned: Batch, scope: Scope, index: Any, said: str

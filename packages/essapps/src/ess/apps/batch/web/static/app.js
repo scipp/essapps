@@ -582,10 +582,7 @@ function renderBatch(state) {
   $('batch-fixed').replaceChildren(...Object.entries(fixed).flatMap(([name, text]) => [h('dt', {text: name}), h('dd', {text})]));
   $('batch-from').textContent = `From ${index}`;
   $('batch-to').textContent = `up to, not including, ${index}`;
-  // A scope that names its rows is made by code, and shown only.
-  $('batch-scope').hidden = header.source === null || header.keys !== null;
-  $('batch-named').hidden = header.keys === null;
-  $('batch-named-text').textContent = header.keys && `${count(header.keys.length)} named`;
+  $('batch-scope').hidden = header.source === null;
   const follows = state.follow?.on ? ' Follow moves to it.' : '';
   $('next-hint').textContent = `Ends this batch before the ${words().one} selected. The next batch takes its ${words().many} from there on, with the same workflow, columns and settings.${follows}`;
   const form = $('batch-form');

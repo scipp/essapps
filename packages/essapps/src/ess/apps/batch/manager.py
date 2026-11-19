@@ -163,10 +163,8 @@ def scope_of(source: Source | None, start: Any = None, stop: Any = None) -> Scop
 
 
 def _typed(source: Source | None, scope: Scope) -> Scope:
-    """``scope``, a slice with its ends converted as :func:`scope_of` does."""
-    return (
-        scope if scope.keys is not None else scope_of(source, scope.start, scope.stop)
-    )
+    """``scope`` with its ends converted as :func:`scope_of` does."""
+    return scope_of(source, scope.start, scope.stop)
 
 
 def check_label(label: str) -> None:
@@ -457,15 +455,12 @@ class BatchManager:
         """
         The scope of the next batch if the batch of ``label`` ended before
         ``index``: from ``index`` up to its stop. Raises ``KeyError`` as
-        :meth:`batch` does; ``ValueError`` if the batch names its rows, which
-        have no end to set, if ``index`` is below the start or above the stop
-        of its scope, or if it holds no row of the scan before ``index``,
-        which would leave it none.
+        :meth:`batch` does; ``ValueError`` if ``index`` is below the start or
+        above the stop of its scope, or if it holds no row of the scan before
+        ``index``, which would leave it none.
         """
         batch = self.batch(label)
         scope = batch.scope
-        if scope.keys is not None:
-            raise ValueError('the batch names its rows, so it has no end to set')
         before = Scope(start=scope.start, stop=index)
         if not any(before.holds(row) for row in batch.rows.scan):
             raise ValueError(
