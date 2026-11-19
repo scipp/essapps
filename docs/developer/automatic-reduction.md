@@ -96,7 +96,7 @@ A record that another `Batch` submits under the label with other cells at `at` i
 A person who wants another file for a row edits the loop's own batch and reduces the row, and the loop leaves the cell set by hand as it is; or the person corrects the file's metadata so that the source gives another file, which the loop reduces.
 Two loops never share a label: if their rows differ at `at`, each replaces the other's records at every step.
 A record under the label that equals the loop's row at `at`, from any submitter, counts as the row's result.
-A loop on a new label starts from the first file. A person's batch under its own label does not touch the loop's rows.
+A loop on a new label starts from the first file, or from the first row of the scope of its batch. A person's batch under its own label does not touch the loop's rows.
 
 ## What the loop keeps
 
@@ -209,7 +209,7 @@ A cut-off by age or by count, of the files given to the source, would bound the 
 - A partner older than the cut-off, such as a can measured at the start, is gone, and its row waits for ever.
 - A sample measured again after the cut-off gets a row with its later runs only, which is reduced with those, and nothing shows it.
 
-A cut-off that a person sets on purpose, "only the files since Tuesday", is a selector on the files given to the source.
+A cut-off that a person sets on purpose, "only the runs from 60339 on", is the scope of a batch: a slice of the index of its rows, such as the run number. It picks rows of the scan, and the source still sees every file ([batch.md, "Rules"](../../packages/essapps/docs/batch.md#rules)).
 
 ## Open
 
@@ -238,7 +238,6 @@ A cut-off that a person sets on purpose, "only the files since Tuesday", is a se
 
   A class with state that the author writes, `add(file) -> changed rows`, is not offered. It would have to give the same rows for any order of arrival, a role corrected later, a file that arrives again, and a restart, which a function over the files gives without effort.
 - **A step that raises ends `run`.** A later step would lose nothing, but `run` does not take it: which errors a service logs and steps past, such as a lost connection, is not decided.
-- **Starting a new label at a given run.** A loop on a new label consumes from the first file. Starting it at a run needs a range in `Selector`, which matches equal values only.
 - **Old rows reduced again for a new spec version.** One more term of `arrived`, from the state of each row (ADR 0009): `state[key].record is None or state[key].changed & at or state[key].spec_changed`.
 - **A loop that pushes into an accumulator**, for a sum that grows with each file (D7). The accumulator would be the only thing the workspace keeps for the loop, which would freeze it with `persist=` once the sum is complete.
 - **The application around the loop**: one process per instrument, a workspace per proposal, the configuration files, and a page that shows the batches. The pages of a workspace's batches share one loop, `ess.apps.batch.auto.Follow`: the switch "Follow" of a page makes its batch the one that follows, and a timer thread of the app steps an `Automatic` on that batch, under the lock that every request of every page takes (`ess.apps.batch.web.Pages.tick`). It reduces with the batch's settings; a change in the page's settings form is in force after Apply. A step that raises is shown on the page of the batch, and the next step runs.

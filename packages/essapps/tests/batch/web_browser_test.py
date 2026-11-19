@@ -27,7 +27,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from ess.apps import Client
-from ess.apps.batch import Batch, BatchManager, CorrectedFiles
+from ess.apps.batch import Batch, BatchManager, CorrectedFiles, Scope
 from ess.apps.batch.auto import Follow
 from ess.apps.batch.web import Pages, Shown, create_app
 from ess.apps.batch.web.api import STATIC
@@ -809,7 +809,11 @@ def test_the_batches_view_links_to_the_page_of_another_batch(
     page: Any, pages: Pages, manager: BatchManager
 ) -> None:
     other = manager.create(
-        STAGED.name, title='Other', source='pairs', description='The second series'
+        STAGED.name,
+        title='Other',
+        source='pairs',
+        description='The second series',
+        scope=Scope(start=2),
     )
     pages.follow.on(other)
     page.reload()
@@ -820,6 +824,7 @@ def test_the_batches_view_links_to_the_page_of_another_batch(
     assert page.inner_text('#batches tr[aria-current=page] a') == 'Scan'
     listed = page.locator('#batches tbody tr', has_text='Other').inner_text()
     assert 'The second series' in listed
+    assert 'Run 2 \N{EN DASH}' in listed
     assert 'follows' in listed
     page.click('#batches a:text-is("Other")')
     page.wait_for_selector('#title:has-text("Other")')

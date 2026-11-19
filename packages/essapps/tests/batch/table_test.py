@@ -2,10 +2,14 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The rules of a table of rows, on plain values."""
 
+import re
+from dataclasses import replace
+from datetime import UTC, datetime
+
 import pytest
 
 from ess.apps import SubmitError
-from ess.apps.batch import EMPTY, Row, RowTable
+from ess.apps.batch import EMPTY, Row, RowTable, Scope
 
 
 def cells(table: RowTable) -> dict[str, dict[str, object]]:
@@ -258,3 +262,154 @@ def test_a_row_put_that_was_removed_is_brought_back_with_its_cells(
         (),
         {'a': {'y': 5}},
     )
+
+
+# The scope
+
+
+def indexed(*indices: int) -> list[Row]:
+    """A row per index, keyed by it."""
+    return [Row(str(i), {'x': i}, index=i) for i in indices]
+
+
+def held(scope: Scope, rows: list[Row]) -> list[str]:
+    return [row.key for row in RowTable(scope=scope).rescan(rows)]
+
+
+def test_a_slice_holds_the_rows_from_start_up_to_stop_excluded() -> None:
+    assert held(Scope(start=2, stop=4), indexed(1, 2, 3, 4, 5)) == ['2', '3']
+
+
+def test_an_open_end_holds_every_row_beyond_the_other() -> None:
+    rows = indexed(1, 2, 3)
+
+    assert held(Scope(start=2), rows) == ['2', '3']
+    assert held(Scope(stop=2), rows) == ['1']
+
+
+def test_a_slice_needs_no_row_at_its_ends() -> None:
+    assert held(Scope(start=2, stop=6), indexed(1, 3, 5, 7)) == ['3', '5']
+
+
+def test_two_slices_that_meet_share_no_row_and_leave_none_out() -> None:
+    rows = indexed(1, 2, 3, 4)
+
+    assert held(Scope(stop=3), rows) + held(Scope(start=3), rows) == [
+        '1',
+        '2',
+        '3',
+        '4',
+    ]
+
+
+def test_a_scope_of_keys_holds_the_rows_named() -> None:
+    rows = [*indexed(1, 2, 3), Row('none')]
+
+    assert held(Scope(keys=frozenset({'3', 'none'})), rows) == ['3', 'none']
+
+
+def test_a_row_without_an_index_is_held_only_by_a_scope_without_ends() -> None:
+    rows = [*indexed(1), Row('none')]
+
+    assert held(Scope(), rows) == ['1', 'none']
+    assert held(Scope(start=0), rows) == ['1']
+
+
+def test_a_scope_of_keys_with_ends_is_refused() -> None:
+    with pytest.raises(ValueError, match='a slice or keys, not both'):
+        Scope(start=1, keys=frozenset({'1'}))
+
+
+def test_keys_given_as_one_string_are_refused() -> None:
+    with pytest.raises(TypeError, match="not '60339'"):
+        Scope(keys='60339')  # type: ignore[arg-type]
+
+
+def test_keys_given_as_any_iterable_of_strings_are_kept_as_a_frozenset() -> None:
+    scope = Scope(keys=['2', '1'])  # type: ignore[arg-type]
+
+    assert scope == Scope(keys=frozenset({'1', '2'}))
+    assert isinstance(scope.keys, frozenset)
+
+
+@pytest.mark.parametrize('end', [datetime(2026, 11, 18, tzinfo=UTC), True])
+def test_an_end_that_is_not_an_int_a_float_or_a_str_is_refused(end: object) -> None:
+    with pytest.raises(TypeError, match=re.escape(repr(end))):
+        Scope(start=end)  # type: ignore[arg-type]
+
+
+def test_a_stop_below_the_start_is_refused() -> None:
+    with pytest.raises(
+        ValueError, match='the stop of a scope, 3, is below its start, 5'
+    ):
+        Scope(start=5, stop=3)
+
+
+def test_a_stop_equal_to_the_start_holds_no_row() -> None:
+    assert held(Scope(start=2, stop=2), indexed(1, 2, 3)) == []
+
+
+def test_ends_that_do_not_compare_are_refused() -> None:
+    with pytest.raises(ValueError, match="do not compare: '60339', 60421"):
+        Scope(start='60339', stop=60421)
+
+
+@pytest.fixture
+def scoped() -> RowTable:
+    """Rows 1 to 4, of which the scope holds 2 and 3."""
+    return RowTable(scope=Scope(start=2, stop=4)).rescan(indexed(1, 2, 3, 4))
+
+
+def test_a_row_added_by_hand_is_shown_whatever_the_scope(scoped: RowTable) -> None:
+    added = scoped.add(Row('mine', {'x': 0}))
+
+    assert [row.key for row in added] == ['2', '3', 'mine']
+
+
+def test_an_edit_of_a_row_outside_the_scope_is_kept_and_used_when_it_widens(
+    scoped: RowTable,
+) -> None:
+    edited = scoped.edit('3', {'x': 30})
+
+    narrowed = replace(edited, scope=Scope(start=2, stop=3))
+    widened = replace(narrowed, scope=Scope())
+
+    assert '3' not in narrowed
+    assert narrowed.edits == {'3': {'x': 30}}
+    assert widened['3'].values == {'x': 30}
+
+
+def test_a_table_put_with_a_row_the_scan_has_outside_the_scope_is_refused(
+    scoped: RowTable,
+) -> None:
+    with pytest.raises(SubmitError) as refused:
+        scoped.put([Row('2', {'x': 20}), Row('4', {'x': 40})], columns=('x',))
+
+    assert [(e.entry, e.msg) for e in refused.value.errors] == [
+        ('4', 'the source makes this row outside the scope')
+    ]
+
+
+def test_a_table_put_sets_a_row_added_by_hand_whose_key_the_scan_gives_outside(
+    scoped: RowTable,
+) -> None:
+    added = RowTable(scope=scoped.scope).add(Row('1', {'x': 0})).rescan(scoped.scan)
+
+    put = added.put([Row('1', {'x': 10})], columns=('x',))
+
+    assert put['1'].values == {'x': 10}
+
+
+def test_the_rows_removed_in_scope_are_those_a_person_sees_removed(
+    scoped: RowTable,
+) -> None:
+    removed = replace(scoped, scope=Scope()).remove_each(['1', '2'])
+
+    assert replace(removed, scope=scoped.scope).removed_in_scope == {'2'}
+
+
+def test_a_row_added_by_hand_with_the_key_of_a_row_outside_the_scope_is_refused(
+    scoped: RowTable,
+) -> None:
+    with pytest.raises(SubmitError, match='outside the scope'):
+        scoped.add(Row('1'))

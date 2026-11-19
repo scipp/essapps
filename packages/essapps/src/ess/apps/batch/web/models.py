@@ -238,13 +238,16 @@ class Runs(BaseModel):
 class BatchRow(BaseModel):
     """
     A batch of the workspace: its label, title and description, what its
-    rows are called, and whether it is the one that follows.
+    rows are called, its scope as text, such as ``Run 60339 \N{EN DASH}`` or
+    ``2 rows named``, empty if it holds every row, and whether it is the one
+    that follows.
     """
 
     label: str
     title: str
     description: str
     words: Words
+    scope: str
     follows: bool
 
 

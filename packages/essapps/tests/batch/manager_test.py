@@ -20,6 +20,7 @@ from ess.apps.batch import (
     Header,
     NotKept,
     Row,
+    Scope,
     Source,
     status_texts,
 )
@@ -270,6 +271,28 @@ def test_a_title_and_description_changed_are_kept(
     assert _again(client, definitions).batches() == {label: header}
 
 
+def test_a_scope_given_at_making_and_changed_is_kept(
+    manager: BatchManager,
+    client: Client,
+    definitions: FolderDefinitions,
+    sample: Measure,
+) -> None:
+    for run, name in enumerate(['water', 'oil', 'sds'], start=1):
+        sample(run, name)
+    label = manager.create(
+        'plain', title='Morning', source='pairs', scope=Scope(start=2)
+    )
+    batch = manager.batch(label)
+    assert [row.key for row in batch.rows] == ['2', '3']
+
+    manager.edit(label, scope=Scope(start=2, stop=3))
+
+    assert [row.key for row in batch.rows] == ['2']
+    again = _again(client, definitions)
+    assert again.batches()[label].scope == Scope(start=2, stop=3)
+    assert [row.key for row in again.batch(label).rows] == ['2']
+
+
 def test_a_batch_removed_is_gone_with_its_definitions_and_its_records_stay(
     manager: BatchManager,
     client: Client,
@@ -349,6 +372,22 @@ def test_a_header_change_that_is_refused_changes_nothing(
     assert manager.batches() == {'b': Header('Morning')}
 
 
+def test_a_scope_change_that_is_refused_leaves_the_rows_of_the_batch(
+    manager: BatchManager, refusing: Refusing, sample: Measure
+) -> None:
+    sample(1, 'water')
+    sample(2, 'oil')
+    label = manager.create('plain', title='Morning', source='pairs')
+    batch = manager.batch(label)
+    refusing.part = 'header'
+
+    with pytest.raises(NotKept):
+        manager.edit(label, scope=Scope(start=2))
+    assert batch.scope == Scope()
+    assert [row.key for row in batch.rows] == ['1', '2']
+    assert manager.batches()[label].scope == Scope()
+
+
 def test_a_batch_whose_removal_is_refused_after_its_header_is_gone_keeps_its_label(
     manager: BatchManager,
     refusing: Refusing,
@@ -424,6 +463,17 @@ def test_a_row_counts_as_shown_if_any_batch_of_its_source_shows_it(
         batch.rows = batch.rows.remove_each(removed).add(Row(f'mine-{label}', {}))
 
     assert manager.counts().outside == {'pairs': 1}  # row 3, removed in both
+
+
+def test_a_row_outside_the_scope_of_every_batch_of_its_source_counts_in_no_batch(
+    manager: BatchManager, sample: Measure
+) -> None:
+    for run, name in enumerate(['water', 'oil', 'sds', 'salt'], start=1):
+        sample(run, name)
+    manager.create('plain', title='Morning', source='pairs', scope=Scope(stop=2))
+    manager.create('plain', title='Evening', source='pairs', scope=Scope(start=4))
+
+    assert manager.counts().outside == {'pairs': 2}  # rows 2 and 3
 
 
 @pytest.mark.parametrize('broken', ['not registered', 'raises'])

@@ -24,6 +24,7 @@ from ess.apps.batch import (
     NotKept,
     Row,
     RowSource,
+    Scope,
 )
 from ess.apps.batch.auto import Automatic, Follow, every
 from ess.apps.folder import open_folder
@@ -750,6 +751,23 @@ def test_reduce_without_a_scan_reduces_the_rows_that_arrived_at_the_last_scan(
     client.wait(list(records.values()))
 
 
+def test_a_loop_reduces_the_rows_of_the_scope_and_those_arriving_in_it(
+    client: Client, sample: Measure
+) -> None:
+    batch = Batch(
+        client, PLAIN, columns=COLUMNS, label='scan', source=pair, scope=Scope(start=2)
+    )
+    loop = Automatic(batch, at={'sample'})
+    sample(1, 'water')
+    sample(2, 'oil')
+
+    first = loop.step()
+    sample(3, 'sds')
+    second = loop.step()
+
+    assert (list(first), list(second)) == (['2'], ['3'])
+
+
 # One loop of Follow
 
 
@@ -905,3 +923,20 @@ def test_every_calls_the_actions_in_turn_until_the_block_ends() -> None:
         pass
 
     assert called == [0, 1, 2]
+
+
+def test_widening_the_scope_of_the_batch_that_follows_reduces_the_rows_it_now_holds(
+    manager: BatchManager, refusing: Refusing, client: Client, sample: Measure
+) -> None:
+    for run, name in enumerate(['water', 'oil', 'sds'], start=1):
+        sample(run, name)
+    manager.create('plain', title='A', source='pairs', scope=Scope(start=3), label='a')
+    follow = Follow(manager, refusing)
+    follow.on('a')
+    client.wait(follow.step())
+
+    manager.edit('a', scope=Scope())
+    records = follow.step()
+
+    client.wait(records)
+    assert sorted(records) == ['1', '2']

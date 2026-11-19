@@ -40,7 +40,8 @@ COLUMNS = ('sample', 'sample_transmission')
 def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
     """
     A row for each sample run, in the order measured, keyed by its run, so that
-    a sample measured twice has two rows. Where several transmission runs have the
+    a sample measured twice has two rows, and indexed by its run number, none
+    if the run is not a number. Where several transmission runs have the
     sample's name, the last measured is the row's. A sample run without a name
     has an empty transmission cell.
 
@@ -62,14 +63,21 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
         if name in transmissions:
             values['sample_transmission'] = transmissions[name]
         info = {} if name is None else {'name': str(name)}
-        rows.append(Row(str(f.metadata.get('run', f.ref.file)), values, info=info))
+        key = str(f.metadata.get('run', f.ref.file))
+        rows.append(Row(key, values, info=info, index=_run_number(f)))
     return rows
+
+
+def _run_number(f: FileInfo) -> int | None:
+    """The run number of a file, ``None`` if its run is not a number."""
+    run = str(f.metadata.get('run', ''))
+    return int(run) if run.isdigit() else None
 
 
 def _measured(f: FileInfo) -> tuple[int, str]:
     """The order measured: by run number; a file without one last, by identity."""
-    run = str(f.metadata.get('run', ''))
-    return (int(run), '') if run.isdigit() else (sys.maxsize, f.ref.file)
+    run = _run_number(f)
+    return (sys.maxsize, f.ref.file) if run is None else (run, '')
 
 
 SOURCES = {
@@ -78,6 +86,7 @@ SOURCES = {
         columns=COLUMNS,
         words=Words(one='sample run', many='sample runs'),
         name='name',
+        index='Run',
     )
 }
 """The sources of LoKI's batches, by name."""

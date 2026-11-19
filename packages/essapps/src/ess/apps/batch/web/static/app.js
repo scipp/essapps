@@ -305,8 +305,8 @@ async function countBatches() {
   drawBatches();
 }
 
-// The list of batches, each a link to its page, with its counts once counted,
-// or why it could not be counted; the batch of this page is marked.
+// The list of batches, each a link to its page, with its scope, and its counts
+// once counted, or why it could not be counted; the batch of this page is marked.
 function drawBatches() {
   if (!view.batchData) return;
   const counted = view.counts?.rows ?? {};
@@ -325,6 +325,7 @@ function drawBatches() {
           h('small', {text: batch.label}),
           batch.description && h('div', {class: 'hint', text: batch.description}),
         ),
+        h('td', {text: batch.scope}),
         h('td', {class: 'n', text: n ? `${all} ${all === 1 ? batch.words.one : batch.words.many}` : ''}),
         h(
           'td',

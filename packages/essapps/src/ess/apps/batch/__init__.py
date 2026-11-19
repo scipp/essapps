@@ -23,7 +23,7 @@ from .state import (
     refused_again,
     status_texts,
 )
-from .table import EMPTY, Row, RowTable
+from .table import EMPTY, Index, Row, RowTable, Scope
 
 __all__ = [
     'EARLIER',
@@ -37,11 +37,13 @@ __all__ = [
     'FileInfo',
     'FolderDefinitions',
     'Header',
+    'Index',
     'NotKept',
     'Row',
     'RowSource',
     'RowState',
     'RowTable',
+    'Scope',
     'Source',
     'Words',
     'arrived',
