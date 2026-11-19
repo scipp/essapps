@@ -30,14 +30,14 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
             rows.append(Row(str(run), values, info={'name': str(name)}, index=int(run)))
     return rows
 
-SOURCES = {'sample-runs': Source(pair_by_sample, columns=('sample', 'sample_transmission'),
-                                 name='name', index='Run')}
+SOURCES = {'sample-runs': Source(pair_by_sample, fills=('sample', 'sample_transmission'),
+                                 row_name='name', index_title='Run')}
 
 client = open_folder(folder, BINDINGS)
 definitions = FolderDefinitions(folder)
 manager = BatchManager(client, sources=SOURCES, definitions=definitions,
                        defaults={IOFQ.name: Defaults(staged=True)})
-if not manager.batches():                  # a new folder: one batch to start with
+if not manager.headers():                  # a new folder: one batch to start with
     manager.create(IOFQ.name, title='Sample runs', source='sample-runs')
 
 def draw_iofq(shown: Sequence[Shown]) -> dict:
@@ -71,14 +71,15 @@ batch.cancel()
 
 ## The model: tables and one cycle
 
-A batch is a set of tables. Five of them are stored, and each has one writer. All others are derived: they are computed from the stored tables at each read and stored nowhere.
+A batch is a set of tables. Six of them are stored, and each has one writer. All others are derived: they are computed from the stored tables at each read and stored nowhere.
 
 | Stored table | Written by | Holds | One table per |
 |---|---|---|---|
 | files | the instrument | the files that the file source lists, with their metadata | workspace |
 | corrections | `CorrectedFiles` | metadata of a file set by hand | workspace folder |
+| header | `BatchManager` | the names of the spec and the source, the columns, the title, the description, the scope | label of a batch of the manager |
 | edits | `Batch.rows` | cells set, rows added or removed, by key | label |
-| settings | `Batch.settings` | the parameters that are not columns | label |
+| settings | `Batch.settings`; the first by the manager, before any `Batch` of the label exists | the parameters that are not columns | label |
 | records | the workspace | a record per submission, with its status | workspace |
 
 ```python
@@ -90,7 +91,7 @@ results  = newest record per key, under the label
 state    = requests joined with results on key
 ```
 
-A *correction* is a value of a file's metadata set by hand ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)). The corrections, edits, and settings are the *definition* of a batch, the part that a person makes, through a page, the command, or code. [Where the definition is kept](#where-the-definition-is-kept) says where they are stored and when they are read. A request is *resolved* as a record holds it ([Rules](#rules)). `state` is what `batch.state()` gives and a page shows: each row with its result, its status, and `changed`, the parameters at which the row's request differs from its result's ([Rules](#rules)).
+A *correction* is a value of a file's metadata set by hand ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)). The corrections, header, edits, and settings are the *definition* of a batch, the part that a person makes, through a page, the command, or code. [Where the definition is kept](#where-the-definition-is-kept) says where they are stored and when they are read. A request is *resolved* as a record holds it ([Rules](#rules)). `state` is what `batch.state()` gives and a page shows: each row with its result, its status, and `changed`, the parameters at which the row's request differs from its result's ([Rules](#rules)).
 
 An edit sets only columns. A value at a name that is not a column makes its row `incomplete` (`not a column`). A `Batch` made again on the same stored tables reads the same state.
 
@@ -102,6 +103,7 @@ flowchart TB
     records[(records)]
     files[(files)]
     corrections[("corrections<br>per workspace folder")]
+    header[("header<br>per label")]
     edits[("edits<br>per label")]
     settings[("settings<br>per label")]
     scan["scan = source(files with corrections)"]
@@ -113,15 +115,15 @@ flowchart TB
     submit{{"batch.reduce(keys)"}}
     workspace ==> records ==> results ==> state ==> rule ==> submit ==> workspace
     instrument --> files
-    person --> corrections & edits & settings
+    person --> corrections & header & edits & settings
     files & corrections --> scan --> rows
-    edits --> rows
+    header & edits --> rows
     rows & settings --> requests --> state
     person -. reads the page .- state
     classDef stored stroke:#2a9d8f,stroke-width:3px
     classDef derived stroke:#6c8ebf,stroke-width:1px,stroke-dasharray:6 4
     classDef cycle stroke:#d08700,stroke-width:3px
-    class files,corrections,edits,settings,records stored
+    class files,corrections,header,edits,settings,records stored
     class scan,rows,requests,results,state derived
     class rule,submit cycle
 ```
@@ -193,7 +195,7 @@ A failed or cancelled row reads `failed` or `cancelled` whether or not its reque
 
 **Not in this picture:**
 
-- The fixed part of a batch: the spec, the columns, and the source. It is code in the technique's package.
+- What the names in the header stand for. The names of the spec and of the source are fixed when a batch is made; the version of the spec that the workspace binds, and the function of the source, are code in the technique's package, read at each start ([The batches of a workspace](#the-batches-of-a-workspace)).
 - A chain: a second batch whose scan reads the results of the first ([Chains](#chains)).
 - Publishing results.
 
@@ -341,7 +343,7 @@ app = create_app(pages)
 
 ## Where the definition is kept
 
-The *definition* of a batch is the corrections, the edits, and the settings ([The model](#the-model-tables-and-one-cycle)). Give the batch and the file source the *definitions* of the workspace, and a batch made again, after a restart or in another process, starts with them:
+The *definition* of a batch is the corrections, the header, the edits, and the settings ([The model](#the-model-tables-and-one-cycle)). Give the batch and the file source the *definitions* of the workspace, and a batch made again, after a restart or in another process, starts with them:
 
 ```python
 from ess.apps.batch import FolderDefinitions
@@ -354,7 +356,7 @@ batch = Batch(client, IOFQ, columns=..., label='auto/iofq', source=pair_by_sampl
 batch.scan()                                                 # the scan, with the edits kept on top
 ```
 
-Without definitions, all three stay in memory. The edits and settings are read when the `Batch` is made, the corrections when the `CorrectedFiles` is made, and nothing reads them again while these live. Each change is written to the definitions before it is made, so a change that they refuse raises `NotKept` (an `OSError`) and changes nothing; the page answers it with a message, and its settings form keeps what it holds, to apply again. A scan writes nothing.
+Without definitions, the corrections, the edits and the settings stay in memory. The edits and settings are read when the `Batch` is made, the corrections when the `CorrectedFiles` is made, and nothing reads them again while these live. Each change is written to the definitions before it is made, so a change that they refuse raises `NotKept` (an `OSError`) and changes nothing; the page answers it with a message, and its settings form keeps what it holds, to apply again. A scan writes nothing.
 
 What is written is what is assigned: `batch.rows = ...`, `batch.settings = ...`, `batch.put(...)`, and `files.correct(...)`, `files.correct_each(...)`, `files.reset(...)`. `batch.settings` is a read-only copy, so a change inside it changes nothing, and settings that name a column raise `ValueError`. The methods of `RowTable` return a new table. Its `edits` and a row's `values` are plain dicts, though: a change made in them is not written and is lost at a restart, so never change them in place.
 
@@ -364,7 +366,7 @@ What is written is what is assigned: `batch.rows = ...`, `batch.settings = ...`,
 definitions/corrections.json                    every file source of the workspace
 definitions/labels/auto%2Fiofq/edits.json       what was set by hand on the rows
 definitions/labels/auto%2Fiofq/settings.json    a template, which essapps-batch reads
-definitions/labels/auto%2Fiofq/header.json      title, description, source and scope; written by the manager
+definitions/labels/auto%2Fiofq/header.json      spec, columns, source, title, description, scope; written by the manager
 definitions/following.json                      the label of the batch that follows; written by Follow
 ```
 
@@ -382,6 +384,7 @@ The edits hold only what was set by hand, so a cell from the scan follows the fi
 - An edit at a column that is gone makes its row `incomplete` (`not a column`). The page offers to remove it.
 - Settings of another version of the spec are read as they are. The settings form shows those that fit, and the page names the others with their values above it. `state()` and `reduce` refuse what the spec bound does not take. Nothing is written until a person presses **Apply**, which writes the settings of the form.
 - Settings of a spec of another name raise `ValueError` when the batch is made, naming the file and both specs.
+- Settings at a column of the batch raise `ValueError` when the batch is made, naming the file and the columns. A `Batch` on the label with fewer columns, such as one of the command, writes such settings.
 - A correction of a file no longer listed is kept, and not used.
 - A file that is not of the shape described raises `ValueError` naming the file and the entry, when the batch or the `CorrectedFiles` is made.
 
@@ -396,46 +399,68 @@ A `BatchManager`, *the manager*, makes, lists, changes and removes the batches o
 ```python
 from ess.apps.batch import BatchManager, Defaults, Scope, Source, Words
 
-SOURCES = {'sample-runs': Source(pair_by_sample, columns=('sample', 'sample_transmission'),
-                                 words=Words(one='sample run', many='sample runs'), name='name',
-                                 index='Run')}
+SOURCES = {'sample-runs': Source(pair_by_sample, fills=('sample', 'sample_transmission'),
+                                 words=Words(one='sample run', many='sample runs'),
+                                 row_name='name', index_title='Run')}
 DEFAULTS = {IOFQ.name: Defaults(settings=SETTINGS, staged=True)}
 
 manager = BatchManager(client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS)
-label = manager.create(IOFQ.name, title='Afternoon', source='sample-runs', columns=('thickness',),
+label = manager.create(IOFQ.name, title='Afternoon', source='sample-runs',
+                       columns=('sample', 'sample_transmission', 'can'),
                        scope=Scope(start=60339))
-manager.batches()      # {'20261118-130204': Header(title='Afternoon', description='',
-                       #                            source='sample-runs', scope=Scope(start=60339))}
+manager.headers()      # {'20261118-130204': Header(spec='loki-iofq',
+                       #     columns=('sample', 'sample_transmission', 'can'),
+                       #     source='sample-runs', title='Afternoon', description='',
+                       #     scope=Scope(start=60339))}
 counts = manager.counts()   # makes and scans every batch
 counts.states          # {label: {key: RowState}} of each batch counted; status_texts(...) names their statuses
 counts.failed          # {label: reason} of each batch that could not be made or scanned
 counts.outside         # {source: rows that no batch of it shows}
 batch = manager.batch(label)   # the Batch, made and scanned at the first call
-manager.edit(label, title='Afternoon, 2 mm cells')
-manager.edit(label, scope=Scope(start=60339, stop=60421))   # the series ends
+manager.change(label, title='Afternoon, 2 mm cells')
+manager.change(label, scope=Scope(start=60339, stop=60421))   # the series ends
 manager.remove(label)
+```
+
+What a batch is, and where each part comes from:
+
+| | fixed at making | changed by a person | from code, by name |
+|---|---|---|---|
+| naming | label | title, description | |
+| rows | name of the source | scope, edits | the `Source` |
+| computation | name of the spec, columns | settings | the version of the spec bound, `staged`, `draw`, the first settings |
+
+Each part that is kept is in one file of the label, with one writer at a time:
+
+```
+header.json     BatchManager      spec, columns, source; title, description; scope
+settings.json   Batch.settings    the settings, as a template; its spec and blanks a copy of the header's;
+                                  the first written by create
+edits.json      Batch.rows        the edits
 ```
 
 What the manager gives the `Batch` of a label:
 
 | Argument | Comes from |
 |---|---|
-| `spec` | `bound_spec(client, name)`: the spec of the name kept that the workspace binds, the highest version if several |
-| `source`, `selector` | the `Source` registered under the name given to `create` |
-| `columns` | those of the source, then those given to `create` |
-| first `settings` | `Defaults.settings` of the spec, or `create(..., settings=...)`; those that are columns are left out |
+| `spec` | `bound_spec(client, header.spec)`: the spec of that name that the workspace binds, the highest version if several |
+| `source`, `selector` | the `Source` registered under `header.source` |
+| `columns` | `header.columns`: those given to `create`, else those that the source fills |
+| `settings` | `settings.json`; else `Defaults.settings` of the spec, those that are columns left out |
 | `staged` | `Defaults.staged` of the spec |
 | `label` | given to `create`, or the time of making, `YYYYMMDD-HHMMSS`, with `-2`, `-3`, ... if that is taken |
-| `scope` | the header: `create(..., scope=...)`, then `edit(..., scope=...)` |
+| `scope` | `header.scope`: `create(..., scope=...)`, then `change(..., scope=...)` |
 | `persist` | always, so the workspace needs a store, as a folder has |
 | `definitions` | those of the manager |
 
-- `create` writes the settings, with the spec and the columns, then the header. The spec, the source and the columns are fixed from then on. `edit` changes the title, the description and the scope; a scope is written to the header, then given to the `Batch` of the label if it was made, whose rows change at once.
+- `create` takes the name of a spec. It refuses an empty title, a column that is not a parameter of the spec or is named twice, and columns that lack one that the source fills; then it writes the first settings, `Defaults.settings` of the spec or `create(..., settings=...)`, and the header. The names of the spec and the source, and the columns, are fixed from then on. What the names stand for is read from code at each start: a later `Defaults.staged` applies to every batch, a later `Defaults.settings` only to batches made after it. `batch(label)` refuses a batch whose source now fills a column that the batch lacks.
+- `change` changes the title, the description and the scope, and refuses an empty title; a scope is written to the header, then given to the `Batch` of the label if it was made, whose rows change at once.
+- A header without `settings.json` is a batch with the default settings of its spec, as registered at each start.
 - A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. `create` refuses a label that has definitions or records.
 - `remove` removes the header, the edits and the settings of a batch, and releases its stage. Its records stay, and those running keep running. A `Batch` handed out before must not be used after its removal, so ask the manager for the batch each time.
 - A `Batch` made in code without the manager has no header and is not listed.
 - `counts` makes every batch not made yet, which scans it, and scans every other batch with a source, so the rows of each batch are those of the files now. It gives the state of each row of each batch, and the rows of each source that no batch of it shows: a row counts as shown if any batch shows it, so a row outside the scope of every batch of its source counts there. A source is called once more only if no batch of it was scanned. A batch that cannot be made or scanned, such as one whose source is no longer registered or raises, gets its reason in `failed`, and its source is left out of `outside`. It costs one scan per batch, so call it when a person asks.
-- `words`, `name` and `info` of a `Source` say what the page of a batch calls a row, which entry of `Row.info` names it, and which other entries it shows. `index` is what the page calls the index of a row, such as `'Run'`.
+- `words`, `row_name` and `row_info` of a `Source` say what the page of a batch calls a row, which entry of `Row.info` names it, and which other entries it shows. `index_title` is what the page calls the index of a row, such as `'Run'`.
 
 One loop per application, `Follow`, reduces the rows of one batch as its files arrive: each step is a step of an `Automatic` on the batch that follows ([Automatic reduction](#automatic-reduction)), with `at` the columns of its source. It reduces the rows of the scope only, and a slice holds every row whose index is inside it, whenever its file is listed: so widening the scope of the batch that follows makes the next step reduce every row that the scope now holds and that has no result.
 
@@ -688,7 +713,7 @@ One command holds the folder at a time. If a command was killed, the next one fi
 [The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows each batch in a browser: how to run it, its layers, and its limits.
 The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. The page of a batch with a source offers a switch **Follow**: it makes the batch the one that the application's `Follow` steps, so no other batch follows, and the page of another batch says which one does. A step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, at the columns of the source, with the batch's settings, whatever the form holds. Follow leaves a row that a person changed to the person, who reduces it with **Reduce**: while following, such a row says "Set by hand, so Follow leaves it to you: reduce it." An action reduces nothing that a person did not ask for, and Apply reduces nothing either: the next step reduces the rows without a result with the settings applied. The batch that follows is kept in `following.json`, so a restart resumes.
 
-`create_app(pages)` makes the app: the page of each batch of the manager at `/batches/<label>/`, and `/`, which redirects to the page of the batch that follows, else of the last label. `Pages(manager, follow, ...)` (`ess.apps.batch.web.pages`) holds what the pages share: the title of the application (`title`), how to draw the results of each spec (`draw`, by the name of the spec), the correction of the metadata of runs (`files`, `marks`), `Follow` and its timer, and one lock that every request of every page and each step of Follow take. What a page calls a row and shows of it are the `words`, `name` and `info` of the batch's `Source`. Every page has a view **Batches**, which lists the batches of the manager, each a link to its page, with its scope, and counts their rows by status when it is opened (`counts`, which scans every batch), with the statuses of the page of each batch. `Server` (`ess.apps.batch.web.server`) holds what the page of one batch shows and does, and its actions return `State`, the whole of what the page shows. The browser renders `State` and sends the actions.
+`create_app(pages)` makes the app: the page of each batch of the manager at `/batches/<label>/`, and `/`, which redirects to the page of the batch that follows, else of the last label. `Pages(manager, follow, ...)` (`ess.apps.batch.web.pages`) holds what the pages share: the title of the application (`title`), how to draw the results of each spec (`draw`, by the name of the spec), the correction of the metadata of runs (`files`, `marks`), `Follow` and its timer, and one lock that every request of every page and each step of Follow take. What a page calls a row and shows of it are the `words`, `row_name` and `row_info` of the batch's `Source`. Every page has a view **Batches**, which lists the batches of the manager, each a link to its page, with its scope, and counts their rows by status when it is opened (`counts`, which scans every batch), with the statuses of the page of each batch. `Page` (`ess.apps.batch.web.page`) holds what the page of one batch shows and does, and its actions return `State`, the whole of what the page shows. The browser renders `State` and sends the actions.
 
 `draw(shown)` gets the completed results of the rows selected, as `Shown` (`key`, `name`, `record`, `outdated`, `color`), and returns a Plotly figure as a dict. `ess.apps.batch.web.plots` draws curves with the page's colours.
 
@@ -711,7 +736,7 @@ python -m ess.apps.batch.web.demo ws       # the rows show as done
 |---|---|
 | **Load table…** | `batch.scan()`, then `batch.put(frames.rows_of(frames.read_table(path), spec.params, batch.columns))`, refused with a row that the source makes and the scope leaves out |
 | **Download as CSV**, **as XLSX** | `frames.batch_table(batch, states)`, written with `frames.write_table` |
-| **Load settings…**, then **Apply** | `batch.settings = text.settings_of(batch, text.load_template(path))`, refused if of another spec, another version of it, or with other blanks than the columns; the file fills the settings form, and Apply writes it |
+| **Load settings…**, then **Apply** | `batch.settings = text.checked_settings(batch, text.load_template(path))`, refused if of another spec, another version of it, or with other blanks than the columns; the file fills the settings form, and Apply writes it |
 | **Download settings** | `text.write_template(batch.template(), path)`, refused while the settings form holds a change |
 | **Download selected**, **Download all** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows, zipped with their table |
 
@@ -724,10 +749,10 @@ python -m ess.apps.batch.web.demo ws       # the rows show as done
 | your pairing and the batch | a function over plain data | there is no behaviour to abstract |
 | `Batch` and the framework | `Client`, the class | one implementation; a fake would have to redo the validation that a table shows |
 | `Form` and the framework | `Listing`, a pydantic model of the params, and `Form.held()` | `Form` needs neither `Client` nor `WorkflowSpec` |
-| the logic and the page | the methods of `BatchManager`, `Follow`, `Batch` and `RowTable` | `Pages` and `Server` hold what the pages show and do, so a rule is written once |
-| `Server` and the browser | `State` and the actions of `Server` | the browser renders `State` and sends actions; `Server` has no HTTP in it |
+| the logic and the page | the methods of `BatchManager`, `Follow`, `Batch` and `RowTable` | `Pages` and `Page` hold what the pages show and do, so a rule is written once |
+| `Page` and the browser | `State` and the actions of `Page` | the browser renders `State` and sends actions; `Page` has no HTTP in it |
 
-`ess.apps` and `ess.apps.panel` import nothing from `ess.apps.batch`, and `ess.apps.batch` imports no widget library and nothing of `ess.apps.batch.web`. `ess.apps.batch.web.server`, `ess.apps.batch.web.pages` and `ess.apps.batch.web.models` import neither `fastapi` nor `starlette`; only `ess.apps.batch.web.api` does. A test enforces this.
+`ess.apps` and `ess.apps.panel` import nothing from `ess.apps.batch`, and `ess.apps.batch` imports no widget library and nothing of `ess.apps.batch.web`. `ess.apps.batch.web.page`, `ess.apps.batch.web.pages` and `ess.apps.batch.web.models` import neither `fastapi` nor `starlette`; only `ess.apps.batch.web.api` does. A test enforces this.
 
 `ess.apps.batch.web` shows the batches as web pages: a FastAPI server and plain JavaScript. It is experimental and the candidate for a hosted interface.
 
@@ -738,7 +763,7 @@ python -m ess.apps.batch.web.demo ws       # the rows show as done
 | your source | plain data |
 | rules of rows and states | plain values; see `packages/essapps/tests/batch/table_test.py` and `state_test.py` |
 | submitting, stages, refusals, reruns | `local()` with `ess.apps.testing.FakeFiles` and fake workflows; a fixture starts in milliseconds |
-| the page | `Pages` and the `Server` of `pages.page(label)`, or `create_app(pages)` with FastAPI's `TestClient(app, base_url=f'http://testserver/batches/{label}/')`; see `packages/essapps/tests/batch/web_test.py` |
+| the page | `Pages` and the `Page` of `pages.page(label)`, or `create_app(pages)` with FastAPI's `TestClient(app, base_url=f'http://testserver/batches/{label}/')`; see `packages/essapps/tests/batch/web_test.py` |
 
 ```python
 fake = FakeFiles('p1', tmp_path)

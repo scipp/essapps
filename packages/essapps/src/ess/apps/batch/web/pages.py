@@ -3,8 +3,8 @@
 """
 What the pages of the batches of a workspace share, without HTTP:
 :class:`Pages`. :mod:`.api` serves the page of each batch of a
-:class:`~ess.apps.batch.BatchManager` at ``/batches/<label>/``; the
-:class:`~.server.Server` of a page reads what is shared from here.
+:class:`~ess.apps.batch.BatchManager` at ``/batches/<label>/``; each
+:class:`~.page.Page` reads what is shared from here.
 
 The pages share one lock. Every request of every page and each step of Follow
 take it, so that what the pages share, such as the corrections of runs and
@@ -39,7 +39,7 @@ from .. import BatchManager, CorrectedFiles, RowState, Scope, Words, refused_aga
 from ..auto import Follow
 from . import forms
 from .models import BatchCounts, Batches, BatchRow
-from .server import Draw, Problem, Server, page_statuses
+from .page import Draw, Page, Problem, page_statuses
 
 
 class Missing(Exception):
@@ -59,7 +59,7 @@ class Pages:
     title:
         The title of the application.
     draw:
-        Draws results (see :data:`~.server.Draw`), by the name of the spec of
+        Draws results (see :data:`~.page.Draw`), by the name of the spec of
         a batch.
     files:
         The file source of the client, to correct runs in.
@@ -109,26 +109,26 @@ class Pages:
         self._batches_version = 0
         self.corrected = 0
         self.failure: str | None = None
-        self._pages: dict[str, Server] = {}
+        self._pages: dict[str, Page] = {}
 
-    def page(self, label: str) -> Server:
+    def page(self, label: str) -> Page:
         """
-        The server of the page of ``label``, made at the first call. Raises
+        The page of ``label``, made at the first call. Raises
         :class:`Missing` if no batch has the label, and
-        :class:`~.server.Problem` if its batch cannot be made, such as when
+        :class:`~.page.Problem` if its batch cannot be made, such as when
         its source raises.
         """
         with self.lock:
-            if label not in self.manager.batches():
+            if label not in self.manager.headers():
                 self._pages.pop(label, None)
                 raise Missing(f'There is no batch {label}.')
-            if (server := self._pages.get(label)) is None:
+            if (page := self._pages.get(label)) is None:
                 try:
-                    server = Server(self, label)
+                    page = Page(self, label)
                 except Exception as error:  # a source is code of the application
                     raise Problem(f'Cannot show {label}: {error}') from None
-                self._pages[label] = server
-            return server
+                self._pages[label] = page
+            return page
 
     def home(self) -> str | None:
         """
@@ -136,14 +136,14 @@ class Pages:
         there is no batch.
         """
         with self.lock:
-            batches = self.manager.batches()
-            if self.follow.label in batches:
+            headers = self.manager.headers()
+            if self.follow.label in headers:
                 return self.follow.label
-            return next(reversed(batches), None)
+            return next(reversed(headers), None)
 
     def tick(self) -> None:
         """
-        A step of Follow, then :meth:`Server.stepped <.server.Server.stepped>`
+        A step of Follow, then :meth:`Page.stepped <.page.Page.stepped>`
         of the page of the batch that follows; :func:`~.api.create_app` calls
         it on a timer. What the step raises is :attr:`failure`, and the next
         step tries again.
@@ -181,7 +181,7 @@ class Pages:
         changed them.
         """
         with self.lock:
-            listed = (tuple(self.manager.batches().items()), self.follow.label)
+            listed = (tuple(self.manager.headers().items()), self.follow.label)
             if listed != self._batches:
                 self._batches = listed
                 self._batches_version += 1
@@ -199,18 +199,18 @@ class Pages:
             key: f'Follow could not reduce it: {forms.message(reason)}'
             for key, reason in self.follow.refused.items()
         }
-        return refused_again(states, source.columns, reasons)
+        return refused_again(states, source.fills, reasons)
 
     def batches(self) -> Batches:
         """The batches, as the Batches view of each page lists them."""
         with self.lock:
             rows = []
-            for label, header in self.manager.batches().items():
+            for label, header in self.manager.headers().items():
                 name, sources = header.source, self.manager.sources
                 # listed even if its source is no longer registered
                 source = None if name is None else sources.get(name)
                 words = Words() if source is None else source.words
-                index = '' if source is None else source.index
+                index = '' if source is None else source.index_title
                 rows.append(
                     BatchRow(
                         label=label,
@@ -227,7 +227,7 @@ class Pages:
         """
         The counts of the manager (:meth:`~ess.apps.batch.BatchManager.counts`)
         in the words of the page: the statuses are those of the page of each
-        batch (:func:`~.server.page_statuses`). Every page and Follow wait
+        batch (:func:`~.page.page_statuses`). Every page and Follow wait
         while it scans.
         """
         with self.lock:

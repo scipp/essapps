@@ -228,7 +228,7 @@ class Follow:
         label = self._label
         if label is None:
             return {}
-        if label not in self._manager.batches():
+        if label not in self._manager.headers():
             self.off()
             return {}
         loop = Automatic(self._manager.batch(label), at=self._at(label))
@@ -241,7 +241,7 @@ class Follow:
         source = self._manager.source(label)
         if source is None:
             raise ValueError(f'{label}: the batch has no source of rows')
-        return set(source.columns)
+        return set(source.fills)
 
     def _keep(self, label: str | None) -> None:
         self._definitions.save(FOLLOWING, following_data(label))

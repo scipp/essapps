@@ -83,10 +83,10 @@ def _measured(f: FileInfo) -> tuple[int, str]:
 SOURCES = {
     'sample-runs': Source(
         pair_by_sample,
-        columns=COLUMNS,
+        fills=COLUMNS,
         words=Words(one='sample run', many='sample runs'),
-        name='name',
-        index='Run',
+        row_name='name',
+        index_title='Run',
     )
 }
 """The sources of LoKI's batches, by name."""

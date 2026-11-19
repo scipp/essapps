@@ -404,7 +404,13 @@ def test_deleting_a_part_never_kept_does_nothing(folder: Path) -> None:
 
 def test_a_header_is_kept_and_read_back(folder: Path) -> None:
     store = FolderDefinitions(folder)
-    header = Header('Sample runs', 'those of May', source='sample-runs')
+    header = Header(
+        spec='plain',
+        columns=COLUMNS,
+        source='sample-runs',
+        title='Sample runs',
+        description='those of May',
+    )
 
     store.save(header_key('a'), header_data(header))
 
@@ -413,7 +419,19 @@ def test_a_header_is_kept_and_read_back(folder: Path) -> None:
 
 
 def test_a_header_without_a_scope_reads_as_every_row() -> None:
-    assert header_of({'title': 'Old'}) == Header('Old', scope=Scope())
+    data = {'spec': 'plain', 'columns': ['sample'], 'title': 'Old'}
+
+    assert header_of(data) == Header(
+        spec='plain', columns=('sample',), title='Old', scope=Scope()
+    )
+
+
+def test_a_header_without_its_spec_and_columns_is_refused(folder: Path) -> None:
+    store = FolderDefinitions(folder)
+    store.save(header_key('a'), {'title': 'Old'})
+
+    with pytest.raises(ValueError, match=r'spec: Field required; columns: '):
+        store.load(header_key('a'), header_of)
 
 
 @pytest.mark.parametrize(
@@ -431,19 +449,20 @@ def test_a_scope_is_written_as_a_slice_or_as_keys(
     folder: Path, scope: Scope, written: dict[str, object]
 ) -> None:
     store = FolderDefinitions(folder)
-    data = header_data(Header('Morning', scope=scope))
+    header = Header(spec='plain', columns=COLUMNS, title='Morning', scope=scope)
+    data = header_data(header)
 
     store.save(header_key('a'), data)
 
     assert data['scope'] == written
-    assert store.load(header_key('a'), header_of) == Header('Morning', scope=scope)
+    assert store.load(header_key('a'), header_of) == header
 
 
 def test_a_header_that_cannot_be_read_is_refused_naming_the_file_and_the_entry(
     folder: Path,
 ) -> None:
     store = FolderDefinitions(folder)
-    store.save(header_key('a'), {'title': 3})
+    store.save(header_key('a'), {'spec': 'plain', 'columns': [], 'title': 3})
 
     with pytest.raises(ValueError, match=r'header\.json: title: '):
         store.load(header_key('a'), header_of)

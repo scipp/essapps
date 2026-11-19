@@ -87,7 +87,7 @@ pages.py          Pages: what the pages share, without HTTP: the manager,
                   Follow and its tick, the corrections of runs, the list of
                   batches and its counts, one lock around every request and
                   step
-server.py         Server: what the page of one batch does, without HTTP: the
+page.py           Page: what the page of one batch does, without HTTP: the
                   settings form (a draft until Apply), the refusals, how the
                   last step of Follow went
    ▼

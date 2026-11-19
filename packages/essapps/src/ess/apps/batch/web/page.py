@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What the page of one batch does, without HTTP: :class:`Server`. :mod:`.api`
+What the page of one batch does, without HTTP: :class:`Page`. :mod:`.api`
 serves it. This module imports neither ``fastapi`` nor ``starlette``, so
 another view of a batch can call the same actions and render the same
 :class:`~.models.State`.
 
-The server of a page holds what a person changes on it: the form of the
+A :class:`Page` holds what a person changes on it: the form of the
 settings and the refusals. It asks :class:`~.pages.Pages` for the rest: the
 :class:`~ess.apps.batch.Batch` of its label with its rows and settings, kept
 by the manager, the corrections of runs, and Follow. The batch and the
@@ -15,31 +15,31 @@ corrections keep their part in their definitions, if given them
 and answers a :class:`Problem`.
 
 The form of the settings is a draft of the batch's settings. An edit changes
-the form only; :meth:`Server.apply_settings` writes it to the batch, and is
-refused while something is missing; :meth:`Server.discard_settings` shows the
+the form only; :meth:`Page.apply_settings` writes it to the batch, and is
+refused while something is missing; :meth:`Page.discard_settings` shows the
 batch's settings again. "Load settings" and "Put these settings in the form"
 fill the form, all or none. While the form holds a change, a reduction by a person
 and a download of the settings are refused, so that nothing is reduced or
 saved with settings other than those shown. Settings that the form cannot
 show, such as those kept for another version of the spec, are named in the
-state's ``settings_problem`` and kept until Apply. The server writes the
+state's ``settings_problem`` and kept until Apply. A ``Page`` writes the
 batch's settings only at Apply: the form does not show an assignment by code
 while the server runs.
 
-The page holds only what it shows: the selection, the filter, the tab. Each
-action returns the :class:`~.models.State` after it, and the page polls the
-state about once a second with the ``version`` it has, to see results arrive.
-The version counts the changes made here and those of the client's records,
-which the server reads from ``client.changes`` at each poll. ``start`` tells a
-page that the server started again, so that the same version may be another
-state.
+The page in the browser holds only what it shows: the selection, the
+filter, the tab. Each action returns the :class:`~.models.State` after it, and
+the browser polls the state about once a second with the ``version`` it has,
+to see results arrive. The version counts the changes made here and those of
+the client's records, which a ``Page`` reads from ``client.changes`` at each
+poll. ``start`` tells a page that the server started again, so that the same
+version may be another state.
 
 A reduction refused raises :class:`Problem`. It says the reasons that no cell
 or setting shows. The others stay in the state until the value of each is
 changed, a setting's by Apply, or a reduction succeeds, so that the page marks
 each at its cell, or at its setting while the form shows the batch's settings.
 Any other request that cannot be done raises :class:`Problem` too, with what
-to tell the person. A server serves one batch to one person, and takes one
+to tell the person. A ``Page`` serves one batch to one person, and takes one
 request at a time, under the lock of all pages.
 
 Statuses are named in a scientist's words: a row that is ``not reduced`` is
@@ -62,7 +62,7 @@ follows, :meth:`Pages.tick <.pages.Pages.tick>` steps it every ``interval``
 seconds, which scans as "Rescan runs" does and reduces the rows that
 :func:`~ess.apps.batch.arrived` gives, at the columns of the source, under the
 lock of all pages, with the batch's settings, whatever the form holds; then
-:meth:`Server.stepped` shows what the step changed. The page of the batch that
+:meth:`Page.stepped` shows what the step changed. The page of the batch that
 follows says what the last step raised, and why rows were not reduced; the
 next step runs all the same. Follow reduces a row for what the files changed,
 never for what a person changed
@@ -119,7 +119,7 @@ from .. import (
 )
 from .. import Row as TableRow
 from ..export import export_table
-from ..text import load_template, settings_of, write_template
+from ..text import checked_settings, load_template, write_template
 from . import forms, plots
 from .models import (
     Action,
@@ -247,20 +247,20 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
 
     @functools.wraps(method)
     def action(*args: P.args, **kwargs: P.kwargs) -> State:
-        server: Server = args[0]  # type: ignore[assignment]
-        with server.lock:
+        page: Page = args[0]  # type: ignore[assignment]
+        with page.lock:
             try:
                 notice = method(*args, **kwargs)
             except NotKept as error:
                 raise Problem(f'The change was not kept: {error}') from None
             finally:
-                server._new_version()
-            return server.state(notice=notice or '')
+                page._new_version()
+            return page.state(notice=notice or '')
 
     return action
 
 
-class Server:
+class Page:
     """
     What the API does for the page of one batch, without HTTP. See the module
     for the rules.
@@ -280,10 +280,10 @@ class Server:
         self.label = label
         source = pages.manager.source(label)
         self.words = Words() if source is None else source.words
-        self._name = None if source is None else source.name
-        self._info = () if source is None else source.info
+        self._name = None if source is None else source.row_name
+        self._info = () if source is None else source.row_info
         # The columns at which Follow reduces a row again; None without a source.
-        self._at = None if source is None else frozenset(source.columns)
+        self._at = None if source is None else frozenset(source.fills)
         batch = self.batch
         self._listing = Listing(batch.client)
         model, listing = batch.spec.params, self._listing
@@ -486,7 +486,7 @@ class Server:
             runs=None if self._marks is None else self.pages.runs_version,
             batches=self.pages.batches_version(),
             label=self.label,
-            title=self.pages.manager.batches()[self.label].title,
+            title=self.pages.manager.headers()[self.label].title,
             application=self.pages.title,
             words=self.words,
             folder=self.pages.folder,
@@ -528,11 +528,11 @@ class Server:
     def _follow(self) -> Following | None:
         if self._at is None:
             return None
-        label, batches = self.pages.follow.label, self.pages.manager.batches()
+        label, headers = self.pages.follow.label, self.pages.manager.headers()
         on = label == self.label
         return Following(
             on=on,
-            other=batches[label].title if not on and label in batches else None,
+            other=headers[label].title if not on and label in headers else None,
             interval=self.pages.follow.interval,
             at=sorted(self._cells.titles[c] for c in self._at),
             failure=self.pages.failure if on else None,
@@ -1164,7 +1164,7 @@ class Server:
                     f'{cannot} it is not a settings file saved from this page.'
                 ) from None
         try:
-            self._fill(settings_of(self.batch, template))
+            self._fill(checked_settings(self.batch, template))
         except (ValueError, KeyError) as error:
             raise Problem(f'{cannot} {forms.message(_why(error))}.') from None
         return f'The form shows the settings of {name}. Apply to use them.'

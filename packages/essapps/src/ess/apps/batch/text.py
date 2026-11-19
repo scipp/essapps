@@ -31,7 +31,8 @@ A file that is written before the records it reads exist names them by label
 
 A template is a YAML file (see :func:`load_template`). :func:`write_template`
 writes each file and reference in its JSON form, which reads back as the same.
-:func:`settings_of` reads the settings of a batch from a template, and
+:func:`checked_settings` reads the settings of a batch from a template, which
+must be of the batch's spec, version and columns, and
 ``write_template(batch.template(), path)`` writes them.
 """
 
@@ -158,7 +159,7 @@ def load_template(path: Path) -> Template:
         raise ValueError(f'{path}: {error}') from None
 
 
-def settings_of(batch: Batch, template: Template) -> dict[str, Any]:
+def checked_settings(batch: Batch, template: Template) -> dict[str, Any]:
     """
     The settings of ``batch`` that ``template`` holds, with files named and
     ``@latest`` read (see :func:`with_named_files` and :func:`with_latest`).

@@ -566,7 +566,7 @@ def test_a_row_reduced_by_another_spec_version_is_outdated(
     with local(proposal='p1', files=files, bind=bind) as client:
         pages = started(client, definitions)
         label = pages.manager.create(
-            PLAIN.name, title='New', source='pairs', columns=('thickness',)
+            PLAIN.name, title='New', source='pairs', columns=COLUMNS
         )
         old = Batch(client, PLAIN, columns=COLUMNS, label=label, source=pair)
         old.scan()
@@ -727,7 +727,7 @@ def test_load_table_refuses_a_row_the_source_makes_outside_the_scope(
     http: TestClient, manager: BatchManager
 ) -> None:
     content = http.get('/api/table.csv').content
-    manager.edit('scan', scope=Scope(start=2))
+    manager.change('scan', scope=Scope(start=2))
 
     loaded = http.post('/api/table', params={'name': 'rows.csv'}, content=content)
 
@@ -855,7 +855,7 @@ def kept(client: Client, fake: FakeFiles, sample: Measure, flaky: Flaky) -> Test
     sample(2, 'sds')
     manager = BatchManager(client, sources=SOURCES, definitions=flaky)
     label = manager.create(
-        STAGED.name, title='Kept', source='pairs', columns=('thickness',), label='kept'
+        STAGED.name, title='Kept', source='pairs', columns=COLUMNS, label='kept'
     )
     files = CorrectedFiles(fake, definitions=flaky)
     return opened(
@@ -1146,9 +1146,7 @@ def test_plotting_and_saving_chosen_rows_reads_their_records_only(
 ) -> None:
     counting = CountingClient(client)
     manager = BatchManager(counting, sources=SOURCES, definitions=definitions)  # type: ignore[arg-type]
-    label = manager.create(
-        STAGED.name, title='Scan', source='pairs', columns=('thickness',)
-    )
+    label = manager.create(STAGED.name, title='Scan', source='pairs', columns=COLUMNS)
     for run in (1, 2, 3):
         sample(run, f's{run}')
     pages = Pages(manager, Follow(manager, definitions), draw={STAGED.name: draw})
@@ -1435,9 +1433,7 @@ def test_a_large_answer_is_compressed_for_a_client_that_accepts_gzip(
 def test_each_batch_has_its_page_at_its_label(
     http: TestClient, manager: BatchManager, pages: Pages
 ) -> None:
-    other = manager.create(
-        STAGED.name, title='Other', source='pairs', columns=('thickness',)
-    )
+    other = manager.create(STAGED.name, title='Other', source='pairs', columns=COLUMNS)
     page = opened(pages, other)
 
     bins(page, 5)
@@ -1537,7 +1533,7 @@ def test_the_batches_view_lists_every_batch_and_the_one_that_follows(
 def test_the_batches_view_shows_the_scope_of_each_batch_in_the_words_of_its_source(
     http: TestClient, manager: BatchManager, scope: Scope, text: str
 ) -> None:
-    manager.edit('scan', scope=scope)
+    manager.change('scan', scope=scope)
 
     (listed,) = http.get('/api/batches').json()['rows']
 
@@ -1549,7 +1545,7 @@ def test_a_page_learns_from_its_poll_that_a_scope_changed(
 ) -> None:
     now = state(http)
 
-    manager.edit('scan', scope=Scope(start=2))
+    manager.change('scan', scope=Scope(start=2))
 
     polled = http.get(
         '/api/state', params={'after': now['version'], 'start': now['start']}
@@ -1656,7 +1652,7 @@ def test_counts_are_given_in_the_words_of_the_page(
 def test_a_page_shows_the_rows_of_its_scope_only(
     http: TestClient, manager: BatchManager
 ) -> None:
-    manager.edit('scan', scope=Scope(start=2))
+    manager.change('scan', scope=Scope(start=2))
 
     assert list(rows(http)) == ['2', '3']
 
@@ -1665,10 +1661,10 @@ def test_bring_back_restores_only_the_rows_removed_that_the_scope_holds(
     http: TestClient, manager: BatchManager
 ) -> None:
     http.post('/api/rows/remove', json={'keys': ['1', '2']})
-    manager.edit('scan', scope=Scope(start=2))
+    manager.change('scan', scope=Scope(start=2))
 
     http.post('/api/rows/restore')
-    manager.edit('scan', scope=Scope())
+    manager.change('scan', scope=Scope())
 
     assert list(rows(http)) == ['2', '3']
     assert state(http)['removed'] == 1
@@ -1679,6 +1675,6 @@ def test_the_rows_removed_that_a_page_counts_are_those_of_its_scope(
 ) -> None:
     http.post('/api/rows/remove', json={'keys': ['1', '2']})
 
-    manager.edit('scan', scope=Scope(start=2))
+    manager.change('scan', scope=Scope(start=2))
 
     assert state(http)['removed'] == 1

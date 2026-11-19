@@ -1,6 +1,6 @@
 # ADR 0011: A person makes the batches of a workspace, each with a scope over the rows of a source
 
-- Status: accepted. Several workflows on one batch are described below and not decided.
+- Status: accepted. Several workflows on one batch are described below and not decided. Amended 2026-11-18: the header holds the spec and the columns.
 - Deciders: Simon
 - Date: 2026-11-18
 
@@ -52,27 +52,29 @@ Problem 3 is not decided (see "Not decided").
 The definitions keep one more part per label, the *header*:
 
 ```json
-{"title": "Afternoon, 2 mm cells",
- "description": "New settings: the collimation changed at 13:00.",
+{"spec": "loki-iofq",
+ "columns": ["sample", "sample_transmission", "can"],
  "source": "sample-runs",
+ "title": "Afternoon, 2 mm cells",
+ "description": "New settings: the collimation changed at 13:00.",
  "scope": {"start": 60339, "stop": null}}
 ```
 
 ```
-definitions/labels/20261118-130204/header.json     title, description, source, scope
+definitions/labels/20261118-130204/header.json     spec, columns, source, title, description, scope
 definitions/labels/20261118-130204/edits.json      cells set, rows added or removed
-definitions/labels/20261118-130204/settings.json   a template: the spec, the columns, the settings
+definitions/labels/20261118-130204/settings.json   a template: the settings, with a copy of the spec and the columns
 definitions/following.json                         the label of the batch that follows, or none
 ```
 
-Making a batch writes its header and its settings, so the spec and the columns are kept from the start.
+Making a batch writes its header and its first settings; the header keeps the spec and the columns.
 A batch has one spec, and a column is a parameter of it.
 What code passes to `Batch` and `create_app` comes from these places for a batch that a person makes:
 
 | Argument | Comes from |
 |---|---|
 | spec | chosen from the specs the workspace binds (`client.specs()`). The name is kept; the version is the one bound, the highest if several are ([ADR 0009](0009-a-record-of-another-spec-stays-readable.md)) |
-| `source`, `selector`, `words`, `name` | chosen as one from the sources that the application registers by name, next to its bindings. A registered source is the function, the columns it fills, the index of a row (below), and these arguments |
+| `source`, `selector`, `words`, `row_name` | chosen as one from the sources that the application registers by name, next to its bindings. A registered source is the function, the columns it fills, the index of a row (below), and these arguments |
 | `columns` | those the source fills, and the parameters that the person makes columns |
 | `label` | generated from the time of making; the manager refuses a label that has definitions or records |
 | first `settings`, `staged`, `draw` | registered by the application for the spec |
@@ -84,7 +86,7 @@ A source is written for the parameter names of a spec.
 So a batch can be made only with a source whose columns are parameters of its spec: `sample-runs` fills `sample` and `sample_transmission`, and fits `loki-iofq`.
 
 A person changes the title, the description and the scope.
-The spec, the source and the columns are fixed when the batch is made.
+The names of the spec and the source, and the columns, are fixed when the batch is made.
 
 ### The scope picks rows, never files
 
@@ -121,12 +123,13 @@ Nothing checks that the batches cover every row or that they do not overlap.
 
 ```python
 manager = BatchManager(client, sources=SOURCES, definitions=definitions)
-label = manager.create(IOFQ, title='Afternoon', source='sample-runs',
-                       columns=('thickness',), scope=Scope(start=60339))
-manager.batches()              # the header of each batch, by label
+label = manager.create('loki-iofq', title='Afternoon', source='sample-runs',
+                       columns=('sample', 'sample_transmission', 'can'),
+                       scope=Scope(start=60339))
+manager.headers()              # the header of each batch, by label
 manager.counts()               # rows per status of each batch; rows of each source in no batch
 manager.batch(label)           # the Batch: state(), reduce(), cancel(), settings
-manager.edit(label, scope=Scope(start=60339, stop=60421))
+manager.change(label, scope=Scope(start=60339, stop=60421))
 manager.remove(label)
 ```
 
@@ -216,7 +219,7 @@ If it is built, the header, the labels and the URL change once more: a label per
 - A person looks at one batch while another runs. All batches share the workspace's queue, so a long reduction still delays the batch that follows (see Open).
 - Problem 3 stays as it is for batches made in code, and is not available for batches that a person makes.
 - `Batch` changes in two places: a row gets an index, and a batch has a scope that its scan applies and that can be set. The page of a batch stays, but for Follow.
-- Follow moves from the server of one page to a loop of the application that serves them all. The loop has the timer, and steps a batch under the lock of its page. The manager takes no part in it.
+- Follow moves from the page of one batch to a loop of the application that serves them all. The loop has the timer, and steps a batch under the lock of its page. The manager takes no part in it.
 - The definitions get two operations they lack: listing the labels, and deleting a part. The layout of `definitions/` stays, with the header added.
 - `essapps-batch reduce --label` reads the header of its label if there is one, and takes the registered sources as it takes the bindings. It looks the kept spec up by name and version today, and has to take the bound version as the manager does.
 - Two rules change. Whether a batch follows is kept; today it belongs to the process, and a restart starts with `--follow` or without. `at` gets a default, the columns of the source; today the application chooses it.

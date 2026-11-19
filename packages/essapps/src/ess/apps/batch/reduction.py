@@ -164,9 +164,10 @@ class Batch:
     ValueError
         If ``settings`` name a column.
     ValueError
-        If ``definitions`` hold edits or settings that cannot be read, or
-        settings of a spec of another name, naming the file and the entry; or
-        if the label is too long to name their file.
+        If ``definitions`` hold edits or settings that cannot be read,
+        settings of a spec of another name, or settings at a column, naming
+        the file and the entry; or if the label is too long to name their
+        file.
     """
 
     def __init__(
@@ -219,7 +220,7 @@ class Batch:
             self._rows = edits
         settings = definitions.load(
             definition.settings_key(self.label),
-            lambda data: definition.settings_of(data, self.spec),
+            lambda data: self._own(definition.settings_of(data, self.spec)),
         )
         if settings is not None:
             self._settings = settings
@@ -306,7 +307,7 @@ class Batch:
         if self._definitions is not None:
             template = Template(self.spec, params=settings, blanks=self.columns)
             key = definition.settings_key(self.label)
-            self._definitions.save(key, definition.settings_data(template))
+            self._definitions.save(key, definition.template_data(template))
         self._settings = settings
 
     def _own(self, settings: Mapping[str, Any]) -> dict[str, Any]:

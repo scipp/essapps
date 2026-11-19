@@ -63,7 +63,7 @@ from .. import (
 from ..auto import Follow, every
 from . import Pages, create_app, plots
 from .api import STATIC
-from .server import Shown
+from .page import Shown
 
 
 class Wavelength(BaseModel):
@@ -207,10 +207,10 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
 SOURCES = {
     'sample-runs': Source(
         pair_by_sample,
-        columns=('sample', 'transmission'),
+        fills=('sample', 'transmission'),
         words=Words(one='sample', many='samples'),
-        name='name',
-        index='Run',
+        row_name='name',
+        index_title='Run',
     )
 }
 """The sources of the demo's batches, by name."""
@@ -321,9 +321,12 @@ def build(
     manager = BatchManager(
         client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS
     )
-    if not manager.batches():
+    if not manager.headers():
         manager.create(
-            DEMO.name, title='Samples', source='sample-runs', columns=('thickness',)
+            DEMO.name,
+            title='Samples',
+            source='sample-runs',
+            columns=('sample', 'transmission', 'thickness'),
         )
 
     def draw(shown: Sequence[Shown]) -> dict[str, object]:

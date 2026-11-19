@@ -34,7 +34,7 @@ def test_the_logic_of_the_toolbox_imports_nothing_of_the_page() -> None:
     assert not any(m.startswith('ess.apps.batch.web') for m in loaded)
 
 
-@pytest.mark.parametrize('module', ['server', 'models', 'pages'])
+@pytest.mark.parametrize('module', ['page', 'models', 'pages'])
 def test_what_the_page_does_and_sends_does_not_depend_on_http(module: str) -> None:
     # The package imports its API, which needs FastAPI. A package without that
     # import shows what the module itself loads.

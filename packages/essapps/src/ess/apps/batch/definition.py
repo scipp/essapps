@@ -4,12 +4,16 @@
 Where the definition of batches is kept: what a person makes of them, so that a
 batch made again, after a restart or in another process, has it.
 
-The definition is these tables, each with one writer:
+The definition is these tables, each with one writer. The settings of a batch
+that the manager makes are written by the manager once, when it makes the
+batch, before any ``Batch`` of it exists, and by ``Batch.settings`` from then
+on:
 
     corrections   metadata of a file set by hand, by file     CorrectedFiles
     edits         cells set, rows added or removed, by key    Batch.rows
     settings      the parameters that are not columns         Batch.settings
-    header        title, description, source, scope           the manager
+    header        spec, columns, source, title, description,  the manager
+                  scope
     following     the label of the batch that follows         Follow
 
 The corrections are about files, and every batch of a workspace reads the
@@ -38,7 +42,8 @@ The plain data of each table, as the functions below give and read it::
                    'cleared': {'60339': ['sample_transmission']},
                    'removed': ['60340']}
     settings      the template of the settings, as a template file holds it
-    header        {'title': 'Sample runs', 'description': '', 'source': 'sample-runs',
+    header        {'spec': 'loki-iofq', 'columns': ['sample', 'sample_transmission'],
+                   'source': 'sample-runs', 'title': 'Sample runs', 'description': '',
                    'scope': {'start': 60339, 'stop': None}}
                   with a scope of keys as {'keys': ['60339', '60351']}
     following     {'label': '20261118-130204'}, or {'label': None}
@@ -46,7 +51,8 @@ The plain data of each table, as the functions below give and read it::
 A value is in the JSON form that a record holds, a file as
 ``{'@ref': 'file', 'file': 'pid:...'}``. The edits hold only what was set by
 hand, so a cell from the scan keeps following the scan. The settings are a
-template so that the command ``essapps-batch`` reads them as one. Each table is
+template so that the command ``essapps-batch`` reads them as one; for a batch
+with a header, its spec and blanks are a copy of the header's. Each table is
 checked when read: data of another shape raises ``ValueError`` naming the
 entry, and :class:`FolderDefinitions` adds the file.
 """
@@ -241,17 +247,39 @@ class _Edits(TypedDict, total=False):
     removed: list[str]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Header:
     """
-    What a person says of a batch: its title, where its rows come from, and
-    which of them it holds. A header kept without a scope holds every row.
+    A batch as the manager keeps it: what it computes, where its rows come
+    from and which of them it holds, and what it is called. A header kept
+    without a scope holds every row. Raises ``ValueError`` for an empty title.
+
+    Parameters
+    ----------
+    spec:
+        The name of the spec; the version is the one that the workspace binds.
+    columns:
+        The parameters that each row gives.
+    source:
+        The name of a registered source; ``None`` for rows added by hand only.
+    title:
+        What the batch is called.
+    description:
+        What a person says of the batch.
+    scope:
+        The rows of the source that the batch holds.
     """
 
+    spec: str
+    columns: tuple[str, ...]
+    source: str | None = None
     title: str
     description: str = ''
-    source: str | None = None
     scope: Scope = field(default_factory=Scope)
+
+    def __post_init__(self) -> None:
+        if not self.title:
+            raise ValueError('a batch has a title that is not empty')
 
 
 class _Following(TypedDict):
@@ -319,19 +347,19 @@ def edits_of(data: Any) -> RowTable:
         raise ValueError(f'{entry or "the edits"}: {why}') from None
 
 
-def settings_data(template: Template) -> Any:
+def template_data(template: Template) -> Any:
     """The template of the settings, as plain data that a template file holds."""
     return TypeAdapter(Template).dump_python(template, mode='json')
 
 
 def template_of(data: Any) -> Template:
-    """The template of :func:`settings_data`; ``ValueError`` names an entry."""
+    """The template of :func:`template_data`; ``ValueError`` names an entry."""
     return _checked(_TEMPLATE, data)
 
 
 def settings_of(data: Any, spec: WorkflowSpec) -> dict[str, Any]:
     """
-    The settings in the template of :func:`settings_data`, for ``spec``, of
+    The settings in the template of :func:`template_data`, for ``spec``, of
     any version of it: a value that ``spec`` does not take is refused when the
     settings are resolved, as any other. Raises ``ValueError`` if the template
     is of a spec of another name.

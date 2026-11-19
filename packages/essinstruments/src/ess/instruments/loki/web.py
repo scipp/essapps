@@ -122,7 +122,7 @@ def build(
         client, sources=SOURCES, definitions=definitions, defaults=defaults
     )
     loop = Follow(manager, definitions, interval=interval)
-    if not manager.batches():
+    if not manager.headers():
         label = manager.create(IOFQ.name, title='Sample runs', source='sample-runs')
         if follow:
             loop.on(label)
