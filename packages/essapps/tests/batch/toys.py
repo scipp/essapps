@@ -175,11 +175,20 @@ def pair(files: Sequence[FileInfo]) -> list[Row]:
     return rows
 
 
-SOURCES = {
-    'pairs': Source(
-        pair, fills=('sample', 'transmission'), row_name='name', index_title='Run'
-    )
-}
+def samples(files: Sequence[FileInfo]) -> list[Row]:
+    """A row per sample run, keyed by run."""
+    return [
+        Row(str(f.metadata['run']), {'sample': f.ref})
+        for f in files
+        if f.metadata.get('role') == 'sample'
+    ]
+
+
+PAIRS = Source(
+    pair, fills=('sample', 'transmission'), row_name='name', index_title='Run'
+)
+SAMPLES = Source(samples, fills=('sample',))
+SOURCES = {'pairs': PAIRS}
 DEFAULTS = {STAGED.name: Defaults(staged=True)}
 
 Measure = Callable[..., FileRef]

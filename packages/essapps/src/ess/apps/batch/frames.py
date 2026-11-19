@@ -34,7 +34,7 @@ from ..client import Client
 from ..records import Template
 from . import state
 from .definition import DefinitionStore, settings_key, template_of
-from .reduction import Batch, RowSource
+from .reduction import Batch, Source
 from .state import RowState
 from .table import Row
 from .text import read_cell, with_named_files, write_cell
@@ -191,7 +191,7 @@ def reduce_table(
     table: pd.DataFrame | None,
     *,
     label: str,
-    source: RowSource | None = None,
+    source: Source | None = None,
     staged: bool = False,
     persist: bool | Sequence[str] = False,
     remaining: bool = False,
@@ -226,7 +226,7 @@ def reduce_table(
         The label of the records. A batch is found again by it, so each batch
         has its own.
     source:
-        Makes rows from the files, as for :class:`~.reduction.Batch`.
+        Makes rows from the files, as :class:`~.reduction.Batch` takes it.
     staged:
         Run the rows through a stage.
     persist:

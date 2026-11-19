@@ -71,9 +71,9 @@ class Automatic:
         (``persist=True``), since nothing releases its records.
     at:
         The columns at which a change of a row's request by the scan reduces
-        the row again, such as ``{'sample_runs', 'trans_runs'}``. A row with
-        no result is reduced whatever ``at`` is, unless a cell is set by
-        hand.
+        the row again, such as ``{'sample_runs', 'trans_runs'}``; those that
+        the source fills if not given. A row with no result is reduced
+        whatever ``at`` is, unless a cell is set by hand.
 
     Attributes
     ----------
@@ -98,14 +98,16 @@ class Automatic:
         self,
         batch: Batch,
         *,
-        at: AbstractSet[str],
+        at: AbstractSet[str] | None = None,
     ) -> None:
+        if batch.source is None:
+            raise ValueError('this batch has no source of rows')
+        if at is None:
+            at = set(batch.source.fills)
         if isinstance(at, str):
             raise TypeError(f'at is a set of columns, such as {{{at!r}}}')
         if unknown := sorted(set(at) - set(batch.columns)):
             raise KeyError(f'{unknown} are not columns of the batch')
-        if batch.source is None:
-            raise ValueError('this batch has no source of rows')
         self.batch = batch
         self.at = frozenset(at)
         self.refused: dict[str, str] = {}
@@ -168,7 +170,7 @@ class Follow:
     """
     The one loop of an application over the batches of a manager: at each
     step, the batch of :attr:`label` does one step of :class:`Automatic`,
-    with ``at`` the columns of its source. See
+    with ``at`` what its source fills. See
     ``packages/essapps/docs/batch.md``.
 
     The label is kept in ``definitions`` and read when the loop is made, so a
@@ -205,10 +207,14 @@ class Follow:
     def on(self, label: str) -> None:
         """
         Make the batch of ``label`` the one that follows. Raises ``KeyError``
-        if no batch has the label, and ``ValueError`` if its batch has no
-        source.
+        if no batch has the label or its source is not registered, and
+        ``ValueError`` if its batch has no source. It makes no batch.
         """
-        self._at(label)
+        name = self._manager.headers()[label].source
+        if name is None:
+            raise ValueError(f'{label}: the batch has no source of rows')
+        if name not in self._manager.sources:
+            raise KeyError(f'{label}: the source {name} is not registered')
         self._keep(label)
 
     def off(self) -> None:
@@ -231,17 +237,10 @@ class Follow:
         if label not in self._manager.headers():
             self.off()
             return {}
-        loop = Automatic(self._manager.batch(label), at=self._at(label))
+        loop = Automatic(self._manager.batch(label))
         records = loop.step()
         self.refused = loop.refused
         return records
-
-    def _at(self, label: str) -> set[str]:
-        """The columns of the source of ``label``'s batch; ``ValueError`` if none."""
-        source = self._manager.source(label)
-        if source is None:
-            raise ValueError(f'{label}: the batch has no source of rows')
-        return set(source.fills)
 
     def _keep(self, label: str | None) -> None:
         self._definitions.save(FOLLOWING, following_data(label))

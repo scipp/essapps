@@ -30,8 +30,9 @@ def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
             rows.append(Row(str(run), values, info={'name': str(name)}, index=int(run)))
     return rows
 
-SOURCES = {'sample-runs': Source(pair_by_sample, fills=('sample', 'sample_transmission'),
-                                 row_name='name', index_title='Run')}
+SAMPLE_RUNS = Source(pair_by_sample, fills=('sample', 'sample_transmission'),
+                     row_name='name', index_title='Run')
+SOURCES = {'sample-runs': SAMPLE_RUNS}
 
 client = open_folder(folder, BINDINGS)
 definitions = FolderDefinitions(folder)
@@ -58,7 +59,7 @@ The same logic works without the page, in a notebook or a test, with a `Batch` o
 from ess.apps.batch import Batch, left_to_reduce, ready
 
 batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'),
-              label='iofq', source=pair_by_sample, staged=True)   # or manager.batch(label)
+              label='iofq', source=SAMPLE_RUNS, staged=True)   # or manager.batch(label)
 batch.settings = settings      # one write; nothing is reduced for it
 batch.scan()
 state = batch.state()           # where each row stands
@@ -84,7 +85,7 @@ A batch is a set of tables. Six of them are stored, and each has one writer. All
 
 ```python
 # derived at each read
-scan     = source(files with corrections)
+scan     = source.rows(files with corrections)
 rows     = scan in scope, with edits on top
 requests = settings with each row on top, resolved
 results  = newest record per key, under the label
@@ -106,7 +107,7 @@ flowchart TB
     header[("header<br>per label")]
     edits[("edits<br>per label")]
     settings[("settings<br>per label")]
-    scan["scan = source(files with corrections)"]
+    scan["scan = source.rows(files with corrections)"]
     rows["rows = scan in scope, with edits on top"]
     requests["requests = settings with each row on top, resolved"]
     results["results = newest record per key, under the label"]
@@ -145,7 +146,7 @@ Every way of reducing a batch is this cycle, with its own rule and its own trigg
 | **Reduce** on the page | a person | `left_to_reduce(state, batch.columns)` |
 | **Reduce them again** on the page | a person | `earlier_settings(state, batch.columns)` |
 | **Reduce all**, **Reduce selected** | a person | `ready(state)`, the keys selected |
-| **Follow** on the page of a batch: the application's loop, a timer that scans as **Rescan runs** does | the application's process | `arrived(state, at)`, `at` the columns of the source |
+| **Follow** on the page of a batch: the application's loop, a timer that scans as **Rescan runs** does | the application's process | `arrived(state, at)`, `at` the columns that the source fills |
 | `Automatic.step`, which `run` calls from a timer | a process of its own | `arrived(state, at)` |
 | `essapps-batch reduce` | a person or a script | every row of the table; with `--remaining`, `left_to_reduce(state, batch.columns)`, and with `--earlier-settings` too, `earlier_settings(state, batch.columns)` |
 
@@ -195,7 +196,7 @@ A failed or cancelled row reads `failed` or `cancelled` whether or not its reque
 
 **Not in this picture:**
 
-- What the names in the header stand for. The names of the spec and of the source are fixed when a batch is made; the version of the spec that the workspace binds, and the function of the source, are code in the technique's package, read at each start ([The batches of a workspace](#the-batches-of-a-workspace)).
+- What the names in the header stand for. The names of the spec and of the source are fixed when a batch is made; the version of the spec that the workspace binds, and the `Source` registered under the name, are code in the technique's package, read at each start ([The batches of a workspace](#the-batches-of-a-workspace)).
 - A chain: a second batch whose scan reads the results of the first ([Chains](#chains)).
 - Publishing results.
 
@@ -204,7 +205,7 @@ A failed or cancelled row reads `failed` or `cancelled` whether or not its reque
 - A **column** is a parameter of the spec that differs per row, such as `sample`. The columns are the blanks of a `Template`.
 - The **settings** are all other parameters, shared by every row. They are the batch's (`batch.settings`), and the template's values.
 - A **row** has a **key**, a value per column, and read-only **info** to show with it. A cell can hold anything a request can: a file, a reference to an output, a number, a list of runs.
-- A **source** is your function from files to rows. A **scan** calls it.
+- A **source** is a `Source`: your function from files to rows, a `RowSource`, with the columns that its rows fill, the files that it is given, and what a page calls a row ([Writing a source](#writing-a-source)). A batch holds it (`batch.source`), and a **scan** calls its function. An application registers its sources by name, and a header holds the name. The *file source* of a workspace, which lists the files, is another thing.
 - A row's **index** is a value that orders the rows, such as the run number or the start time. The source gives it (`Row(..., index=60339)`); a row added by hand has none.
 - The **scope** of a batch is which rows of the scan it holds: a slice of index values, or the keys named ([Rules](#rules)).
 - An **edit** is a cell set, a row added, or a row removed, by hand: by a person or by your code.
@@ -306,13 +307,22 @@ The page does the same with **Apply** and **Reduce selected** ([the page's READM
 
 ## Writing a source
 
-A source takes `FileInfo(ref, metadata)` for each file, and returns `Row`s. It calls nothing but, in a chain, the `state` of another batch ([Chains](#chains)), so test it on plain data:
+The function of a source, a `RowSource`, takes `FileInfo(ref, metadata)` for each file, and returns `Row`s. It calls nothing but, in a chain, the `state` of another batch ([Chains](#chains)), so test it on plain data:
 
 ```python
 def test_a_sample_run_pairs_with_its_transmission_run():
     rows = pair_by_sample([info(1, role='sample', sample='w'),
                            info(2, role='transmission', sample='w')])
     assert rows[0].values['sample_transmission'] == ref(2)
+```
+
+A `Source` holds the function and the columns that its rows fill. They are columns of each batch of it, and `Automatic` reduces a row again for a change at them, unless given other columns. `selector=` names the files that the function is given; raw files if not given. A `Batch` refuses a source that fills a column it lacks:
+
+```python
+SAMPLE_RUNS = Source(pair_by_sample, fills=('sample', 'sample_transmission'),
+                     row_name='name', index_title='Run')    # as in "An application"
+Batch(client, IOFQ, columns=('sample',), label='iofq', source=SAMPLE_RUNS)
+# ValueError: iofq: the source fills ['sample_transmission'], which are not columns of the batch
 ```
 
 Give each row its index, such as the run number as a number (`Row(key, values, info, index=int(run))`), so that a batch can hold a slice of the rows ([Rules](#rules)). A row without one, such as of a file without a run number, is held only by a scope without ends or by its key.
@@ -351,7 +361,7 @@ from ess.apps.batch import FolderDefinitions
 definitions = FolderDefinitions(directory)                   # the workspace's folder
 files = CorrectedFiles(folder_files(directory), definitions=definitions)  # reads the corrections
 client = open_folder(directory, BINDINGS, files=files)
-batch = Batch(client, IOFQ, columns=..., label='auto/iofq', source=pair_by_sample,
+batch = Batch(client, IOFQ, columns=..., label='auto/iofq', source=SAMPLE_RUNS,
               settings=DEFAULTS, definitions=definitions)    # the settings kept replace DEFAULTS
 batch.scan()                                                 # the scan, with the edits kept on top
 ```
@@ -399,9 +409,10 @@ A `BatchManager`, *the manager*, makes, lists, changes and removes the batches o
 ```python
 from ess.apps.batch import BatchManager, Defaults, Scope, Source, Words
 
-SOURCES = {'sample-runs': Source(pair_by_sample, fills=('sample', 'sample_transmission'),
-                                 words=Words(one='sample run', many='sample runs'),
-                                 row_name='name', index_title='Run')}
+SAMPLE_RUNS = Source(pair_by_sample, fills=('sample', 'sample_transmission'),
+                     words=Words(one='sample run', many='sample runs'),
+                     row_name='name', index_title='Run')
+SOURCES = {'sample-runs': SAMPLE_RUNS}
 DEFAULTS = {IOFQ.name: Defaults(settings=SETTINGS, staged=True)}
 
 manager = BatchManager(client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS)
@@ -444,7 +455,7 @@ What the manager gives the `Batch` of a label:
 | Argument | Comes from |
 |---|---|
 | `spec` | `bound_spec(client, header.spec)`: the spec of that name that the workspace binds, the highest version if several |
-| `source`, `selector` | the `Source` registered under `header.source` |
+| `source` | the `Source` registered under `header.source` |
 | `columns` | `header.columns`: those given to `create`, else those that the source fills |
 | `settings` | `settings.json`; else `Defaults.settings` of the spec, those that are columns left out |
 | `staged` | `Defaults.staged` of the spec |
@@ -453,7 +464,7 @@ What the manager gives the `Batch` of a label:
 | `persist` | always, so the workspace needs a store, as a folder has |
 | `definitions` | those of the manager |
 
-- `create` takes the name of a spec. It refuses an empty title, a column that is not a parameter of the spec or is named twice, and columns that lack one that the source fills; then it writes the first settings, `Defaults.settings` of the spec or `create(..., settings=...)`, and the header. The names of the spec and the source, and the columns, are fixed from then on. What the names stand for is read from code at each start: a later `Defaults.staged` applies to every batch, a later `Defaults.settings` only to batches made after it. `batch(label)` refuses a batch whose source now fills a column that the batch lacks.
+- `create` takes the name of a spec. It refuses an empty title, a column that is not a parameter of the spec or is named twice, and columns that lack one that the source fills; then it writes the first settings, `Defaults.settings` of the spec or `create(..., settings=...)`, and the header. The names of the spec and the source, and the columns, are fixed from then on. What the names stand for is read from code at each start: a later `Defaults.staged` applies to every batch, a later `Defaults.settings` only to batches made after it. `Batch` refuses a source that fills a column it lacks, so `batch(label)` refuses a batch whose source now fills one.
 - `change` changes the title, the description and the scope, and refuses an empty title; a scope is written to the header, then given to the `Batch` of the label if it was made, whose rows change at once.
 - A header without `settings.json` is a batch with the default settings of its spec, as registered at each start.
 - A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. `create` refuses a label that has definitions or records.
@@ -462,7 +473,7 @@ What the manager gives the `Batch` of a label:
 - `counts` makes every batch not made yet, which scans it, and scans every other batch with a source, so the rows of each batch are those of the files now. It gives the state of each row of each batch, and the rows of each source that no batch of it shows: a row counts as shown if any batch shows it, so a row outside the scope of every batch of its source counts there. A source is called once more only if no batch of it was scanned. A batch that cannot be made or scanned, such as one whose source is no longer registered or raises, gets its reason in `failed`, and its source is left out of `outside`. It costs one scan per batch, so call it when a person asks.
 - `words`, `row_name` and `row_info` of a `Source` say what the page of a batch calls a row, which entry of `Row.info` names it, and which other entries it shows. `index_title` is what the page calls the index of a row, such as `'Run'`.
 
-One loop per application, `Follow`, reduces the rows of one batch as its files arrive: each step is a step of an `Automatic` on the batch that follows ([Automatic reduction](#automatic-reduction)), with `at` the columns of its source. It reduces the rows of the scope only, and a slice holds every row whose index is inside it, whenever its file is listed: so widening the scope of the batch that follows makes the next step reduce every row that the scope now holds and that has no result.
+One loop per application, `Follow`, reduces the rows of one batch as its files arrive: each step is a step of an `Automatic` on the batch that follows ([Automatic reduction](#automatic-reduction)), with `at` the columns that its source fills. It reduces the rows of the scope only, and a slice holds every row whose index is inside it, whenever its file is listed: so widening the scope of the batch that follows makes the next step reduce every row that the scope now holds and that has no result.
 
 ```python
 from ess.apps.batch.auto import Follow
@@ -489,7 +500,7 @@ for key, record in centres.items():
 
 After a centre failed, this reruns only what is left, and points those rows at the new centre. The field must be typed `Referenced[...]` in the spec.
 
-A source that reads the other batch's state makes the same cells at every scan, without an edit for each new row, which automatic reduction needs:
+A source whose function reads the other batch's state makes the same cells at every scan, without an edit for each new row, which automatic reduction needs:
 
 ```python
 def with_centre(files: Sequence[FileInfo]) -> list[Row]:
@@ -497,6 +508,8 @@ def with_centre(files: Sequence[FileInfo]) -> list[Row]:
     return [replace(row, values={**row.values, 'beam_centre': found[row.key].ref('centre')})
             if row.key in found else row
             for row in pair_by_sample(files)]
+
+CENTRED = Source(with_centre, fills=('sample', 'sample_transmission', 'beam_centre'))
 ```
 
 Scan `find` before a batch with this source, so that its rows see the newest centres.
@@ -509,8 +522,8 @@ Automatic reduction reduces a batch as its files arrive. Its *loop*, an `Automat
 from ess.apps.batch.auto import Automatic, run
 
 batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'), label='auto/iofq',
-              source=pair_by_sample, staged=True, persist=True, settings=settings)
-loop = Automatic(batch, at={'sample'})
+              source=SAMPLE_RUNS, staged=True, persist=True, settings=settings)
+loop = Automatic(batch)   # at: the columns that the source fills
 loop.step()       # scans, and reduces the rows that arrived; their records by key
 loop.refused      # why rows of the last step were refused, by key
 run([loop])       # steps once a second, until a step raises
@@ -518,7 +531,7 @@ run([loop])       # steps once a second, until a step raises
 
 A step is [the cycle](#the-model-tables-and-one-cycle) with a scan and the rule `arrived`: `batch.reduce(arrived(batch.state(), at))`, with the batch's settings as they are at the step.
 
-`at` is a set of columns, and has no default. A row with no result is reduced whatever `at` is. A row with a result is reduced again only if its request differs from its result's at a column of `at`. Take a source that makes a row per sample, with the lists `sample_runs` and `trans_runs`, and leaves `trans_runs` out until a transmission run arrives. The files arrive as `s1, t1, s1', t1'`, where `s1'` repeats `s1`, and each step finishes before the next file arrives:
+`at` is a set of columns, by default those that the source fills; `Automatic(batch, at={'sample'})` names others. A row with no result is reduced whatever `at` is. A row with a result is reduced again only if its request differs from its result's at a column of `at`. Take a source that makes a row per sample, with the lists `sample_runs` and `trans_runs`, and leaves `trans_runs` out until a transmission run arrives. The files arrive as `s1, t1, s1', t1'`, where `s1'` repeats `s1`, and each step finishes before the next file arrives:
 
 | Arrives | `at={'sample_runs', 'trans_runs'}` | `at={'sample_runs'}` | `at=set()` |
 |---|---|---|---|
@@ -560,14 +573,14 @@ A result of another spec, such as an older version, stays the row's result ([Rul
 
 A row whose key changes from one scan to the next, such as a key made from a sample name that a correction changed, is a new row, and is reduced again under its new key; so choose a key that does not change, such as the run number ([Terms](#terms)).
 
-The page of a batch has a switch "Follow", which makes its batch the one that the application's `Follow` steps ([The UI](#the-ui)). In a chain, step the loop of the batch that is read first: `run([Automatic(find, ...), Automatic(iofq, ...)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
+The page of a batch has a switch "Follow", which makes its batch the one that the application's `Follow` steps ([The UI](#the-ui)). In a chain, step the loop of the batch that is read first: `run([Automatic(find), Automatic(iofq)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
 
 ### One label, one batch
 
 Which rows a step reduces follows from the files, the batch's rows and settings, and the records under its label. The loop keeps nothing else, so a step that raises, in the settings, the source, or a submission, loses nothing. For the rows with no change by hand that is not reduced yet, the loop keeps the results under its label equal to its batch's rows at the columns of `at`:
 
 ```python
-page = Batch(client, IOFQ, columns=..., label='auto/iofq', source=pair_by_sample)  # a second batch on the label
+page = Batch(client, IOFQ, columns=..., label='auto/iofq', source=SAMPLE_RUNS)  # a second batch on the label
 page.rows = page.rows.edit('60339', {'sample': file(run=60400)})
 page.reduce(['60339'])               # a record with run 60400 at `sample`
 loop.step()                          # reduces '60339' again with the source's file: the loop's rows win
@@ -628,7 +641,7 @@ Each step is a command, and a function for a notebook that takes and returns a p
 | Step | Command | Function |
 |---|---|---|
 | list the files | `files package.module:read --with runs` | `frames.described(pd.DataFrame(scan_folder(folder, read)), runs)` |
-| make the table | `rows package.module:source`, or a spreadsheet | `frames.table_of(source(batch.file_infos(client)))` |
+| make the table | `rows package.module:SOURCE`, or a spreadsheet | `frames.table_of(source.rows(batch.file_infos(client, source.selector)))` |
 | reduce it | `reduce template table --label ...` | `frames.reduce_table(client, template, table, label=...)` |
 | write the outputs to files | `export table folder` | `export.export_table(client, table, folder)` |
 
@@ -694,7 +707,7 @@ run,role,sample
 
 `read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. A file that cannot be read is left out, with a warning. Two files of one run are refused. Running `files` again after files gained a `pid` changes their identity: the loop of automatic reduction reduces them again, and earlier records name files the folder no longer knows.
 
-A file says its kind, its run, and perhaps its sample, but not what a run is for. A row source that pairs runs reads the `role`, and a field such as the direct beam requires it. The run table gives it (`frames.described`): a row describes the file of its `run`, or the file at its `file` if it has no run. A run of the table that has no file in the folder is ignored, so the table may cover more than the folder holds. A file that no row describes keeps what it says of itself, and where both have a column, a cell of the run table that is not empty wins. Two rows for one run are refused. Without `--with`, the roles are typed into `files.csv`, so `files` then refuses to write over a table that exists.
+A file says its kind, its run, and perhaps its sample, but not what a run is for. A source that pairs runs reads the `role`, and a field such as the direct beam requires it. The run table gives it (`frames.described`): a row describes the file of its `run`, or the file at its `file` if it has no run. A run of the table that has no file in the folder is ignored, so the table may cover more than the folder holds. A file that no row describes keeps what it says of itself, and where both have a column, a cell of the run table that is not empty wins. Two rows for one run are refused. Without `--with`, the roles are typed into `files.csv`, so `files` then refuses to write over a table that exists.
 
 The workspace outlives the command, so a template references a record of an earlier command. A template without blanks is one request, and `reduce` without a table submits it:
 
@@ -711,7 +724,7 @@ One command holds the folder at a time. If a command was killed, the next one fi
 ## The UI
 
 [The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows each batch in a browser: how to run it, its layers, and its limits.
-The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. The page of a batch with a source offers a switch **Follow**: it makes the batch the one that the application's `Follow` steps, so no other batch follows, and the page of another batch says which one does. A step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, at the columns of the source, with the batch's settings, whatever the form holds. Follow leaves a row that a person changed to the person, who reduces it with **Reduce**: while following, such a row says "Set by hand, so Follow leaves it to you: reduce it." An action reduces nothing that a person did not ask for, and Apply reduces nothing either: the next step reduces the rows without a result with the settings applied. The batch that follows is kept in `following.json`, so a restart resumes.
+The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. The page of a batch with a source offers a switch **Follow**: it makes the batch the one that the application's `Follow` steps, so no other batch follows, and the page of another batch says which one does. A step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, at the columns that the source fills, with the batch's settings, whatever the form holds. Follow leaves a row that a person changed to the person, who reduces it with **Reduce**: while following, such a row says "Set by hand, so Follow leaves it to you: reduce it." An action reduces nothing that a person did not ask for, and Apply reduces nothing either: the next step reduces the rows without a result with the settings applied. The batch that follows is kept in `following.json`, so a restart resumes.
 
 `create_app(pages)` makes the app: the page of each batch of the manager at `/batches/<label>/`, and `/`, which redirects to the page of the batch that follows, else of the last label. `Pages(manager, follow, ...)` (`ess.apps.batch.web.pages`) holds what the pages share: the title of the application (`title`), how to draw the results of each spec (`draw`, by the name of the spec), the correction of the metadata of runs (`files`, `marks`), `Follow` and its timer, and one lock that every request of every page and each step of Follow take. What a page calls a row and shows of it are the `words`, `row_name` and `row_info` of the batch's `Source`. Every page has a view **Batches**, which lists the batches of the manager, each a link to its page, with its scope, and counts their rows by status when it is opened (`counts`, which scans every batch), with the statuses of the page of each batch. `Page` (`ess.apps.batch.web.page`) holds what the page of one batch shows and does, and its actions return `State`, the whole of what the page shows. The browser renders `State` and sends the actions.
 
@@ -730,7 +743,7 @@ $B reduce --label $L --remaining           # the batch as the label keeps it
 python -m ess.apps.batch.web.demo ws       # the rows show as done
 ```
 
-`reduce` imports what it is given into the definitions of its label, then reduces the rows of the table: the template becomes the batch's settings, and the table is set by hand as **Load table…** sets it, on the rows that `--source` makes from the files, if given, and on the edits that the label keeps. So what the command was given shows in the app afterwards, and a table older than an edit made in the app sets the cell back, as any import does. Without a template and a table, `reduce` reduces the batch that the label keeps, with the app's edits. `rows`, `files`, and `export` read the files as corrected, and keep no batch. The command finds the results of the app, and the app those of the command, if the outputs are persisted (`Batch(..., persist=True)`).
+`reduce` imports what it is given into the definitions of its label, then reduces the rows of the table: the template becomes the batch's settings, and the table is set by hand as **Load table…** sets it, on the rows that a `Source` makes from the files, if `--source package.module:NAME` names one, and on the edits that the label keeps. With `--source`, the blanks of the template must include every column that the source fills, or `reduce` refuses. So what the command was given shows in the app afterwards, and a table older than an edit made in the app sets the cell back, as any import does. Without a template and a table, `reduce` reduces the batch that the label keeps, with the app's edits. `rows`, `files`, and `export` read the files as corrected, and keep no batch. The command finds the results of the app, and the app those of the command, if the outputs are persisted (`Batch(..., persist=True)`).
 
 | Button of the page | Same as |
 |---|---|

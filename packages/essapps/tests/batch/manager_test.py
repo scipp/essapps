@@ -32,6 +32,7 @@ from .toys import (
     COLUMNS,
     DEFAULTS,
     FIND,
+    PAIRS,
     PLAIN,
     SOURCES,
     STAGED,
@@ -70,7 +71,7 @@ def test_a_batch_made_is_listed_with_its_header(
     )
     assert label == 'b'
     assert manager.headers() == {'b': header}
-    assert manager.source('b') is SOURCES['pairs']
+    assert manager.batch('b').source is PAIRS
     assert _again(client, definitions).headers() == {'b': header}
 
 
@@ -113,9 +114,13 @@ def test_the_columns_of_a_batch_are_those_given_else_those_its_source_fills(
 def test_columns_that_lack_one_the_source_fills_are_refused(
     manager: BatchManager, definitions: FolderDefinitions
 ) -> None:
-    with pytest.raises(ValueError, match=r"pairs fills \['transmission'\]"):
+    with pytest.raises(ValueError, match=r"b: the source fills \['transmission'\]"):
         manager.create(
-            'plain', title='Morning', source='pairs', columns=('sample', 'thickness')
+            'plain',
+            title='Morning',
+            source='pairs',
+            columns=('sample', 'thickness'),
+            label='b',
         )
     assert manager.headers() == {}
     assert definitions.labels() == []
@@ -275,7 +280,7 @@ def _with_definitions(client: Client, definitions: FolderDefinitions) -> None:
 
 
 def _with_records(client: Client, definitions: FolderDefinitions) -> None:
-    batch = Batch(client, PLAIN, columns=COLUMNS, label='b', source=pair)
+    batch = Batch(client, PLAIN, columns=COLUMNS, label='b', source=PAIRS)
     batch.scan()
     client.wait(batch.reduce(['1']))
 
@@ -353,7 +358,7 @@ def test_a_batch_whose_source_fills_a_column_it_lacks_is_refused(
     manager = BatchManager(client, sources=narrow, definitions=definitions)
     manager.create('plain', title='Morning', source='pairs', label='b')
 
-    with pytest.raises(ValueError, match=r"b: its source fills \['transmission'\]"):
+    with pytest.raises(ValueError, match=r"b: the source fills \['transmission'\]"):
         _again(client, definitions).batch('b')
 
 
@@ -361,11 +366,10 @@ def test_a_batch_whose_source_fills_a_column_it_lacks_is_refused(
     'call',
     [
         lambda m: m.batch('b'),
-        lambda m: m.source('b'),
         lambda m: m.change('b', title='Afternoon'),
         lambda m: m.remove('b'),
     ],
-    ids=['batch', 'source', 'change', 'remove'],
+    ids=['batch', 'change', 'remove'],
 )
 def test_a_label_that_is_no_batch_is_refused(
     manager: BatchManager, call: Callable[[BatchManager], Any]
@@ -553,7 +557,7 @@ def test_a_batch_without_a_source_has_only_rows_added_by_hand(
     label = manager.create('plain', title='Morning', columns=COLUMNS)
     batch = manager.batch(label)
 
-    assert manager.source(label) is None
+    assert batch.source is None
     assert list(batch.rows) == []
     batch.put([Row('mine', {'sample': sample(2, 'oil')})])
     assert [r.key for r in manager.batch(label).rows] == ['mine']

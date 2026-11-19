@@ -7,7 +7,7 @@ from ess.apps.batch import Batch, CorrectedFiles, ready
 from ess.apps.testing import FakeFiles
 from ess.spec import File
 
-from .toys import COLUMNS, STAGED, Measure, pair
+from .toys import COLUMNS, PAIRS, STAGED, Measure
 
 
 def test_a_corrected_file_is_listed_as_corrected(
@@ -62,7 +62,7 @@ def test_a_correction_reaches_the_rows_at_the_next_scan(
 ) -> None:
     run = sample(1, 'water', partner=False)
     partner = fake.measure(2, 1.0, role='sample', sample='water')
-    batch = Batch(client, STAGED, columns=COLUMNS, label='scan', source=pair)
+    batch = Batch(client, STAGED, columns=COLUMNS, label='scan', source=PAIRS)
     batch.scan()
     assert ready(batch.state()) == []
 

@@ -11,7 +11,7 @@ import pytest
 import scipp as sc
 
 from ess.apps import Client, Selector, file
-from ess.apps.batch import Batch, FileInfo, Row
+from ess.apps.batch import Batch, FileInfo, Row, Source
 from ess.apps.batch.auto import Automatic
 from ess.apps.batch.frames import batch_table
 from ess.apps.folder import (
@@ -166,7 +166,12 @@ def _found(client: Client) -> Batch:
         return [Row(f.metadata['run'], {'sample': f.ref}) for f in files]
 
     return Batch(
-        client, toys.FIND, columns=['sample'], label='found', source=rows, persist=True
+        client,
+        toys.FIND,
+        columns=['sample'],
+        label='found',
+        source=Source(rows, fills=('sample',)),
+        persist=True,
     )
 
 
@@ -180,7 +185,7 @@ def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_t
     folder: Path, bindings: list[Binding]
 ) -> None:
     with open_folder(folder, bindings) as first:
-        found = list(Automatic(_found(first), at={'sample'}).step().values())
+        found = list(Automatic(_found(first)).step().values())
         first.wait(found)
         table = _table(first)
     files = [r.request.params['sample'] for r in found]
@@ -193,7 +198,7 @@ def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_t
     with open_folder(folder.rename(folder.with_name('moved')), bindings) as second:
         assert second.files.list(Selector()) == files
         assert [second.output(r, 'offset').value for r in found] == [1, 2, 3]
-        assert Automatic(_found(second), at={'sample'}).step() == {}
+        assert Automatic(_found(second)).step() == {}
         assert _table(second).equals(table)
         again = second.submit(found[0].request)
         second.wait([again])

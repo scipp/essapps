@@ -12,7 +12,8 @@ sample, and pairs the run with the transmission run of the same sample::
 
 :data:`SOURCES` and :data:`DEFAULTS` give a
 :class:`~ess.apps.batch.BatchManager` the batches of I(Q);
-:func:`iofq_batch` makes one batch without a manager.
+:func:`iofq_batch` makes one batch without a manager, and the command names
+the source of both as ``ess.instruments.loki.batch:SAMPLE_RUNS``.
 """
 
 import sys
@@ -80,15 +81,15 @@ def _measured(f: FileInfo) -> tuple[int, str]:
     return (sys.maxsize, f.ref.file) if run is None else (run, '')
 
 
-SOURCES = {
-    'sample-runs': Source(
-        pair_by_sample,
-        fills=COLUMNS,
-        words=Words(one='sample run', many='sample runs'),
-        row_name='name',
-        index_title='Run',
-    )
-}
+SAMPLE_RUNS = Source(
+    pair_by_sample,
+    fills=COLUMNS,
+    words=Words(one='sample run', many='sample runs'),
+    row_name='name',
+    index_title='Run',
+)
+"""A row per sample run, paired by :func:`pair_by_sample`."""
+SOURCES = {'sample-runs': SAMPLE_RUNS}
 """The sources of LoKI's batches, by name."""
 DEFAULTS = {IOFQ.name: Defaults(staged=True)}
 """A batch of I(Q) runs through one stage, so that the can is reduced once."""
@@ -111,7 +112,7 @@ def iofq_batch(
         IOFQ,
         columns=COLUMNS,
         label=label,
-        source=pair_by_sample,
+        source=SAMPLE_RUNS,
         staged=True,
         persist=persist,
         settings=settings,

@@ -180,11 +180,11 @@ app = App(client)` },
         runs.setdefault(f.metadata['sample'], []).append(f.ref)
     return [Row(s, {'runs': refs}) for s, refs in runs.items()]
 
+source = Source(angles, fills=('runs',), selector=Selector(role='sample'))
 batch = Batch(client, STITCH, columns=('runs',),
-              label='reflectivity', source=angles,
-              selector=Selector(role='sample'), persist=True,
+              label='reflectivity', source=source, persist=True,
               settings={'reference': file(run=500)})
-run([Automatic(batch, at={'runs'})])` },
+run([Automatic(batch)])` },
   { level: 11, caller: 'all', placement: 'service', planned: SERVICE, title: 'Many controllers, one history',
     body: `<p>All clients of a proposal share its history. A notebook can reference a transmission that the automatic reduction computed, and the app lists that record in its pickers.</p>
            <p>Every client of a workspace reads the same values. The automatic reduction persists its outputs, so they outlive the workspace. A proposal has one workspace. Whether its users share the values in memory, or the service separates or bounds them per user, is open. Provenance follows each reference back to the files.</p>`,
@@ -289,7 +289,7 @@ client.output(r[60339],
 const CALLER_SMALL = [
   h('Jupyter notebook', '', '<pre class="mini">client.submit(IOFQ, ...)</pre>'),
   h('Panel app', '', '<pre class="mini">App(client)</pre>'),
-  h('Automatic reduction', '', '<pre class="mini">run([Automatic(batch, ...)])</pre>'),
+  h('Automatic reduction', '', '<pre class="mini">run([Automatic(batch)])</pre>'),
 ];
 
 function layout(cfg, { box, arrow }) {
@@ -404,8 +404,8 @@ const CODE = {
   caller: {
     notebook: `record = client.submit(SPEC, params={...})\nclient.output(record, ...)`,
     app: 'app = App(client)',
-    trigger: 'run([Automatic(batch, at=...)])',
-    all: '# each in its own process, with its own client\nclient.submit(SPEC, params={...})\nApp(client)\nrun([Automatic(batch, ...)])',
+    trigger: 'run([Automatic(batch)])',
+    all: '# each in its own process, with its own client\nclient.submit(SPEC, params={...})\nApp(client)\nrun([Automatic(batch)])',
   },
 };
 

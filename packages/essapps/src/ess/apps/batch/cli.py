@@ -19,9 +19,10 @@ definitions (:mod:`.definition`), so a label is one batch whoever works on it:
 
 - ``reduce`` imports its template as the label's settings, and its table as an
   application imports one (:meth:`.reduction.Batch.put`): set by hand on the
-  rows that ``--source`` makes from the files, if given, and on those that
-  the definitions hold. It then reduces the rows of the table. Without a
-  template and a table, it reduces the batch that the definitions hold.
+  rows that the :class:`~.reduction.Source` named by ``--source`` makes from
+  the files, if given, and on those that the definitions hold. It then
+  reduces the rows of the table. Without a template and a table, it reduces
+  the batch that the definitions hold.
   With ``--remaining`` it reduces the rows that the page's "Reduce" does
   (:func:`.state.left_to_reduce`), and leaves those reduced with earlier
   settings, which it says on stderr; ``--earlier-settings`` adds them.
@@ -56,7 +57,7 @@ from . import frames
 from .corrections import CorrectedFiles
 from .definition import FolderDefinitions
 from .export import export_table
-from .reduction import file_infos
+from .reduction import Source, file_infos
 from .state import EARLIER
 from .text import load_template, with_latest
 
@@ -65,6 +66,17 @@ def _named(name: str) -> Any:
     """The object that ``package.module:name`` names."""
     module, _, attribute = name.partition(':')
     return getattr(import_module(module), attribute)
+
+
+def _source(parser: argparse.ArgumentParser, name: str) -> Source:
+    """The :class:`~.reduction.Source` that ``name`` names; exits if it is none."""
+    source = _named(name)
+    if not isinstance(source, Source):
+        parser.error(
+            f'{name} is a {type(source).__name__}, not a Source '
+            '(ess.apps.batch.Source), such as package.module:SAMPLE_RUNS'
+        )
+    return source
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -105,7 +117,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     reduce.add_argument(
         '--source',
-        help='files to rows, as package.module:name; the table is set on them',
+        help='a Source, as package.module:NAME; the table is set on its rows',
     )
     reduce.add_argument(
         '-l', '--label', required=True, help='names the batch; each has its own'
@@ -144,7 +156,7 @@ def _parser() -> argparse.ArgumentParser:
     rows = commands.add_parser(
         'rows', parents=[output], help='make a table from the files'
     )
-    rows.add_argument('source', help='files to rows, as package.module:name')
+    rows.add_argument('source', help='a Source, as package.module:NAME')
     return parser
 
 
@@ -152,7 +164,8 @@ def _run(
     client: Client, args: argparse.Namespace, definitions: FolderDefinitions
 ) -> pd.DataFrame:
     if args.command == 'rows':
-        return frames.table_of(_named(args.source)(file_infos(client)))
+        source = args.source
+        return frames.table_of(source.rows(file_infos(client, source.selector)))
     if args.command == 'export':
         return export_table(client, frames.read_table(args.table), args.directory)
     template, table = None, None
@@ -169,7 +182,7 @@ def _run(
         template,
         table,
         label=args.label,
-        source=None if args.source is None else _named(args.source),
+        source=args.source,
         staged=args.staged,
         persist=True,
         remaining=args.remaining,
@@ -211,6 +224,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         # a workspace goes on with pending records, which need their bindings
         parser.error('--bind is required: the bindings of the workspace')
     bind = _named(args.bind)
+    if getattr(args, 'source', None) is not None:  # rows and reduce
+        args.source = _source(parser, args.source)
     definitions = FolderDefinitions(args.workspace)
     try:
         files = CorrectedFiles(folder_files(args.workspace), definitions=definitions)

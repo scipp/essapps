@@ -18,7 +18,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from ..manager import Words
+from ..reduction import Words
 
 
 class Way(BaseModel):

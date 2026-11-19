@@ -6,7 +6,7 @@ Its stories are E1 to E4 in [user-stories.md](user-stories.md), and [deployments
 ## A batch reduced as its files arrive
 
 The framework knows no technique: which runs make one reduction is the application's to say.
-It says so once, as the *source* of a batch, a function from files to rows.
+It says so once, as the *source* of a batch: a `Source`, which holds a function from files to rows and the columns that its rows fill.
 A person reducing a batch and automatic reduction use the same source.
 
 [The model](../../packages/essapps/docs/batch.md#the-model-tables-and-one-cycle) shows a batch as stored tables, derived tables, and one cycle: a rule picks rows from the state, and `Batch.reduce` submits them.
@@ -14,9 +14,10 @@ A person reducing a batch and automatic reduction use the same source.
 Automatic reduction steps this cycle with a *loop*, an `ess.apps.batch.auto.Automatic`:
 
 ```python
+SAMPLE_RUNS = Source(pair_by_sample, fills=('sample', 'sample_transmission'))
 batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'), label='auto/iofq',
-              source=pair_by_sample, staged=True, persist=True, settings=defaults)
-loop = Automatic(batch, at={'sample'})
+              source=SAMPLE_RUNS, staged=True, persist=True, settings=defaults)
+loop = Automatic(batch)  # at: the columns that the source fills, unless given
 run([loop])              # steps until one raises
 
 # one step
@@ -46,7 +47,7 @@ def arrived(state, at):    # the loop
 
 `ready` is the batch's: the row is complete, and its result is not running.
 `changed` names the parameters at which the row's request differs from its result's request, both resolved as a record holds them.
-`at` is a set of columns that the application names, with no default: the columns whose change reduces a row again.
+`at` is a set of columns, by default those that the batch's source fills: the columns whose change reduces a row again.
 `changed_by_hand` is true if the row has a cell set by hand (an edit, or any cell of a row added by hand) and has no result, or differs from its result at such a cell.
 So the loop reduces a row for what the files changed, never for what a person changed: a person reduces what they changed, with or without the loop.
 
@@ -65,7 +66,7 @@ Each line answers a story or a failure mode:
 
 - A failed record counts, so that a file that fails is not retried at every step. Running it again is a person's decision (D2), or follows a change at `at`.
 - A changed setting does not reduce old rows again (E4). Their records keep the settings they ran with; the rows read `outdated`, and a person reduces them through the loop's batch if they want.
-- A later partner, such as a transmission run that the source pairs with rows made before, changes a cell at a column outside `at`, and does not reduce those rows again.
+- A later partner, such as a newer transmission run that the source pairs with rows made before, reduces those rows again, since the source fills its column. With an `at` that leaves the column out, the rows read `outdated` instead.
 - A series grows (E1): a new angle in a row's list at `at` reduces the row again with every angle so far, and an angle whose file arrives again keeps its identity and changes nothing.
 - A cell that names a file by run, `file(run=1)`, resolves to the identity that the record holds, so it is not a change.
 - A person edits a row at two cells of `at`, such as its sample run and then its transmission run. The loop does not reduce the row with half of the change; the person reduces it once both are set.
@@ -85,7 +86,7 @@ For the rows with no change by hand that is not reduced yet, the loop keeps the 
 So a label has one batch:
 
 ```python
-page = Batch(client, IOFQ, ..., label='auto/iofq', source=pair_by_sample)   # a second batch on the loop's label
+page = Batch(client, IOFQ, ..., label='auto/iofq', source=SAMPLE_RUNS)   # a second batch on the loop's label
 page.rows = page.rows.edit('60339', {'sample': file(run=60400)})
 page.reduce(['60339'])             # the row's result now holds run 60400 at `sample`
 loop.step()                        # differs from the loop's row at `at`: reduced again with the source's file
@@ -156,8 +157,8 @@ def samples(files):
             for k, s in transmissions.state().items() if s.record}
     return [Row(key, {'sample': run, 'transmission': done[name].ref('transmission')}) ...]
 
-run([Automatic(transmissions, at={'run'}),
-     Automatic(Batch(client, IOFQ, ..., source=samples), at={'sample'})])
+iofq = Batch(client, IOFQ, ..., source=Source(samples, fills=('sample', 'transmission')))
+run([Automatic(transmissions), Automatic(iofq)])
 ```
 
 A sample that arrives before its transmission run waits with an empty cell.
@@ -220,8 +221,8 @@ A cut-off that a person sets on purpose, "only the runs from 60339 on", is the s
   - *A group per file*, declared by the author. A step makes the rows of the groups that got a file, from those files and the files shared by all groups. A source that pairs by time, such as "the can measured before", has no such group and stays linear.
 
     ```python
-    Batch(..., source=pair_by_sample,
-          group=lambda f: None if f.metadata['role'] == 'can' else f.metadata['sample'])  # None: shared
+    Source(pair_by_sample, fills=...,
+           group=lambda f: None if f.metadata['role'] == 'can' else f.metadata['sample'])  # None: shared
     ```
 
   - *A row from one file, by queries on an index of the files.* The framework records what each row asked for. It needs no declaration by the author, and changes the signature of every source.

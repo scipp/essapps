@@ -19,6 +19,7 @@ from ess.apps.batch import (
     FolderDefinitions,
     Row,
     Scope,
+    Source,
 )
 from ess.apps.batch.definition import (
     CORRECTIONS,
@@ -38,7 +39,7 @@ from ess.apps.batch.text import load_template
 from ess.apps.folder import folder_files, open_folder
 from ess.spec import Binding
 
-from .toys import COLUMNS, PLAIN, Measure, pair
+from .toys import COLUMNS, PAIRS, PLAIN, Measure
 
 
 def first_transmission(files: Sequence[FileInfo]) -> list[Row]:
@@ -50,6 +51,8 @@ def first_transmission(files: Sequence[FileInfo]) -> list[Row]:
         if f.metadata['role'] == 'sample'
     ]
 
+
+FIRST_TRANSMISSION = Source(first_transmission, fills=('sample', 'transmission'))
 
 type Opened = Callable[..., AbstractContextManager[tuple[Batch, CorrectedFiles]]]
 
@@ -73,7 +76,7 @@ def opened(folder: Path, folder_bindings: list[Binding]) -> Opened:
                 PLAIN,
                 columns=columns,
                 label=label,
-                source=first_transmission,
+                source=FIRST_TRANSMISSION,
                 settings=settings,
                 definitions=store,
             )
@@ -342,7 +345,7 @@ def test_a_change_that_cannot_be_kept_raises_and_changes_nothing(
 ) -> None:
     sample(1, 'water')
     batch = Batch(
-        client, PLAIN, columns=COLUMNS, label='f', source=pair, definitions=Failing()
+        client, PLAIN, columns=COLUMNS, label='f', source=PAIRS, definitions=Failing()
     )
     files = CorrectedFiles(client.files, definitions=Failing())
     batch.scan()  # writes nothing

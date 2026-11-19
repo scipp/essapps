@@ -112,8 +112,9 @@ Automatic reduction belongs to its sub-design ([automatic-reduction.md](automati
 The stories use these calls:
 
 ```python
-batch = Batch(client, SPEC, columns=(...), label=..., source=rows_of_files, persist=True)
-auto = Automatic(batch, at={'sample'})   # reads batch.settings at each step
+batch = Batch(client, SPEC, columns=(...), label=..., source=Source(rows_of_files, fills=(...)),
+              persist=True)
+auto = Automatic(batch)   # reads batch.settings at each step
 auto.step()       # scans, and reduces the rows that arrived; their records by key
 auto.refused      # why rows of the last step were refused by submit, by key
 ```
@@ -646,7 +647,8 @@ def per_run(files):                                            # every raw file
     return [Row(str(f.metadata['run']), {'sample': f.ref}) for f in files]
 
 def iofq_batch(client):
-    return Batch(client, IOFQ, columns=('sample',), label='iofq', source=per_run, persist=True,
+    return Batch(client, IOFQ, columns=('sample',), label='iofq',
+                 source=Source(per_run, fills=('sample',)), persist=True,
                  settings={'normalization': None})
 ```
 
@@ -664,9 +666,10 @@ def angles(files):                                             # a row per sampl
             runs.setdefault(f.metadata['sample'], []).append(f.ref)
     return [Row(sample, {'runs': refs}) for sample, refs in runs.items()]
 
-batch = Batch(client, STITCH, columns=('runs',), label='reflectivity', source=angles, persist=True,
+batch = Batch(client, STITCH, columns=('runs',), label='reflectivity',
+              source=Source(angles, fills=('runs',)), persist=True,
               settings={'reference': reference})
-auto = Automatic(batch, at={'runs'})
+auto = Automatic(batch)
 
 r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
 client.wait(auto.step())                                       # a row still running waits for its record
@@ -692,7 +695,7 @@ Actor: instrument scientist. Goal: after an upgrade removed the spec version of 
 
 ```python
 upgraded = upgrade(specs=[IOFQ_V2])                            # version 1 is gone
-auto = Automatic(iofq_batch(upgraded), at={'sample'})
+auto = Automatic(iofq_batch(upgraded))
 measure(1, [1.0, 1.0], role='sample')
 
 assert auto.step() == {}
@@ -704,7 +707,7 @@ assert auto.refused == {'1': 'unknown spec sans-iofq/v1'}
 Actor: none; a failure mode. Goal: a published result that SciCat lists as a dataset does not make a row.
 
 ```python
-auto = Automatic(iofq_batch(client), at={'sample'})
+auto = Automatic(iofq_batch(client))
 measure(1, [1.0, 2.0, 3.0, 4.0])
 (reduced,) = auto.step().values()
 pid = client.publish(reduced.ref('iofq'), 'scicat')
@@ -720,7 +723,7 @@ A published entry is a file of kind `'derived'`, and a batch's source is given o
 Actor: instrument scientist. Goal: new runs use the improved settings; earlier results stay; the results made before the improvement can be found.
 
 ```python
-auto = Automatic(iofq_batch(client), at={'sample'})
+auto = Automatic(iofq_batch(client))
 first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
 (before,) = auto.step().values()
 

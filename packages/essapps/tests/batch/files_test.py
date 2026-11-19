@@ -50,7 +50,7 @@ def test_a_template_may_leave_out_the_blanks_and_the_params(tmp_path: Path) -> N
 # The command
 
 MODULE = '''
-from ess.apps.batch import Row
+from ess.apps.batch import Row, Source
 from ess.apps.testing import read_file
 from ess.spec import RunFile, WorkflowSpec, function_binding
 from pydantic import BaseModel
@@ -110,6 +110,9 @@ def pair(files):
         for f in files
         if f.metadata['role'] == 'sample'
     ]
+
+
+PAIRS = Source(pair, fills=('sample',))
 '''
 
 
@@ -390,9 +393,9 @@ def test_a_table_given_with_a_source_keeps_only_what_differs_from_the_scan(
     command: list[str], cli_template: Path, folder: Path
 ) -> None:
     runs = folder / 'runs.csv'
-    assert main([*command, 'rows', 'cli_toys_batch_files:pair', '-o', str(runs)]) == 0
+    assert main([*command, 'rows', 'cli_toys_batch_files:PAIRS', '-o', str(runs)]) == 0
     runs.write_text(runs.read_text().replace('3,path:run-3.json', '3,path:run-1.json'))
-    source = ['--source', 'cli_toys_batch_files:pair']
+    source = ['--source', 'cli_toys_batch_files:PAIRS']
 
     assert (
         main([*command, 'reduce', *source, str(cli_template), str(runs), '-l', 'x'])
@@ -423,7 +426,7 @@ def test_definitions_that_cannot_be_read_are_said_without_a_traceback(
     (folder / 'definitions').mkdir()
     (folder / 'definitions' / 'corrections.json').write_text('{"x": ')
 
-    code = main([*command, 'rows', 'cli_toys_batch_files:pair'])
+    code = main([*command, 'rows', 'cli_toys_batch_files:PAIRS'])
 
     assert code == 2
     assert 'definitions/corrections.json: ' in capsys.readouterr().err
@@ -441,6 +444,28 @@ def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(
     assert code == 0
     assert list(result['key']) == ['detector']
     assert list(result['status']) == ['completed']
+
+
+@pytest.mark.parametrize(
+    'arguments',
+    [
+        ['rows', 'cli_toys_batch_files:pair'],
+        ['reduce', '--source', 'cli_toys_batch_files:pair', '-l', 'x'],
+    ],
+    ids=['rows', 'reduce'],
+)
+def test_main_refuses_a_source_that_is_not_a_source_before_the_folder_is_opened(
+    command: list[str],
+    folder: Path,
+    arguments: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_:
+        main([*command, *arguments])
+
+    assert exit_.value.code == 2
+    assert 'is a function, not a Source' in capsys.readouterr().err
+    assert not (folder / 'log.jsonl').exists()
 
 
 def test_main_refuses_reduce_without_a_label(
@@ -505,7 +530,7 @@ def test_the_rows_that_main_makes_from_the_files_are_a_table_to_reduce(
     runs = folder / 'runs.csv'
     out = folder / 'results.csv'
 
-    assert main([*command, 'rows', 'cli_toys_batch_files:pair', '-o', str(runs)]) == 0
+    assert main([*command, 'rows', 'cli_toys_batch_files:PAIRS', '-o', str(runs)]) == 0
     code = main(
         [*command, 'reduce', str(cli_template), str(runs), '-l', 'x', '-o', str(out)]
     )
@@ -523,7 +548,7 @@ def test_the_rows_that_main_makes_read_the_corrections_kept_in_the_folder(
     files.correct(files.resolve(file(run=BAD)), role='sample')
     runs = folder / 'runs.csv'
 
-    assert main([*command, 'rows', 'cli_toys_batch_files:pair', '-o', str(runs)]) == 0
+    assert main([*command, 'rows', 'cli_toys_batch_files:PAIRS', '-o', str(runs)]) == 0
 
     assert list(read_table(runs)['key']) == ['1', '2', '3', str(BAD)]
 

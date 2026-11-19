@@ -50,9 +50,11 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any
+
+from pydantic import BaseModel
 
 from ess.spec import FileRef, WorkflowSpec
 
@@ -121,6 +123,66 @@ takes plain data and returns plain data, so it is tested on its own.
 """
 
 
+class Words(BaseModel):
+    """What a row is called, as ``1 sample``, ``2 samples``."""
+
+    one: str = 'row'
+    many: str = 'rows'
+
+    def count(self, n: int) -> str:
+        return f'{n} {self.one if n == 1 else self.many}'
+
+
+@dataclass(frozen=True)
+class Source:
+    """
+    A source of rows: a :data:`RowSource`, the files it is given, and what it
+    fills. A :class:`Batch` takes it, and an application registers it by name
+    with a :class:`~.manager.BatchManager`.
+
+    Parameters
+    ----------
+    rows:
+        Makes rows from files.
+    fills:
+        The parameters that its rows fill. They are columns of each batch of
+        it, and :class:`~.auto.Automatic` reduces a row again for a change at
+        them, unless given other columns.
+    selector:
+        The files that ``rows`` is given; raw files if not given.
+    words:
+        What a row is called on the page of a batch.
+    row_name:
+        The entry of :attr:`~.table.Row.info` that names a row on the page;
+        its key if ``None``.
+    row_info:
+        Other entries of :attr:`~.table.Row.info` that the page shows as
+        columns.
+    index_title:
+        What the page calls the :attr:`~.table.Row.index` that ``rows``
+        gives, such as ``'Run'``.
+    """
+
+    rows: RowSource
+    fills: tuple[str, ...]
+    selector: Selector | None = None
+    words: Words = field(default_factory=Words)
+    row_name: str | None = None
+    row_info: tuple[str, ...] = ()
+    index_title: str = 'Index'
+
+
+def check_fills(label: str, source: Source | None, columns: Iterable[str]) -> None:
+    """
+    Raise ``ValueError`` if ``source`` fills a parameter that is not one of
+    ``columns``, those of the batch of ``label``.
+    """
+    if source is not None and (missing := sorted(set(source.fills) - set(columns))):
+        raise ValueError(
+            f'{label}: the source fills {missing}, which are not columns of the batch'
+        )
+
+
 class Batch:
     """
     One spec reduced for many rows. See ``packages/essapps/docs/batch.md``.
@@ -137,9 +199,8 @@ class Batch:
     label:
         The label of the records. A row's key is its member.
     source:
-        Makes rows from files, for :meth:`scan`.
-    selector:
-        The files given to ``source``; raw files if not given.
+        Makes rows from files, for :meth:`scan`. Each parameter that it fills
+        is a column.
     staged:
         Run the rows through a stage, so that what they share is computed
         once. The spec's binding must make stages.
@@ -162,7 +223,8 @@ class Batch:
     KeyError
         If a column is not a parameter of the spec.
     ValueError
-        If ``settings`` name a column.
+        If ``settings`` name a column, or the source fills a parameter that
+        is not a column.
     ValueError
         If ``definitions`` hold edits or settings that cannot be read,
         settings of a spec of another name, or settings at a column, naming
@@ -177,8 +239,7 @@ class Batch:
         *,
         columns: Sequence[str],
         label: str,
-        source: RowSource | None = None,
-        selector: Selector | None = None,
+        source: Source | None = None,
         staged: bool = False,
         persist: bool | Sequence[str] = False,
         settings: Mapping[str, Any] | None = None,
@@ -188,6 +249,7 @@ class Batch:
         fields = spec.params.model_fields
         if unknown := sorted(set(columns) - fields.keys()):
             raise KeyError(f'{spec.title} has no parameters {unknown}')
+        check_fills(label, source, columns)
         self.client = client
         self.spec = spec
         self.columns = tuple(columns)
@@ -201,7 +263,6 @@ class Batch:
         if definitions is not None:
             self._load(definitions)
         self.scope = Scope() if scope is None else scope
-        self._selector = Selector() if selector is None else selector
         self._staged = staged
         self._persist = persist
         self._stage: tuple[Template, Stage] | None = None
@@ -275,9 +336,9 @@ class Batch:
         """
         if self.source is None:
             raise ValueError('this batch has no source of rows')
-        infos = file_infos(self.client, self._selector)
+        infos = file_infos(self.client, self.source.selector)
         # What was set by hand stays, so there is nothing to write.
-        self._rows = self._rows.rescan(self.source(infos))
+        self._rows = self._rows.rescan(self.source.rows(infos))
         self._scanned = True
         # A file that gained a catalogue identifier is resolved to it from now
         # on, by any of its names, its old identity among them.
