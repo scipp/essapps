@@ -54,7 +54,6 @@ from .models import (
     Keys,
     Made,
     NewBatch,
-    Next,
     Notice,
     On,
     Plot,
@@ -143,25 +142,18 @@ def create_app(pages: Pages) -> FastAPI:
 
     # Each action answers with the state after it.
 
-    @batch.post('/api/scan')
-    def scan(page: PageOfLabel) -> State:
-        return page.scan()
+    @batch.post('/api/relist')
+    def relist(page: PageOfLabel) -> State:
+        """List the runs again; no row changes."""
+        return page.relist()
 
     @batch.post('/api/cells')
     def edit(page: PageOfLabel, body: CellEdit) -> State:
         return page.edit(body)
 
-    @batch.post('/api/cells/revert')
-    def revert(page: PageOfLabel, body: Cells) -> State:
-        return page.revert(body)
-
     @batch.post('/api/rows/remove')
     def remove(page: PageOfLabel, body: Keys) -> State:
         return page.remove(body.keys)
-
-    @batch.post('/api/rows/restore')
-    def restore(page: PageOfLabel) -> State:
-        return page.restore()
 
     @batch.post('/api/rows/add')
     def add(page: PageOfLabel, body: Key) -> State:
@@ -210,13 +202,13 @@ def create_app(pages: Pages) -> FastAPI:
     @batch.get('/api/table.{suffix}', response_class=Response)
     def table_file(page: PageOfLabel, suffix: Literal['csv', 'xlsx']) -> Response:
         media = 'text/csv' if suffix == 'csv' else _XLSX
-        name = f'{page.words.many}.{suffix}'
-        return _download(page.table_file(f'.{suffix}'), name, media)
+        return _download(page.table_file(f'.{suffix}'), f'rows.{suffix}', media)
 
     @batch.post('/api/table')
     def load_table(
         page: PageOfLabel, name: str, content: Annotated[bytes, Body()]
     ) -> State:
+        """Replace the table of the batch with that of a table file."""
         return page.load_table(name, content)
 
     @batch.get('/api/settings.yaml', response_class=Response)
@@ -231,13 +223,8 @@ def create_app(pages: Pages) -> FastAPI:
 
     @batch.post('/api/batch')
     def change(page: PageOfLabel, body: HeaderEdit) -> State:
-        """Change the title, description and scope of the batch."""
+        """Change the title and description of the batch."""
         return page.change(body)
-
-    @batch.post('/api/batch/next')
-    def start_next(page: PageOfLabel, body: Next) -> Made:
-        """End the batch before a row, and start the next batch there."""
-        return page.start_next(body)
 
     @batch.post('/api/batch/remove')
     def remove_batch(label: str) -> dict[str, str]:
@@ -260,7 +247,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @workspace.get('/api/batches/counts')
     def counts() -> BatchCounts:
-        """The rows of each batch by status; it scans every batch."""
+        """The rows of each batch by status; it reads the state of every batch."""
         return pages.counts()
 
     @workspace.post('/api/batches')
@@ -278,7 +265,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @workspace.post('/api/runs/cells')
     def correct(body: CellEdit) -> Notice:
-        """Correct runs; the page of each batch scans at its next poll."""
+        """Correct runs; no row of a batch changes."""
         return pages.correct(body)
 
     @workspace.post('/api/runs/cells/revert')

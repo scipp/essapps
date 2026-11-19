@@ -73,14 +73,6 @@ button.primary {
 button.primary:hover:not(:disabled) { background: var(--accent-dark); }
 button.quiet { border-color: transparent; background: transparent; color: var(--accent); }
 button.quiet:hover:not(:disabled) { border-color: var(--line); background: var(--panel); }
-button.link {
-  height: auto;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--accent);
-}
-button.link:hover { text-decoration: underline; }
 button.danger { border-color: var(--bad); background: var(--bad); color: #fff; font-weight: 600; }
 button.small { height: 24px; min-width: 24px; padding: 0 6px; }
 
@@ -442,15 +434,13 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .new-batch .field > input, .new-batch .field > select { max-width: 420px; }
 /* The forms "New batch" and of the tab "Batch" */
-.scope-form .field > :first-child { color: var(--muted); }
-.scope-form .field > small { grid-column: 2; }
-.scope-form .problem { margin: 0 0 0 162px; color: var(--bad); }
-.scope-form .problem:empty { display: none; }
-.scope-form .buttons { display: flex; gap: 8px; margin-left: 162px; }
+.header-form .field > :first-child { color: var(--muted); }
+.header-form .field > small { grid-column: 2; }
+.header-form .problem { margin: 0 0 0 162px; color: var(--bad); }
+.header-form .problem:empty { display: none; }
+.header-form .buttons { display: flex; gap: 8px; margin-left: 162px; }
 .columns { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .columns label { display: inline-flex; align-items: center; gap: 4px; }
-.scope { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.scope input { width: 100px; }
 
 /* The page without a batch: the Batches and Runs views only */
 

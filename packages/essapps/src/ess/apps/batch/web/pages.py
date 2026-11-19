@@ -10,13 +10,12 @@ The pages share one lock. Every request of every page and each step of Follow
 take it, so that what the pages share, such as the corrections of runs and
 the batches of the manager, changes in one request at a time. One person
 works with the application, so a request waits for at most one step, or for
-the counts (:meth:`Pages.counts`), which scan every batch.
+the counts (:meth:`Pages.counts`), which read the state of every batch.
 
 The runs are the same on every page (:meth:`Pages.runs`), and a person
 corrects them on any page, with or without a batch (:meth:`Pages.correct`).
-The page of each batch scans its batch at its next poll after a correction
-(:attr:`Pages.corrected`), and says once if that scan fails; the page the
-correction was made on polls at once.
+A correction changes no row of a batch: a table names files, and the page
+shows each with its metadata now.
 
 A person makes a batch from the list of batches, of the sources and specs
 that :meth:`Pages.sources` offers (:meth:`Pages.create`); the manager decides
@@ -27,11 +26,12 @@ be shown (:meth:`Pages.page`), with the reason, and that of a batch removed
 :class:`~.page.Missing` from then on.
 
 The manager keeps which batch follows
-(:attr:`~ess.apps.batch.BatchManager.following`). :meth:`Pages.tick` steps it
-with :class:`~ess.apps.batch.auto.Automatic`, with or without a page open,
-keeps why rows were refused and what the step raised, and has the page of the
-batch that follows show what the step changed. :func:`~.api.create_app` owns
-the timer that calls it, every :attr:`Pages.interval` seconds.
+(:attr:`~ess.apps.batch.BatchManager.following`). :meth:`Pages.tick` is one
+step of it (:meth:`~ess.apps.batch.BatchManager.step`), with or without a
+page open, plus what the page shows of the step: why rows were refused, how
+many rows wait, and what the step raised; then the page of the batch that
+follows shows what the step changed. :func:`~.api.create_app` owns the timer
+that calls it, every :attr:`Pages.interval` seconds.
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from typing import Any
 
+import pandas as pd
 from pydantic import BaseModel
 
 from ess.spec import FileRef, WorkflowSpec
@@ -50,13 +51,11 @@ from ...errors import SubmitError
 from ...fields import UNSET, Fields
 from ...files import Selector
 from ...listing import Listing
-from ..auto import Automatic
 from ..corrections import CorrectedFiles
 from ..definition import NotKept
 from ..manager import BatchManager, fits
-from ..reduction import Source, Words, file_infos
+from ..source import Source
 from ..state import RowState, refused_again
-from ..table import Scope
 from . import forms
 from .models import (
     BatchCounts,
@@ -116,9 +115,6 @@ class Pages:
     runs_version:
         Counts the changes of the runs, so that the Runs view of each page
         asks for them again.
-    corrected:
-        Counts the corrections of runs, so that the page of each batch scans
-        again at its next poll after one.
     failure:
         What the last step of Follow raised, ``None`` if it raised nothing.
     refused:
@@ -126,6 +122,9 @@ class Pages:
         raise was on, and why it refused rows, by key
         (:attr:`~ess.apps.batch.auto.Automatic.refused`); said only while
         that batch follows, and emptied when its page applies settings.
+    waiting:
+        How many rows of the source the same step did not add, since they are
+        not filled yet (:attr:`~ess.apps.batch.auto.Automatic.waiting`).
     """
 
     def __init__(
@@ -153,17 +152,17 @@ class Pages:
         # What the runs, their corrections and a new batch are read with,
         # listed again for each.
         self._listing: Listing | None = None
-        self.corrected = 0
         self.failure: str | None = None
         self.refused: tuple[str | None, dict[str, str]] = (None, {})
+        self.waiting = 0
         self._pages: dict[str, Page] = {}
 
     def page(self, label: str) -> Page:
         """
         The page of ``label``, made at the first call. Raises
         :class:`Missing` if no batch has the label, and
-        :class:`~.page.Problem` if its batch cannot be made, such as when
-        its source raises.
+        :class:`~.page.Problem` if its page cannot be made, such as when its
+        table cannot be read, or the files cannot be listed.
         """
         with self.lock:
             if label not in self.manager.headers():
@@ -172,10 +171,7 @@ class Pages:
             if (page := self._pages.get(label)) is None:
                 try:
                     page = Page(self, label)
-                    # The rows can be read: an end of a scope kept that does
-                    # not compare with the index of the source raises here.
-                    len(page.batch.rows)
-                except Exception as error:  # a source is code of the application
+                except Exception as error:  # the file source is code of the application
                     raise Problem(f'Cannot show {label}: {error}') from None
                 self._pages[label] = page
             return page
@@ -194,9 +190,9 @@ class Pages:
 
     def tick(self) -> None:
         """
-        A step of Follow: one step of :class:`~ess.apps.batch.auto.Automatic`
-        on the batch that follows, if one does; then
-        :meth:`Page.stepped <.page.Page.stepped>` of its page.
+        A step of Follow on the batch that follows, if one does
+        (:meth:`~ess.apps.batch.BatchManager.step`), and what the page shows
+        of it; then :meth:`Page.stepped <.page.Page.stepped>` of its page.
         :func:`~.api.create_app` calls it on a timer. What the step raises is
         :attr:`failure`, and the next step tries again.
         """
@@ -208,9 +204,10 @@ class Pages:
             if (label := self.manager.following) is None:
                 return
             try:
-                loop = Automatic(self.manager.batch(label))
-                loop.step()
+                if (loop := self.manager.step()) is None:
+                    return
                 self.refused = (label, loop.refused)
+                self.waiting = len(loop.waiting)
                 self.failure = None
             except Exception as error:  # the next step tries again
                 self.failure = f'Follow could not step: {str(error) or repr(error)}'
@@ -288,11 +285,7 @@ class Pages:
             )
 
     def correct(self, edit: CellEdit) -> Notice:
-        """
-        Correct a field of the runs ``edit.keys``, as its field reads the
-        value. The page of each batch scans its batch at its next poll, and
-        Follow the batch that follows at its next step.
-        """
+        """Correct a field of the runs ``edit.keys``, as its field reads the value."""
         with self.lock:
             marks, files, _ = self._marked()
             value = read(marks, edit)
@@ -321,15 +314,14 @@ class Pages:
 
     def _kept(self, correction: Callable[[], None]) -> None:
         """
-        Make ``correction``, then have the pages scan their batches and show
-        the runs again. Raises :class:`~.page.Problem` if the definitions do
-        not keep it, or if the runs cannot be listed after it.
+        Make ``correction``, then have the pages show the runs again. Raises
+        :class:`~.page.Problem` if the definitions do not keep it, or if the
+        runs cannot be listed after it.
         """
         try:
             correction()
         except NotKept as error:
             raise Problem(f'The change was not kept: {error}') from None
-        self.corrected += 1
         try:
             runs = self._relisted().listed(Selector())
         except Exception as error:  # the file source of the application
@@ -338,13 +330,13 @@ class Pages:
             ) from None
         self.runs_listed(runs, changed=True)
 
-    def waiting(self, label: str, states: Mapping[str, RowState]) -> dict[str, str]:
+    def refusals(self, label: str, states: Mapping[str, RowState]) -> dict[str, str]:
         """
         Why Follow could not submit each row of ``states`` that its next step
         would try again, by key; none unless the batch of ``label`` follows.
         """
-        source, (of, refused) = self.manager.batch(label).source, self.refused
-        if source is None or self.manager.following != label or of != label:
+        of, refused = self.refused
+        if self.manager.following != label or of != label:
             return {}
         reasons = {
             key: f'Follow could not reduce it: {forms.message(reason)}'
@@ -355,23 +347,15 @@ class Pages:
     def batches(self) -> Batches:
         """The batches, as the Batches view of each page lists them."""
         with self.lock:
-            rows = []
-            for label, header in self.manager.headers().items():
-                name, sources = header.source, self.manager.sources
-                # listed even if its source is no longer registered
-                source = None if name is None else sources.get(name)
-                words = Words() if source is None else source.words
-                index = '' if source is None else source.index_title
-                rows.append(
-                    BatchRow(
-                        label=label,
-                        title=header.title,
-                        description=header.description,
-                        words=words,
-                        scope=_scope_text(header.scope, index),
-                        follows=label == self.manager.following,
-                    )
+            rows = [
+                BatchRow(
+                    label=label,
+                    title=header.title,
+                    description=header.description,
+                    follows=label == self.manager.following,
                 )
+                for label, header in self.manager.headers().items()
+            ]
             return Batches(
                 application=self.title,
                 runs=self.runs_version if self.corrects_runs else None,
@@ -399,8 +383,6 @@ class Pages:
                 return SourceChoice(
                     name=name,
                     fills=list(fills),
-                    words=Words() if source is None else source.words,
-                    index_title='' if source is None else source.index_title,
                     specs=[
                         _spec_choice(spec, fills, listing)
                         for spec in specs
@@ -415,20 +397,28 @@ class Pages:
         """
         Make the batch of ``new`` with the manager
         (:meth:`~ess.apps.batch.BatchManager.create`), with the settings that
-        the application gives its spec, and the ends of its scope as typed.
-        Raises :class:`~.page.Problem` with what the manager refuses.
+        the application gives its spec: with a source, of every row that the
+        source gives now, and an empty column for each other of
+        ``new.columns``; without, of a table of ``new.columns`` without rows.
+        Raises :class:`~.page.Problem` with what the manager refuses, or what
+        the source raises.
         """
         with self.lock:
             try:
+                if new.source is None:
+                    rows = pd.DataFrame(columns=new.columns)
+                else:
+                    given = self.manager.rows_of(new.source)
+                    empty = [c for c in new.columns if c not in given.columns]
+                    rows = given.assign(**dict.fromkeys(empty))
                 label = self.manager.create(
                     new.spec,
                     title=new.title,
+                    rows=rows,
                     source=new.source,
-                    columns=new.columns,
                     description=new.description,
-                    scope=Scope(start=new.start, stop=new.stop),
                 )
-            except (ValueError, NotKept) as error:
+            except Exception as error:  # a source is code of the application
                 raise Problem(f'The batch was not made: {why(error)}.') from None
             return Made(label=label)
 
@@ -453,56 +443,41 @@ class Pages:
     def counts(self) -> BatchCounts:
         """
         The rows of each batch by status, in the words of the page of each
-        batch (:func:`~.page.page_statuses`), and the rows of each registered
-        source that no batch shows. Every page and Follow wait while it
-        scans.
+        batch (:func:`~.page.page_statuses`), and how many rows of each
+        registered source no table of a batch has. Every page and Follow wait
+        while it counts.
 
-        It scans every batch with a source, so the rows of each batch are
-        those of the files now. A batch not made yet is made first, which
-        scans it too, so it is scanned twice. While the settings of a batch
-        are refused, its rows are as :meth:`~ess.apps.batch.Batch.results`
-        gives them. A row counts as
-        shown if any batch of its source shows it, so a row removed by hand,
-        or outside a scope, counts as not shown only if every batch of the
-        source removed it or leaves it out. A source is called once more only
-        if no batch of it was scanned. A batch that cannot be made or
-        scanned, such as one whose source is not registered or raises, has
-        its reason in ``failed``, and its source is left out of ``outside``.
+        The state of each batch is read as its page reads it, without asking
+        its source; while the settings of a batch are refused, its rows are
+        as :meth:`~ess.apps.batch.Batch.results` gives them. Each source is
+        asked once for its rows now. A batch that cannot be made, such as one
+        whose table cannot be read, has its reason in ``failed``, and then
+        ``outside`` is empty, since the rows of that batch are not known; so
+        is a source that raises left out of it.
         """
         with self.lock:
             manager = self.manager
             rows: dict[str, dict[str, int]] = {}
             failed: dict[str, str] = {}
-            made: dict[str, set[str]] = {}  # the keys of the rows each source made
-            shown: dict[str, set[str]] = {name: set() for name in manager.sources}
-            for label, header in manager.headers().items():
+            held: set[str] = set()  # the keys of the tables of every batch
+            for label in manager.headers():
                 try:
                     batch = manager.batch(label)
-                    if batch.source is not None:
-                        batch.scan()
                     try:
                         states = batch.state()
                     except SubmitError:
                         states = batch.results()
-                except Exception as error:  # a source is code of the application
+                except (ValueError, OSError) as error:
                     failed[label] = why(error)
-                    shown.pop(header.source, None)  # its rows shown are not known
                     continue
-                waiting = self.waiting(label, states)
-                statuses = page_statuses(states, batch.columns, waiting)
+                refused = self.refusals(label, states)
+                statuses = page_statuses(states, batch.columns, refused)
                 rows[label] = dict(Counter(statuses.values()))
-                if header.source in shown:
-                    made[header.source] = {row.key for row in batch.rows.scan}
-                    shown[header.source] |= {row.key for row in batch.rows}
+                held |= set(states)
             outside = {}
-            for name, keys in shown.items():
-                source = manager.sources[name]
-                if name not in made:
-                    with suppress(Exception):  # a source is code of the application
-                        infos = file_infos(manager.client, source.selector)
-                        made[name] = {row.key for row in source.rows(infos)}
-                if name in made:
-                    outside[name] = source.words.count(len(made[name] - keys))
+            for name in [] if failed else manager.sources:
+                with suppress(Exception):  # a source is code of the application
+                    outside[name] = len(set(manager.rows_of(name).index) - held)
             return BatchCounts(rows=rows, failed=failed, outside=outside)
 
 
@@ -521,14 +496,3 @@ def _spec_choice(
         title=spec.title,
         params=[Param(name=n, title=form.titles[n]) for n in names],
     )
-
-
-def _scope_text(scope: Scope, index: str) -> str:
-    """
-    A scope as the Batches view shows it: ``Run 60339 \N{EN DASH} 60421``, with an open
-    end left out; empty for every row.
-    """
-    if scope.start is None and scope.stop is None:
-        return ''
-    start, stop = ('' if end is None else str(end) for end in (scope.start, scope.stop))
-    return ' '.join(filter(None, [index, start, '\N{EN DASH}', stop]))
