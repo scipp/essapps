@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from ess.apps import Client, Stage, Workspace
+from ess.apps import Client, Stage, Template, Workspace
 from ess.apps.batch import (
     Batch,
     BatchManager,
@@ -21,6 +21,7 @@ from ess.apps.batch import (
     Scope,
     Source,
 )
+from ess.apps.batch.definition import settings_key, template_data
 from ess.apps.testing import FakeStore, StagedFunction
 from ess.spec import function_binding
 
@@ -136,14 +137,8 @@ def test_settings_kept_at_a_column_of_the_batch_are_refused_naming_the_file(
     manager: BatchManager, client: Client, definitions: FolderDefinitions
 ) -> None:
     manager.create('plain', title='Morning', source='pairs', columns=COLUMNS, label='b')
-    narrow = Batch(
-        client,
-        PLAIN,
-        columns=('sample', 'transmission'),
-        label='b',
-        definitions=definitions,
-    )
-    narrow.settings = {'thickness': 2.0}
+    narrow = Template(PLAIN, params={'thickness': 2.0}, blanks=('sample',))
+    definitions.save(settings_key('b'), template_data(narrow))  # as a person edits it
 
     with pytest.raises(
         ValueError, match=r"b/settings\.json: \['thickness'\]: columns of the batch"
@@ -182,19 +177,6 @@ def test_a_batch_whose_spec_is_no_longer_bound_as_it_was_made_is_refused(
 
         with pytest.raises(ValueError, match=said):
             _again(client, definitions).batch('b')
-
-
-def test_a_second_batch_on_the_label_with_other_columns_changes_no_header(
-    manager: BatchManager, client: Client, definitions: FolderDefinitions
-) -> None:
-    manager.create('plain', title='Morning', source='pairs', label='b')
-    other = Batch(client, PLAIN, columns=COLUMNS, label='b', definitions=definitions)
-    other.settings = {}
-
-    again = _again(client, definitions)
-
-    assert again.headers()['b'].columns == ('sample', 'transmission')
-    assert again.batch('b').columns == ('sample', 'transmission')
 
 
 @pytest.fixture

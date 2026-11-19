@@ -25,7 +25,6 @@ from typing import Any
 from ess.apps import Client
 from ess.apps.batch import (
     Batch,
-    DefinitionStore,
     FileInfo,
     Row,
     Source,
@@ -102,11 +101,11 @@ def iofq_batch(
     label: str = 'iofq',
     persist: bool = False,
     settings: Mapping[str, Any] | None = None,
-    definitions: DefinitionStore | None = None,
 ) -> Batch:
     """
     The batch of I(Q), through one stage, so that the can is reduced once.
-    ``persist``, ``settings`` and ``definitions`` are those of :class:`Batch`.
+    ``persist`` and ``settings`` are those of :class:`Batch`. It keeps
+    nothing: a batch kept in the definitions is made by the manager.
     """
     return Batch(
         client,
@@ -117,5 +116,4 @@ def iofq_batch(
         staged=True,
         persist=persist,
         settings=settings,
-        definitions=definitions,
     )

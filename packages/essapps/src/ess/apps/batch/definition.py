@@ -50,8 +50,9 @@ The plain data of each table, as the functions below give and read it::
 A value is in the JSON form that a record holds, a file as
 ``{'@ref': 'file', 'file': 'pid:...'}``. The edits hold only what was set by
 hand, so a cell from the scan keeps following the scan. The settings are a
-template so that the command ``essapps-batch`` reads them as one; for a batch
-with a header, its spec and blanks are a copy of the header's. Each table is
+template, in the format of the file that a person saves from a page.
+:func:`settings_of` checks the name of its spec, and reads neither its
+version nor its blanks: the header says the columns. Each table is
 checked when read: data of another shape raises ``ValueError`` naming the
 entry, and :class:`FolderDefinitions` adds the file.
 """

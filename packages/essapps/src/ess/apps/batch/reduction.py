@@ -216,8 +216,10 @@ class Batch:
         takes its default.
     definitions:
         Keep the edits and the settings of the label (:mod:`~.definition`):
-        read here, and written at each change. Without them, the edits and
-        settings are kept in memory only.
+        read here, and written at each change. The manager gives them to the
+        ``Batch`` of a label it holds (:meth:`.manager.BatchManager.batch`);
+        a ``Batch`` made in code keeps nothing, and its edits and settings are
+        in memory only.
     scope:
         The rows of the scan that the batch holds (:attr:`scope`); every row
         if not given.

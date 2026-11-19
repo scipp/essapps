@@ -352,20 +352,19 @@ app = create_app(pages)
 
 ## Where the definition is kept
 
-The *definition* of a batch is the corrections, the header, the edits, and the settings ([The model](#the-model-tables-and-one-cycle)). Give the batch and the file source the *definitions* of the workspace, and a batch made again, after a restart or in another process, starts with them:
+The *definition* of a batch is the corrections, the header, the edits, and the settings ([The model](#the-model-tables-and-one-cycle)). Give the manager and the file source the *definitions* of the workspace, and a batch made again, after a restart or in another process, starts with them:
 
 ```python
-from ess.apps.batch import FolderDefinitions
+from ess.apps.batch import BatchManager, FolderDefinitions
 
 definitions = FolderDefinitions(directory)                   # the workspace's folder
 files = CorrectedFiles(folder_files(directory), definitions=definitions)  # reads the corrections
 client = open_folder(directory, BINDINGS, files=files)
-batch = Batch(client, IOFQ, columns=..., label='auto/iofq', source=SAMPLE_RUNS,
-              settings=DEFAULTS, definitions=definitions)    # the settings kept replace DEFAULTS
-batch.scan()                                                 # the scan, with the edits kept on top
+manager = BatchManager(client, sources=SOURCES, definitions=definitions)
+batch = manager.batch(label)        # the settings kept, and the scan with the edits kept on top
 ```
 
-Without definitions, the corrections, the edits and the settings stay in memory. The edits and settings are read when the `Batch` is made, the corrections when the `CorrectedFiles` is made, and nothing reads them again while these live. Each change is written to the definitions before it is made, so a change that they refuse raises `NotKept` (an `OSError`) and changes nothing; the page answers it with a message, and its settings form keeps what it holds, to apply again. A scan writes nothing.
+Only the manager gives a `Batch` the definitions. A `Batch` made in code keeps its edits and settings in memory, and a `CorrectedFiles` without definitions its corrections. The edits and settings are read when the `Batch` is made, the corrections when the `CorrectedFiles` is made, and nothing reads them again while these live. Each change is written to the definitions before it is made, so a change that they refuse raises `NotKept` (an `OSError`) and changes nothing; the page answers it with a message, and its settings form keeps what it holds, to apply again. A scan writes nothing.
 
 What is written is what is assigned: `batch.rows = ...`, `batch.settings = ...`, `batch.put(...)`, and `files.correct(...)`, `files.correct_each(...)`, `files.reset(...)`. `batch.settings` is a read-only copy, so a change inside it changes nothing, and settings that name a column raise `ValueError`. The methods of `RowTable` return a new table. Its `edits` and a row's `values` are plain dicts, though: a change made in them is not written and is lost at a restart, so never change them in place.
 
@@ -444,8 +443,9 @@ Each part that is kept is in one file of the label, with one writer at a time:
 
 ```
 header.json     BatchManager      spec, columns, source; title, description; scope
-settings.json   Batch.settings    the settings, as a template; its spec and blanks a copy of the header's;
-                                  the first written by create
+settings.json   Batch.settings    the settings, as a template; the first written by create. Reading them
+                                  checks the name of its spec; its version and blanks are not read,
+                                  since the header says the columns
 edits.json      Batch.rows        the edits
 ```
 

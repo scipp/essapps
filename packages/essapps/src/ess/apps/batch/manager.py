@@ -12,8 +12,10 @@ with one writer::
 
     header      the spec by name, the columns, the name     BatchManager
                 of its source, title, description, scope
-    settings    a template of the settings, its spec and    Batch.settings; the
-                blanks a copy of the header's               first by the manager
+    settings    a template of the settings; reading it      Batch.settings; the
+                checks the name of its spec, and reads      first by the manager
+                neither its version nor its blanks, since
+                the header says the columns
     edits       what a person set on its rows               Batch.rows
 
 so a manager made again, after a restart, makes the same ``Batch`` of a label
