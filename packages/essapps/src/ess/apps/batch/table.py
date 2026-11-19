@@ -72,24 +72,39 @@ Python values keeps each float and integer exact, and :func:`frame_of` builds
 each column with ``pd.array(values, dtype=extDtype)``.
 A row is read as ``frame.to_dict('index')``, which gives Python values of each
 column's type, never a NumPy scalar or a ``Float64`` in place of an ``Int64``.
+
+A table file, ``.csv``, ``.tsv`` or ``.xlsx``, is the frame as text
+(:func:`write_table`), with the key as its column ``key``; :func:`read_table`
+reads it back equal. A list or a group is JSON text, as is a cell of an
+``object`` column that would read back as something else
+(:func:`write_cell`)::
+
+    key,sample,thickness,binning,name
+    60339,run:60339,1.5,"{""bins"": 4}",water
+    60340,run:60340,,,NA
+
+Empty is the only missing marker, so a note ``NA`` is text.
 """
 
 from __future__ import annotations
 
 import copy
+import json
 import re
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
-from typing import Any, Literal, get_args, get_origin
+from functools import partial
+from pathlib import Path
+from typing import Any, Literal, TextIO, get_args, get_origin
 
 import pandas as pd
 from pandas.io.json import build_table_schema
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
-from pydantic_core import to_jsonable_python
+from pydantic_core import to_json, to_jsonable_python
 
 from ess.spec import FileRef, OutputRef, field_types
 
@@ -407,3 +422,113 @@ def frame_of(data: Any) -> pd.DataFrame:
     if problems:
         raise ValueError('; '.join(problems))
     return pd.DataFrame(columns, index=index, columns=names)
+
+
+RESULT = ('status', 'record', 'failure')
+"""The columns of what came of each row, which a table file may hold."""
+
+_READERS: dict[str, Callable[..., pd.DataFrame]] = {
+    '.csv': pd.read_csv,
+    '.tsv': partial(pd.read_csv, sep='\t'),
+    '.xlsx': pd.read_excel,
+}
+
+SUFFIXES = tuple(_READERS)
+"""The suffixes of the files that hold a table."""
+
+
+def _reader(path: Path) -> Callable[..., pd.DataFrame]:
+    if (reader := _READERS.get(path.suffix)) is None:
+        raise ValueError(f'{path}: a table is one of {", ".join(SUFFIXES)}')
+    return reader
+
+
+def read_cell(text: str) -> Any:
+    """The value of a cell of an ``object`` column: its JSON value, or its text."""
+    try:
+        return json.loads(text)
+    except ValueError:
+        return text
+
+
+def write_cell(value: Any) -> str:
+    """The text that :func:`read_cell` reads as ``value``, plain data."""
+    if isinstance(value, str) and read_cell(value) == value:
+        return value
+    return to_json(value).decode()
+
+
+def read_text(path: Path) -> pd.DataFrame:
+    """
+    The table in a file of one of :data:`SUFFIXES`, each cell as text, an
+    empty one as ``''``: a table that is not of a batch, such as a run table,
+    or one with the columns of :data:`RESULT`.
+    """
+    return _reader(path)(path, dtype=str, keep_default_na=False)
+
+
+def read_table(path: Path, model: type[BaseModel]) -> pd.DataFrame:
+    """
+    The table in a file of one of :data:`SUFFIXES`, as :func:`typed` gives it
+    for the params model ``model``. The file has a column :data:`KEY`. A column
+    of a parameter is read with its dtype, an ``object`` column cell by cell
+    with :func:`read_cell`, and a note as pandas infers it; the columns of
+    :data:`RESULT` are dropped. Only an empty cell is missing.
+
+    Raises ``ValueError`` if the file has no column :data:`KEY`, a cell is not
+    of the kind of its column, or :func:`typed` refuses the table.
+    """
+    types = dtypes(model)
+    text: dict[str, Any] = {
+        n: 'string' if t == 'object' else t for n, t in types.items()
+    }
+    if path.suffix == '.xlsx':
+        # pandas reads an empty cell of .xlsx as the text 'nan' for a boolean
+        # dtype; a cell of .xlsx is a bool already, which typed() checks.
+        text = {n: object if t == 'boolean' else t for n, t in text.items()}
+    try:
+        frame = _reader(path)(
+            path,
+            dtype={**text, KEY: 'string'},
+            keep_default_na=False,
+            na_values=[''],
+        )
+    except TypeError as error:  # what pandas raises for 2.5 in an Int64 column
+        raise ValueError(f'{path}: {error}') from None
+    if KEY not in frame.columns:
+        raise ValueError(f'{path}: a table has a column {KEY!r}, the key of each row')
+    frame = frame.drop(columns=list(RESULT), errors='ignore').set_index(KEY)
+    for name in frame.columns:
+        if types.get(name) == 'object':
+            frame[name] = pd.Series(
+                [None if pd.isna(v) else read_cell(v) for v in frame[name]],
+                index=frame.index,
+                dtype=object,
+            )
+    return typed(frame, model)
+
+
+def write_table(frame: pd.DataFrame, out: Path | TextIO) -> None:
+    """
+    Write ``frame`` as :func:`read_table` reads it back: to a file of one of
+    :data:`SUFFIXES`, by its suffix, or as CSV to a stream. A named index,
+    such as :data:`KEY`, is the first column, and each cell of an ``object``
+    column is :func:`write_cell` of it.
+    """
+    suffix = '.csv'
+    if isinstance(out, Path):
+        _reader(out)  # refuses another suffix before anything is written
+        suffix = out.suffix
+    if frame.index.name is not None:
+        frame = frame.reset_index()
+    frame = frame.assign(
+        **{
+            name: [None if _empty(v) else write_cell(v) for v in column]
+            for name, column in frame.items()
+            if column.dtype == object
+        }
+    )
+    if suffix == '.xlsx':
+        frame.to_excel(out, index=False)
+    else:
+        frame.to_csv(out, index=False, sep='\t' if suffix == '.tsv' else ',')

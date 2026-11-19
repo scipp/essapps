@@ -10,6 +10,7 @@ import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
+import pandas as pd
 import pydantic
 import pytest
 import scipp as sc
@@ -24,7 +25,7 @@ from ess.apps import (
     SubmitError,
     Template,
 )
-from ess.apps.batch import Batch, Row
+from ess.apps.batch import Batch
 from ess.apps.folder import open_folder
 from ess.apps.log import Finished, Log, Started, Submitted
 from ess.apps.testing import kept_rows
@@ -385,9 +386,8 @@ def batch_of(folder: Path) -> Callable[[list[Binding]], Batch]:
 
     def make(bindings: list[Binding]) -> Batch:
         client = open_folder(folder, bindings)
-        batch = Batch(client, bindings[0].spec, columns=('bins',), label='c')
-        batch.rows = batch.rows.rescan([Row('5', {'bins': 5})])
-        return batch
+        rows = pd.DataFrame({'bins': [5]}, index=['5'])
+        return Batch(client, bindings[0].spec, label='c', rows=rows)
 
     with open_folder(folder, WRITTEN) as client:
         client.submit(CENTRE, params={'bins': 5}, label='c', member='5', persist=True)

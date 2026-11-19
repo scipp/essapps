@@ -1,126 +1,42 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Params as a person writes them in a text file: a cell of a table, or a value of
-a YAML file.
+Templates as a person writes them: YAML files (see :func:`load_template`).
 
-A cell is text, and is read as JSON if it is JSON, so that a cell holds anything
-a request can::
+At a parameter that takes a file, or a list of them, a file is named as in a
+cell of a table (:func:`~.table.as_request`)::
 
-    1.5                 a number
-    water               a string, since it is not JSON
-    null                None
-    {"x": 0, "y": 1}    a group
-    (empty)             no value: the parameter takes its default
+    sample: run:60339           the file of that name
+    sample: 60339               the run 60339
+    masks: [path:masks/a.xml]   a file of the workspace's folder, by its identity
 
-A file has no JSON form that a person would write, so at a parameter that is a
-file field, or a list of them, a file is named by text (see :func:`named_file`)::
-
-    60339                   the run 60339
-    /data/mask.xml          a path
-    pid:20.500.12269/abc    anything else by its kind, as ``FileRef.file`` holds it
-    path:masks/mask.xml     a file of the workspace's folder, by its identity
-
-Only a parameter is read this way, not a file field inside a group, which takes
-the JSON form of a file, as the record holds it.
+A file field inside a group takes the JSON form of a file, as the record holds
+it.
 
 A file that is written before the records it reads exist names them by label
 (see :func:`with_latest`)::
 
     masks: {'@latest': masks, output: masks}
 
-A template is a YAML file (see :func:`load_template`). :func:`write_template`
-writes each file and reference in its JSON form, which reads back as the same.
-:func:`checked_settings` reads the settings of a batch from a template, which
-must be of the batch's spec, version and columns, and
+:func:`write_template` writes each file and reference in its JSON form, which
+reads back as the same. :func:`checked_settings` reads the settings of a batch
+from a template, which must be of the batch's spec and its version, and
 ``write_template(batch.template(), path)`` writes them.
 """
 
 from __future__ import annotations
 
-import json
-import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, get_args, get_origin
+from typing import Any
 
 import yaml
-from pydantic import BaseModel, TypeAdapter
-from pydantic_core import to_json
-
-from ess.spec import FileRef, field_types
+from pydantic import TypeAdapter
 
 from ..client import Client
-from ..files import file
 from ..records import SpecId, Template
 from .reduction import Batch
-
-_KIND = re.compile(r'[a-z]+:')
-
-
-def read_cell(text: str) -> Any:
-    """The value of a cell that is not empty: its JSON value, or else its text."""
-    try:
-        return json.loads(text)
-    except ValueError:
-        return text
-
-
-def write_cell(value: Any) -> str:
-    """The text that :func:`read_cell` and :func:`named_file` read as ``value``."""
-    if isinstance(value, FileRef):
-        return value.file
-    if isinstance(value, str) and read_cell(value) == value:
-        return value
-    if isinstance(value, list):
-        value = [v.file if isinstance(v, FileRef) else v for v in value]
-    return to_json(value).decode()
-
-
-def named_file(name: Any) -> Any:
-    """
-    The file that ``name`` names: a whole number is a run, text that starts with
-    a kind, such as ``pid:``, is the file of that kind, and other text is a
-    path, relative to the working directory. Anything else is returned as it is,
-    for the workspace to refuse.
-    """
-    if isinstance(name, int) and not isinstance(name, bool):
-        return file(run=name)
-    if not isinstance(name, str):
-        return name
-    if _KIND.match(name):
-        return FileRef(file=name)
-    return file(path=name)
-
-
-def _takes_files(annotation: Any, metadata: tuple[Any, ...]) -> bool:
-    """Whether a parameter is a file field or a list of file fields."""
-    tp, _, metadata = field_types.unwrapped(annotation, metadata)
-    if get_origin(tp) is list:
-        tp, _, metadata = field_types.unwrapped(get_args(tp)[0])
-    inline, inline_metadata, _ = field_types.split(tp, *metadata)
-    return field_types.file_marker(inline, *inline_metadata) is not None
-
-
-def with_named_files(
-    model: type[BaseModel], params: Mapping[str, Any]
-) -> dict[str, Any]:
-    """
-    ``params`` of the params model ``model``, with each name at a parameter that
-    takes files as the file it names (see :func:`named_file`).
-    """
-    read = dict(params)
-    for name, info in model.model_fields.items():
-        if name in read and _takes_files(
-            info.annotation, field_types.field_metadata(info)
-        ):
-            value = read[name]
-            read[name] = (
-                [named_file(v) for v in value]
-                if isinstance(value, list)
-                else named_file(value)
-            )
-    return read
+from .table import as_request
 
 
 def with_latest(client: Client, value: Any) -> Any:
@@ -161,12 +77,14 @@ def load_template(path: Path) -> Template:
 
 def checked_settings(batch: Batch, template: Template) -> dict[str, Any]:
     """
-    The settings of ``batch`` that ``template`` holds, with files named and
-    ``@latest`` read (see :func:`with_named_files` and :func:`with_latest`).
+    The settings of ``batch`` that ``template`` holds: the value of each
+    parameter that is not a column of ``batch``, with files named as in a cell
+    (:func:`~.table.as_request`) and ``@latest`` read (:func:`with_latest`).
+    The blanks of the template are not read: the columns of the batch are the
+    blanks.
 
     Raises ``ValueError``, saying why in a person's words, if the template is
-    of another spec, of another version of it, or has other blanks than the
-    columns of the batch, or if a value cannot be read.
+    of another spec or of another version of it, or if a value cannot be read.
     """
     theirs, ours = template.spec, SpecId.of(batch.spec)
     if theirs.name != ours.name:
@@ -178,13 +96,8 @@ def checked_settings(batch: Batch, template: Template) -> dict[str, Any]:
             'mean something else in another, so check them, and set the '
             f'version in the template to {ours.version}'
         )
-    if set(template.blanks) != set(batch.columns):
-        raise ValueError(
-            f'its columns are {", ".join(template.blanks) or "none"}, '
-            f'not {", ".join(batch.columns)}'
-        )
-    settings = with_named_files(batch.spec.params, template.params)
-    return with_latest(batch.client, settings)
+    params = {k: v for k, v in template.params.items() if k not in batch.columns}
+    return with_latest(batch.client, as_request(batch.spec.params, params))
 
 
 def write_template(template: Template, path: Path) -> None:

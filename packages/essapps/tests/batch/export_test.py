@@ -14,6 +14,7 @@ import scipp as sc
 from ess.apps import Client, Record, Template, file, hdf5
 from ess.apps.batch.export import export_table, write_outputs
 from ess.apps.batch.frames import reduce_table
+from ess.apps.batch.table import KEY
 from ess.apps.folder import open_folder
 from ess.spec import Binding, WorkflowSpec, function_binding
 
@@ -127,7 +128,8 @@ def test_a_row_that_failed_has_no_folder_and_empty_output_columns(
     client: Client, template: Template, tmp_path: Path
 ) -> None:
     table = pd.DataFrame(
-        {'name': ['a', 'b'], 'sample': ['1', str(BAD)], 'transmission': ['1001'] * 2}
+        {'sample': ['run:1', f'run:{BAD}'], 'transmission': ['run:1001'] * 2},
+        index=pd.Index(['a', 'b'], name=KEY),
     )
     out = tmp_path / 'export'
     reduced = reduce_table(client, template, table, label='scan')
@@ -140,16 +142,15 @@ def test_a_row_that_failed_has_no_folder_and_empty_output_columns(
 
 def test_a_table_without_records_is_refused(client: Client, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match='record'):
-        export_table(client, pd.DataFrame({'key': ['a']}), tmp_path / 'export')
+        export_table(client, pd.DataFrame(index=['a']), tmp_path / 'export')
 
 
 @pytest.mark.parametrize('key', ['../a', 'a/b', '', '..'])
 def test_a_key_that_is_not_a_folder_name_is_refused_and_nothing_is_written(
-    client: Client, template: Template, tmp_path: Path, key: str
+    client: Client, tmp_path: Path, key: str
 ) -> None:
-    table = pd.DataFrame({'name': ['ok', key], 'sample': ['1', '2']})
-    table['transmission'] = '1001'
-    reduced = reduce_table(client, template, table, label='scan')
+    record = run(client, toys.FIND, sample=file(run=3))
+    reduced = pd.DataFrame({'record': [record.id] * 2}, index=['ok', key])
     out = tmp_path / 'parent' / 'export'
 
     with pytest.raises(ValueError, match='folder'):
@@ -178,7 +179,7 @@ def test_a_record_that_the_workspace_lacks_is_refused_and_nothing_is_written(
     client: Client, template: Template, table: pd.DataFrame, tmp_path: Path
 ) -> None:
     reduced = reduce_table(client, template, table, label='scan')
-    reduced.loc[1, 'record'] = 'no-such-record'
+    reduced.loc['b', 'record'] = 'no-such-record'
     out = tmp_path / 'export'
 
     with pytest.raises(ValueError, match='no-such-record'):
@@ -191,7 +192,7 @@ def test_a_key_that_two_rows_share_is_refused_and_nothing_is_written(
     client: Client, template: Template, table: pd.DataFrame, tmp_path: Path
 ) -> None:
     reduced = reduce_table(client, template, table, label='scan')
-    reduced['name'] = 'a'
+    reduced.index = pd.Index(['a', 'a'], name=KEY)
     out = tmp_path / 'export'
 
     with pytest.raises(ValueError, match='one key'):
@@ -204,7 +205,7 @@ def test_an_output_named_as_a_column_of_the_result_is_refused_and_nothing_is_wri
     client: Client, tmp_path: Path
 ) -> None:
     record = run(client, NAMED)
-    table = pd.DataFrame({'key': ['a'], 'status': ['completed'], 'record': [record.id]})
+    table = pd.DataFrame({'status': ['completed'], 'record': [record.id]}, index=['a'])
 
     with pytest.raises(ValueError, match='status'):
         export_table(client, table, tmp_path / 'export')

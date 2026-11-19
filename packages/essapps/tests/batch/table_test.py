@@ -5,6 +5,7 @@
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
@@ -19,7 +20,11 @@ from ess.apps.batch.table import (
     data_of,
     dtypes,
     frame_of,
+    read_cell,
+    read_table,
     typed,
+    write_cell,
+    write_table,
 )
 from ess.spec import FileRef, OutputRef, Referenced, RunFile
 from ess.spec.request_types import request_model
@@ -330,3 +335,124 @@ def test_the_cell_of_a_group_or_a_time_is_its_json_form_which_a_request_takes() 
         'when': '2026-11-19T12:00:00Z',
     }
     request_model(Grouped).model_validate(as_request(Grouped, cells))
+
+
+# A table file
+
+
+class Filed(BaseModel):
+    x: float | None = None
+    n: int | None = None
+    f: bool | None = None
+    s: RunFile | None = None
+    o: list[Any] | None = None
+
+
+@pytest.fixture
+def filed() -> pd.DataFrame:
+    """A table of each dtype, with notes, a key that a number would lose, and gaps."""
+    key = pd.Index(['a', '0342', 'b'], name=KEY, dtype='string')
+    return typed(
+        pd.DataFrame(
+            {
+                'x': [0.1 + 0.2, None, 6.02214076e23],
+                'n': [2**40 + 1, None, 1],
+                'f': [True, None, False],
+                's': ['run:1', None, 'path:a b, "c".nxs'],
+                'o': [['run:1', 2], None, {'v': 1.5}],
+                'name': ['NA', None, 'water'],
+                'run': [60339, 60340, None],
+            },
+            index=key,
+        ).astype({'o': object}),
+        Filed,
+    )
+
+
+@pytest.mark.parametrize('suffix', ['.csv', '.tsv', '.xlsx'])
+def test_a_table_written_to_a_file_is_read_back_equal(
+    tmp_path: Path, filed: pd.DataFrame, suffix: str
+) -> None:
+    path = tmp_path / f'table{suffix}'
+
+    write_table(filed, path)
+
+    pd.testing.assert_frame_equal(read_table(path, Filed), filed)
+
+
+def test_a_list_or_a_group_is_json_text_in_a_table_file(
+    tmp_path: Path, filed: pd.DataFrame
+) -> None:
+    path = tmp_path / 'table.csv'
+
+    write_table(filed, path)
+
+    assert path.read_text().splitlines()[1] == (
+        'a,0.30000000000000004,1099511627777,True,run:1,"[""run:1"",2]",NA,60339'
+    )
+
+
+def test_the_columns_of_what_came_of_each_row_are_dropped_when_read(
+    tmp_path: Path, filed: pd.DataFrame
+) -> None:
+    path = tmp_path / 'done.csv'
+    write_table(filed.assign(status='completed', record='r1', failure=''), path)
+
+    pd.testing.assert_frame_equal(read_table(path, Filed), filed)
+
+
+@pytest.mark.parametrize(
+    ('text', 'message'),
+    [
+        ('sample,x\nrun:1,1\n', "a table has a column 'key'"),
+        ('key,x\na,thick\n', 'thick'),
+        ('key,n\na,2.5\n', 'cast'),
+        ('key,f\na,yes\n', 'yes'),
+        ('key,x\na,1\na,2\n', "the key 'a' is given twice"),
+    ],
+    ids=['no-key', 'not-a-number', 'not-whole', 'not-true-or-false', 'key-twice'],
+)
+def test_a_table_file_that_is_not_a_table_is_refused_saying_why(
+    tmp_path: Path, text: str, message: str
+) -> None:
+    path = tmp_path / 'table.csv'
+    path.write_text(text)
+
+    with pytest.raises(ValueError, match=message):
+        read_table(path, Filed)
+
+
+@pytest.mark.parametrize(
+    'function',
+    [lambda p: read_table(p, Filed), lambda p: write_table(pd.DataFrame(), p)],
+    ids=['read', 'write'],
+)
+def test_a_table_file_of_an_unknown_suffix_is_refused(
+    tmp_path: Path, function: Callable[[Path], object]
+) -> None:
+    with pytest.raises(ValueError, match='a table is one of'):
+        function(tmp_path / 'table.json')
+
+
+@pytest.mark.parametrize(
+    ('text', 'value'),
+    [
+        ('1.5', 1.5),
+        ('null', None),
+        ('{"x": 0}', {'x': 0}),
+        ('[1, 2]', [1, 2]),
+        ('water', 'water'),
+    ],
+)
+def test_a_cell_of_plain_data_is_read_as_json_if_it_is_json_and_else_as_text(
+    text: str, value: Any
+) -> None:
+    assert read_cell(text) == value
+
+
+@pytest.mark.parametrize(
+    'value',
+    ['1', 'null', 'water', {'x': [1, 2]}, None, 2.5, True, [1, 2], [{'x': None}]],
+)
+def test_a_cell_of_plain_data_written_is_read_back(value: Any) -> None:
+    assert read_cell(write_cell(value)) == value

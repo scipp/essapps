@@ -4,9 +4,9 @@
 The files that a person takes away from a batch. It needs pandas, scipp, and h5py.
 
 :func:`export_table` takes the table that :func:`.frames.reduce_table` returned,
-and writes the outputs of each completed row to a folder named by its key. It
-finds a row's outputs by the ``record`` column, so it exports what the table
-says, also after later reductions under the same label.
+indexed by key, and writes the outputs of each completed row to a folder named
+by its key. It finds a row's outputs by the ``record`` column, so it exports
+what the table says, also after later reductions under the same label.
 
 The files are those of :mod:`ess.apps.hdf5`, a placeholder for the formats of
 the techniques, such as NXcanSAS, each of which needs a writer for the type of
@@ -22,7 +22,7 @@ import pandas as pd
 from .. import hdf5
 from ..client import Client
 from ..records import Record, Status
-from .frames import RESULT
+from .table import RESULT
 
 RECORD_FILE = '_record.json'
 """The file of the record in the folder of a row; no output is named so."""
@@ -51,20 +51,20 @@ def write_outputs(client: Client, record: Record, directory: Path) -> dict[str, 
 
 def export_table(client: Client, table: pd.DataFrame, directory: Path) -> pd.DataFrame:
     """
-    Write the outputs of each row of ``table`` whose record completed to
-    ``directory / key`` (see :func:`write_outputs`), and return the table with a
-    column for each output, which holds the path of its file, empty for a row
-    that has none. A column of the table that is named as an output is replaced,
-    as one of an earlier export is.
+    Write the outputs of each row of ``table``, indexed by key, whose record
+    completed to ``directory / key`` (see :func:`write_outputs`), and return
+    the table with a column for each output, which holds the path of its file,
+    empty for a row that has none. A column of the table that is named as an
+    output is replaced, as one of an earlier export is.
 
     Raises ``ValueError`` if the table has no ``record`` column, names a record
     that the workspace lacks, has a key twice, a key that is not the name of a
-    folder, such as one with ``/``, or an output named as the key column or a
+    folder, such as one with ``/``, or an output named as the index or a
     column that reduce adds; nothing is written.
     """
     if 'record' not in table:
         raise ValueError('the table has no column record: reduce it first')
-    keys = table[table.columns[0]].astype(str)
+    keys = [str(k) for k in table.index]
     if bad := sorted(k for k in keys if k in ('', '.', '..') or Path(k).name != k):
         raise ValueError(f'not the name of a folder: {", ".join(map(repr, bad))}')
     if len(set(keys)) < len(keys):
@@ -77,7 +77,7 @@ def export_table(client: Client, table: pd.DataFrame, directory: Path) -> pd.Dat
     status = dict(zip((r.id for r in records), client.status(records), strict=True))
     by_id = {r.id: r for r in records if status[r.id] is Status.COMPLETED}
     names = dict.fromkeys(n for r in records for n in r.outputs)
-    if taken := sorted(names.keys() & {table.columns[0], *RESULT}):
+    if taken := sorted(names.keys() & {table.index.name, *RESULT}):
         raise ValueError(f'an output is named as a column: {", ".join(taken)}')
     paths = {
         key: write_outputs(client, by_id[i], directory / key)
