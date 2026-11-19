@@ -18,14 +18,9 @@ with :func:`differs` on both as a record holds them. A result is *outdated*
 A value refused when resolved is a problem of the row, not a change: the row
 cannot run with it, and a change would offer it to :func:`left_to_reduce`.
 
-A row is *changed by hand* (:attr:`RowState.changed_by_hand`) if a person, or
-code, set a cell of it and that cell is not yet reduced: the row has no result,
-or the request differs from its result's at that cell. Automatic reduction
-(:func:`arrived`) leaves such a row to whoever changed it::
-
-    set_by_hand == {'sample'}, record is None        # changed by hand
-    set_by_hand == {'sample'}, changed == {'sample'}   # changed by hand
-    set_by_hand == {'sample'}, changed == {'binning'}  # not: a setting changed
+Automatic reduction reduces the rows of :func:`not_reduced`: ready, and
+without a result. A row with a result is left to a person, whether it is
+outdated, failed or cancelled.
 """
 
 from __future__ import annotations
@@ -59,10 +54,9 @@ class RowState:
     result, both as a record holds them, and is ``None`` if they were not
     compared, as in what :meth:`~.reduction.Batch.results` gives.
     ``spec_changed`` is true if the result is of another spec than the one
-    bound. ``set_by_hand`` names the columns whose cells were set by hand: the
-    cells edited, or every column of a row added by hand. ``outdated`` is true
-    if the result is of another spec, or if the request changed; ``None`` if
-    that is not known, since the requests were not compared.
+    bound. ``outdated`` is true if the result is of another spec, or if the
+    request changed; ``None`` if that is not known, since the requests were not
+    compared.
     """
 
     key: str
@@ -71,21 +65,7 @@ class RowState:
     problems: tuple[FieldError, ...] = ()
     changed: frozenset[str] | None = frozenset()
     spec_changed: bool = False
-    set_by_hand: frozenset[str] = frozenset()
     outdated: bool | None = False
-
-    @property
-    def changed_by_hand(self) -> bool:
-        """
-        Whether a cell set by hand is not reduced yet: the row has no result,
-        or its request differs from its result's at that cell. A cell set by
-        hand to its result's value is not a change. Rows not compared with
-        their results count as unchanged at their cells.
-        """
-        changed = self.changed or frozenset()
-        return bool(self.set_by_hand) and (
-            self.record is None or not self.set_by_hand.isdisjoint(changed)
-        )
 
     @property
     def text(self) -> str:
@@ -174,16 +154,14 @@ def row_states(
     changed: Mapping[str, frozenset[str]] | None = MappingProxyType({}),
     refused: Mapping[str, tuple[FieldError, ...]] | None = None,
     spec_changed: AbstractSet[str] = frozenset(),
-    set_by_hand: Mapping[str, AbstractSet[str]] = MappingProxyType({}),
 ) -> dict[str, RowState]:
     """
     The state of each row. ``found`` holds their results by key, ``status`` the
     status of those and of the records their cells reference, by record ID,
     ``changed`` the names at which a row differs from its result, ``None`` if
     the rows were not compared with their results, ``refused``
-    the reasons a row's cells were refused when resolved, ``spec_changed`` the
-    keys whose result is of another spec, and ``set_by_hand`` the columns set
-    by hand of each row.
+    the reasons a row's cells were refused when resolved, and ``spec_changed``
+    the keys whose result is of another spec.
     """
     refused = refused or {}
     states = {}
@@ -201,7 +179,6 @@ def row_states(
             problems=problems(row, model, columns, status) + refused.get(row.key, ()),
             changed=names,
             spec_changed=row.key in spec_changed,
-            set_by_hand=frozenset(set_by_hand.get(row.key, ())),
             outdated=outdated,
         )
     return states
@@ -283,46 +260,24 @@ def left_to_reduce(
     ]
 
 
-def arrived(states: Mapping[str, RowState], at: Collection[str]) -> list[str]:
+def not_reduced(states: Mapping[str, RowState]) -> list[str]:
     """
-    The ready rows with no result, or whose request differs from their result's
-    at a column of ``at``, but those changed by hand
-    (:attr:`RowState.changed_by_hand`): the rule of automatic reduction. It
-    reduces a row for what the files changed, and leaves what a person changed
-    to the person. ``changed`` is read, so ``states`` are those of
-    :meth:`~.reduction.Batch.state`; raises ``ValueError`` for a row that was
-    not compared.
-
-    A failed or cancelled result counts as any other, so such a row is given
-    again only for a change at ``at``. With ``at=set()``, no row with a result
-    is given.
+    The ready rows with no result: the rule of automatic reduction. A row with
+    a result is left to a person, also one that is outdated, failed or was
+    cancelled. ``changed`` is not read, so ``states`` may be those of
+    :meth:`~.reduction.Batch.state` or of :meth:`~.reduction.Batch.results`.
     """
-    changed = _compared(states)
-    return [
-        k
-        for k in ready(states)
-        if not states[k].changed_by_hand
-        and (states[k].record is None or not changed[k].isdisjoint(at))
-    ]
+    return [k for k in ready(states) if states[k].record is None]
 
 
 def refused_again(
-    states: Mapping[str, RowState], at: Collection[str], refused: Mapping[str, str]
+    states: Mapping[str, RowState], refused: Mapping[str, str]
 ) -> dict[str, str]:
     """
     Of the reasons ``refused`` by row, those of the rows that the next step of
-    automatic reduction would submit again: the rows of :func:`arrived`. States
-    that were not compared (:func:`compared`) tell this only for the rows with
-    no result.
+    automatic reduction would submit again: the rows of :func:`not_reduced`.
     """
-    again = (
-        arrived(states, at)
-        if compared(states)
-        else [
-            k for k, s in states.items() if s.record is None and not s.changed_by_hand
-        ]
-    )
-    return {k: refused[k] for k in again if k in refused}
+    return {k: refused[k] for k in not_reduced(states) if k in refused}
 
 
 EARLIER = 'earlier settings'

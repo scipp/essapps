@@ -115,7 +115,7 @@ The stories use these calls:
 batch = Batch(client, SPEC, columns=(...), label=..., source=Source(rows_of_files, fills=(...)),
               persist=True)
 auto = Automatic(batch)   # reads batch.settings at each step
-auto.step()       # scans, and reduces the rows that arrived; their records by key
+auto.step()       # scans, and reduces the ready rows without a result; their records by key
 auto.refused      # why rows of the last step were refused by submit, by key
 ```
 
@@ -655,6 +655,8 @@ def iofq_batch(client):
 ### E1. Series grows, reduction follows
 
 Actor: reflectometry user during a beamtime. Goal: after each angle, the stitched curve grows by one angle; one curve per sample, not one per arrival.
+
+This story is not met, and its test is marked `xfail`. A step of Follow reduces only the rows that have no result ([ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md), "What a step reduces"), so the row of `si` is reduced once, with the first angle, and never again as angles arrive. It is open whether ADR 0013 is amended for a source whose rows grow, or this story changes.
 
 ```python
 reference = measure(1, [1.0, 1.0], role='reference')

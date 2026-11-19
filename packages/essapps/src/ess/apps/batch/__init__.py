@@ -14,9 +14,9 @@ from .manager import BatchManager
 from .reduction import Batch, FileInfo, RowSource, Source, Words, file_infos
 from .state import (
     RowState,
-    arrived,
     earlier_settings,
     left_to_reduce,
+    not_reduced,
     ready,
     refused_again,
     status_texts,
@@ -40,10 +40,10 @@ __all__ = [
     'Scope',
     'Source',
     'Words',
-    'arrived',
     'earlier_settings',
     'file_infos',
     'left_to_reduce',
+    'not_reduced',
     'ready',
     'refused_again',
     'status_texts',

@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 Follow on the page of a batch: a step of the batch that follows scans as
-"Rescan runs" does, and reduces the rows that arrived. The tests call
+"Rescan runs" does, and reduces the rows that are new. The tests call
 :meth:`Pages.tick` in place of the timer, except one, which runs the app's
 timer.
 """
@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from ess.apps import Client, Status
 from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions
 from ess.apps.batch.web import Page, Pages, create_app
-from ess.apps.batch.web.models import CellEdit, Cells, Edit, Next, Reduce, State
+from ess.apps.batch.web.models import CellEdit, Edit, Next, Reduce, State
 from ess.apps.batch.web.page import Problem
 from ess.apps.testing import FakeFiles
 
@@ -65,7 +65,7 @@ def done(page: Page, client: Client) -> State:
     return page.state()
 
 
-def test_a_step_shows_new_rows_and_runs_and_reduces_the_rows_that_arrived(
+def test_a_step_shows_new_rows_and_runs_and_reduces_the_new_rows(
     page: Page, client: Client, sample: Measure, gate: Gate
 ) -> None:
     before = page.state()
@@ -140,6 +140,12 @@ def test_a_step_that_changes_one_thing_the_page_shows_tells_the_page(
     page: Page, client: Client, sample: Measure, fake: FakeFiles, what: str
 ) -> None:
     sample(1, 'water')
+    sample(2, 'oil')
+    page.scan()
+    # A cell that the workspace refuses when it resolves the row: the row is
+    # incomplete, but ready while the settings are refused, since then no cell
+    # is resolved, so a step refuses it with them.
+    page.edit(CellEdit(keys=['2'], column='thickness', value=-1.0))
     page.follow(True)
     client.wait(client.records())
     page.pages.tick()
@@ -218,7 +224,7 @@ def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_p
     assert {r['status'] for r in shown.json()['rows']} == {'done'}
 
 
-def test_a_step_reduces_a_row_whose_cell_changed_at_a_column_of_at(
+def test_a_step_leaves_a_done_row_whose_files_changed_to_the_person(
     page: Page, client: Client, sample: Measure, fake: FakeFiles
 ) -> None:
     sample(1, 'water')
@@ -228,7 +234,12 @@ def test_a_step_reduces_a_row_whose_cell_changed_at_a_column_of_at(
     fake.measure(1005, 2.0, role='transmission', sample='water')
     page.pages.tick()
 
-    assert done(page, client).rows[0].record != first
+    (row,) = done(page, client).rows
+    assert (row.record, row.status, row.reason) == (
+        first,
+        'outdated',
+        'Transmission changed.',
+    )
 
 
 def test_a_run_that_a_step_finds_can_be_chosen_in_a_cell_without_a_runs_view(
@@ -412,7 +423,7 @@ def ids(client: Client) -> set[str]:
     return {r.id for r in client.records()}
 
 
-def test_follow_leaves_a_row_changed_by_hand_to_the_person(
+def test_follow_leaves_a_done_row_that_a_person_changed_to_the_person(
     page: Page, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
@@ -439,88 +450,17 @@ def test_follow_leaves_a_row_changed_by_hand_to_the_person(
     )
 
 
-@pytest.mark.parametrize('following', [True, False])
-def test_a_row_set_by_hand_says_that_follow_leaves_it_to_the_person(
-    page: Page, sample: Measure, following: bool
+def test_a_row_set_by_hand_without_a_result_is_reduced_by_the_next_step(
+    page: Page, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
     page.scan()
     page.edit(CellEdit(keys=['1'], column='thickness', value=2.0))
 
-    shown = page.follow(following)
-
-    (row,) = shown.rows
-    assert row.status == 'ready'
-    assert row.reason == (
-        'Set by hand, so Follow leaves it to you: reduce it.' * following
-    )
-    assert shown.action.label == 'Reduce 1 remaining'
-
-
-def test_a_row_a_person_reduced_after_an_edit_follows_the_files_again(
-    page: Page, client: Client, sample: Measure, fake: FakeFiles
-) -> None:
-    sample(1, 'water')
-    sample(2, 'oil')
     page.follow(True)
-    done(page, client)
-    other = option(page, 'sample', 2)
-    page.edit(CellEdit(keys=['1'], column='sample', value=other))
-    page.reduce(Reduce(which='remaining'))
-    edited = done(page, client).rows[0].record
 
-    fake.measure(1005, 2.0, role='transmission', sample='water')
-    page.pages.tick()
-
-    assert statuses(done(page, client)) == {'water': 'done', 'oil': 'done'}
-    record = client.latest('scan', '1')
-    assert record.id != edited
-    assert (
-        record.request.params['sample']
-        == client.latest('scan', '2').request.params['sample']
-    )
-
-
-def test_a_cell_reverted_after_a_reduction_is_followed_at_the_next_step(
-    page: Page, client: Client, sample: Measure
-) -> None:
-    sample(1, 'water')
-    sample(2, 'oil')
-    page.follow(True)
-    done(page, client)
-    for column, run in [('sample', 2), ('transmission', 1002)]:
-        value = option(page, column, run)
-        page.edit(CellEdit(keys=['1'], column=column, value=value))
-    page.reduce(Reduce(which='remaining'))
-    done(page, client)
-
-    page.revert(Cells(keys=['1'], column='sample'))
-    page.pages.tick()
-
-    water, oil = (client.latest('scan', k).request.params for k in ('1', '2'))
-    assert water['sample'] != oil['sample']  # the scan's
-    assert water['transmission'] == oil['transmission']  # still set by hand
-
-
-def test_an_edit_not_reduced_leaves_its_row_to_the_person_when_a_file_arrives(
-    page: Page, client: Client, sample: Measure, fake: FakeFiles
-) -> None:
-    sample(1, 'water')
-    page.follow(True)
-    done(page, client)
-    page.edit(CellEdit(keys=['1'], column='thickness', value=2.0))
-    before = ids(client)
-
-    fake.measure(1005, 2.0, role='transmission', sample='water')
-    page.pages.tick()
-
-    (row,) = page.state().rows
-    assert ids(client) == before
-    assert (row.status, row.reason) == (
-        'outdated',
-        'Transmission and Thickness changed.'
-        ' Set by hand, so Follow leaves it to you: reduce it.',
-    )
+    assert statuses(done(page, client)) == {'water': 'done'}
+    assert client.latest('scan', '1').request.params['thickness'] == 2.0
 
 
 @pytest.mark.parametrize('value', [3, None], ids=['changed', 'missing'])

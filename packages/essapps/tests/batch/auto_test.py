@@ -20,7 +20,6 @@ from ess.apps.batch import (
     CorrectedFiles,
     DefinitionStore,
     FileInfo,
-    FolderDefinitions,
     Row,
     RowSource,
     Scope,
@@ -97,7 +96,7 @@ def _per_sample(files: Sequence[FileInfo]) -> list[Row]:
     return [Row(name, cells) for name, cells in runs.items()]
 
 
-def _repeated(client: Client, at: set[str]) -> Automatic:
+def _repeated(client: Client) -> Automatic:
     batch = Batch(
         client,
         REPEATED,
@@ -105,7 +104,7 @@ def _repeated(client: Client, at: set[str]) -> Automatic:
         label='repeated',
         source=Source(_per_sample, fills=('sample_runs', 'trans_runs')),
     )
-    return Automatic(batch, at=at)
+    return Automatic(batch)
 
 
 # The files of the section "The model: tables and one cycle" of the guide, in
@@ -120,43 +119,10 @@ ARRIVALS = [
 ]
 
 
-@pytest.mark.parametrize(
-    ('at', 'reduced', 'texts'),
-    [
-        (
-            {'sample_runs', 'trans_runs'},
-            {
-                't1': {'1': (['s1'], ['t1'])},
-                "s1'": {'1': (['s1', "s1'"], ['t1'])},
-                "t1'": {'1': (['s1', "s1'"], ['t1', "t1'"])},
-                't2': {'2': (['s2'], ['t2'])},
-            },
-            {'1': 'completed', '2': 'completed'},
-        ),
-        (
-            {'sample_runs'},
-            {
-                't1': {'1': (['s1'], ['t1'])},
-                "s1'": {'1': (['s1', "s1'"], ['t1'])},
-                't2': {'2': (['s2'], ['t2'])},
-            },
-            {'1': 'outdated', '2': 'completed'},
-        ),
-        (
-            set(),
-            {'t1': {'1': (['s1'], ['t1'])}, 't2': {'2': (['s2'], ['t2'])}},
-            {'1': 'outdated', '2': 'completed'},
-        ),
-    ],
-)
-def test_a_row_is_reduced_again_for_a_change_at_a_column_of_at(
-    client: Client,
-    fake: FakeFiles,
-    at: set[str],
-    reduced: dict[str, dict[str, tuple[list[str], list[str]]]],
-    texts: dict[str, str],
+def test_a_row_is_reduced_once_and_not_again_when_its_files_change(
+    client: Client, fake: FakeFiles
 ) -> None:
-    loop = _repeated(client, at)
+    loop = _repeated(client)
     names: dict[FileRef, str] = {}
     seen = {}
     for name, run, role, sample in ARRIVALS:
@@ -172,15 +138,21 @@ def test_a_row_is_reduced_again_for_a_change_at_a_column_of_at(
         }
         assert loop.refused == {}
 
-    assert {name: rows for name, rows in seen.items() if rows} == reduced
+    assert {name: rows for name, rows in seen.items() if rows} == {
+        't1': {'1': (['s1'], ['t1'])},
+        't2': {'2': (['s2'], ['t2'])},
+    }
     state = loop.batch.state()
-    assert {key: s.text for key, s in state.items()} == texts
+    assert {key: s.text for key, s in state.items()} == {
+        '1': 'outdated',
+        '2': 'completed',
+    }
 
 
 def test_a_row_with_an_empty_cell_waits_and_its_state_says_why(
     client: Client, fake: FakeFiles
 ) -> None:
-    loop = _repeated(client, {'sample_runs', 'trans_runs'})
+    loop = _repeated(client)
     fake.measure(1, 1.0, role='sample', sample='1')
 
     assert loop.step() == {}
@@ -203,48 +175,22 @@ def test_each_new_row_is_reduced_once(
     assert loop.step() == {}
 
 
-def test_without_at_a_row_is_reduced_again_for_a_change_at_what_the_source_fills(
-    loop: Automatic, client: Client, sample: Measure, fake: FakeFiles
-) -> None:
-    sample(1, 'water')
-    client.wait(loop.step())
-
-    transmission = fake.measure(1005, 2.0, role='transmission', sample='water')
-    (record,) = loop.step().values()
-
-    assert loop.at == {'sample', 'transmission'}
-    assert record.request.params['transmission'] == transmission
-
-
-@pytest.mark.parametrize('at', [{'offset', 'sample'}, {'offset'}])
-def test_every_element_of_at_must_be_a_column(batch: Batch, at: set[str]) -> None:
-    with pytest.raises(KeyError, match='offset'):
-        Automatic(batch, at=at)
-
-
-def test_at_is_a_set_not_a_column_name(batch: Batch) -> None:
-    with pytest.raises(TypeError, match='a set of columns'):
-        Automatic(batch, at='sample')  # type: ignore[arg-type]
-
-
-@pytest.mark.parametrize('at', [None, {'sample'}])
-def test_the_batch_must_have_a_source(client: Client, at: set[str] | None) -> None:
+def test_the_batch_must_have_a_source(client: Client) -> None:
     batch = Batch(client, PLAIN, columns=COLUMNS, label='scan')
 
     with pytest.raises(ValueError, match='no source'):
-        Automatic(batch, at=at)
+        Automatic(batch)
 
 
-def test_a_failed_row_is_reduced_again_only_for_a_change_at_at(
+def test_a_failed_row_is_left_to_a_person_also_when_its_files_change(
     series: Automatic, client: Client, fake: FakeFiles
 ) -> None:
     fake.corrupt(fake.measure(1, 1.0, sample='si'))
     assert client.wait(series.step()) == {'si': 'failed'}
-    assert series.step() == {}
 
     fake.measure(2, 2.0, sample='si')
 
-    assert list(series.step()) == ['si']
+    assert series.step() == {}
 
 
 def test_a_file_that_arrives_again_is_not_reduced_again(
@@ -424,37 +370,19 @@ def test_a_cell_the_workspace_does_not_accept_makes_its_row_wait(
     assert list(loop.step()) == ['2']
 
 
-def test_a_row_changed_by_hand_waits_for_a_person_then_follows_the_files(
-    client: Client, sample: Measure, fake: FakeFiles
-) -> None:
-    sample(1, 'water')
-    other = fake.measure(77, 7.0, role='sample', sample='other')
-    loop = _loop(client)
-    batch = loop.batch
-    client.wait(loop.step())
-    batch.rows = batch.rows.edit('1', {'sample': other})
-
-    assert loop.step() == {}
-    assert batch.state()['1'].text == 'outdated'
-
-    client.wait(batch.reduce(['1']))
-    transmission = fake.measure(1005, 2.0, role='transmission', sample='water')
-    (record,) = loop.step().values()
-
-    assert record.request.params['sample'] == other
-    assert record.request.params['transmission'] == transmission
-
-
 @pytest.mark.parametrize(
     ('by_hand', 'reduced'),
     [
-        (lambda rows: rows.edit('2', {'sample': rows['2'].values['sample']}), ['1']),
-        (lambda rows: rows.edit('2', {'thickness': EMPTY}), ['1']),
-        (lambda rows: rows.add(Row('3', dict(rows['2'].values))), ['1', '2']),
+        (
+            lambda rows: rows.edit('2', {'sample': rows['2'].values['sample']}),
+            ['1', '2'],
+        ),
+        (lambda rows: rows.edit('2', {'thickness': EMPTY}), ['1', '2']),
+        (lambda rows: rows.add(Row('3', dict(rows['2'].values))), ['1', '2', '3']),
     ],
     ids=['the value of the scan', 'cleared', 'added'],
 )
-def test_a_row_set_by_hand_without_a_result_waits_for_a_person(
+def test_a_row_set_by_hand_without_a_result_is_reduced_by_the_next_step(
     client: Client, sample: Measure, by_hand: Any, reduced: list[str]
 ) -> None:
     loop = _loop(client)
@@ -466,72 +394,18 @@ def test_a_row_set_by_hand_without_a_result_waits_for_a_person(
     assert list(loop.step()) == reduced
 
 
-def test_a_row_reverted_to_the_scan_follows_the_files_again(
+def test_a_row_with_a_result_is_left_to_a_person_also_when_set_by_hand(
     client: Client, sample: Measure, fake: FakeFiles
 ) -> None:
-    run = sample(1, 'water')
+    sample(1, 'water')
     other = fake.measure(77, 7.0, role='sample', sample='other')
     loop = _loop(client)
     batch = loop.batch
-    batch.scan()
+    client.wait(loop.step())
     batch.rows = batch.rows.edit('1', {'sample': other})
-    client.wait(batch.reduce(['1']))
+
     assert loop.step() == {}
-
-    batch.rows = batch.rows.reset('1')
-    (record,) = loop.step().values()
-
-    assert record.request.params['sample'] == run
-
-
-def test_a_record_of_another_batch_on_the_label_is_replaced_if_it_differs_at_at(
-    loop: Automatic, client: Client, sample: Measure, fake: FakeFiles
-) -> None:
-    run = sample(1, 'water')
-    client.wait(loop.step())
-    other = fake.measure(77, 7.0, role='sample', sample='other')
-    page = Batch(client, STAGED, columns=COLUMNS, label='scan', source=PAIRS)
-    page.scan()
-    page.rows = page.rows.edit('1', {'sample': other})
-    client.wait(page.reduce(['1']))
-
-    (record,) = loop.step().values()
-
-    assert record.request.params['sample'] == run
-
-
-def test_without_a_store_a_row_edited_at_at_is_reduced_again_after_a_restart(
-    client: Client, sample: Measure, fake: FakeFiles
-) -> None:
-    run = sample(1, 'water')
-    other = fake.measure(77, 7.0, role='sample', sample='other')
-    loop = _loop(client)
-    client.wait(loop.step())
-    loop.batch.rows = loop.batch.rows.edit('1', {'sample': other})
-    (edited,) = loop.batch.reduce(['1']).values()
-    client.wait(edited)
-
-    (record,) = _loop(client).step().values()
-
-    assert edited.request.params['sample'] == other
-    assert record.request.params['sample'] == run
-
-
-def test_with_a_store_a_row_edited_at_at_keeps_its_edit_after_a_restart(
-    client: Client, sample: Measure, fake: FakeFiles, tmp_path: Path
-) -> None:
-    store = FolderDefinitions(tmp_path)
-    sample(1, 'water')
-    other = fake.measure(77, 7.0, role='sample', sample='other')
-    loop = _loop(client, definitions=store)
-    client.wait(loop.step())
-    loop.batch.rows = loop.batch.rows.edit('1', {'sample': other})
-    client.wait(loop.batch.reduce(['1']))
-
-    restarted = _loop(client, definitions=store)
-
-    assert restarted.step() == {}
-    assert restarted.batch.rows['1'].values['sample'] == other
+    assert batch.state()['1'].text == 'outdated'
 
 
 def test_a_row_whose_key_changes_is_reduced_under_its_new_key(
@@ -550,34 +424,7 @@ def test_a_row_whose_key_changes_is_reduced_under_its_new_key(
     assert list(loop.step()) == ['oil']
 
 
-def test_a_list_at_at_in_another_order_reduces_the_row_again(
-    client: Client, fake: FakeFiles
-) -> None:
-    reverse = False
-
-    def runs(files: Sequence[FileInfo]) -> list[Row]:
-        ordered = sorted(files, key=lambda f: f.metadata['run'], reverse=reverse)
-        return [Row('si', {'runs': [f.ref for f in ordered]})]
-
-    batch = Batch(
-        client,
-        SERIES,
-        columns=('runs',),
-        label='series',
-        source=Source(runs, fills=('runs',)),
-    )
-    loop = Automatic(batch)
-    fake.measure(1, 1.0, sample='si')
-    fake.measure(2, 2.0, sample='si')
-    client.wait(loop.step())
-    assert loop.step() == {}
-
-    reverse = True
-
-    assert list(loop.step()) == ['si']
-
-
-def test_refused_settings_refuse_every_ready_row_until_they_change(
+def test_refused_settings_refuse_every_new_ready_row_until_they_change(
     batch: Batch, client: Client, sample: Measure
 ) -> None:
     loop = Automatic(batch)
@@ -586,17 +433,15 @@ def test_refused_settings_refuse_every_ready_row_until_they_change(
     sample(2, 'sds')
     sample(3, 'dmso', partner=False)
     sample(4, 'd2o')
-    batch.scan()
-    batch.rows = batch.rows.edit('4', {'thickness': 2.0})  # left to a person
 
     batch.settings = {'binning': {'bins': 0}}
     assert loop.step() == {}
     assert loop.refused == dict.fromkeys(
-        ['1', '2'], 'binning.bins: Input should be greater than or equal to 1'
+        ['2', '4'], 'binning.bins: Input should be greater than or equal to 1'
     )
 
     batch.settings = SETTINGS
-    assert list(loop.step()) == ['2']
+    assert list(loop.step()) == ['2', '4']
     assert loop.refused == {}
 
 
@@ -615,40 +460,6 @@ def test_a_changed_setting_reduces_no_row_again_and_its_rows_read_outdated(
     assert record.request.params['binning'] == {'bins': 3}
     old = batch.state()['1']
     assert (old.text, old.changed) == ('outdated', {'binning'})
-
-
-def test_a_pending_row_is_reduced_once_its_record_finishes_if_a_file_arrived(
-    series: Automatic, client: Client, fake: FakeFiles, gate: Gate
-) -> None:
-    gate.close()
-    fake.measure(1, 1.0, sample='si')
-    first = series.step()
-    fake.measure(2, 2.0, sample='si')
-    assert series.step() == {}
-    assert series.refused == {}
-
-    gate.open()
-    client.wait(first)
-
-    (record,) = series.step().values()
-    assert len(record.request.params['runs']) == 2
-
-
-@pytest.mark.parametrize(
-    ('at', 'reduced'), [({'sample'}, []), ({'sample', 'transmission'}, ['1'])]
-)
-def test_a_result_of_another_spec_counts_at_the_columns_it_holds(
-    batch: Batch, client: Client, sample: Measure, at: set[str], reduced: list[str]
-) -> None:
-    run = sample(1, 'water')
-    client.wait(client.submit(FIND, params={'sample': run}, label='scan', member='1'))
-    batch.scan()
-
-    state = batch.state()['1']
-    assert (state.text, state.spec_changed) == ('outdated', True)
-    assert state.changed == {'binning', 'transmission', 'thickness', 'offset'}
-    loop = Automatic(batch, at=at)
-    assert list(loop.step()) == reduced
 
 
 def test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before(
@@ -741,8 +552,7 @@ def test_a_step_that_raises_as_a_running_record_finishes_loses_nothing(
     gate.close()
     fake.measure(1, 1.0, sample='si')
     first = loop.step()
-    fake.measure(2, 2.0, sample='si')
-    assert loop.step() == {}  # still running
+    fake.measure(2, 2.0, sample='ge')
     gate.open()
     client.wait(first)
 
@@ -751,8 +561,7 @@ def test_a_step_that_raises_as_a_running_record_finishes_loses_nothing(
         loop.step()
     source.on = False
 
-    (record,) = loop.step().values()
-    assert len(record.request.params['runs']) == 2
+    assert list(loop.step()) == ['ge']
 
 
 def test_two_loops_on_one_label_submit_a_file_once(

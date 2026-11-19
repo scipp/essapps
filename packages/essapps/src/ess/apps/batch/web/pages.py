@@ -350,7 +350,7 @@ class Pages:
             key: f'Follow could not reduce it: {forms.message(reason)}'
             for key, reason in refused.items()
         }
-        return refused_again(states, source.fills, reasons)
+        return refused_again(states, reasons)
 
     def batches(self) -> Batches:
         """The batches, as the Batches view of each page lists them."""

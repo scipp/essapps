@@ -41,10 +41,10 @@ masks as batches without a source, of one row each, and so makes no batch of
 I(Q) in such a folder: a person makes it with "New batch".
 
 The switch "Follow" of the page of a batch makes it the batch that follows:
-a step every ``SECONDS`` (5) reduces each row once both its runs are listed,
-and again when one of them changes, such as a newer transmission run of its
-sample (:data:`~.batch.COLUMNS`). A row with a cell that a person set waits
-for the person's "Reduce". The batch that follows is kept, so a restart resumes.
+a step every ``SECONDS`` (5) reduces each row once both its runs are listed.
+A row with a result waits for the person's "Reduce", also when one of its runs
+changes, such as a newer transmission run of its sample. The batch that
+follows is kept, so a restart resumes.
 """
 
 from __future__ import annotations

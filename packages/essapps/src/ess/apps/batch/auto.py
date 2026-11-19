@@ -13,12 +13,11 @@ the manager keeps as the one that follows, every few seconds::
 Whoever serves owns the timer that calls it.
 
 A step does what a person does with the buttons of a batch's page to scan and
-to reduce, with the rule :func:`~.state.arrived` in place of the person's
+to reduce, with the rule :func:`~.state.not_reduced` in place of the person's
 choice::
 
     batch.scan()
-    state = batch.state()
-    batch.reduce(arrived(state, at))
+    batch.reduce(not_reduced(batch.state()))
 
 Which rows a step reduces follows from the files, the batch's rows and
 settings, and the records under its label. :class:`Automatic` keeps nothing
@@ -26,30 +25,18 @@ that changes it: :attr:`Automatic.refused` says why rows of the last step were
 refused, and a refused row is tried again at every step. So a step that raises
 loses nothing.
 
-The rule is on the state, not on who changed it: :func:`~.state.arrived`
-gives the ready rows that have no result under the label, or whose request
-differs from their result's at a column of ``at``, less the rows with a cell
-set by hand that is not reduced yet
-(:attr:`~.state.RowState.changed_by_hand`), which a person reduces. So an
-action of a person can make the next step reduce rows: turning Follow on,
-widening the scope, a correction of a run, a revert of a cell, or bringing a
-removed row back.
-
-For the rows with no change by hand that is not reduced yet, the loop keeps
-the results under its label equal to its batch's rows at the columns of
-``at``, so a label has one batch. A record that another ``Batch`` submits
-under the label with other cells at ``at`` is replaced at the next step. A
-restarted loop reduces no row again whose result equals its row at ``at``. An
-edit is kept by the batch's definitions (:mod:`.definition`), so with them, an
-edited row is not reduced again either, and one not reduced still waits for a
-person; without them, the edit is gone after a restart, and a row edited at
-``at`` is reduced again with the source's cells.
+The rule is on the state, not on who changed it: :func:`~.state.not_reduced`
+gives the ready rows that have no result under the label. A row with a result
+is never reduced by a step, whether it is outdated, failed or was cancelled; a
+person reduces it. So a row is reduced by a step once, as soon as it is
+complete, whether the scan or a person put it into the batch; and a restarted
+loop reduces no row again.
 
 A step costs the scan of all files and the state of all rows:
 the status of every row's result, and the comparison of every row's cells with
 its result's request, which resolves the cells that differ as given, such as a
 file named by run (:meth:`~.reduction.Batch.state`). Since a scan drops what
-the batch kept resolved, such a cell is resolved at every step, at any column.
+the batch kept resolved, such a cell is resolved at every step.
 """
 
 from __future__ import annotations
@@ -57,30 +44,24 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from collections.abc import Set as AbstractSet
 from contextlib import contextmanager
 
 from ..errors import SubmitError
 from ..records import Record
 from .reduction import Batch
-from .state import arrived, ready
+from .state import not_reduced
 
 
 class Automatic:
     """
-    Reduces the rows of ``batch`` that :func:`~.state.arrived` gives at each
-    step. See ``packages/essapps/docs/batch.md``.
+    Reduces the rows of ``batch`` that :func:`~.state.not_reduced` gives at
+    each step. See ``packages/essapps/docs/batch.md``.
 
     Parameters
     ----------
     batch:
         The batch, with a source. It should persist what it submits
         (``persist=True``), since nothing releases its records.
-    at:
-        The columns at which a change of a row's request by the scan reduces
-        the row again, such as ``{'sample_runs', 'trans_runs'}``; those that
-        the source fills if not given. A row with no result is reduced
-        whatever ``at`` is, unless a cell is set by hand.
 
     Attributes
     ----------
@@ -88,61 +69,40 @@ class Automatic:
         Why the last step's submission refused each row, by key: the rows it
         submitted that a ``SubmitError`` names, or every row it submitted if
         the reason names none. If the settings are refused, every ready row
-        but those without a result that are set by hand: no row is compared
-        with its result then, so a row with a result counts either way.
+        without a result.
 
     Raises
     ------
-    KeyError
-        If an element of ``at`` is not a column of ``batch``.
-    TypeError
-        If ``at`` is a string, not a set of columns.
     ValueError
         If ``batch`` has no source.
     """
 
-    def __init__(
-        self,
-        batch: Batch,
-        *,
-        at: AbstractSet[str] | None = None,
-    ) -> None:
+    def __init__(self, batch: Batch) -> None:
         if batch.source is None:
             raise ValueError('this batch has no source of rows')
-        if at is None:
-            at = set(batch.source.fills)
-        if isinstance(at, str):
-            raise TypeError(f'at is a set of columns, such as {{{at!r}}}')
-        if unknown := sorted(set(at) - set(batch.columns)):
-            raise KeyError(f'{unknown} are not columns of the batch')
         self.batch = batch
-        self.at = frozenset(at)
         self.refused: dict[str, str] = {}
 
     def step(self) -> dict[str, Record]:
         """
-        Scan, and reduce the rows that :func:`~.state.arrived` gives, with the
-        batch's settings as they are at the step; their records by key. A row
-        whose request is refused does not hold back the others, and
+        Scan, and reduce the rows that :func:`~.state.not_reduced` gives, with
+        the batch's settings as they are at the step; their records by key. A
+        row whose request is refused does not hold back the others, and
         :attr:`refused` says why.
 
         If the settings are refused, no row can run: the step reduces none,
-        and :attr:`refused` gives the reason for each ready row but those
-        without a result that are set by hand.
+        and :attr:`refused` gives the reason for each ready row without a
+        result.
         """
         batch = self.batch
         batch.scan()
         try:
             state = batch.state()
         except SubmitError as error:
-            # Without a comparison, a row with a result may be due or not, and
-            # changed by hand or not. A row without a result that is set by
-            # hand is left to a person either way.
-            states = batch.results()
-            due = [k for k in ready(states) if not states[k].changed_by_hand]
+            due = not_reduced(batch.results())
             self.refused = dict.fromkeys(due, str(error))
             return {}
-        records, self.refused = self._reduce(arrived(state, self.at))
+        records, self.refused = self._reduce(not_reduced(state))
         return records
 
     def _reduce(self, keys: list[str]) -> tuple[dict[str, Record], dict[str, str]]:

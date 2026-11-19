@@ -537,9 +537,9 @@ function renderFollow(follow) {
   $('follow').hidden = !follow;
   $('follow-status').hidden = !follow?.on && !follow?.other;
   if (!follow) return;
-  const {one, many} = words();
+  const {many} = words();
   $('follow').querySelector('input').checked = follow.on;
-  $('follow').title = `Every ${follow.interval} s, rescan the runs and reduce the ${many} that are new or whose ${follow.at.join(' or ')} changed. A ${one} set by hand is left to you to reduce.`;
+  $('follow').title = `Every ${follow.interval} s, rescan the runs and reduce the ${many} that are new.`;
   const status = $('follow-status');
   status.classList.toggle('bad', Boolean(follow.failure));
   status.textContent = follow.failure

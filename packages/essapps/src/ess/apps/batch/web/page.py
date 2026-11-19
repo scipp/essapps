@@ -66,16 +66,15 @@ A batch with a source offers to follow the files. The switch "Follow" makes
 the batch the one that follows (:meth:`~ess.apps.batch.BatchManager.follow`),
 so no other batch follows. While it follows, :meth:`Pages.tick
 <.pages.Pages.tick>` steps it every ``interval`` seconds, which scans as
-"Rescan runs" does and reduces the rows that :func:`~ess.apps.batch.arrived`
-gives, at the columns of the source, under the lock of all pages, with the
-batch's settings, whatever the form holds; then :meth:`Page.stepped` shows
-what the step changed. The page of the batch that follows says what the last
-step raised, and why rows were not reduced; the next step runs all the same.
-Follow reduces by a rule on the state, not on who changed it
-(:func:`~ess.apps.batch.arrived`): a row with a cell set by hand that is not
-reduced yet waits for "Reduce" (:attr:`~ess.apps.batch.RowState.changed_by_hand`).
-An action submits only what a person asks to reduce, and the next step reduces
-what the rule gives after it, such as the rows that a wider scope adds. Apply
+"Rescan runs" does and reduces the rows that
+:func:`~ess.apps.batch.not_reduced` gives, the rows that are ready and have
+no result, under the lock of all pages, with the batch's settings, whatever
+the form holds; then :meth:`Page.stepped` shows what the step changed. The
+page of the batch that follows says what the last step raised, and why rows
+were not reduced; the next step runs all the same. A row with a result is left
+to a person, also one that is outdated. An action submits only what a person
+asks to reduce, and the next step reduces what the rule gives after it, such
+as the rows that a wider scope adds. Apply
 forgets why Follow could not reduce rows, since its next step tries them with
 the settings applied. Which batch follows is kept in the definitions, so a
 restart resumes.
@@ -173,10 +172,6 @@ _STATUS = {
 }
 _ORDER = ('ready', 'running', 'done', 'outdated', 'failed', 'cancelled', 'incomplete')
 _ENDED = (Status.FAILED, Status.CANCELLED)
-_BY_HAND = ('ready', 'outdated')
-"""The statuses at which a row changed by hand says that Follow leaves it."""
-_LEFT = 'Set by hand, so Follow leaves it to you: reduce it.'
-"""What a row changed by hand says while following."""
 _DRAWN = 12
 """How many results the plot shows when no row is selected."""
 
@@ -566,7 +561,7 @@ class Page:
         )
 
     def _follow(self) -> Following | None:
-        if (source := self.batch.source) is None:
+        if self.batch.source is None:
             return None
         manager = self.pages.manager
         label, on = manager.following, self._follows()
@@ -574,7 +569,6 @@ class Page:
             on=on,
             other=None if on or label is None else manager.headers()[label].title,
             interval=self.pages.interval,
-            at=sorted(self._cells.titles[c] for c in source.fills),
             failure=self.pages.failure if on else None,
         )
 
@@ -641,8 +635,6 @@ class Page:
             reason = self._outdated(state)
         elif status == 'outdated':
             reason = 'The settings cannot be used, so this result may not match them.'
-        if self._follows() and state.changed_by_hand and status in _BY_HAND:
-            reason = f'{reason} {_LEFT}'.lstrip()
         scanned = scan.get(row.key)
         cells = {
             c: Cell(
