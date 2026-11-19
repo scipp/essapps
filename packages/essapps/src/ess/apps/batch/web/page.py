@@ -1010,9 +1010,10 @@ class Page:
         """
         End the batch before row ``request.key``, and start the next batch
         there, called ``request.title``
-        (:meth:`~ess.apps.batch.BatchManager.start_next`). Follow moves to the
-        next batch if this batch follows. What the manager refuses is a
-        :class:`Problem`.
+        (:meth:`~ess.apps.batch.BatchManager.start_next`). Follow stays where
+        it is: the rows that move have no result under the next batch, so a
+        step would reduce them all again before a person can change its
+        settings. What the manager refuses is a :class:`Problem`.
         """
         row = self._row_of(request.key)
         if row.index is None:
@@ -1025,8 +1026,6 @@ class Page:
             label = self.pages.manager.start_next(
                 self.label, row.index, title=request.title
             )
-            if self._follows():
-                self.pages.manager.follow(label)
         except NotKept as error:
             raise Problem(f'The change was not kept: {error}') from None
         except Exception as error:  # the scan runs code of the application

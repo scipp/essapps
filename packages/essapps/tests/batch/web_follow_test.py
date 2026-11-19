@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from ess.apps import Client, Status
 from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions
 from ess.apps.batch.web import Page, Pages, create_app
-from ess.apps.batch.web.models import CellEdit, Cells, Edit, Reduce, State
+from ess.apps.batch.web.models import CellEdit, Cells, Edit, Next, Reduce, State
 from ess.apps.batch.web.page import Problem
 from ess.apps.testing import FakeFiles
 
@@ -747,6 +747,25 @@ def test_the_failure_of_a_step_shows_on_the_page_of_the_batch_that_follows_only(
     assert following.failure == 'Follow could not step: half written'
     assert shown is not None
     assert shown.failure is None
+
+
+def test_follow_stays_on_the_batch_that_ended_and_the_rows_that_moved_wait(
+    page: Page, pages: Pages, manager: BatchManager, client: Client, sample: Measure
+) -> None:
+    sample(1, 'water')
+    sample(2, 'oil')
+    page.follow(True)
+    done(page, client)
+
+    made = page.start_next(Next(key='2', title='Afternoon')).label
+    pages.tick()
+
+    following = pages.page(made)
+    assert manager.following == page.label
+    assert statuses(following.state()) == {'oil': 'ready'}
+    assert client.records(label=made) == []
+    following.follow(True)
+    assert statuses(done(following, client)) == {'oil': 'done'}
 
 
 def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follows(

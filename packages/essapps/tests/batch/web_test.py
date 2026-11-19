@@ -2100,25 +2100,6 @@ def test_the_next_batch_starts_at_the_row_with_the_settings_applied(
 
 
 @pytest.mark.parametrize(
-    ('follows', 'after'), [('scan', 'new'), ('other', 'other'), (None, None)]
-)
-def test_the_next_batch_takes_follow_from_the_batch_that_followed(
-    http: TestClient,
-    pages: Pages,
-    manager: BatchManager,
-    follows: str | None,
-    after: str | None,
-) -> None:
-    manager.create(STAGED.name, title='Other', source='pairs', label='other')
-    if follows is not None:
-        pages.manager.follow(follows)
-
-    made = next_batch(http, '2').json()
-
-    assert pages.manager.following == (made['label'] if after == 'new' else after)
-
-
-@pytest.mark.parametrize(
     ('key', 'said'),
     [
         ('added', 'added has no run, so no batch can start at it.'),

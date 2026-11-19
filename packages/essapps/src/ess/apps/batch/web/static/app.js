@@ -583,7 +583,7 @@ function renderBatch(state) {
   $('batch-from').textContent = `From ${index}`;
   $('batch-to').textContent = `up to, not including, ${index}`;
   $('batch-scope').hidden = header.source === null;
-  const follows = state.follow?.on ? ' Follow moves to it.' : '';
+  const follows = state.follow?.on ? ' Follow stays on this batch: turn it on for the next batch when its settings are right.' : '';
   $('next-hint').textContent = `Ends this batch before the ${words().one} selected. The next batch takes its ${words().many} from there on, with the same workflow, columns and settings. The results of the ${words().many} that move stay in this batch.${follows}`;
   const form = $('batch-form');
   const shown = JSON.stringify([state.title, header]);
