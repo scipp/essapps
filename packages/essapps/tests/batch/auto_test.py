@@ -768,19 +768,6 @@ def test_two_loops_on_one_label_submit_a_file_once(
     assert second.step() == {}
 
 
-def test_reduce_without_a_scan_reduces_the_rows_that_arrived_at_the_last_scan(
-    loop: Automatic, client: Client, sample: Measure
-) -> None:
-    sample(1, 'water')
-    loop.batch.scan()
-    sample(2, 'oil')
-
-    records = loop.reduce()
-
-    assert list(records) == ['1']
-    client.wait(list(records.values()))
-
-
 def test_a_loop_reduces_the_rows_of_the_scope_and_those_arriving_in_it(
     client: Client, sample: Measure
 ) -> None:

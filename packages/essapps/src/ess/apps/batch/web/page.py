@@ -110,22 +110,20 @@ from ...fields import UNSET, Fields
 from ...files import Selector
 from ...listing import Listing
 from ...records import Record, Status
-from .. import (
+from .. import frames
+from ..definition import NotKept
+from ..export import export_table
+from ..reduction import Batch, Words
+from ..state import (
     EARLIER,
-    EMPTY,
-    Batch,
-    NotKept,
     RowState,
-    Scope,
-    Words,
     earlier_settings,
-    frames,
     left_to_reduce,
     ready,
     status_texts,
 )
-from .. import Row as TableRow
-from ..export import export_table
+from ..table import EMPTY, Scope
+from ..table import Row as TableRow
 from ..text import checked_settings, load_template, write_template
 from . import forms, plots
 from .models import (

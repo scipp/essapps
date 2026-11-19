@@ -123,16 +123,8 @@ class Automatic:
         and :attr:`refused` gives the reason for each ready row but those
         without a result that are set by hand.
         """
-        self.batch.scan()
-        return self.reduce()
-
-    def reduce(self) -> dict[str, Record]:
-        """
-        The second half of :meth:`step`, without the scan: reduce the rows
-        that :func:`~.state.arrived` gives now. A page that scans by itself,
-        such as the batch page, calls this after its scan.
-        """
         batch = self.batch
+        batch.scan()
         try:
             state = batch.state()
         except SubmitError as error:

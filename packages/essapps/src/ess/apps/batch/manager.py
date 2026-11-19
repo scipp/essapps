@@ -226,11 +226,10 @@ class BatchManager:
             If ``title`` is empty or only spaces; if ``label`` is not one that
             :func:`check_label` takes, or has definitions or records; if no
             source ``source`` is registered; if the workspace binds no spec
-            ``spec``, or it does not fit the source (:func:`fits`); if a column
-            is not a parameter of the spec, or is named twice; if the source
-            fills a parameter that is not among the columns; or for an end
-            of the scope that does not convert, an end without a source, or a
-            stop below the start.
+            ``spec``; if a column is not a parameter of the spec, or is named
+            twice; if the source fills a parameter that is not among the
+            columns; or for an end of the scope that does not convert, an end
+            without a source, or a stop below the start.
         """
         if label is None:
             stamp = time.strftime('%Y%m%d-%H%M%S')
@@ -238,19 +237,14 @@ class BatchManager:
             while self._taken(label):
                 n += 1
                 label = f'{stamp}-{n}'
-        check_label(label)
-        if self._taken(label):
-            raise ValueError(f'{label}: the label has definitions or records')
+        else:
+            check_label(label)
+            if self._taken(label):
+                raise ValueError(f'{label}: the label has definitions or records')
         registered = self._source(source)
         fills = () if registered is None else registered.fills
         columns = fills if columns is None else tuple(columns)
         bound = self._bound(spec, columns)
-        if not fits(bound, registered):
-            lacks = sorted(set(fills) - bound.params.model_fields.keys())
-            raise ValueError(
-                f'{bound.title} has no parameters {lacks}, which the source '
-                f'{source} fills'
-            )
         if len(set(columns)) != len(columns):
             raise ValueError(f'a column is named twice: {list(columns)}')
         check_fills(label, registered, columns)

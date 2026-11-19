@@ -49,19 +49,13 @@ from ...errors import SubmitError
 from ...fields import UNSET, Fields
 from ...files import Selector
 from ...listing import Listing
-from .. import (
-    BatchManager,
-    CorrectedFiles,
-    NotKept,
-    RowState,
-    Scope,
-    Source,
-    Words,
-    file_infos,
-    fits,
-    refused_again,
-)
 from ..auto import Follow
+from ..corrections import CorrectedFiles
+from ..definition import NotKept
+from ..manager import BatchManager, fits
+from ..reduction import Source, Words, file_infos
+from ..state import RowState, refused_again
+from ..table import Scope
 from . import forms
 from .models import (
     BatchCounts,
