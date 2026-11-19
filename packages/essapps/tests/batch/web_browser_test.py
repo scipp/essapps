@@ -409,11 +409,12 @@ def test_a_request_the_server_fails_says_its_status_where_no_action_asked(
 def test_a_poll_the_server_refuses_says_the_message_of_the_server(
     page: Any,
 ) -> None:
-    message = {'message': 'There is no batch scan.'}
-    page.route('**/api/state*', lambda route: route.fulfill(status=404, json=message))
+    # A 404, a batch that is gone, shows the list instead (see the tab "Batch").
+    message = {'message': 'Cannot show scan: the table is half written.'}
+    page.route('**/api/state*', lambda route: route.fulfill(status=422, json=message))
 
-    page.wait_for_selector('#offline:has-text("There is no batch scan.")')
-    assert all('status of 404' in e for e in page.errors)
+    page.wait_for_selector('#offline:has-text("the table is half written.")')
+    assert all('status of 422' in e for e in page.errors)
     page.errors.clear()
 
 
@@ -1028,3 +1029,135 @@ def test_a_batch_that_cannot_be_shown_says_why_and_shows_the_list(
         page.wait_for_selector('#rows .tabulator-row:has-text("water")')
         page.close()
     assert page.errors == []
+
+
+# The tab "Batch"
+
+
+def test_a_person_saves_a_title_and_a_scope(page: Any, manager: BatchManager) -> None:
+    page.click('[data-tab=batch]')
+    assert 'Staged' in page.inner_text('#batch-fixed')
+
+    page.fill('#batch-title', 'Morning')
+    page.fill('#batch-start', '2')
+    page.click('#batch-form [type=submit]')
+
+    page.wait_for_selector('#title:has-text("Morning")')
+    page.wait_for_selector('.chip.st-all .n:text-is("2")')
+    header = manager.headers()['scan']
+    assert (header.title, header.scope) == ('Morning', Scope(start=2))
+
+
+def test_a_refused_header_shows_at_the_form_and_changes_nothing(
+    page: Any, manager: BatchManager
+) -> None:
+    page.click('[data-tab=batch]')
+
+    page.fill('#batch-start', '3')
+    page.fill('#tab-batch [name=stop]', '2')
+    page.click('#batch-form [type=submit]')
+
+    page.wait_for_selector('#batch-problem:has-text("below its start")')
+    assert page.is_hidden('#message')
+    assert manager.headers()['scan'].scope == Scope()
+    assert len(page.errors) == 1
+    assert 'status of 422' in page.errors[0]
+    page.errors.clear()
+
+
+def test_a_wider_scope_of_the_batch_that_follows_is_saved_after_a_confirmation(
+    page: Any, pages: Pages, manager: BatchManager
+) -> None:
+    manager.change('scan', scope=Scope(stop=2))
+    pages.follow.on('scan')
+    page.reload()
+    page.wait_for_selector('#follow input:checked')
+    page.click('[data-tab=batch]')
+    asked: list[str] = []
+
+    def answer(dialog: Any) -> None:
+        asked.append(dialog.message)
+        dialog.dismiss() if len(asked) == 1 else dialog.accept()
+
+    page.on('dialog', answer)
+    page.fill('#tab-batch [name=stop]', '')
+    with page.expect_event('dialog'):
+        page.click('#batch-form [type=submit]')
+    assert manager.headers()['scan'].scope == Scope(stop=2)
+    page.click('#batch-form [type=submit]')
+
+    page.wait_for_selector('.chip.st-all .n:text-is("3")')
+    assert asked[0].startswith('This scope adds 2 rows without a result.')
+    assert len(asked) == 2
+    assert manager.headers()['scan'].scope == Scope()
+
+
+def test_a_person_ends_a_series_and_starts_the_next_at_a_row(
+    page: Any, manager: BatchManager
+) -> None:
+    page.click('[data-tab=batch]')
+    select(page, 'sds')
+    asked: list[str] = []
+
+    def answer(dialog: Any) -> None:
+        asked.append(dialog.message)
+        dialog.accept('Afternoon')
+
+    page.once('dialog', answer)
+    page.click('#next-batch')
+
+    page.wait_for_selector('#title:has-text("Afternoon")')
+    assert asked[0].startswith('2 rows move to the next batch, from sds on,')
+    (label,) = set(manager.headers()) - {'scan'}
+    assert page.url.endswith(f'/batches/{label}/')
+    assert manager.headers()['scan'].scope == Scope(stop=2)
+    assert manager.headers()[label].scope == Scope(start=2)
+
+
+def test_the_next_batch_asks_for_one_row_selected(
+    page: Any, manager: BatchManager
+) -> None:
+    page.click('[data-tab=batch]')
+
+    page.click('#next-batch')
+
+    page.wait_for_selector(
+        '#message:has-text("Select one row: the next batch starts at it.")'
+    )
+    assert list(manager.headers()) == ['scan']
+
+
+def test_remove_goes_to_another_batch_then_to_the_root_without_one(
+    page: Any, manager: BatchManager
+) -> None:
+    manager.create(STAGED.name, title='Other', source='pairs', label='other')
+    page.on('dialog', lambda dialog: dialog.accept())
+    page.click('[data-tab=batch]')
+
+    page.click('#remove-batch')
+    page.wait_for_selector('#title:has-text("Other")')
+    assert page.url.endswith('/batches/other/')
+    page.click('[data-tab=batch]')
+    page.click('#remove-batch')
+
+    page.wait_for_selector('#new-batch:not([hidden])')
+    assert manager.headers() == {}
+    assert page.is_hidden('.right')
+    # A poll on its way while the batch is removed answers 404.
+    assert all('status of 404' in e for e in page.errors)
+    page.errors.clear()
+
+
+def test_another_page_of_a_removed_batch_shows_why_and_the_list(
+    page: Any, pages: Pages, manager: BatchManager
+) -> None:
+    manager.create(STAGED.name, title='Other', source='pairs', label='other')
+
+    pages.remove('scan')
+
+    page.wait_for_selector('#message:has-text("There is no batch scan.")')
+    page.wait_for_selector('#batches tbody tr:has-text("Other")')
+    assert page.is_hidden('.right')
+    assert page.is_hidden('#new-batch')
+    assert all('status of 404' in e for e in page.errors)
+    page.errors.clear()

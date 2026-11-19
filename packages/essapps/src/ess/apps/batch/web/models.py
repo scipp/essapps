@@ -172,11 +172,31 @@ class Following(BaseModel):
     failure: str | None
 
 
+class HeaderShown(BaseModel):
+    """
+    The header of the batch of a page, as the tab "Batch" shows it, but its
+    title and columns, which :class:`State` has: the title of its
+    ``workflow``, the name of its ``source``, ``None`` for rows added by hand
+    only, and what the source calls the index of a row; its description; and
+    its scope, from ``start`` up to ``stop`` (``None`` an open end), or the
+    ``keys`` of the rows it names.
+    """
+
+    workflow: str
+    source: str | None
+    index_title: str
+    description: str
+    start: Index | None
+    stop: Index | None
+    keys: list[str] | None
+
+
 class State(BaseModel):
     """
     Everything the page of a batch shows but the details of one row, the plot,
-    and the runs. ``label`` names the batch and ``title`` is its title;
-    ``application`` is the title of the application. ``start`` changes when
+    and the runs. ``label`` names the batch, ``title`` is its title, and
+    ``header`` the rest of its header; ``application`` is the title of the
+    application. ``start`` changes when
     the server starts again, ``version`` with each change, ``runs`` with
     each change of the runs, and ``batches`` with each change of the list of
     batches. ``settings`` is the form
@@ -195,6 +215,7 @@ class State(BaseModel):
     batches: int
     label: str
     title: str
+    header: HeaderShown
     application: str
     words: Words
     folder: str
@@ -360,12 +381,22 @@ class On(BaseModel):
     on: bool
 
 
-class NewBatch(BaseModel):
+class Ends(BaseModel):
+    """
+    The ends of the scope of a batch as typed, converted to the type of the
+    index of its source (:func:`~ess.apps.batch.scope_of`); ``None`` is an
+    open end.
+    """
+
+    start: Index | None = None
+    stop: Index | None = None
+
+
+class NewBatch(Ends):
     """
     Make a batch, as :meth:`~ess.apps.batch.BatchManager.create` takes it:
     ``columns`` are all columns, and ``start`` and ``stop`` the ends of its
-    scope as typed, converted to the type of the index of the source
-    (:func:`~ess.apps.batch.scope_of`), ``None`` for an open end.
+    scope.
     """
 
     title: str
@@ -373,8 +404,34 @@ class NewBatch(BaseModel):
     source: str | None = None
     spec: str
     columns: list[str]
-    start: Index | None = None
-    stop: Index | None = None
+
+
+class HeaderEdit(Ends):
+    """
+    The title, description and scope of the batch of a page, as a person
+    saves them; a scope of keys stays as it is whatever the ends say.
+    """
+
+    title: str
+    description: str = ''
+
+
+class Next(BaseModel):
+    """Start the next batch at row ``key``, called ``title``."""
+
+    key: str
+    title: str
+
+
+class Moved(BaseModel):
+    """
+    What starting the next batch at a row moves: how many ``rows`` the next
+    batch holds in place of this one, and how many of them have a result
+    under this batch's label, which the next batch does not show.
+    """
+
+    rows: int
+    results: int
 
 
 class Made(BaseModel):

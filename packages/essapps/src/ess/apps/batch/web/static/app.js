@@ -93,14 +93,14 @@ async function request(url, {body, kind, fresh = () => true, say = showMessage} 
   return null;
 }
 
-// Send an action and show the state it answers with, or what went wrong;
-// whether it was done.
-function act(url, body = {}) {
-  return queued(() => perform(url, body));
+// Send an action and show the state it answers with, or have `say` show what
+// went wrong; whether it was done.
+function act(url, body = {}, say = showMessage) {
+  return queued(() => perform(url, body, say));
 }
 
-async function perform(url, body) {
-  const state = await request(url, {body});
+async function perform(url, body, say) {
+  const state = await request(url, {body, say});
   if (!state) {
     await refresh().catch(() => {});
     return false;
@@ -130,7 +130,8 @@ async function refresh() {
   if (response.status === 204) return;
   if (!response.ok) {
     const message = response.body?.message ?? `The server answered ${response.status}.`;
-    throw view.state ? new Offline(message) : new Unshown(message);
+    // A batch removed, such as on another page, is shown no more.
+    throw view.state && response.status !== 404 ? new Offline(message) : new Unshown(message);
   }
   render(response.body);
   // A poll says only what failed without an action, such as a scan after a
@@ -139,8 +140,8 @@ async function refresh() {
 }
 
 // Ask for the state every second; say so while the server does not give it.
-// A batch whose first state the server refuses cannot be shown: the page
-// says why, and shows the batches and the runs.
+// A batch whose first state the server refuses, or that is gone, cannot be
+// shown: the page says why, and shows the batches and the runs.
 async function poll() {
   let again = true;
   try {
@@ -214,6 +215,7 @@ function render(state) {
   renderRefused(state.refused);
   renderFollow(state.follow);
   renderSettings(state);
+  renderBatch(state);
   renderSelection();
   if (view.tab === 'row') loadRow();
 }
@@ -565,6 +567,87 @@ function renderSettings(state) {
   renderForm($('settings'), state.settings, (edit) => act('settings', edit));
 }
 
+// The tab "Batch": what the batch was made with, and a form of its title,
+// description and scope. The inputs are filled again only when the header
+// changes, so that a value typed stays while the page polls.
+function renderBatch(state) {
+  const {header, label} = state;
+  const index = header.index_title.toLowerCase();
+  const fixed = {
+    Workflow: header.workflow,
+    Source: header.source ?? 'none: rows added by hand',
+    Columns: state.columns.map((c) => c.title).join(', '),
+    Label: label,
+  };
+  $('batch-fixed').replaceChildren(...Object.entries(fixed).flatMap(([name, text]) => [h('dt', {text: name}), h('dd', {text})]));
+  $('batch-from').textContent = `From ${index}`;
+  $('batch-to').textContent = `up to, not including, ${index}`;
+  // A scope that names its rows is made by code, and shown only.
+  $('batch-scope').hidden = header.source === null || header.keys !== null;
+  $('batch-named').hidden = header.keys === null;
+  $('batch-named-text').textContent = header.keys && `${count(header.keys.length)} named`;
+  const follows = state.follow?.on ? ' Follow moves to it.' : '';
+  $('next-hint').textContent = `Ends this batch before the ${words().one} selected. The next batch takes its ${words().many} from there on, with the same workflow, columns and settings.${follows}`;
+  const form = $('batch-form');
+  const shown = JSON.stringify([state.title, header]);
+  if (shown === form.shown) return;
+  form.shown = shown;
+  form.elements.title.value = state.title;
+  form.elements.description.value = header.description;
+  form.elements.start.value = header.start ?? '';
+  form.elements.stop.value = header.stop ?? '';
+}
+
+// Save the form of the tab "Batch"; a refusal shows at the form. A wider scope
+// of the batch that follows makes Follow reduce the rows it adds, so Save asks
+// first, naming how many.
+async function saveBatch(event) {
+  event.preventDefault();
+  const {elements} = $('batch-form');
+  const say = (text) => ($('batch-problem').textContent = text);
+  const end = (input) => input.value.trim() || null;
+  const ends = {start: end(elements.start), stop: end(elements.stop)};
+  say('');
+  if (view.state.follow?.on) {
+    const n = await request('batch/added', {body: ends, say});
+    if (n === null) return;
+    const question = `This scope adds ${count(n)} without a result. Follow reduces those it can at its next step. Save?`;
+    if (n > 0 && !confirm(question)) return;
+  }
+  const body = {...ends, title: elements.title.value.trim(), description: elements.description.value.trim()};
+  act('batch', body, say);
+}
+
+// End this batch at the row selected, and go to the next batch, which starts
+// there. The server says first what moves, or why it cannot; the title is
+// asked with that, so that Cancel changes nothing.
+async function startNext() {
+  const chosen = selectedRows();
+  if (chosen.length !== 1) return showMessage(`Select one ${words().one}: the next batch starts at it.`);
+  const [row] = chosen;
+  const moved = await request('batch/moved', {body: {key: row.key}});
+  if (!moved) return;
+  const follows = view.state.follow?.on;
+  const said = [`${count(moved.rows)} move to the next batch, from ${row.name} on, with the values set by hand on them.`];
+  if (moved.results) {
+    const again = follows ? ', and Follow, which moves to it, reduces them again' : '';
+    said.push(`${moved.results} of them have a result in this batch, which stays here: the next batch shows them as not reduced${again}.`);
+  } else if (follows) said.push('Follow moves to the next batch.');
+  const title = prompt(`${said.join(' ')}\n\nTitle of the next batch:`);
+  if (title === null) return;
+  const made = await queued(() => request('batch/next', {body: {key: row.key, title: title.trim()}}));
+  if (made) location.href = batchUrl(made.label);
+}
+
+// Remove this batch, then go to the root: it goes to another batch, or shows
+// the workspace without one.
+async function removeBatch() {
+  const question = `Remove the batch "${view.state.title}"? Its title, description, scope, settings and the values set by hand are removed. Its results stay in the workspace.`;
+  if (!confirm(question)) return;
+  const done = await queued(() => request('batch/remove', {body: {}}));
+  if (done) location.href = '../../';
+}
+
 // Whether to replace the changes of the settings form that are not applied.
 function replaceChanges() {
   return !view.state.settings_changed || confirm('The settings form holds changes that are not applied. Replace them?');
@@ -774,7 +857,7 @@ function showTab(tab) {
   view.tab = tab;
   remember();
   document.querySelectorAll('[data-tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-  for (const name of ['result', 'settings', 'row']) $(`tab-${name}`).hidden = name !== tab;
+  for (const name of ['result', 'settings', 'row', 'batch']) $(`tab-${name}`).hidden = name !== tab;
   if (tab === 'row' && view.state) loadRow();
   if (tab === 'result' && !$('plot').hidden) Plotly.Plots.resize($('plot'));
 }
@@ -810,6 +893,9 @@ function wire() {
   newBatch.elements.spec.onchange = chooseSpec;
   newBatch.querySelector('[data-cancel]').onclick = closeNewBatch;
   newBatch.addEventListener('keydown', (event) => event.key === 'Escape' && closeNewBatch());
+  $('batch-form').onsubmit = saveBatch;
+  $('next-batch').onclick = startNext;
+  $('remove-batch').onclick = removeBatch;
   $('remove').onclick = () => {
     const added = selectedRows().filter((row) => row.added).length;
     const question = `${added} of the ${count(view.selected.length)} selected ${added === 1 ? 'was' : 'were'} added by hand and cannot be brought back. Remove?`;
@@ -898,15 +984,15 @@ function wire() {
 
 // The page at the root of a workspace without a batch, or of a batch that
 // cannot be shown, saying why: the Batches view, with the form "New batch"
-// open, and the Runs view, each loaded once. Nothing polls: making a batch
-// goes to its page.
+// open if there is no batch, and the Runs view, each loaded once. Nothing
+// polls: making a batch goes to its page.
 async function showWorkspace(why = '') {
   document.body.classList.add('no-batch');
   showPage('batches');
   if (why) showMessage(why);
-  openNewBatch();
   await loadBatches();
   if (!view.batchData) return;
+  if (!view.batchData.rows.length) openNewBatch();
   const {application, runs} = view.batchData;
   if (application) document.title = $('title').textContent = application;
   document.querySelector('[data-view="runs"]').hidden = runs === null;

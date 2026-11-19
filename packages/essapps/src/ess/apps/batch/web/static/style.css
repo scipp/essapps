@@ -440,12 +440,13 @@ input[type="checkbox"] { accent-color: var(--accent); }
   border-top: 1px solid var(--line);
   background: #f7f8fa;
 }
-.new-batch .field > :first-child { color: var(--muted); }
 .new-batch .field > input, .new-batch .field > select { max-width: 420px; }
-.new-batch .field > small { grid-column: 2; }
-.new-batch .problem { margin: 0 0 0 162px; color: var(--bad); }
-.new-batch .problem:empty { display: none; }
-.new-batch .buttons { display: flex; gap: 8px; margin-left: 162px; }
+/* The forms "New batch" and of the tab "Batch" */
+.scope-form .field > :first-child { color: var(--muted); }
+.scope-form .field > small { grid-column: 2; }
+.scope-form .problem { margin: 0 0 0 162px; color: var(--bad); }
+.scope-form .problem:empty { display: none; }
+.scope-form .buttons { display: flex; gap: 8px; margin-left: 162px; }
 .columns { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .columns label { display: inline-flex; align-items: center; gap: 4px; }
 .scope { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
@@ -648,7 +649,9 @@ legend { padding: 0 4px; color: var(--muted); font-weight: 600; }
 .reason.info { border-left-color: var(--outdated); background: var(--outdated-bg); }
 .reduced-with { display: flex; flex-direction: column; gap: 8px; }
 .reduced-with h3 { font-size: 13px; }
-.reduced-with button { align-self: flex-start; }
+.reduced-with button, #tab-batch .param > button { align-self: flex-start; }
+#tab-batch { gap: 20px; }
+#tab-batch .summary { grid-template-columns: 150px minmax(0, 1fr); }
 .summary {
   display: grid;
   grid-template-columns: 130px minmax(0, 1fr);

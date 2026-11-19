@@ -22,7 +22,9 @@ A person makes a batch from the list of batches, of the sources and specs
 that :meth:`Pages.sources` offers (:meth:`Pages.create`); the manager decides
 what can be made. With no batch at all, the page is served without one: it
 shows the list of batches and the runs. So is the page of a batch that cannot
-be shown (:meth:`Pages.page`), with the reason.
+be shown (:meth:`Pages.page`), with the reason, and that of a batch removed
+(:meth:`Pages.remove`): a :class:`~.page.Page` handed out before answers
+:class:`~.page.Missing` from then on.
 
 Follow is the one loop of the application
 (:class:`~ess.apps.batch.auto.Follow`). :meth:`Pages.tick` steps it, with or
@@ -57,7 +59,6 @@ from .. import (
     bound_spec,
     fits,
     refused_again,
-    scope_of,
 )
 from ..auto import Follow
 from . import forms
@@ -78,11 +79,16 @@ from .models import (
     SourceChoice,
     SpecChoice,
 )
-from .page import Draw, Page, Problem, page_statuses, read, why
-
-
-class Missing(Exception):
-    """No batch has the label asked for."""
+from .page import (
+    Draw,
+    Missing,
+    Page,
+    Problem,
+    page_statuses,
+    read,
+    scoped,
+    why,
+)
 
 
 class Pages:
@@ -426,6 +432,7 @@ class Pages:
         with what the manager refuses.
         """
         with self.lock:
+            refused = 'The batch was not made'
             try:
                 source = (
                     None if new.source is None else self.manager.sources[new.source]
@@ -436,11 +443,43 @@ class Pages:
                     source=new.source,
                     columns=new.columns,
                     description=new.description,
-                    scope=scope_of(source, new.start, new.stop),
+                    scope=scoped(source, new, refused),
                 )
             except (KeyError, ValueError, NotKept) as error:
-                raise Problem(f'The batch was not made: {why(error)}.') from None
+                raise Problem(f'{refused}: {why(error)}.') from None
             return Made(label=label)
+
+    def remove(self, label: str) -> None:
+        """
+        Remove the batch of ``label`` with the manager
+        (:meth:`~ess.apps.batch.BatchManager.remove`): its definitions go,
+        its records stay. Its page goes, and a page handed out before
+        answers :class:`~.page.Missing`. If it follows, Follow is turned off
+        at once, rather than at its next step, so that a batch made later
+        under the label does not follow. Raises :class:`~.page.Missing` if no batch
+        has the label, and :class:`~.page.Problem` if the definitions refuse
+        a part, saying whether the batch is still listed.
+        """
+        with self.lock:
+            if label not in self.manager.headers():
+                raise Missing(f'There is no batch {label}.')
+            try:
+                self.manager.remove(label)
+            except NotKept as error:
+                said = (
+                    'not removed'
+                    if label in self.manager.headers()
+                    else 'removed, but part of its definitions stays'
+                )
+                raise Problem(f'The batch was {said}: {error}') from None
+            finally:
+                # The batch is gone once its header is; a refusal before
+                # leaves its page and Follow as they were.
+                if label not in self.manager.headers():
+                    self._pages.pop(label, None)
+                    if self.follow.label == label:
+                        with suppress(NotKept):  # else its next step does
+                            self.follow.off()
 
     def counts(self) -> BatchCounts:
         """

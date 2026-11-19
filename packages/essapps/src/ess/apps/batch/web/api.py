@@ -48,10 +48,14 @@ from .models import (
     CellEdit,
     Cells,
     Edit,
+    Ends,
+    HeaderEdit,
     Key,
     Keys,
     Made,
+    Moved,
     NewBatch,
+    Next,
     Notice,
     On,
     Plot,
@@ -61,8 +65,8 @@ from .models import (
     SourceChoice,
     State,
 )
-from .page import Page, Problem
-from .pages import Missing, Pages
+from .page import Missing, Page, Problem
+from .pages import Pages
 
 STATIC = Path(__file__).parent / 'static'
 _XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -225,6 +229,32 @@ def create_app(pages: Pages) -> FastAPI:
         page: PageOfLabel, name: str, content: Annotated[bytes, Body()]
     ) -> State:
         return page.load_settings(name, content)
+
+    @batch.post('/api/batch')
+    def change(page: PageOfLabel, body: HeaderEdit) -> State:
+        """Change the title, description and scope of the batch."""
+        return page.change(body)
+
+    @batch.post('/api/batch/added')
+    def added(page: PageOfLabel, body: Ends) -> int:
+        """How many rows the scope of ``body`` adds that Follow would reduce."""
+        return page.added(body)
+
+    @batch.post('/api/batch/moved')
+    def moved(page: PageOfLabel, body: Key) -> Moved:
+        """What starting the next batch at row ``key`` moves."""
+        return page.moved(body.key)
+
+    @batch.post('/api/batch/next')
+    def start_next(page: PageOfLabel, body: Next) -> Made:
+        """End the batch before a row, and start the next batch there."""
+        return page.start_next(body)
+
+    @batch.post('/api/batch/remove')
+    def remove_batch(label: str) -> dict[str, str]:
+        """Remove the batch; its results stay in the workspace."""
+        pages.remove(label)
+        return {}
 
     @batch.post('/api/results.zip', response_class=Response)
     def results_file(page: PageOfLabel, body: Keys) -> Response:

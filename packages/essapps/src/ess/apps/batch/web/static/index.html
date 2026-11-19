@@ -86,7 +86,7 @@
           <span class="spacer"></span>
           <button type="button" id="count">Count again</button>
         </div>
-        <form class="new-batch" id="new-batch" hidden>
+        <form class="new-batch scope-form" id="new-batch" hidden>
           <div class="field"><label for="new-title">Title</label><input type="text" id="new-title" name="title"></div>
           <div class="field"><label for="new-description">Description</label><input type="text" id="new-description" name="description"></div>
           <div class="field"><label for="new-source">Source</label><select id="new-source" name="source"></select></div>
@@ -132,6 +132,7 @@
         <button type="button" role="tab" data-tab="result" aria-selected="true">Result</button>
         <button type="button" role="tab" data-tab="settings" aria-selected="false">Settings <span class="badge" id="settings-badge" hidden>!</span></button>
         <button type="button" role="tab" data-tab="row" aria-selected="false" id="tab-row-label">Row</button>
+        <button type="button" role="tab" data-tab="batch" aria-selected="false">Batch</button>
       </div>
       <div class="tab" id="tab-result">
         <div class="plot-head">
@@ -162,6 +163,38 @@
         <div class="form" id="settings"></div>
       </div>
       <div class="tab" id="tab-row" hidden></div>
+      <div class="tab" id="tab-batch" hidden>
+        <section class="param">
+          <h3>Fixed when the batch was made</h3>
+          <dl class="summary" id="batch-fixed"></dl>
+        </section>
+        <form class="param scope-form" id="batch-form">
+          <h3>Title, description and scope</h3>
+          <div class="field"><label for="batch-title">Title</label><input type="text" id="batch-title" name="title"></div>
+          <div class="field"><label for="batch-description">Description</label><input type="text" id="batch-description" name="description"></div>
+          <div class="field" id="batch-scope">
+            <label for="batch-start">Scope</label>
+            <span class="scope">
+              <span id="batch-from">From run</span> <input type="text" id="batch-start" name="start">
+              <span id="batch-to">up to, not including, run</span> <input type="text" name="stop" aria-label="Stop">
+            </span>
+            <small>Empty for no limit.</small>
+          </div>
+          <div class="field" id="batch-named"><span>Scope</span><span id="batch-named-text"></span></div>
+          <p class="problem" id="batch-problem"></p>
+          <div class="buttons"><button type="submit" class="primary">Save</button></div>
+        </form>
+        <section class="param">
+          <h3>Start the next batch here</h3>
+          <p class="hint" id="next-hint"></p>
+          <button type="button" id="next-batch">Start the next batch here</button>
+        </section>
+        <section class="param">
+          <h3>Remove</h3>
+          <p class="hint">Removes the title, description, scope and settings of the batch, and the values set by hand. Its results stay in the workspace.</p>
+          <button type="button" id="remove-batch">Remove this batch</button>
+        </section>
+      </div>
     </aside>
   </main>
 
