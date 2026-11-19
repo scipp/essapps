@@ -53,17 +53,19 @@ This decides what a batch is when it is made once and then changed by a person. 
 
 ### Keys, columns, cells
 
-- **The key** of a row is text, unique in the batch, and the index of the frame. It joins a row to its results: the records under the label of the batch with that key, as today.
+- **The key** of a row is text, unique in the batch, and the index of the frame, named `key`; no column has that name. It joins a row to its results: the records under the label of the batch with that key, as today.
 - **A column named as a parameter of the spec is a parameter column**, and the parameter columns are the blanks of the template. Any other column, such as `run` or `name`, is a note for the person. Nothing else tells them apart.
 - **A cell holds one value, or is empty.** The value is plain data: a number, text, a truth value, a list, or a group. A file and an output are text: `run:60339`, and `r17.centre` for the output `centre` of record `r17`. A request takes neither as text, so the cells of a row are converted in one place before `fill` (`table.as_request`), and a value of a request back to a cell in one place (`table.cell_of`).
 - **A column has the type of its parameter**, so a wrong value is refused where it enters the table:
 
 | The parameter takes | dtype | A cell |
 |---|---|---|
-| a file, an output, a file or an output, text | `string` | `'run:60339'` |
+| a file, an output, a file or an output; text, a `Literal` or an enum of text, a time, a date | `string` | `'run:60339'` |
 | a number | `Float64`, `Int64` | `2.0` |
 | a truth value | `boolean` | `True` |
 | a list, a group, a value or an output, anything else | `object` | `['run:1', 'run:2']` |
+
+A cell must be of the kind of its column, and nothing converts it: `'2'` and `True` are not numbers.
 
 ### A row fills the template
 
@@ -118,7 +120,7 @@ The first rows are an argument of making the batch, as its first settings are; t
 ```python
 frame = rows_of(client, source)                          # rows from the files: code of the application
 manager.create('loki-iofq', title='Afternoon', rows=frame[frame.run >= 60339])
-manager.create('loki-iofq', title='Water', rows=pd.read_csv('runs.csv', index_col='key', dtype='string'))
+manager.create('loki-iofq', title='Water', rows=pd.read_csv('runs.csv', index_col='key', dtype='string'))  # files and text only
 manager.create('loki-iofq', title='By hand')             # no rows yet
 ```
 
@@ -151,7 +153,7 @@ text = pydantic_core.to_json(data)                                              
 column = pd.array([r.get(name) for r in data['data']], dtype=field['extDtype'])    # each column, read back
 ```
 
-`table.data_of` and `table.frame_of` are the two halves. Checked on a table with `string`, `Float64`, `Int64`, `boolean` and `object` columns, empty cells, a list and a dict in a cell, `0.1 + 0.2`, `2**53 + 1`, a table without rows, and the key `'0342'`: the frame read back equals the frame written, dtypes included, with an empty cell of an `object` column read as `None`.
+`table.data_of` and `table.frame_of` are the two halves. Checked on a table with `string`, `Float64`, `Int64`, `boolean` and `object` columns, empty cells, a list and a dict in a cell, `0.1 + 0.2`, `2**53 + 1`, a table without rows, and the key `'0342'`: the frame read back equals the frame written, dtypes included, with an empty cell of an `object` column read as `None`. It holds for every table, since a note too is text, a number, a truth value, or plain data.
 
 ### "Start the next batch here" splits the table
 

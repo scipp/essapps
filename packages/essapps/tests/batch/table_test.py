@@ -3,8 +3,10 @@
 """The rules of a table of rows, on plain values; the table as a frame."""
 
 import re
+from collections.abc import Callable
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from enum import Enum
 from typing import Any, Literal
 
 import pandas as pd
@@ -24,6 +26,7 @@ from ess.apps.batch.table import (
     typed,
 )
 from ess.spec import FileRef, OutputRef, Referenced, RunFile
+from ess.spec.request_types import request_model
 
 from . import toys
 
@@ -399,6 +402,11 @@ def test_a_row_added_by_hand_with_the_key_of_a_row_outside_the_scope_is_refused(
 # The table as a frame
 
 
+class Colour(Enum):
+    RED = 'red'
+    BLUE = 'blue'
+
+
 class Kinds(BaseModel):
     count: int = 1
     flag: bool = False
@@ -406,6 +414,8 @@ class Kinds(BaseModel):
     choice: Literal['a', 'b'] = 'a'
     level: Literal[1, 2] = 1
     when: datetime | None = None
+    day: date | None = None
+    colour: Colour = Colour.RED
     scale: float | None = None
     either: int | str = 0
     centre: Referenced[toys.Offset] | None = None
@@ -420,6 +430,8 @@ def test_a_column_has_the_dtype_of_its_parameter() -> None:
         'choice': 'string',
         'level': 'object',
         'when': 'string',
+        'day': 'string',
+        'colour': 'string',
         'scale': 'Float64',
         'either': 'object',
         'centre': 'string',
@@ -436,6 +448,15 @@ def test_the_columns_of_the_toy_have_the_dtypes_of_their_parameters() -> None:
         'offset': 'object',
     }
     assert dtypes(toys.SeriesParams) == {'runs': 'object'}
+
+
+class Ambiguous(BaseModel):
+    label: str | Referenced[toys.Offset]
+
+
+def test_a_parameter_of_text_or_an_output_is_refused_by_name() -> None:
+    with pytest.raises(ValueError, match='label: takes text or an output'):
+        dtypes(Ambiguous)
 
 
 def test_typed_names_the_index_and_casts_parameters_and_notes() -> None:
@@ -470,18 +491,54 @@ def test_typed_names_the_index_and_casts_parameters_and_notes() -> None:
     [
         (['a', 'a'], {}, "the key 'a' is given twice"),
         (['a', ''], {}, 'a key is empty'),
-        ([60339], {}, r'not a number such as 60339; .*frame.index.astype\(str\)'),
+        ([60339.0], {}, '^a key is text, not a number such as 60339.0$'),
         (['a', 'b'], {'scale': [1.0, 'thick']}, "row 'b', column 'scale': 'thick'"),
+        (['a'], {'scale': ['2']}, "row 'a', column 'scale': '2' is not a number"),
+        (['a'], {'scale': [True]}, "row 'a', column 'scale': True is not a number"),
         (['a', 'b'], {'word': ['run:1', 60339.0]}, "row 'b', column 'word': 60339.0"),
         (['a'], {'count': [2.5]}, "row 'a', column 'count': 2.5 is not a whole"),
+        (['a'], {'count': [float('inf')]}, "row 'a', column 'count': inf is not a"),
+        (['a'], {'count': [2**63]}, f"row 'a', column 'count': {2**63} is not a"),
         (['a'], {'flag': ['yes']}, "row 'a', column 'flag': 'yes' is not true"),
+        (['a'], {'flag': [1]}, "row 'a', column 'flag': 1 is not true or false"),
+        (['a'], {'level': [(1, 2)]}, r"row 'a', column 'level': \(1, 2\) is not plain"),
+        (['a'], {'key': ['x']}, "a column is named 'key'.*set_index"),
+        (['a'], {0: ['x']}, 'the column 0 is not text'),
+        (
+            ['a'],
+            {'when': [datetime(2026, 1, 1, tzinfo=UTC)]},
+            r"column 'when': Timestamp.* is not text",
+        ),
     ],
 )
-def test_typed_refuses_a_key_or_a_cell_and_names_it(
-    index: list[Any], columns: dict[str, list[Any]], message: str
+def test_typed_refuses_a_key_a_column_or_a_cell_and_names_it(
+    index: list[Any], columns: dict[Any, list[Any]], message: str
 ) -> None:
     with pytest.raises(ValueError, match=message):
         typed(pd.DataFrame(columns, index=index), Kinds)
+
+
+def test_typed_refuses_a_column_given_twice() -> None:
+    frame = pd.DataFrame([['a', 'b']], columns=['word', 'word'], index=['r'])
+
+    with pytest.raises(ValueError, match="the column 'word' is given twice"):
+        typed(frame, Kinds)
+
+
+def test_typed_refuses_a_note_of_another_dtype_by_name() -> None:
+    frame = pd.DataFrame({'start': [pd.Timestamp('2026-11-19')]}, index=['a'])
+
+    with pytest.raises(ValueError, match=r"the note 'start' is datetime64.*text"):
+        typed(frame, Kinds)
+
+
+def test_a_float_nan_in_a_column_of_numbers_is_an_empty_cell() -> None:
+    frame = pd.DataFrame({'scale': [float('nan'), 1.0]}, index=['a', 'b'])
+
+    table = typed(frame, Kinds)
+
+    assert table['scale'].isna().tolist() == [True, False]
+    pd.testing.assert_frame_equal(frame_of(data_of(table)), table)
 
 
 @pytest.fixture
@@ -517,18 +574,28 @@ def test_the_data_of_a_table_without_rows_give_its_columns_and_dtypes(
     pd.testing.assert_frame_equal(frame_of(data_of(empty)), empty)
 
 
+def test_the_data_of_a_table_without_columns_give_its_keys() -> None:
+    table = typed(pd.DataFrame(index=['a', 'b']), Kinds)
+
+    pd.testing.assert_frame_equal(frame_of(data_of(table)), table)
+
+
 @pytest.mark.parametrize(
     ('change', 'message'),
     [
         (lambda d: d.pop('schema'), 'not a table'),
-        (lambda d: d['data'][1].pop(KEY), "data\\[1\\]: not an object with a 'key'"),
-        (lambda d: d['data'][2].update(y=1), 'data\\[2\\]: no field y'),
-        (lambda d: d['data'][0].update(n=2.5), "column 'n'"),
+        (lambda d: d.update(data={'a': 1}), 'data: not a list of rows'),
+        (lambda d: d['data'][1].pop(KEY), r"data\[1\]: not an object with a 'key'"),
+        (lambda d: d['data'][2].update(y=1), r'data\[2\]: no field y'),
+        (lambda d: d['data'][0].update(n=2.5), "row 'a', column 'n': 2.5 is not"),
+        (lambda d: d['data'][0].update(s=1.0), "row 'a', column 's': 1.0 is not"),
+        (lambda d: d['data'][0].update(n=True), "row 'a', column 'n': True is not"),
         (lambda d: d['data'][1].update(key='a'), "the key 'a' is given twice"),
+        (lambda d: d['schema']['fields'].append({'name': 'n'}), "'n' is given twice"),
     ],
-)  # fmt: skip
+)
 def test_data_that_are_not_a_table_are_refused_by_entry(
-    exact: pd.DataFrame, change: Any, message: str
+    exact: pd.DataFrame, change: Callable[[dict[str, Any]], object], message: str
 ) -> None:
     data = from_json(to_json(data_of(exact)))
     change(data)
@@ -551,6 +618,7 @@ def output(record: str, name: str, key: str | None = None) -> OutputRef:
     [
         (toys.Params, {'sample': 'run:60339'}, {'sample': FileRef(file='run:60339')}),
         (toys.Params, {'sample': 'path:a.nxs'}, {'sample': FileRef(file='path:a.nxs')}),
+        (toys.Params, {'sample': ''}, {'sample': ''}),
         (toys.Params, {'offset': 'r17.offset'}, {'offset': output('r17', 'offset')}),
         (toys.Params, {'binning': {'bins': 3}}, {'binning': {'bins': 3}}),
         (Either, {'centre': 'r18.slices[2]'}, {'centre': output('r18', 'slices', '2')}),
@@ -576,3 +644,27 @@ def test_a_whole_number_at_a_file_is_a_run() -> None:
     assert as_request(toys.SeriesParams, {'runs': [60339, 'run:2']}) == {
         'runs': [FileRef(file='run:60339'), FileRef(file='run:2')]
     }
+
+
+class Masked(BaseModel):
+    mask: RunFile
+
+
+class Grouped(BaseModel):
+    masked: Masked
+    when: datetime
+
+
+def test_the_cell_of_a_group_or_a_time_is_its_json_form_which_a_request_takes() -> None:
+    values = {
+        'masked': Masked.model_construct(mask=FileRef(file='run:1')),
+        'when': datetime(2026, 11, 19, 12, tzinfo=UTC),
+    }
+
+    cells = {name: cell_of(v) for name, v in values.items()}
+
+    assert cells == {
+        'masked': {'mask': {'@ref': 'file', 'file': 'run:1'}},
+        'when': '2026-11-19T12:00:00Z',
+    }
+    request_model(Grouped).model_validate(as_request(Grouped, cells))
