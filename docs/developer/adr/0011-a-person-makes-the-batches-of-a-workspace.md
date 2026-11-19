@@ -1,6 +1,6 @@
 # ADR 0011: A person makes the batches of a workspace, each with a scope over the rows of a source
 
-- Status: accepted. Several workflows on one batch are described below and not decided. Amended 2026-11-18: the header holds the spec and the columns. Amended 2026-11-19: the manager keeps which batch follows; "Start the next batch here" leaves Follow where it is. [ADR 0012](0012-a-batch-is-a-table.md), proposed, replaces what is said here of the spec and the columns in the header and of `edits.json`. [ADR 0013](0013-follow-adds-the-rows-not-considered.md), proposed, replaces what is said here of the scope, of the source in the header, and of what a step of Follow reduces.
+- Status: accepted. Several workflows on one batch are described below and not decided. Amended 2026-11-18: the header holds the spec and the columns. Amended 2026-11-19: the manager keeps which batch follows; "Start the next batch here" leaves Follow where it is. [ADR 0012](0012-a-batch-is-a-table.md) replaces what is said here of the spec and the columns in the header and of `edits.json`. [ADR 0013](0013-follow-adds-the-rows-not-considered.md) replaces what is said here of the scope, of the source in the header, and of what a step of Follow reduces.
 - Deciders: Simon
 - Date: 2026-11-18
 

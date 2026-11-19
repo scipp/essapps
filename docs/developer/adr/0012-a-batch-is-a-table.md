@@ -1,6 +1,6 @@
 # ADR 0012: A batch is a template and a table
 
-- Status: proposed (#236)
+- Status: accepted (#236)
 - Deciders: Simon
 - Date: 2026-11-19
 
@@ -53,23 +53,26 @@ This decides what a batch is when it is made once and then changed by a person. 
 
 ### Keys, columns, cells
 
-- **The key** of a row is text, unique in the batch, and the index of the frame. It joins a row to its results: the records under the label of the batch with that key, as today.
+- **The key** of a row is text, unique in the batch, and the index of the frame, named `key`; no column has that name. It joins a row to its results: the records under the label of the batch with that key, as today.
 - **A column named as a parameter of the spec is a parameter column**, and the parameter columns are the blanks of the template. Any other column, such as `run` or `name`, is a note for the person. Nothing else tells them apart.
-- **A cell holds one value, or is empty.** The value is the plain form of a parameter's value, as a request holds it before it is resolved. A file and an output are text: `run:60339`, and `r17.centre` for the output `centre` of record `r17`.
+- **A cell holds one value, or is empty.** The value is plain data: a number, text, a truth value, a list, or a group. A file and an output are text: `run:60339`, and `r17.centre` for the output `centre` of record `r17`. A request takes neither as text, so the cells of a row are converted in one place before `fill` (`table.as_request`), and a value of a request back to a cell in one place (`table.cell_of`).
 - **A column has the type of its parameter**, so a wrong value is refused where it enters the table:
 
 | The parameter takes | dtype | A cell |
 |---|---|---|
-| a file, an output, text | `string` | `'run:60339'` |
+| a file, an output, a file or an output; text, a `Literal` or an enum of text, a time, a date | `string` | `'run:60339'` |
 | a number | `Float64`, `Int64` | `2.0` |
 | a truth value | `boolean` | `True` |
-| a list, a group, or more than one of the above | `object` | `['run:1', 'run:2']` |
+| a list, a group, a value or an output, anything else | `object` | `['run:1', 'run:2']` |
+
+A cell must be of the kind of its column, and nothing converts it: `'2'` and `True` are not numbers. One exception: a column of whole numbers takes a float that is a whole number (`1.0` is kept as `1`), since pandas gives whole numbers with a gap as floats.
 
 ### A row fills the template
 
 ```python
 def request(key):
-    cells = rows.loc[key, list(template.blanks)].dropna().to_dict()
+    row = rows[list(template.blanks)].loc[[key]].to_dict('index')[key]
+    cells = as_request(spec.params, {c: v for c, v in row.items() if v is not None})
     for parameter in template.blanks - cells.keys():        # the empty cells
         if has_default(parameter):
             cells[parameter] = default(parameter)
@@ -77,6 +80,8 @@ def request(key):
             cells[parameter] = None
     return template.fill(params=cells)      # refuses "a blank, not filled": the row is incomplete
 ```
+
+`to_dict('index')` gives each cell as a Python value of its column's type, and an empty cell as `None`. `rows.loc[key, blanks]` would not: the row is a `Series` of one dtype, so with only numbers among the blanks an `Int64` cell becomes a float, which a parameter of whole numbers refuses.
 
 - **A parameter is a setting or a column, never both.** These are the rules of a template, unchanged: `fill` refuses a value for a parameter that the template fixes, and naming a parameter as a blank drops its value. So every value that the table contributes is in the table, and no cell depends on a setting.
 - **The settings are one dict**, parameter to value, with no keys of rows: `template.params`.
@@ -113,9 +118,9 @@ Removing a row drops it. Its records stay under the label, as every record does,
 The first rows are an argument of making the batch, as its first settings are; the parameter columns of the rows are its blanks. Where they come from is the business of whoever makes it:
 
 ```python
-frame = table_of(source.rows(files))                     # rows from the files: code of the application
+frame = rows_of(client, source)                          # rows from the files: code of the application
 manager.create('loki-iofq', title='Afternoon', rows=frame[frame.run >= 60339])
-manager.create('loki-iofq', title='Water', rows=pd.read_csv('runs.csv', index_col='key', dtype='string'))
+manager.create('loki-iofq', title='Water', rows=pd.read_csv('runs.csv', index_col='key', dtype='string'))  # files and text only
 manager.create('loki-iofq', title='By hand')             # no rows yet
 ```
 
@@ -136,10 +141,19 @@ A cell that names a file that is not found is marked when the table is shown, an
 ```
 definitions/labels/20261118-130204/header.json     title, description
 definitions/labels/20261118-130204/settings.json   the template, as a settings file that a person saves: spec, params, blanks
-definitions/labels/20261118-130204/rows.json       the table: the plain data of frame.to_json(orient='table')
+definitions/labels/20261118-130204/rows.json       the table: {"schema": ..., "data": [{"key": "60339", "sample": "run:60339", ...}, ...]}
 ```
 
-pandas writes and reads the table with the types of its columns. Checked on a table with `string`, `Float64`, `Int64` and `object` columns, empty cells, a list and a dict in a cell, and the key `'0342'`: the frame read back equals the frame written, with an empty cell of an `object` column read as `NaN`.
+`rows.json` has the shape of `frame.to_json(orient='table')`, but pandas neither writes nor reads its records: `to_json` rounds floats (`0.1 + 0.2` reads back `0.3`), and an `Int64` above 2**53 loses its last digit. So:
+
+```python
+data = {'schema': build_table_schema(frame, version=False),                      # pandas: the dtype of each column
+        'data': [{'key': key, **row} for key, row in frame.to_dict('index').items()]}
+text = pydantic_core.to_json(data)                                                 # the shortest text of each float that reads back equal
+column = pd.array([r.get(name) for r in data['data']], dtype=field['extDtype'])    # each column, read back
+```
+
+`table.data_of` and `table.frame_of` are the two halves. Checked on a table with `string`, `Float64`, `Int64`, `boolean` and `object` columns, empty cells, a list and a dict in a cell, `0.1 + 0.2`, `2**53 + 1`, a table without rows, and the key `'0342'`: the frame read back equals the frame written, dtypes included, with an empty cell of an `object` column read as `None`. It holds for every table, since a note too is text, a number, a truth value, or plain data.
 
 ### "Start the next batch here" splits the table
 
@@ -191,7 +205,7 @@ The batch holds its rows as a `DataFrame`, so pandas becomes a dependency of `es
 |---|---|
 | a row, a key | a row of the frame, its index |
 | the parameter columns | `[c for c in rows.columns if c in parameters]`, equal to `template.blanks` |
-| the request of a row | `template.fill(params=rows.loc[key, blanks].dropna().to_dict())` |
+| the request of a row | `template.fill(params=as_request(spec.params, rows[blanks].loc[[key]].to_dict('index')[key]))`, its empty cells left out |
 | set, empty, add, remove | `.loc[key, column] = value`, `= pd.NA`, `.loc[key, column] = value` at a new key, `.drop(key)` |
 | the results | `records.sort_values('created').drop_duplicates('member', keep='last')` |
 | the state | `rows.join(results)`, a left join on the key |
