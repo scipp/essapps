@@ -68,4 +68,4 @@ A technique package's tests compare each spec's digest with one kept in the pack
 - A result of another spec cannot feed a new request. A person who needs it as an input reduces again, or keeps the old spec installed.
 - An edit to a title or a description changes no digest, so no record becomes one of another spec.
 - What the digest covers is part of the log's format ([ADR 0004](0004-history-is-append-only-lists.md#decision)).
-- A batch shows a row whose result is of another spec as outdated (`RowState.spec_changed`), and the result stays the row's result, readable as stored, so that the results of two versions of a spec can be compared ([batch.md](../../../packages/essapps/docs/batch.md#rules)).
+- A batch shows a row whose result is of another spec as outdated (`RowState.spec_changed`), and the result stays the row's result, readable as stored, so that the results of two versions of a spec can be compared ([batch.md](../../../packages/essapps/docs/batch.md#rules-that-always-hold)).
