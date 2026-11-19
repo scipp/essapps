@@ -1,4 +1,4 @@
-# ADR 0012: A batch is a table
+# ADR 0012: A batch is a template and a table
 
 - Status: proposed (#236)
 - Deciders: Simon
@@ -7,6 +7,7 @@
 ## Context
 
 *Batch*, *label*, *header*, *scope*, *source*, *definitions* are the words of [ADR 0011](0011-a-person-makes-the-batches-of-a-workspace.md).
+*Template*, *blank* and *fill* are those of `ess.apps.Template`: a spec, some values, and blanks that each use fills.
 *Row*, *key*, *cell*, *scan*, *result* are those of [batch.md, "Terms"](../../../packages/essapps/docs/batch.md#terms).
 
 Today the rows of a batch are stored nowhere. They are computed at each scan, and only what a person set on top is kept:
@@ -29,21 +30,23 @@ A person thinks of a batch as a table: they edit its cells, remove its rows, red
 
 ## Decision
 
-**A batch is a table. It is a label with a header, settings, and rows; the rows are one table with one value per cell, and only a person changes it. How the table was made is not part of the batch.**
+**A batch is a template and a table. The template holds the settings, and its blanks are the columns; each row of the table fills it once. The table has one value per cell, and only a person changes it. How the table was made is not part of the batch.**
 
 ```
 batch '20261118-130204'
-  header     spec, title, description                     # what it is a batch of
-  settings   {'wavelength': {...}, 'direct_beam': None}   # one dict: a parameter's value, the same for all rows
-  rows       one DataFrame                                # a table: a parameter's value for one row
+  header     title, description
+  template   spec      loki-iofq
+             params    {'wavelength': {...}, 'thickness': 1.0}    # the settings: one value per parameter, for all rows
+             blanks    ('sample', 'sample_transmission')          # the parameters that each row gives
+  rows       one DataFrame: a column per blank, and notes
 ```
 
 ```
 rows
-key     run    name         sample      sample_transmission  thickness
-60339   60339  D2O buffer   run:60339   run:60305            2.0
-60340   60340  sample A     run:60340   <NA>                 <NA>
-water   <NA>   by hand      run:60012   run:60013            1.0
+key     run    name         sample      sample_transmission
+60339   60339  D2O buffer   run:60339   run:60305
+60340   60340  sample A     run:60340   <NA>
+water   <NA>   by hand      run:60012   run:60013
 ```
 
 This decides what a batch is when it is made once and then changed by a person. How a batch is amended from the files, Follow included, is decided after it and on top of it (see "Not decided here").
@@ -51,7 +54,7 @@ This decides what a batch is when it is made once and then changed by a person. 
 ### Keys, columns, cells
 
 - **The key** of a row is text, unique in the batch, and the index of the frame. It joins a row to its results: the records under the label of the batch with that key, as today.
-- **A column named as a parameter of the spec is a parameter column.** Any other column, such as `run` or `name`, is a note for the person. Nothing else tells them apart, and the header keeps no list of columns.
+- **A column named as a parameter of the spec is a parameter column**, and the parameter columns are the blanks of the template. Any other column, such as `run` or `name`, is a note for the person. Nothing else tells them apart.
 - **A cell holds one value, or is empty.** The value is the plain form of a parameter's value, as a request holds it before it is resolved. A file and an output are text: `run:60339`, and `r17.centre` for the output `centre` of record `r17`.
 - **A column has the type of its parameter**, so a wrong value is refused where it enters the table:
 
@@ -62,41 +65,52 @@ This decides what a batch is when it is made once and then changed by a person. 
 | a truth value | `boolean` | `True` |
 | a list, a group, or more than one of the above | `object` | `['run:1', 'run:2']` |
 
-### A cell overrides a setting
+### A row fills the template
 
 ```python
 def request(key):
-    cells = rows.loc[key, parameter_columns].dropna()
-    return settings | cells.to_dict()          # validated by the spec, as any request
+    cells = rows.loc[key, list(template.blanks)].dropna().to_dict()
+    for parameter in template.blanks - cells.keys():        # the empty cells
+        if has_default(parameter):
+            cells[parameter] = default(parameter)
+        elif takes_none(parameter):
+            cells[parameter] = None
+    return template.fill(params=cells)      # refuses "a blank, not filled": the row is incomplete
 ```
 
-- The settings are one dict, parameter to value, with no keys of rows: a single row of defaults. `rows.fillna(settings)` would be the table with every parameter in every row.
-- An empty cell means "as in the settings". A row is incomplete if a required parameter has neither a setting nor a cell.
-- So a parameter is not either a setting or a column, fixed when the batch is made. A person adds a column for a parameter at any time: its cells are empty, every request is as before, and a value in one cell changes that row.
-- A cell does not hold `None`. Where rows differ in whether they have a value, the setting says `None` and the rows that have one give it: `direct_beam: None` in the settings, and a file in the cells of the rows with a direct beam run.
+- **A parameter is a setting or a column, never both.** These are the rules of a template, unchanged: `fill` refuses a value for a parameter that the template fixes, and naming a parameter as a blank drops its value. So every value that the table contributes is in the table, and no cell depends on a setting.
+- **The settings are one dict**, parameter to value, with no keys of rows: `template.params`.
+- **An empty cell gives no value.** The parameter then takes its default, or `None` if it takes `None`, and the row is incomplete otherwise. A cell holds no word for `None`: in a table, empty is `None`.
+
+| A column of | An empty cell gives |
+|---|---|
+| `thickness: float = 1.0` | `1.0` |
+| `direct_beam: DirectBeamFile \| None` | `None`: no direct beam |
+| `sample: SampleFile` | nothing: the row is incomplete |
 
 ### A person changes the table
 
 A batch gives its table and takes one:
 
 ```python
-frame = batch.frame()                       # the rows, as above
-frame.loc['60340', 'thickness'] = 1.0       # set a cell
-frame.loc['60340', 'thickness'] = pd.NA     # empty it: as in the settings
-frame.loc['d2o', 'sample'] = 'run:7'        # add a row
-frame = frame.drop('60339')                 # remove a row
-frame['can'] = pd.NA                        # add a column, for the parameter `can`
-batch.put(frame)                            # replaces the table
-batch.put(batch.frame())                    # changes nothing and writes nothing
+frame = batch.frame()                                      # the rows, as above
+frame.loc['60340', 'sample_transmission'] = 'run:60341'    # set a cell
+frame.loc['60340', 'sample_transmission'] = pd.NA          # empty it
+frame.loc['d2o', 'sample'] = 'run:7'                       # add a row
+frame = frame.drop('60339')                                # remove a row
+frame['thickness'] = 1.0                                   # add a column: `thickness` becomes a blank
+frame = frame.drop(columns='thickness')                    # remove it: `thickness` is a setting again, with no value yet
+batch.put(frame)                                           # replaces the table; the blanks follow its columns
+batch.put(batch.frame())                                   # changes nothing and writes nothing
 ```
 
-`put` refuses the whole table for a key that is empty or used twice, and for a cell that does not have the type of its column. Each action of the page is `put` with one such line before it. A table file of the page and the CSV of the command are this frame as text.
+`put` refuses the whole table for a key that is empty or used twice, and for a cell that does not have the type of its column. It keeps the blanks of the template equal to the parameter columns of the table, so the columns are said in one place. Each action of the page is `put` with one such line before it. A table file of the page and the CSV of the command are this frame as text.
 
 Removing a row drops it. Its records stay under the label, as every record does, and show again if a row with that key is added.
 
 ### Making a batch
 
-The first rows are an argument of making the batch, as its first settings are. Where they come from is the business of whoever makes it:
+The first rows are an argument of making the batch, as its first settings are; the parameter columns of the rows are its blanks. Where they come from is the business of whoever makes it:
 
 ```python
 frame = table_of(source.rows(files))                     # rows from the files: code of the application
@@ -120,8 +134,8 @@ A cell that names a file that is not found is marked when the table is shown, an
 ### What is kept
 
 ```
-definitions/labels/20261118-130204/header.json     spec, title, description
-definitions/labels/20261118-130204/settings.json   a template: the settings
+definitions/labels/20261118-130204/header.json     title, description
+definitions/labels/20261118-130204/settings.json   the template, as a settings file that a person saves: spec, params, blanks
 definitions/labels/20261118-130204/rows.json       the table: the plain data of frame.to_json(orient='table')
 ```
 
@@ -131,7 +145,7 @@ pandas writes and reads the table with the types of its columns. Checked on a ta
 
 ```python
 at = rows.index.get_loc('60400')
-this, following = rows.iloc[:at], rows.iloc[at:]     # the next batch gets `following`, and the same spec and settings
+this, following = rows.iloc[:at], rows.iloc[at:]     # the next batch gets `following`, and the same template
 ```
 
 Results stay under the label of this batch (ADR 0011), so a row that moves has no result in the next batch.
@@ -147,15 +161,21 @@ Results stay under the label of this batch (ADR 0011), so a row that moves has n
 **A parameter becomes a column.**
 
 ```python
-settings['thickness']                       # 1.0, for every row
-frame['thickness'] = pd.NA                  # a column; every request is as before, no row is outdated
-frame.loc['60340', 'thickness'] = 2.0       # row 60340 is outdated; the others are not
+template.params['thickness']                # 1.0, for every row
+frame['thickness'] = 1.0                    # a column with the value of the setting in every cell
+batch.put(frame)                            # `thickness` is a blank; every request is as before, no row is outdated
+frame.loc['60340', 'thickness'] = 2.0
+batch.put(frame)                            # row 60340 is outdated; the others are not
 ```
+
+The page does the first two lines for "Make this a column". The settings form no longer shows `thickness`.
+
+**Some rows have a direct beam run.** `direct_beam` takes a file or `None`. As a column, the rows with a run name it, and the cells of the others are empty.
 
 **The command.**
 
 ```
-essapps-batch reduce iofq.yaml runs.csv -l water      # makes the batch `water`: iofq.yaml its settings, runs.csv its rows
+essapps-batch reduce iofq.yaml runs.csv -l water      # makes the batch `water`: iofq.yaml its template, runs.csv its rows
 essapps-batch reduce -l water -o done.csv             # the table, with a status and a record per row
 # edit done.csv in a spreadsheet, then:
 essapps-batch reduce -l water done.csv                # done.csv replaces the table, and its rows are reduced
@@ -170,8 +190,8 @@ The batch holds its rows as a `DataFrame`, so pandas becomes a dependency of `es
 | Concept | In pandas |
 |---|---|
 | a row, a key | a row of the frame, its index |
-| a parameter column | `[c for c in rows.columns if c in parameters]` |
-| the request of a row | `settings \| rows.loc[key, parameter_columns].dropna().to_dict()` |
+| the parameter columns | `[c for c in rows.columns if c in parameters]`, equal to `template.blanks` |
+| the request of a row | `template.fill(params=rows.loc[key, blanks].dropna().to_dict())` |
 | set, empty, add, remove | `.loc[key, column] = value`, `= pd.NA`, `.loc[key, column] = value` at a new key, `.drop(key)` |
 | the results | `records.sort_values('created').drop_duplicates('member', keep='last')` |
 | the state | `rows.join(results)`, a left join on the key |
@@ -200,27 +220,26 @@ Until then the parts of ADR 0011 on the source, the scope and Follow stand, and 
 
 - **Keep the rows derived, and cache the last scan for when the files are away.** Two models: what a person sees depends on whether the cache or the scan answered, and removing files still removes rows.
 - **Two values per cell, one that the source gave and one that a person set, and a scan that merges.** It stores the inputs of a merge in place of the table. Each row then carries what only a scan needs (`source`, `hand`, `cleared`, `added`, `removed`), and the table is not one that pandas holds or stores. It also decides the three uses of a scan above with "yes" without asking.
-- **A parameter is a column or a setting, fixed at making** (today). The header then lists the columns, a column cannot be added, and a cell needs a form for `None`.
-- **A list of the parameter columns in the header.** A second place that says what the columns of the frame say.
-- **`None` as the value of a cell**, as the text `none`. Not needed with a cell that overrides a setting, and a text column would hold a word that is not text of its parameter.
+- **A cell overrides a setting**: `settings | row.dropna()`, with an empty cell meaning "as in the settings". A second rule next to that of a template for the same two things, values for all uses and values of one use. An empty cell then depends on something outside the table.
+- **The columns fixed when the batch is made** (today). Nothing needs it: a row is outdated by the comparison of its request with its record, whatever the columns were.
+- **A list of the parameter columns in the header.** The template has it: its blanks.
+- **A word for `None` in a cell**, such as the text `none`, so that an empty cell of `direct_beam` can mean "not said yet". A text column would hold a word that is not text of its parameter, and pandas reads empty as missing in every operation.
 - **Cells as typed objects** (`FileRef`, `OutputRef`). Two forms of one value, and converters between them; see the context.
 - **Rows of plain data inside the batch, and a `DataFrame` only at its interface.** With one value per cell the frame is the table, and a second form of it needs converters and a rule for which one is right.
 
 ## Consequences
 
 - `rows.json` replaces `edits.json`. No code reads `edits.json`: a batch made before keeps its settings, and what was set by hand on it is lost.
-- `RowTable`, the layers of `Row` (`values`, `info`, `index`), the marker `EMPTY`, "set by hand", and the four converters of cells go. `Header.columns` goes.
+- `RowTable`, the layers of `Row` (`values`, `info`, `index`), the marker `EMPTY`, "set by hand", and the four converters of cells go. `Header.spec` and `Header.columns` go: the template names the spec, and its blanks are the columns.
 - A batch is shown without a scan and without its source. A batch cannot be shown in one case: the workspace binds no spec of its name.
 - A wrong value in a cell is refused when it is set or read from a table file, not when the row is reduced.
-- A change of the settings changes the request of each row with an empty cell at that parameter, and of no other row.
+- A spec cannot make a person choose between a value and `None` for each row: an empty cell of such a column is `None`. It still can for a setting.
 - A row that only wrong metadata made stays until a person removes it, and a correction of a run changes no batch (the example above).
 - The command and the page need no translation of a table: a table file is the table.
 - `put` writes the whole table. At 3000 rows that is tens of milliseconds.
-- What ADR 0011 says of the columns in the header and of `edits.json` is replaced by this. What it says of the source, the scope and Follow stands until the ADR on amending.
+- What ADR 0011 says of the spec and the columns in the header and of `edits.json` is replaced by this. What it says of the source, the scope and Follow stands until the ADR on amending.
 
 ## Open
 
 - **A note cannot have the name of a parameter.** A column `sample` is the parameter `sample` of the spec, whatever the maker of the table meant by it.
-- **One row cannot say `None` where the setting gives a value.** The setting has to say `None`, and the other rows give the value.
 - **The order of the rows** is the order of the frame, and a new row goes to its end. Whether sorting on the page changes the stored order is not decided.
-- **The blanks of a template.** The settings stay a template, the format of the settings file a person saves. Its blanks no longer say what the columns are. The command could still check that each blank is a column of the table it is given.
