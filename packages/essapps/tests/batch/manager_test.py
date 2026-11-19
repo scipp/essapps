@@ -22,7 +22,7 @@ from ess.apps.batch import (
     Source,
 )
 from ess.apps.batch.definition import settings_key, template_data
-from ess.apps.testing import FakeStore, StagedFunction
+from ess.apps.testing import FakeFiles, FakeStore, StagedFunction
 from ess.spec import function_binding
 
 from .toys import (
@@ -558,8 +558,9 @@ def test_what_was_set_by_hand_on_the_rows_that_move_goes_with_them(
         ),
         (Scope(start=2), 1, 'the stop of a scope, 1, is below its start, 2'),
         (Scope(stop=2), 3, 'the stop of a scope, 2, is below its start, 3'),
+        (Scope(stop=3), 3, '3 is the stop of the batch, so the next batch would'),
     ],
-    ids=['first', 'first-of-scope', 'below', 'above'],
+    ids=['first', 'first-of-scope', 'below', 'above', 'stop'],
 )
 def test_the_next_batch_is_refused_at_such_an_index_and_nothing_changes(
     manager: BatchManager, scanned: Batch, scope: Scope, index: Any, said: str
@@ -591,6 +592,26 @@ def test_a_next_batch_that_cannot_take_what_was_set_by_hand_is_removed_again(
     with pytest.raises(NotKept):
         manager.start_next('scan', 2, title='Afternoon')
     assert manager.headers() == before
+
+
+@pytest.mark.parametrize('clean_up', ['kept', 'refused'])
+def test_a_next_batch_whose_scan_raises_is_removed_again_and_the_batch_stays(
+    manager: BatchManager,
+    scanned: Batch,
+    fake: FakeFiles,
+    refusing: Refusing,
+    clean_up: str,
+) -> None:
+    before, rows = manager.headers(), scanned.rows
+    fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
+    if clean_up == 'refused':
+        refusing.part = 'edits'
+
+    with pytest.raises(OSError, match='half written'):
+        manager.start_next('scan', 2, title='Afternoon')
+
+    assert manager.headers() == before
+    assert manager.batch('scan').rows == rows
 
 
 def test_a_batch_removed_is_gone_with_its_definitions_and_its_records_stay(
@@ -788,7 +809,34 @@ def test_which_batch_follows_stays_if_the_definitions_refuse_a_change(
         two.follow('b')
     with pytest.raises(NotKept):
         two.follow(None)
+    assert two.following == 'a'
+
+
+def test_a_removal_that_the_definitions_refuse_leaves_the_batch_following(
+    two: BatchManager, refusing: Refusing
+) -> None:
+    two.follow('a')
+    refusing.part = 'header'
+
     with pytest.raises(NotKept):
         two.remove('a')
-    assert two.following == 'a'
+
     assert list(two.headers()) == ['a', 'b']
+    assert two.following == 'a'
+
+
+def test_a_removal_whose_end_of_follow_is_refused_leaves_none_following(
+    two: BatchManager,
+    refusing: Refusing,
+    client: Client,
+    definitions: FolderDefinitions,
+) -> None:
+    two.follow('a')
+    refusing.part = 'following'
+
+    with pytest.raises(NotKept):
+        two.remove('a')
+
+    assert list(two.headers()) == ['b']
+    assert two.following is None
+    assert _again(client, definitions).following is None

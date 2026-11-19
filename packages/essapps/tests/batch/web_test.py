@@ -1752,8 +1752,13 @@ def test_a_batch_that_cannot_be_counted_has_its_reason_and_its_source_no_outside
     assert counted.outside == {'pairs': '0 rows'}
 
 
-def test_a_count_calls_a_source_once_per_batch_of_it(
-    client: Client, definitions: FolderDefinitions, sample: Measure
+@pytest.mark.parametrize(('made', 'scans'), [(True, 1), (False, 2)])
+def test_a_count_scans_each_batch_and_one_not_made_yet_once_more(
+    client: Client,
+    definitions: FolderDefinitions,
+    sample: Measure,
+    made: bool,
+    scans: int,
 ) -> None:
     sample(1, 'water')
     calls = []
@@ -1766,13 +1771,15 @@ def test_a_count_calls_a_source_once_per_batch_of_it(
     manager = BatchManager(client, sources=sources, definitions=definitions)
     for label in ('a', 'b'):
         manager.create('plain', title=label, source='pairs', label=label)
-        manager.batch(label)
+        if made:
+            manager.batch(label)
     pages = Pages(manager)
     before = len(calls)
 
     pages.counts()
 
-    assert len(calls) - before == 2  # the rows outside come from these scans
+    # The rows outside come from these scans; making a batch scans it too.
+    assert len(calls) - before == 2 * scans
 
 
 # The scope
@@ -2042,6 +2049,42 @@ def test_the_state_shows_what_the_batch_was_made_with(http: TestClient) -> None:
     }
 
 
+def test_a_header_change_the_definitions_refuse_answers_422_and_changes_nothing(
+    http: TestClient, manager: BatchManager, refusing: Refusing
+) -> None:
+    before = state(http)
+    refusing.part = 'header'
+
+    answer = save_header(http, title='Morning', start='2')
+
+    assert (answer.status_code, answer.json()) == (
+        422,
+        {'message': "The change was not kept: ('labels', 'scan', 'header'): refused"},
+    )
+    assert manager.headers()['scan'].title == 'Scan'
+    after = state(http)
+    assert (after['title'], after['header'], after['rows']) == (
+        before['title'],
+        before['header'],
+        before['rows'],
+    )
+
+
+def test_follow_the_definitions_refuse_answers_422_and_follow_stays_off(
+    http: TestClient, manager: BatchManager, refusing: Refusing
+) -> None:
+    refusing.part = 'following'
+
+    answer = http.post('/api/follow', json={'on': True})
+
+    assert (answer.status_code, answer.json()) == (
+        422,
+        {'message': "The change was not kept: ('following',): refused"},
+    )
+    assert manager.following is None
+    assert state(http)['follow']['on'] is False
+
+
 def test_a_title_description_and_scope_saved_on_the_page_are_kept(
     http: TestClient, manager: BatchManager
 ) -> None:
@@ -2169,6 +2212,7 @@ def test_removing_the_batch_that_follows_turns_follow_off(
 def test_a_removal_the_definitions_refuse_answers_422_and_the_batch_stays(
     http: TestClient, manager: BatchManager, refusing: Refusing
 ) -> None:
+    manager.follow('scan')
     refusing.part = 'header'
 
     answer = http.post('/api/batch/remove')
@@ -2178,6 +2222,7 @@ def test_a_removal_the_definitions_refuse_answers_422_and_the_batch_stays(
         "The change was not kept: ('labels', 'scan', 'header'): refused"
     )
     assert list(manager.headers()) == ['scan']
+    assert manager.following == 'scan'
 
 
 def test_another_page_of_a_removed_batch_answers_404_at_its_next_poll(

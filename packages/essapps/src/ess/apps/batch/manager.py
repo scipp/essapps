@@ -38,6 +38,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Collection, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import replace
 from typing import Any
 
@@ -51,6 +52,7 @@ from .definition import (
     FOLLOWING,
     DefinitionStore,
     Header,
+    NotKept,
     edits_key,
     following_data,
     following_of,
@@ -409,13 +411,14 @@ class BatchManager:
         added by hand stay, and so do the results, under ``label``.
 
         It raises what :meth:`batch` and :meth:`create` raise, and
-        ``ValueError`` if ``index`` is below the start or above the stop of
-        the scope of the batch, or if the batch holds no row of the scan
-        before ``index``, which would leave it none; with the batch of
-        ``label`` as it was. The next batch is made first; if its scan
-        raises, or it cannot take what was set by hand, it is removed again
-        (:meth:`remove`) and the error raised, since a batch that cannot be
-        shown cannot be removed on a page.
+        ``ValueError`` if ``index`` is below the start of the scope of the
+        batch, or at or above its stop, which would leave the next batch no
+        row, or if the batch holds no row of the scan before ``index``, which
+        would leave it none; with the batch of ``label`` as it was. The next
+        batch is made first; if its scan raises, or it cannot take what was
+        set by hand, it is removed again (:meth:`remove`) and the error
+        raised, since a batch that cannot be shown cannot be removed on a
+        page.
         """
         batch = self.batch(label)
         header = self._headers[label]
@@ -425,6 +428,10 @@ class BatchManager:
                 f'the batch holds no row before {index}, so it would then hold none'
             )
         scope = _scope_of(batch.source, Scope(start=index, stop=header.scope.stop))
+        if scope.start == scope.stop:
+            raise ValueError(
+                f'{index} is the stop of the batch, so the next batch would hold no row'
+            )
         rows = batch.rows
         moving = {row.key for row in rows.scan if scope.holds(row)}
         made = self.create(
@@ -443,7 +450,9 @@ class BatchManager:
                 removed=rows.removed & moving,
             )
         except Exception:
-            self.remove(made)
+            # The first error is what to say, not a refused clean-up.
+            with suppress(NotKept):
+                self.remove(made)
             raise
         self.change(label, scope=ended)
         return made
@@ -460,10 +469,13 @@ class BatchManager:
         """
         if label not in self._headers:
             raise KeyError(label)
-        if label == self._following:
-            self.follow(None)
         self._definitions.delete(header_key(label))
         del self._headers[label]
+        # A kept label without a header counts as none, so if this write is
+        # refused, none follows after a restart either.
+        if label == self._following:
+            self._following = None
+            self._definitions.save(FOLLOWING, following_data(None))
         if (batch := self._batches.pop(label, None)) is not None:
             batch.close()
         self._definitions.delete(edits_key(label))

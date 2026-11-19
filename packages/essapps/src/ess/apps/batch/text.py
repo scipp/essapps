@@ -174,7 +174,9 @@ def checked_settings(batch: Batch, template: Template) -> dict[str, Any]:
     if theirs.version != ours.version:
         raise ValueError(
             f'it holds the settings of version {theirs.version} of {ours.name}, '
-            f'not of version {ours.version}'
+            f'not of version {ours.version}; the settings of one version may '
+            'mean something else in another, so check them, and set the '
+            f'version in the template to {ours.version}'
         )
     if set(template.blanks) != set(batch.columns):
         raise ValueError(

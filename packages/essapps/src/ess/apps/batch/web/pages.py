@@ -122,9 +122,10 @@ class Pages:
     failure:
         What the last step of Follow raised, ``None`` if it raised nothing.
     refused:
-        Why the last step of Follow that did not raise refused rows, by key
-        (:attr:`~ess.apps.batch.auto.Automatic.refused`); emptied when a
-        page turns Follow on and when it applies settings.
+        The label of the batch that the last step of Follow that did not
+        raise was on, and why it refused rows, by key
+        (:attr:`~ess.apps.batch.auto.Automatic.refused`); said only while
+        that batch follows, and emptied when its page applies settings.
     """
 
     def __init__(
@@ -154,7 +155,7 @@ class Pages:
         self._listing: Listing | None = None
         self.corrected = 0
         self.failure: str | None = None
-        self.refused: dict[str, str] = {}
+        self.refused: tuple[str | None, dict[str, str]] = (None, {})
         self._pages: dict[str, Page] = {}
 
     def page(self, label: str) -> Page:
@@ -209,7 +210,7 @@ class Pages:
             try:
                 loop = Automatic(self.manager.batch(label))
                 loop.step()
-                self.refused = loop.refused
+                self.refused = (label, loop.refused)
                 self.failure = None
             except Exception as error:  # the next step tries again
                 self.failure = f'Follow could not step: {str(error) or repr(error)}'
@@ -342,12 +343,12 @@ class Pages:
         Why Follow could not submit each row of ``states`` that its next step
         would submit again, by key; none unless the batch of ``label`` follows.
         """
-        source = self.manager.batch(label).source
-        if source is None or self.manager.following != label:
+        source, (of, refused) = self.manager.batch(label).source, self.refused
+        if source is None or self.manager.following != label or of != label:
             return {}
         reasons = {
             key: f'Follow could not reduce it: {forms.message(reason)}'
-            for key, reason in self.refused.items()
+            for key, reason in refused.items()
         }
         return refused_again(states, source.fills, reasons)
 
@@ -456,10 +457,11 @@ class Pages:
         source that no batch shows. Every page and Follow wait while it
         scans.
 
-        It makes every batch not made yet, which scans it, and scans every
-        batch with a source, so the rows of each batch are those of the files
-        now. While the settings of a batch are refused, its rows are as
-        :meth:`~ess.apps.batch.Batch.results` gives them. A row counts as
+        It scans every batch with a source, so the rows of each batch are
+        those of the files now. A batch not made yet is made first, which
+        scans it too, so it is scanned twice. While the settings of a batch
+        are refused, its rows are as :meth:`~ess.apps.batch.Batch.results`
+        gives them. A row counts as
         shown if any batch of its source shows it, so a row removed by hand,
         or outside a scope, counts as not shown only if every batch of the
         source removed it or leaves it out. A source is called once more only

@@ -911,7 +911,6 @@ class Page:
             self.pages.manager.follow(self.label)
         except ValueError as error:
             raise Problem(f'{why(error)}.') from None
-        self.pages.refused = {}
         self.pages.tick()
         return 'Following.'
 
@@ -955,7 +954,7 @@ class Page:
         # Follow tries every row again with these at its next step.
         self.refused = [e for e in self.refused if e.entry]
         if self._follows():
-            self.pages.refused = {}
+            self.pages.refused = (None, {})
         return 'Applied the settings.'
 
     @_action

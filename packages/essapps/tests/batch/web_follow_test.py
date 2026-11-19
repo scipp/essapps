@@ -768,8 +768,14 @@ def test_follow_stays_on_the_batch_that_ended_and_the_rows_that_moved_wait(
     assert statuses(done(following, client)) == {'oil': 'done'}
 
 
+@pytest.mark.parametrize('turned', ['on its page', 'in code'])
 def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follows(
-    page: Page, pages: Pages, manager: BatchManager, sample: Measure, fake: FakeFiles
+    page: Page,
+    pages: Pages,
+    manager: BatchManager,
+    sample: Measure,
+    fake: FakeFiles,
+    turned: str,
 ) -> None:
     sample(1, 'water')
     bins(page, 0)
@@ -777,13 +783,16 @@ def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follo
     other = pages.page(
         manager.create(STAGED.name, title='Other', source='pairs', columns=COLUMNS)
     )
+    # No step runs on the other batch: its first step raises, or none runs.
     fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
 
-    shown = other.follow(True)
+    if turned == 'on its page':
+        shown = other.follow(True)
+    else:
+        manager.follow(other.label)
+        shown = other.state()
 
     assert statuses(refused) == {'water': 'incomplete'}
-    assert shown.follow is not None
-    assert shown.follow.failure == 'Follow could not step: half written'
     assert statuses(shown) == {'water': 'ready'}
 
 
