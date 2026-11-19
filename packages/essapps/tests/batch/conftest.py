@@ -117,13 +117,13 @@ def sample(fake: FakeFiles) -> toys.Measure:
 
 @pytest.fixture
 def batch(client: Client) -> Iterator[Batch]:
+    """
+    A staged batch of :data:`toys.COLUMNS` with the rows that ``toys.PAIRS``
+    makes before a file is measured: none. ``batch.put(toys.rows(client))``
+    takes those measured since.
+    """
     batch = Batch(
-        client,
-        toys.STAGED,
-        columns=toys.COLUMNS,
-        label='scan',
-        source=toys.PAIRS,
-        staged=True,
+        client, toys.STAGED, label='scan', rows=toys.rows(client), staged=True
     )
     yield batch
     batch.close()
@@ -148,13 +148,17 @@ def manager(client: Client, refusing: toys.Refusing) -> BatchManager:
 
 
 @pytest.fixture
-def label(manager: BatchManager) -> str:
-    """A batch of ``manager`` with the spec, columns and label of ``batch``."""
+def label(manager: BatchManager, client: Client) -> str:
+    """
+    A batch of ``manager`` with the spec, columns and label of ``batch``, made
+    from the source ``pairs`` before a file is measured: it has no rows, and
+    Follow or ``manager.take`` adds those measured since.
+    """
     return manager.create(
         toys.STAGED.name,
         title='Scan',
+        rows=toys.rows(client),
         source='pairs',
-        columns=toys.COLUMNS,
         label='scan',
     )
 

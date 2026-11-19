@@ -10,7 +10,6 @@ from pydantic import BaseModel
 
 from ess.apps import Record, Request, SpecId, Status
 from ess.apps.batch import (
-    Row,
     RowState,
     earlier_settings,
     left_to_reduce,
@@ -50,30 +49,27 @@ def record(
     )
 
 
-def states(rows: list[Row], *found: Record, **status: Status) -> dict[str, RowState]:
-    return row_states(rows, Model, COLUMNS, {r.member: r for r in found}, status)
+def row(**cells: Any) -> dict[str, Any]:
+    """The cells of a row as a batch gives them: an empty thickness its default."""
+    return {'thickness': 1.0, **cells}
+
+
+def states(
+    cells: dict[str, dict[str, Any]], *found: Record, **status: Status
+) -> dict[str, RowState]:
+    return row_states(cells, COLUMNS, {r.member: r for r in found}, status)
 
 
 def test_a_row_with_an_empty_required_cell_is_not_ready() -> None:
-    found = states([Row('a', {'sample': 'x'}), Row('b')])
+    found = states({'a': row(sample='x'), 'b': row()})
 
     assert ready(found) == ['a']
     assert [(e.entry, e.loc) for e in found['b'].problems] == [('b', ('sample',))]
 
 
-def test_an_empty_cell_of_a_column_with_a_default_is_ready() -> None:
-    assert ready(states([Row('a', {'sample': 'x'})])) == ['a']
-
-
-def test_a_value_outside_the_columns_is_a_problem() -> None:
-    found = states([Row('a', {'sample': 'x', 'shared': 2})])
-
-    assert [e.loc for e in found['a'].problems] == [('shared',)]
-
-
 def test_a_cell_reading_a_failed_record_is_a_problem() -> None:
     ref = OutputRef(record='c', output='centre')
-    found = states([Row('a', {'sample': ref})], c=Status.FAILED)
+    found = states({'a': row(sample=ref)}, c=Status.FAILED)
 
     assert ready(found) == []
     assert 'failed' in found['a'].problems[0].msg
@@ -82,7 +78,7 @@ def test_a_cell_reading_a_failed_record_is_a_problem() -> None:
 def test_a_cell_reading_a_pending_record_is_ready() -> None:
     ref = OutputRef(record='c', output='centre')
 
-    assert ready(states([Row('a', {'sample': ref})], c=Status.PENDING)) == ['a']
+    assert ready(states({'a': row(sample=ref)}, c=Status.PENDING)) == ['a']
 
 
 @pytest.mark.parametrize(
@@ -95,13 +91,13 @@ def test_a_cell_reading_a_pending_record_is_ready() -> None:
     ],
 )
 def test_what_is_left_to_do_by_status(status: Status, left: bool) -> None:
-    found = states([Row('a', {'sample': 'x'})], record('1', 'a'), **{'1': status})
+    found = states({'a': row(sample='x')}, record('1', 'a'), **{'1': status})
 
     assert left_to_reduce(found, COLUMNS) == (['a'] if left else [])
 
 
 def test_a_row_without_a_result_is_left_to_do() -> None:
-    assert left_to_reduce(states([Row('a', {'sample': 'x'})]), COLUMNS) == ['a']
+    assert left_to_reduce(states({'a': row(sample='x')}), COLUMNS) == ['a']
 
 
 @pytest.mark.parametrize(
@@ -111,8 +107,7 @@ def test_an_outdated_row_is_left_to_do_and_shown_as_outdated(
     outdated: dict[str, Any],
 ) -> None:
     found = row_states(
-        [Row('a', {'sample': 'x'})],
-        Model,
+        {'a': row(sample='x')},
         COLUMNS,
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
@@ -131,8 +126,7 @@ def test_a_failed_or_cancelled_row_reads_so_when_its_request_changed(
     status: Status, outdated: dict[str, Any]
 ) -> None:
     found = row_states(
-        [Row('a', {'sample': 'x'})],
-        Model,
+        {'a': row(sample='x')},
         COLUMNS,
         {'a': record('1', 'a')},
         {'1': status},
@@ -162,8 +156,7 @@ def test_a_result_that_differs_only_at_settings_is_not_left_to_reduce(
     left: bool,
 ) -> None:
     found = row_states(
-        [Row('a', {'sample': 'x'})],
-        Model,
+        {'a': row(sample='x')},
         COLUMNS,
         {'a': record('1', 'a')},
         {'1': status},
@@ -177,8 +170,7 @@ def test_a_result_that_differs_only_at_settings_is_not_left_to_reduce(
 
 def test_a_row_that_cannot_run_is_not_one_of_earlier_settings() -> None:
     found = row_states(
-        [Row('a')],
-        Model,
+        {'a': row()},
         COLUMNS,
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
@@ -192,8 +184,7 @@ def test_a_row_that_cannot_run_is_not_one_of_earlier_settings() -> None:
 def earlier_and_new() -> dict[str, RowState]:
     """Row ``a`` reduced with earlier settings, ``b`` without a result."""
     return row_states(
-        [Row('a', {'sample': 'x'}), Row('b', {'sample': 'y'})],
-        Model,
+        {'a': row(sample='x'), 'b': row(sample='y')},
         COLUMNS,
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
@@ -217,7 +208,7 @@ def test_refused_again_keeps_the_reasons_of_the_rows_a_step_submits_again() -> N
 
 
 def test_a_row_without_a_result_is_left_to_reduce() -> None:
-    found = states([Row('a', {'sample': 'x'}), Row('b')])
+    found = states({'a': row(sample='x'), 'b': row()})
 
     assert left_to_reduce(found, COLUMNS) == ['a']
 
@@ -238,8 +229,7 @@ def test_a_row_with_a_result_is_not_reduced_by_a_step(
     status: Status, other: dict[str, Any]
 ) -> None:
     found = row_states(
-        [Row('a', {'sample': 'x'})],
-        Model,
+        {'a': row(sample='x')},
         COLUMNS,
         {'a': record('1', 'a')},
         {'1': status},
@@ -254,7 +244,7 @@ def test_a_ready_row_without_a_result_is_reduced_by_a_step(
     changed: dict[str, frozenset[str]] | None,
 ) -> None:
     found = row_states(
-        [Row('a', {'sample': 'x'}), Row('b')], Model, COLUMNS, {}, {}, changed=changed
+        {'a': row(sample='x'), 'b': row()}, COLUMNS, {}, {}, changed=changed
     )
 
     assert not_reduced(found) == ['a']
@@ -263,8 +253,7 @@ def test_a_ready_row_without_a_result_is_reduced_by_a_step(
 def test_a_refused_value_is_a_problem_of_its_row() -> None:
     reason = FieldError('a', ('thickness',), 'must be positive')
     found = row_states(
-        [Row('a', {'sample': 'x'})],
-        Model,
+        {'a': row(sample='x')},
         COLUMNS,
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
@@ -300,8 +289,7 @@ def test_a_list_in_another_order_differs() -> None:
 
 def not_compared() -> dict[str, RowState]:
     return row_states(
-        [Row('a', {'sample': 'x'})],
-        Model,
+        {'a': row(sample='x')},
         COLUMNS,
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},

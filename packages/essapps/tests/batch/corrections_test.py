@@ -3,11 +3,11 @@
 """Corrections reach what lists files and what makes rows."""
 
 from ess.apps import Client, Listing, Selector
-from ess.apps.batch import Batch, CorrectedFiles, ready
+from ess.apps.batch import CorrectedFiles, rows_of
 from ess.apps.testing import FakeFiles
 from ess.spec import File
 
-from .toys import COLUMNS, PAIRS, STAGED, Measure
+from .toys import PAIRS, Measure
 
 
 def test_a_corrected_file_is_listed_as_corrected(
@@ -57,17 +57,15 @@ def test_a_form_offers_a_file_as_corrected(
     assert list(Listing(client).files(marker).values()) == [run]
 
 
-def test_a_correction_reaches_the_rows_at_the_next_scan(
+def test_a_correction_reaches_the_rows_a_source_makes(
     fake: FakeFiles, files: CorrectedFiles, client: Client, sample: Measure
 ) -> None:
-    run = sample(1, 'water', partner=False)
+    sample(1, 'water', partner=False)
     partner = fake.measure(2, 1.0, role='sample', sample='water')
-    batch = Batch(client, STAGED, columns=COLUMNS, label='scan', source=PAIRS)
-    batch.scan()
-    assert ready(batch.state()) == []
+    assert list(rows_of(client, PAIRS).index) == ['1', '2']
 
     files.correct(partner, role='transmission')
-    batch.scan()
 
-    assert ready(batch.state()) == ['1']
-    assert batch.rows['1'].values == {'sample': run, 'transmission': partner}
+    made = rows_of(client, PAIRS)
+    assert list(made.index) == ['1']
+    assert made.loc['1', 'transmission'] == str(partner)

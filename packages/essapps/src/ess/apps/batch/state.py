@@ -15,8 +15,12 @@ with :func:`differs` on both as a record holds them. A result is *outdated*
 (:attr:`RowState.spec_changed`), or if the request changed at any parameter
 (:func:`row_states`).
 
-A value refused when resolved is a problem of the row, not a change: the row
-cannot run with it, and a change would offer it to :func:`left_to_reduce`.
+The cells of a row are given here as its request takes them, each empty cell
+given its default, or ``None`` if its parameter takes ``None``
+(:meth:`~.reduction.Batch.state`). A column left out of them is empty, and a
+problem of the row. A value refused when resolved is a problem of the row, not
+a change: the row cannot run with it, and a change would offer it to
+:func:`left_to_reduce`.
 
 Automatic reduction reduces the rows of :func:`not_reduced`: ready, and
 without a result. A row with a result is left to a person, whether it is
@@ -31,14 +35,11 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
-from pydantic import BaseModel
-
 from ess.spec import OutputRef
 from ess.spec.refs import iter_refs
 
 from ..errors import FieldError
 from ..records import Record, Status
-from .table import Row
 
 _RERUN = (Status.FAILED, Status.CANCELLED)
 
@@ -87,29 +88,20 @@ class RowState:
 
 
 def problems(
-    row: Row,
-    model: type[BaseModel],
+    key: str,
+    cells: Mapping[str, Any],
     columns: Collection[str],
     status: Mapping[str, Status],
 ) -> tuple[FieldError, ...]:
     """
-    Why ``row`` cannot be reduced: a value at a name that is not a column, an
-    empty cell of a column with no default, or a reference to a record that
+    Why the row of ``key`` cannot be reduced: a column that ``cells`` leave
+    out, which is empty and has no value, or a reference to a record that
     failed or was cancelled, per ``status`` by record ID.
     """
-    found = [
-        FieldError(row.key, (name,), 'not a column')
-        for name in row.values
-        if name not in columns
-    ]
+    found = [FieldError(key, (c,), 'empty') for c in columns if c not in cells]
     found += [
-        FieldError(row.key, (column,), 'empty')
-        for column in columns
-        if column not in row.values and model.model_fields[column].is_required()
-    ]
-    found += [
-        FieldError(row.key, loc, f'the record it reads is {status[ref.record]}')
-        for loc, ref in iter_refs(row.values)
+        FieldError(key, loc, f'the record it reads is {status[ref.record]}')
+        for loc, ref in iter_refs(cells)
         if isinstance(ref, OutputRef) and status.get(ref.record) in _RERUN
     ]
     return tuple(found)
@@ -124,12 +116,12 @@ def results(records: Iterable[Record]) -> dict[str, Record]:
     return {r.member: r for r in records if r.member is not None}
 
 
-def references(rows: Iterable[Row]) -> set[str]:
-    """The IDs of the records that the cells of ``rows`` reference."""
+def references(cells: Iterable[Mapping[str, Any]]) -> set[str]:
+    """The IDs of the records that ``cells``, those of some rows, reference."""
     return {
         ref.record
-        for row in rows
-        for _, ref in iter_refs(row.values)
+        for row in cells
+        for _, ref in iter_refs(row)
         if isinstance(ref, OutputRef)
     }
 
@@ -146,8 +138,7 @@ def differs(
 
 
 def row_states(
-    rows: Iterable[Row],
-    model: type[BaseModel],
+    cells: Mapping[str, Mapping[str, Any]],
     columns: Collection[str],
     found: Mapping[str, Record],
     status: Mapping[str, Status],
@@ -156,29 +147,30 @@ def row_states(
     spec_changed: AbstractSet[str] = frozenset(),
 ) -> dict[str, RowState]:
     """
-    The state of each row. ``found`` holds their results by key, ``status`` the
-    status of those and of the records their cells reference, by record ID,
-    ``changed`` the names at which a row differs from its result, ``None`` if
-    the rows were not compared with their results, ``refused``
-    the reasons a row's cells were refused when resolved, and ``spec_changed``
-    the keys whose result is of another spec.
+    The state of each row of ``cells``, which hold its cells by key.
+    ``found`` holds their results by key, ``status`` the status of those and
+    of the records their cells reference, by record ID, ``changed`` the names
+    at which a row differs from its result, ``None`` if the rows were not
+    compared with their results, ``refused`` the reasons a row's cells were
+    refused when resolved, and ``spec_changed`` the keys whose result is of
+    another spec.
     """
     refused = refused or {}
     states = {}
-    for row in rows:
-        record = found.get(row.key)
-        names = None if changed is None else changed.get(row.key, frozenset())
-        if row.key in spec_changed:
+    for key, row in cells.items():
+        record = found.get(key)
+        names = None if changed is None else changed.get(key, frozenset())
+        if key in spec_changed:
             outdated: bool | None = True
         else:
             outdated = None if names is None else bool(names)
-        states[row.key] = RowState(
-            key=row.key,
+        states[key] = RowState(
+            key=key,
             record=record,
             status=None if record is None else status[record.id],
-            problems=problems(row, model, columns, status) + refused.get(row.key, ()),
+            problems=problems(key, row, columns, status) + refused.get(key, ()),
             changed=names,
-            spec_changed=row.key in spec_changed,
+            spec_changed=key in spec_changed,
             outdated=outdated,
         )
     return states

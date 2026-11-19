@@ -8,16 +8,20 @@ import threading
 from collections.abc import Callable, Sequence
 from typing import Annotated, Any
 
+import pandas as pd
 from pydantic import BaseModel, Field
 
+from ess.apps import Client
 from ess.apps.batch import (
+    Batch,
     DefinitionStore,
     FileInfo,
     NotKept,
-    Row,
     Source,
+    rows_of,
 )
 from ess.apps.batch.definition import Key
+from ess.apps.batch.table import KEY
 from ess.spec import FileRef, Referenced, RunFile, WorkflowSpec
 
 
@@ -152,45 +156,61 @@ class Refusing:
             raise NotKept(f'{key}: refused')
 
 
-def pair(files: Sequence[FileInfo]) -> list[Row]:
-    """A row per sample run, keyed by run, with the sample's transmission run."""
+def pair(files: Sequence[FileInfo]) -> pd.DataFrame:
+    """
+    A row per sample run, keyed by run, with the sample's transmission run;
+    the run and the name of the sample as notes.
+    """
     partner = {
-        f.metadata['sample']: f.ref
+        f.metadata['sample']: str(f.ref)
         for f in files
         if f.metadata.get('role') == 'transmission'
     }
-    rows = []
-    for f in files:
-        if f.metadata.get('role') == 'sample' and not f.metadata.get('exclude'):
-            values = {'sample': f.ref}
-            if f.metadata['sample'] in partner:
-                values['transmission'] = partner[f.metadata['sample']]
-            rows.append(
-                Row(
-                    str(f.metadata['run']),
-                    values,
-                    info={'name': f.metadata['sample']},
-                    index=int(f.metadata['run']),
-                )
-            )
-    return rows
+    rows = [
+        {
+            KEY: str(f.metadata['run']),
+            'run': f.metadata['run'],
+            'name': f.metadata['sample'],
+            'sample': str(f.ref),
+            'transmission': partner.get(f.metadata['sample']),
+        }
+        for f in files
+        if f.metadata.get('role') == 'sample' and not f.metadata.get('exclude')
+    ]
+    columns = [KEY, 'run', 'name', 'sample', 'transmission']
+    return pd.DataFrame.from_records(rows, columns=columns).set_index(KEY)
 
 
-def samples(files: Sequence[FileInfo]) -> list[Row]:
+def samples(files: Sequence[FileInfo]) -> pd.DataFrame:
     """A row per sample run, keyed by run."""
-    return [
-        Row(str(f.metadata['run']), {'sample': f.ref})
+    rows = [
+        {KEY: str(f.metadata['run']), 'sample': str(f.ref)}
         for f in files
         if f.metadata.get('role') == 'sample'
     ]
+    return pd.DataFrame.from_records(rows, columns=[KEY, 'sample']).set_index(KEY)
 
 
-PAIRS = Source(
-    pair, fills=('sample', 'transmission'), row_name='name', index_title='Run'
-)
+PAIRS = Source(pair, fills=('sample', 'transmission'))
 SAMPLES = Source(samples, fills=('sample',))
 SOURCES = {'pairs': PAIRS}
 STAGED_NAMES = frozenset({STAGED.name})
 """The specs whose batches run through a stage."""
 
 Measure = Callable[..., FileRef]
+
+
+def rows(client: Client) -> pd.DataFrame:
+    """
+    The rows that :data:`PAIRS` makes from the files now, with an empty column
+    ``thickness``: the rows of a batch whose columns are :data:`COLUMNS`.
+    """
+    return rows_of(client, PAIRS).assign(thickness=None)
+
+
+def edit(batch: Batch, key: str, **cells: Any) -> None:
+    """Set cells of the row of ``key``, ``pd.NA`` to empty one; a new key adds a row."""
+    frame = batch.frame()
+    for column, cell in cells.items():
+        frame.loc[key, column] = cell
+    batch.put(frame)

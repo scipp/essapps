@@ -4,57 +4,52 @@
 Where the definition of batches is kept: what a person makes of them, so that a
 batch made again, after a restart or in another process, has it.
 
-The definition is these tables, each with one writer. The settings of a batch
-that the manager makes are written by the manager once, when it makes the
-batch, before any ``Batch`` of it exists, and by ``Batch.settings`` from then
-on:
+The definition is these tables, each with one writer. The settings and the
+rows of a batch that the manager makes are written by the manager once, when
+it makes the batch, before any ``Batch`` of it exists, and by the ``Batch``
+from then on:
 
     corrections   metadata of a file set by hand, by file     CorrectedFiles
-    edits         cells set, rows added or removed, by key    Batch.rows
-    settings      the parameters that are not columns         Batch.settings
-    header        spec, columns, source, title, description,  the manager
-                  scope
-    following     the label of the batch that follows         the manager
+    header        title, description                          the manager
+    settings      the template: spec, settings, blanks        Batch.settings, Batch.put
+    rows          the table                                  Batch.put
+    source        the source a batch was made from, and the  the manager
+                  keys of it that the batch has considered
+    following     the label of the batch that follows        the manager
 
 The corrections are about files, and every batch of a workspace reads the
 files through one :class:`~.corrections.CorrectedFiles`, so a workspace has
-one table of them. The following label is the workspace's too. The edits, the
-settings and the header are of a label. A :class:`DefinitionStore`, *the
-definitions*, keeps each table as plain data under a key::
+one table of them. The following label is the workspace's too. The others are
+of a label. A :class:`DefinitionStore`, *the definitions*, keeps each table as
+plain data under a key::
 
     ('corrections',)
     ('following',)
-    ('labels', label, 'edits')
-    ('labels', label, 'settings')
     ('labels', label, 'header')
+    ('labels', label, 'settings')
+    ('labels', label, 'rows')
+    ('labels', label, 'source')
 
-and its writer saves it whole at each change, and reads it when it is made.
-It can forget a table (``delete``) and list the labels that have a table
-(``labels``).
-Only :class:`FolderDefinitions` knows that the definitions are files. A batch
-and a file source without definitions keep their tables in memory.
+and its writer saves it whole at each change. It can forget a table
+(``delete``) and list the labels that have a table (``labels``). Only
+:class:`FolderDefinitions` knows that the definitions are files. A batch and a
+file source without definitions keep their tables in memory.
 
 The plain data of each table, as the functions below give and read it::
 
     corrections   {'pid:20.500.12269/abc': {'role': 'sample'}}
-    edits         {'added': [{'key': 'mine', 'values': {...}, 'info': {...}}],
-                   'edited': {'60339': {'thickness': 2.0}},
-                   'cleared': {'60339': ['sample_transmission']},
-                   'removed': ['60340']}
-    settings      the template of the settings, as a template file holds it
-    header        {'spec': 'loki-iofq', 'columns': ['sample', 'sample_transmission'],
-                   'source': 'sample-runs', 'title': 'Sample runs', 'description': '',
-                   'scope': {'start': 60339, 'stop': None}}
+    header        {'title': 'Sample runs', 'description': ''}
+    settings      the template, as a template file holds it
+    rows          {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
+    source        {'source': 'sample-runs', 'considered': ['60337', '60338']}
     following     {'label': '20261118-130204'}, or {'label': None}
 
-A value is in the JSON form that a record holds, a file as
-``{'@ref': 'file', 'file': 'pid:...'}``. The edits hold only what was set by
-hand, so a cell from the scan keeps following the scan. The settings are a
-template, in the format of the file that a person saves from a page.
-:func:`settings_of` checks the name of its spec, and reads neither its
-version nor its blanks: the header says the columns. Each table is
-checked when read: data of another shape raises ``ValueError`` naming the
-entry, and :class:`FolderDefinitions` adds the file.
+The settings are a template, in the format of the file that a person saves
+from a page. Its blanks are written so that the file is a template a person
+can load, and are not read: the parameter columns of the rows are the blanks.
+The rows are :func:`~.table.data_of` of the table. Each table is checked when
+read: data of another shape raises ``ValueError`` naming the entry, and
+:class:`FolderDefinitions` adds the file.
 """
 
 from __future__ import annotations
@@ -63,7 +58,7 @@ import os
 import tempfile
 from collections.abc import Callable, Mapping
 from contextlib import suppress
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 from urllib.parse import quote, unquote
@@ -71,11 +66,9 @@ from urllib.parse import quote, unquote
 from pydantic import TypeAdapter, ValidationError
 from pydantic_core import from_json, to_json
 
-from ess.spec import FileRef, WorkflowSpec
-from ess.spec.refs import ParamsError, map_refs
+from ess.spec import FileRef
 
 from ..records import Template
-from .table import EMPTY, Row, RowTable, Scope
 
 type Key = tuple[str, ...]
 """Names a table: ``('corrections',)``, or ``('labels', label, part)``."""
@@ -84,16 +77,20 @@ CORRECTIONS: Key = ('corrections',)
 FOLLOWING: Key = ('following',)
 
 
-def edits_key(label: str) -> Key:
-    return ('labels', label, 'edits')
+def header_key(label: str) -> Key:
+    return ('labels', label, 'header')
 
 
 def settings_key(label: str) -> Key:
     return ('labels', label, 'settings')
 
 
-def header_key(label: str) -> Key:
-    return ('labels', label, 'header')
+def rows_key(label: str) -> Key:
+    return ('labels', label, 'rows')
+
+
+def source_key(label: str) -> Key:
+    return ('labels', label, 'source')
 
 
 class NotKept(OSError):
@@ -133,9 +130,10 @@ class FolderDefinitions:
     workspace's folder (see :mod:`ess.apps.folder`)::
 
         definitions/corrections.json
-        definitions/labels/auto%2Fiofq/edits.json
-        definitions/labels/auto%2Fiofq/settings.json
         definitions/labels/auto%2Fiofq/header.json
+        definitions/labels/auto%2Fiofq/settings.json
+        definitions/labels/auto%2Fiofq/rows.json
+        definitions/labels/auto%2Fiofq/source.json
         definitions/following.json
 
     Each name of a key is a folder or a file, with ``/``, ``%`` and ``.``
@@ -234,144 +232,59 @@ def _checked[T](adapter: TypeAdapter[T], data: Any) -> T:
         raise ValueError('; '.join(said)) from None
 
 
-class _Added(TypedDict):
-    key: str
-    values: dict[str, Any]
-    info: dict[str, str]
-
-
-class _Edits(TypedDict, total=False):
-    added: list[_Added]
-    edited: dict[str, dict[str, Any]]
-    cleared: dict[str, list[str]]
-    removed: list[str]
-
-
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True)
 class Header:
     """
-    A batch as the manager keeps it: what it computes, where its rows come
-    from and which of them it holds, and what it is called. A header kept
-    without a scope holds every row. Raises ``ValueError`` for a title that
-    is empty or only spaces.
+    What a batch is called. Raises ``ValueError`` for a title that is empty
+    or only spaces.
 
     Parameters
     ----------
-    spec:
-        The name of the spec; the version is the one that the workspace binds.
-    columns:
-        The parameters that each row gives.
-    source:
-        The name of a registered source; ``None`` for rows added by hand only.
     title:
         What the batch is called.
     description:
         What a person says of the batch.
-    scope:
-        The rows of the source that the batch holds.
     """
 
-    spec: str
-    columns: tuple[str, ...]
-    source: str | None = None
     title: str
     description: str = ''
-    scope: Scope = field(default_factory=Scope)
 
     def __post_init__(self) -> None:
         if not self.title.strip():
             raise ValueError('a batch has a title that is not empty')
 
 
+@dataclass(frozen=True)
+class FromSource:
+    """
+    What a batch made from a source keeps of it: the name of the source, and
+    the keys of its rows that the batch has considered, those put into the
+    batch from the source or left out when the batch was made.
+    """
+
+    source: str
+    considered: frozenset[str]
+
+
 class _Following(TypedDict):
     label: str | None
 
 
-_EDITS = TypeAdapter(_Edits)
 _HEADER = TypeAdapter(Header)
+_FROM_SOURCE = TypeAdapter(FromSource)
 _FOLLOWING = TypeAdapter(_Following)
 _CORRECTIONS = TypeAdapter(dict[str, dict[str, Any]])
 _TEMPLATE = TypeAdapter(Template)
 
 
-def _values(values: Mapping[str, Any]) -> dict[str, Any]:
-    """Cells in their JSON form as the values a row holds: each file a FileRef."""
-    return map_refs(values, lambda ref: ref)
-
-
-def edits_data(rows: RowTable) -> dict[str, Any]:
-    """What was set by hand on ``rows``, as plain data (see the module)."""
-    edited: dict[str, Mapping[str, Any]] = {}
-    cleared: dict[str, list[str]] = {}
-    for key, cells in rows.edits.items():
-        if not any(v is EMPTY for v in cells.values()):
-            edited[key] = cells  # most edits clear nothing
-            continue
-        if given := {c: v for c, v in cells.items() if v is not EMPTY}:
-            edited[key] = given
-        cleared[key] = [c for c, v in cells.items() if v is EMPTY]
-    return {
-        'added': [
-            {'key': r.key, 'values': dict(r.values), 'info': dict(r.info)}
-            for r in rows.added
-        ],
-        'edited': edited,
-        'cleared': cleared,
-        'removed': sorted(rows.removed),
-    }
-
-
-def edits_of(data: Any) -> RowTable:
-    """
-    The table, without a scan, of the edits of :func:`edits_data`. Raises
-    ``ValueError`` naming the entry of data of another shape, and the row of a
-    value that is not one.
-    """
-    data = _checked(_EDITS, data)
-    entry = ''
-    try:
-        added = []
-        for row in data.get('added', []):
-            entry = f'row {row["key"]} added'
-            added.append(Row(row['key'], _values(row['values']), row['info']))
-        edits: dict[str, dict[str, Any]] = {}
-        for key, cells in data.get('edited', {}).items():
-            entry = f'row {key}'
-            edits[key] = _values(cells)
-        for key, columns in data.get('cleared', {}).items():
-            edits[key] = {**edits.get(key, {}), **dict.fromkeys(columns, EMPTY)}
-        return RowTable(
-            added=tuple(added), edits=edits, removed=frozenset(data.get('removed', []))
-        )
-    except (KeyError, TypeError, ParamsError) as error:
-        why = f'no {error}' if isinstance(error, KeyError) else str(error)
-        raise ValueError(f'{entry or "the edits"}: {why}') from None
-
-
 def template_data(template: Template) -> Any:
     """The template of the settings, as plain data that a template file holds."""
-    return TypeAdapter(Template).dump_python(template, mode='json')
+    return _TEMPLATE.dump_python(template, mode='json')
 
 
 def template_of(data: Any) -> Template:
     """The template of :func:`template_data`; ``ValueError`` names an entry."""
     return _checked(_TEMPLATE, data)
-
-
-def settings_of(data: Any, spec: WorkflowSpec) -> dict[str, Any]:
-    """
-    The settings in the template of :func:`template_data`, for ``spec``, of
-    any version of it: a value that ``spec`` does not take is refused when the
-    settings are resolved, as any other. Raises ``ValueError`` if the template
-    is of a spec of another name.
-    """
-    template = template_of(data)
-    if template.spec.name != spec.name:
-        raise ValueError(
-            f'settings of the spec {template.spec.name} '
-            f'version {template.spec.version}, not of {spec.name}'
-        )
-    return dict(template.params)
 
 
 def corrections_data(
@@ -399,6 +312,16 @@ def header_data(header: Header) -> dict[str, Any]:
 def header_of(data: Any) -> Header:
     """The header of :func:`header_data`; ``ValueError`` names an entry."""
     return _checked(_HEADER, data)
+
+
+def source_data(made: FromSource) -> dict[str, Any]:
+    """What a batch keeps of its source, as plain data; the keys sorted."""
+    return {'source': made.source, 'considered': sorted(made.considered)}
+
+
+def source_of(data: Any) -> FromSource:
+    """The source of :func:`source_data`; ``ValueError`` names an entry."""
+    return _checked(_FROM_SOURCE, data)
 
 
 def following_data(label: str | None) -> dict[str, Any]:
