@@ -9,9 +9,14 @@ import pandas as pd
 import pytest
 
 from ess.apps import Client, Template, Workspace
-from ess.apps.batch import Batch, CorrectedFiles
+from ess.apps.batch import (
+    Batch,
+    BatchManager,
+    CorrectedFiles,
+    FolderDefinitions,
+)
 from ess.apps.folder import open_folder
-from ess.apps.testing import FakeFiles, StagedFunction, read_file
+from ess.apps.testing import FakeFiles, FakeStore, StagedFunction, read_file
 from ess.spec import Binding, FileRef, function_binding
 
 from . import toys
@@ -80,6 +85,7 @@ def workspace(
         proposal='p1',
         files=files,
         bind=[staged_binding, plain, find, series, repeated],
+        store=FakeStore(),
     )
     yield workspace
     workspace.close()
@@ -121,6 +127,24 @@ def batch(client: Client) -> Iterator[Batch]:
     )
     yield batch
     batch.close()
+
+
+@pytest.fixture
+def definitions(tmp_path: Path) -> FolderDefinitions:
+    return FolderDefinitions(tmp_path / 'workspace')
+
+
+@pytest.fixture
+def refusing(definitions: FolderDefinitions) -> toys.Refusing:
+    return toys.Refusing(definitions)
+
+
+@pytest.fixture
+def manager(client: Client, refusing: toys.Refusing) -> BatchManager:
+    """A manager on ``definitions``, through ``refusing``, which refuses nothing."""
+    return BatchManager(
+        client, sources=toys.SOURCES, definitions=refusing, defaults=toys.DEFAULTS
+    )
 
 
 # A workspace kept in a folder of toy files, for batches from tables
