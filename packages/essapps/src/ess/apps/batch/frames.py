@@ -34,7 +34,7 @@ from ..client import Client
 from ..records import Template
 from . import state
 from .manager import bound_spec
-from .reduction import Batch, Source
+from .reduction import Batch
 from .state import RowState
 from .table import Row
 from .text import read_cell, with_named_files, write_cell
@@ -131,7 +131,9 @@ def table_of(rows: Iterable[Row], columns: Sequence[str] = ()) -> pd.DataFrame:
         records.append(
             {'key': row.key, **dict.fromkeys(columns, ''), **cells, **row.info}
         )
-    return pd.DataFrame(records, dtype=str).fillna('')
+    # A table without rows still has its columns.
+    header = None if records else ['key', *columns]
+    return pd.DataFrame(records, columns=header, dtype=str).fillna('')
 
 
 def described(files: pd.DataFrame, run_table: pd.DataFrame) -> pd.DataFrame:
@@ -188,10 +190,9 @@ The columns that :func:`reduce_batch`, :func:`batch_table`, and
 def reduce_table(
     client: Client,
     template: Template,
-    table: pd.DataFrame | None,
+    table: pd.DataFrame,
     *,
     label: str,
-    source: Source | None = None,
     staged: bool = False,
     persist: bool | Sequence[str] = False,
     remaining: bool = False,
@@ -201,7 +202,8 @@ def reduce_table(
     Reduce each row of ``table`` with ``template``, wait, and return the table
     with what came of each row (see :func:`reduce_batch`). The batch is of the
     spec of the template's name that the workspace binds, the highest version
-    if it binds several (:func:`~.manager.bound_spec`).
+    if it binds several (:func:`~.manager.bound_spec`). It keeps nothing in
+    definitions, so no manager lists it.
 
     Parameters
     ----------
@@ -211,14 +213,10 @@ def reduce_table(
         The settings, and the blanks, each a column of ``table``. A file in it
         may be named as in a table (see :mod:`.text`).
     table:
-        The rows, as :func:`rows_of` reads them, set by hand on the rows that
-        ``source`` makes from the files. ``None`` for every row that
-        ``source`` makes; the table returned is then :func:`batch_table`.
+        The rows, as :func:`rows_of` reads them.
     label:
         The label of the records. A batch is found again by it, so each batch
         has its own.
-    source:
-        Makes rows from the files, as :class:`~.reduction.Batch` takes it.
     staged:
         Run the rows through a stage.
     persist:
@@ -233,18 +231,14 @@ def reduce_table(
     SubmitError, ValueError
         As :func:`reduce_batch` raises them.
     """
-    spec = bound_spec(client, template.spec.name)
     batch = Batch(
         client,
-        spec,
+        bound_spec(client, template.spec.name),
         columns=template.blanks,
         label=label,
-        source=source,
         staged=staged,
         persist=persist,
     )
-    if source is not None:
-        batch.scan()
     return reduce_batch(
         batch,
         table,
@@ -270,7 +264,9 @@ def reduce_batch(
     ``settings`` and ``table`` are imported into the batch, as an application
     imports them: the settings are the batch's, and the table's rows are set
     by hand (:meth:`~.reduction.Batch.put`) on the rows of its last scan, so
-    that a batch with definitions keeps both.
+    that a batch with definitions keeps both. Both are checked before either
+    is written, so a table refused changes nothing; a ``SubmitError`` leaves
+    them imported, as "Apply" and a refused "Reduce" of a page do.
 
     Parameters
     ----------
@@ -299,22 +295,24 @@ def reduce_batch(
     SubmitError
         If a row cannot run; nothing is submitted.
     ValueError
-        If the table does not fit the batch (see :func:`rows_of`), or a
-        column is named as one of :data:`RESULT`.
+        If the table does not fit the batch (see :func:`rows_of` and
+        :meth:`~.reduction.Batch.put`), or a column is named as one of
+        :data:`RESULT`.
     """
     if taken := sorted(set(batch.columns) & set(RESULT)):
         raise ValueError(f'a table cannot hold the blank {", ".join(taken)}')
+    client, model = batch.client, batch.spec.params
+    rows = None if table is None else rows_of(table, model, batch.columns)
     if settings is not None:
-        batch.settings = with_named_files(batch.spec.params, settings)
-    keys = None
-    if table is not None:
-        rows = rows_of(table, batch.spec.params, batch.columns)
+        settings = with_named_files(model, settings)
+    if rows is not None:
         batch.put(rows)
-        keys = [row.key for row in rows]
+    if settings is not None:
+        batch.settings = settings
+    keys = None if rows is None else [row.key for row in rows]
     try:
         # Records that a workspace went on with after a restart finish first.
-        records = [s.record for s in batch.results(keys).values() if s.record]
-        batch.client.wait(records)
+        client.wait([s.record for s in batch.results(keys).values() if s.record])
         states = batch.state(keys)
         left = (
             set(states)
@@ -330,7 +328,7 @@ def reduce_batch(
         )
         # A row that cannot run is given too, so that reduce refuses it by key.
         picked = [k for k, s in states.items() if k in left or s.problems]
-        batch.client.wait(batch.reduce(picked))
+        client.wait(batch.reduce(picked))
     except KeyboardInterrupt:
         batch.cancel()
         raise
@@ -339,7 +337,7 @@ def reduce_batch(
     states = batch.state(keys)
     if table is None:
         table = batch_table(batch, states)
-    return with_results(batch.client, states, table, batch.columns)
+    return with_results(client, states, table, batch.columns)
 
 
 def batch_table(

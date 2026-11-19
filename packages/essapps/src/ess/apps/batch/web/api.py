@@ -19,9 +19,10 @@ the query, never in the path, since a key may hold any character; the keys of
 many rows go in the body, since a URL has a limit. A label is one
 segment of a path (:func:`~ess.apps.batch.manager.check_label`). The page asks
 for ``api/...`` relative to its own URL, and ``/`` redirects to a page by a
-relative URL, so the app can be mounted under a path prefix. With no batch,
-``/`` is the page without a batch, which asks for the routes of the
-workspace only. Answers are gzipped for a client that accepts it.
+relative URL, so the app can be mounted under a path prefix. If it has no
+batch to go to, ``/`` is the page without a batch, which lists the batches
+and asks for the routes of the workspace only. Answers are gzipped for a
+client that accepts it.
 """
 
 import itertools
@@ -85,7 +86,7 @@ def create_app(pages: Pages) -> FastAPI:
     The JSON API of the batches of ``pages`` and the page that uses it, at
     ``/batches/<label>/``; ``/`` redirects to the page of
     :meth:`Pages.home <.pages.Pages.home>`, or is the page without a batch if
-    there is none. ``/docs`` lists the API. The page
+    that gives none. ``/docs`` lists the API. The page
     loads libraries that ``sh static/vendor.sh`` fetches into
     ``static/vendor``.
 

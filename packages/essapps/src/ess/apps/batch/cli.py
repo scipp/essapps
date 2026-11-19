@@ -9,33 +9,32 @@ A batch from files, as a command::
 
 ``iofq.yaml`` is a :class:`~ess.apps.Template`, and ``runs.csv`` has a row for each
 sample, with a column for each blank (see :mod:`.frames`). Each command is one
-function, for a notebook: :func:`.frames.reduce_table`, which keeps nothing in
-the definitions, and :func:`.export.export_table`. The workspace is kept in a
-folder (see :mod:`ess.apps.folder`), so a template may reference a record of an
-earlier command, by its ID or by its label (see :func:`.text.with_latest`).
+function, for a notebook: :func:`.frames.reduce_table`, which keeps no batch,
+and :func:`.export.export_table`. The workspace is kept in a folder (see
+:mod:`ess.apps.folder`), so a template may reference a record of an earlier
+command, by its ID or by its label (see :func:`.text.with_latest`).
 
-The command keeps a batch where an application does, in the folder's
-definitions (:mod:`.definition`), so a label is one batch whoever works on it:
+The command makes and reads its batch with a :class:`~.manager.BatchManager`,
+as a page does, so a label is one batch whoever works on it:
 
-- ``reduce`` reduces the batch of its label. A label with a header, such as
-  that of a batch made on a page, is the batch that the header says
-  (:func:`.manager.header_batch`): its spec, of the version that the
-  workspace binds, its columns, its source, which ``-s/--sources`` registers
-  by name as an application does, and its scope::
+- ``reduce`` reduces the batch of its label, with the sources of the
+  application that ``-s/--sources`` names::
 
       essapps-batch -b my.package:BINDINGS reduce -s my.package:SOURCES -l LABEL
 
-  A template given there must be of the header's spec, with its columns as
-  the blanks, and ``--source``, if given, must name the header's source. A
-  label without a header takes the spec and the columns from the template
-  given, else from the settings that the label keeps, and the source from
-  ``--source NAME``; the command then writes the header, with the label as
-  title, so that the batch shows in the list of batches of a page. The
-  template given becomes the batch's settings, and the table is imported as
-  an application imports one (:meth:`.reduction.Batch.put`): set by hand on
-  the rows that the source makes from the files, and on those that the
-  definitions hold. It then reduces the rows of the table; without a
-  template and a table, those of the batch.
+  A template given must be of the batch's spec, with its columns as the
+  blanks, and ``--source``, if given, must name the batch's source. For a
+  label without a batch, the manager makes one
+  (:meth:`~.manager.BatchManager.create`) of the template's spec, with its
+  blanks as the columns, the source that ``--source NAME`` names, and the
+  label as title; it refuses a label that has definitions or records. A batch
+  made so is removed again if the run raises before a row of it was
+  submitted. The template becomes the batch's settings, and the table is
+  imported as an application imports one (:meth:`.reduction.Batch.put`): set
+  by hand on the rows that the source makes from the files, and on those that
+  the definitions hold. It then reduces the rows of the table; without a
+  table, those of the batch, or, given a template, one row keyed by the label
+  if the batch has no source.
   With ``--remaining`` it reduces the rows that the page's "Reduce" does
   (:func:`.state.left_to_reduce`), and leaves those reduced with earlier
   settings, which it says on stderr; ``--earlier-settings`` adds them.
@@ -68,17 +67,9 @@ from ..folder import folder_files, open_folder, scan_folder
 from ..records import Status
 from . import frames
 from .corrections import CorrectedFiles
-from .definition import (
-    FolderDefinitions,
-    Header,
-    header_data,
-    header_key,
-    header_of,
-    settings_key,
-    template_of,
-)
+from .definition import FolderDefinitions
 from .export import export_table
-from .manager import Defaults, check_label, header_batch
+from .manager import BatchManager, Defaults, bound_spec
 from .reduction import Source, file_infos
 from .state import EARLIER
 from .text import load_template, with_latest
@@ -148,7 +139,7 @@ def _parser() -> argparse.ArgumentParser:
         'table',
         type=Path,
         nargs='?',
-        help='the rows, .csv, .tsv, or .xlsx; without it, the template is one row',
+        help='the rows, .csv, .tsv, or .xlsx; without it, those of the batch',
     )
     reduce.add_argument(
         '-s',
@@ -205,64 +196,68 @@ def _reduce(
     client: Client, args: argparse.Namespace, definitions: FolderDefinitions
 ) -> pd.DataFrame:
     """
-    Reduce the batch of the label: that of its header, else that of the
-    template given or kept, whose header it writes (see the module).
+    Reduce the batch of the label, which the manager makes from the template
+    if the label has none (see the module).
     """
     label = args.label
-    template, table = None, None
+    template = None
     if args.template is not None:
         template = load_template(args.template)
         template = replace(template, params=with_latest(client, template.params))
-        table = (
-            pd.DataFrame({'key': [label]})
-            if args.table is None
-            else frames.read_table(args.table)
-        )
-    header = definitions.load(header_key(label), header_of)
-    if header is not None:
-        if args.source not in (None, header.source):
-            has = (
-                'no source' if header.source is None else f'the source {header.source}'
-            )
-            raise ValueError(f'{label}: the batch has {has}, not {args.source}')
-        if template is not None and (
-            template.spec.name != header.spec
-            or set(template.blanks) != set(header.columns)
-        ):
-            raise ValueError(
-                f'{label}: the batch is of {header.spec} with the columns '
-                f'{list(header.columns)}, the template of {template.spec.name} '
-                f'with the blanks {list(template.blanks)}'
-            )
-        made = header
-    else:
-        check_label(label)
-        kept = template or definitions.load(settings_key(label), template_of)
-        if kept is None:
-            raise ValueError(f'{label}: no settings are kept, so give a template')
-        made = Header(
-            spec=kept.spec.name,
-            columns=tuple(kept.blanks),
-            source=args.source,
-            title=label,
-        )
-    batch = header_batch(
+    staged = Defaults(staged=args.staged)
+    manager = BatchManager(
         client,
-        label,
-        made,
         sources=args.sources,
         definitions=definitions,
-        defaults=Defaults(staged=args.staged),
+        defaults={bound.name: staged for bound in client.specs()},
     )
+    if (header := manager.headers().get(label)) is not None:
+        spec, source, columns = header.spec, header.source, header.columns
+        if args.source not in (None, source):
+            has = 'no source' if source is None else f'the source {source}'
+            raise ValueError(f'{label}: the batch has {has}, not {args.source}')
+        if template is not None and (
+            template.spec.name != spec or set(template.blanks) != set(columns)
+        ):
+            raise ValueError(
+                f'{label}: the batch is of {spec} with the columns '
+                f'{list(columns)}, the template of {template.spec.name} '
+                f'with the blanks {list(template.blanks)}'
+            )
+        if source is not None and source not in args.sources:
+            raise ValueError(
+                f'{label}: the source {source} is not registered; give the '
+                'sources of the application with -s/--sources package.module:NAME'
+            )
+    elif template is None:
+        raise ValueError(f'{label}: no batch has the label, so give a template')
+    else:
+        spec, source, columns = template.spec.name, args.source, template.blanks
+    try:
+        bound_spec(client, spec)
+    except KeyError as error:  # a spec that the bindings given lack
+        raise ValueError(error.args[0]) from None
+    table = None
+    if args.table is not None:
+        table = frames.read_table(args.table)
+    elif template is not None and source is None:
+        table = pd.DataFrame({'key': [label]})
     if header is None:
-        definitions.save(header_key(label), header_data(made))
-    return frames.reduce_batch(
-        batch,
-        table,
-        settings=None if template is None else template.params,
-        remaining=args.remaining,
-        earlier_settings=args.earlier_settings,
-    )
+        manager.create(spec, title=label, source=source, columns=columns, label=label)
+    try:
+        return frames.reduce_batch(
+            manager.batch(label),
+            table,
+            settings=None if template is None else template.params,
+            remaining=args.remaining,
+            earlier_settings=args.earlier_settings,
+        )
+    except BaseException:
+        # A batch made here that submitted nothing would fix the spec, the
+        # columns and the source of the label for the next run.
+        if header is None and not client.records(label=label):
+            manager.remove(label)
+        raise
 
 
 def _run(
@@ -329,10 +324,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ) as client:
         try:
             result = _run(client, args, definitions)
-        except (SubmitError, ValueError, KeyError) as error:
-            # KeyError: no spec bound, or no source registered, of a name
-            said = error.args[0] if isinstance(error, KeyError) else error
-            sys.stderr.write(f'{said}\n')
+        except (SubmitError, ValueError) as error:
+            sys.stderr.write(f'{error}\n')
             return 2
     _write(result, args.output)
     if args.command == 'reduce' and args.remaining and not args.earlier_settings:
