@@ -34,8 +34,8 @@ A person thinks of a batch as a table: they edit its cells, remove its rows, red
 ```
 batch '20261118-130204'
   header     spec, title, description                     # what it is a batch of
-  settings   {'wavelength': {...}, 'direct_beam': None}   # a value for every row
-  rows       one DataFrame                                # a value per row
+  settings   {'wavelength': {...}, 'direct_beam': None}   # one dict: a parameter's value, the same for all rows
+  rows       one DataFrame                                # a table: a parameter's value for one row
 ```
 
 ```
@@ -70,6 +70,7 @@ def request(key):
     return settings | cells.to_dict()          # validated by the spec, as any request
 ```
 
+- The settings are one dict, parameter to value, with no keys of rows: a single row of defaults. `rows.fillna(settings)` would be the table with every parameter in every row.
 - An empty cell means "as in the settings". A row is incomplete if a required parameter has neither a setting nor a cell.
 - So a parameter is not either a setting or a column, fixed when the batch is made. A person adds a column for a parameter at any time: its cells are empty, every request is as before, and a value in one cell changes that row.
 - A cell does not hold `None`. Where rows differ in whether they have a value, the setting says `None` and the rows that have one give it: `direct_beam: None` in the settings, and a file in the cells of the rows with a direct beam run.
