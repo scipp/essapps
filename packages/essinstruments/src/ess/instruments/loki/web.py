@@ -9,10 +9,10 @@ The batch page of LoKI's I(Q) on a workspace folder, as a web page
 ``FOLDER`` is a workspace folder (:mod:`ess.apps.folder`): its ``files.csv``
 says the run, role and sample of each file, as ``essapps-batch files`` writes
 it. A row is a sample run, paired with the transmission run of its sample
-(:func:`~.batch.pair_by_sample`). A folder without a batch gets one of all
-sample runs. The batches with their edits and settings, the batch that
-follows, and the corrections of runs are kept in ``FOLDER/definitions/``, the
-results in ``FOLDER/store/``.
+(:func:`~.batch.pair_by_sample`). A start at which no batch is listed makes
+a batch of all sample runs. The batches with their edits and settings,
+the batch that follows, and the corrections of runs are kept in
+``FOLDER/definitions/``, the results in ``FOLDER/store/``.
 
 The settings name the masks by a record, so reduce the detector and the masks
 first, on the same folder, while no page runs on it. With the run of the can
@@ -43,15 +43,14 @@ I(Q) in such a folder: a person makes it with "New batch".
 The switch "Follow" of the page of a batch makes it the batch that follows:
 a step every ``SECONDS`` (5) reduces each row once both its runs are listed,
 and again when one of them changes, such as a newer transmission run of its
-sample (:data:`~.batch.COLUMNS`). A row that a person changed waits for the
-person's "Reduce". The batch that follows is kept, so a restart resumes.
+sample (:data:`~.batch.COLUMNS`). A row with a cell that a person set waits
+for the person's "Reduce". The batch that follows is kept, so a restart resumes.
 """
 
 from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -60,12 +59,11 @@ from pydantic import BaseModel, Field
 
 from ess.apps import Client
 from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions
-from ess.apps.batch.auto import Follow
 from ess.apps.batch.web import Pages, Shown, create_app, plots
 from ess.apps.batch.web.api import STATIC
 from ess.apps.folder import ArrivingFiles, open_folder
 
-from .batch import DEFAULTS, SOURCES
+from .batch import SOURCES, STAGED
 from .bindings import BINDINGS
 from .specs import IOFQ
 
@@ -116,24 +114,26 @@ def build(
     """
     The pages of the batches of ``client``, kept in ``definitions``, with a
     step of Follow every ``interval`` seconds while a batch follows. A new
-    batch of I(Q) starts with ``settings``. If there is no batch at all, one
-    of all sample runs is made, which follows from the start if ``follow``.
-    A folder with only the detector and the masks that the command reduced
-    has batches, so a person makes the batch of I(Q) with "New batch"; one
-    that a person removed is not made again.
+    batch of I(Q) starts with ``settings``. If no batch is listed, a batch of
+    all sample runs is made, so also at a start after a person removed the
+    last one; it follows from the start if ``follow``. A folder with only the
+    detector and the masks that the command reduced has batches, so a person
+    makes the batch of I(Q) with "New batch".
     """
-    defaults = {IOFQ.name: replace(DEFAULTS[IOFQ.name], settings=settings or {})}
     manager = BatchManager(
-        client, sources=SOURCES, definitions=definitions, defaults=defaults
+        client,
+        sources=SOURCES,
+        definitions=definitions,
+        settings={IOFQ.name: settings or {}},
+        staged=STAGED,
     )
-    loop = Follow(manager, definitions, interval=interval)
     if not manager.headers():
         label = manager.create(IOFQ.name, title='Sample runs', source='sample-runs')
         if follow:
-            loop.on(label)
+            manager.follow(label)
     pages = Pages(
         manager,
-        loop,
+        interval=interval,
         title='LoKI I(Q)',
         draw={IOFQ.name: _draw(client)},
         files=files,

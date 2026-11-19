@@ -7,11 +7,12 @@ working on the page.
 ``python -m ess.apps.batch.web.demo [DIRECTORY] [--port N]`` serves it on
 ``http://localhost:N``, with the workspace kept in ``DIRECTORY`` (see
 :mod:`ess.apps.folder`), a new temporary folder if not given. The first start
-writes the fake runs and ``files.csv`` there, and makes one batch of the
-samples; a later start reuses them, with the results of earlier starts, and
-the batches, edits, settings, corrections, and the batch that follows kept in
-``definitions/`` (:mod:`..definition`). The file source reads ``files.csv``
-again when it changes (:class:`~ess.apps.folder.ArrivingFiles`).
+writes the fake runs and ``files.csv`` there. A later start reuses them, with
+the results of earlier starts, and the batches, edits, settings, corrections,
+and the batch that follows kept in ``definitions/`` (:mod:`..definition`).
+Each start makes a batch of the samples if no batch is listed. The file
+source reads ``files.csv`` again when it changes
+(:class:`~ess.apps.folder.ArrivingFiles`).
 
 With ``--arrive SECONDS [--count N]``, a new folder starts with the empty cell
 and the first few samples, and the runs of one more sample arrive every
@@ -53,14 +54,13 @@ from ess.spec import (
 from .. import (
     BatchManager,
     CorrectedFiles,
-    Defaults,
     FileInfo,
     FolderDefinitions,
     Row,
     Source,
     Words,
 )
-from ..auto import Follow, every
+from ..auto import every
 from . import Pages, create_app, plots
 from .api import STATIC
 from .page import Shown
@@ -214,8 +214,8 @@ SOURCES = {
     )
 }
 """The sources of the demo's batches, by name."""
-DEFAULTS = {DEMO.name: Defaults(staged=True)}
-"""What a new batch of the demo's spec gets."""
+STAGED = frozenset({DEMO.name})
+"""The specs whose batches run through a stage: the demo's."""
 
 
 SAMPLES = (
@@ -315,11 +315,12 @@ def build(
 ) -> FastAPI:
     """
     The application on what :func:`open_demo` returns, with a step of Follow
-    every ``interval`` seconds while a batch follows. A folder without a batch
-    gets one of all samples.
+    every ``interval`` seconds while a batch follows. If no batch is listed,
+    a batch of all samples is made, so also at a start after a person removed
+    the last one.
     """
     manager = BatchManager(
-        client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS
+        client, sources=SOURCES, definitions=definitions, staged=STAGED
     )
     if not manager.headers():
         manager.create(
@@ -338,7 +339,7 @@ def build(
 
     pages = Pages(
         manager,
-        Follow(manager, definitions, interval=interval),
+        interval=interval,
         title=DEMO.title,
         draw={DEMO.name: draw},
         files=files,

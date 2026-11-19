@@ -445,10 +445,9 @@ def test_a_header_without_its_spec_and_columns_is_refused(folder: Path) -> None:
             Scope(start='2026-11-18T13:00', stop='2026-11-19T13:00'),
             {'start': '2026-11-18T13:00', 'stop': '2026-11-19T13:00'},
         ),
-        (Scope(keys=['60351', '60339']), {'keys': ['60339', '60351']}),
     ],
 )
-def test_a_scope_is_written_as_a_slice_or_as_keys(
+def test_a_scope_is_written_as_its_ends(
     folder: Path, scope: Scope, written: dict[str, object]
 ) -> None:
     store = FolderDefinitions(folder)

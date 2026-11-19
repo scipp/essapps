@@ -11,7 +11,6 @@ from typing import Annotated, Any
 from pydantic import BaseModel, Field
 
 from ess.apps.batch import (
-    Defaults,
     DefinitionStore,
     FileInfo,
     NotKept,
@@ -191,6 +190,7 @@ PAIRS = Source(
 )
 SAMPLES = Source(samples, fills=('sample',))
 SOURCES = {'pairs': PAIRS}
-DEFAULTS = {STAGED.name: Defaults(staged=True)}
+STAGED_NAMES = frozenset({STAGED.name})
+"""The specs whose batches run through a stage."""
 
 Measure = Callable[..., FileRef]

@@ -3,9 +3,14 @@
 """
 Automatic reduction: a batch reduced as its files arrive. The guide is the
 section "Automatic reduction" of ``packages/essapps/docs/batch.md``.
-:class:`Follow` is the one loop of an application over the batches of a
-:class:`~.manager.BatchManager`: it steps an :class:`Automatic` on the batch
-that follows.
+:class:`Automatic` steps one batch. Follow is a step of it on the batch that
+the manager keeps as the one that follows, every few seconds::
+
+    label = manager.following
+    if label is not None:
+        Automatic(manager.batch(label)).step()
+
+Whoever serves owns the timer that calls it.
 
 A step does what a person does with the buttons of a batch's page to scan and
 to reduce, with the rule :func:`~.state.arrived` in place of the person's
@@ -21,10 +26,14 @@ that changes it: :attr:`Automatic.refused` says why rows of the last step were
 refused, and a refused row is tried again at every step. So a step that raises
 loses nothing.
 
-A step reduces a row for what the files changed, never for what a person
-changed: :func:`~.state.arrived` leaves a row with a cell set by hand that is
-not reduced yet (:attr:`~.state.RowState.changed_by_hand`), with or without a
-page, so a person reduces it.
+The rule is on the state, not on who changed it: :func:`~.state.arrived`
+gives the ready rows that have no result under the label, or whose request
+differs from their result's at a column of ``at``, less the rows with a cell
+set by hand that is not reduced yet
+(:attr:`~.state.RowState.changed_by_hand`), which a person reduces. So an
+action of a person can make the next step reduce rows: turning Follow on,
+widening the scope, a correction of a run, a revert of a cell, or bringing a
+removed row back.
 
 For the rows with no change by hand that is not reduced yet, the loop keeps
 the results under its label equal to its batch's rows at the columns of
@@ -53,8 +62,6 @@ from contextlib import contextmanager
 
 from ..errors import SubmitError
 from ..records import Record
-from .definition import FOLLOWING, DefinitionStore, following_data, following_of
-from .manager import BatchManager
 from .reduction import Batch
 from .state import arrived, ready
 
@@ -123,16 +130,8 @@ class Automatic:
         and :attr:`refused` gives the reason for each ready row but those
         without a result that are set by hand.
         """
-        self.batch.scan()
-        return self.reduce()
-
-    def reduce(self) -> dict[str, Record]:
-        """
-        The second half of :meth:`step`, without the scan: reduce the rows
-        that :func:`~.state.arrived` gives now. A page that scans by itself,
-        such as the batch page, calls this after its scan.
-        """
         batch = self.batch
+        batch.scan()
         try:
             state = batch.state()
         except SubmitError as error:
@@ -164,88 +163,6 @@ class Automatic:
                     refused[key] = str(SubmitError(errors))
                 keys = [k for k in keys if k not in named]
         return {}, refused
-
-
-class Follow:
-    """
-    The one loop of an application over the batches of a manager: at each
-    step, the batch of :attr:`label` does one step of :class:`Automatic`,
-    with ``at`` what its source fills. See
-    ``packages/essapps/docs/batch.md``.
-
-    The label is kept in ``definitions`` and read when the loop is made, so a
-    loop made again after a restart resumes. The loop has no thread: whoever
-    owns the timer calls :meth:`step` every :attr:`interval` seconds.
-
-    Attributes
-    ----------
-    interval:
-        The seconds between two steps, for whoever calls :meth:`step`.
-    refused:
-        :attr:`Automatic.refused` of the last step that did not raise;
-        emptied by :meth:`on`, :meth:`off` and :meth:`forget`.
-    """
-
-    def __init__(
-        self,
-        manager: BatchManager,
-        definitions: DefinitionStore,
-        *,
-        interval: float = 5.0,
-    ) -> None:
-        self.interval = interval
-        self.refused: dict[str, str] = {}
-        self._manager = manager
-        self._definitions = definitions
-        self._label = definitions.load(FOLLOWING, following_of)
-
-    @property
-    def label(self) -> str | None:
-        """The label of the batch that follows, ``None`` if none does."""
-        return self._label
-
-    def on(self, label: str) -> None:
-        """
-        Make the batch of ``label`` the one that follows. Raises ``KeyError``
-        if no batch has the label or its source is not registered, and
-        ``ValueError`` if its batch has no source. It makes no batch.
-        """
-        name = self._manager.headers()[label].source
-        if name is None:
-            raise ValueError(f'{label}: the batch has no source of rows')
-        if name not in self._manager.sources:
-            raise KeyError(f'{label}: the source {name} is not registered')
-        self._keep(label)
-
-    def off(self) -> None:
-        """Let no batch follow."""
-        self._keep(None)
-
-    def forget(self) -> None:
-        """Forget why rows were refused, such as after a change of settings."""
-        self.refused = {}
-
-    def step(self) -> dict[str, Record]:
-        """
-        One step of :class:`Automatic` on the batch that follows; the records
-        by key. Nothing if none follows; if its batch is gone, the loop turns
-        itself off. Raises what the step raises.
-        """
-        label = self._label
-        if label is None:
-            return {}
-        if label not in self._manager.headers():
-            self.off()
-            return {}
-        loop = Automatic(self._manager.batch(label))
-        records = loop.step()
-        self.refused = loop.refused
-        return records
-
-    def _keep(self, label: str | None) -> None:
-        self._definitions.save(FOLLOWING, following_data(label))
-        self._label = label
-        self.refused = {}
 
 
 def run(loops: Sequence[Automatic], interval: float = 1.0) -> None:

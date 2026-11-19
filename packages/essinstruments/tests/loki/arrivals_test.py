@@ -57,7 +57,7 @@ def test_a_sample_whose_runs_arrived_is_reduced_by_hand_or_by_a_step_of_follow(
     client.wait(client.records())
     instrument.measure(*plan[3])
     pages = http.app.state.pages  # type: ignore[attr-defined]
-    pages.follow.on(pages.home())
+    pages.manager.follow(pages.home())
     pages.tick()
     client.wait(client.records())
 

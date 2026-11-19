@@ -176,6 +176,17 @@ def test_a_client_gives_the_specs_the_workspace_runs(
         client.spec(SpecId(name='load', version=2))
 
 
+def test_the_spec_of_a_name_is_the_highest_version_the_workspace_binds(
+    files: FakeFiles,
+) -> None:
+    newer = toys.LOAD.model_copy(update={'version': 2})
+    bind = [function_binding(spec, toys.load_run) for spec in (newer, toys.LOAD)]
+    with local(proposal='p1', files=files, bind=bind) as client:
+        assert client.spec_named('load') == newer
+        with pytest.raises(KeyError, match='the workspace binds no spec shift'):
+            client.spec_named('shift')
+
+
 def test_a_spec_whose_output_holds_a_file_field_is_refused() -> None:
     class RunOutputs(BaseModel):
         run: RunFile

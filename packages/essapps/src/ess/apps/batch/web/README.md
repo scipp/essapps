@@ -18,7 +18,7 @@ python -m ess.instruments.loki.arrivals --follow 2                      # the sa
 
 Open `http://localhost:8000/`: it redirects to the page of the batch that follows, else to that of the only batch; otherwise it shows the list of batches, to open one or make one (see [Making a batch](#making-a-batch)).
 Each `FOLDER` is a workspace folder (`ess.apps.folder`); the demos make a temporary one if none is given, and say which.
-A folder without a batch gets one, of all sample runs; the batches and the batch that follows are kept in the folder.
+At a start, the demo and the LoKI page make a batch of all sample runs if no batch is listed, so also at a start after a person removed the last one; the batches and the batch that follows are kept in the folder.
 The demo needs the extra `essapps[web]`, the LoKI modules `essinstruments[loki-app]`.
 The LoKI page reads the masks from a record, so reduce the detector and the masks on the folder first, with two `essapps-batch` commands that [the docstring of `ess.instruments.loki.web`](../../../../../../essinstruments/src/ess/instruments/loki/web.py) gives; the LoKI arrivals do this themselves.
 The two commands make the batches `detector` and `masks`, so the LoKI page then makes no batch of I(Q): make it with **+ New batch**.
@@ -45,10 +45,10 @@ The page sends its actions in the order a person did them, so a value typed and 
 Each state replaces the form, but not while the focused input holds a value typed and not sent; Escape puts back the value sent last.
 
 **Follow** is a switch next to **Rescan runs**, offered for a batch with a source; the columns that the source fills are those at which a changed cell reduces a row again.
-The application has one Follow (`ess.apps.batch.auto.Follow`): turning the switch on makes this batch the one that follows, and no other; the page of another batch then says which batch follows.
-While a batch follows, a timer in the server runs a step every `interval` seconds (5 by default; `Follow(..., interval=...)`, or `--interval SECONDS`): the scan of **Rescan runs**, then a reduction of the rows that `ess.apps.batch.arrived` gives, under the lock of every request, with or without a page open.
+Turning the switch on makes this batch the one that follows, and no other (`BatchManager.follow`); the page of another batch then says which batch follows.
+While a batch follows, a timer in the server runs a step every `interval` seconds (5 by default; `Pages(manager, interval=...)`, or `--interval SECONDS`): the scan of **Rescan runs**, then a reduction of the rows that `ess.apps.batch.arrived` gives, under the lock of every request, with or without a page open.
 Follow reduces with the batch's settings, whatever the form holds.
-Follow reduces a row for what the files changed, never for what a person changed.
+Follow reduces by a rule on the state, not on who changed it: the rows that have no result, or whose request differs from their result's at a column of `at`, less the rows with a cell set by hand that is not reduced yet.
 A row with a cell set by hand that is not reduced yet waits for **Reduce**, with or without Follow, so a row edited at two cells of `at` is reduced once, with both.
 While following, such a row says "Set by hand, so Follow leaves it to you: reduce it."
 Once reduced, the row follows the files again, with its cells set by hand.
@@ -56,7 +56,7 @@ A cell that a person reverts follows the files again at once: the next step redu
 A correction in the Runs view reaches the rows through the scan, so Follow reduces for it as for a file that arrives; two corrections that belong together reduce a row twice if a step runs between them.
 A correction is an action of the workspace, made in the Runs view of any page, also of the page without a batch (`POST api/runs/cells`). The page it was made on asks for its state at once, which scans its batch; every other page scans its batch at its next poll, and Follow scans the batch that follows at its next step.
 If the scan at a poll fails, that poll says why once, and the rows stay as they are until **Rescan runs**.
-An action submits nothing but what a person asks to reduce: Apply reduces nothing, and the next step reduces the rows without a result with the settings applied.
+An action submits only what a person asks to reduce; the next step reduces what the rule gives after it. Apply submits nothing, and the next step reduces the rows without a result with the settings applied.
 Apply forgets why Follow could not reduce a row, since the next step tries again.
 The page of the batch that follows shows "Following, every N s", why the last step failed if it did, and, as an `incomplete` row, why a row could not be submitted.
 If the batch that follows cannot be made, such as when its source raises at the first scan after a restart, its page says why in the bar at its top, and the next step tries again.
@@ -64,9 +64,9 @@ Whatever a step raises, from the files, the workflow or the workspace, is the st
 
 ## The list of batches
 
-The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, its scope in the source's word for the index (`Run 60339 –`, `Run 60301 – 60339`, `2 rows named`, or nothing for every row), and which batch follows; the batch of the page is marked.
+The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, its scope in the source's word for the index (`Run 60339 –`, `Run 60301 – 60339`, or nothing for every row), and which batch follows; the batch of the page is marked.
 Each title is a link to the page of its batch.
-Opening the view, and **Count again**, counts the rows of each batch by status, and for each registered source the rows that no batch shows, such as a row removed by hand in every batch, or outside the scope of every batch (`BatchManager.counts`).
+Opening the view, and **Count again**, counts the rows of each batch by status, and for each registered source the rows that no batch shows, such as a row removed by hand in every batch, or outside the scope of every batch (`Pages.counts`).
 The statuses are those of the chips of each batch's page, the rows that Follow could not submit `incomplete` too.
 A count is a rescan of every batch: it costs one scan per batch, under the lock of all pages, so the pages and Follow wait until it ends, and the open pages show the rows it found.
 A batch that cannot be counted, such as one whose source raises, shows why in its row, and the rows of its source in no batch are not said.
@@ -87,9 +87,9 @@ The list and the Runs view are the same on every page.
 
 **Make** sends the form to `POST api/batches`, and the page goes to the page of the new batch.
 The choices come from `GET api/sources`; what can be made is decided by `BatchManager.create`, and what it refuses, such as an empty title or a stop below the start, shows at the form, with nothing made.
-A start or a stop is sent as typed; the manager converts it to the type of the index of the source (`Source.index_type`, `ess.apps.batch.scope_of`) and refuses what does not convert, such as `abc` for a run number.
+A start or a stop is sent as typed; the manager converts it to the type of the index of the source (`Source.index_type`) and refuses what does not convert, such as `abc` for a run number.
 **Make** is disabled while it is sent, so a double click makes one batch.
-The new batch starts with the settings that the application gives its spec (`Defaults`).
+The new batch starts with the settings that the application gives its spec (`BatchManager(settings=...)`).
 A source that no spec fits is not offered.
 
 The form is closed until **+ New batch** is pressed.
@@ -105,34 +105,30 @@ The tab **Batch**, next to **Result**, **Settings** and the row tab, shows the h
 Its workflow, source, columns and label are fixed when the batch is made, and shown as text.
 Its title, description and scope are a form, which **Save** sends to `POST api/batch` (`BatchManager.change`); the scope is written as in the form "New batch".
 What the manager refuses, such as an empty title or a stop below the start, shows at the form, and nothing changes.
-A scope that names its rows, which only code makes, is shown as "2 rows named", and Save keeps it.
-A wider scope of the batch that follows makes its next step reduce the rows it adds, so Save first asks `POST api/batch/added` how many rows the scope adds that have no result and no cell set by hand, and asks the person to confirm if there are any.
+A wider scope of the batch that follows makes its next step reduce the rows it adds that have no result.
 
 **Start the next batch here** splits the batch at the row selected: this batch ends before the row, and the next batch holds the rows of this one from the row on (`POST api/batch/next`).
-In code, with `old = manager.headers()[label]` and `index` that of the row:
+The manager decides what moves and what it refuses (`BatchManager.start_next`); the page finds the index of the row.
+In code, with `index` that of the row:
 
 ```python
-new = manager.create(old.spec, title=title, source=old.source, columns=old.columns,
-                     scope=Scope(start=index, stop=old.scope.stop),
-                     settings=manager.batch(label).settings)
-manager.batch(new).rows = ...   # the edits and removals of the rows that move
-manager.change(label, scope=Scope(start=old.scope.start, stop=index))
-if follow.label == label:
-    follow.on(new)
+new = manager.start_next(label, index, title=title)
 ```
 
 What a person did to the rows that move goes with them: their cells set by hand, and their removal by hand, so Follow still leaves a row set by hand to the person.
 A row added by hand stays in this batch, since such a row is in its batch whatever the scope.
-The results of the rows that move stay under the label of this batch, as every result does, so the next batch shows those rows as not reduced, and Follow, if it moves, reduces them again.
-So the page first asks the server what moves (`POST api/batch/moved`), and asks for the title of the next batch with that said: how many rows move, how many of them have a result here, and whether Follow moves and reduces them again.
-Cancel changes nothing; otherwise the page goes to the page of the next batch.
+The results of the rows that move stay under the label of this batch, as every result does, so the next batch shows those rows as not reduced.
+Follow stays where it is: on the next batch, a step would reduce all those rows again with the settings copied, before a person can change them.
+The text under the button says to turn Follow on for the next batch when its settings are right.
+The page asks for the title of the next batch; Cancel changes nothing, otherwise the page goes to the page of the next batch.
 The next batch gets the settings in force, not a change of the settings form that is not applied.
-It needs one row selected, with an index, that is not the first row of this batch, and a batch whose scope is a range: the page says so otherwise, and nothing changes.
+It needs one row selected, with an index; the manager refuses the first row of this batch.
+The page says why, and nothing changes.
 A row of the scan without an index is in neither batch afterwards, since both scopes then have an end.
-The next batch is made first, so a title that the manager refuses changes nothing, and it is removed again if it cannot take what was set by hand; if this batch then cannot be ended, both hold the rows that move, and the page says so.
+The next batch is made first, so a title that the manager refuses changes nothing, and it is removed again if its scan raises or it cannot take what was set by hand.
 
 **Remove this batch**, after a confirmation, removes the header, the settings and the edits of the batch (`POST api/batch/remove`, `BatchManager.remove`); its results stay in the workspace.
-If the batch follows, Follow is turned off at once; if the definitions refuse the removal, the batch and Follow stay as they were.
+If the batch follows, none follows from then on.
 The page then goes to `/`, which redirects to the batch that follows or the only batch left, or shows the page without a batch.
 
 ## Layers
@@ -147,14 +143,14 @@ api.py            HTTP: create_app(pages); each action is a POST that
                   404 for a label that is no batch
    ▼
 pages.py          Pages: what the pages share, without HTTP: the manager,
-                  Follow and its tick, the corrections of runs, the list of
+                  the step of Follow (tick), the corrections of runs, the list of
                   batches and its counts, the runs, making and removing a
                   batch, one lock around every request and step
 page.py           Page: what the page of one batch does, without HTTP: the
                   settings form (a draft until Apply), the refusals, how the
                   last step of Follow went, its header, the next batch
    ▼
-ess.apps.batch    the logic: BatchManager, Follow, Batch, RowTable, states,
+ess.apps.batch    the logic: BatchManager, Automatic, Batch, RowTable, states,
                   CorrectedFiles; shared with the command essapps-batch
 ```
 
@@ -167,7 +163,7 @@ The server answers 204 if nothing changed since `version`, and else the whole `S
 `version` counts each action, each step of Follow that changes what the page shows (the rows, the runs, the records, the refusals, or its failure), each change of the batch that follows, and each change of the workspace's records, such as a reduction that finished.
 `start` is new at each start of the server; a page that sees another one loads again.
 `State.runs` counts the changes of the runs, which all pages share; the Runs view asks for `api/runs` when it moves.
-`State.batches` moves when the headers of the batches or the batch that follows change, whoever changed them; the Batches view asks for `api/batches` when it moves.
+`State.batches` lists the batches, so the version moves when the headers of the batches or the batch that follows change, whoever changed them; only the page without a batch asks for `api/batches`.
 `api/batches`, `api/batches/counts`, `api/sources`, `api/runs` and the corrections of runs (`api/runs/cells`, `api/runs/cells/revert`) belong to the workspace: they answer the same under any label, and at `/api/...`.
 
 ## How the page asks
@@ -189,8 +185,8 @@ parent.mount('/batch', batch)
 
 ## Where the definition is kept
 
-The edits of rows, the settings, and the corrections of runs are the definition of the batch.
-The demo and the LoKI page give the manager, Follow and the file source the folder's definitions, `FOLDER/definitions/` (`ess.apps.batch.FolderDefinitions`), so a restart shows the batches, their definitions and the batch that follows again.
+The headers, the edits of rows, the settings, the batch that follows, and the corrections of runs are the definitions of the workspace.
+The demo and the LoKI page give the manager and the file source the folder's definitions, `FOLDER/definitions/` (`ess.apps.batch.FolderDefinitions`), so a restart shows the batches, their definitions and the batch that follows again.
 The settings form is a draft of the batch's settings: **Apply** writes it to the batch, and so to the definitions. A draft not applied is lost when the server stops.
 Results are records of the workspace, in `FOLDER/store/`.
 See [Where the definition is kept](../../../../../docs/batch.md#where-the-definition-is-kept).
@@ -201,7 +197,6 @@ See [Where the definition is kept](../../../../../docs/batch.md#where-the-defini
 - One `Batch` per label. Another one on the page's label writes its whole table of edits at each change, over those of the page ([Where the definition is kept](../../../../../docs/batch.md#where-the-definition-is-kept)).
 - One user. Two open pages of one batch show and edit the same state.
 - One lock for all pages: a request waits while a step of Follow runs on another batch.
-- The confirmation of a wider scope counts the rows of the last scan without a result and not set by hand, incomplete ones too, which Follow does not reduce; it leaves out the rows with an outdated result, which Follow reduces too if a cell changed at its columns.
 - A batch that cannot be shown, such as one whose source raises, has no tab **Batch**, so it is removed only in code.
 - The confirmations and the title of the next batch are the browser's dialogs (`confirm`, `prompt`).
 

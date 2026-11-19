@@ -57,27 +57,28 @@ outdated.
 
 The tab "Batch" shows the header of the batch, and changes its title,
 description and scope with the manager (:meth:`Page.change`), which decides
-what can be changed. :meth:`Page.start_next` ends the batch at a row and makes
-the next one from there. Removing a batch is :meth:`Pages.remove
-<.pages.Pages.remove>`; a request to a page of a batch removed answers
-:class:`Missing`.
+what can be changed. :meth:`Page.start_next` has the manager end the batch at
+a row and make the next one from there; Follow stays where it is. Removing a
+batch is :meth:`Pages.remove <.pages.Pages.remove>`; a request to a page of a
+batch removed answers :class:`Missing`.
 
 A batch with a source offers to follow the files. The switch "Follow" makes
-the batch the one that the application's Follow steps
-(:class:`~ess.apps.batch.auto.Follow`), so no other batch follows. While it
-follows, :meth:`Pages.tick <.pages.Pages.tick>` steps it every ``interval``
-seconds, which scans as "Rescan runs" does and reduces the rows that
-:func:`~ess.apps.batch.arrived` gives, at the columns of the source, under the
-lock of all pages, with the batch's settings, whatever the form holds; then
-:meth:`Page.stepped` shows what the step changed. The page of the batch that
-follows says what the last step raised, and why rows were not reduced; the
-next step runs all the same. Follow reduces a row for what the files changed,
-never for what a person changed
-(:attr:`~ess.apps.batch.RowState.changed_by_hand`): a row whose cells a person
-set waits for "Reduce". So an action, but turning Follow on, submits only what
-a person asks to reduce. Apply forgets why Follow could not reduce rows, since
-its next step tries them with the settings applied. Which batch follows is
-kept in the definitions, so a restart resumes.
+the batch the one that follows (:meth:`~ess.apps.batch.BatchManager.follow`),
+so no other batch follows. While it follows, :meth:`Pages.tick
+<.pages.Pages.tick>` steps it every ``interval`` seconds, which scans as
+"Rescan runs" does and reduces the rows that :func:`~ess.apps.batch.arrived`
+gives, at the columns of the source, under the lock of all pages, with the
+batch's settings, whatever the form holds; then :meth:`Page.stepped` shows
+what the step changed. The page of the batch that follows says what the last
+step raised, and why rows were not reduced; the next step runs all the same.
+Follow reduces by a rule on the state, not on who changed it
+(:func:`~ess.apps.batch.arrived`): a row with a cell set by hand that is not
+reduced yet waits for "Reduce" (:attr:`~ess.apps.batch.RowState.changed_by_hand`).
+An action submits only what a person asks to reduce, and the next step reduces
+what the rule gives after it, such as the rows that a wider scope adds. Apply
+forgets why Follow could not reduce rows, since its next step tries them with
+the settings applied. Which batch follows is kept in the definitions, so a
+restart resumes.
 """
 
 from __future__ import annotations
@@ -97,7 +98,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import AbstractContextManager, contextmanager, suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -110,24 +111,20 @@ from ...fields import UNSET, Fields
 from ...files import Selector
 from ...listing import Listing
 from ...records import Record, Status
-from .. import (
+from .. import frames
+from ..definition import NotKept
+from ..export import export_table
+from ..reduction import Batch, Words
+from ..state import (
     EARLIER,
-    EMPTY,
-    Batch,
-    NotKept,
     RowState,
-    Scope,
-    Source,
-    Words,
     earlier_settings,
-    frames,
     left_to_reduce,
     ready,
-    scope_of,
     status_texts,
 )
-from .. import Row as TableRow
-from ..export import export_table
+from ..table import EMPTY, Scope
+from ..table import Row as TableRow
 from ..text import checked_settings, load_template, write_template
 from . import forms, plots
 from .models import (
@@ -137,12 +134,10 @@ from .models import (
     Cells,
     Column,
     Edit,
-    Ends,
     Following,
     HeaderEdit,
     HeaderShown,
     Made,
-    Moved,
     Next,
     Plot,
     Reduce,
@@ -209,18 +204,6 @@ class Problem(Exception):
 
 class Missing(Exception):
     """No batch has the label asked for."""
-
-
-def scoped(source: Source | None, ends: Ends, said: str) -> Scope:
-    """
-    The slice from ``ends.start`` to ``ends.stop`` of the rows of ``source``
-    (:func:`~ess.apps.batch.scope_of`); a :class:`Problem` that starts with
-    ``said`` for an end that it refuses.
-    """
-    try:
-        return scope_of(source, ends.start, ends.stop)
-    except ValueError as error:
-        raise Problem(f'{said}: {why(error)}.') from None
 
 
 def _say(title: str, message: str) -> str:
@@ -307,8 +290,8 @@ class Page:
     Parameters
     ----------
     pages:
-        What the pages share: the manager of the batch, Follow, the lock, and
-        what the application gives every page.
+        What the pages share: the manager of the batch, how the last step of
+        Follow went, the lock, and what the application gives every page.
     label:
         The label of the batch. The source of the batch says what a row is
         called, and which entries of :attr:`Row.info` name and describe it.
@@ -362,24 +345,24 @@ class Page:
 
     def _follows(self) -> bool:
         """Whether this batch is the one that follows."""
-        return self.pages.follow.label == self.label
+        return self.pages.manager.following == self.label
 
     # Reading
 
     def _live(self) -> tuple[object, ...]:
         """
         What the page shows that changes without an action: the rows, the
-        records, the runs, the list of batches, which batch follows, and how
-        the last step of Follow went.
+        records, the runs, the headers of the batches, which batch follows,
+        and how the last step of Follow went.
         """
         pages = self.pages
         return (
             self.batch.rows,
             self._listing.cursor,
             pages.runs_version,
-            pages.batches_version(),
-            pages.follow.label,
-            pages.follow.refused,
+            pages.manager.headers(),
+            pages.manager.following,
+            pages.refused,
             pages.failure,
         )
 
@@ -533,7 +516,7 @@ class Page:
             version=self.version,
             start=self.start,
             runs=self.pages.runs_version if self.pages.corrects_runs else None,
-            batches=self.pages.batches_version(),
+            batches=self.pages.batches().rows,
             label=self.label,
             title=header.title,
             header=HeaderShown(
@@ -543,7 +526,6 @@ class Page:
                 description=header.description,
                 start=header.scope.start,
                 stop=header.scope.stop,
-                keys=None if header.scope.keys is None else sorted(header.scope.keys),
             ),
             application=self.pages.title,
             words=self.words,
@@ -586,12 +568,12 @@ class Page:
     def _follow(self) -> Following | None:
         if (source := self.batch.source) is None:
             return None
-        label, headers = self.pages.follow.label, self.pages.manager.headers()
-        on = label == self.label
+        manager = self.pages.manager
+        label, on = manager.following, self._follows()
         return Following(
             on=on,
-            other=headers[label].title if not on and label in headers else None,
-            interval=self.pages.follow.interval,
+            other=None if on or label is None else manager.headers()[label].title,
+            interval=self.pages.interval,
             at=sorted(self._cells.titles[c] for c in source.fills),
             failure=self.pages.failure if on else None,
         )
@@ -920,14 +902,15 @@ class Page:
         Make this batch the one that follows, with a first step at once; or,
         if it follows, let none follow.
         """
-        if self.batch.source is None:
-            raise Problem('This batch has no source, so it cannot follow the files.')
         if not on:
             if not self._follows():
                 return ''  # another batch follows, or none
-            self.pages.follow.off()
+            self.pages.manager.follow(None)
             return 'Stopped following.'
-        self.pages.follow.on(self.label)
+        try:
+            self.pages.manager.follow(self.label)
+        except ValueError as error:
+            raise Problem(f'{why(error)}.') from None
         self.pages.tick()
         return 'Following.'
 
@@ -971,7 +954,7 @@ class Page:
         # Follow tries every row again with these at its next step.
         self.refused = [e for e in self.refused if e.entry]
         if self._follows():
-            self.pages.follow.forget()
+            self.pages.refused = (None, {})
         return 'Applied the settings.'
 
     @_action
@@ -1004,148 +987,49 @@ class Page:
 
     # The header
 
-    def _scope(self, ends: Ends, said: str) -> Scope | None:
-        """
-        The scope of ``ends`` (:func:`scoped`), or ``None`` if the scope of the
-        batch names its keys, which no page changes.
-        """
-        if self.batch.scope.keys is not None:
-            return None
-        return scoped(self.batch.source, ends, said)
-
     @_action
     def change(self, edit: HeaderEdit) -> str:
         """
         Give the batch the title, description and scope of ``edit``
-        (:meth:`~ess.apps.batch.BatchManager.change`); a scope of keys stays
-        as it is. What the manager refuses is a :class:`Problem`, and changes
-        nothing.
+        (:meth:`~ess.apps.batch.BatchManager.change`). What the manager
+        refuses is a :class:`Problem`, and changes nothing.
         """
-        refused = 'The batch was not changed'
-        scope = self._scope(edit, refused)
         try:
             self.pages.manager.change(
-                self.label, title=edit.title, description=edit.description, scope=scope
+                self.label,
+                title=edit.title,
+                description=edit.description,
+                scope=Scope(start=edit.start, stop=edit.stop),
             )
-        except (KeyError, ValueError) as error:
-            raise Problem(f'{refused}: {why(error)}.') from None
+        except ValueError as error:
+            raise Problem(f'The batch was not changed: {why(error)}.') from None
         return 'Saved.'
-
-    @_locked
-    def added(self, ends: Ends) -> int:
-        """
-        How many rows of the last scan the scope of ``ends`` holds that the
-        batch does not, with no result and no cell set by hand. If the scope
-        is saved while the batch follows, Follow reduces those of them that
-        are complete at its next step (:func:`~ess.apps.batch.arrived`).
-        Nothing for a scope of keys, which a change keeps.
-        """
-        if (scope := self._scope(ends, 'The scope is refused')) is None:
-            return 0
-        rows = self.batch.rows
-        held = replace(rows, scope=scope)
-        reduced = {r.member for r in self.batch.client.records(label=self.label)}
-        return sum(
-            r.key not in rows and r.key not in reduced and r.key not in rows.edits
-            for r in held
-        )
-
-    def _next_scope(self, key: str) -> tuple[TableRow, Scope]:
-        """
-        Row ``key``, and the scope of the next batch if it starts there: from
-        the row's index up to the stop of this batch. :class:`Problem` if this
-        batch names its rows, if the row has no index, or if it is the first
-        row of the scan that this batch holds, which would leave it none.
-        """
-        scope = self.batch.scope
-        if scope.keys is not None:
-            raise Problem('This batch names its rows, so it has no end to set.')
-        row = self._row_of(key)
-        name = self._named(row)
-        if row.index is None:
-            source = self.batch.source
-            what = 'index' if source is None else source.index_title.lower()
-            raise Problem(f'{name} has no {what}, so no batch can start at it.')
-        before = Scope(start=scope.start, stop=row.index)
-        if not any(before.holds(r) for r in self.batch.rows.scan):
-            raise Problem(
-                f'{name} is the first {self.words.one} of this batch, which would '
-                f'then hold none: select a later one.'
-            )
-        return row, Scope(start=row.index, stop=scope.stop)
-
-    @_locked
-    def moved(self, key: str) -> Moved:
-        """
-        What "Start the next batch here" at row ``key`` moves: how many rows
-        this batch shows that the next batch holds instead, and how many of
-        them have a result here, which stays under this batch's label.
-        :class:`Problem` as :meth:`start_next` refuses.
-        """
-        _, scope = self._next_scope(key)
-        moving = [r.key for r in self.batch.rows if scope.holds(r)]
-        reduced = {r.member for r in self.batch.client.records(label=self.label)}
-        return Moved(rows=len(moving), results=len(reduced.intersection(moving)))
 
     @_locked
     def start_next(self, request: Next) -> Made:
         """
         End the batch before row ``request.key``, and start the next batch
-        there, called ``request.title``, with the same spec, source, columns
-        and settings, from the row's index up to this batch's stop. The cells
-        set by hand and the removals of the rows that move go with them; the
-        rows added by hand stay, and so do the results, under this batch's
-        label. Follow moves to the next batch if this batch follows.
-
-        The next batch is made first, so a refusal of the manager, such as of
-        an empty title, changes nothing, and it is removed again if what was
-        set by hand cannot be given to it. If this batch then cannot be ended,
-        both hold the rows that move, Follow stays where it is, and the
-        :class:`Problem` says so.
+        there, called ``request.title``
+        (:meth:`~ess.apps.batch.BatchManager.start_next`). Follow stays where
+        it is: the rows that move have no result under the next batch, so a
+        step would reduce them all again before a person can change its
+        settings. What the manager refuses is a :class:`Problem`.
         """
-        manager = self.pages.manager
-        row, scope = self._next_scope(request.key)
-        rows = self.batch.rows
-        moving = {r.key for r in rows.scan if scope.holds(r)}
-        try:
-            label = manager.create(
-                self.batch.spec.name,
-                title=request.title,
-                source=manager.headers()[self.label].source,
-                columns=self.batch.columns,
-                scope=scope,
-                settings=self.batch.settings,
+        row = self._row_of(request.key)
+        if row.index is None:
+            source = self.batch.source
+            what = 'index' if source is None else source.index_title.lower()
+            raise Problem(
+                f'{self._named(row)} has no {what}, so no batch can start at it.'
             )
-        except (KeyError, ValueError, NotKept) as error:
-            raise Problem(f'The next batch was not made: {why(error)}.') from None
         try:
-            following = manager.batch(label)  # scanned
-            following.rows = replace(
-                following.rows,
-                edits={k: v for k, v in rows.edits.items() if k in moving},
-                removed=rows.removed & moving,
-            )
-        except Exception as error:  # the scan runs code of the application
-            with suppress(NotKept):
-                manager.remove(label)
-            raise Problem(f'The next batch was not made: {why(error)}.') from None
-        try:
-            manager.change(
-                self.label, scope=Scope(start=self.batch.scope.start, stop=row.index)
+            label = self.pages.manager.start_next(
+                self.label, row.index, title=request.title
             )
         except NotKept as error:
-            raise Problem(
-                f'{request.title} was made, but this batch was not ended, so both '
-                f'hold the {self.words.many} that move: {error}'
-            ) from None
-        if self._follows():
-            try:
-                self.pages.follow.on(label)
-            except NotKept as error:
-                raise Problem(
-                    f'{request.title} was made and this batch ended, but Follow '
-                    f'stays on this batch: {error}'
-                ) from None
+            raise Problem(f'The change was not kept: {error}') from None
+        except Exception as error:  # the scan runs code of the application
+            raise Problem(f'The next batch was not made: {why(error)}.') from None
         return Made(label=label)
 
     # One row

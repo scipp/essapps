@@ -178,8 +178,7 @@ class HeaderShown(BaseModel):
     title and columns, which :class:`State` has: the title of its
     ``workflow``, the name of its ``source``, ``None`` for rows added by hand
     only, and what the source calls the index of a row; its description; and
-    its scope, from ``start`` up to ``stop`` (``None`` an open end), or the
-    ``keys`` of the rows it names.
+    its scope, from ``start`` up to ``stop`` (``None`` an open end).
     """
 
     workflow: str
@@ -188,7 +187,6 @@ class HeaderShown(BaseModel):
     description: str
     start: Index | None
     stop: Index | None
-    keys: list[str] | None
 
 
 class State(BaseModel):
@@ -197,9 +195,9 @@ class State(BaseModel):
     and the runs. ``label`` names the batch, ``title`` is its title, and
     ``header`` the rest of its header; ``application`` is the title of the
     application. ``start`` changes when
-    the server starts again, ``version`` with each change, ``runs`` with
-    each change of the runs, and ``batches`` with each change of the list of
-    batches. ``settings`` is the form
+    the server starts again, ``version`` with each change, and ``runs`` with
+    each change of the runs. ``batches`` lists the batches of the workspace,
+    as :class:`Batches` has them. ``settings`` is the form
     of the settings. ``settings_changed`` says whether a person changed it and
     has not applied the change; the rows read as with the batch's settings.
     ``settings_problem`` names the batch's settings that the form cannot show,
@@ -212,7 +210,7 @@ class State(BaseModel):
     version: int
     start: str
     runs: int | None
-    batches: int
+    batches: list[BatchRow]
     label: str
     title: str
     header: HeaderShown
@@ -260,9 +258,8 @@ class Runs(BaseModel):
 class BatchRow(BaseModel):
     """
     A batch of the workspace: its label, title and description, what its
-    rows are called, its scope as text, such as ``Run 60339 \N{EN DASH}`` or
-    ``2 rows named``, empty if it holds every row, and whether it is the one
-    that follows.
+    rows are called, its scope as text, such as ``Run 60339 \N{EN DASH}``,
+    empty if it holds every row, and whether it is the one that follows.
     """
 
     label: str
@@ -279,7 +276,6 @@ class Batches(BaseModel):
     application, and the version of the runs, as :class:`State` has them.
     """
 
-    version: int
     application: str
     runs: int | None
     rows: list[BatchRow]
@@ -383,9 +379,8 @@ class On(BaseModel):
 
 class Ends(BaseModel):
     """
-    The ends of the scope of a batch as typed, converted to the type of the
-    index of its source (:func:`~ess.apps.batch.scope_of`); ``None`` is an
-    open end.
+    The ends of the scope of a batch as typed; the manager converts them to
+    the type of the index of its source. ``None`` is an open end.
     """
 
     start: Index | None = None
@@ -409,7 +404,7 @@ class NewBatch(Ends):
 class HeaderEdit(Ends):
     """
     The title, description and scope of the batch of a page, as a person
-    saves them; a scope of keys stays as it is whatever the ends say.
+    saves them.
     """
 
     title: str
@@ -421,17 +416,6 @@ class Next(BaseModel):
 
     key: str
     title: str
-
-
-class Moved(BaseModel):
-    """
-    What starting the next batch at a row moves: how many ``rows`` the next
-    batch holds in place of this one, and how many of them have a result
-    under this batch's label, which the next batch does not show.
-    """
-
-    rows: int
-    results: int
 
 
 class Made(BaseModel):

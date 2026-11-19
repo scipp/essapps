@@ -2,35 +2,44 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 The batches of a workspace: :class:`BatchManager` makes, lists, changes and
-removes them. The guide is the section "The batches of a workspace" of
+removes them, ends one at a row to start the next, and keeps which batch
+follows. The guide is the section "The batches of a workspace" of
 ``packages/essapps/docs/batch.md``; the decision is
 ``docs/developer/adr/0011-a-person-makes-the-batches-of-a-workspace.md``.
 
-A batch is kept as three tables of the definitions (:mod:`.definition`), each
+A batch is a label with a header. A :class:`~.reduction.Batch` is the object
+that works on its rows; the manager makes the one ``Batch`` of each batch. A
+batch is kept as three tables of the definitions (:mod:`.definition`), each
 with one writer::
 
     header      the spec by name, the columns, the name     BatchManager
                 of its source, title, description, scope
-    settings    a template of the settings, its spec and    Batch.settings; the
-                blanks a copy of the header's               first by the manager
+    settings    a template of the settings; reading it      Batch.settings; the
+                checks the name of its spec, and reads      first by the manager
+                neither its version nor its blanks, since
+                the header says the columns
     edits       what a person set on its rows               Batch.rows
 
 so a manager made again, after a restart, makes the same ``Batch`` of a label
-from them, the registered sources and the defaults. Making a batch writes its
-first settings, before any ``Batch`` of the label exists, then its header: a
-label without a header is not a batch, and a header without settings is a
-batch with the default settings of its spec. The ``Batch`` of a label is made
-at the first call of :meth:`BatchManager.batch`, and writes the settings and
-the edits from then on.
+from them, the registered sources and the specs that run staged. Making a
+batch writes its first settings, before any ``Batch`` of the label exists,
+then its header: a label without a header is not a batch. The ``Batch`` of a
+label is made at the first call of :meth:`BatchManager.batch`, and writes the
+settings and the edits from then on.
+
+The manager writes one more table, ``following``: the label of the batch that
+follows, or none. A step of Follow is one step of
+:class:`~.auto.Automatic` on ``manager.batch(manager.following)``; whoever
+serves owns the timer that calls it, and the lock. The manager has neither.
 """
 
 from __future__ import annotations
 
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
@@ -38,88 +47,23 @@ from pydantic import TypeAdapter, ValidationError
 from ess.spec import WorkflowSpec
 
 from ..client import Client
-from ..errors import SubmitError
 from ..records import Template
 from .definition import (
+    FOLLOWING,
     DefinitionStore,
     Header,
     NotKept,
     edits_key,
+    following_data,
+    following_of,
     header_data,
     header_key,
     header_of,
     settings_key,
     template_data,
 )
-from .reduction import Batch, Source, check_fills, file_infos
-from .state import RowState
-from .table import Scope
-
-
-@dataclass(frozen=True)
-class Defaults:
-    """
-    What an application gives a new batch of one spec.
-
-    Parameters
-    ----------
-    settings:
-        The settings that a new batch starts with, copied once when it is
-        made, so a change of them leaves the batches made before as they are.
-        Those that are columns of the batch are left out. A batch whose
-        settings are not kept starts with them too.
-    staged:
-        Run the rows through a stage, as :class:`~.reduction.Batch` takes it.
-        It is read at every start, and so applies to the batches made before
-        too.
-    """
-
-    settings: Mapping[str, Any] = field(default_factory=dict)
-    staged: bool = False
-
-
-@dataclass(frozen=True)
-class Counts:
-    """
-    What :meth:`BatchManager.counts` gives: where the rows of each batch
-    stand, and how many rows of each source no batch shows.
-
-    Parameters
-    ----------
-    states:
-        The state of each row, by key, of each batch that could be made and
-        scanned, by label. Count them with :func:`~.state.status_texts`.
-    failed:
-        Why each other batch could not be made or scanned, by label.
-    outside:
-        The rows that each registered source makes and no batch of it shows,
-        by its name. A row counts as shown if any batch of the source shows
-        it, so a row removed by hand, or outside a scope, counts here only if
-        every batch of the source removed it or leaves it out. A source is
-        left out if one of its batches failed, or if it raised.
-    """
-
-    states: dict[str, dict[str, RowState]]
-    failed: dict[str, str]
-    outside: dict[str, int]
-
-
-def _said(error: Exception) -> str:
-    """What an exception says, without the quotes of a ``KeyError``."""
-    if isinstance(error, KeyError) and error.args:
-        return str(error.args[0])
-    return str(error) or repr(error)
-
-
-def bound_spec(client: Client, name: str) -> WorkflowSpec[Any, Any]:
-    """
-    The spec of ``name`` that the workspace binds, the highest version if it
-    binds several; raises ``KeyError`` if it binds none.
-    """
-    specs = [spec for spec in client.specs() if spec.name == name]
-    if not specs:
-        raise KeyError(f'the workspace binds no spec {name}')
-    return max(specs, key=lambda spec: spec.version)
+from .reduction import Batch, Source, check_fills
+from .table import Index, Scope
 
 
 def fits(spec: WorkflowSpec[Any, Any], source: Source | None) -> bool:
@@ -135,17 +79,17 @@ def fits(spec: WorkflowSpec[Any, Any], source: Source | None) -> bool:
 _KINDS = {int: 'a whole number', float: 'a number', str: 'text'}
 
 
-def scope_of(source: Source | None, start: Any = None, stop: Any = None) -> Scope:
+def _scope_of(source: Source | None, scope: Scope) -> Scope:
     """
-    The slice of the rows of ``source`` from ``start`` to ``stop``, each end
-    converted to the type of its index (:attr:`~.reduction.Source.index_type`),
-    such as ``'60339'`` to ``60339``; ``None`` is an open end. Raises
-    ``ValueError`` for an end that does not convert, naming it, and for an
-    end without a source: a batch without one has only rows added by hand,
-    which have no index.
+    ``scope`` as a slice of the rows of ``source``: each end converted to the
+    type of its index (:attr:`~.reduction.Source.index_type`), such as
+    ``'60339'`` to ``60339``. Raises ``ValueError`` for an end that does not
+    convert, naming it; for an end without a source, since a batch without
+    one has only rows added by hand, which have no index; and for a ``stop``
+    below the ``start``.
     """
-    if start is None and stop is None:
-        return Scope()
+    if scope == Scope():
+        return scope
     if source is None:
         raise ValueError(
             'a batch without a source has only rows added by hand, which have '
@@ -162,14 +106,13 @@ def scope_of(source: Source | None, start: Any = None, stop: Any = None) -> Scop
             kind = _KINDS[source.index_type]
             raise ValueError(f'{source.index_title} {value!r} is not {kind}') from None
 
-    return Scope(start=end(start), stop=end(stop))
-
-
-def _typed(source: Source | None, scope: Scope) -> Scope:
-    """``scope``, a slice with its ends converted as :func:`scope_of` does."""
-    return (
-        scope if scope.keys is not None else scope_of(source, scope.start, scope.stop)
-    )
+    scope = Scope(start=end(scope.start), stop=end(scope.stop))
+    start, stop = scope.start, scope.stop
+    if start is not None and stop is not None and stop < start:  # type: ignore[operator]
+        raise ValueError(
+            f'the stop of a scope, {scope.stop!r}, is below its start, {scope.start!r}'
+        )
+    return scope
 
 
 def check_label(label: str) -> None:
@@ -187,15 +130,23 @@ def check_label(label: str) -> None:
 
 class BatchManager:
     """
-    Makes, lists, changes and removes the batches of a workspace, and holds
-    the one :class:`~.reduction.Batch` of each label. See
+    Makes, lists, changes and removes the batches of a workspace, holds the
+    one :class:`~.reduction.Batch` of each label, and keeps which batch
+    follows. See
     ``packages/essapps/docs/batch.md``.
 
+    Every refusal of what is asked raises ``ValueError``, with a message for a
+    person, such as for a spec that the workspace does not bind, a source that
+    is not registered, or a label that is taken. ``KeyError`` says only that
+    no batch has the label asked for, and :class:`~.definition.NotKept` that
+    the definitions refuse a write. Anything else is an error of the code of
+    the application, such as a source that raises.
+
     The headers are read when the manager is made. Each change of a header is
-    written to the definitions before the manager holds it, and one that
-    they refuse raises :class:`~.definition.NotKept`, so the manager lists
-    the batches whose header the definitions keep. :meth:`create` and
-    :meth:`remove` say what they leave when a write is refused.
+    written to the definitions before the manager holds it, so the manager
+    lists the batches whose header the definitions keep. A write that they
+    refuse raises :class:`~.definition.NotKept`, and what was written before
+    it in the same call stays written.
 
     Parameters
     ----------
@@ -205,9 +156,16 @@ class BatchManager:
         The sources that a batch can be made with, by name.
     definitions:
         Where the batches are kept.
-    defaults:
-        What a new batch of a spec gets, by the spec's name; ``Defaults()``
-        for a spec not named.
+    settings:
+        The settings that a new batch of a spec starts with, by the name of
+        the spec; none for a spec not named. They are copied when a batch is
+        made, so a change of them leaves the batches made before as they are.
+        Those that are columns of the batch are left out.
+    staged:
+        The names of the specs whose batches run their rows through a stage,
+        as :class:`~.reduction.Batch` takes it. It is read each time the
+        manager makes the ``Batch`` of a label, so it applies to the batches
+        made before too.
     """
 
     def __init__(
@@ -216,17 +174,46 @@ class BatchManager:
         *,
         sources: Mapping[str, Source],
         definitions: DefinitionStore,
-        defaults: Mapping[str, Defaults] | None = None,
+        settings: Mapping[str, Mapping[str, Any]] | None = None,
+        staged: Collection[str] = (),
     ) -> None:
         self.client = client
         self.sources = sources
         self._definitions = definitions
-        self._defaults = {} if defaults is None else defaults
+        self._settings = {} if settings is None else settings
+        self._staged = staged
         self._headers: dict[str, Header] = {}
         for label in definitions.labels():
             if (header := definitions.load(header_key(label), header_of)) is not None:
                 self._headers[label] = header
         self._batches: dict[str, Batch] = {}
+        following = definitions.load(FOLLOWING, following_of)
+        self._following = following if following in self._headers else None
+
+    @property
+    def following(self) -> str | None:
+        """
+        The label of the batch that follows, ``None`` if none does. It is
+        kept in the definitions and read when the manager is made; a label
+        kept without a header counts as none.
+        """
+        return self._following
+
+    def follow(self, label: str | None) -> None:
+        """
+        Make the batch of ``label`` the one that follows, so that no other
+        does; with ``None``, let none follow. It makes no ``Batch``. Raises
+        ``KeyError`` if no batch has the label, and ``ValueError`` if the
+        batch has no source or its source is not registered.
+        """
+        if label is not None:
+            if (name := self._headers[label].source) is None:
+                raise ValueError(
+                    f'{label} has no source of rows, so it cannot follow the files'
+                )
+            self._source(name)
+        self._definitions.save(FOLLOWING, following_data(label))
+        self._following = label
 
     def create(
         self,
@@ -241,9 +228,9 @@ class BatchManager:
         label: str | None = None,
     ) -> str:
         """
-        Make a batch and keep it; its label. If saving the header is refused,
-        the settings written before it are deleted, and ``NotKept`` raised.
-        Nothing is written if a check fails.
+        Make a batch and keep it; its label. Nothing is written if a check
+        fails. The first settings are written before the header, so a label
+        without a header is no batch.
 
         Parameters
         ----------
@@ -262,11 +249,11 @@ class BatchManager:
             What a person says of the batch.
         scope:
             The rows of the source that the batch holds; every row if not
-            given. The ends of a slice are converted to the type of the
-            index of the source (:func:`scope_of`).
+            given. Its ends are converted to the type of the index of the
+            source, such as ``'60339'`` to ``60339``.
         settings:
-            The settings to start with, in place of the defaults of the spec.
-            Those that are columns are left out.
+            The settings to start with, in place of those that the manager
+            was given for the spec. Those that are columns are left out.
         label:
             The label of the batch. If not given, the time of making,
             ``YYYYMMDD-HHMMSS``, with ``-2``, ``-3``, ... added if that is
@@ -274,16 +261,14 @@ class BatchManager:
 
         Raises
         ------
-        KeyError
-            If the workspace binds no spec ``spec``, or no source ``source``
-            is registered.
         ValueError
             If ``title`` is empty or only spaces; if ``label`` is not one that
-            :func:`check_label` takes, or has definitions or records; if the
-            spec does not fit the source (:func:`fits`); if a column is not a
-            parameter of the spec, or is named twice; if the source fills a
-            parameter that is not among the columns; or if :func:`scope_of`
-            refuses an end of the scope.
+            :func:`check_label` takes, or has definitions or records; if no
+            source ``source`` is registered; if the workspace binds no spec
+            ``spec``; if a column is not a parameter of the spec, or is named
+            twice; if the source fills a parameter that is not among the
+            columns; or for an end of the scope that does not convert, an end
+            without a source, or a stop below the start.
         """
         if label is None:
             stamp = time.strftime('%Y%m%d-%H%M%S')
@@ -291,21 +276,14 @@ class BatchManager:
             while self._taken(label):
                 n += 1
                 label = f'{stamp}-{n}'
-        check_label(label)
-        if self._taken(label):
-            raise ValueError(f'{label}: the label has definitions or records')
-        bound = bound_spec(self.client, spec)
-        registered = None if source is None else self.sources[source]
+        else:
+            check_label(label)
+            if self._taken(label):
+                raise ValueError(f'{label}: the label has definitions or records')
+        registered = self._source(source)
         fills = () if registered is None else registered.fills
-        if not fits(bound, registered):
-            lacks = sorted(set(fills) - bound.params.model_fields.keys())
-            raise ValueError(
-                f'{bound.title} has no parameters {lacks}, which the source '
-                f'{source} fills'
-            )
         columns = fills if columns is None else tuple(columns)
-        if unknown := sorted(set(columns) - bound.params.model_fields.keys()):
-            raise ValueError(f'{bound.title} has no parameters {unknown}')
+        bound = self._bound(spec, columns)
         if len(set(columns)) != len(columns):
             raise ValueError(f'a column is named twice: {list(columns)}')
         check_fills(label, registered, columns)
@@ -315,22 +293,40 @@ class BatchManager:
             source=source,
             title=title,
             description=description,
-            scope=_typed(registered, Scope() if scope is None else scope),
+            scope=_scope_of(registered, Scope() if scope is None else scope),
         )
         if settings is None:
-            settings = self._defaults.get(spec, Defaults()).settings
+            settings = self._settings.get(spec, {})
         # The template leaves out the settings that are columns.
         template = Template(bound, params=settings, blanks=columns)
         self._definitions.save(settings_key(label), template_data(template))
-        try:
-            self._definitions.save(header_key(label), header_data(header))
-        except NotKept:
-            # so that the label is not left taken by settings alone
-            with suppress(NotKept):
-                self._definitions.delete(settings_key(label))
-            raise
+        self._definitions.save(header_key(label), header_data(header))
         self._headers[label] = header
         return label
+
+    def _source(self, name: str | None) -> Source | None:
+        """
+        The source registered as ``name``, ``None`` for none; ``ValueError``
+        if none is registered so.
+        """
+        if name is None:
+            return None
+        if name not in self.sources:
+            raise ValueError(f'the source {name} is not registered')
+        return self.sources[name]
+
+    def _bound(self, spec: str, columns: Sequence[str]) -> WorkflowSpec[Any, Any]:
+        """
+        The spec of name ``spec`` that the workspace binds; ``ValueError`` if
+        it binds none, or if one of ``columns`` is not a parameter of it.
+        """
+        try:
+            bound = self.client.spec_named(spec)
+        except KeyError as error:
+            raise ValueError(error.args[0]) from None
+        if unknown := sorted(set(columns) - bound.params.model_fields.keys()):
+            raise ValueError(f'{bound.title} has no parameters {unknown}')
+        return bound
 
     def _taken(self, label: str) -> bool:
         """Whether ``label`` has definitions or records."""
@@ -350,28 +346,23 @@ class BatchManager:
         time it is used: one handed out before must not be used after
         :meth:`remove`.
 
-        Raises ``KeyError`` if no batch has the label, or the workspace binds
-        no spec of its name, or its source is not registered; ``ValueError``
-        if its settings or edits cannot be read, or its source fills a
-        parameter that is not a column of the batch.
+        Raises ``KeyError`` if no batch has the label; ``ValueError`` if its
+        source is not registered, if the workspace binds no spec of its name,
+        or one that lacks a column, if its settings or edits cannot be read,
+        or if its source fills a parameter that is not a column of the batch.
         """
         if (batch := self._batches.get(label)) is not None:
             return batch
         header = self._headers[label]
-        if (name := header.source) is not None and name not in self.sources:
-            raise KeyError(f'{label}: the source {name} is not registered')
-        defaults = self._defaults.get(header.spec, Defaults())
+        source = self._source(header.source)
         batch = Batch(
             self.client,
-            bound_spec(self.client, header.spec),
+            self._bound(header.spec, header.columns),
             columns=header.columns,
             label=label,
-            source=None if name is None else self.sources[name],
-            staged=defaults.staged,
+            source=source,
+            staged=header.spec in self._staged,
             persist=True,
-            settings={
-                n: v for n, v in defaults.settings.items() if n not in header.columns
-            },
             definitions=self._definitions,
             scope=header.scope,
         )
@@ -379,49 +370,6 @@ class BatchManager:
             batch.scan()
         self._batches[label] = batch
         return batch
-
-    def counts(self) -> Counts:
-        """
-        Where the rows of every batch stand, and the rows of each registered
-        source that no batch shows (see :class:`Counts`). It makes every batch
-        not made yet, which scans it, and scans every other batch with a
-        source, so the rows of each batch are those of the files now. While
-        the settings of a batch are refused, its rows are as
-        :meth:`~.reduction.Batch.results` gives them. A source is called once
-        more only if no batch of it was scanned.
-        """
-        states: dict[str, dict[str, RowState]] = {}
-        failed: dict[str, str] = {}
-        made: dict[str, set[str]] = {}  # the keys of the rows each source made
-        shown: dict[str, set[str]] = {name: set() for name in self.sources}
-        for label, header in self.headers().items():
-            try:
-                new = label not in self._batches
-                batch = self.batch(label)  # scans a batch that it makes
-                if not new and batch.source is not None:
-                    batch.scan()
-                try:
-                    states[label] = batch.state()
-                except SubmitError:
-                    states[label] = batch.results()
-            except Exception as error:  # a source is code of the application
-                failed[label] = _said(error)
-                if header.source is not None:  # its rows shown are not known
-                    shown.pop(header.source, None)
-                continue
-            if header.source is not None and header.source in shown:
-                made[header.source] = {row.key for row in batch.rows.scan}
-                shown[header.source] |= {row.key for row in batch.rows}
-        outside = {}
-        for name, keys in shown.items():
-            source = self.sources[name]
-            if name not in made:
-                with suppress(Exception):  # a source is code of the application
-                    infos = file_infos(self.client, source.selector)
-                    made[name] = {row.key for row in source.rows(infos)}
-            if name in made:
-                outside[name] = len(made[name] - keys)
-        return Counts(states, failed, outside)
 
     def change(
         self,
@@ -433,16 +381,15 @@ class BatchManager:
     ) -> Header:
         """
         The header of ``label`` with what is given changed, as kept. A scope
-        changes the rows of the batch at once, without a scan; the ends of a
-        slice are converted as :func:`scope_of` does. Raises ``KeyError`` if
-        no batch has the label, or a scope is given and the source of the
-        batch is not registered; ``ValueError`` for an empty title, and for
-        an end of the scope that :func:`scope_of` refuses.
+        changes the rows of the batch at once, without a scan; its ends are
+        converted as :meth:`create` converts them. Raises ``KeyError`` if no
+        batch has the label; ``ValueError`` for an empty title, and, if a
+        scope is given, if the source of the batch is not registered, or for
+        an end of the scope as :meth:`create` refuses it.
         """
         header = self._headers[label]
         if scope is not None:
-            source = None if header.source is None else self.sources[header.source]
-            scope = _typed(source, scope)
+            scope = _scope_of(self._source(header.source), scope)
         header = replace(
             header,
             title=header.title if title is None else title,
@@ -455,21 +402,80 @@ class BatchManager:
             batch.scope = header.scope
         return header
 
+    def start_next(self, label: str, index: Index, *, title: str) -> str:
+        """
+        End the batch of ``label`` before ``index``, and make the next batch,
+        called ``title``, from ``index`` up to the stop of the batch, with the
+        same spec, source, columns and settings; its label. The cells set by
+        hand and the removals of the rows that move go with them; the rows
+        added by hand stay, and so do the results, under ``label``.
+
+        It raises what :meth:`batch` and :meth:`create` raise, and
+        ``ValueError`` if ``index`` is below the start of the scope of the
+        batch, or at or above its stop, which would leave the next batch no
+        row, or if the batch holds no row of the scan before ``index``, which
+        would leave it none; with the batch of ``label`` as it was. The next
+        batch is made first; if its scan raises, or it cannot take what was
+        set by hand, it is removed again (:meth:`remove`) and the error
+        raised, since a batch that cannot be shown cannot be removed on a
+        page.
+        """
+        batch = self.batch(label)
+        header = self._headers[label]
+        ended = _scope_of(batch.source, Scope(start=header.scope.start, stop=index))
+        if not any(ended.holds(row) for row in batch.rows.scan):
+            raise ValueError(
+                f'the batch holds no row before {index}, so it would then hold none'
+            )
+        scope = _scope_of(batch.source, Scope(start=index, stop=header.scope.stop))
+        if scope.start == scope.stop:
+            raise ValueError(
+                f'{index} is the stop of the batch, so the next batch would hold no row'
+            )
+        rows = batch.rows
+        moving = {row.key for row in rows.scan if scope.holds(row)}
+        made = self.create(
+            header.spec,
+            title=title,
+            source=header.source,
+            columns=header.columns,
+            scope=scope,
+            settings=batch.settings,
+        )
+        try:
+            next_batch = self.batch(made)  # scanned
+            next_batch.rows = replace(
+                next_batch.rows,
+                edits={k: v for k, v in rows.edits.items() if k in moving},
+                removed=rows.removed & moving,
+            )
+        except Exception:
+            # The first error is what to say, not a refused clean-up.
+            with suppress(NotKept):
+                self.remove(made)
+            raise
+        self.change(label, scope=ended)
+        return made
+
     def remove(self, label: str) -> None:
         """
         Forget the batch of ``label`` and remove its definitions; its records
-        stay, and those running keep running. A ``Batch`` of the label handed
-        out before must not be used after: it would write its definitions
-        again. Raises ``KeyError`` if no batch has the label.
+        stay, and those running keep running. If the batch follows, none
+        follows from then on. A ``Batch`` of the label handed out before must
+        not be used after: it would write its definitions again. Raises
+        ``KeyError`` if no batch has the label.
 
         The header is deleted first, so a batch is never listed half removed.
-        If the definitions refuse a later delete, ``NotKept`` is raised, and
-        the label keeps that part and cannot be made again.
         """
         if label not in self._headers:
             raise KeyError(label)
         self._definitions.delete(header_key(label))
         del self._headers[label]
+        # A kept label without a header counts as none, so if this write is
+        # refused, none follows after a restart either.
+        if label == self._following:
+            self._following = None
+            self._definitions.save(FOLLOWING, following_data(None))
         if (batch := self._batches.pop(label, None)) is not None:
             batch.close()
         self._definitions.delete(edits_key(label))

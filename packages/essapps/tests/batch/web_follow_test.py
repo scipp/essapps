@@ -18,13 +18,12 @@ from pydantic import BaseModel
 
 from ess.apps import Client, Status
 from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions
-from ess.apps.batch.auto import Follow
 from ess.apps.batch.web import Page, Pages, create_app
-from ess.apps.batch.web.models import CellEdit, Cells, Edit, Reduce, State
+from ess.apps.batch.web.models import CellEdit, Cells, Edit, Next, Reduce, State
 from ess.apps.batch.web.page import Problem
 from ess.apps.testing import FakeFiles
 
-from .toys import COLUMNS, DEFAULTS, SOURCES, STAGED, Gate, Measure, Refusing
+from .toys import COLUMNS, SOURCES, STAGED, STAGED_NAMES, Gate, Measure
 
 BINS = ['binning', 'bins']
 
@@ -35,14 +34,14 @@ class Marks(BaseModel):
 
 
 @pytest.fixture
-def pages(manager: BatchManager, refusing: Refusing, files: CorrectedFiles) -> Pages:
-    return Pages(manager, Follow(manager, refusing), files=files, marks=Marks)
+def pages(manager: BatchManager, files: CorrectedFiles) -> Pages:
+    return Pages(manager, files=files, marks=Marks)
 
 
 @pytest.fixture
 def page(pages: Pages, label: str) -> Page:
     """The page of ``label``, the batch that follows."""
-    pages.follow.on(label)
+    pages.manager.follow(label)
     return pages.page(label)
 
 
@@ -201,12 +200,12 @@ def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_p
         finishing,  # type: ignore[arg-type]
         sources=SOURCES,
         definitions=definitions,
-        defaults=DEFAULTS,
+        staged=STAGED_NAMES,
     )
     label = manager.create(STAGED.name, title='Scan', source='pairs', columns=COLUMNS)
     sample(1, 'water')
-    pages = Pages(manager, Follow(manager, definitions))
-    pages.follow.on(label)
+    pages = Pages(manager)
+    pages.manager.follow(label)
     http = opened(pages, label)
     page = pages.page(label)
     gate.close()
@@ -233,10 +232,10 @@ def test_a_step_reduces_a_row_whose_cell_changed_at_a_column_of_at(
 
 
 def test_a_run_that_a_step_finds_can_be_chosen_in_a_cell_without_a_runs_view(
-    manager: BatchManager, refusing: Refusing, label: str, sample: Measure
+    manager: BatchManager, label: str, sample: Measure
 ) -> None:
-    pages = Pages(manager, Follow(manager, refusing))
-    pages.follow.on(label)
+    pages = Pages(manager)
+    pages.manager.follow(label)
     page = pages.page(label)
     page.pages.tick()
     sample(1, 'water', partner=False)  # a row that waits, so no record is made
@@ -584,7 +583,7 @@ def test_a_tick_whose_step_raises_what_cannot_be_said_lets_the_next_tick_run(
 def test_a_tick_does_nothing_while_not_following(
     page: Page, pages: Pages, sample: Measure
 ) -> None:
-    pages.follow.off()
+    pages.manager.follow(None)
     sample(1, 'water')
 
     pages.tick()
@@ -628,16 +627,14 @@ def test_a_tick_that_waited_for_the_request_that_stops_following_does_nothing(
 
 def test_the_app_steps_while_following_and_stops_with_the_app(
     manager: BatchManager,
-    refusing: Refusing,
     label: str,
     sample: Measure,
     client: Client,
 ) -> None:
     sample(1, 'water')
-    follow = Follow(manager, refusing, interval=0.01)
-    follow.on(label)
+    manager.follow(label)
 
-    with opened(Pages(manager, follow), label) as http:
+    with opened(Pages(manager, interval=0.01), label) as http:
         give_up = time.monotonic() + 10
         while not client.records() and time.monotonic() < give_up:
             time.sleep(0.01)
@@ -650,15 +647,13 @@ def test_the_app_steps_while_following_and_stops_with_the_app(
 
 def test_a_parent_that_runs_the_lifespan_of_the_app_it_mounts_steps_follow(
     manager: BatchManager,
-    refusing: Refusing,
     label: str,
     sample: Measure,
     client: Client,
 ) -> None:
     sample(1, 'water')
-    follow = Follow(manager, refusing, interval=0.01)
-    follow.on(label)
-    batch = create_app(Pages(manager, follow))
+    manager.follow(label)
+    batch = create_app(Pages(manager, interval=0.01))
     parent = FastAPI(lifespan=lambda _: batch.router.lifespan_context(batch))
     parent.mount('/batch', batch)
 
@@ -690,7 +685,7 @@ def test_follow_turned_on_on_one_page_shows_on_the_other_which_batch_follows(
     assert on.follow is not None
     assert (on.follow.on, on.follow.other) == (True, None)
     off = page.follow(False)  # a page that does not follow stops nothing
-    assert (off.notice, pages.follow.label) == ('', other.label)
+    assert (off.notice, pages.manager.following) == ('', other.label)
 
 
 def test_follow_resumes_after_a_restart(
@@ -701,9 +696,9 @@ def test_follow_resumes_after_a_restart(
     definitions: FolderDefinitions,
 ) -> None:
     manager = BatchManager(
-        client, sources=SOURCES, definitions=definitions, defaults=DEFAULTS
+        client, sources=SOURCES, definitions=definitions, staged=STAGED_NAMES
     )
-    again = Pages(manager, Follow(manager, definitions))
+    again = Pages(manager)
     sample(1, 'water')
 
     again.tick()
@@ -717,7 +712,7 @@ def test_follow_resumes_after_a_restart(
 def test_a_tick_steps_the_batch_that_follows_without_a_page_open(
     pages: Pages, label: str, client: Client, sample: Measure
 ) -> None:
-    pages.follow.on(label)
+    pages.manager.follow(label)
     sample(1, 'water')
 
     pages.tick()
@@ -730,7 +725,7 @@ def test_a_tick_after_follow_moved_steps_the_batch_that_follows_now(
     page: Page, pages: Pages, manager: BatchManager, client: Client, sample: Measure
 ) -> None:
     other = manager.create(STAGED.name, title='Other', source='pairs')
-    pages.follow.on(other)
+    pages.manager.follow(other)
     sample(1, 'water')
 
     pages.tick()
@@ -754,10 +749,57 @@ def test_the_failure_of_a_step_shows_on_the_page_of_the_batch_that_follows_only(
     assert shown.failure is None
 
 
+def test_follow_stays_on_the_batch_that_ended_and_the_rows_that_moved_wait(
+    page: Page, pages: Pages, manager: BatchManager, client: Client, sample: Measure
+) -> None:
+    sample(1, 'water')
+    sample(2, 'oil')
+    page.follow(True)
+    done(page, client)
+
+    made = page.start_next(Next(key='2', title='Afternoon')).label
+    pages.tick()
+
+    following = pages.page(made)
+    assert manager.following == page.label
+    assert statuses(following.state()) == {'oil': 'ready'}
+    assert client.records(label=made) == []
+    following.follow(True)
+    assert statuses(done(following, client)) == {'oil': 'done'}
+
+
+@pytest.mark.parametrize('turned', ['on its page', 'in code'])
+def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follows(
+    page: Page,
+    pages: Pages,
+    manager: BatchManager,
+    sample: Measure,
+    fake: FakeFiles,
+    turned: str,
+) -> None:
+    sample(1, 'water')
+    bins(page, 0)
+    refused = page.follow(True)  # Follow cannot submit water with these settings
+    other = pages.page(
+        manager.create(STAGED.name, title='Other', source='pairs', columns=COLUMNS)
+    )
+    # No step runs on the other batch: its first step raises, or none runs.
+    fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
+
+    if turned == 'on its page':
+        shown = other.follow(True)
+    else:
+        manager.follow(other.label)
+        shown = other.state()
+
+    assert statuses(refused) == {'water': 'incomplete'}
+    assert statuses(shown) == {'water': 'ready'}
+
+
 def test_a_step_that_cannot_make_its_batch_is_a_failure_that_its_page_says(
     pages: Pages, label: str, fake: FakeFiles, sample: Measure
 ) -> None:
-    pages.follow.on(label)
+    pages.manager.follow(label)
     sample(1, 'water')
     fake.measure(7, 1.0, role='transmission')  # the source needs a name
 
@@ -799,19 +841,3 @@ def test_the_counts_of_the_batch_that_follows_are_the_chips_of_its_page(
 
     chips = {s: n for s, n in page.state().counts.items() if n and s != 'all'}
     assert counted == chips == {'outdated': 1, 'incomplete': 1}
-
-
-def test_follow_turning_itself_off_moves_the_version_of_the_list_of_batches(
-    page: Page, pages: Pages, manager: BatchManager
-) -> None:
-    other = manager.create(STAGED.name, title='Other', source='pairs')
-    pages.follow.on(other)
-    manager.remove(other)
-    seen = page.state()
-
-    pages.tick()  # Follow finds its batch gone
-
-    polled = page.poll(seen.version, page.start)
-    assert pages.follow.label is None
-    assert polled is not None
-    assert polled.batches > seen.batches

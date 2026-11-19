@@ -10,34 +10,28 @@ for application developers is ``packages/essapps/docs/batch.md``.
 
 from .corrections import CorrectedFiles
 from .definition import DefinitionStore, FolderDefinitions, Header, NotKept
-from .manager import BatchManager, Counts, Defaults, bound_spec, fits, scope_of
+from .manager import BatchManager
 from .reduction import Batch, FileInfo, RowSource, Source, Words, file_infos
 from .state import (
-    EARLIER,
     RowState,
     arrived,
-    compared,
     earlier_settings,
     left_to_reduce,
     ready,
     refused_again,
     status_texts,
 )
-from .table import EMPTY, Index, Row, RowTable, Scope
+from .table import EMPTY, Row, RowTable, Scope
 
 __all__ = [
-    'EARLIER',
     'EMPTY',
     'Batch',
     'BatchManager',
     'CorrectedFiles',
-    'Counts',
-    'Defaults',
     'DefinitionStore',
     'FileInfo',
     'FolderDefinitions',
     'Header',
-    'Index',
     'NotKept',
     'Row',
     'RowSource',
@@ -47,14 +41,10 @@ __all__ = [
     'Source',
     'Words',
     'arrived',
-    'bound_spec',
-    'compared',
     'earlier_settings',
     'file_infos',
-    'fits',
     'left_to_reduce',
     'ready',
     'refused_again',
-    'scope_of',
     'status_texts',
 ]

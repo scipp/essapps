@@ -26,11 +26,12 @@ be shown (:meth:`Pages.page`), with the reason, and that of a batch removed
 (:meth:`Pages.remove`): a :class:`~.page.Page` handed out before answers
 :class:`~.page.Missing` from then on.
 
-Follow is the one loop of the application
-(:class:`~ess.apps.batch.auto.Follow`). :meth:`Pages.tick` steps it, with or
-without a page open, keeps what the step raised, and has the page of the batch
-that follows show what the step changed. :func:`~.api.create_app` owns the
-timer that calls it.
+The manager keeps which batch follows
+(:attr:`~ess.apps.batch.BatchManager.following`). :meth:`Pages.tick` steps it
+with :class:`~ess.apps.batch.auto.Automatic`, with or without a page open,
+keeps why rows were refused and what the step raised, and has the page of the
+batch that follows show what the step changed. :func:`~.api.create_app` owns
+the timer that calls it, every :attr:`Pages.interval` seconds.
 """
 
 from __future__ import annotations
@@ -45,22 +46,17 @@ from pydantic import BaseModel
 
 from ess.spec import FileRef, WorkflowSpec
 
+from ...errors import SubmitError
 from ...fields import UNSET, Fields
 from ...files import Selector
 from ...listing import Listing
-from .. import (
-    BatchManager,
-    CorrectedFiles,
-    NotKept,
-    RowState,
-    Scope,
-    Source,
-    Words,
-    bound_spec,
-    fits,
-    refused_again,
-)
-from ..auto import Follow
+from ..auto import Automatic
+from ..corrections import CorrectedFiles
+from ..definition import NotKept
+from ..manager import BatchManager, fits
+from ..reduction import Source, Words, file_infos
+from ..state import RowState, refused_again
+from ..table import Scope
 from . import forms
 from .models import (
     BatchCounts,
@@ -86,7 +82,6 @@ from .page import (
     Problem,
     page_statuses,
     read,
-    scoped,
     why,
 )
 
@@ -99,8 +94,9 @@ class Pages:
     ----------
     manager:
         The batches.
-    follow:
-        The loop of the application over them.
+    interval:
+        The seconds between two steps of Follow, for the timer of
+        :func:`~.api.create_app`.
     title:
         The title of the application.
     draw:
@@ -125,13 +121,18 @@ class Pages:
         again at its next poll after one.
     failure:
         What the last step of Follow raised, ``None`` if it raised nothing.
+    refused:
+        The label of the batch that the last step of Follow that did not
+        raise was on, and why it refused rows, by key
+        (:attr:`~ess.apps.batch.auto.Automatic.refused`); said only while
+        that batch follows, and emptied when its page applies settings.
     """
 
     def __init__(
         self,
         manager: BatchManager,
-        follow: Follow,
         *,
+        interval: float = 5.0,
         title: str = '',
         draw: Mapping[str, Draw] | None = None,
         files: CorrectedFiles | None = None,
@@ -139,7 +140,7 @@ class Pages:
         folder: str = '',
     ) -> None:
         self.manager = manager
-        self.follow = follow
+        self.interval = interval
         self.title = title
         self.draw = {} if draw is None else draw
         # What a person corrects of a run, and where; None if nothing.
@@ -152,11 +153,9 @@ class Pages:
         # What the runs, their corrections and a new batch are read with,
         # listed again for each.
         self._listing: Listing | None = None
-        # The batches and the label that follows, as listed at the last version.
-        self._batches: tuple[object, ...] = ()
-        self._batches_version = 0
         self.corrected = 0
         self.failure: str | None = None
+        self.refused: tuple[str | None, dict[str, str]] = (None, {})
         self._pages: dict[str, Page] = {}
 
     def page(self, label: str) -> Page:
@@ -188,30 +187,34 @@ class Pages:
         ``/`` lists them rather than guess.
         """
         with self.lock:
+            if (label := self.manager.following) is not None:
+                return label
             headers = self.manager.headers()
-            if self.follow.label in headers:
-                return self.follow.label
             return next(iter(headers)) if len(headers) == 1 else None
 
     def tick(self) -> None:
         """
-        A step of Follow, then :meth:`Page.stepped <.page.Page.stepped>`
-        of the page of the batch that follows; :func:`~.api.create_app` calls
-        it on a timer. What the step raises is :attr:`failure`, and the next
-        step tries again.
+        A step of Follow: one step of :class:`~ess.apps.batch.auto.Automatic`
+        on the batch that follows, if one does; then
+        :meth:`Page.stepped <.page.Page.stepped>` of its page.
+        :func:`~.api.create_app` calls it on a timer. What the step raises is
+        :attr:`failure`, and the next step tries again.
         """
         # Under the lock, so that a tick that waited for a request sees what
         # that request did: no step after "Stopped following". What cannot be
         # said, such as an exception whose text raises, or a page that cannot
         # be made, must not end the timer.
         with self.lock, suppress(Exception):
+            if (label := self.manager.following) is None:
+                return
             try:
-                self.follow.step()
+                loop = Automatic(self.manager.batch(label))
+                loop.step()
+                self.refused = (label, loop.refused)
                 self.failure = None
             except Exception as error:  # the next step tries again
                 self.failure = f'Follow could not step: {str(error) or repr(error)}'
-            if (label := self.follow.label) is not None:
-                self.page(label).stepped()
+            self.page(label).stepped()
 
     def runs_listed(
         self, runs: Mapping[FileRef, Mapping[str, Any]], *, changed: bool = False
@@ -335,31 +338,17 @@ class Pages:
             ) from None
         self.runs_listed(runs, changed=True)
 
-    def batches_version(self) -> int:
-        """
-        The version of the list of batches, so that the Batches view of each
-        page asks for it again. It moves when the headers of the batches or
-        the label that follows differ from those of the last version, whoever
-        changed them.
-        """
-        with self.lock:
-            listed = (tuple(self.manager.headers().items()), self.follow.label)
-            if listed != self._batches:
-                self._batches = listed
-                self._batches_version += 1
-            return self._batches_version
-
     def waiting(self, label: str, states: Mapping[str, RowState]) -> dict[str, str]:
         """
         Why Follow could not submit each row of ``states`` that its next step
         would submit again, by key; none unless the batch of ``label`` follows.
         """
-        source = self.manager.batch(label).source
-        if source is None or self.follow.label != label:
+        source, (of, refused) = self.manager.batch(label).source, self.refused
+        if source is None or self.manager.following != label or of != label:
             return {}
         reasons = {
             key: f'Follow could not reduce it: {forms.message(reason)}'
-            for key, reason in self.follow.refused.items()
+            for key, reason in refused.items()
         }
         return refused_again(states, source.fills, reasons)
 
@@ -379,12 +368,11 @@ class Pages:
                         title=header.title,
                         description=header.description,
                         words=words,
-                        scope=_scope_text(header.scope, index, words),
-                        follows=label == self.follow.label,
+                        scope=_scope_text(header.scope, index),
+                        follows=label == self.manager.following,
                     )
                 )
             return Batches(
-                version=self.batches_version(),
                 application=self.title,
                 runs=self.runs_version if self.corrects_runs else None,
                 rows=rows,
@@ -403,7 +391,7 @@ class Pages:
         with self.lock:
             client = self.manager.client
             names = dict.fromkeys(spec.name for spec in client.specs())
-            specs = [bound_spec(client, name) for name in names]
+            specs = [client.spec_named(name) for name in names]
             listing = self._relisted()
 
             def choice(name: str | None, source: Source | None) -> SourceChoice:
@@ -427,85 +415,95 @@ class Pages:
         """
         Make the batch of ``new`` with the manager
         (:meth:`~ess.apps.batch.BatchManager.create`), with the settings that
-        the application gives its spec, and its scope with the ends converted
-        to the type of the index of its source
-        (:func:`~ess.apps.batch.scope_of`). Raises :class:`~.page.Problem`
-        with what the manager refuses.
+        the application gives its spec, and the ends of its scope as typed.
+        Raises :class:`~.page.Problem` with what the manager refuses.
         """
         with self.lock:
-            refused = 'The batch was not made'
             try:
-                source = (
-                    None if new.source is None else self.manager.sources[new.source]
-                )
                 label = self.manager.create(
                     new.spec,
                     title=new.title,
                     source=new.source,
                     columns=new.columns,
                     description=new.description,
-                    scope=scoped(source, new, refused),
+                    scope=Scope(start=new.start, stop=new.stop),
                 )
-            except (KeyError, ValueError, NotKept) as error:
-                raise Problem(f'{refused}: {why(error)}.') from None
+            except (ValueError, NotKept) as error:
+                raise Problem(f'The batch was not made: {why(error)}.') from None
             return Made(label=label)
 
     def remove(self, label: str) -> None:
         """
         Remove the batch of ``label`` with the manager
         (:meth:`~ess.apps.batch.BatchManager.remove`): its definitions go,
-        its records stay. Its page goes, and a page handed out before
-        answers :class:`~.page.Missing`. If it follows, Follow is turned off
-        at once, rather than at its next step, so that a batch made later
-        under the label does not follow. Raises :class:`~.page.Missing` if no batch
-        has the label, and :class:`~.page.Problem` if the definitions refuse
-        a part, saying whether the batch is still listed.
+        its records stay, and if it follows, none follows. Its page goes, and
+        a page handed out before answers :class:`~.page.Missing`. Raises
+        :class:`~.page.Missing` if no batch has the label, and
+        :class:`~.page.Problem` if the definitions refuse a write.
         """
         with self.lock:
             if label not in self.manager.headers():
                 raise Missing(f'There is no batch {label}.')
             try:
                 self.manager.remove(label)
+                self._pages.pop(label, None)
             except NotKept as error:
-                said = (
-                    'not removed'
-                    if label in self.manager.headers()
-                    else 'removed, but part of its definitions stays'
-                )
-                raise Problem(f'The batch was {said}: {error}') from None
-            finally:
-                # The batch is gone once its header is; a refusal before
-                # leaves its page and Follow as they were.
-                if label not in self.manager.headers():
-                    self._pages.pop(label, None)
-                    if self.follow.label == label:
-                        with suppress(NotKept):  # else its next step does
-                            self.follow.off()
+                raise Problem(f'The change was not kept: {error}') from None
 
     def counts(self) -> BatchCounts:
         """
-        The counts of the manager (:meth:`~ess.apps.batch.BatchManager.counts`)
-        in the words of the page: the statuses are those of the page of each
-        batch (:func:`~.page.page_statuses`). Every page and Follow wait
-        while it scans.
+        The rows of each batch by status, in the words of the page of each
+        batch (:func:`~.page.page_statuses`), and the rows of each registered
+        source that no batch shows. Every page and Follow wait while it
+        scans.
+
+        It scans every batch with a source, so the rows of each batch are
+        those of the files now. A batch not made yet is made first, which
+        scans it too, so it is scanned twice. While the settings of a batch
+        are refused, its rows are as :meth:`~ess.apps.batch.Batch.results`
+        gives them. A row counts as
+        shown if any batch of its source shows it, so a row removed by hand,
+        or outside a scope, counts as not shown only if every batch of the
+        source removed it or leaves it out. A source is called once more only
+        if no batch of it was scanned. A batch that cannot be made or
+        scanned, such as one whose source is not registered or raises, has
+        its reason in ``failed``, and its source is left out of ``outside``.
         """
         with self.lock:
-            counts = self.manager.counts()
-            rows = {}
-            for label, states in counts.states.items():
-                columns = self.manager.batch(label).columns
+            manager = self.manager
+            rows: dict[str, dict[str, int]] = {}
+            failed: dict[str, str] = {}
+            made: dict[str, set[str]] = {}  # the keys of the rows each source made
+            shown: dict[str, set[str]] = {name: set() for name in manager.sources}
+            for label, header in manager.headers().items():
+                try:
+                    batch = manager.batch(label)
+                    if batch.source is not None:
+                        batch.scan()
+                    try:
+                        states = batch.state()
+                    except SubmitError:
+                        states = batch.results()
+                except Exception as error:  # a source is code of the application
+                    failed[label] = why(error)
+                    shown.pop(header.source, None)  # its rows shown are not known
+                    continue
                 waiting = self.waiting(label, states)
-                statuses = page_statuses(states, columns, waiting)
+                statuses = page_statuses(states, batch.columns, waiting)
                 rows[label] = dict(Counter(statuses.values()))
-            sources = self.manager.sources
-            return BatchCounts(
-                rows=rows,
-                failed=counts.failed,
-                outside={
-                    name: sources[name].words.count(n)
-                    for name, n in counts.outside.items()
-                },
-            )
+                if header.source in shown:
+                    made[header.source] = {row.key for row in batch.rows.scan}
+                    shown[header.source] |= {row.key for row in batch.rows}
+            outside = {}
+            for name, keys in shown.items():
+                source = manager.sources[name]
+                if name not in made:
+                    with suppress(Exception):  # a source is code of the application
+                        infos = file_infos(manager.client, source.selector)
+                        made[name] = {row.key for row in source.rows(infos)}
+                if name in made:
+                    outside[name] = source.words.count(len(made[name] - keys))
+            return BatchCounts(rows=rows, failed=failed, outside=outside)
 
 
 def _spec_choice(
@@ -525,13 +523,11 @@ def _spec_choice(
     )
 
 
-def _scope_text(scope: Scope, index: str, words: Words) -> str:
+def _scope_text(scope: Scope, index: str) -> str:
     """
     A scope as the Batches view shows it: ``Run 60339 \N{EN DASH} 60421``, with an open
-    end left out, or ``2 rows named``; empty for every row.
+    end left out; empty for every row.
     """
-    if scope.keys is not None:
-        return f'{words.count(len(scope.keys))} named'
     if scope.start is None and scope.stop is None:
         return ''
     start, stop = ('' if end is None else str(end) for end in (scope.start, scope.stop))

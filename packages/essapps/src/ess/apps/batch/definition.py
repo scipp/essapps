@@ -14,7 +14,7 @@ on:
     settings      the parameters that are not columns         Batch.settings
     header        spec, columns, source, title, description,  the manager
                   scope
-    following     the label of the batch that follows         Follow
+    following     the label of the batch that follows         the manager
 
 The corrections are about files, and every batch of a workspace reads the
 files through one :class:`~.corrections.CorrectedFiles`, so a workspace has
@@ -45,14 +45,14 @@ The plain data of each table, as the functions below give and read it::
     header        {'spec': 'loki-iofq', 'columns': ['sample', 'sample_transmission'],
                    'source': 'sample-runs', 'title': 'Sample runs', 'description': '',
                    'scope': {'start': 60339, 'stop': None}}
-                  with a scope of keys as {'keys': ['60339', '60351']}
     following     {'label': '20261118-130204'}, or {'label': None}
 
 A value is in the JSON form that a record holds, a file as
 ``{'@ref': 'file', 'file': 'pid:...'}``. The edits hold only what was set by
 hand, so a cell from the scan keeps following the scan. The settings are a
-template so that the command ``essapps-batch`` reads them as one; for a batch
-with a header, its spec and blanks are a copy of the header's. Each table is
+template, in the format of the file that a person saves from a page.
+:func:`settings_of` checks the name of its spec, and reads neither its
+version nor its blanks: the header says the columns. Each table is
 checked when read: data of another shape raises ``ValueError`` naming the
 entry, and :class:`FolderDefinitions` adds the file.
 """
@@ -392,13 +392,8 @@ def corrections_of(data: Any) -> dict[FileRef, dict[str, Any]]:
 
 
 def header_data(header: Header) -> dict[str, Any]:
-    """The header, as plain data: its scope a slice, or the keys sorted."""
-    scope = header.scope
-    if scope.keys is None:
-        written = {'start': scope.start, 'stop': scope.stop}
-    else:
-        written = {'keys': sorted(scope.keys)}
-    return {**asdict(header), 'scope': written}
+    """The header, as plain data."""
+    return asdict(header)
 
 
 def header_of(data: Any) -> Header:

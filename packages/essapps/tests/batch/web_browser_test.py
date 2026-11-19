@@ -28,7 +28,6 @@ from pydantic import BaseModel
 
 from ess.apps import Client
 from ess.apps.batch import Batch, BatchManager, CorrectedFiles, Scope, Source
-from ess.apps.batch.auto import Follow
 from ess.apps.batch.web import Pages, Shown, create_app
 from ess.apps.batch.web.api import STATIC
 
@@ -76,11 +75,11 @@ def batch(manager: BatchManager, label: str) -> Batch:
 
 
 @pytest.fixture
-def pages(manager: BatchManager, refusing: Refusing, files: CorrectedFiles) -> Pages:
+def pages(manager: BatchManager, files: CorrectedFiles) -> Pages:
     """The pages, with a step of Follow every 0.2 s while a batch follows."""
     return Pages(
         manager,
-        Follow(manager, refusing, interval=0.2),
+        interval=0.2,
         draw={STAGED.name: draw},
         files=files,
         marks=Marks,
@@ -613,7 +612,7 @@ def test_a_click_on_a_row_mostly_shown_at_the_bottom_does_not_scroll(
 @pytest.fixture
 def following(browser: Any, pages: Pages, label: str) -> Iterator[Any]:
     """The page of a batch with no rows yet, following its files."""
-    pages.follow.on(label)
+    pages.manager.follow(label)
     with serve(create_app(pages)) as url:
         page = browser.new_page(viewport={'width': 1440, 'height': 900})
         errors: list[str] = []
@@ -641,7 +640,7 @@ def test_the_page_says_which_other_batch_follows(
 ) -> None:
     other = manager.create(STAGED.name, title='Other', source='pairs')
 
-    pages.follow.on(other)
+    pages.manager.follow(other)
 
     page.wait_for_selector('#follow-status:text-is("Other follows")')
     assert not page.is_checked('#follow input')
@@ -844,7 +843,7 @@ def test_the_batches_view_links_to_the_page_of_another_batch(
         description='The second series',
         scope=Scope(start=2),
     )
-    pages.follow.on(other)
+    pages.manager.follow(other)
     page.reload()
 
     page.click('[data-view=batches]')
@@ -1014,7 +1013,7 @@ def test_a_batch_that_cannot_be_shown_says_why_and_shows_the_list(
     manager = BatchManager(client, sources=sources, definitions=refusing)
     manager.create(STAGED.name, title='Good', source='pairs', label='good')
     manager.create(STAGED.name, title='Broken', source='broken', label='broken')
-    pages = Pages(manager, Follow(manager, refusing), files=files, marks=Marks)
+    pages = Pages(manager, files=files, marks=Marks)
     with serve(create_app(pages)) as url:
         page = watched(browser)
         page.goto(f'{url}batches/broken/')
@@ -1065,33 +1064,6 @@ def test_a_refused_header_shows_at_the_form_and_changes_nothing(
     page.errors.clear()
 
 
-def test_a_wider_scope_of_the_batch_that_follows_is_saved_after_a_confirmation(
-    page: Any, pages: Pages, manager: BatchManager
-) -> None:
-    manager.change('scan', scope=Scope(stop=2))
-    pages.follow.on('scan')
-    page.reload()
-    page.wait_for_selector('#follow input:checked')
-    page.click('[data-tab=batch]')
-    asked: list[str] = []
-
-    def answer(dialog: Any) -> None:
-        asked.append(dialog.message)
-        dialog.dismiss() if len(asked) == 1 else dialog.accept()
-
-    page.on('dialog', answer)
-    page.fill('#tab-batch [name=stop]', '')
-    with page.expect_event('dialog'):
-        page.click('#batch-form [type=submit]')
-    assert manager.headers()['scan'].scope == Scope(stop=2)
-    page.click('#batch-form [type=submit]')
-
-    page.wait_for_selector('.chip.st-all .n:text-is("3")')
-    assert asked[0].startswith('This scope adds 2 rows without a result.')
-    assert len(asked) == 2
-    assert manager.headers()['scan'].scope == Scope()
-
-
 def test_a_person_ends_a_series_and_starts_the_next_at_a_row(
     page: Any, manager: BatchManager
 ) -> None:
@@ -1107,7 +1079,7 @@ def test_a_person_ends_a_series_and_starts_the_next_at_a_row(
     page.click('#next-batch')
 
     page.wait_for_selector('#title:has-text("Afternoon")')
-    assert asked[0].startswith('2 rows move to the next batch, from sds on,')
+    assert asked[0].startswith('The next batch starts at sds.')
     (label,) = set(manager.headers()) - {'scan'}
     assert page.url.endswith(f'/batches/{label}/')
     assert manager.headers()['scan'].scope == Scope(stop=2)

@@ -143,7 +143,7 @@ def refusing(definitions: FolderDefinitions) -> toys.Refusing:
 def manager(client: Client, refusing: toys.Refusing) -> BatchManager:
     """A manager on ``definitions``, through ``refusing``, which refuses nothing."""
     return BatchManager(
-        client, sources=toys.SOURCES, definitions=refusing, defaults=toys.DEFAULTS
+        client, sources=toys.SOURCES, definitions=refusing, staged=toys.STAGED_NAMES
     )
 
 

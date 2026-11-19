@@ -162,9 +162,8 @@ class Source:
         What the page calls the :attr:`~.table.Row.index` that ``rows``
         gives, such as ``'Run'``.
     index_type:
-        The type of that index: ``int``, ``float`` or ``str``. The ends of a
-        scope of a batch of the source are of this type
-        (:func:`~.manager.scope_of`).
+        The type of that index: ``int``, ``float`` or ``str``. The manager
+        converts the ends of a scope of a batch of the source to this type.
     """
 
     rows: RowSource
@@ -217,8 +216,10 @@ class Batch:
         takes its default.
     definitions:
         Keep the edits and the settings of the label (:mod:`~.definition`):
-        read here, and written at each change. Without them, the edits and
-        settings are kept in memory only.
+        read here, and written at each change. The manager gives them to the
+        ``Batch`` of a label it holds (:meth:`.manager.BatchManager.batch`);
+        a ``Batch`` made in code keeps nothing, and its edits and settings are
+        in memory only.
     scope:
         The rows of the scan that the batch holds (:attr:`scope`); every row
         if not given.

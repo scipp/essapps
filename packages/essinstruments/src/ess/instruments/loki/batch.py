@@ -10,7 +10,7 @@ sample, and pairs the run with the transmission run of the same sample::
     {'file': 'run-1.nxs', 'run': 1, 'role': 'sample', 'sample': 'water'}
     {'file': 'run-2.nxs', 'run': 2, 'role': 'transmission', 'sample': 'water'}
 
-:data:`SOURCES` and :data:`DEFAULTS` give a
+:data:`SOURCES` and :data:`STAGED` give a
 :class:`~ess.apps.batch.BatchManager` the batches of I(Q);
 :func:`iofq_batch` makes one batch without a manager. The command takes the
 sources as ``essapps-batch reduce -s ess.instruments.loki.batch:SOURCES``,
@@ -25,8 +25,6 @@ from typing import Any
 from ess.apps import Client
 from ess.apps.batch import (
     Batch,
-    Defaults,
-    DefinitionStore,
     FileInfo,
     Row,
     Source,
@@ -93,7 +91,7 @@ SAMPLE_RUNS = Source(
 """A row per sample run, paired by :func:`pair_by_sample`."""
 SOURCES = {'sample-runs': SAMPLE_RUNS}
 """The sources of LoKI's batches, by name."""
-DEFAULTS = {IOFQ.name: Defaults(staged=True)}
+STAGED = frozenset({IOFQ.name})
 """A batch of I(Q) runs through one stage, so that the can is reduced once."""
 
 
@@ -103,11 +101,11 @@ def iofq_batch(
     label: str = 'iofq',
     persist: bool = False,
     settings: Mapping[str, Any] | None = None,
-    definitions: DefinitionStore | None = None,
 ) -> Batch:
     """
     The batch of I(Q), through one stage, so that the can is reduced once.
-    ``persist``, ``settings`` and ``definitions`` are those of :class:`Batch`.
+    ``persist`` and ``settings`` are those of :class:`Batch`. It keeps
+    nothing: a batch kept in the definitions is made by the manager.
     """
     return Batch(
         client,
@@ -118,5 +116,4 @@ def iofq_batch(
         staged=True,
         persist=persist,
         settings=settings,
-        definitions=definitions,
     )
