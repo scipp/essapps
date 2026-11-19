@@ -176,8 +176,9 @@ class State(BaseModel):
     Everything the page of a batch shows but the details of one row, the plot,
     and the runs. ``label`` names the batch and ``title`` is its title;
     ``application`` is the title of the application. ``start`` changes when
-    the server starts again, ``version`` with each change, and ``runs`` with
-    each change of the runs. ``settings`` is the form
+    the server starts again, ``version`` with each change, ``runs`` with
+    each change of the runs, and ``batches`` with each change of the list of
+    batches. ``settings`` is the form
     of the settings. ``settings_changed`` says whether a person changed it and
     has not applied the change; the rows read as with the batch's settings.
     ``settings_problem`` names the batch's settings that the form cannot show,
@@ -190,6 +191,7 @@ class State(BaseModel):
     version: int
     start: str
     runs: int | None
+    batches: int
     label: str
     title: str
     application: str
@@ -231,6 +233,38 @@ class Runs(BaseModel):
     version: int
     columns: list[Column]
     rows: list[RunRow]
+
+
+class BatchRow(BaseModel):
+    """
+    A batch of the workspace: its label, title and description, what its
+    rows are called, and whether it is the one that follows.
+    """
+
+    label: str
+    title: str
+    description: str
+    words: Words
+    follows: bool
+
+
+class Batches(BaseModel):
+    version: int
+    rows: list[BatchRow]
+
+
+class BatchCounts(BaseModel):
+    """
+    The rows of each batch by status, in the words of the page, by label; why
+    each other batch could not be counted, by label; and the rows of each
+    registered source that no batch shows, in its words, such as
+    ``3 samples``, by its name. A source of a batch that could not be counted
+    is left out of ``outside``.
+    """
+
+    rows: dict[str, dict[str, int]]
+    failed: dict[str, str]
+    outside: dict[str, str]
 
 
 class Plot(BaseModel):

@@ -295,7 +295,7 @@ main {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  margin: 0 12px 8px;
+  margin: 12px 12px 0;
   padding: 8px 8px 8px 12px;
   border: 1px solid #f2b8b2;
   border-left: 3px solid var(--bad);
@@ -408,6 +408,30 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .add-form { display: flex; gap: 4px; }
 .add-form input { width: 220px; }
+
+/* The list of batches: a plain table, styled as the grids */
+
+.list { flex: 1; min-height: 0; overflow: auto; border-top: 1px solid var(--line); }
+.list table { width: 100%; border-collapse: collapse; }
+.list th {
+  position: sticky;
+  top: 0;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  background: #f7f8fa;
+  color: var(--muted);
+  text-align: left;
+}
+.list td { padding: 6px 8px; border-bottom: 1px solid #eef0f3; vertical-align: top; }
+.list a { color: var(--accent); text-decoration: none; }
+.list a:hover { text-decoration: underline; }
+.list td small { margin-left: 8px; }
+.list td .pill { margin: 0 4px 2px 0; }
+.list tr[aria-current="page"] { background: var(--accent-soft); }
+.list tr[aria-current="page"] a { font-weight: 600; }
+.list .follows { color: var(--done); font-weight: 600; }
+.list .bad { color: var(--bad); }
+#outside { padding: 8px; }
 
 /* The right region */
 

@@ -1463,3 +1463,130 @@ def test_a_label_that_is_no_batch_answers_404(
     assert (action.status_code, action.json()) == (404, unknown.json())
     assert page.get('/').status_code == 404
     assert page.get('/api/state').status_code == 404
+
+
+# The list of batches
+
+
+def test_the_batches_view_lists_every_batch_and_the_one_that_follows(
+    http: TestClient, pages: Pages, manager: BatchManager
+) -> None:
+    other = manager.create(
+        STAGED.name,
+        title='Other',
+        source='pairs',
+        description='The second series',
+        label='other',
+    )
+    pages.follow.on(other)
+
+    listed = http.get('/api/batches').json()
+
+    words = {'one': 'row', 'many': 'rows'}
+    assert listed['rows'] == [
+        {
+            'label': 'other',
+            'title': 'Other',
+            'description': 'The second series',
+            'words': words,
+            'follows': True,
+        },
+        {
+            'label': 'scan',
+            'title': 'Scan',
+            'description': '',
+            'words': words,
+            'follows': False,
+        },
+    ]
+
+
+def test_the_list_of_batches_is_the_same_from_every_page(
+    http: TestClient, pages: Pages, manager: BatchManager
+) -> None:
+    other = manager.create(STAGED.name, title='Other', source='pairs')
+
+    listed = http.get('/api/batches').json()
+
+    assert opened(pages, other).get('/api/batches').json() == listed
+    assert TestClient(create_app(pages)).get('/api/batches').json() == listed
+
+
+def test_a_page_learns_from_its_poll_that_another_batch_follows(
+    http: TestClient, pages: Pages, manager: BatchManager
+) -> None:
+    other = opened(pages, manager.create(STAGED.name, title='Other', source='pairs'))
+    now = state(http)
+
+    other.post('/api/follow', json={'on': True})
+
+    polled = http.get(
+        '/api/state', params={'after': now['version'], 'start': now['start']}
+    )
+    assert polled.status_code == 200
+    assert polled.json()['batches'] > now['batches']
+    assert http.get('/api/batches').json()['version'] == polled.json()['batches']
+
+
+def test_a_correction_on_one_page_shows_in_the_runs_view_and_the_rows_of_another(
+    http: TestClient, pages: Pages, manager: BatchManager, fake: FakeFiles
+) -> None:
+    key = fake.measure(4, 1.0, role='sample', sample='oil').file
+    other = opened(pages, manager.create(STAGED.name, title='Other', source='pairs'))
+    assert statuses(other)['3'] == 'incomplete'
+
+    edit = {'keys': [key], 'column': 'role', 'value': 'transmission'}
+    http.post('/api/runs/cells', json=edit)
+
+    runs = {r['key']: r['cells']['role'] for r in other.get('/api/runs').json()['rows']}
+    assert runs[key]['text'] == 'transmission'
+    assert statuses(other)['3'] == 'ready'
+
+
+def test_a_correction_taken_back_on_one_page_reaches_the_rows_of_another(
+    http: TestClient, pages: Pages, manager: BatchManager, fake: FakeFiles
+) -> None:
+    key = fake.measure(4, 1.0, role='sample', sample='oil').file
+    other = opened(pages, manager.create(STAGED.name, title='Other', source='pairs'))
+    edit = {'keys': [key], 'column': 'role', 'value': 'transmission'}
+    http.post('/api/runs/cells', json=edit)
+    assert statuses(other)['3'] == 'ready'
+
+    http.post('/api/runs/cells/revert', json={'keys': [key], 'column': 'role'})
+
+    assert statuses(other)['3'] == 'incomplete'
+
+
+def test_a_scan_after_a_correction_that_fails_is_said_once_by_the_next_poll(
+    http: TestClient, pages: Pages, manager: BatchManager, fake: FakeFiles
+) -> None:
+    key = fake.measure(7, 1.0, role='background').file  # no sample name
+    other = opened(pages, manager.create(STAGED.name, title='Other', source='pairs'))
+    now = state(other)
+
+    # As a transmission without a sample name, the run makes the source raise.
+    edit = {'keys': [key], 'column': 'role', 'value': 'transmission'}
+    assert http.post('/api/runs/cells', json=edit).status_code == 422
+
+    at = {'after': now['version'], 'start': now['start']}
+    polled = other.get('/api/state', params=at).json()
+    assert polled['notice'] == (
+        "Runs were corrected on another page, but the scan failed: 'sample'"
+    )
+    at['after'] = polled['version']
+    assert other.get('/api/state', params=at).status_code == 204
+
+
+def test_counts_are_given_in_the_words_of_the_page(
+    http: TestClient, batch: Batch, client: Client
+) -> None:
+    client.wait(batch.reduce(['1']))
+    bins(http, 3)  # row 1 is done with earlier settings
+
+    counted = http.get('/api/batches/counts').json()
+
+    assert counted == {
+        'rows': {'scan': {'done': 1, 'ready': 1, 'incomplete': 1}},
+        'failed': {},
+        'outside': {'pairs': '0 rows'},
+    }
