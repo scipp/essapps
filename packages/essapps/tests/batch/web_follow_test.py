@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 Follow on the page of a batch: a step of the batch that follows scans as
-"Rescan runs" does, and reduces the rows that are new. The tests call
+"Rescan runs" does, and reduces the rows not reduced yet. The tests call
 :meth:`Pages.tick` in place of the timer, except one, which runs the app's
 timer.
 """
@@ -65,7 +65,7 @@ def done(page: Page, client: Client) -> State:
     return page.state()
 
 
-def test_a_step_shows_new_rows_and_runs_and_reduces_the_new_rows(
+def test_a_step_shows_new_rows_and_runs_and_reduces_them(
     page: Page, client: Client, sample: Measure, gate: Gate
 ) -> None:
     before = page.state()
@@ -140,12 +140,14 @@ def test_a_step_that_changes_one_thing_the_page_shows_tells_the_page(
     page: Page, client: Client, sample: Measure, fake: FakeFiles, what: str
 ) -> None:
     sample(1, 'water')
-    sample(2, 'oil')
-    page.scan()
-    # A cell that the workspace refuses when it resolves the row: the row is
-    # incomplete, but ready while the settings are refused, since then no cell
-    # is resolved, so a step refuses it with them.
-    page.edit(CellEdit(keys=['2'], column='thickness', value=-1.0))
+    if what == 'refusals':
+        # A row without a result that a step refuses with refused settings: a
+        # cell that the workspace refuses when it resolves the row makes it
+        # incomplete, but it is ready as given, and no cell is resolved while
+        # the settings are refused.
+        sample(2, 'oil')
+        page.scan()
+        page.edit(CellEdit(keys=['2'], column='thickness', value=-1.0))
     page.follow(True)
     client.wait(client.records())
     page.pages.tick()
@@ -224,22 +226,45 @@ def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_p
     assert {r['status'] for r in shown.json()['rows']} == {'done'}
 
 
-def test_a_step_leaves_a_done_row_whose_files_changed_to_the_person(
-    page: Page, client: Client, sample: Measure, fake: FakeFiles
+@pytest.mark.parametrize(
+    ('change', 'reason'),
+    [
+        (
+            lambda page, fake: fake.measure(
+                1005, 2.0, role='transmission', sample='water'
+            ),
+            'Transmission changed.',
+        ),
+        (
+            lambda page, fake: page.edit(
+                CellEdit(keys=['1'], column='thickness', value=2.0)
+            ),
+            'Thickness changed.',
+        ),
+    ],
+    ids=['files', 'person'],
+)
+def test_a_step_leaves_a_done_row_that_changed_to_the_person(
+    page: Page,
+    client: Client,
+    sample: Measure,
+    fake: FakeFiles,
+    change: Any,
+    reason: str,
 ) -> None:
     sample(1, 'water')
     page.pages.tick()
-    first = done(page, client).rows[0].record
+    done(page, client)
+    before = ids(client)
 
-    fake.measure(1005, 2.0, role='transmission', sample='water')
+    change(page, fake)
     page.pages.tick()
 
-    (row,) = done(page, client).rows
-    assert (row.record, row.status, row.reason) == (
-        first,
-        'outdated',
-        'Transmission changed.',
-    )
+    shown = done(page, client)
+    (row,) = shown.rows
+    assert ids(client) == before
+    assert (row.status, row.reason) == ('outdated', reason)
+    assert shown.action.label == 'Reduce 1 outdated'
 
 
 def test_a_run_that_a_step_finds_can_be_chosen_in_a_cell_without_a_runs_view(
@@ -421,33 +446,6 @@ def test_a_refusal_of_a_running_row_is_said_once_and_not_kept(
 
 def ids(client: Client) -> set[str]:
     return {r.id for r in client.records()}
-
-
-def test_follow_leaves_a_done_row_that_a_person_changed_to_the_person(
-    page: Page, client: Client, sample: Measure
-) -> None:
-    sample(1, 'water')
-    sample(2, 'oil')
-    page.follow(True)
-    done(page, client)
-    before = ids(client)
-
-    for column, run in [('sample', 2), ('transmission', 1002)]:
-        value = option(page, column, run)
-        edited = page.edit(CellEdit(keys=['1'], column=column, value=value))
-        page.pages.tick()
-
-    assert ids(client) == before
-    assert statuses(edited) == {'water': 'outdated', 'oil': 'done'}
-    assert edited.action.label == 'Reduce 1 outdated'
-    page.reduce(Reduce(which='remaining'))
-    page.pages.tick()
-    assert len(ids(client) - before) == 1
-    water, oil = (client.latest('scan', k).request.params for k in ('1', '2'))
-    assert (water['sample'], water['transmission']) == (
-        oil['sample'],
-        oil['transmission'],
-    )
 
 
 def test_a_row_set_by_hand_without_a_result_is_reduced_by_the_next_step(

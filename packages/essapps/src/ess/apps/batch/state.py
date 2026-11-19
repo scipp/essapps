@@ -275,7 +275,7 @@ def refused_again(
 ) -> dict[str, str]:
     """
     Of the reasons ``refused`` by row, those of the rows that the next step of
-    automatic reduction would submit again: the rows of :func:`not_reduced`.
+    automatic reduction would try again: the rows of :func:`not_reduced`.
     """
     return {k: refused[k] for k in not_reduced(states) if k in refused}
 

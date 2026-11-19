@@ -14,11 +14,9 @@ import pytest
 
 from ess.apps import Client, Workspace, file
 from ess.apps.batch import (
-    EMPTY,
     Batch,
     BatchManager,
     CorrectedFiles,
-    DefinitionStore,
     FileInfo,
     Row,
     RowSource,
@@ -37,9 +35,7 @@ from .toys import (
     PLAIN,
     REPEATED,
     SAMPLES,
-    SERIES,
     STAGED,
-    Gate,
     Measure,
     pair,
 )
@@ -52,35 +48,11 @@ def loop(batch: Batch) -> Automatic:
     return Automatic(batch)
 
 
-def _loop(
-    client: Any, rows: RowSource = pair, definitions: DefinitionStore | None = None
-) -> Automatic:
+def _loop(client: Any, rows: RowSource = pair) -> Automatic:
     """A loop on ``client``, which may be a fake that wraps a client."""
     batch = Batch(
-        client,
-        PLAIN,
-        columns=COLUMNS,
-        label='scan',
-        source=replace(PAIRS, rows=rows),
-        definitions=definitions,
+        client, PLAIN, columns=COLUMNS, label='scan', source=replace(PAIRS, rows=rows)
     )
-    return Automatic(batch)
-
-
-def _angles(files: Sequence[FileInfo]) -> list[Row]:
-    """A row per sample: all its runs so far, in run order."""
-    runs: dict[str, list[Any]] = {}
-    for f in sorted(files, key=lambda f: f.metadata['run']):
-        runs.setdefault(f.metadata['sample'], []).append(f.ref)
-    return [Row(name, {'runs': refs}) for name, refs in runs.items()]
-
-
-ANGLES = Source(_angles, fills=('runs',))
-
-
-@pytest.fixture
-def series(client: Client) -> Automatic:
-    batch = Batch(client, SERIES, columns=('runs',), label='series', source=ANGLES)
     return Automatic(batch)
 
 
@@ -182,45 +154,43 @@ def test_the_batch_must_have_a_source(client: Client) -> None:
         Automatic(batch)
 
 
-def test_a_failed_row_is_left_to_a_person_also_when_its_files_change(
-    series: Automatic, client: Client, fake: FakeFiles
+def _by_run(files: Sequence[FileInfo]) -> list[Row]:
+    """The rows of :func:`pair`, each naming its sample run by run number."""
+    return [
+        replace(row, values={**row.values, 'sample': file(run=int(row.key))})
+        for row in pair(files)
+    ]
+
+
+@pytest.mark.parametrize(
+    ('change', 'text'),
+    [
+        ('a newer transmission run', 'outdated'),
+        ('a cell set by a person', 'outdated'),
+        ('its runs arrive again', 'completed'),
+        ('its sample named by run', 'completed'),
+        ('its reduction failed', 'failed'),
+    ],
+)
+def test_a_row_with_a_result_is_left_to_a_person(
+    client: Client, sample: Measure, fake: FakeFiles, change: str, text: str
 ) -> None:
-    fake.corrupt(fake.measure(1, 1.0, sample='si'))
-    assert client.wait(series.step()) == {'si': 'failed'}
-
-    fake.measure(2, 2.0, sample='si')
-
-    assert series.step() == {}
-
-
-def test_a_file_that_arrives_again_is_not_reduced_again(
-    loop: Automatic, client: Client, sample: Measure
-) -> None:
-    sample(1, 'water')
+    loop = _loop(client, _by_run if change == 'its sample named by run' else pair)
+    run = sample(1, 'water')
+    if change == 'its reduction failed':
+        fake.corrupt(run)
     client.wait(loop.step())
 
-    sample(1, 'water')
+    if change == 'a newer transmission run':
+        fake.measure(1005, 2.0, role='transmission', sample='water')
+    elif change == 'a cell set by a person':
+        other = fake.measure(77, 7.0, role='sample', sample='other')
+        loop.batch.rows = loop.batch.rows.edit('1', {'sample': other})
+    elif change == 'its runs arrive again':
+        sample(1, 'water')
 
     assert loop.step() == {}
-
-
-def test_a_cell_that_names_a_file_by_run_is_reduced_once(
-    client: Client, sample: Measure
-) -> None:
-    def by_run(files: Sequence[FileInfo]) -> list[Row]:
-        return [
-            replace(row, values={**row.values, 'sample': file(run=int(row.key))})
-            for row in pair(files)
-        ]
-
-    loop = _loop(client, by_run)
-    run = sample(1, 'water')
-
-    (record,) = loop.step().values()
-    client.wait(record)
-
-    assert record.request.params['sample'] == run
-    assert loop.step() == {}
+    assert loop.batch.state()['1'].text == text
 
 
 def test_a_new_loop_of_any_submitter_reduces_only_the_rows_without_a_result(
@@ -370,42 +340,15 @@ def test_a_cell_the_workspace_does_not_accept_makes_its_row_wait(
     assert list(loop.step()) == ['2']
 
 
-@pytest.mark.parametrize(
-    ('by_hand', 'reduced'),
-    [
-        (
-            lambda rows: rows.edit('2', {'sample': rows['2'].values['sample']}),
-            ['1', '2'],
-        ),
-        (lambda rows: rows.edit('2', {'thickness': EMPTY}), ['1', '2']),
-        (lambda rows: rows.add(Row('3', dict(rows['2'].values))), ['1', '2', '3']),
-    ],
-    ids=['the value of the scan', 'cleared', 'added'],
-)
-def test_a_row_set_by_hand_without_a_result_is_reduced_by_the_next_step(
-    client: Client, sample: Measure, by_hand: Any, reduced: list[str]
+def test_a_row_added_by_a_person_is_reduced_by_the_next_step(
+    client: Client, sample: Measure
 ) -> None:
     loop = _loop(client)
     sample(1, 'water')
-    sample(2, 'oil')
     loop.batch.scan()
-    loop.batch.rows = by_hand(loop.batch.rows)
+    loop.batch.rows = loop.batch.rows.add(Row('2', dict(loop.batch.rows['1'].values)))
 
-    assert list(loop.step()) == reduced
-
-
-def test_a_row_with_a_result_is_left_to_a_person_also_when_set_by_hand(
-    client: Client, sample: Measure, fake: FakeFiles
-) -> None:
-    sample(1, 'water')
-    other = fake.measure(77, 7.0, role='sample', sample='other')
-    loop = _loop(client)
-    batch = loop.batch
-    client.wait(loop.step())
-    batch.rows = batch.rows.edit('1', {'sample': other})
-
-    assert loop.step() == {}
-    assert batch.state()['1'].text == 'outdated'
+    assert list(loop.step()) == ['1', '2']
 
 
 def test_a_row_whose_key_changes_is_reduced_under_its_new_key(
@@ -424,7 +367,7 @@ def test_a_row_whose_key_changes_is_reduced_under_its_new_key(
     assert list(loop.step()) == ['oil']
 
 
-def test_refused_settings_refuse_every_new_ready_row_until_they_change(
+def test_refused_settings_refuse_every_ready_row_without_a_result_until_they_change(
     batch: Batch, client: Client, sample: Measure
 ) -> None:
     loop = Automatic(batch)
@@ -522,46 +465,6 @@ def test_a_row_whose_submission_raised_runs_at_the_next_step(
 
     assert list(loop.step()) == ['1']
     assert loop.step() == {}
-
-
-class Raising:
-    """Calls ``function``, or raises while ``on`` is set."""
-
-    def __init__(self, function: Any) -> None:
-        self.function = function
-        self.on = False
-
-    def __call__(self, *args: Any) -> Any:
-        if self.on:
-            raise RuntimeError('unreadable')
-        return self.function(*args)
-
-
-def test_a_step_that_raises_as_a_running_record_finishes_loses_nothing(
-    client: Client, fake: FakeFiles, gate: Gate
-) -> None:
-    source = Raising(_angles)
-    batch = Batch(
-        client,
-        SERIES,
-        columns=('runs',),
-        label='series',
-        source=replace(ANGLES, rows=source),
-    )
-    loop = Automatic(batch)
-    gate.close()
-    fake.measure(1, 1.0, sample='si')
-    first = loop.step()
-    fake.measure(2, 2.0, sample='ge')
-    gate.open()
-    client.wait(first)
-
-    source.on = True
-    with pytest.raises(RuntimeError):
-        loop.step()
-    source.on = False
-
-    assert list(loop.step()) == ['ge']
 
 
 def test_two_loops_on_one_label_submit_a_file_once(

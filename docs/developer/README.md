@@ -288,7 +288,7 @@ total = client.freeze(volume)                               # the final sum, as 
 ## Automatic reduction
 
 Automatic reduction is a batch of `ess.apps.batch` reduced as its files arrive ([automatic-reduction.md](automatic-reduction.md)).
-The application's source pairs runs as the technique needs, and a row runs when it has no result, or when its request changes at a column of `at`, by default those that the source fills:
+The application's source pairs runs as the technique needs, and a row runs once it is ready and has no result under the label:
 
 ```python
 def transmission_runs(files: Sequence[FileInfo]) -> list[Row]:
@@ -301,7 +301,7 @@ batch = Batch(client, TRANSMISSION, columns=('run',), label='transmission',
 run([Automatic(batch)])
 ```
 
-Which rows run follows from the files, the batch's rows, and the records under its label, so a restarted loop reduces no row again whose result equals its row at `at`, unless the files changed it. The batch's definitions keep its edits and settings (`ess.apps.batch.definition`); without them, a row edited at `at` is reduced again with the source's cells. A label has one batch: the loop replaces a record under its label whose cells at `at` differ from its rows.
+Which rows run follows from the batch's rows and the records under its label, so a restarted loop reduces no row that has a result. A record under the label with a row's key as member, from any batch, is that row's result.
 
 ## Provenance and publication
 

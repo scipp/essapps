@@ -746,7 +746,7 @@ outdated = [k for k, s in states.items() if s.outdated]
 assert [states[k].record.request.files() for k in outdated] == [[first]]   # to reprocess, if the user wants
 ```
 
-The loop reduces a row with a result again only for a change at a column of `at`, `sample` here, so a changed setting does not reduce run 1 again. A restarted loop reads the same from the records. A row's state, read from its newest record, names the setting that changed since (`s.changed == {'reduction'}`), for any `Batch` on the label.
+A step reduces only the rows without a result, so a changed setting does not reduce run 1 again. A restarted loop reads the same from the records. A row's state, read from its newest record, names the setting that changed since (`s.changed == {'reduction'}`), for any `Batch` on the label.
 
 ## F. Publication and provenance
 

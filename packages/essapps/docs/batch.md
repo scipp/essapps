@@ -327,7 +327,7 @@ Batch(client, IOFQ, columns=('sample',), label='iofq', source=SAMPLE_RUNS)
 
 Give each row its index, such as the run number as a number (`Row(key, values, info, index=int(run))`), so that a batch can hold a slice of the rows ([Rules](#rules)). A row without one, such as of a file without a run number, is held only by a scope without ends or by its key.
 
-Group runs by giving a cell a list of files, in one order at every scan, such as sorted by run: `FileSource.list` promises no order, and a list in another order is another request, which automatic reduction reduces again ([Automatic reduction](#automatic-reduction)). Choose one of several partners by an order too, such as the last by run. Leave a cell out if a partner is missing, so the row shows as incomplete and the rest of the batch can run. A key given twice is refused with the key named, and nothing changes.
+Group runs by giving a cell a list of files, in one order at every scan, such as sorted by run: `FileSource.list` promises no order, and a list in another order is another request, so the row reads `outdated`. Choose one of several partners by an order too, such as the last by run. Leave a cell out if a partner is missing, so the row shows as incomplete and the rest of the batch can run. A key given twice is refused with the key named, and nothing changes.
 
 Pairing is yours to write. The framework knows no technique. If a source raises, the page shows the error in a message.
 
@@ -456,7 +456,7 @@ What the manager refuses raises `ValueError`, with a message for a person; `KeyE
 
 - `create` takes the name of a spec. It refuses an empty title, a column that is not a parameter of the spec or is named twice, and columns that lack one that the source fills; then it writes the first settings, those given to the manager for the spec or `create(..., settings=...)`, and the header. The names of the spec and the source, and the columns, are fixed from then on. What the names stand for is read from code at each start: a later `staged` applies to every batch, later `settings` only to batches made after them.
 - `change` changes the title, the description and the scope, and refuses an empty title. A scope changes the rows of the `Batch` at once.
-- A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. A label is used once: `create` refuses a label that has definitions or records, so the label of a removed batch that had results is never a batch again. Code may still submit under the label of a batch, and Follow replaces such records ([One label, one batch](#one-label-one-batch)).
+- A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. A label is used once: `create` refuses a label that has definitions or records, so the label of a removed batch that had results is never a batch again. Code may still submit under the label of a batch, and such a record is the result of its row ([The records of a label are the results](#the-records-of-a-label-are-the-results)).
 - `start_next` ends a batch before an index and makes the next batch from there up to the old stop, with the same spec, source, columns and settings. The cells set by hand and the removals of the rows that move go with them; the rows added by hand stay, and so do the results, under the old label, so the next batch reduces those rows again. It refuses an index with no row of the scan before it, which would leave the batch none. Which batch follows does not change.
 - `follow(label)` makes a batch the one that follows, and no other; `follow(None)` lets none follow. It refuses a batch without a source, or whose source is not registered. `following` is the label, or `None`.
 - `remove` removes the header, the edits and the settings of a batch, and releases its stage; if the batch follows, none follows from then on. Its records stay, and those running keep running. A `Batch` handed out before must not be used after its removal, so ask the manager for the batch each time.
@@ -517,7 +517,7 @@ loop.refused      # why rows of the last step were refused, by key
 run([loop])       # steps once a second, until a step raises
 ```
 
-A step is [the cycle](#the-model-tables-and-one-cycle) with a scan and the rule `not_reduced`: `batch.reduce(not_reduced(batch.state()))`, with the batch's settings as they are at the step.
+A step is [the cycle](#the-model-tables-and-one-cycle) with a scan and the rule `not_reduced`: `batch.reduce(not_reduced(batch.state(not_reduced(batch.results()))))`, with the batch's settings as they are at the step. Only the rows without a result are compared, so the rows with a result cost a step no resolving.
 
 ```python
 def not_reduced(state):
@@ -550,7 +550,7 @@ So the loop, the page's buttons, and the command differ:
 
 On the page, a change of settings applies to rows not reduced yet, and to all only when a person says so. `essapps-batch reduce --remaining` follows the page's "Reduce", and `--earlier-settings` with it adds the rows of "Reduce them again". The command is given its settings at each call, so without `--remaining` it applies them to all.
 
-A failed or cancelled result counts as any other, so a row whose reduction fails is not reduced at every step. A changed setting reduces no row again ([The model](#the-model-tables-and-one-cycle)). A person reduces those rows through the loop's batch, with **Reduce them again** on the page ([one label, one batch](#one-label-one-batch)).
+A failed or cancelled result counts as any other, so a row whose reduction fails is not reduced at every step. A changed setting reduces no row again ([The model](#the-model-tables-and-one-cycle)). A person reduces those rows through the loop's batch, with **Reduce them again** on the page ([The records of a label are the results](#the-records-of-a-label-are-the-results)).
 
 A row whose result is running is not ready, and the loop does not submit it again.
 
@@ -560,7 +560,7 @@ A row whose key changes from one scan to the next, such as a key made from a sam
 
 The page of a batch has a switch "Follow", which makes its batch the one that follows ([The UI](#the-ui)). In a chain, step the loop of the batch that is read first: `run([Automatic(find), Automatic(iofq)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
 
-### One label, one batch
+### The records of a label are the results
 
 Which rows a step reduces follows from the files, the batch's rows and settings, and the records under its label. The loop keeps nothing else, so a step that raises, in the settings, the source, or a submission, loses nothing. A record under the label with a row's key as its member, from any submitter or any `Batch`, is the row's result, so the step leaves the row to a person. Two `Batch`es on one label share their results: what one reduces, the other does not.
 
@@ -570,7 +570,7 @@ A restart starts from a new scan, with the edits that the batch's definitions ke
 
 A row with an empty cell, or a cell that the workspace does not accept when the state is read, such as a thickness below zero or a file named before it is measured, is `incomplete`. The reason is one of the row's `problems`, `not_reduced` does not give the row, and the loop reduces it once the scan or a person fills the cell, or the workspace accepts it.
 
-`submit` checks a few things that `state` does not, such as a reference to an output that the workspace no longer keeps, and refuses the rows with a `SubmitError`. The step drops the rows that the error names, submits the others, and `refused` holds the reasons by key until the next step. Such a row is submitted again at every step. A reason that names no row refuses every row of the step. If the settings are refused, no row can run: the step submits nothing, and `refused` holds the reason for every ready row without a result, `{'1': 'unknown spec sans-iofq/v1'}`.
+`submit` checks a few things that `state` does not, such as a reference to an output that the workspace no longer keeps, and refuses the rows with a `SubmitError`. The step drops the rows that the error names, submits the others, and `refused` holds the reasons by key until the next step. Such a row is submitted again at every step. A reason that names no row refuses every row of the step. If the settings are refused, no row can run: the step submits nothing, and `refused` holds the reason for every row without a result that is ready as given, `{'1': 'unknown spec sans-iofq/v1'}`. No cell is resolved while the settings are refused, so a row whose cell the workspace would refuse is named too.
 
 ## From files, and from the command line
 

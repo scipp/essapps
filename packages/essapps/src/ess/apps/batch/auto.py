@@ -17,7 +17,8 @@ to reduce, with the rule :func:`~.state.not_reduced` in place of the person's
 choice::
 
     batch.scan()
-    batch.reduce(not_reduced(batch.state()))
+    candidates = not_reduced(batch.results())    # ready as given, no result
+    batch.reduce(not_reduced(batch.state(candidates)))
 
 Which rows a step reduces follows from the files, the batch's rows and
 settings, and the records under its label. :class:`Automatic` keeps nothing
@@ -32,11 +33,12 @@ person reduces it. So a row is reduced by a step once, as soon as it is
 complete, whether the scan or a person put it into the batch; and a restarted
 loop reduces no row again.
 
-A step costs the scan of all files and the state of all rows:
-the status of every row's result, and the comparison of every row's cells with
-its result's request, which resolves the cells that differ as given, such as a
-file named by run (:meth:`~.reduction.Batch.state`). Since a scan drops what
-the batch kept resolved, such a cell is resolved at every step.
+A step costs the scan of all files, and the results of all rows: the status of
+every row's result, and the problems of every row's cells as given
+(:meth:`~.reduction.Batch.results`). It resolves the settings, and the cells
+of the rows without a result only (:meth:`~.reduction.Batch.state` of those
+keys), since a row with a result is not reduced, whatever its comparison
+says.
 """
 
 from __future__ import annotations
@@ -68,8 +70,9 @@ class Automatic:
     refused:
         Why the last step's submission refused each row, by key: the rows it
         submitted that a ``SubmitError`` names, or every row it submitted if
-        the reason names none. If the settings are refused, every ready row
-        without a result.
+        the reason names none. If the settings are refused, every row without a
+        result that is ready as given: no cell is resolved while the settings
+        are refused, so a row whose cell would be refused is named too.
 
     Raises
     ------
@@ -91,16 +94,17 @@ class Automatic:
         :attr:`refused` says why.
 
         If the settings are refused, no row can run: the step reduces none,
-        and :attr:`refused` gives the reason for each ready row without a
-        result.
+        and :attr:`refused` gives the reason for each row without a result
+        that is ready as given, its cells not resolved.
         """
         batch = self.batch
         batch.scan()
+        # Only the rows without a result are compared: a step reduces no other.
+        candidates = not_reduced(batch.results())
         try:
-            state = batch.state()
+            state = batch.state(candidates)
         except SubmitError as error:
-            due = not_reduced(batch.results())
-            self.refused = dict.fromkeys(due, str(error))
+            self.refused = dict.fromkeys(candidates, str(error))
             return {}
         records, self.refused = self._reduce(not_reduced(state))
         return records

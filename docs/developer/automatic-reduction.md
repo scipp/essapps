@@ -22,7 +22,8 @@ run([loop])              # steps until one raises
 
 # one step
 batch.scan()
-batch.reduce(not_reduced(batch.state()))
+candidates = not_reduced(batch.results())   # ready as given, no result
+batch.reduce(not_reduced(batch.state(candidates)))
 ```
 
 A step reads the batch's settings, so a setting changed during a beamtime, `batch.settings = new`, applies to the rows reduced from then on.
@@ -64,7 +65,7 @@ Each line answers a story or a failure mode:
 A result of another spec, such as an older version, stays the row's result, and the row reads `outdated`.
 A row whose result is running is not ready, and once the record has finished, the row has a result.
 
-## One label, one batch
+## The records of a label are the results
 
 Which rows are reduced follows from the records under the label: a step reduces the ready rows of its batch that have no record under the label.
 A record under the label with the row's key as its member, from any submitter or any batch, is the row's result, so the step leaves the row to a person.
@@ -112,7 +113,8 @@ A reason that names no row refuses every row of the step.
 Nothing is kept to spare a retry, so a refused row is submitted again at every step, and refused again until what it references changes.
 
 Settings that the workspace does not accept make `Batch.state()` raise a `SubmitError`, since no row can run with them.
-The step then submits nothing, and `refused` holds the reason for every ready row without a result, such as `{'1': 'unknown spec sans-iofq/v1'}` after an upgrade removed the spec (E2).
+The step then submits nothing, and `refused` holds the reason for every row without a result that is ready as given, such as `{'1': 'unknown spec sans-iofq/v1'}` after an upgrade removed the spec (E2).
+No cell is resolved while the settings are refused, so a row whose cell the workspace would refuse is named too.
 
 ## Chains
 
@@ -143,18 +145,21 @@ The source reads the state of every row of the first batch at every step.
 Some instruments in full operation are expected to write 10 000 to 100 000 files per proposal, and a file every few seconds.
 The numbers below are measured against that scale.
 
-A step lists every file, runs the source over all of them, and reads the state of every row:
+A step lists every file, runs the source over all of them, reads the results of every row, and compares only the rows without a result:
 
 ```python
-batch.scan()                    # every file listed, the source run over all
-state = batch.state()           # per row: its problems, its cells compared with its result's
-                                # request, the status of its result; the settings resolved once
+batch.scan()                                  # every file listed, the source run over all
+candidates = not_reduced(batch.results())     # per row: its problems as given, the status of its result
+state = batch.state(candidates)               # the settings resolved once; the cells of these rows resolved
 ```
 
-A cell of a row with a result is compared as given first, and resolved only if it differs, such as a file named by run, whose record holds its identity.
-`scan` drops what the batch kept resolved, since a file may have gained a catalogue identifier, so such a cell is resolved again at every step, at about 0.13 ms each.
-This is the slow regime: 15 s per step at 100 000 rows whose transmission is named by run, against 2.8 s for the same rows with files by identity.
+A row with a result is not compared with its result, since a step does not reduce it whatever the comparison says.
+So a cell named by run, which `scan` drops from what the batch kept resolved, is resolved at a step only in a row without a result.
 A row without a result has every cell resolved, which the first step pays.
+
+The table below was measured with a step that compared every row with its result (`batch.state()`).
+A step compares only the rows without a result, so the lines "all reduced" overstate its cost: a toy measurement at 3000 rows gives 0.05 s per step where a step that compares every row takes 0.07 s with files by identity, and 0.06 s where it takes 1.7 s with each row's sample named by run.
+So the cost of a step does not depend on whether a row with a result names its files by run.
 
 | Rows (2 files each) | 10 000 | 30 000 | 100 000 |
 |---|---|---|---|
@@ -165,10 +170,10 @@ A row without a result has every cell resolved, which the first step pays.
 
 Best of five steps, with a toy workflow, a file source that finds a name by run in one lookup, and a history in memory, on a machine shared with other work.
 The mean is up to 1.5 times the best, because of Python's garbage collector, which walks every object of the process, the records among them.
-Of a step at 30 000 rows with nothing named by run, listing the files is about 40 %, finding the problems of each row and the references in its cells about 30 %, comparing the cells with the results about 20 %, and the status of every result 5 %.
+Of a step at 30 000 rows with nothing named by run, listing the files is about 40 %, finding the problems of each row and the references in its cells about 30 %, comparing the cells with the results about 20 % (which a step does not do), and the status of every result 5 %.
 
 A step costs the same for one new file or fifty, so the interval of `run` sets the load on one core, `step / (step + interval)`.
-With a step of about 3 s at 100 000 rows, that is 75 % at an interval of 1 s, 23 % at 10 s, and 9 % at 30 s; with every row naming a file by run, a step of 15 s keeps a core busy at any interval below a minute.
+With a step of about 3 s at 100 000 rows, that is 75 % at an interval of 1 s, 23 % at 10 s, and 9 % at 30 s.
 The price is that a new file waits up to one interval.
 An interval that follows the step time, such as `max(1 s, 10 × the last step)`, would keep the load near 10 % at any number of files; it is not built.
 
@@ -185,7 +190,7 @@ A cut-off that a person sets on purpose, "only the runs from 60339 on", is the s
 
 - **New files since a position.** `FileSource.list` returns every file, so each step lists the whole proposal. A catalogue cannot be listed whole at each step; the file source needs a call that returns what is new since a position, as `client.changes` does for records.
 - **Reading the records of chosen members.** A batch reads every record under its label once, at its first state. Each later state reads the records that the proposal's changes name since, under any label, and keeps those under its own. A remote client would read 100 000 records when a batch is made, and every record that another batch of the proposal submits or finishes. A step also asks for the status of every row's result, 100 000 at that scale.
-- **A cell that names a file by run, resolved at every step.** `scan` drops every value a batch kept resolved, so a cell that names a file by run is resolved again at every step, about 15 s at 100 000 rows. Keeping a value until the file it names changes identity needs the file source to say which files did.
+- **A cell that names a file by run, resolved at every step.** `scan` drops every value a batch kept resolved, so a cell that names a file by run is resolved again at every state of all rows, as a page reads it, about 15 s at 100 000 rows; a step resolves only the rows without a result. Keeping a value until the file it names changes identity needs the file source to say which files did.
 - **A step below linear.** The source runs over all files because nothing says which rows a new file can touch. Two ways would say it; neither is prototyped, and a spike on LoKI's pairing and on a pairing by time would show which is better:
   - *A group per file*, declared by the author. A step makes the rows of the groups that got a file, from those files and the files shared by all groups. A source that pairs by time, such as "the can measured before", has no such group and stays linear.
 

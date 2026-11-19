@@ -341,7 +341,7 @@ class Pages:
     def waiting(self, label: str, states: Mapping[str, RowState]) -> dict[str, str]:
         """
         Why Follow could not submit each row of ``states`` that its next step
-        would submit again, by key; none unless the batch of ``label`` follows.
+        would try again, by key; none unless the batch of ``label`` follows.
         """
         source, (of, refused) = self.manager.batch(label).source, self.refused
         if source is None or self.manager.following != label or of != label:

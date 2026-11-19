@@ -539,7 +539,7 @@ function renderFollow(follow) {
   if (!follow) return;
   const {many} = words();
   $('follow').querySelector('input').checked = follow.on;
-  $('follow').title = `Every ${follow.interval} s, rescan the runs and reduce the ${many} that are new.`;
+  $('follow').title = `Every ${follow.interval} s, rescan the runs and reduce the ${many} not reduced yet.`;
   const status = $('follow-status');
   status.classList.toggle('bad', Boolean(follow.failure));
   status.textContent = follow.failure

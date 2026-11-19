@@ -294,6 +294,10 @@ def test_a_value_differs_if_either_side_lacks_it() -> None:
     ]
 
 
+def test_a_list_in_another_order_differs() -> None:
+    assert differs({'runs': ['b', 'a']}, {'runs': ['a', 'b']}, ['runs']) == ['runs']
+
+
 def not_compared() -> dict[str, RowState]:
     return row_states(
         [Row('a', {'sample': 'x'})],
