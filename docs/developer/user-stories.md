@@ -112,10 +112,10 @@ Automatic reduction belongs to its sub-design ([automatic-reduction.md](automati
 The stories use these calls:
 
 ```python
-batch = Batch(client, SPEC, columns=(...), label=..., source=Source(rows_of_files, fills=(...)),
-              persist=True)
-auto = Automatic(batch)   # reads batch.settings at each step
-auto.step()       # scans, and reduces the ready rows without a result; their records by key
+source = Source(rows_of_files, fills=(...))   # rows_of_files: the files -> a DataFrame of rows
+batch = Batch(client, SPEC, label=..., rows=rows_of(client, source), persist=True)
+auto = Automatic(batch, source)   # reads batch.settings at each step
+auto.step()       # adds the new rows of the source, and reduces the ready rows without a result; their records by key
 auto.refused      # why rows of the last step were refused by submit, by key
 ```
 
@@ -644,12 +644,14 @@ The stories E2 to E4 reduce a row per run:
 
 ```python
 def per_run(files):                                            # every raw file
-    return [Row(str(f.metadata['run']), {'sample': f.ref}) for f in files]
+    return pd.DataFrame({'sample': [f.ref.file for f in files]},
+                        index=[str(f.metadata['run']) for f in files])
+
+PER_RUN = Source(per_run, fills=('sample',))
 
 def iofq_batch(client):
-    return Batch(client, IOFQ, columns=('sample',), label='iofq',
-                 source=Source(per_run, fills=('sample',)), persist=True,
-                 settings={'normalization': None})
+    return Batch(client, IOFQ, label='iofq', rows=rows_of(client, PER_RUN),
+                 persist=True, settings={'normalization': None})
 ```
 
 ### E1. Series grows, reduction follows
@@ -665,13 +667,13 @@ def angles(files):                                             # a row per sampl
     runs = {}
     for f in sorted(files, key=lambda f: f.metadata['run']):
         if f.metadata.get('role') == 'sample':
-            runs.setdefault(f.metadata['sample'], []).append(f.ref)
-    return [Row(sample, {'runs': refs}) for sample, refs in runs.items()]
+            runs.setdefault(f.metadata['sample'], []).append(f.ref.file)
+    return pd.DataFrame({'runs': list(runs.values())}, index=list(runs))
 
-batch = Batch(client, STITCH, columns=('runs',), label='reflectivity',
-              source=Source(angles, fills=('runs',)), persist=True,
-              settings={'reference': reference})
-auto = Automatic(batch)
+source = Source(angles, fills=('runs',))
+batch = Batch(client, STITCH, label='reflectivity', rows=rows_of(client, source),
+              persist=True, settings={'reference': reference})
+auto = Automatic(batch, source)
 
 r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
 client.wait(auto.step())                                       # a row still running waits for its record
@@ -697,7 +699,7 @@ Actor: instrument scientist. Goal: after an upgrade removed the spec version of 
 
 ```python
 upgraded = upgrade(specs=[IOFQ_V2])                            # version 1 is gone
-auto = Automatic(iofq_batch(upgraded))
+auto = Automatic(iofq_batch(upgraded), PER_RUN)
 measure(1, [1.0, 1.0], role='sample')
 
 assert auto.step() == {}
@@ -709,7 +711,7 @@ assert auto.refused == {'1': 'unknown spec sans-iofq/v1'}
 Actor: none; a failure mode. Goal: a published result that SciCat lists as a dataset does not make a row.
 
 ```python
-auto = Automatic(iofq_batch(client))
+auto = Automatic(iofq_batch(client), PER_RUN)
 measure(1, [1.0, 2.0, 3.0, 4.0])
 (reduced,) = auto.step().values()
 pid = client.publish(reduced.ref('iofq'), 'scicat')
@@ -725,7 +727,7 @@ A published entry is a file of kind `'derived'`, and a batch's source is given o
 Actor: instrument scientist. Goal: new runs use the improved settings; earlier results stay; the results made before the improvement can be found.
 
 ```python
-auto = Automatic(iofq_batch(client))
+auto = Automatic(iofq_batch(client), PER_RUN)
 first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
 (before,) = auto.step().values()
 
@@ -738,9 +740,8 @@ user = connect()                                                # any client of 
 assert after.request.files() == [second]                        # run 1 is not reduced again
 assert [user.output(r, 'iofq').values.tolist() for r in (before, after)] == [
     [3.0, 7.0], [2.0, 7.0]]
-batch = iofq_batch(user)                                        # a batch of its own on the label
+batch = iofq_batch(user)                                        # a batch of its own on the label, of the runs now
 batch.settings = settings
-batch.scan()
 states = batch.state()
 outdated = [k for k, s in states.items() if s.outdated]
 assert [states[k].record.request.files() for k in outdated] == [[first]]   # to reprocess, if the user wants
