@@ -6,31 +6,36 @@
 
 from collections.abc import Callable, Sequence
 
+import pandas as pd
 import pytest
 
 from ess.apps import Client
-from ess.apps.batch import Batch, FileInfo, Row, Source
+from ess.apps.batch import Batch, FileInfo, Source, rows_of
 from ess.apps.batch.auto import Automatic
 from ess.apps.testing import FakeFiles
-from ess.spec import FileRef
 
 from . import toys
 
 NO_PUBLISH = 'publication is not implemented'
 
 
-def per_run(files: Sequence[FileInfo]) -> list[Row]:
-    """A row per file the batch's selector matches: every raw file."""
-    return [Row(str(f.metadata['run']), {'sample': f.ref}) for f in files]
+def per_run(files: Sequence[FileInfo]) -> pd.DataFrame:
+    """A row per file the source's selector matches: every raw file."""
+    return pd.DataFrame(
+        {'sample': [f.ref.file for f in files]},
+        index=[str(f.metadata['run']) for f in files],
+    )
+
+
+PER_RUN = Source(per_run, fills=('sample',))
 
 
 def iofq_batch(client: Client) -> Batch:
     return Batch(
         client,
         toys.IOFQ,
-        columns=('sample',),
         label='iofq',
-        source=Source(per_run, fills=('sample',)),
+        rows=rows_of(client, PER_RUN),
         persist=True,
         settings={'normalization': None},
     )
@@ -47,24 +52,24 @@ def test_e1_series_grows_reduction_follows(
 ) -> None:
     reference = measure(1, [1.0, 1.0], role='reference')
 
-    def angles(files: Sequence[FileInfo]) -> list[Row]:
+    def angles(files: Sequence[FileInfo]) -> pd.DataFrame:
         """A row per sample: all its angles so far, in run order."""
-        runs: dict[str, list[FileRef]] = {}
+        runs: dict[str, list[str]] = {}
         for f in sorted(files, key=lambda f: f.metadata['run']):
             if f.metadata.get('role') == 'sample':
-                runs.setdefault(f.metadata['sample'], []).append(f.ref)
-        return [Row(sample, {'runs': refs}) for sample, refs in runs.items()]
+                runs.setdefault(f.metadata['sample'], []).append(f.ref.file)
+        return pd.DataFrame({'runs': list(runs.values())}, index=list(runs))
 
+    source = Source(angles, fills=('runs',))
     batch = Batch(
         client,
         toys.STITCH,
-        columns=('runs',),
         label='reflectivity',
-        source=Source(angles, fills=('runs',)),
+        rows=rows_of(client, source),
         persist=True,
         settings={'reference': reference},
     )
-    loop = Automatic(batch)
+    loop = Automatic(batch, source)
 
     r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
     client.wait(loop.step())
@@ -92,7 +97,7 @@ def test_e2_automatic_reduction_goes_quiet(
     upgrade: Callable[..., Client], measure: toys.Measure
 ) -> None:
     upgraded = upgrade(specs=[toys.IOFQ_V2])  # a workspace without version 1
-    loop = Automatic(iofq_batch(upgraded))
+    loop = Automatic(iofq_batch(upgraded), PER_RUN)
     measure(1, [1.0, 1.0], role='sample')
 
     assert loop.step() == {}
@@ -103,7 +108,7 @@ def test_e2_automatic_reduction_goes_quiet(
 def test_e3_reduction_of_our_own_output(
     client: Client, measure: toys.Measure, files: FakeFiles
 ) -> None:
-    loop = Automatic(iofq_batch(client))
+    loop = Automatic(iofq_batch(client), PER_RUN)
     measure(1, [1.0, 2.0, 3.0, 4.0])
     (reduced,) = loop.step().values()
     pid = client.publish(reduced.ref('iofq'), 'scicat')
@@ -115,7 +120,7 @@ def test_e3_reduction_of_our_own_output(
 def test_e4_template_improved_during_a_beamtime(
     client: Client, connect: Callable[..., Client], measure: toys.Measure
 ) -> None:
-    loop = Automatic(iofq_batch(client))
+    loop = Automatic(iofq_batch(client), PER_RUN)
     first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
     (before,) = loop.step().values()
 
@@ -132,7 +137,6 @@ def test_e4_template_improved_during_a_beamtime(
     ]
     batch = iofq_batch(user)
     batch.settings = settings
-    batch.scan()
     states = batch.state()
     outdated = [k for k, s in states.items() if s.outdated]
     assert [states[k].record.request.files() for k in outdated] == [[first]]

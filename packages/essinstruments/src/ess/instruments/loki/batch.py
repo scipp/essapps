@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A batch of I(Q) reductions of LoKI, on the toolbox of :mod:`ess.apps.batch`. It
+The batches of I(Q) of LoKI, on the toolbox of :mod:`ess.apps.batch`. It
 needs the extra ``[loki-app]``.
 
 A sample run is a row. The ``sample`` key of the metadata of its file names the
@@ -11,62 +11,62 @@ sample, and pairs the run with the transmission run of the same sample::
     {'file': 'run-2.nxs', 'run': 2, 'role': 'transmission', 'sample': 'water'}
 
 :data:`SOURCES` and :data:`STAGED` give a
-:class:`~ess.apps.batch.BatchManager` the batches of I(Q);
-:func:`iofq_batch` makes one batch without a manager. The command takes the
-sources as ``essapps-batch reduce -s ess.instruments.loki.batch:SOURCES``,
-and the source of the rows as
-``essapps-batch rows ess.instruments.loki.batch:SAMPLE_RUNS``.
+:class:`~ess.apps.batch.BatchManager` the batches of I(Q). A batch without a
+manager keeps nothing::
+
+    Batch(client, IOFQ, label='iofq', rows=rows_of(client, SAMPLE_RUNS), staged=True)
+
+The command takes the sources as
+``essapps-batch reduce -s ess.instruments.loki.batch:SOURCES``, and the source
+of the rows as ``essapps-batch rows ess.instruments.loki.batch:SAMPLE_RUNS``.
 """
 
 import sys
-from collections.abc import Mapping, Sequence
-from typing import Any
+from collections.abc import Sequence
 
-from ess.apps import Client
-from ess.apps.batch import (
-    Batch,
-    FileInfo,
-    Row,
-    Source,
-    Words,
-)
-from ess.spec import FileRef
+import pandas as pd
+
+from ess.apps.batch import FileInfo, Source
+from ess.apps.batch.table import KEY
 
 from .specs import IOFQ
 
-COLUMNS = ('sample', 'sample_transmission')
-"""The parameters of I(Q) that a row gives; the others are the settings."""
 
-
-def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
+def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
     """
     A row for each sample run, in the order measured, keyed by its run, so that
-    a sample measured twice has two rows, and indexed by its run number, none
-    if the run is not a number. Where several transmission runs have the
-    sample's name, the last measured is the row's. A sample run without a name
-    has an empty transmission cell.
+    a sample measured twice has two rows. The cells ``sample`` and
+    ``sample_transmission`` name the files; the notes are ``run``, the run
+    number, empty if the run is not a number, and ``name``, the sample's name.
+    Where several transmission runs have the sample's name, the last measured
+    is the row's. A sample run without a name has an empty transmission cell.
 
     The files are sorted by run number, since a file source lists them in no
     promised order, and "the last measured" transmission run must not depend
     on it.
     """
     files = sorted(files, key=_measured)
-    transmissions: dict[object, FileRef] = {}
+    transmissions: dict[object, str] = {}
     for f in files:
         if f.metadata.get('role') == 'transmission' and 'sample' in f.metadata:
-            transmissions[f.metadata['sample']] = f.ref
+            transmissions[f.metadata['sample']] = f.ref.file
     rows = []
     for f in files:
         if f.metadata.get('role') != 'sample':
             continue
         name = f.metadata.get('sample')
-        values = {'sample': f.ref}
-        if name in transmissions:
-            values['sample_transmission'] = transmissions[name]
-        info = {} if name is None else {'name': str(name)}
-        key = str(f.metadata.get('run', f.ref.file))
-        rows.append(Row(key, values, info=info, index=_run_number(f)))
-    return rows
+        rows.append(
+            {
+                KEY: str(f.metadata.get('run', f.ref.file)),
+                'run': _run_number(f),
+                'name': None if name is None else str(name),
+                'sample': f.ref.file,
+                'sample_transmission': transmissions.get(name),
+            }
+        )
+    columns = [KEY, 'run', 'name', 'sample', 'sample_transmission']
+    frame = pd.DataFrame.from_records(rows, columns=columns).set_index(KEY)
+    return frame.astype({'run': 'Int64', 'name': 'string'})
 
 
 def _run_number(f: FileInfo) -> int | None:
@@ -81,39 +81,9 @@ def _measured(f: FileInfo) -> tuple[int, str]:
     return (sys.maxsize, f.ref.file) if run is None else (run, '')
 
 
-SAMPLE_RUNS = Source(
-    pair_by_sample,
-    fills=COLUMNS,
-    words=Words(one='sample run', many='sample runs'),
-    row_name='name',
-    index_title='Run',
-)
+SAMPLE_RUNS = Source(pair_by_sample, fills=('sample', 'sample_transmission'))
 """A row per sample run, paired by :func:`pair_by_sample`."""
 SOURCES = {'sample-runs': SAMPLE_RUNS}
 """The sources of LoKI's batches, by name."""
 STAGED = frozenset({IOFQ.name})
 """A batch of I(Q) runs through one stage, so that the can is reduced once."""
-
-
-def iofq_batch(
-    client: Client,
-    *,
-    label: str = 'iofq',
-    persist: bool = False,
-    settings: Mapping[str, Any] | None = None,
-) -> Batch:
-    """
-    The batch of I(Q), through one stage, so that the can is reduced once.
-    ``persist`` and ``settings`` are those of :class:`Batch`. It keeps
-    nothing: a batch kept in the definitions is made by the manager.
-    """
-    return Batch(
-        client,
-        IOFQ,
-        columns=COLUMNS,
-        label=label,
-        source=SAMPLE_RUNS,
-        staged=True,
-        persist=persist,
-        settings=settings,
-    )
