@@ -60,17 +60,19 @@ Two values are needed, not one value and a mark: "revert" shows the source's val
 A cell holds the plain form of a value, as the parameters of a request are held before they are resolved: text, a number, a truth value, `None`, or a list or dict of these.
 
 ```python
-'run:60339'                                                 # a file, in a column whose field takes a file
+'run:60339'                                                 # a file
+'r17.centre'                                                # an output of another record
 2.0                                                         # a thickness
 None                                                        # "no direct beam": a value. An empty cell is a key left out.
 ['path:masks/beamstop.xml', 'path:masks/edges.xml']         # several files in one cell
 {'start': 1.0, 'stop': 13.0, 'num_bins': 200, 'unit': 'Å'}  # a group
-{'@ref': 'output', 'record': 'r17', 'output': 'centre'}     # an output of another record
 ```
 
-A value is brought to this form once, where it enters the table: from a source, from an edit on the page, from a table file. The field of the column validates it when a request is made, as today. The four converters go. Two cells are equal if their plain data are equal, and `rows.json` is the table as it is.
+- **A file and an output are text.** The field of the column says that the text names a file or an output, as it does for a file named in a table today. The text of an output is what `str(OutputRef)` gives: `r17.centre`, `r18.slices[2]`.
+- **Every column that the page offers is then text or a number.** Of the 17 parameters of the six specs of LoKI and the demo that can be a column on the page, 9 are files, 7 are outputs, and 1 is a number. A group or a list can be a column only of a batch made in code or with the command.
+- **A value has one plain form.** It is brought to it once, where it enters the table: from a source, from an edit on the page, from a table file. For a dict or a list, that form is what the field of the column dumps, so a group typed without its defaults and the same group with them are one cell. (A reference as a dict has two forms today, with and without `'key': None`, which compare unequal.)
 
-Whether a file is the text `run:60339` or the tagged form `{'@ref': 'file', 'file': 'run:60339'}` is open (see "Open").
+The field of the column validates a cell when a request is made, as today. The four converters go. Two cells are equal if their plain data are equal, and `rows.json` is the table as it is.
 
 ### A scan is a merge
 
@@ -171,8 +173,8 @@ essapps-batch reduce -s pkg:SOURCES -l 20261118-130204 done.csv   # the cells ch
 
 Developers of applications know pandas, so the table is given to them as a `DataFrame`, and the guide explains the model in its terms.
 
-- **`batch.frame()` and `batch.put(frame)`.** With plain cells the frame holds the same data as the table: most columns are text or numbers, and `put(frame())` loses nothing.
-- **The guide states each concept with its pandas line:**
+- **`batch.frame()` and `batch.put(frame)`.** The frame holds the same data as the table: text and numbers. An empty cell is `NaN`; `None`, a value, is the text `null`, as in a table file. `put(frame())` sets nothing.
+- **The guide states each concept with its pandas line**, which is literally true of the plain data:
 
 | Concept | For a pandas user |
 |---|---|
@@ -184,7 +186,26 @@ Developers of applications know pandas, so the table is given to them as a `Data
 | a rule, such as `left_to_reduce` | a boolean mask over the state |
 | the settings | a column with one value for all rows |
 
-Whether the batch itself holds its rows as dicts of plain data or as a `DataFrame` is not decided here: it is not seen from outside. A batch writes before it changes and has one writer, so it does not hand out a frame that it holds, and a person works on a copy either way. Both forms were built and run through one session with equal results and equal size (162 lines against 156). Two things need care in a `DataFrame`: `None` is a value (`direct_beam: DirectBeamFile | None`), which the pandas operations for missing data treat as an empty cell; and a few columns hold a list or a dict.
+### What the batch holds inside: rows of plain data
+
+Inside, the table is rows of plain data, each a frozen value with `source`, `hand` and `cleared`; a table is replaced, never changed in place. A `DataFrame` inside was built too (four frames on one index: the rows, `source`, `hand`, `cleared`) and run through the same session with equal tables after each step. With plain cells nothing that can be counted decides between them:
+
+| | rows of plain data | four frames |
+|---|---|---|
+| lines, as written | 152 | 138 |
+| lines, formatted at 88 columns | 209 | 241 |
+| the state, the rules, `frame()`, `put()` | 70 lines | 38 lines |
+| plain data out and in (a request, a record's params, `rows.json`) | 4 lines | 16 lines |
+| a scan, the state, saving, at 3000 rows | 15, 10, 24 ms | 15, 14, 44 ms |
+| a frame handed out cannot change the one held | a copy is made | yes, by copy-on-write (72 cases; one exception, `combine_first` on `object` columns) |
+
+The choice is made on three facts that cannot be counted, and by a narrow margin:
+
+1. **Three partners of a batch take plain data and one takes a frame.** A request, the params of a record, and `rows.json` are plain data, at every reduction, state and save. A person takes a frame, on demand. Rows hold the form that the three use.
+2. **A frame inside needs rules that nothing checks.** Four traps were hit in 138 lines, two of them silent: `combine_first` shares memory with its argument, so a write changed the table held; `.at` at a key that is no row adds a row; `from_dict` turns 200 into 200.0; `ne` says that two empty cells differ. `None` next to an empty cell needs the text `null` in the cells. A type checker reads a row; it reads nothing of a `pd.DataFrame`.
+3. **`ess.apps.batch` imports without pandas today.**
+
+For the frame: the state and the rules read as the formulas of the table above. It is a sound second choice, and the one to take if `None` stops being a cell value of its own (it is one at 3 of the 17 columns), or if several workflows on one batch (#222) make the column the unit of work.
 
 ## Alternatives considered
 
@@ -208,7 +229,8 @@ Whether the batch itself holds its rows as dicts of plain data or as a `DataFram
 
 ## Open
 
-- **The plain form of a file in a column that takes files**: the text `run:60339`, or the tagged form that a request holds. The text gives a column of text, and the field of the column says that it names a file. The tagged form needs no field to be read.
+- **Whether `None` stays a cell value of its own.** `direct_beam` takes a file or `None`, "no direct beam", and an empty cell there makes the row incomplete. A named choice in its place would make every cell text or a number with nothing else to tell apart.
+- **`put` of a frame that holds a row removed before** brings the row back. `frame()` leaves removed rows out, so this happens only if a person adds the key.
 
 - **Whether a removed row that is not in the files is dropped for good.** Kept here, for one rule less. The table then holds rows that nothing shows.
 - **Rows shaped as a table.** A row has four kinds of fields (`key`, `index`, `values`, `info`), and five fields of `Source` say which is what. A table has columns with roles. This matters for several workflows on one batch (#222: a column has a third writer, a workflow), and is left for that decision. So is the name `index`, which means the key in pandas.
