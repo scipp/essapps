@@ -2,12 +2,14 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 The batches of a workspace: :class:`BatchManager` makes, lists, changes and
-removes them, and ends one at a row to start the next. The guide is the
-section "The batches of a workspace" of ``packages/essapps/docs/batch.md``;
-the decision is
+removes them, ends one at a row to start the next, and keeps which batch
+follows. The guide is the section "The batches of a workspace" of
+``packages/essapps/docs/batch.md``; the decision is
 ``docs/developer/adr/0011-a-person-makes-the-batches-of-a-workspace.md``.
 
-A batch is kept as three tables of the definitions (:mod:`.definition`), each
+A batch is a label with a header. A :class:`~.reduction.Batch` is the object
+that works on its rows; the manager makes the one ``Batch`` of each batch. A
+batch is kept as three tables of the definitions (:mod:`.definition`), each
 with one writer::
 
     header      the spec by name, the columns, the name     BatchManager
@@ -22,9 +24,13 @@ so a manager made again, after a restart, makes the same ``Batch`` of a label
 from them, the registered sources and the specs that run staged. Making a
 batch writes its first settings, before any ``Batch`` of the label exists,
 then its header: a label without a header is not a batch. The ``Batch`` of a
-label is made
-at the first call of :meth:`BatchManager.batch`, and writes the settings and
-the edits from then on.
+label is made at the first call of :meth:`BatchManager.batch`, and writes the
+settings and the edits from then on.
+
+The manager writes one more table, ``following``: the label of the batch that
+follows, or none. A step of Follow is one step of
+:class:`~.auto.Automatic` on ``manager.batch(manager.following)``; whoever
+serves owns the timer that calls it, and the lock. The manager has neither.
 """
 
 from __future__ import annotations

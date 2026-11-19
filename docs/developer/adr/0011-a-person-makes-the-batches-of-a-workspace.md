@@ -1,6 +1,6 @@
 # ADR 0011: A person makes the batches of a workspace, each with a scope over the rows of a source
 
-- Status: accepted. Several workflows on one batch are described below and not decided. Amended 2026-11-18: the header holds the spec and the columns.
+- Status: accepted. Several workflows on one batch are described below and not decided. Amended 2026-11-18: the header holds the spec and the columns. Amended 2026-11-19: the manager keeps which batch follows; "Start the next batch here" leaves Follow where it is.
 - Deciders: Simon
 - Date: 2026-11-18
 
@@ -13,7 +13,7 @@ Four more are used here:
 - The *label* of a batch names its results: a row's result is the newest record under the label with the row's key.
 - A *template* is a spec with values for some of its parameters; the parameters left out are its *blanks*.
 - The *definitions* are where a workspace keeps what a person made of a batch: per label, the edits, and the settings as a template whose blanks are the columns.
-- *Follow* is the loop that scans at an interval and reduces a row once its files are listed, and again when the files change it at one of the columns `at` (`Automatic`).
+- *Follow* scans the batch that follows at an interval and reduces a row once its files are listed, and again when the files change it at one of the columns `at` (`Automatic`).
 
 A batch is one workflow over every row that the files of a workspace give:
 
@@ -138,24 +138,23 @@ manager.remove(label)
 
 ### One batch follows
 
-The manager does not run Follow.
-The application that serves the pages has one loop, which holds the label of the batch that follows, or none:
+The manager keeps the label of the batch that follows, or none:
 
 ```python
-follow = Follow(manager, definitions, interval=5.0)    # one per application
-follow.on(label)        # this batch follows, and no other
-follow.off()
-follow.label            # what the switch of a page shows
+manager.follow(label)   # this batch follows, and no other
+manager.follow(None)    # none follows
+manager.following       # what the switch of a page shows
 ```
 
 - One value means that at most one batch follows, with no rule to enforce. Turning Follow on for one batch turns it off for the other.
-- The loop keeps the value in the definitions, apart from any batch, so a restart resumes.
-- At each step the loop asks the manager for the batch of its label, and does one step of `Automatic` on it. If the batch is gone, the loop turns itself off.
-- The manager has no thread, no timer and no lock. It reads and writes definitions and hands out `Batch` objects.
+- The manager keeps the value in the definitions, apart from any batch, so a restart resumes. Removing the batch that follows ends Follow.
+- A step of Follow is one step of `Automatic` on `manager.batch(manager.following)`.
+- Whoever serves the pages owns the timer that steps it, and the lock. The manager has no thread, no timer and no lock. It reads and writes definitions and hands out `Batch` objects.
 
 A batch has no state "closed".
 It receives no new rows once its scope has a `stop` at or below the newest index.
-"Start the next batch here" sets the `stop` of one batch there, makes the next with the same spec, source and settings from that index on, and moves Follow to it.
+"Start the next batch here" sets the `stop` of one batch there, makes the next with the same spec, source and settings from that index on, and leaves Follow where it is.
+The rows that move have no result under the next batch, so a step would reduce them all again, with settings that a person has not changed yet.
 
 ### A page shows one batch, named in its URL
 
@@ -208,7 +207,7 @@ If it is built, the header, the labels and the URL change once more: a label per
 - **A slice by position.** A file listed late shifts every row after it, so a batch would hold other rows than the day before.
 - **A slice with both ends included**, as `.loc` of pandas. With times as the index, a batch that starts where another stops would share a row with it or leave a gap.
 - **Batches that split the rows between them.** It is a rule to enforce, and it forbids reducing one series with two sets of settings to compare them.
-- **Follow in the manager.** The manager would get a thread, a timer and a lock next to the definitions it keeps. Which batch follows is a fact about the running application, not about a batch.
+- **Follow run by the manager.** The manager would get a thread, a timer and a lock next to the definitions it keeps. What was built: the manager keeps which batch follows, as it keeps the headers, and the application that serves owns the timer and the lock.
 - **Follow as a flag of each batch.** Every open-ended batch that follows reduces every new run. A bounded one reduces its rows again when a later file changes a cell, which for the standard measured each day is not wanted. One value can become a set later; a flag per batch is hard to take back.
 
 ## Consequences
@@ -217,7 +216,7 @@ If it is built, the header, the labels and the URL change once more: a label per
 - A person looks at one batch while another runs. All batches share the workspace's queue, so a long reduction still delays the batch that follows (see Open).
 - Problem 3 stays as it is for batches made in code, and is not available for batches that a person makes.
 - `Batch` changes in two places: a row gets an index, and a batch has a scope that its scan applies and that can be set. The page of a batch stays, but for Follow.
-- Follow moves from the page of one batch to a loop of the application that serves them all. The loop has the timer, and steps a batch under the lock of its page. The manager takes no part in it.
+- Follow moves from the page of one batch to the application that serves them all. The application owns the timer, and steps the batch that follows under the lock of the pages. The manager keeps which batch follows.
 - The definitions get two operations they lack: listing the labels, and deleting a part. The layout of `definitions/` stays, with the header added.
 - `essapps-batch reduce --label` makes and reads the batch of its label with the manager, and takes the registered sources as it takes the bindings. It looks the kept spec up by name and version today, and has to take the bound version as the manager does.
 - Two rules change. Whether a batch follows is kept; today it belongs to the process, and a restart starts with `--follow` or without. `at` gets a default, the columns of the source; today the application chooses it.

@@ -7,11 +7,12 @@ working on the page.
 ``python -m ess.apps.batch.web.demo [DIRECTORY] [--port N]`` serves it on
 ``http://localhost:N``, with the workspace kept in ``DIRECTORY`` (see
 :mod:`ess.apps.folder`), a new temporary folder if not given. The first start
-writes the fake runs and ``files.csv`` there, and makes one batch of the
-samples; a later start reuses them, with the results of earlier starts, and
-the batches, edits, settings, corrections, and the batch that follows kept in
-``definitions/`` (:mod:`..definition`). The file source reads ``files.csv``
-again when it changes (:class:`~ess.apps.folder.ArrivingFiles`).
+writes the fake runs and ``files.csv`` there. A later start reuses them, with
+the results of earlier starts, and the batches, edits, settings, corrections,
+and the batch that follows kept in ``definitions/`` (:mod:`..definition`).
+Each start makes a batch of the samples if no batch is listed. The file
+source reads ``files.csv`` again when it changes
+(:class:`~ess.apps.folder.ArrivingFiles`).
 
 With ``--arrive SECONDS [--count N]``, a new folder starts with the empty cell
 and the first few samples, and the runs of one more sample arrive every
@@ -314,8 +315,9 @@ def build(
 ) -> FastAPI:
     """
     The application on what :func:`open_demo` returns, with a step of Follow
-    every ``interval`` seconds while a batch follows. A folder without a batch
-    gets one of all samples.
+    every ``interval`` seconds while a batch follows. Whenever no batch is
+    listed, a batch of all samples is made, also after a person removed the
+    last one.
     """
     manager = BatchManager(
         client, sources=SOURCES, definitions=definitions, staged=STAGED

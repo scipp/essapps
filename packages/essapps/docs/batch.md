@@ -11,7 +11,6 @@ Your application supplies what depends on the technique: which files make which 
 import uvicorn
 
 from ess.apps.batch import BatchManager, FileInfo, FolderDefinitions, Row, Source
-from ess.apps.batch.auto import Follow
 from ess.apps.batch.web import Pages, Shown, create_app
 from ess.apps.folder import open_folder
 
@@ -38,14 +37,14 @@ client = open_folder(folder, BINDINGS)
 definitions = FolderDefinitions(folder)
 manager = BatchManager(client, sources=SOURCES, definitions=definitions,
                        staged={IOFQ.name})
-if not manager.headers():                  # a new folder: one batch to start with
+if not manager.headers():                  # no batch listed: one to start with
     manager.create(IOFQ.name, title='Sample runs', source='sample-runs')
 
 def draw_iofq(shown: Sequence[Shown]) -> dict:
     """A Plotly figure of the completed results that the page asks to draw."""
     ...
 
-pages = Pages(manager, Follow(manager, definitions), title='I(Q)', draw={IOFQ.name: draw_iofq})
+pages = Pages(manager, title='I(Q)', draw={IOFQ.name: draw_iofq})
 app = create_app(pages)   # a FastAPI app: the page of each batch at /batches/<label>/
 uvicorn.run(app, host='localhost', port=8000)
 ```
@@ -72,7 +71,7 @@ batch.cancel()
 
 ## The model: tables and one cycle
 
-A batch is a set of tables. Six of them are stored, and each has one writer. All others are derived: they are computed from the stored tables at each read and stored nowhere.
+A batch and what it reads are a set of tables. Six of them are stored, and each has one writer. All others are derived: they are computed from the stored tables at each read and stored nowhere.
 
 | Stored table | Written by | Holds | One table per |
 |---|---|---|---|
@@ -92,7 +91,7 @@ results  = newest record per key, under the label
 state    = requests joined with results on key
 ```
 
-A *correction* is a value of a file's metadata set by hand ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)). The corrections, header, edits, and settings are the *definition* of a batch, the part that a person makes, through a page, the command, or code. [Where the definition is kept](#where-the-definition-is-kept) says where they are stored and when they are read. A request is *resolved* as a record holds it ([Rules](#rules)). `state` is what `batch.state()` gives and a page shows: each row with its result, its status, and `changed`, the parameters at which the row's request differs from its result's ([Rules](#rules)).
+A *correction* is a value of a file's metadata set by hand ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)). The corrections, header, edits, and settings are kept in the *definitions* ([Terms](#terms)): what a person makes, through a page, the command, or code. [Where the definition is kept](#where-the-definition-is-kept) says where they are stored and when they are read. A request is *resolved* as a record holds it ([Rules](#rules)). `state` is what `batch.state()` gives and a page shows: each row with its result, its status, and `changed`, the parameters at which the row's request differs from its result's ([Rules](#rules)).
 
 An edit sets only columns. A value at a name that is not a column makes its row `incomplete` (`not a column`). A `Batch` made again on the same stored tables reads the same state.
 
@@ -146,7 +145,7 @@ Every way of reducing a batch is this cycle, with its own rule and its own trigg
 | **Reduce** on the page | a person | `left_to_reduce(state, batch.columns)` |
 | **Reduce them again** on the page | a person | `earlier_settings(state, batch.columns)` |
 | **Reduce all**, **Reduce selected** | a person | `ready(state)`, the keys selected |
-| **Follow** on the page of a batch: the application's loop, a timer that scans as **Rescan runs** does | the application's process | `arrived(state, at)`, `at` the columns that the source fills |
+| **Follow** on the page of a batch: a step on the batch that follows, from a timer, that scans as **Rescan runs** does | the application's process | `arrived(state, at)`, `at` the columns that the source fills |
 | `Automatic.step`, which `run` calls from a timer | a process of its own | `arrived(state, at)` |
 | `essapps-batch reduce` | a person or a script | every row of the table; with `--remaining`, `left_to_reduce(state, batch.columns)`, and with `--earlier-settings` too, `earlier_settings(state, batch.columns)` |
 
@@ -202,6 +201,9 @@ A failed or cancelled row reads `failed` or `cancelled` whether or not its reque
 
 ## Terms
 
+- A **batch** is a label with a header ([The batches of a workspace](#the-batches-of-a-workspace)). It has settings and edits, and its results are the records under its label.
+- A **`Batch`** is the object that works on the rows of one label: it scans, edits and reduces them. The manager makes the one `Batch` of a batch. A `Batch` made in code has no header, is not listed, and keeps nothing.
+- The **definitions** are what a workspace keeps besides its files and records: per batch the header, the settings and the edits; per workspace the label of the batch that follows and the corrections of runs ([Where the definition is kept](#where-the-definition-is-kept)).
 - A **column** is a parameter of the spec that differs per row, such as `sample`. The columns are the blanks of a `Template`.
 - The **settings** are all other parameters, shared by every row. They are the batch's (`batch.settings`), and the template's values.
 - A **row** has a **key**, a value per column, and read-only **info** to show with it. A cell can hold anything a request can: a file, a reference to an output, a number, a list of runs.
@@ -346,13 +348,13 @@ The page has a Runs tab, a table of the files, in which a person does this. You 
 class Marks(BaseModel):
     role: Literal['sample', 'transmission'] | None = None
 
-pages = Pages(manager, follow, files=files, marks=Marks, draw={IOFQ.name: draw_iofq})
+pages = Pages(manager, files=files, marks=Marks, draw={IOFQ.name: draw_iofq})
 app = create_app(pages)
 ```
 
 ## Where the definition is kept
 
-The *definition* of a batch is the corrections, the header, the edits, and the settings ([The model](#the-model-tables-and-one-cycle)). Give the manager and the file source the *definitions* of the workspace, and a batch made again, after a restart or in another process, starts with them:
+Give the manager and the file source the definitions of the workspace ([Terms](#terms)), and a batch made again, after a restart or in another process, starts with them:
 
 ```python
 from ess.apps.batch import BatchManager, FolderDefinitions
@@ -375,7 +377,7 @@ definitions/corrections.json                        every file source of the wor
 definitions/labels/20261118-130204/edits.json       what was set by hand on the rows
 definitions/labels/20261118-130204/settings.json    a template, which essapps-batch reads
 definitions/labels/20261118-130204/header.json      spec, columns, source, title, description, scope; written by the manager
-definitions/following.json                          the label of the batch that follows; written by Follow
+definitions/following.json                          the label of the batch that follows; written by the manager
 ```
 
 The manager refuses a label with `/` (`check_label`); a `Batch` made in code may still have one, written as `%2F` in the name of its folder, and no manager lists it, since it has no header.
@@ -404,7 +406,7 @@ The files that a person loads and writes ([The UI](#the-ui)) are copies, for oth
 
 ## The batches of a workspace
 
-A `BatchManager`, *the manager*, makes, lists, changes and removes the batches of a workspace, and holds the one `Batch` of each label. It keeps each batch in the definitions, so a manager made again after a restart lists the same batches and makes the same `Batch` of each. The application registers its sources by name, and what a new batch of a spec gets:
+A batch is a label with a header ([Terms](#terms)). A `BatchManager`, *the manager*, makes, lists, changes and removes the batches of a workspace, holds the one `Batch` of each, and keeps which batch follows. It keeps each batch in the definitions, so a manager made again after a restart lists the same batches and makes the same `Batch` of each. The application registers its sources by name, and what a new batch of a spec gets:
 
 ```python
 from ess.apps.batch import BatchManager, Scope, Source, Words
@@ -427,8 +429,10 @@ manager.headers()      # {'20261118-130204': Header(spec='loki-iofq',
 batch = manager.batch(label)   # the Batch, made and scanned at the first call
 manager.change(label, title='Afternoon, 2 mm cells')
 manager.change(label, scope=Scope(start=60339, stop=60421))   # the series ends
-evening = manager.start_next(label, 60400, title='Evening')   # the next batch; this one ends before 60400
-manager.remove(label)
+manager.follow(label)          # this batch follows, and no other; follow(None): none
+manager.following              # '20261118-130204'
+evening = manager.start_next(label, 60400, title='Evening')   # this batch ends before 60400
+manager.remove(label)          # none follows from then on
 ```
 
 What a batch is, and where each part comes from:
@@ -449,43 +453,29 @@ settings.json   Batch.settings    the settings, as a template; the first written
 edits.json      Batch.rows        the edits
 ```
 
-What the manager gives the `Batch` of a label:
+What the manager refuses raises `ValueError`, with a message for a person; `KeyError` says only that no batch has the label.
 
-| Argument | Comes from |
-|---|---|
-| `spec` | `client.spec_named(header.spec)`: the spec of that name that the workspace binds, the highest version if several |
-| `source` | the `Source` registered under `header.source` |
-| `columns` | `header.columns`: those given to `create`, else those that the source fills |
-| `settings` | `settings.json` |
-| `staged` | whether the spec is in `staged` of the manager |
-| `label` | given to `create`, or the time of making, `YYYYMMDD-HHMMSS`, with `-2`, `-3`, ... if that is taken |
-| `scope` | `header.scope`: `create(..., scope=...)`, then `change(..., scope=...)` |
-| `persist` | always, so the workspace needs a store, as a folder has |
-| `definitions` | those of the manager |
-
-- `create` takes the name of a spec. It refuses an empty title, a column that is not a parameter of the spec or is named twice, and columns that lack one that the source fills; then it writes the first settings, those given to the manager for the spec or `create(..., settings=...)`, and the header. The names of the spec and the source, and the columns, are fixed from then on. What the names stand for is read from code at each start: a later `staged` applies to every batch, later `settings` only to batches made after them. `Batch` refuses a source that fills a column it lacks, so `batch(label)` refuses a batch whose source now fills one.
-- `change` changes the title, the description and the scope, and refuses an empty title; a scope is written to the header, then given to the `Batch` of the label if it was made, whose rows change at once.
-- A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. `create` refuses a label that has definitions or records.
-- `start_next` ends a batch before an index and makes the next batch from there up to the old stop, with the same spec, source, columns and settings. The cells set by hand and the removals of the rows that move go with them; the rows added by hand stay, and so do the results, under the old label, so the next batch reduces those rows again. It refuses an index with no row of the scan before it, which would leave the batch none.
- The next batch is made first, so a refusal of `create` changes nothing, and it is removed again if its scan raises or it cannot take what was set by hand. `Follow` is the caller's to move.
-- `remove` removes the header, the edits and the settings of a batch, and releases its stage. Its records stay, and those running keep running. A `Batch` handed out before must not be used after its removal, so ask the manager for the batch each time.
-- A `Batch` made in code without the manager has no header and is not listed.
+- `create` takes the name of a spec. It refuses an empty title, a column that is not a parameter of the spec or is named twice, and columns that lack one that the source fills; then it writes the first settings, those given to the manager for the spec or `create(..., settings=...)`, and the header. The names of the spec and the source, and the columns, are fixed from then on. What the names stand for is read from code at each start: a later `staged` applies to every batch, later `settings` only to batches made after them.
+- `change` changes the title, the description and the scope, and refuses an empty title. A scope changes the rows of the `Batch` at once.
+- A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. A label is used once: `create` refuses a label that has definitions or records, so the label of a removed batch that had results is never a batch again. Code may still submit under the label of a batch, and Follow replaces such records ([One label, one batch](#one-label-one-batch)).
+- `start_next` ends a batch before an index and makes the next batch from there up to the old stop, with the same spec, source, columns and settings. The cells set by hand and the removals of the rows that move go with them; the rows added by hand stay, and so do the results, under the old label, so the next batch reduces those rows again. It refuses an index with no row of the scan before it, which would leave the batch none. Which batch follows does not change.
+- `follow(label)` makes a batch the one that follows, and no other; `follow(None)` lets none follow. It refuses a batch without a source, or whose source is not registered. `following` is the label, or `None`.
+- `remove` removes the header, the edits and the settings of a batch, and releases its stage; if the batch follows, none follows from then on. Its records stay, and those running keep running. A `Batch` handed out before must not be used after its removal, so ask the manager for the batch each time.
 - `words`, `row_name` and `row_info` of a `Source` say what the page of a batch calls a row, which entry of `Row.info` names it, and which other entries it shows. `index_title` is what the page calls the index of a row, such as `'Run'`, and `index_type` its type.
 
-One loop per application, `Follow`, reduces the rows of one batch as its files arrive: each step is a step of an `Automatic` on the batch that follows ([Automatic reduction](#automatic-reduction)), with `at` the columns that its source fills. It reduces the rows of the scope only, and a slice holds every row whose index is inside it, whenever its file is listed: so widening the scope of the batch that follows makes the next step reduce every row that the scope now holds and that has no result.
+A restart keeps what a person gave: the batches, their settings and edits, the corrections, and which batch follows. It loses a draft of settings not applied on a page, and why Follow refused rows. A row that was running reads as failed, and Follow leaves a failed row to a person.
+
+Follow reduces the rows of the batch that follows as its files arrive. A step is one step of an `Automatic` on it ([Automatic reduction](#automatic-reduction)), with `at` the columns that its source fills:
 
 ```python
-from ess.apps.batch.auto import Follow
+from ess.apps.batch.auto import Automatic
 
-follow = Follow(manager, definitions, interval=5.0)
-follow.on(label)       # this batch follows, and no other; ValueError for a batch without a source
-follow.label           # the label of the batch that follows, or None
-while True:
-    follow.step()      # its records by key; follow.refused says why rows were refused
-    time.sleep(follow.interval)
+if (label := manager.following) is not None:
+    loop = Automatic(manager.batch(label))
+    loop.step()        # its records by key; loop.refused says why rows were refused
 ```
 
-`follow.on` and `follow.off` write `following.json`, so a `Follow` made again after a restart resumes. If the batch that follows is removed, the next step turns `Follow` off. `Follow` has no thread, and the manager none either: whoever owns the timer calls `step`. For the pages, `create_app` owns it ([The UI](#the-ui)).
+The manager has no thread, no timer and no lock: whoever serves owns the timer that steps it, and the lock. For the pages, `Pages.tick` is the step, and `create_app` owns the timer ([The UI](#the-ui)).
 
 ## Chains
 
@@ -539,7 +529,7 @@ A step is [the cycle](#the-model-tables-and-one-cycle) with a scan and the rule 
 | `s1'` | row 1, `[s1, s1']`, `[t1]` | row 1, `[s1, s1']`, `[t1]` | nothing: row 1 reads `outdated` |
 | `t1'` | row 1, `[s1, s1']`, `[t1, t1']` | nothing: row 1 reads `outdated` | nothing |
 
-A row that a person changed is the person's to reduce: the loop leaves a row with a cell set by hand ([Rules](#rules)) while it has no result, or while its request differs from its result's at such a cell:
+The rule is on the state, not on who changed it. `arrived` gives the rows that are ready and have no result under the label, or whose request differs from their result's at a column of `at`, less the rows with a cell set by hand ([Rules](#rules)) that is not reduced yet:
 
 ```python
 def arrived(state, at):
@@ -548,7 +538,15 @@ def arrived(state, at):
             and (state[key].record is None or state[key].changed & at)]
 ```
 
-The loop reduces a row for what the files changed, never for what a person changed. Every cell of a row added by hand is set by hand. A row edited at two cells of `at`, such as its sample run and then its transmission run, waits until a person reduces it with both. Once reduced, a cell set by hand equals its result's, so a file that arrives later at another cell of `at` reduces the row again, with the cell set by hand. A correction of a file's metadata ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)) reaches the rows through the scan, so the loop reduces for it as for a file that arrives: two corrections that belong together reduce a row twice if a step runs between them.
+So a cell that a person sets waits for the person to reduce its row. Other actions of a person change the state so that the next step reduces rows:
+
+- turning Follow on for a batch: the rows that the rule gives at once, such as each row without a result;
+- widening the scope: the rows that the scope then holds and that have no result;
+- a correction of a file's metadata: the rows whose cells it changes at `at`;
+- a revert of a cell to the scan's: its row, unless its request then equals its result's at `at`;
+- bringing a removed row back: the row, as for a revert of all its cells.
+
+Every cell of a row added by hand is set by hand. A row edited at two cells of `at`, such as its sample run and then its transmission run, waits until a person reduces it with both. Once reduced, a cell set by hand equals its result's, so a file that arrives later at another cell of `at` reduces the row again, with the cell set by hand. A correction of a file's metadata ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)) reaches the rows through the scan, so the loop reduces for it as for a file that arrives: two corrections that belong together reduce a row twice if a step runs between them.
 
 A cell that a person reverts to the scan's (`reset`) is no longer set by hand, so it follows the files again at once: the next step reduces the row, with its other cells as they are. Nothing distinguishes the row then from one whose file changed. So two reverts of one row, one after the other, can reduce it twice, the first time with the scan's cell next to a cell still set by hand. `reset(key)`, or `reset(key, *columns)`, reverts several cells of a row in one write, and the row is reduced once; on the page, a revert takes one column, and removing and restoring a row reverts all its cells.
 
@@ -572,7 +570,7 @@ A result of another spec, such as an older version, stays the row's result ([Rul
 
 A row whose key changes from one scan to the next, such as a key made from a sample name that a correction changed, is a new row, and is reduced again under its new key; so choose a key that does not change, such as the run number ([Terms](#terms)).
 
-The page of a batch has a switch "Follow", which makes its batch the one that the application's `Follow` steps ([The UI](#the-ui)). In a chain, step the loop of the batch that is read first: `run([Automatic(find), Automatic(iofq)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
+The page of a batch has a switch "Follow", which makes its batch the one that follows ([The UI](#the-ui)). In a chain, step the loop of the batch that is read first: `run([Automatic(find), Automatic(iofq)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
 
 ### One label, one batch
 
@@ -727,9 +725,9 @@ One command holds the folder at a time. If a command was killed, the next one fi
 ## The UI
 
 [The batch page](../src/ess/apps/batch/web/README.md) (`ess.apps.batch.web`) shows each batch in a browser: how to run it, its layers, and its limits.
-The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. The page of a batch with a source offers a switch **Follow**: it makes the batch the one that the application's `Follow` steps, so no other batch follows, and the page of another batch says which one does. A step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, at the columns that the source fills, with the batch's settings, whatever the form holds. Follow leaves a row that a person changed to the person, who reduces it with **Reduce**: while following, such a row says "Set by hand, so Follow leaves it to you: reduce it." An action reduces nothing that a person did not ask for, and Apply reduces nothing either: the next step reduces the rows without a result with the settings applied. The batch that follows is kept in `following.json`, so a restart resumes.
+The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again. Apply is refused while the form misses something, and while the form holds a change a person's reductions with the batch's settings are refused, so that nothing is reduced with settings other than those shown. A change of the settings applies to the rows not reduced yet. A row reduced before is shown as done, marked "earlier settings", and "Reduce" leaves it; **Reduce them again** in the Settings tab reduces those rows, after a confirmation that names how many. The page of a batch with a source offers a switch **Follow**: it makes the batch the one that follows (`manager.follow`), so no other batch follows, and the page of another batch says which one does. A step every few seconds does what **Rescan runs** does and reduces the rows that `arrived` gives, at the columns that the source fills, with the batch's settings, whatever the form holds. Follow leaves a row with a cell set by hand that is not reduced yet to the person, who reduces it with **Reduce**: while following, such a row says "Set by hand, so Follow leaves it to you: reduce it." An action submits only what a person asks to reduce, and Apply submits nothing; the next step reduces what the rule gives after the action, such as the rows without a result, with the settings applied ([Automatic reduction](#automatic-reduction)). The batch that follows is kept in `following.json`, so a restart resumes.
 
-`create_app(pages)` makes the app: the page of each batch of the manager at `/batches/<label>/`, and `/`, which redirects to the page of the batch that follows, else of the only batch, and otherwise lists the batches. `Pages(manager, follow, ...)` (`ess.apps.batch.web.pages`) holds what the pages share: the title of the application (`title`), how to draw the results of each spec (`draw`, by the name of the spec), the correction of the metadata of runs (`files`, `marks`), `Follow` and its timer, and one lock that every request of every page and each step of Follow take. What a page calls a row and shows of it are the `words`, `row_name` and `row_info` of the batch's `Source`. Every page has a view **Batches**, which lists the batches of the manager, each a link to its page, with its scope, and counts their rows by status when it is opened (`Pages.counts`, which scans every batch), with the statuses of the page of each batch; a person makes a batch there. The tab **Batch** of a page changes the title, description and scope of its batch, starts the next batch at a row, and removes the batch. `Page` (`ess.apps.batch.web.page`) holds what the page of one batch shows and does, and its actions return `State`, the whole of what the page shows. The browser renders `State` and sends the actions.
+`create_app(pages)` makes the app: the page of each batch of the manager at `/batches/<label>/`, and `/`, which redirects to the page of the batch that follows, else of the only batch, and otherwise lists the batches. `Pages(manager, interval=5.0, ...)` (`ess.apps.batch.web.pages`) holds what the pages share: the title of the application (`title`), how to draw the results of each spec (`draw`, by the name of the spec), the correction of the metadata of runs (`files`, `marks`), the step of Follow (`Pages.tick`) and the seconds between two steps (`interval`), and one lock that every request of every page and each step of Follow take. What a page calls a row and shows of it are the `words`, `row_name` and `row_info` of the batch's `Source`. Every page has a view **Batches**, which lists the batches of the manager, each a link to its page, with its scope, and counts their rows by status when it is opened (`Pages.counts`, which scans every batch), with the statuses of the page of each batch; a person makes a batch there. The tab **Batch** of a page changes the title, description and scope of its batch, starts the next batch at a row, and removes the batch. `Page` (`ess.apps.batch.web.page`) holds what the page of one batch shows and does, and its actions return `State`, the whole of what the page shows. The browser renders `State` and sends the actions.
 
 `draw(shown)` gets the completed results of the rows selected, as `Shown` (`key`, `name`, `record`, `outdated`, `color`), and returns a Plotly figure as a dict. `ess.apps.batch.web.plots` draws curves with the page's colours.
 
@@ -763,8 +761,9 @@ Each `reduce` exits 3: the demo's run 60345 holds no neutron events, so its row 
 | **Download settings** | `text.write_template(batch.template(), path)`, refused while the settings form holds a change |
 | **Download selected**, **Download all** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows, zipped with their table |
 | **Save** in the tab **Batch** | `manager.change(label, title=..., description=..., scope=Scope(start=start, stop=stop))`, with the ends as typed |
-| **Start the next batch here** | `manager.start_next(label, index, title=...)`, with `index` that of the row selected, then `follow.on(...)` with its label if this batch follows |
-| **Remove this batch** | `follow.off()` if it follows, then `manager.remove(label)` |
+| **Start the next batch here** | `manager.start_next(label, index, title=...)`, with `index` that of the row selected |
+| **Follow** | `manager.follow(label)`, or `manager.follow(None)` if this batch follows |
+| **Remove this batch** | `manager.remove(label)` |
 
 `reduce` refuses a table or a batch with a row that cannot run, so remove the incomplete rows on the page first. A table loaded is set by hand: each cell that differs from the row shown is an edit, a row the batch removed is brought back, and a row the batch does not show is added, so it stays after **Rescan runs**, and the definitions keep it. A table with a row that the source makes and the scope leaves out is refused, and nothing is set. The `status` of a table written is what the page shows, such as `outdated`, `not reduced`, or `completed, earlier settings` (`status_texts`). `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table.
 
@@ -775,7 +774,7 @@ Each `reduce` exits 3: the demo's run 60345 holds no neutron events, so its row 
 | your pairing and the batch | a function over plain data | there is no behaviour to abstract |
 | `Batch` and the framework | `Client`, the class | one implementation; a fake would have to redo the validation that a table shows |
 | `Form` and the framework | `Listing`, a pydantic model of the params, and `Form.held()` | `Form` needs neither `Client` nor `WorkflowSpec` |
-| the logic and the page | the methods of `BatchManager`, `Follow`, `Batch` and `RowTable` | `Pages` and `Page` hold what the pages show and do, so a rule is written once |
+| the logic and the page | the methods of `BatchManager`, `Automatic`, `Batch` and `RowTable` | `Pages` and `Page` hold what the pages show and do, so a rule is written once |
 | `Page` and the browser | `State` and the actions of `Page` | the browser renders `State` and sends actions; `Page` has no HTTP in it |
 
 `ess.apps` and `ess.apps.panel` import nothing from `ess.apps.batch`, and `ess.apps.batch` imports no widget library and nothing of `ess.apps.batch.web`. `ess.apps.batch.web.page`, `ess.apps.batch.web.pages` and `ess.apps.batch.web.models` import neither `fastapi` nor `starlette`; only `ess.apps.batch.web.api` does. A test enforces this.

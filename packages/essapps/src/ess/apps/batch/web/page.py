@@ -58,26 +58,27 @@ outdated.
 The tab "Batch" shows the header of the batch, and changes its title,
 description and scope with the manager (:meth:`Page.change`), which decides
 what can be changed. :meth:`Page.start_next` has the manager end the batch at
-a row and make the next one from there. Removing a batch is :meth:`Pages.remove
-<.pages.Pages.remove>`; a request to a page of a batch removed answers
-:class:`Missing`.
+a row and make the next one from there; Follow stays where it is. Removing a
+batch is :meth:`Pages.remove <.pages.Pages.remove>`; a request to a page of a
+batch removed answers :class:`Missing`.
 
 A batch with a source offers to follow the files. The switch "Follow" makes
 the batch the one that follows (:meth:`~ess.apps.batch.BatchManager.follow`),
-so no other batch follows. While it
-follows, :meth:`Pages.tick <.pages.Pages.tick>` steps it every ``interval``
-seconds, which scans as "Rescan runs" does and reduces the rows that
-:func:`~ess.apps.batch.arrived` gives, at the columns of the source, under the
-lock of all pages, with the batch's settings, whatever the form holds; then
-:meth:`Page.stepped` shows what the step changed. The page of the batch that
-follows says what the last step raised, and why rows were not reduced; the
-next step runs all the same. Follow reduces a row for what the files changed,
-never for what a person changed
-(:attr:`~ess.apps.batch.RowState.changed_by_hand`): a row whose cells a person
-set waits for "Reduce". So an action, but turning Follow on, submits only what
-a person asks to reduce. Apply forgets why Follow could not reduce rows, since
-its next step tries them with the settings applied. Which batch follows is
-kept in the definitions, so a restart resumes.
+so no other batch follows. While it follows, :meth:`Pages.tick
+<.pages.Pages.tick>` steps it every ``interval`` seconds, which scans as
+"Rescan runs" does and reduces the rows that :func:`~ess.apps.batch.arrived`
+gives, at the columns of the source, under the lock of all pages, with the
+batch's settings, whatever the form holds; then :meth:`Page.stepped` shows
+what the step changed. The page of the batch that follows says what the last
+step raised, and why rows were not reduced; the next step runs all the same.
+Follow reduces by a rule on the state, not on who changed it
+(:func:`~ess.apps.batch.arrived`): a row with a cell set by hand that is not
+reduced yet waits for "Reduce" (:attr:`~ess.apps.batch.RowState.changed_by_hand`).
+An action submits only what a person asks to reduce, and the next step reduces
+what the rule gives after it, such as the rows that a wider scope adds. Apply
+forgets why Follow could not reduce rows, since its next step tries them with
+the settings applied. Which batch follows is kept in the definitions, so a
+restart resumes.
 """
 
 from __future__ import annotations

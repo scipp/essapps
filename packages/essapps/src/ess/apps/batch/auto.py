@@ -26,10 +26,14 @@ that changes it: :attr:`Automatic.refused` says why rows of the last step were
 refused, and a refused row is tried again at every step. So a step that raises
 loses nothing.
 
-A step reduces a row for what the files changed, never for what a person
-changed: :func:`~.state.arrived` leaves a row with a cell set by hand that is
-not reduced yet (:attr:`~.state.RowState.changed_by_hand`), with or without a
-page, so a person reduces it.
+The rule is on the state, not on who changed it: :func:`~.state.arrived`
+gives the ready rows that have no result under the label, or whose request
+differs from their result's at a column of ``at``, less the rows with a cell
+set by hand that is not reduced yet
+(:attr:`~.state.RowState.changed_by_hand`), which a person reduces. So an
+action of a person can make the next step reduce rows: turning Follow on,
+widening the scope, a correction of a run, a revert of a cell, or bringing a
+removed row back.
 
 For the rows with no change by hand that is not reduced yet, the loop keeps
 the results under its label equal to its batch's rows at the columns of

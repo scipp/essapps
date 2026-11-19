@@ -9,10 +9,10 @@ The batch page of LoKI's I(Q) on a workspace folder, as a web page
 ``FOLDER`` is a workspace folder (:mod:`ess.apps.folder`): its ``files.csv``
 says the run, role and sample of each file, as ``essapps-batch files`` writes
 it. A row is a sample run, paired with the transmission run of its sample
-(:func:`~.batch.pair_by_sample`). A folder without a batch gets one of all
-sample runs. The batches with their edits and settings, the batch that
-follows, and the corrections of runs are kept in ``FOLDER/definitions/``, the
-results in ``FOLDER/store/``.
+(:func:`~.batch.pair_by_sample`). Whenever no batch is listed, a start
+makes a batch of all sample runs. The batches with their edits and settings,
+the batch that follows, and the corrections of runs are kept in
+``FOLDER/definitions/``, the results in ``FOLDER/store/``.
 
 The settings name the masks by a record, so reduce the detector and the masks
 first, on the same folder, while no page runs on it. With the run of the can
@@ -43,8 +43,8 @@ I(Q) in such a folder: a person makes it with "New batch".
 The switch "Follow" of the page of a batch makes it the batch that follows:
 a step every ``SECONDS`` (5) reduces each row once both its runs are listed,
 and again when one of them changes, such as a newer transmission run of its
-sample (:data:`~.batch.COLUMNS`). A row that a person changed waits for the
-person's "Reduce". The batch that follows is kept, so a restart resumes.
+sample (:data:`~.batch.COLUMNS`). A row with a cell that a person set waits
+for the person's "Reduce". The batch that follows is kept, so a restart resumes.
 """
 
 from __future__ import annotations
@@ -114,11 +114,11 @@ def build(
     """
     The pages of the batches of ``client``, kept in ``definitions``, with a
     step of Follow every ``interval`` seconds while a batch follows. A new
-    batch of I(Q) starts with ``settings``. If there is no batch at all, one
-    of all sample runs is made, which follows from the start if ``follow``.
-    A folder with only the detector and the masks that the command reduced
-    has batches, so a person makes the batch of I(Q) with "New batch"; one
-    that a person removed is not made again.
+    batch of I(Q) starts with ``settings``. Whenever no batch is listed, a
+    batch of all sample runs is made, also after a person removed the last
+    one; it follows from the start if ``follow``. A folder with only the
+    detector and the masks that the command reduced has batches, so a person
+    makes the batch of I(Q) with "New batch".
     """
     manager = BatchManager(
         client,
