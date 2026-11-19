@@ -761,6 +761,12 @@ class Flaky:
         self.saves += 1
         self.kept[key] = data
 
+    def delete(self, key: Key) -> None:
+        self.kept.pop(key, None)
+
+    def labels(self) -> list[str]:
+        return sorted({key[1] for key in self.kept if key[0] == 'labels'})
+
 
 @pytest.fixture
 def flaky() -> Flaky:

@@ -1,6 +1,6 @@
 # ADR 0011: A person makes the batches of a workspace, each with a scope over the rows of a source
 
-- Status: proposed. Nothing is implemented. Several workflows on one batch are described below and not decided.
+- Status: accepted. Several workflows on one batch are described below and not decided.
 - Deciders: Simon
 - Date: 2026-11-18
 

@@ -19,7 +19,20 @@ from ess.apps.batch import (
     FolderDefinitions,
     Row,
 )
-from ess.apps.batch.definition import CORRECTIONS, Key, NotKept, edits_key, settings_key
+from ess.apps.batch.definition import (
+    CORRECTIONS,
+    FOLLOWING,
+    Header,
+    Key,
+    NotKept,
+    edits_key,
+    following_data,
+    following_of,
+    header_data,
+    header_key,
+    header_of,
+    settings_key,
+)
 from ess.apps.batch.text import load_template
 from ess.apps.folder import folder_files, open_folder
 from ess.spec import Binding
@@ -316,6 +329,12 @@ class Failing:
     def save(self, key: Key, data: Any) -> None:
         raise NotKept('disk full')
 
+    def delete(self, key: Key) -> None:
+        raise NotKept('disk full')
+
+    def labels(self) -> list[str]:
+        return []
+
 
 def test_a_change_that_cannot_be_kept_raises_and_changes_nothing(
     client: Client, sample: Measure
@@ -338,3 +357,76 @@ def test_a_change_that_cannot_be_kept_raises_and_changes_nothing(
     assert batch.rows is before
     assert batch.settings == {}
     assert [files.corrections(r) for r in client.files.list(Selector())] == [{}, {}]
+
+
+def test_the_labels_are_those_with_a_part_kept_written_back_as_given(
+    folder: Path,
+) -> None:
+    store = FolderDefinitions(folder)
+    for label in ('b', 'a.x', 'auto/iofq'):
+        store.save(edits_key(label), {})
+    cut_off = store.path(edits_key('c')).parent
+    cut_off.mkdir(parents=True)
+    (cut_off / '.edits.json.k3j2h1g0').write_text('{')
+
+    assert store.labels() == ['a.x', 'auto/iofq', 'b']
+
+
+def test_no_labels_before_anything_is_kept(folder: Path) -> None:
+    assert FolderDefinitions(folder).labels() == []
+
+
+def test_a_part_deleted_is_gone_and_its_label_with_its_last_part(
+    folder: Path,
+) -> None:
+    store = FolderDefinitions(folder)
+    store.save(edits_key('a'), {})
+    store.save(settings_key('a'), {'x': 1})
+
+    store.delete(edits_key('a'))
+    assert store.load(edits_key('a'), lambda data: data) is None
+    assert store.labels() == ['a']
+
+    store.delete(settings_key('a'))
+    assert store.labels() == []
+
+
+def test_deleting_a_part_never_kept_does_nothing(folder: Path) -> None:
+    store = FolderDefinitions(folder)
+    store.save(edits_key('a'), {})
+
+    store.delete(edits_key('b'))
+    store.delete(FOLLOWING)
+
+    assert store.labels() == ['a']
+
+
+def test_a_header_is_kept_and_read_back(folder: Path) -> None:
+    store = FolderDefinitions(folder)
+    header = Header('Sample runs', 'those of May', source='sample-runs')
+
+    store.save(header_key('a'), header_data(header))
+
+    assert store.load(header_key('a'), header_of) == header
+    assert store.load(header_key('b'), header_of) is None
+
+
+def test_a_header_that_cannot_be_read_is_refused_naming_the_file_and_the_entry(
+    folder: Path,
+) -> None:
+    store = FolderDefinitions(folder)
+    store.save(header_key('a'), {'title': 3})
+
+    with pytest.raises(ValueError, match=r'header\.json: title: '):
+        store.load(header_key('a'), header_of)
+
+
+@pytest.mark.parametrize('label', ['20261118-130204', None])
+def test_the_label_that_follows_is_kept_and_read_back(
+    folder: Path, label: str | None
+) -> None:
+    store = FolderDefinitions(folder)
+
+    store.save(FOLLOWING, following_data(label))
+
+    assert store.load(FOLLOWING, following_of) == label
