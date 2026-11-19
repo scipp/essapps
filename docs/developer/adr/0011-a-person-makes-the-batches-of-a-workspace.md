@@ -126,14 +126,13 @@ label = manager.create('loki-iofq', title='Afternoon', source='sample-runs',
                        columns=('sample', 'sample_transmission', 'can'),
                        scope=Scope(start=60339))
 manager.headers()              # the header of each batch, by label
-manager.counts()               # rows per status of each batch; rows of each source in no batch
 manager.batch(label)           # the Batch: state(), reduce(), cancel(), settings
 manager.change(label, scope=Scope(start=60339, stop=60421))
 manager.remove(label)
 ```
 
 - The manager holds the one `Batch` of each label in its process, since two writers of one definition lose each other's changes.
-- The counts are how a person sees a row that became `outdated` or arrived in a batch that does not follow, and the rows that no batch holds. They take a scan and a state of every batch, so they are computed when asked for, not at each poll of a page.
+- The counts of the page (rows per status of each batch, rows of each source in no batch) are how a person sees a row that became `outdated` or arrived in a batch that does not follow, and the rows that no batch holds. They take a scan and a state of every batch, so they are computed when asked for, not at each poll of a page.
 - Removing a batch removes its header, edits and settings. Its records stay in the workspace, as all history does ([ADR 0004](0004-history-is-append-only-lists.md)).
 - The command makes and reads its batch with the manager, so a batch made with `essapps-batch reduce --label` shows in the list. A `Batch` made in code without the manager has no header and is not listed.
 

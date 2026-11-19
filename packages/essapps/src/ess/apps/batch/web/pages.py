@@ -45,6 +45,7 @@ from pydantic import BaseModel
 
 from ess.spec import FileRef, WorkflowSpec
 
+from ...errors import SubmitError
 from ...fields import UNSET, Fields
 from ...files import Selector
 from ...listing import Listing
@@ -56,6 +57,7 @@ from .. import (
     Scope,
     Source,
     Words,
+    file_infos,
     fits,
     refused_again,
 )
@@ -466,28 +468,57 @@ class Pages:
 
     def counts(self) -> BatchCounts:
         """
-        The counts of the manager (:meth:`~ess.apps.batch.BatchManager.counts`)
-        in the words of the page: the statuses are those of the page of each
-        batch (:func:`~.page.page_statuses`). Every page and Follow wait
-        while it scans.
+        The rows of each batch by status, in the words of the page of each
+        batch (:func:`~.page.page_statuses`), and the rows of each registered
+        source that no batch shows. Every page and Follow wait while it
+        scans.
+
+        It makes every batch not made yet, which scans it, and scans every
+        batch with a source, so the rows of each batch are those of the files
+        now. While the settings of a batch are refused, its rows are as
+        :meth:`~ess.apps.batch.Batch.results` gives them. A row counts as
+        shown if any batch of its source shows it, so a row removed by hand,
+        or outside a scope, counts as not shown only if every batch of the
+        source removed it or leaves it out. A source is called once more only
+        if no batch of it was scanned. A batch that cannot be made or
+        scanned, such as one whose source is not registered or raises, has
+        its reason in ``failed``, and its source is left out of ``outside``.
         """
         with self.lock:
-            counts = self.manager.counts()
-            rows = {}
-            for label, states in counts.states.items():
-                columns = self.manager.batch(label).columns
+            manager = self.manager
+            rows: dict[str, dict[str, int]] = {}
+            failed: dict[str, str] = {}
+            made: dict[str, set[str]] = {}  # the keys of the rows each source made
+            shown: dict[str, set[str]] = {name: set() for name in manager.sources}
+            for label, header in manager.headers().items():
+                try:
+                    batch = manager.batch(label)
+                    if batch.source is not None:
+                        batch.scan()
+                    try:
+                        states = batch.state()
+                    except SubmitError:
+                        states = batch.results()
+                except Exception as error:  # a source is code of the application
+                    failed[label] = why(error)
+                    shown.pop(header.source, None)  # its rows shown are not known
+                    continue
                 waiting = self.waiting(label, states)
-                statuses = page_statuses(states, columns, waiting)
+                statuses = page_statuses(states, batch.columns, waiting)
                 rows[label] = dict(Counter(statuses.values()))
-            sources = self.manager.sources
-            return BatchCounts(
-                rows=rows,
-                failed=counts.failed,
-                outside={
-                    name: sources[name].words.count(n)
-                    for name, n in counts.outside.items()
-                },
-            )
+                if header.source in shown:
+                    made[header.source] = {row.key for row in batch.rows.scan}
+                    shown[header.source] |= {row.key for row in batch.rows}
+            outside = {}
+            for name, keys in shown.items():
+                source = manager.sources[name]
+                if name not in made:
+                    with suppress(Exception):  # a source is code of the application
+                        infos = file_infos(manager.client, source.selector)
+                        made[name] = {row.key for row in source.rows(infos)}
+                if name in made:
+                    outside[name] = source.words.count(len(made[name] - keys))
+            return BatchCounts(rows=rows, failed=failed, outside=outside)
 
 
 def _spec_choice(

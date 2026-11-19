@@ -26,7 +26,9 @@ from ess.apps.batch import (
     CorrectedFiles,
     Defaults,
     DefinitionStore,
+    FolderDefinitions,
     Header,
+    Row,
     Scope,
     Source,
 )
@@ -1674,6 +1676,105 @@ def test_counts_are_given_in_the_words_of_the_page(
         'failed': {},
         'outside': {'pairs': '0 rows'},
     }
+
+
+def test_the_counts_give_the_rows_of_each_batch_by_status_after_a_scan(
+    pages: Pages, manager: BatchManager, client: Client, sample: Measure
+) -> None:
+    sample(1, 'water')
+    sample(2, 'oil', partner=False)
+    manager.create('plain', title='Morning', source='pairs', label='a')
+    manager.create('plain', title='Afternoon', source='pairs', label='b')
+    client.wait(manager.batch('a').reduce(['1']))
+    sample(3, 'sds')
+
+    counted = pages.counts()
+
+    assert counted.rows == {
+        'a': {'done': 1, 'incomplete': 1, 'ready': 1},
+        'b': {'ready': 2, 'incomplete': 1},
+    }
+    assert counted.failed == {}
+
+
+def test_a_row_counts_as_shown_if_any_batch_of_its_source_shows_it(
+    pages: Pages, manager: BatchManager, sample: Measure
+) -> None:
+    for run, name in enumerate(['water', 'oil', 'sds', 'salt'], start=1):
+        sample(run, name)
+    for label, removed in [('a', ['2', '3']), ('b', ['3'])]:
+        manager.create('plain', title=label, source='pairs', label=label)
+        batch = manager.batch(label)
+        batch.rows = batch.rows.remove_each(removed).add(Row(f'mine-{label}', {}))
+
+    assert pages.counts().outside == {'pairs': '1 row'}  # row 3, removed in both
+
+
+def test_a_row_outside_the_scope_of_every_batch_of_its_source_counts_in_no_batch(
+    pages: Pages, manager: BatchManager, sample: Measure
+) -> None:
+    for run, name in enumerate(['water', 'oil', 'sds', 'salt'], start=1):
+        sample(run, name)
+    manager.create('plain', title='Morning', source='pairs', scope=Scope(stop=2))
+    manager.create('plain', title='Evening', source='pairs', scope=Scope(start=4))
+
+    assert pages.counts().outside == {'pairs': '2 rows'}  # rows 2 and 3
+
+
+@pytest.mark.parametrize('broken', ['not registered', 'raises'])
+def test_a_batch_that_cannot_be_counted_has_its_reason_and_its_source_no_outside(
+    client: Client, definitions: FolderDefinitions, sample: Measure, broken: str
+) -> None:
+    sample(1, 'water')
+    sources = {**SOURCES, 'other': SOURCES['pairs']}
+    first = BatchManager(client, sources=sources, definitions=definitions)
+    first.create('plain', title='Fine', source='pairs', label='a')
+    first.create('plain', title='Broken', source='other', label='b')
+
+    def raising(files: Any) -> list[Row]:
+        raise OSError('half written')
+
+    if broken == 'not registered':
+        sources = SOURCES
+    else:
+        sources = {
+            **SOURCES,
+            'other': Source(raising, fills=('sample', 'transmission')),
+        }
+    manager = BatchManager(client, sources=sources, definitions=definitions)
+
+    counted = Pages(manager, Follow(manager, definitions)).counts()
+
+    reason = {
+        'not registered': 'the source other is not registered',
+        'raises': 'half written',
+    }[broken]
+    assert list(counted.rows) == ['a']
+    assert counted.failed == {'b': reason}
+    assert counted.outside == {'pairs': '0 rows'}
+
+
+def test_a_count_calls_a_source_once_per_batch_of_it(
+    client: Client, definitions: FolderDefinitions, sample: Measure
+) -> None:
+    sample(1, 'water')
+    calls = []
+
+    def counted(files: Any) -> list[Row]:
+        calls.append(1)
+        return pair(files)
+
+    sources = {'pairs': Source(counted, fills=('sample', 'transmission'))}
+    manager = BatchManager(client, sources=sources, definitions=definitions)
+    for label in ('a', 'b'):
+        manager.create('plain', title=label, source='pairs', label=label)
+        manager.batch(label)
+    pages = Pages(manager, Follow(manager, definitions))
+    before = len(calls)
+
+    pages.counts()
+
+    assert len(calls) - before == 2  # the rows outside come from these scans
 
 
 # The scope

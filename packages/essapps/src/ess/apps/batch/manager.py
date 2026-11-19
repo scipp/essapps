@@ -30,7 +30,6 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -39,7 +38,6 @@ from pydantic import TypeAdapter, ValidationError
 from ess.spec import WorkflowSpec
 
 from ..client import Client
-from ..errors import SubmitError
 from ..records import Template
 from .definition import (
     DefinitionStore,
@@ -51,8 +49,7 @@ from .definition import (
     settings_key,
     template_data,
 )
-from .reduction import Batch, Source, check_fills, file_infos
-from .state import RowState
+from .reduction import Batch, Source, check_fills
 from .table import Index, Scope
 
 
@@ -76,39 +73,6 @@ class Defaults:
 
     settings: Mapping[str, Any] = field(default_factory=dict)
     staged: bool = False
-
-
-@dataclass(frozen=True)
-class Counts:
-    """
-    What :meth:`BatchManager.counts` gives: where the rows of each batch
-    stand, and how many rows of each source no batch shows.
-
-    Parameters
-    ----------
-    states:
-        The state of each row, by key, of each batch that could be made and
-        scanned, by label. Count them with :func:`~.state.status_texts`.
-    failed:
-        Why each other batch could not be made or scanned, by label.
-    outside:
-        The rows that each registered source makes and no batch of it shows,
-        by its name. A row counts as shown if any batch of the source shows
-        it, so a row removed by hand, or outside a scope, counts here only if
-        every batch of the source removed it or leaves it out. A source is
-        left out if one of its batches failed, or if it raised.
-    """
-
-    states: dict[str, dict[str, RowState]]
-    failed: dict[str, str]
-    outside: dict[str, int]
-
-
-def _said(error: Exception) -> str:
-    """What an exception says, without the quotes of a ``KeyError``."""
-    if isinstance(error, KeyError) and error.args:
-        return str(error.args[0])
-    return str(error) or repr(error)
 
 
 def fits(spec: WorkflowSpec[Any, Any], source: Source | None) -> bool:
@@ -388,49 +352,6 @@ class BatchManager:
             batch.scan()
         self._batches[label] = batch
         return batch
-
-    def counts(self) -> Counts:
-        """
-        Where the rows of every batch stand, and the rows of each registered
-        source that no batch shows (see :class:`Counts`). It makes every batch
-        not made yet, which scans it, and scans every other batch with a
-        source, so the rows of each batch are those of the files now. While
-        the settings of a batch are refused, its rows are as
-        :meth:`~.reduction.Batch.results` gives them. A source is called once
-        more only if no batch of it was scanned.
-        """
-        states: dict[str, dict[str, RowState]] = {}
-        failed: dict[str, str] = {}
-        made: dict[str, set[str]] = {}  # the keys of the rows each source made
-        shown: dict[str, set[str]] = {name: set() for name in self.sources}
-        for label, header in self.headers().items():
-            try:
-                new = label not in self._batches
-                batch = self.batch(label)  # scans a batch that it makes
-                if not new and batch.source is not None:
-                    batch.scan()
-                try:
-                    states[label] = batch.state()
-                except SubmitError:
-                    states[label] = batch.results()
-            except Exception as error:  # a source is code of the application
-                failed[label] = _said(error)
-                if header.source is not None:  # its rows shown are not known
-                    shown.pop(header.source, None)
-                continue
-            if header.source is not None and header.source in shown:
-                made[header.source] = {row.key for row in batch.rows.scan}
-                shown[header.source] |= {row.key for row in batch.rows}
-        outside = {}
-        for name, keys in shown.items():
-            source = self.sources[name]
-            if name not in made:
-                with suppress(Exception):  # a source is code of the application
-                    infos = file_infos(self.client, source.selector)
-                    made[name] = {row.key for row in source.rows(infos)}
-            if name in made:
-                outside[name] = len(made[name] - keys)
-        return Counts(states, failed, outside)
 
     def change(
         self,
