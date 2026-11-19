@@ -553,11 +553,11 @@ def test_reduce_refuses_a_source_other_than_that_of_the_header(
     [
         (
             'spec: {name: cli-toy, version: 1}\nblanks: [sample, offset]\n',
-            "the template of cli-toy with the blanks ['sample', 'offset']",
+            'its columns are sample, offset, not sample',
         ),
         (
             'spec: {name: cli-find, version: 1}\nblanks: [sample]\n',
-            "the template of cli-find with the blanks ['sample']",
+            'it holds the settings of cli-find, not cli-toy',
         ),
     ],
     ids=['blanks', 'spec'],
@@ -578,10 +578,8 @@ def test_reduce_refuses_a_template_other_than_the_header_says(
 
     code = main([*command, 'reduce', str(other), str(runs), '-l', 'x'])
 
-    err = capsys.readouterr().err
     assert code == 2
-    assert "x: the batch is of cli-toy with the columns ['sample']" in err
-    assert said in err
+    assert f'{other}: {said}' in capsys.readouterr().err
 
 
 def test_reduce_refuses_a_label_that_is_not_one_segment_of_a_url(
@@ -599,20 +597,68 @@ def test_reduce_refuses_a_label_that_is_not_one_segment_of_a_url(
     assert FolderDefinitions(folder).labels() == []
 
 
-@pytest.mark.parametrize('given', [True, False], ids=['template', 'kept'])
 def test_reduce_takes_the_version_of_the_spec_that_the_workspace_binds(
-    command: list[str], cli_template: Path, folder: Path, given: bool
+    command: list[str], cli_template: Path, folder: Path
 ) -> None:
     runs = write_rows(folder, ['1'])
     assert main([*command, 'reduce', str(cli_template), str(runs), '-l', 'x']) == 0
     upgraded = [*command[:-1], 'cli_toys_batch_files:UPGRADED']
-    template = [str(cli_template), str(runs)] if given else []
 
-    assert main([*upgraded, 'reduce', *template, '-l', 'x', '--remaining']) == 0
+    assert main([*upgraded, 'reduce', '-l', 'x', '--remaining']) == 0
 
     with open_folder(folder, []) as client:
         versions = [r.spec.version for r in client.records(label='x')]
     assert versions == [1, 2]
+
+
+def test_reduce_refuses_a_template_of_another_version_as_the_page_does(
+    command: list[str],
+    cli_template: Path,
+    folder: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs = write_rows(folder, ['1'])
+    assert main([*command, 'reduce', str(cli_template), str(runs), '-l', 'x']) == 0
+    upgraded = [*command[:-1], 'cli_toys_batch_files:UPGRADED']
+
+    code = main([*upgraded, 'reduce', str(cli_template), str(runs), '-l', 'x'])
+
+    assert code == 2
+    assert 'of version 1 of cli-toy, not of version 2' in capsys.readouterr().err
+
+
+def test_reduce_whose_definitions_refuse_a_write_says_so(
+    command: list[str],
+    cli_template: Path,
+    folder: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs = write_rows(folder, ['1'])
+    definitions = folder / 'definitions'
+    definitions.mkdir()
+    definitions.chmod(0o500)
+    try:
+        code = main([*command, 'reduce', str(cli_template), str(runs), '-l', 'x'])
+    finally:
+        definitions.chmod(0o700)
+
+    assert code == 1
+    assert 'not kept: ' in capsys.readouterr().err
+
+
+def test_reduce_on_a_folder_that_another_process_holds_says_so(
+    command: list[str],
+    cli_template: Path,
+    folder: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs = write_rows(folder, ['1'])
+
+    with open_folder(folder, []):
+        code = main([*command, 'reduce', str(cli_template), str(runs), '-l', 'x'])
+
+    assert code == 1
+    assert 'is held by another log' in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

@@ -22,14 +22,16 @@ as a page does, so a label is one batch whoever works on it:
 
       essapps-batch -b my.package:BINDINGS reduce -s my.package:SOURCES -l LABEL
 
-  A template given must be of the batch's spec, with its columns as the
-  blanks, and ``--source``, if given, must name the batch's source. For a
-  label without a batch, the manager makes one
+  A template given must be of the batch's spec and its version, with its
+  columns as the blanks, as the page's "Load settings" checks it
+  (:func:`.text.checked_settings`), and ``--source``, if given, must name the
+  batch's source. For a label without a batch, the manager makes one
   (:meth:`~.manager.BatchManager.create`) of the template's spec, with its
   blanks as the columns, the source that ``--source NAME`` names, and the
   label as title; it refuses a label that has definitions or records. A batch
   made so is removed again if the run raises before a row of it was
-  submitted. The template becomes the batch's settings, and the table is
+  submitted.
+ The template becomes the batch's settings, and the table is
   imported as an application imports one (:meth:`.reduction.Batch.put`): set
   by hand on the rows that the source makes from the files, and on those that
   the definitions hold. It then reduces the rows of the table; without a
@@ -54,7 +56,6 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -67,12 +68,12 @@ from ..folder import folder_files, open_folder, scan_folder
 from ..records import Status
 from . import frames
 from .corrections import CorrectedFiles
-from .definition import FolderDefinitions
+from .definition import FolderDefinitions, NotKept
 from .export import export_table
 from .manager import BatchManager, Defaults
 from .reduction import Source, file_infos
 from .state import EARLIER
-from .text import load_template, with_latest
+from .text import checked_settings, load_template
 
 
 def _named(name: str) -> Any:
@@ -200,10 +201,7 @@ def _reduce(
     if the label has none (see the module).
     """
     label = args.label
-    template = None
-    if args.template is not None:
-        template = load_template(args.template)
-        template = replace(template, params=with_latest(client, template.params))
+    template = None if args.template is None else load_template(args.template)
     staged = Defaults(staged=args.staged)
     manager = BatchManager(
         client,
@@ -211,44 +209,44 @@ def _reduce(
         definitions=definitions,
         defaults={bound.name: staged for bound in client.specs()},
     )
-    if (header := manager.headers().get(label)) is not None:
-        spec, source, columns = header.spec, header.source, header.columns
-        if args.source not in (None, source):
-            has = 'no source' if source is None else f'the source {source}'
-            raise ValueError(f'{label}: the batch has {has}, not {args.source}')
-        if template is not None and (
-            template.spec.name != spec or set(template.blanks) != set(columns)
-        ):
-            raise ValueError(
-                f'{label}: the batch is of {spec} with the columns '
-                f'{list(columns)}, the template of {template.spec.name} '
-                f'with the blanks {list(template.blanks)}'
-            )
-        if source is not None and source not in args.sources:
-            raise ValueError(
-                f'{label}: the source {source} is not registered; give the '
-                'sources of the application with -s/--sources package.module:NAME'
-            )
-    elif template is None:
-        raise ValueError(f'{label}: no batch has the label, so give a template')
-    else:
-        spec, source, columns = template.spec.name, args.source, template.blanks
+    if (header := manager.headers().get(label)) is None:
+        if template is None:
+            raise ValueError(f'{label}: no batch has the label, so give a template')
+        manager.create(
+            template.spec.name,
+            title=label,
+            source=args.source,
+            columns=template.blanks,
+            label=label,
+        )
+    elif args.source not in (None, header.source):
+        has = 'no source' if header.source is None else f'the source {header.source}'
+        raise ValueError(f'{label}: the batch has {has}, not {args.source}')
     try:
-        client.spec_named(spec)
-    except KeyError as error:  # a spec that the bindings given lack
-        raise ValueError(error.args[0]) from None
-    table = None
-    if args.table is not None:
-        table = frames.read_table(args.table)
-    elif template is not None and source is None:
-        table = pd.DataFrame({'key': [label]})
-    if header is None:
-        manager.create(spec, title=label, source=source, columns=columns, label=label)
-    try:
+        try:
+            batch = manager.batch(label)
+        except ValueError as error:
+            if header is None or header.source in (None, *args.sources):
+                raise
+            raise ValueError(
+                f'{label}: {error}; give the sources of the application with '
+                '-s/--sources package.module:NAME'
+            ) from None
+        settings = None
+        if template is not None:
+            try:  # as the page's "Load settings" checks a template
+                settings = checked_settings(batch, template)
+            except ValueError as error:
+                raise ValueError(f'{args.template}: {error}') from None
+        table = None
+        if args.table is not None:
+            table = frames.read_table(args.table)
+        elif template is not None and batch.source is None:
+            table = pd.DataFrame({'key': [label]})
         return frames.reduce_batch(
-            manager.batch(label),
+            batch,
             table,
-            settings=None if template is None else template.params,
+            settings=settings,
             remaining=args.remaining,
             earlier_settings=args.earlier_settings,
         )
@@ -319,14 +317,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ValueError as error:
         sys.stderr.write(f'{error}\n')
         return 2
-    with open_folder(
-        args.workspace, bind, files=files, proposal=args.proposal
-    ) as client:
+    try:
+        client = open_folder(args.workspace, bind, files=files, proposal=args.proposal)
+    except RuntimeError as error:  # another process holds the folder
+        sys.stderr.write(f'{error}\n')
+        return 1
+    with client:
         try:
             result = _run(client, args, definitions)
         except (SubmitError, ValueError) as error:
             sys.stderr.write(f'{error}\n')
             return 2
+        except NotKept as error:
+            sys.stderr.write(f'not kept: {error}\n')
+            return 1
+
     _write(result, args.output)
     if args.command == 'reduce' and args.remaining and not args.earlier_settings:
         left = int(result['status'].str.endswith(EARLIER).sum())

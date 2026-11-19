@@ -438,7 +438,7 @@ class Pages:
                     description=new.description,
                     scope=Scope(start=new.start, stop=new.stop),
                 )
-            except (KeyError, ValueError, NotKept) as error:
+            except (ValueError, NotKept) as error:
                 raise Problem(f'The batch was not made: {why(error)}.') from None
             return Made(label=label)
 

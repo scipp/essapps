@@ -185,7 +185,7 @@ def test_a_batch_whose_spec_is_no_longer_bound_as_it_was_made_is_refused(
     with closing(workspace):
         client = Client(workspace, submitter='anna')
 
-        with pytest.raises(KeyError, match=said):
+        with pytest.raises(ValueError, match=said):
             _again(client, definitions).batch('b')
 
 
@@ -312,7 +312,7 @@ def test_a_label_with_a_slash_or_a_leading_dot_is_refused(
 
 
 def test_a_source_that_is_not_registered_is_refused(manager: BatchManager) -> None:
-    with pytest.raises(KeyError, match='runs'):
+    with pytest.raises(ValueError, match='the source runs is not registered'):
         manager.create('plain', title='Morning', source='runs')
     assert manager.headers() == {}
 
@@ -328,7 +328,7 @@ def test_a_source_whose_columns_the_spec_lacks_is_refused(
 def test_a_spec_that_the_workspace_does_not_bind_is_refused(
     manager: BatchManager,
 ) -> None:
-    with pytest.raises(KeyError, match='no spec iofq'):
+    with pytest.raises(ValueError, match='no spec iofq'):
         manager.create('iofq', title='Morning')
     assert manager.headers() == {}
 
@@ -871,7 +871,7 @@ def test_a_batch_that_cannot_be_made_has_its_reason_and_its_source_no_outside(
     counts = manager.counts()
 
     reason = {
-        'not registered': 'b: the source other is not registered',
+        'not registered': 'the source other is not registered',
         'raises': 'half written',
     }[broken]
     assert list(counts.states) == ['a']

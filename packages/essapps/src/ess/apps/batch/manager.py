@@ -187,6 +187,13 @@ class BatchManager:
     the one :class:`~.reduction.Batch` of each label. See
     ``packages/essapps/docs/batch.md``.
 
+    Every refusal of what is asked raises ``ValueError``, with a message for a
+    person, such as for a spec that the workspace does not bind, a source that
+    is not registered, or a label that is taken. ``KeyError`` says only that
+    no batch has the label asked for, and :class:`~.definition.NotKept` that
+    the definitions refuse a write. Anything else is an error of the code of
+    the application, such as a source that raises.
+
     The headers are read when the manager is made. Each change of a header is
     written to the definitions before the manager holds it, and one that
     they refuse raises :class:`~.definition.NotKept`, so the manager lists
@@ -271,16 +278,14 @@ class BatchManager:
 
         Raises
         ------
-        KeyError
-            If the workspace binds no spec ``spec``, or no source ``source``
-            is registered.
         ValueError
             If ``title`` is empty or only spaces; if ``label`` is not one that
-            :func:`check_label` takes, or has definitions or records; if the
-            spec does not fit the source (:func:`fits`); if a column is not a
-            parameter of the spec, or is named twice; if the source fills a
-            parameter that is not among the columns; or if :func:`scope_of`
-            refuses an end of the scope.
+            :func:`check_label` takes, or has definitions or records; if no
+            source ``source`` is registered; if the workspace binds no spec
+            ``spec``, or it does not fit the source (:func:`fits`); if a column
+            is not a parameter of the spec, or is named twice; if the source
+            fills a parameter that is not among the columns; or if
+            :func:`scope_of` refuses an end of the scope.
         """
         if label is None:
             stamp = time.strftime('%Y%m%d-%H%M%S')
@@ -291,18 +296,16 @@ class BatchManager:
         check_label(label)
         if self._taken(label):
             raise ValueError(f'{label}: the label has definitions or records')
-        bound = self.client.spec_named(spec)
-        registered = None if source is None else self.sources[source]
+        registered = self._source(source)
         fills = () if registered is None else registered.fills
+        columns = fills if columns is None else tuple(columns)
+        bound = self._bound(spec, columns)
         if not fits(bound, registered):
             lacks = sorted(set(fills) - bound.params.model_fields.keys())
             raise ValueError(
                 f'{bound.title} has no parameters {lacks}, which the source '
                 f'{source} fills'
             )
-        columns = fills if columns is None else tuple(columns)
-        if unknown := sorted(set(columns) - bound.params.model_fields.keys()):
-            raise ValueError(f'{bound.title} has no parameters {unknown}')
         if len(set(columns)) != len(columns):
             raise ValueError(f'a column is named twice: {list(columns)}')
         check_fills(label, registered, columns)
@@ -329,6 +332,30 @@ class BatchManager:
         self._headers[label] = header
         return label
 
+    def _source(self, name: str | None) -> Source | None:
+        """
+        The source registered as ``name``, ``None`` for none; ``ValueError``
+        if none is registered so.
+        """
+        if name is None:
+            return None
+        if name not in self.sources:
+            raise ValueError(f'the source {name} is not registered')
+        return self.sources[name]
+
+    def _bound(self, spec: str, columns: Sequence[str]) -> WorkflowSpec[Any, Any]:
+        """
+        The spec of name ``spec`` that the workspace binds; ``ValueError`` if
+        it binds none, or if one of ``columns`` is not a parameter of it.
+        """
+        try:
+            bound = self.client.spec_named(spec)
+        except KeyError as error:
+            raise ValueError(error.args[0]) from None
+        if unknown := sorted(set(columns) - bound.params.model_fields.keys()):
+            raise ValueError(f'{bound.title} has no parameters {unknown}')
+        return bound
+
     def _taken(self, label: str) -> bool:
         """Whether ``label`` has definitions or records."""
         return label in self._definitions.labels() or bool(
@@ -347,23 +374,22 @@ class BatchManager:
         time it is used: one handed out before must not be used after
         :meth:`remove`.
 
-        Raises ``KeyError`` if no batch has the label, or the workspace binds
-        no spec of its name, or its source is not registered; ``ValueError``
-        if its settings or edits cannot be read, or its source fills a
-        parameter that is not a column of the batch.
+        Raises ``KeyError`` if no batch has the label; ``ValueError`` if its
+        source is not registered, if the workspace binds no spec of its name,
+        or one that lacks a column, if its settings or edits cannot be read,
+        or if its source fills a parameter that is not a column of the batch.
         """
         if (batch := self._batches.get(label)) is not None:
             return batch
         header = self._headers[label]
-        if (name := header.source) is not None and name not in self.sources:
-            raise KeyError(f'{label}: the source {name} is not registered')
+        source = self._source(header.source)
         defaults = self._defaults.get(header.spec, Defaults())
         batch = Batch(
             self.client,
-            self.client.spec_named(header.spec),
+            self._bound(header.spec, header.columns),
             columns=header.columns,
             label=label,
-            source=None if name is None else self.sources[name],
+            source=source,
             staged=defaults.staged,
             persist=True,
             settings={
@@ -431,15 +457,14 @@ class BatchManager:
         """
         The header of ``label`` with what is given changed, as kept. A scope
         changes the rows of the batch at once, without a scan; its ends are
-        converted as :func:`scope_of` does. Raises ``KeyError`` if
-        no batch has the label, or a scope is given and the source of the
-        batch is not registered; ``ValueError`` for an empty title, and for
-        an end of the scope that :func:`scope_of` refuses.
+        converted as :func:`scope_of` does. Raises ``KeyError`` if no batch
+        has the label; ``ValueError`` for an empty title, and, if a scope is
+        given, if the source of the batch is not registered, or
+        :func:`scope_of` refuses an end of the scope.
         """
         header = self._headers[label]
         if scope is not None:
-            source = None if header.source is None else self.sources[header.source]
-            scope = scope_of(source, scope)
+            scope = scope_of(self._source(header.source), scope)
         header = replace(
             header,
             title=header.title if title is None else title,

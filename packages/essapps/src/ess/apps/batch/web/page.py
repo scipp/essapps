@@ -1006,7 +1006,7 @@ class Page:
                 description=edit.description,
                 scope=Scope(start=edit.start, stop=edit.stop),
             )
-        except (KeyError, ValueError) as error:
+        except ValueError as error:
             raise Problem(f'The batch was not changed: {why(error)}.') from None
         return 'Saved.'
 
