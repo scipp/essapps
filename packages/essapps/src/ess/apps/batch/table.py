@@ -41,11 +41,13 @@ is refused: a cell cannot tell its text from an output.
 
 A cell must be of the kind of its column, with no conversion by pandas:
 ``string`` takes text, ``Float64`` an ``int`` or a ``float``, ``Int64`` an
-``int``, ``boolean`` a ``bool``, and ``object`` plain data, the values of JSON
-as Python gives them. A note takes the dtype of ``convert_dtypes()``, which
-must be one of these five. An empty cell is ``None``, ``NaN`` or ``pd.NA`` as
-given; in the table it is ``pd.NA``, or ``None`` in an ``object`` column, and
-in a row read with ``to_dict('index')`` and in ``rows.json`` it is ``None``.
+``int`` or a whole ``float`` (``1.0`` is kept as ``1``: pandas gives whole
+numbers with a gap as floats), ``boolean`` a ``bool``, and ``object`` plain
+data, the values of JSON as Python gives them. A note takes the dtype of
+``convert_dtypes()``, which must be one of these five. An empty cell is
+``None``, ``NaN`` or ``pd.NA`` as given; in the table it is ``pd.NA``, or
+``None`` in an ``object`` column, and in a row read with ``to_dict('index')``
+and in ``rows.json`` it is ``None``.
 
 A cell is plain data. A file and an output are text, which a request does not
 take, so :func:`as_request` converts the cells of a row before
@@ -474,7 +476,10 @@ def _fits(value: Any, dtype: str) -> bool:
     if isinstance(value, bool):
         return dtype == 'boolean'
     if dtype == 'Int64':
-        return isinstance(value, int) and -(2**63) <= value < 2**63
+        whole = isinstance(value, int) or (
+            isinstance(value, float) and value.is_integer()
+        )
+        return whole and -(2**63) <= value < 2**63
     kinds = {'string': str, 'Float64': (int, float), 'boolean': bool}
     return isinstance(value, kinds[dtype])
 
@@ -528,6 +533,8 @@ def _cast(column: pd.Series, dtype: str) -> tuple[pd.Series, list[str]]:
         return pd.Series(values, index=column.index, dtype=object), refused
     if refused:
         return column, refused
+    if dtype == 'Int64':  # a whole float, as pandas gives a column with a gap
+        values = [None if v is None else int(v) for v in values]
     return pd.Series(pd.array(values, dtype=dtype), index=column.index), []
 
 

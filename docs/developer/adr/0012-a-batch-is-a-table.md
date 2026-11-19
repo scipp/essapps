@@ -65,7 +65,7 @@ This decides what a batch is when it is made once and then changed by a person. 
 | a truth value | `boolean` | `True` |
 | a list, a group, a value or an output, anything else | `object` | `['run:1', 'run:2']` |
 
-A cell must be of the kind of its column, and nothing converts it: `'2'` and `True` are not numbers.
+A cell must be of the kind of its column, and nothing converts it: `'2'` and `True` are not numbers. One exception: a column of whole numbers takes a float that is a whole number (`1.0` is kept as `1`), since pandas gives whole numbers with a gap as floats.
 
 ### A row fills the template
 

@@ -498,6 +498,7 @@ def test_typed_names_the_index_and_casts_parameters_and_notes() -> None:
         (['a', 'b'], {'word': ['run:1', 60339.0]}, "row 'b', column 'word': 60339.0"),
         (['a'], {'count': [2.5]}, "row 'a', column 'count': 2.5 is not a whole"),
         (['a'], {'count': [float('inf')]}, "row 'a', column 'count': inf is not a"),
+        (['a'], {'count': [True]}, "row 'a', column 'count': True is not a whole"),
         (['a'], {'count': [2**63]}, f"row 'a', column 'count': {2**63} is not a"),
         (['a'], {'flag': ['yes']}, "row 'a', column 'flag': 'yes' is not true"),
         (['a'], {'flag': [1]}, "row 'a', column 'flag': 1 is not true or false"),
@@ -530,6 +531,16 @@ def test_typed_refuses_a_note_of_another_dtype_by_name() -> None:
 
     with pytest.raises(ValueError, match=r"the note 'start' is datetime64.*text"):
         typed(frame, Kinds)
+
+
+def test_a_whole_float_in_a_column_of_whole_numbers_is_kept_as_an_int() -> None:
+    frame = pd.DataFrame({'count': [1, None]}, index=['a', 'b'])
+
+    table = typed(frame, Kinds)
+
+    assert table['count'].dtype == 'Int64'
+    assert table['count'].tolist() == [1, pd.NA]
+    assert type(table.to_dict('index')['a']['count']) is int
 
 
 def test_a_float_nan_in_a_column_of_numbers_is_an_empty_cell() -> None:
