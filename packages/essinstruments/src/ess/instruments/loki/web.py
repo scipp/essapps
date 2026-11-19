@@ -36,7 +36,9 @@ and two commands::
 
 The command persists the outputs, so the page then offers the masks in the
 settings, under "Masks", "From a result". ``path:`` names a file by its path in
-the folder, as ``files.csv`` lists it.
+the folder, as ``files.csv`` lists it. The page lists the detector and the
+masks as batches without a source, of one row each, and so makes no batch of
+I(Q) in such a folder: a person makes it with "New batch".
 
 The switch "Follow" of the page of a batch makes it the batch that follows:
 a step every ``SECONDS`` (5) reduces each row once both its runs are listed,
@@ -112,10 +114,13 @@ def build(
     follow: bool = False,
 ) -> FastAPI:
     """
-    The pages of the batches of I(Q) of ``client``, kept in ``definitions``,
-    with a step of Follow every ``interval`` seconds while a batch follows. A
-    new batch starts with ``settings``. If there is no batch, one of all
-    sample runs is made, which follows from the start if ``follow``.
+    The pages of the batches of ``client``, kept in ``definitions``, with a
+    step of Follow every ``interval`` seconds while a batch follows. A new
+    batch of I(Q) starts with ``settings``. If there is no batch at all, one
+    of all sample runs is made, which follows from the start if ``follow``.
+    A folder with only the detector and the masks that the command reduced
+    has batches, so a person makes the batch of I(Q) with "New batch"; one
+    that a person removed is not made again.
     """
     defaults = {IOFQ.name: replace(DEFAULTS[IOFQ.name], settings=settings or {})}
     manager = BatchManager(

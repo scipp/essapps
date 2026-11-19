@@ -639,8 +639,8 @@ async function startNext() {
   if (made) location.href = batchUrl(made.label);
 }
 
-// Remove this batch, then go to the root: it goes to another batch, or shows
-// the workspace without one.
+// Remove this batch, then go to the root: it goes to the batch that follows or
+// the only one left, or shows the workspace without a batch.
 async function removeBatch() {
   const question = `Remove the batch "${view.state.title}"? Its title, description, scope, settings and the values set by hand are removed. Its results stay in the workspace.`;
   if (!confirm(question)) return;
@@ -982,8 +982,8 @@ function wire() {
   });
 }
 
-// The page at the root of a workspace without a batch, or of a batch that
-// cannot be shown, saying why: the Batches view, with the form "New batch"
+// The page at the root, when it goes to no batch, or of a batch that cannot
+// be shown, saying why: the Batches view, with the form "New batch"
 // open if there is no batch, and the Runs view, each loaded once. Nothing
 // polls: making a batch goes to its page.
 async function showWorkspace(why = '') {

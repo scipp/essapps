@@ -1458,19 +1458,41 @@ def test_each_batch_has_its_page_at_its_label(
     assert rows(page)['1']['cells']['thickness']['edited']
 
 
-def test_the_root_redirects_to_the_batch_that_follows_else_the_last(
+def test_the_root_redirects_to_the_batch_that_follows(
     pages: Pages, manager: BatchManager
 ) -> None:
     http = TestClient(create_app(pages), follow_redirects=False)
-
     for label in ('a', 'b'):
         manager.create(STAGED.name, title=label, source='pairs', label=label)
-    last = http.get('/')
-    pages.follow.on('a')
-    following = http.get('/')
+    pages.follow.on('b')
 
-    assert (last.status_code, last.headers['location']) == (307, 'batches/b/')
-    assert following.headers['location'] == 'batches/a/'
+    page = http.get('/')
+
+    assert (page.status_code, page.headers['location']) == (307, 'batches/b/')
+
+
+def test_the_root_redirects_to_the_only_batch(
+    pages: Pages, manager: BatchManager
+) -> None:
+    http = TestClient(create_app(pages), follow_redirects=False)
+    manager.create(STAGED.name, title='a', source='pairs', label='a')
+
+    page = http.get('/')
+
+    assert (page.status_code, page.headers['location']) == (307, 'batches/a/')
+
+
+def test_the_root_lists_several_batches_if_none_follows(
+    pages: Pages, manager: BatchManager
+) -> None:
+    http = TestClient(create_app(pages), follow_redirects=False)
+    for label in ('a', 'b'):
+        manager.create(STAGED.name, title=label, source='pairs', label=label)
+
+    page = http.get('/')
+
+    assert page.status_code == 200
+    assert page.headers['content-type'].startswith('text/html')
 
 
 def test_a_label_that_is_no_batch_answers_404_and_its_page_says_so(

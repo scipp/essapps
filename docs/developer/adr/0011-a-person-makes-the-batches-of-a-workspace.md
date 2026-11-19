@@ -136,7 +136,7 @@ manager.remove(label)
 - The manager holds the one `Batch` of each label in its process, since two writers of one definition lose each other's changes.
 - The counts are how a person sees a row that became `outdated` or arrived in a batch that does not follow, and the rows that no batch holds. They take a scan and a state of every batch, so they are computed when asked for, not at each poll of a page.
 - Removing a batch removes its header, edits and settings. Its records stay in the workspace, as all history does ([ADR 0004](0004-history-is-append-only-lists.md)).
-- The command writes a header as the manager does, so a batch made with `essapps-batch reduce --label` shows in the list. A `Batch` made in code without the manager has no header and is not listed.
+- The command makes and reads its batch with the manager, so a batch made with `essapps-batch reduce --label` shows in the list. A `Batch` made in code without the manager has no header and is not listed.
 
 ### One batch follows
 
@@ -221,7 +221,7 @@ If it is built, the header, the labels and the URL change once more: a label per
 - `Batch` changes in two places: a row gets an index, and a batch has a scope that its scan applies and that can be set. The page of a batch stays, but for Follow.
 - Follow moves from the page of one batch to a loop of the application that serves them all. The loop has the timer, and steps a batch under the lock of its page. The manager takes no part in it.
 - The definitions get two operations they lack: listing the labels, and deleting a part. The layout of `definitions/` stays, with the header added.
-- `essapps-batch reduce --label` reads the header of its label if there is one, and takes the registered sources as it takes the bindings. It looks the kept spec up by name and version today, and has to take the bound version as the manager does.
+- `essapps-batch reduce --label` makes and reads the batch of its label with the manager, and takes the registered sources as it takes the bindings. It looks the kept spec up by name and version today, and has to take the bound version as the manager does.
 - Two rules change. Whether a batch follows is kept; today it belongs to the process, and a restart starts with `--follow` or without. `at` gets a default, the columns of the source; today the application chooses it.
 - A batch that a person bounds has tens to hundreds of rows, so the cost per row does not arise ([#223](https://github.com/scipp/essapps/issues/223)). The cost per file stays whatever the scope: at 60 000 files the options of the file cells are 3.1 MB of each state, a new listing takes 1.4 s, and the Runs view 1.8 s.
 - A batch without a `stop` remains, and is what an automatic reduction with no person has. Its page can show only its newest rows.
@@ -239,6 +239,6 @@ If it is built, the header, the labels and the URL change once more: a label per
 - **Which request runs first.** A workspace runs its requests on one pool of threads, one thread for a folder unless told otherwise, in the order submitted. A priority at submission would be a change of the workspace. To be measured with real runs first.
 - **When the manager lets go of a batch.** Each `Batch` it holds keeps its stage and its page's state until closed. What hundreds of them cost is not measured.
 - **A row without an index**, such as a file without a run number. It is in no slice; a list of keys can name it.
-- **A label with a `/`** in the path of a URL. Generated labels have none; code and the command may give one.
+- **A label with a `/`** in the path of a URL. Generated labels have none, and the manager refuses one; code may give one to a `Batch` made without the manager.
 - **Results of removed batches on disk.** Their records stay, and so do their persisted outputs. Nothing releases them.
 - **Many batches.** The list has no order but that of making, and no archive.

@@ -16,11 +16,12 @@ python -m ess.instruments.loki.arrivals [FOLDER] --arrive 15 [--count N] # LoKI'
 python -m ess.instruments.loki.arrivals --follow 2                      # the same, following the files, a step every 2 s
 ```
 
-Open `http://localhost:8000/`: it redirects to the page of the batch that follows, else of the last label; with no batch at all, it shows the list of batches, to make one (see [Making a batch](#making-a-batch)).
+Open `http://localhost:8000/`: it redirects to the page of the batch that follows, else to that of the only batch; otherwise it shows the list of batches, to open one or make one (see [Making a batch](#making-a-batch)).
 Each `FOLDER` is a workspace folder (`ess.apps.folder`); the demos make a temporary one if none is given, and say which.
 A folder without a batch gets one, of all sample runs; the batches and the batch that follows are kept in the folder.
 The demo needs the extra `essapps[web]`, the LoKI modules `essinstruments[loki-app]`.
 The LoKI page reads the masks from a record, so reduce the detector and the masks on the folder first, with two `essapps-batch` commands that [the docstring of `ess.instruments.loki.web`](../../../../../../essinstruments/src/ess/instruments/loki/web.py) gives; the LoKI arrivals do this themselves.
+The two commands make the batches `detector` and `masks`, so the LoKI page then makes no batch of I(Q): make it with **+ New batch**.
 With `--arrive`, the runs of one sample (fake demo) or one run (LoKI) arrive every `SECONDS`, until `--count` have arrived. Press **Rescan runs** to see them, and **Reduce** to reduce the rows they complete, or turn on **Follow**.
 Each page reads `files.csv` again when it is replaced (`ess.apps.folder.ArrivingFiles`), so a run registered by hand, with `ess.apps.folder.write_files_table`, shows too.
 The demo and the LoKI page take `--interval SECONDS`, the time between two steps of Follow (5).
@@ -92,9 +93,9 @@ The new batch starts with the settings that the application gives its spec (`Def
 A source that no spec fits is not offered.
 
 The form is closed until **+ New batch** is pressed.
-A workspace with no batch serves the page at `/` without a batch: the Batches view with the form open, and the Runs view.
+`/` serves the page without a batch if no batch follows and there are none or several: the Batches view, with the form open if there is no batch, and the Runs view.
 It loads both once and polls nothing; making a batch goes to its page.
-`/` answers with `Cache-Control: no-store`, so that Back and a `/` opened again ask the server, which redirects once there is a batch.
+`/` answers with `Cache-Control: no-store`, so that Back and a `/` opened again ask the server, which redirects once one batch follows or there is one batch.
 The page of a batch that cannot be shown, such as one whose source raises, says why, and shows the Batches and Runs views; the form is open only if there is no batch.
 So does an open page of a batch removed meanwhile, at its next poll, which the server answers 404 ("There is no batch X.").
 
@@ -132,7 +133,7 @@ The next batch is made first, so a title that the manager refuses changes nothin
 
 **Remove this batch**, after a confirmation, removes the header, the settings and the edits of the batch (`POST api/batch/remove`, `BatchManager.remove`); its results stay in the workspace.
 If the batch follows, Follow is turned off at once; if the definitions refuse the removal, the batch and Follow stay as they were.
-The page then goes to `/`, which redirects to another batch, or shows the page without a batch if none is left.
+The page then goes to `/`, which redirects to the batch that follows or the only batch left, or shows the page without a batch.
 
 ## Layers
 

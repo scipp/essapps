@@ -9,20 +9,32 @@ A batch from files, as a command::
 
 ``iofq.yaml`` is a :class:`~ess.apps.Template`, and ``runs.csv`` has a row for each
 sample, with a column for each blank (see :mod:`.frames`). Each command is one
-function, for a notebook: :func:`.frames.reduce_table` and
-:func:`.export.export_table`. The workspace is kept in a folder (see
+function, for a notebook: :func:`.frames.reduce_table`, which keeps no batch,
+and :func:`.export.export_table`. The workspace is kept in a folder (see
 :mod:`ess.apps.folder`), so a template may reference a record of an earlier
 command, by its ID or by its label (see :func:`.text.with_latest`).
 
-The command keeps a batch where an application does, in the folder's
-definitions (:mod:`.definition`), so a label is one batch whoever works on it:
+The command makes and reads its batch with a :class:`~.manager.BatchManager`,
+as a page does, so a label is one batch whoever works on it:
 
-- ``reduce`` imports its template as the label's settings, and its table as an
-  application imports one (:meth:`.reduction.Batch.put`): set by hand on the
-  rows that the :class:`~.reduction.Source` named by ``--source`` makes from
-  the files, if given, and on those that the definitions hold. It then
-  reduces the rows of the table. Without a template and a table, it reduces
-  the batch that the definitions hold.
+- ``reduce`` reduces the batch of its label, with the sources of the
+  application that ``-s/--sources`` names::
+
+      essapps-batch -b my.package:BINDINGS reduce -s my.package:SOURCES -l LABEL
+
+  A template given must be of the batch's spec, with its columns as the
+  blanks, and ``--source``, if given, must name the batch's source. For a
+  label without a batch, the manager makes one
+  (:meth:`~.manager.BatchManager.create`) of the template's spec, with its
+  blanks as the columns, the source that ``--source NAME`` names, and the
+  label as title; it refuses a label that has definitions or records. A batch
+  made so is removed again if the run raises before a row of it was
+  submitted. The template becomes the batch's settings, and the table is
+  imported as an application imports one (:meth:`.reduction.Batch.put`): set
+  by hand on the rows that the source makes from the files, and on those that
+  the definitions hold. It then reduces the rows of the table; without a
+  table, those of the batch, or, given a template, one row keyed by the label
+  if the batch has no source.
   With ``--remaining`` it reduces the rows that the page's "Reduce" does
   (:func:`.state.left_to_reduce`), and leaves those reduced with earlier
   settings, which it says on stderr; ``--earlier-settings`` adds them.
@@ -41,7 +53,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from importlib import import_module
 from pathlib import Path
@@ -57,6 +69,7 @@ from . import frames
 from .corrections import CorrectedFiles
 from .definition import FolderDefinitions
 from .export import export_table
+from .manager import BatchManager, Defaults, bound_spec
 from .reduction import Source, file_infos
 from .state import EARLIER
 from .text import load_template, with_latest
@@ -77,6 +90,19 @@ def _source(parser: argparse.ArgumentParser, name: str) -> Source:
             '(ess.apps.batch.Source), such as package.module:SAMPLE_RUNS'
         )
     return source
+
+
+def _sources(parser: argparse.ArgumentParser, name: str) -> Mapping[str, Source]:
+    """The sources by name that ``name`` names; exits if it names other things."""
+    sources = _named(name)
+    if not isinstance(sources, Mapping) or not all(
+        isinstance(source, Source) for source in sources.values()
+    ):
+        parser.error(
+            f'{name} is a {type(sources).__name__}, not a mapping of names to '
+            'Sources (ess.apps.batch.Source), such as package.module:SOURCES'
+        )
+    return sources
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -113,11 +139,17 @@ def _parser() -> argparse.ArgumentParser:
         'table',
         type=Path,
         nargs='?',
-        help='the rows, .csv, .tsv, or .xlsx; without it, the template is one row',
+        help='the rows, .csv, .tsv, or .xlsx; without it, those of the batch',
+    )
+    reduce.add_argument(
+        '-s',
+        '--sources',
+        help='the sources of the application, by name, as package.module:NAME',
     )
     reduce.add_argument(
         '--source',
-        help='a Source, as package.module:NAME; the table is set on its rows',
+        metavar='NAME',
+        help='the name of a source in --sources; the table is set on its rows',
     )
     reduce.add_argument(
         '-l', '--label', required=True, help='names the batch; each has its own'
@@ -160,6 +192,74 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _reduce(
+    client: Client, args: argparse.Namespace, definitions: FolderDefinitions
+) -> pd.DataFrame:
+    """
+    Reduce the batch of the label, which the manager makes from the template
+    if the label has none (see the module).
+    """
+    label = args.label
+    template = None
+    if args.template is not None:
+        template = load_template(args.template)
+        template = replace(template, params=with_latest(client, template.params))
+    staged = Defaults(staged=args.staged)
+    manager = BatchManager(
+        client,
+        sources=args.sources,
+        definitions=definitions,
+        defaults={bound.name: staged for bound in client.specs()},
+    )
+    if (header := manager.headers().get(label)) is not None:
+        spec, source, columns = header.spec, header.source, header.columns
+        if args.source not in (None, source):
+            has = 'no source' if source is None else f'the source {source}'
+            raise ValueError(f'{label}: the batch has {has}, not {args.source}')
+        if template is not None and (
+            template.spec.name != spec or set(template.blanks) != set(columns)
+        ):
+            raise ValueError(
+                f'{label}: the batch is of {spec} with the columns '
+                f'{list(columns)}, the template of {template.spec.name} '
+                f'with the blanks {list(template.blanks)}'
+            )
+        if source is not None and source not in args.sources:
+            raise ValueError(
+                f'{label}: the source {source} is not registered; give the '
+                'sources of the application with -s/--sources package.module:NAME'
+            )
+    elif template is None:
+        raise ValueError(f'{label}: no batch has the label, so give a template')
+    else:
+        spec, source, columns = template.spec.name, args.source, template.blanks
+    try:
+        bound_spec(client, spec)
+    except KeyError as error:  # a spec that the bindings given lack
+        raise ValueError(error.args[0]) from None
+    table = None
+    if args.table is not None:
+        table = frames.read_table(args.table)
+    elif template is not None and source is None:
+        table = pd.DataFrame({'key': [label]})
+    if header is None:
+        manager.create(spec, title=label, source=source, columns=columns, label=label)
+    try:
+        return frames.reduce_batch(
+            manager.batch(label),
+            table,
+            settings=None if template is None else template.params,
+            remaining=args.remaining,
+            earlier_settings=args.earlier_settings,
+        )
+    except BaseException:
+        # A batch made here that submitted nothing would fix the spec, the
+        # columns and the source of the label for the next run.
+        if header is None and not client.records(label=label):
+            manager.remove(label)
+        raise
+
+
 def _run(
     client: Client, args: argparse.Namespace, definitions: FolderDefinitions
 ) -> pd.DataFrame:
@@ -168,27 +268,7 @@ def _run(
         return frames.table_of(source.rows(file_infos(client, source.selector)))
     if args.command == 'export':
         return export_table(client, frames.read_table(args.table), args.directory)
-    template, table = None, None
-    if args.template is not None:
-        template = load_template(args.template)
-        template = replace(template, params=with_latest(client, template.params))
-        table = (
-            pd.DataFrame({'key': [args.label]})
-            if args.table is None
-            else frames.read_table(args.table)
-        )
-    return frames.reduce_table(
-        client,
-        template,
-        table,
-        label=args.label,
-        source=args.source,
-        staged=args.staged,
-        persist=True,
-        remaining=args.remaining,
-        earlier_settings=args.earlier_settings,
-        definitions=definitions,
-    )
+    return _reduce(client, args, definitions)
 
 
 def _write(table: pd.DataFrame, path: Path | None) -> None:
@@ -224,8 +304,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         # a workspace goes on with pending records, which need their bindings
         parser.error('--bind is required: the bindings of the workspace')
     bind = _named(args.bind)
-    if getattr(args, 'source', None) is not None:  # rows and reduce
+    if args.command == 'rows':
         args.source = _source(parser, args.source)
+    if args.command == 'reduce':
+        args.sources = {} if args.sources is None else _sources(parser, args.sources)
+        if args.source is not None and args.source not in args.sources:
+            parser.error(
+                f'--source {args.source} is not a name in --sources: '
+                f'{", ".join(args.sources) or "none given"}'
+            )
     definitions = FolderDefinitions(args.workspace)
     try:
         files = CorrectedFiles(folder_files(args.workspace), definitions=definitions)

@@ -12,7 +12,15 @@ import pytest
 import yaml
 
 from ess.apps import Template, file
-from ess.apps.batch import Batch, CorrectedFiles, FolderDefinitions, left_to_reduce
+from ess.apps.batch import (
+    Batch,
+    BatchManager,
+    CorrectedFiles,
+    FolderDefinitions,
+    Header,
+    Scope,
+    left_to_reduce,
+)
 from ess.apps.batch.cli import main
 from ess.apps.batch.definition import edits_key, settings_key, template_of
 from ess.apps.batch.frames import read_table
@@ -51,7 +59,7 @@ def test_a_template_may_leave_out_the_blanks_and_the_params(tmp_path: Path) -> N
 
 MODULE = '''
 from ess.apps.batch import Row, Source
-from ess.apps.testing import read_file
+from ess.apps.testing import StagedFunction, read_file
 from ess.spec import RunFile, WorkflowSpec, function_binding
 from pydantic import BaseModel
 from ess.spec import Referenced
@@ -102,17 +110,24 @@ def _find(params: FindParams) -> FindOutputs:
 
 
 BINDINGS = [function_binding(SPEC, _reduce), function_binding(FIND, _find)]
+UPGRADED = [
+    function_binding(SPEC.model_copy(update={'version': 2}), _reduce),
+    function_binding(FIND, _find),
+]
+STAGING = [StagedFunction(SPEC, _reduce), function_binding(FIND, _find)]
 
 
 def pair(files):
     return [
-        Row(str(f.metadata['run']), {'sample': f.ref})
+        Row(str(f.metadata['run']), {'sample': f.ref}, index=int(f.metadata['run']))
         for f in files
         if f.metadata['role'] == 'sample'
     ]
 
 
 PAIRS = Source(pair, fills=('sample',))
+BROKEN = Source(lambda files: [f.metadata['nope'] for f in files], fills=('sample',))
+SOURCES = {'pairs': PAIRS, 'broken': BROKEN}
 '''
 
 
@@ -395,7 +410,7 @@ def test_a_table_given_with_a_source_keeps_only_what_differs_from_the_scan(
     runs = folder / 'runs.csv'
     assert main([*command, 'rows', 'cli_toys_batch_files:PAIRS', '-o', str(runs)]) == 0
     runs.write_text(runs.read_text().replace('3,path:run-3.json', '3,path:run-1.json'))
-    source = ['--source', 'cli_toys_batch_files:PAIRS']
+    source = ['-s', 'cli_toys_batch_files:SOURCES', '--source', 'pairs']
 
     assert (
         main([*command, 'reduce', *source, str(cli_template), str(runs), '-l', 'x'])
@@ -411,12 +426,338 @@ def test_a_table_given_with_a_source_keeps_only_what_differs_from_the_scan(
     }
 
 
-def test_the_command_without_files_on_a_label_that_keeps_nothing_says_so(
+# The command and the batches of a manager on one folder
+
+
+@contextmanager
+def manager(folder: Path) -> Iterator[BatchManager]:
+    """The manager of an application on the folder, with the sources by name."""
+    module = import_module('cli_toys_batch_files')
+    definitions = FolderDefinitions(folder)
+    files = CorrectedFiles(folder_files(folder), definitions=definitions)
+    with open_folder(folder, module.BINDINGS, files=files) as client:
+        yield BatchManager(client, sources=module.SOURCES, definitions=definitions)
+
+
+SOURCES = ['-s', 'cli_toys_batch_files:SOURCES']
+
+
+def test_reduce_on_a_new_label_writes_a_header_so_the_manager_lists_it(
+    command: list[str], cli_template: Path, folder: Path
+) -> None:
+    runs = write_rows(folder, ['1'])
+    reduce = [str(cli_template), str(runs), '-l', 'x', '--source', 'pairs']
+
+    assert main([*command, 'reduce', *SOURCES, *reduce]) == 0
+
+    with manager(folder) as batches:
+        assert batches.headers() == {
+            'x': Header(spec='cli-toy', columns=('sample',), source='pairs', title='x')
+        }
+
+
+def test_reduce_refuses_a_label_that_has_definitions_but_no_batch(
+    command: list[str],
+    cli_template: Path,
+    folder: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with manager(folder) as batches:
+        old = Batch(
+            batches.client,
+            import_module('cli_toys_batch_files').SPEC,
+            columns=['sample'],
+            label='old',
+            definitions=FolderDefinitions(folder),
+        )
+        old.settings = {'offset': {'value': 0.5}}
+    runs = write_rows(folder, ['1'])
+
+    code = main([*command, 'reduce', str(cli_template), str(runs), '-l', 'old'])
+
+    assert code == 2
+    assert 'old: the label has definitions or records' in capsys.readouterr().err
+    with manager(folder) as batches:
+        assert batches.headers() == {}
+        assert batches.client.records(label='old') == []
+
+
+def test_reduce_on_a_batch_of_the_manager_takes_its_source_and_its_scope(
+    command: list[str], folder: Path
+) -> None:
+    with manager(folder) as batches:
+        label = batches.create(
+            'cli-toy', title='Later', source='pairs', scope=Scope(start=2)
+        )
+        before = batches.headers()
+    out = folder / 'done.csv'
+
+    code = main([*command, 'reduce', *SOURCES, '-l', label, '-o', str(out)])
+
+    assert code == 0
+    assert list(read_table(out)['key']) == ['2', '3']
+    with manager(folder) as batches:
+        assert batches.headers() == before
+        reduced = {r.member for r in batches.client.records(label=label)}
+        assert reduced == {'2', '3'}
+
+
+def test_reduce_refuses_a_row_that_the_source_makes_outside_the_scope(
+    command: list[str],
+    cli_template: Path,
+    folder: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with manager(folder) as batches:
+        label = batches.create(
+            'cli-toy', title='Later', source='pairs', scope=Scope(start=2)
+        )
+    runs = folder / 'runs.csv'
+    runs.write_text('sample\n1\n')
+    reduce = [str(cli_template), str(runs), '-l', label]
+
+    assert main([*command, 'reduce', *SOURCES, *reduce]) == 2
+    assert 'the source makes this row outside the scope' in capsys.readouterr().err
+
+
+def test_reduce_refuses_a_batch_whose_source_is_not_registered(
+    command: list[str], folder: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with manager(folder) as batches:
+        label = batches.create('cli-toy', title='All', source='pairs')
+
+    assert main([*command, 'reduce', '-l', label]) == 2
+    assert (
+        f'{label}: the source pairs is not registered; give the sources of the '
+        'application with -s/--sources package.module:NAME'
+    ) in capsys.readouterr().err
+
+
+def test_reduce_refuses_a_source_other_than_that_of_the_header(
+    command: list[str],
+    cli_template: Path,
+    folder: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs = write_rows(folder, ['1'])
+    assert main([*command, 'reduce', str(cli_template), str(runs), '-l', 'x']) == 0
+
+    code = main([*command, 'reduce', *SOURCES, '--source', 'pairs', '-l', 'x'])
+
+    assert code == 2
+    assert 'x: the batch has no source, not pairs' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ('template', 'said'),
+    [
+        (
+            'spec: {name: cli-toy, version: 1}\nblanks: [sample, offset]\n',
+            "the template of cli-toy with the blanks ['sample', 'offset']",
+        ),
+        (
+            'spec: {name: cli-find, version: 1}\nblanks: [sample]\n',
+            "the template of cli-find with the blanks ['sample']",
+        ),
+    ],
+    ids=['blanks', 'spec'],
+)
+def test_reduce_refuses_a_template_other_than_the_header_says(
+    command: list[str],
+    cli_template: Path,
+    folder: Path,
+    capsys: pytest.CaptureFixture[str],
+    template: str,
+    said: str,
+) -> None:
+    runs = write_rows(folder, ['1'])
+    assert main([*command, 'reduce', str(cli_template), str(runs), '-l', 'x']) == 0
+    other = folder / 'other.yaml'
+    other.write_text(template)
+    capsys.readouterr()
+
+    code = main([*command, 'reduce', str(other), str(runs), '-l', 'x'])
+
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "x: the batch is of cli-toy with the columns ['sample']" in err
+    assert said in err
+
+
+def test_reduce_refuses_a_label_that_is_not_one_segment_of_a_url(
+    command: list[str],
+    cli_template: Path,
+    folder: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs = write_rows(folder, ['1'])
+
+    code = main([*command, 'reduce', str(cli_template), str(runs), '-l', 'auto/x'])
+
+    assert code == 2
+    assert "'auto/x': a label is letters" in capsys.readouterr().err
+    assert FolderDefinitions(folder).labels() == []
+
+
+@pytest.mark.parametrize('given', [True, False], ids=['template', 'kept'])
+def test_reduce_takes_the_version_of_the_spec_that_the_workspace_binds(
+    command: list[str], cli_template: Path, folder: Path, given: bool
+) -> None:
+    runs = write_rows(folder, ['1'])
+    assert main([*command, 'reduce', str(cli_template), str(runs), '-l', 'x']) == 0
+    upgraded = [*command[:-1], 'cli_toys_batch_files:UPGRADED']
+    template = [str(cli_template), str(runs)] if given else []
+
+    assert main([*upgraded, 'reduce', *template, '-l', 'x', '--remaining']) == 0
+
+    with open_folder(folder, []) as client:
+        versions = [r.spec.version for r in client.records(label='x')]
+    assert versions == [1, 2]
+
+
+@pytest.mark.parametrize(
+    'template',
+    [
+        'spec: {name: cli-toy, version: 1}\nblanks: [sample, offset]\n',
+        'spec: {name: cli-toy, version: 1}\nparams: {offset: {value: nope}}\n'
+        'blanks: [sample]\n',
+    ],
+    ids=['table', 'settings'],
+)
+def test_a_refused_first_run_leaves_no_batch(
+    command: list[str], cli_template: Path, folder: Path, template: str
+) -> None:
+    runs = write_rows(folder, ['1'])
+    refused = folder / 'refused.yaml'
+    refused.write_text(template)
+
+    assert main([*command, 'reduce', str(refused), str(runs), '-l', 'x']) == 2
+
+    assert FolderDefinitions(folder).labels() == []
+    assert main([*command, 'reduce', str(cli_template), str(runs), '-l', 'x']) == 0
+
+
+def test_a_source_that_raises_is_an_error_and_leaves_no_batch(
+    command: list[str], cli_template: Path, folder: Path
+) -> None:
+    runs = write_rows(folder, ['1'])
+    reduce = [str(cli_template), str(runs), '-l', 'x', '--source', 'broken']
+
+    with pytest.raises(KeyError, match='nope'):
+        main([*command, 'reduce', *SOURCES, *reduce])
+
+    assert FolderDefinitions(folder).labels() == []
+
+
+def kept(folder: Path, label: str) -> dict[str, str]:
+    """The files that the definitions of ``label`` are kept in, by name."""
+    files = (folder / 'definitions' / 'labels' / label).iterdir()
+    return {path.name: path.read_text() for path in files}
+
+
+@pytest.mark.parametrize(
+    'table', ['sampel\n2\n', 'sample\n1\n'], ids=['column', 'scope']
+)
+def test_a_refused_reduce_changes_neither_the_settings_nor_the_rows_of_a_batch(
+    command: list[str], folder: Path, table: str
+) -> None:
+    with manager(folder) as batches:
+        label = batches.create(
+            'cli-toy',
+            title='Later',
+            source='pairs',
+            scope=Scope(start=2),
+            settings={'offset': {'value': 0.5}},
+        )
+        batch = batches.batch(label)
+        batch.rows = batch.rows.edit('2', {'sample': file(run=3)})
+    before = kept(folder, label)
+    template = folder / 'other.yaml'
+    template.write_text(
+        'spec: {name: cli-toy, version: 1}\nblanks: [sample]\n'
+        'params: {offset: {value: 9.0}}\n'
+    )
+    runs = folder / 'runs.csv'
+    runs.write_text(table)
+
+    code = main([*command, 'reduce', *SOURCES, str(template), str(runs), '-l', label])
+
+    assert code == 2
+    assert kept(folder, label) == before
+
+
+def test_reduce_on_a_batch_without_rows_writes_a_table_of_its_columns(
+    command: list[str], folder: Path
+) -> None:
+    with manager(folder) as batches:
+        label = batches.create(
+            'cli-toy', title='Later', source='pairs', scope=Scope(start=99)
+        )
+    out = folder / 'done.csv'
+
+    code = main([*command, 'reduce', *SOURCES, '-l', label, '-o', str(out)])
+
+    assert code == 0
+    assert list(read_table(out).columns) == [
+        'key',
+        'sample',
+        'status',
+        'record',
+        'failure',
+    ]
+    assert read_table(out).empty
+
+
+def test_a_template_without_a_table_is_the_settings_of_a_batch_with_a_source(
+    command: list[str], folder: Path
+) -> None:
+    with manager(folder) as batches:
+        label = batches.create(
+            'cli-toy', title='Later', source='pairs', scope=Scope(start=2)
+        )
+    template = folder / 'offset.yaml'
+    template.write_text(
+        'spec: {name: cli-toy, version: 1}\nblanks: [sample]\n'
+        'params: {offset: {value: 0.5}}\n'
+    )
+    out = folder / 'done.csv'
+
+    reduce = [str(template), '-l', label, '-o', str(out)]
+    assert main([*command, 'reduce', *SOURCES, *reduce]) == 0
+
+    assert list(read_table(out)['key']) == ['2', '3']
+    with manager(folder) as batches:
+        assert batches.batch(label).settings == {'offset': {'value': 0.5}}
+
+
+def test_reduce_with_staged_runs_the_rows_of_its_batch_through_a_stage(
+    command: list[str], cli_template: Path, folder: Path
+) -> None:
+    runs = write_rows(folder, ['1'])
+    assert main([*command, 'reduce', str(cli_template), str(runs), '-l', 'x']) == 0
+    staging = [*command[:-1], 'cli_toys_batch_files:STAGING']
+
+    assert main([*staging, 'reduce', '-l', 'x', '--staged']) == 0
+
+    assert import_module('cli_toys_batch_files').STAGING[0].staged == [('sample',)]
+
+
+def test_reduce_refuses_a_spec_that_the_bindings_lack(
+    command: list[str], folder: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    template = folder / 'other.yaml'
+    template.write_text('spec: {name: nope, version: 1}\nparams: {sample: 1}\n')
+
+    assert main([*command, 'reduce', str(template), '-l', 'x']) == 2
+    assert 'the workspace binds no spec nope' in capsys.readouterr().err
+
+
+def test_reduce_without_a_template_on_a_label_without_a_batch_says_so(
     command: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert main([*command, 'reduce', '-l', 'nothing']) == 2
     assert (
-        'nothing: no settings are kept, so give a template' in capsys.readouterr().err
+        'nothing: no batch has the label, so give a template' in capsys.readouterr().err
     )
 
 
@@ -447,24 +788,36 @@ def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(
 
 
 @pytest.mark.parametrize(
-    'arguments',
+    ('arguments', 'said'),
     [
-        ['rows', 'cli_toys_batch_files:pair'],
-        ['reduce', '--source', 'cli_toys_batch_files:pair', '-l', 'x'],
+        (['rows', 'cli_toys_batch_files:pair'], 'is a function, not a Source'),
+        (
+            ['reduce', '-s', 'cli_toys_batch_files:pair', '-l', 'x'],
+            'is a function, not a mapping of names to Sources',
+        ),
+        (
+            ['reduce', *SOURCES, '--source', 'p', '-l', 'x'],
+            '--source p is not a name in --sources: pairs, broken',
+        ),
+        (
+            ['reduce', '--source', 'pairs', '-l', 'x'],
+            '--source pairs is not a name in --sources: none given',
+        ),
     ],
-    ids=['rows', 'reduce'],
+    ids=['rows', 'reduce', 'reduce-name', 'reduce-no-sources'],
 )
 def test_main_refuses_a_source_that_is_not_a_source_before_the_folder_is_opened(
     command: list[str],
     folder: Path,
     arguments: list[str],
+    said: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as exit_:
         main([*command, *arguments])
 
     assert exit_.value.code == 2
-    assert 'is a function, not a Source' in capsys.readouterr().err
+    assert said in capsys.readouterr().err
     assert not (folder / 'log.jsonl').exists()
 
 

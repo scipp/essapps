@@ -183,14 +183,15 @@ class Pages:
 
     def home(self) -> str | None:
         """
-        The label of the batch that follows, else the last label; ``None`` if
-        there is no batch.
+        The label of the batch that follows, else that of the only batch;
+        ``None`` if no batch follows and there are none or several, so that
+        ``/`` lists them rather than guess.
         """
         with self.lock:
             headers = self.manager.headers()
             if self.follow.label in headers:
                 return self.follow.label
-            return next(reversed(headers), None)
+            return next(iter(headers)) if len(headers) == 1 else None
 
     def tick(self) -> None:
         """
