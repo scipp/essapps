@@ -152,9 +152,6 @@ class Pages:
         # What the runs, their corrections and a new batch are read with,
         # listed again for each.
         self._listing: Listing | None = None
-        # The batches and the label that follows, as listed at the last version.
-        self._batches: tuple[object, ...] = ()
-        self._batches_version = 0
         self.corrected = 0
         self.failure: str | None = None
         self.refused: dict[str, str] = {}
@@ -340,20 +337,6 @@ class Pages:
             ) from None
         self.runs_listed(runs, changed=True)
 
-    def batches_version(self) -> int:
-        """
-        The version of the list of batches, so that the Batches view of each
-        page asks for it again. It moves when the headers of the batches or
-        the label that follows differ from those of the last version, whoever
-        changed them.
-        """
-        with self.lock:
-            listed = (tuple(self.manager.headers().items()), self.manager.following)
-            if listed != self._batches:
-                self._batches = listed
-                self._batches_version += 1
-            return self._batches_version
-
     def waiting(self, label: str, states: Mapping[str, RowState]) -> dict[str, str]:
         """
         Why Follow could not submit each row of ``states`` that its next step
@@ -389,7 +372,6 @@ class Pages:
                     )
                 )
             return Batches(
-                version=self.batches_version(),
                 application=self.title,
                 runs=self.runs_version if self.corrects_runs else None,
                 rows=rows,

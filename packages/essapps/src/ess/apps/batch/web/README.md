@@ -163,7 +163,7 @@ The server answers 204 if nothing changed since `version`, and else the whole `S
 `version` counts each action, each step of Follow that changes what the page shows (the rows, the runs, the records, the refusals, or its failure), each change of the batch that follows, and each change of the workspace's records, such as a reduction that finished.
 `start` is new at each start of the server; a page that sees another one loads again.
 `State.runs` counts the changes of the runs, which all pages share; the Runs view asks for `api/runs` when it moves.
-`State.batches` moves when the headers of the batches or the batch that follows change, whoever changed them; the Batches view asks for `api/batches` when it moves.
+`State.batches` lists the batches, so the version moves when the headers of the batches or the batch that follows change, whoever changed them; only the page without a batch asks for `api/batches`.
 `api/batches`, `api/batches/counts`, `api/sources`, `api/runs` and the corrections of runs (`api/runs/cells`, `api/runs/cells/revert`) belong to the workspace: they answer the same under any label, and at `/api/...`.
 
 ## How the page asks

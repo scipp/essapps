@@ -195,9 +195,9 @@ class State(BaseModel):
     and the runs. ``label`` names the batch, ``title`` is its title, and
     ``header`` the rest of its header; ``application`` is the title of the
     application. ``start`` changes when
-    the server starts again, ``version`` with each change, ``runs`` with
-    each change of the runs, and ``batches`` with each change of the list of
-    batches. ``settings`` is the form
+    the server starts again, ``version`` with each change, and ``runs`` with
+    each change of the runs. ``batches`` lists the batches of the workspace,
+    as :class:`Batches` has them. ``settings`` is the form
     of the settings. ``settings_changed`` says whether a person changed it and
     has not applied the change; the rows read as with the batch's settings.
     ``settings_problem`` names the batch's settings that the form cannot show,
@@ -210,7 +210,7 @@ class State(BaseModel):
     version: int
     start: str
     runs: int | None
-    batches: int
+    batches: list[BatchRow]
     label: str
     title: str
     header: HeaderShown
@@ -276,7 +276,6 @@ class Batches(BaseModel):
     application, and the version of the runs, as :class:`State` has them.
     """
 
-    version: int
     application: str
     runs: int | None
     rows: list[BatchRow]

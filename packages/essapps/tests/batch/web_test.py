@@ -1577,7 +1577,7 @@ def test_a_page_learns_from_its_poll_that_a_scope_changed(
         '/api/state', params={'after': now['version'], 'start': now['start']}
     )
     assert polled.status_code == 200
-    assert polled.json()['batches'] > now['batches']
+    assert polled.json()['batches'][0]['scope'] == 'Run 2 \N{EN DASH}'
     assert [row['key'] for row in polled.json()['rows']] == ['2', '3']
 
 
@@ -1604,8 +1604,12 @@ def test_a_page_learns_from_its_poll_that_another_batch_follows(
         '/api/state', params={'after': now['version'], 'start': now['start']}
     )
     assert polled.status_code == 200
-    assert polled.json()['batches'] > now['batches']
-    assert http.get('/api/batches').json()['version'] == polled.json()['batches']
+    listed = polled.json()['batches']
+    assert [(b['title'], b['follows']) for b in listed] == [
+        ('Other', True),
+        ('Scan', False),
+    ]
+    assert http.get('/api/batches').json()['rows'] == listed
 
 
 def test_a_correction_on_one_page_shows_in_the_runs_view_and_the_rows_of_another(
@@ -1870,7 +1874,6 @@ def test_a_source_that_no_spec_fits_is_not_offered_and_no_source_always_is(
 def test_a_batch_made_from_the_page_is_listed_with_what_the_form_sent(
     http: TestClient, pages: Pages, manager: BatchManager
 ) -> None:
-    before = state(http)['batches']
     sent = new_batch(
         description='Thicker cells',
         columns=['sample', 'transmission', 'thickness'],
@@ -1889,7 +1892,8 @@ def test_a_batch_made_from_the_page_is_listed_with_what_the_form_sent(
         scope=Scope(start=2, stop=10),
     )
     assert list(rows(opened(pages, made['label']))) == ['2', '3']
-    assert state(http)['batches'] > before
+    listed = {b['label']: b['title'] for b in state(http)['batches']}
+    assert listed == {'scan': 'Scan', made['label']: 'Afternoon'}
 
 
 def test_a_batch_made_from_the_page_starts_with_the_settings_of_its_spec(

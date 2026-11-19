@@ -351,15 +351,15 @@ class Page:
     def _live(self) -> tuple[object, ...]:
         """
         What the page shows that changes without an action: the rows, the
-        records, the runs, the list of batches, which batch follows, and how
-        the last step of Follow went.
+        records, the runs, the headers of the batches, which batch follows,
+        and how the last step of Follow went.
         """
         pages = self.pages
         return (
             self.batch.rows,
             self._listing.cursor,
             pages.runs_version,
-            pages.batches_version(),
+            pages.manager.headers(),
             pages.manager.following,
             pages.refused,
             pages.failure,
@@ -515,7 +515,7 @@ class Page:
             version=self.version,
             start=self.start,
             runs=self.pages.runs_version if self.pages.corrects_runs else None,
-            batches=self.pages.batches_version(),
+            batches=self.pages.batches().rows,
             label=self.label,
             title=header.title,
             header=HeaderShown(

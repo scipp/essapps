@@ -33,8 +33,7 @@ const view = {
   dismissed: '', // the refusal whose message was closed
   runs: 0, // the version of the runs shown
   runData: null, // the runs last loaded, with their columns
-  batches: 0, // the version of the list of batches shown
-  batchData: null, // the list of batches last loaded
+  batchData: null, // the list of batches last shown
   counts: null, // the counts of the rows of each batch, once counted
 };
 let rows; // the Grid of the rows
@@ -207,7 +206,7 @@ function render(state) {
   const updated = rows.update(state.rows);
   if (!old) updated.then(() => rows.select(view.selected));
   if (state.runs !== null && state.runs !== view.runs) loadRuns();
-  if (state.batches !== view.batches) loadBatches();
+  showBatches({application: state.application, runs: state.runs, rows: state.batches});
   const many = state.words.many;
   $('rescan').title = `Make the ${many} from the runs again. Values set by hand stay.`;
   $('restore').hidden = state.removed === 0;
@@ -316,10 +315,9 @@ function correctRuns(url, body) {
   });
 }
 
-async function loadBatches() {
-  const listed = await request('batches', {kind: 'batches'});
-  if (!listed) return;
-  view.batches = listed.version;
+// Show the list of batches: from each state, and on the page without a batch
+// from api/batches.
+function showBatches(listed) {
   view.batchData = listed;
   $('n-batches').textContent = listed.rows.length;
   drawBatches();
@@ -973,8 +971,9 @@ async function showWorkspace(why = '') {
   document.body.classList.add('no-batch');
   showPage('batches');
   if (why) showMessage(why);
-  await loadBatches();
-  if (!view.batchData) return;
+  const listed = await request('batches');
+  if (!listed) return;
+  showBatches(listed);
   if (!view.batchData.rows.length) openNewBatch();
   const {application, runs} = view.batchData;
   if (application) document.title = $('title').textContent = application;
