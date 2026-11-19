@@ -41,6 +41,7 @@ from .toys import (
     REPEATED,
     SAMPLES,
     STAGED,
+    Flaky,
     Measure,
     edit,
     pair,
@@ -470,23 +471,6 @@ def test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before(
     assert client.output(reduced['1'], 'total') == 2.0
 
 
-class Flaky:
-    """A client whose next ``fail`` submissions raise, as a lost connection does."""
-
-    def __init__(self, client: Client) -> None:
-        self._client = client
-        self.fail = 0
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._client, name)
-
-    def submit(self, *args: Any, **kwargs: Any) -> Any:
-        if self.fail:
-            self.fail -= 1
-            raise ConnectionError('lost')
-        return self._client.submit(*args, **kwargs)
-
-
 def test_a_row_whose_submission_raised_runs_at_the_next_step(
     client: Client, sample: Measure
 ) -> None:
@@ -591,6 +575,41 @@ def test_a_row_that_a_person_removes_stays_away(following: BatchManager) -> None
     following.step()
 
     assert list(batch.frame().index) == ['3']
+
+
+def test_a_row_added_by_a_step_whose_submission_raised_stays_away_once_removed(
+    client: Client, definitions: FolderDefinitions, sample: Measure
+) -> None:
+    flaky = Flaky(client)
+    manager = BatchManager(flaky, sources={'pairs': PAIRS}, definitions=definitions)
+    manager.create(PLAIN.name, title='A', rows=rows(client), source='pairs', label='a')
+    manager.follow('a')
+    sample(1, 'water')
+    flaky.fail = 1
+    with pytest.raises(ConnectionError):
+        manager.step()
+    batch = manager.batch('a')
+    batch.put(batch.frame().drop('1'))
+
+    manager.step()
+
+    assert batch.frame().empty
+    assert considered(definitions) == {'1'}
+
+
+def test_a_cell_of_the_source_that_the_batch_refuses_is_named_with_the_source(
+    client: Client, definitions: FolderDefinitions, sample: Measure
+) -> None:
+    thick = Source(_changed(pair, **{'1': {'thickness': 'thick'}}), PAIRS.fills)
+    manager = BatchManager(client, sources={'pairs': thick}, definitions=definitions)
+    manager.create(PLAIN.name, title='A', rows=rows(client), source='pairs', label='a')
+    manager.follow('a')
+    sample(1, 'water')
+
+    with pytest.raises(
+        ValueError, match=r"the source pairs: .*row '1', column 'thickness'"
+    ):
+        manager.step()
 
 
 def test_a_step_after_a_restart_adds_the_rows_that_arrived_meanwhile(

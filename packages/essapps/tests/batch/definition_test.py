@@ -18,7 +18,6 @@ from ess.apps.batch import (
     CorrectedFiles,
     FileInfo,
     FolderDefinitions,
-    FromSource,
     Header,
     NotKept,
     Source,
@@ -26,6 +25,7 @@ from ess.apps.batch import (
 from ess.apps.batch.definition import (
     CORRECTIONS,
     FOLLOWING,
+    FromSource,
     Key,
     following_data,
     following_of,

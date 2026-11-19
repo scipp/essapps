@@ -9,7 +9,7 @@ for application developers is ``packages/essapps/docs/batch.md``.
 """
 
 from .corrections import CorrectedFiles
-from .definition import DefinitionStore, FolderDefinitions, FromSource, Header, NotKept
+from .definition import DefinitionStore, FolderDefinitions, Header, NotKept
 from .manager import BatchManager
 from .reduction import Batch
 from .source import FileInfo, RowSource, Source, file_infos, rows_of
@@ -30,7 +30,6 @@ __all__ = [
     'DefinitionStore',
     'FileInfo',
     'FolderDefinitions',
-    'FromSource',
     'Header',
     'NotKept',
     'RowSource',

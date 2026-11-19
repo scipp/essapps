@@ -19,7 +19,7 @@ from ess.apps.batch import (
     Header,
     NotKept,
 )
-from ess.apps.batch.definition import source_key, source_of
+from ess.apps.batch.definition import header_key, source_key, source_of
 from ess.apps.testing import FakeFiles, FakeStore, StagedFunction
 from ess.spec import function_binding
 
@@ -349,8 +349,56 @@ def test_a_batch_whose_header_is_refused_is_not_made(
     refusing.part = 'header'
 
     with pytest.raises(NotKept):
-        manager.create('plain', title='Morning', label='b')
+        manager.create('plain', title='Morning', source='pairs', label='b')
     assert manager.headers() == {}
+    assert refusing.labels() == []
+    refusing.part = None
+    assert manager.create('plain', title='Morning', label='c') == 'c'
+
+
+def test_the_header_of_a_batch_is_written_last(
+    manager: BatchManager, refusing: Refusing
+) -> None:
+    manager.create('plain', title='Morning', source='pairs', label='b')
+
+    assert refusing.saved[-1] == header_key('b')
+
+
+def test_a_setting_keeps_its_value_if_the_table_that_makes_it_a_column_is_refused(
+    manager: BatchManager,
+    client: Client,
+    definitions: FolderDefinitions,
+    refusing: Refusing,
+    sample: Measure,
+) -> None:
+    sample(1, 'water')
+    table = rows(client).drop(columns='thickness')
+    label = manager.create('plain', title='M', rows=table, settings={'thickness': 2.0})
+    batch = manager.batch(label)
+    refusing.part = 'rows'
+
+    with pytest.raises(NotKept):
+        batch.put(batch.frame().assign(thickness=3.0))
+
+    assert _again(client, definitions).batch(label).settings == {'thickness': 2.0}
+
+
+def test_rows_reduced_are_not_outdated_in_a_manager_made_again(
+    manager: BatchManager,
+    client: Client,
+    definitions: FolderDefinitions,
+    sample: Measure,
+) -> None:
+    sample(1, 'water')
+    label = manager.create('plain', title='Morning', rows=rows(client))
+    batch = manager.batch(label)
+    batch.settings = {'binning': {'bins': 3}}
+    edit(batch, '1', thickness=1 / 3)
+    client.wait(list(batch.reduce(['1']).values()))
+
+    state = _again(client, definitions).batch(label).state()['1']
+
+    assert (state.text, state.outdated) == ('completed', False)
 
 
 @pytest.mark.parametrize('title', ['', '   '])
@@ -474,7 +522,10 @@ def test_rows_taken_are_put_as_the_source_makes_them_and_considered(
 
 @pytest.mark.parametrize(
     ('keys', 'said'),
-    [(['9'], r"makes no rows \['9'\]"), (['3'], "the key '3' is given twice")],
+    [
+        (['9'], r"makes no rows \['9'\]"),
+        (['3'], r"rows \['3'\] are in the batch already"),
+    ],
 )
 def test_rows_that_cannot_be_taken_are_refused_and_nothing_changes(
     made: BatchManager, keys: list[str], said: str

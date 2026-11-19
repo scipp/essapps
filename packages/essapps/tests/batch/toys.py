@@ -125,16 +125,34 @@ class Gate:
         assert self._event.wait(30)
 
 
+class Flaky:
+    """A client whose next ``fail`` submissions raise, as a lost connection does."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+        self.fail = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    def submit(self, *args: Any, **kwargs: Any) -> Any:
+        if self.fail:
+            self.fail -= 1
+            raise ConnectionError('lost')
+        return self._client.submit(*args, **kwargs)
+
+
 class Refusing:
     """
     Definitions that refuse to save or delete the tables named ``part``, such
     as ``'header'``, or the table of the key ``part``, such as
     ``('labels', 'scan', 'header')``, and keep the others in the definitions
-    they wrap.
+    they wrap; ``saved`` lists the keys saved, in order.
     """
 
     def __init__(self, definitions: DefinitionStore) -> None:
         self.part: str | Key | None = None
+        self.saved: list[Key] = []
         self._definitions = definitions
 
     def load[T](self, key: Key, read: Callable[[Any], T]) -> T | None:
@@ -143,6 +161,7 @@ class Refusing:
     def save(self, key: Key, data: Any) -> None:
         self._check(key)
         self._definitions.save(key, data)
+        self.saved.append(key)
 
     def delete(self, key: Key) -> None:
         self._check(key)

@@ -80,6 +80,21 @@ OPTIONAL = WorkflowSpec(
     outputs=Outputs,
 )
 
+
+class NumberParams(BaseModel):
+    bins: StrictInt
+    scale: float
+
+
+NUMBERS = WorkflowSpec(
+    name='numbers',
+    version=1,
+    title='Numbers',
+    description='A toy whose parameters are all numbers, one a strict int.',
+    params=NumberParams,
+    outputs=Outputs,
+)
+
 SETTINGS: dict[str, Any] = {'binning': {'bins': 2}}
 OTHER_SETTINGS: dict[str, Any] = {'binning': {'bins': 3}}
 
@@ -267,6 +282,30 @@ def test_an_empty_cell_of_a_parameter_that_takes_none_gives_none(
         records = batch.reduce(['1'])
 
     assert records['1'].request.params['transmission'] is None
+
+
+def test_a_whole_number_is_an_int_in_the_request_where_all_columns_are_numbers(
+    files: CorrectedFiles,
+) -> None:
+    bind = [function_binding(NUMBERS, lambda _: Outputs(total=1.0))]
+    with local(proposal='p1', files=files, bind=bind) as client:
+        table = pd.DataFrame({'bins': [3], 'scale': [0.5]}, index=['1'])
+        records = Batch(client, NUMBERS, label='s', rows=table).reduce(['1'])
+
+    assert type(records['1'].request.params['bins']) is int
+
+
+def test_a_list_in_a_cell_changes_only_by_put(strict: Client) -> None:
+    table = pd.DataFrame({'sample': ['run:1'], 'counts': [[1]]}, index=['a'])
+    batch = Batch(strict, STRICT, label='s', rows=table)
+    table.loc['a', 'counts'].append(2)
+    frame = batch.frame()
+    frame.loc['a', 'counts'].append(3)
+
+    assert batch.frame().loc['a', 'counts'] == [1]
+    batch.put(frame)
+    frame.loc['a', 'counts'].append(4)
+    assert batch.frame().loc['a', 'counts'] == [1, 3]
 
 
 def test_a_person_can_add_a_row_by_run_number(

@@ -245,7 +245,7 @@ The code of this ADR and of ADR 0013 is written together, since Follow is in use
 
 - `rows.json` replaces `edits.json`. No code reads `edits.json`: a batch made before keeps its settings, and what was set by hand on it is lost.
 - `RowTable`, the layers of `Row` (`values`, `info`, `index`), the marker `EMPTY`, "set by hand", and the four converters of cells go. `Header.spec` and `Header.columns` go: the template names the spec, and its blanks are the columns.
-- A batch is shown without a scan and without its source. A batch cannot be shown in one case: the workspace binds no spec of its name.
+- A batch is shown without a scan and without its source. A batch cannot be shown in two cases: the workspace binds no spec of its name, or it binds a version of the spec that refuses the cells of the table, since it takes another kind of value at a column, or has a parameter of the name of a note.
 - A wrong value in a cell is refused when it is set or read from a table file, not when the row is reduced.
 - A spec cannot make a person choose between a value and `None` for each row: an empty cell of such a column is `None`. It still can for a setting.
 - A row that only wrong metadata made stays until a person removes it, and a correction of a run changes no batch (the example above).

@@ -158,6 +158,32 @@ def test_typed_refuses_a_note_of_another_dtype_by_name() -> None:
         typed(frame, Kinds)
 
 
+def test_a_note_with_no_value_keeps_its_dtype_and_is_text_if_pandas_lost_it() -> None:
+    none = pd.Index([], dtype=str)
+    table = typed(pd.DataFrame({'comment': [], 'scale': []}, index=none), Kinds)
+    table = table.astype({'comment': 'string', 'scale': 'Float64'})
+    # A row whose source lacks the note: concat makes the column float NaN.
+    new = pd.DataFrame(index=['1']).reindex(columns=table.columns)
+
+    both = typed(pd.concat([table, new]), Kinds)
+    both.loc['1', 'comment'] = 'text'
+
+    assert both.dtypes.astype(str).to_dict() == {
+        'comment': 'string',
+        'scale': 'Float64',
+    }
+    assert typed(both, Kinds).loc['1', 'comment'] == 'text'
+
+
+def test_a_list_in_a_cell_is_the_tables_own() -> None:
+    frame = pd.DataFrame({'runs': [['run:1']]}, index=['a'])
+
+    table = typed(frame, Kinds)
+    frame.loc['a', 'runs'].append('run:2')
+
+    assert table.loc['a', 'runs'] == ['run:1']
+
+
 def test_a_whole_float_in_a_column_of_whole_numbers_is_kept_as_an_int() -> None:
     frame = pd.DataFrame({'count': [1, None]}, index=['a', 'b'])
 

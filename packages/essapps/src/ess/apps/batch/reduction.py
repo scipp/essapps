@@ -174,7 +174,7 @@ class Batch:
         self.spec = spec
         self.label = label
         self._definitions = definitions
-        self._settings = copy.deepcopy(dict(settings or {}))
+        self._template = Template(spec, params=copy.deepcopy(dict(settings or {})))
         self._set(typed(pd.DataFrame() if rows is None else rows, spec.params))
         self._staged = staged
         self._persist = persist
@@ -189,20 +189,36 @@ class Batch:
 
     def _set(self, rows: pd.DataFrame) -> None:
         """
-        Hold ``rows``, a typed table, with its parameter columns as the blanks,
-        and the settings at these left out, as a template leaves them out.
+        Hold ``rows``, a typed table, with its parameter columns as the blanks
+        of the template, which drops the settings at these.
         """
         fields = self.spec.params.model_fields
         self._rows = rows
-        self.columns = tuple(c for c in rows.columns if c in fields)
-        self.settings_fields = tuple(n for n in fields if n not in self.columns)
-        self._settings = {
-            k: v for k, v in self._settings.items() if k not in self.columns
-        }
+        blanks = [c for c in rows.columns if c in fields]
+        self._template = Template(
+            self.spec, params=self._template.params, blanks=blanks
+        )
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        return self._template.blanks
+
+    @property
+    def settings_fields(self) -> tuple[str, ...]:
+        fields = self.spec.params.model_fields
+        return tuple(n for n in fields if n not in self.columns)
 
     def frame(self) -> pd.DataFrame:
-        """A copy of the table: the key as index, a column per blank, and notes."""
-        return self._rows.copy()
+        """
+        A copy of the table: the key as index, a column per blank, and notes.
+        A list or a group in a cell is copied too, so that changing it in place
+        changes the batch only by :meth:`put`.
+        """
+        frame = self._rows.copy()
+        for c in frame.select_dtypes(object).columns:
+            cells = copy.deepcopy(frame[c].tolist())
+            frame[c] = pd.Series(cells, index=frame.index, dtype=object)
+        return frame
 
     def put(self, frame: pd.DataFrame) -> None:
         """
@@ -216,22 +232,26 @@ class Batch:
 
         Raises ``ValueError``, and changes nothing, for a table that
         :func:`~.table.typed` refuses: a key that is not text, empty, or
-        given twice, or a cell that is not of the kind of its column; and
-        :class:`~.definition.NotKept`, and changes nothing, if the
-        definitions refuse the table. The table is written before the
-        settings, whose blanks are not read.
+        given twice, or a cell that is not of the kind of its column.
+
+        Raises :class:`~.definition.NotKept` if the definitions refuse the
+        table, and then nothing changes. The table is written before the
+        settings: if the definitions refuse the settings after the table, the
+        table is changed and kept, and the settings kept are stale only in
+        their blanks, which are not read, and at the values that the columns
+        drop, which a batch made again from them drops too.
         """
         rows = typed(frame, self.spec.params)
         self._resolved.clear()
         data = data_of(rows)
         if to_json(data) == to_json(data_of(self._rows)):
             return
-        before = self.template()
+        before = self._template
         if self._definitions is not None:
             self._definitions.save(definition.rows_key(self.label), data)
         self._set(rows)
-        if self.template() != before:
-            self._save(self.template())
+        if self._template != before:
+            self._save(self._template)
 
     @property
     def settings(self) -> Mapping[str, Any]:
@@ -248,15 +268,17 @@ class Batch:
         refuses a name that is not a parameter. Raises ``ValueError`` for a
         name that is a column: a column's value is a cell of each row.
         """
-        return MappingProxyType(copy.deepcopy(self._settings))
+        return MappingProxyType(copy.deepcopy(self._template.params))
 
     @settings.setter
     def settings(self, settings: Mapping[str, Any]) -> None:
         if at := sorted(settings.keys() & set(self.columns)):
             raise ValueError(f'{at}: columns of the batch, not settings')
-        settings = copy.deepcopy(dict(settings))
-        self._save(Template(self.spec, params=settings, blanks=self.columns))
-        self._settings = settings
+        template = Template(
+            self.spec, params=copy.deepcopy(dict(settings)), blanks=self.columns
+        )
+        self._save(template)
+        self._template = template
 
     def _save(self, template: Template) -> None:
         """Write ``template`` as the settings of the label, if kept."""
@@ -266,7 +288,7 @@ class Batch:
 
     def template(self) -> Template:
         """The template of the settings, with the columns as its blanks."""
-        return Template(self.spec, params=self._settings, blanks=self.columns)
+        return self._template
 
     def _cells(self, keys: Sequence[str] | None) -> dict[str, dict[str, Any]]:
         """

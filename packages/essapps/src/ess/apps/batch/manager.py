@@ -41,6 +41,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Collection, Iterable, Mapping
+from contextlib import suppress
 from typing import Any
 
 import pandas as pd
@@ -48,13 +49,14 @@ import pandas as pd
 from ess.spec import WorkflowSpec
 
 from ..client import Client
-from ..records import Template
+from ..errors import SubmitError
 from .auto import Automatic, added
 from .definition import (
     FOLLOWING,
     DefinitionStore,
     FromSource,
     Header,
+    NotKept,
     following_data,
     following_of,
     header_data,
@@ -76,8 +78,8 @@ from .table import data_of, frame_of, typed
 def fits(spec: WorkflowSpec[Any, Any], source: Source | None) -> bool:
     """
     Whether a batch of ``spec`` can be made with ``source``: whether each
-    parameter that the source fills is a parameter of the spec. Every spec
-    fits no source.
+    parameter that the source fills is a parameter of the spec. With no
+    source, every spec fits.
     """
     fills = () if source is None else source.fills
     return set(fills) <= spec.params.model_fields.keys()
@@ -248,22 +250,31 @@ class BatchManager:
             if self._taken(label):
                 raise ValueError(f'{label}: the label has definitions or records')
         header = Header(title, description)
-        bound = self._bound(spec)
-        table = typed(pd.DataFrame() if rows is None else rows, bound.params)
-        made = None
+        if settings is None:
+            settings = self._settings.get(spec, {})
+        first = Batch(
+            self.client, self._bound(spec), label=label, settings=settings, rows=rows
+        )
+        table = first.frame()
+        writes = {
+            settings_key(label): template_data(first.template()),
+            rows_key(label): data_of(table),
+        }
         if source is not None:
             given = self.rows_of(source)
             made = FromSource(source, frozenset(given.index) | frozenset(table.index))
-        if settings is None:
-            settings = self._settings.get(spec, {})
-        columns = [c for c in table.columns if c in bound.params.model_fields]
-        # The template leaves out the settings that are columns.
-        template = Template(bound, params=settings, blanks=columns)
-        self._definitions.save(settings_key(label), template_data(template))
-        self._definitions.save(rows_key(label), data_of(table))
-        if made is not None:
-            self._definitions.save(source_key(label), source_data(made))
-        self._definitions.save(header_key(label), header_data(header))
+            writes[source_key(label)] = source_data(made)
+        writes[header_key(label)] = header_data(header)  # last: then it is a batch
+        written = []
+        try:
+            for key, data in writes.items():
+                self._definitions.save(key, data)
+                written.append(key)
+        except NotKept:
+            with suppress(NotKept):  # the first error is what to say
+                for key in written:
+                    self._definitions.delete(key)
+            raise
         self._headers[label] = header
         return label
 
@@ -313,7 +324,10 @@ class BatchManager:
 
         Raises ``KeyError`` if no batch has the label; ``ValueError`` if the
         workspace binds no spec of the name of its settings, or if its
-        settings or rows cannot be read or are refused by the spec.
+        settings or rows cannot be read. A version of the spec that takes
+        another kind of value at a column of the table, or that has a
+        parameter of the name of a note, refuses the cells of the table, and
+        the batch cannot be shown either.
         """
         if (batch := self._batches.get(label)) is not None:
             return batch
@@ -364,8 +378,13 @@ class BatchManager:
         then keep the keys considered. The step is returned, to read what it
         refused and which rows wait.
 
-        Raises ``ValueError`` if the source of the batch is no longer
-        registered, and what the step raises.
+        The keys considered are kept also if the step raises, such as when a
+        submission is cut off, after the rows were added: otherwise a row a
+        person removes would come back.
+
+        Raises ``ValueError`` if the source of the batch is not registered,
+        or if the batch refuses a row that the source makes, naming the
+        source, the row and the column; and what the step raises otherwise.
         """
         if (label := self._following) is None:
             return None
@@ -373,16 +392,23 @@ class BatchManager:
         loop = Automatic(
             self.batch(label), self._source(made.source), considered=made.considered
         )
-        loop.step()
-        self._consider(label, made, loop.considered)
+        try:
+            loop.step()
+        except SubmitError:
+            raise
+        except ValueError as error:  # made by the source: a defect of its code
+            raise ValueError(f'the source {made.source}: {error}') from error
+        finally:
+            self._consider(label, made, loop.considered)
         return loop
 
     def offered(self, label: str) -> pd.DataFrame:
         """
         The rows that the source of the batch of ``label`` makes now and its
-        table lacks, with a column ``waits``: whether the row waits, so that
-        Follow adds it once it is filled. A row that does not wait was left
-        out when the batch was made, or removed from it.
+        table lacks, with the columns of the source and a column ``waits``:
+        whether the row waits, so that Follow adds it once it is filled. A row
+        that does not wait was left out when the batch was made, or removed
+        from it. A column of the source named ``waits`` is replaced by it.
 
         Raises ``KeyError`` if no batch has the label, and ``ValueError`` if
         it was not made from a source, or its source is not registered.
@@ -412,6 +438,8 @@ class BatchManager:
             raise ValueError(f'the source {made.source} makes no rows {unknown}')
         batch = self.batch(label)
         table = batch.frame()
+        if held := [k for k in keys if k in table.index]:
+            raise ValueError(f'rows {held} are in the batch already')
         batch.put(pd.concat([table, given.loc[keys].reindex(columns=table.columns)]))
         self._consider(label, made, made.considered | set(keys))
 

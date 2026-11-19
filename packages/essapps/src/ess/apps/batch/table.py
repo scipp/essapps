@@ -32,7 +32,12 @@ A cell must be of the kind of its column, with no conversion by pandas:
 ``int`` or a whole ``float`` (``1.0`` is kept as ``1``: pandas gives whole
 numbers with a gap as floats), ``boolean`` a ``bool``, and ``object`` plain
 data, the values of JSON as Python gives them. A note takes the dtype of
-``convert_dtypes()``, which must be one of these five. An empty cell is
+``convert_dtypes()``, which must be one of these five. A note with no value
+keeps its dtype if it is ``string``, ``Float64``, ``Int64`` or ``boolean``,
+and is ``string`` otherwise: pandas makes a column ``float64`` or ``object``
+when it fills it with empty cells, as ``concat`` does. The table owns the
+lists and groups in its ``object`` cells: :func:`typed` copies them. An empty
+cell is
 ``None``, ``NaN`` or ``pd.NA`` as given; in the table it is ``pd.NA``, or
 ``None`` in an ``object`` column, and in a row read with ``to_dict('index')``
 and in ``rows.json`` it is ``None``.
@@ -71,6 +76,7 @@ column's type, never a NumPy scalar or a ``Float64`` in place of an ``Int64``.
 
 from __future__ import annotations
 
+import copy
 import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
@@ -245,8 +251,10 @@ def _cast(column: pd.Series, dtype: str) -> tuple[pd.Series, list[str]]:
         for k, v in zip(column.index, values, strict=True)
         if v is not None and not _fits(v, dtype)
     ]
-    if dtype == 'object':
-        return pd.Series(values, index=column.index, dtype=object), refused
+    if dtype == 'object':  # the table owns its lists and groups
+        return pd.Series(
+            copy.deepcopy(values), index=column.index, dtype=object
+        ), refused
     if refused:
         return column, refused
     if dtype == 'Int64':  # a whole float, as pandas gives a column with a gap
@@ -258,7 +266,9 @@ def typed(frame: pd.DataFrame, model: type[BaseModel]) -> pd.DataFrame:
     """
     ``frame`` as a batch holds it: the index of text named :data:`KEY`, each
     column of a parameter of ``model`` of its dtype (see :func:`dtypes`), and
-    each note of the dtype of ``convert_dtypes()``.
+    each note of the dtype of ``convert_dtypes()``; a note with no value keeps
+    its dtype, or is ``string`` if that is ``float64`` or ``object``. A list
+    or a group in a cell is copied.
 
     Raises ``ValueError``, naming each key, column or cell refused: a key that
     is not text, empty, or given twice; a column named :data:`KEY`, not named
@@ -273,6 +283,9 @@ def typed(frame: pd.DataFrame, model: type[BaseModel]) -> pd.DataFrame:
     for name, column in frame.set_axis(index).items():
         if name in types:
             dtype = types[name]
+        elif column.isna().all():  # pandas makes it float or object when it lost it
+            kept = str(column.dtype) in _WORDS.keys() - {'object'}
+            dtype = str(column.dtype) if kept else 'string'
         else:
             column = column.convert_dtypes()
             dtype = str(column.dtype)

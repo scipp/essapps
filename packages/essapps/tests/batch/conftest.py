@@ -22,13 +22,6 @@ from ess.spec import Binding, FileRef, function_binding
 from . import toys
 
 
-def _find(params: toys.FindParams) -> toys.FindOutputs:
-    value = read_file(params.sample)
-    if value < 0:
-        raise ValueError('nothing to find')
-    return toys.FindOutputs(offset=toys.Offset(value=value))
-
-
 def _series(gate: toys.Gate) -> Callable[[toys.SeriesParams], toys.Outputs]:
     def series(params: toys.SeriesParams) -> toys.Outputs:
         gate.wait()
