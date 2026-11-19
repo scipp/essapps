@@ -33,6 +33,8 @@ from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from pydantic import TypeAdapter, ValidationError
+
 from ess.spec import WorkflowSpec
 
 from ..client import Client
@@ -120,6 +122,56 @@ def bound_spec(client: Client, name: str) -> WorkflowSpec[Any, Any]:
     return max(specs, key=lambda spec: spec.version)
 
 
+def fits(spec: WorkflowSpec[Any, Any], source: Source | None) -> bool:
+    """
+    Whether a batch of ``spec`` can be made with ``source``: whether each
+    parameter that the source fills is a parameter of the spec. Every spec
+    fits no source.
+    """
+    fills = () if source is None else source.fills
+    return set(fills) <= spec.params.model_fields.keys()
+
+
+_KINDS = {int: 'a whole number', float: 'a number', str: 'text'}
+
+
+def scope_of(source: Source | None, start: Any = None, stop: Any = None) -> Scope:
+    """
+    The slice of the rows of ``source`` from ``start`` to ``stop``, each end
+    converted to the type of its index (:attr:`~.reduction.Source.index_type`),
+    such as ``'60339'`` to ``60339``; ``None`` is an open end. Raises
+    ``ValueError`` for an end that does not convert, naming it, and for an
+    end without a source: a batch without one has only rows added by hand,
+    which have no index.
+    """
+    if start is None and stop is None:
+        return Scope()
+    if source is None:
+        raise ValueError(
+            'a batch without a source has only rows added by hand, which have '
+            'no index, so its scope has no start or stop'
+        )
+    adapter = TypeAdapter(source.index_type)
+
+    def end(value: Any) -> Any:
+        if value is None:
+            return None
+        try:
+            return adapter.validate_python(value)
+        except ValidationError:
+            kind = _KINDS[source.index_type]
+            raise ValueError(f'{source.index_title} {value!r} is not {kind}') from None
+
+    return Scope(start=end(start), stop=end(stop))
+
+
+def _typed(source: Source | None, scope: Scope) -> Scope:
+    """``scope``, a slice with its ends converted as :func:`scope_of` does."""
+    return (
+        scope if scope.keys is not None else scope_of(source, scope.start, scope.stop)
+    )
+
+
 def check_label(label: str) -> None:
     """
     Raise ``ValueError`` unless ``label`` is letters, digits, ``_``, ``.``
@@ -166,7 +218,7 @@ class BatchManager:
         definitions: DefinitionStore,
         defaults: Mapping[str, Defaults] | None = None,
     ) -> None:
-        self._client = client
+        self.client = client
         self.sources = sources
         self._definitions = definitions
         self._defaults = {} if defaults is None else defaults
@@ -210,7 +262,8 @@ class BatchManager:
             What a person says of the batch.
         scope:
             The rows of the source that the batch holds; every row if not
-            given.
+            given. The ends of a slice are converted to the type of the
+            index of the source (:func:`scope_of`).
         settings:
             The settings to start with, in place of the defaults of the spec.
             Those that are columns are left out.
@@ -225,10 +278,12 @@ class BatchManager:
             If the workspace binds no spec ``spec``, or no source ``source``
             is registered.
         ValueError
-            If ``title`` is empty; if ``label`` is not one that
-            :func:`check_label` takes, or has definitions or records; if a
-            column is not a parameter of the spec, or is named twice; or if
-            the source fills a parameter that is not among the columns.
+            If ``title`` is empty or only spaces; if ``label`` is not one that
+            :func:`check_label` takes, or has definitions or records; if the
+            spec does not fit the source (:func:`fits`); if a column is not a
+            parameter of the spec, or is named twice; if the source fills a
+            parameter that is not among the columns; or if :func:`scope_of`
+            refuses an end of the scope.
         """
         if label is None:
             stamp = time.strftime('%Y%m%d-%H%M%S')
@@ -239,9 +294,15 @@ class BatchManager:
         check_label(label)
         if self._taken(label):
             raise ValueError(f'{label}: the label has definitions or records')
-        bound = bound_spec(self._client, spec)
+        bound = bound_spec(self.client, spec)
         registered = None if source is None else self.sources[source]
         fills = () if registered is None else registered.fills
+        if not fits(bound, registered):
+            lacks = sorted(set(fills) - bound.params.model_fields.keys())
+            raise ValueError(
+                f'{bound.title} has no parameters {lacks}, which the source '
+                f'{source} fills'
+            )
         columns = fills if columns is None else tuple(columns)
         if unknown := sorted(set(columns) - bound.params.model_fields.keys()):
             raise ValueError(f'{bound.title} has no parameters {unknown}')
@@ -254,7 +315,7 @@ class BatchManager:
             source=source,
             title=title,
             description=description,
-            scope=Scope() if scope is None else scope,
+            scope=_typed(registered, Scope() if scope is None else scope),
         )
         if settings is None:
             settings = self._defaults.get(spec, Defaults()).settings
@@ -274,7 +335,7 @@ class BatchManager:
     def _taken(self, label: str) -> bool:
         """Whether ``label`` has definitions or records."""
         return label in self._definitions.labels() or bool(
-            self._client.records(label=label)
+            self.client.records(label=label)
         )
 
     def headers(self) -> dict[str, Header]:
@@ -301,8 +362,8 @@ class BatchManager:
             raise KeyError(f'{label}: the source {name} is not registered')
         defaults = self._defaults.get(header.spec, Defaults())
         batch = Batch(
-            self._client,
-            bound_spec(self._client, header.spec),
+            self.client,
+            bound_spec(self.client, header.spec),
             columns=header.columns,
             label=label,
             source=None if name is None else self.sources[name],
@@ -356,7 +417,7 @@ class BatchManager:
             source = self.sources[name]
             if name not in made:
                 with suppress(Exception):  # a source is code of the application
-                    infos = file_infos(self._client, source.selector)
+                    infos = file_infos(self.client, source.selector)
                     made[name] = {row.key for row in source.rows(infos)}
             if name in made:
                 outside[name] = len(made[name] - keys)
@@ -372,11 +433,16 @@ class BatchManager:
     ) -> Header:
         """
         The header of ``label`` with what is given changed, as kept. A scope
-        changes the rows of the batch at once, without a scan. Raises
-        ``KeyError`` if no batch has the label, and ``ValueError`` for an
-        empty title.
+        changes the rows of the batch at once, without a scan; the ends of a
+        slice are converted as :func:`scope_of` does. Raises ``KeyError`` if
+        no batch has the label, or a scope is given and the source of the
+        batch is not registered; ``ValueError`` for an empty title, and for
+        an end of the scope that :func:`scope_of` refuses.
         """
         header = self._headers[label]
+        if scope is not None:
+            source = None if header.source is None else self.sources[header.source]
+            scope = _typed(source, scope)
         header = replace(
             header,
             title=header.title if title is None else title,

@@ -161,6 +161,10 @@ class Source:
     index_title:
         What the page calls the :attr:`~.table.Row.index` that ``rows``
         gives, such as ``'Run'``.
+    index_type:
+        The type of that index: ``int``, ``float`` or ``str``. The ends of a
+        scope of a batch of the source are of this type
+        (:func:`~.manager.scope_of`).
     """
 
     rows: RowSource
@@ -170,6 +174,7 @@ class Source:
     row_name: str | None = None
     row_info: tuple[str, ...] = ()
     index_title: str = 'Index'
+    index_type: type[int | float | str] = int
 
 
 def check_fills(label: str, source: Source | None, columns: Iterable[str]) -> None:

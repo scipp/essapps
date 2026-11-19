@@ -81,10 +81,35 @@
 
       <div class="view" id="view-batches" hidden>
         <div class="toolbar">
+          <button type="button" id="new-batch-open">+ New batch</button>
           <p class="hint">Counting scans the runs of every batch. The pages wait until it ends.</p>
           <span class="spacer"></span>
           <button type="button" id="count">Count again</button>
         </div>
+        <form class="new-batch" id="new-batch" hidden>
+          <div class="field"><label for="new-title">Title</label><input type="text" id="new-title" name="title"></div>
+          <div class="field"><label for="new-description">Description</label><input type="text" id="new-description" name="description"></div>
+          <div class="field"><label for="new-source">Source</label><select id="new-source" name="source"></select></div>
+          <div class="field"><label for="new-spec">Workflow</label><select id="new-spec" name="spec"></select></div>
+          <div class="field">
+            <span>Columns</span>
+            <div class="columns" id="new-columns"></div>
+            <small id="new-settings"></small>
+          </div>
+          <div class="field" id="new-scope">
+            <label for="new-start">Scope</label>
+            <span class="scope">
+              <span id="new-from">From run</span> <input type="text" id="new-start" name="start">
+              <span id="new-to">up to, not including, run</span> <input type="text" name="stop" aria-label="Stop">
+            </span>
+            <small>Empty for no limit.</small>
+          </div>
+          <p class="problem" id="new-problem"></p>
+          <div class="buttons">
+            <button type="submit" class="primary">Make</button>
+            <button type="button" class="quiet" data-cancel>Cancel</button>
+          </div>
+        </form>
         <div class="list">
           <table id="batches">
             <thead><tr><th>Batch</th><th>Scope</th><th>Rows</th><th>Status</th><th>Follow</th></tr></thead>

@@ -22,6 +22,7 @@ from ess.apps.batch import (
     Row,
     Scope,
     Source,
+    scope_of,
     status_texts,
 )
 from ess.apps.batch.definition import settings_key
@@ -418,6 +419,72 @@ def test_a_scope_given_at_making_and_changed_is_kept(
     assert [row.key for row in again.batch(label).rows] == ['2']
 
 
+@pytest.mark.parametrize(
+    ('index_type', 'given', 'end'),
+    [
+        (int, '60339', 60339),
+        (int, 60339.0, 60339),
+        (float, '2.5', 2.5),
+        (str, 'a', 'a'),
+    ],
+)
+def test_an_end_of_a_scope_takes_the_type_of_the_index_of_its_source(
+    index_type: type, given: Any, end: Any
+) -> None:
+    source = Source(pair, fills=('sample',), index_type=index_type)
+
+    scope = scope_of(source, start=given)
+
+    assert scope == Scope(start=end)
+    assert type(scope.start) is index_type
+
+
+@pytest.mark.parametrize(
+    ('index_type', 'given', 'said'),
+    [
+        (int, 'abc', "Run 'abc' is not a whole number"),
+        (int, '2.5', "Run '2.5' is not a whole number"),
+        (int, '0x10', "Run '0x10' is not a whole number"),
+        (float, 'many', "Run 'many' is not a number"),
+        (str, 5, 'Run 5 is not text'),
+    ],
+)
+def test_an_end_of_a_scope_that_is_not_of_the_type_of_the_index_is_refused(
+    index_type: type, given: Any, said: str
+) -> None:
+    source = Source(pair, fills=('sample',), index_title='Run', index_type=index_type)
+
+    with pytest.raises(ValueError, match=re.escape(said)):
+        scope_of(source, stop=given)
+
+
+def test_the_manager_converts_the_ends_of_a_scope_and_refuses_those_that_do_not(
+    manager: BatchManager, sample: Measure
+) -> None:
+    sample(2, 'water')
+    with pytest.raises(ValueError, match="Run 'abc' is not a whole number"):
+        manager.create(
+            'plain', title='Morning', source='pairs', scope=Scope(start='abc')
+        )
+    assert manager.headers() == {}
+    label = manager.create(
+        'plain', title='Morning', source='pairs', scope=Scope(start='2')
+    )
+
+    with pytest.raises(ValueError, match="Run 'x' is not a whole number"):
+        manager.change(label, scope=Scope(stop='x'))
+    manager.change(label, scope=Scope(start='1', stop='3'))
+
+    assert manager.headers()[label].scope == Scope(start=1, stop=3)
+    assert [row.key for row in manager.batch(label).rows] == ['2']
+
+
+def test_a_batch_without_a_source_takes_no_start_or_stop(manager: BatchManager) -> None:
+    with pytest.raises(ValueError, match='no start or stop'):
+        manager.create('plain', title='Morning', columns=COLUMNS, scope=Scope(stop=2))
+    assert manager.headers() == {}
+
+
 def test_a_batch_removed_is_gone_with_its_definitions_and_its_records_stay(
     manager: BatchManager,
     client: Client,
@@ -503,16 +570,17 @@ def test_a_header_change_that_is_refused_changes_nothing(
     }
 
 
-def test_an_empty_title_is_refused(
-    manager: BatchManager, definitions: FolderDefinitions
+@pytest.mark.parametrize('title', ['', '   '])
+def test_an_empty_or_blank_title_is_refused(
+    manager: BatchManager, definitions: FolderDefinitions, title: str
 ) -> None:
     with pytest.raises(ValueError, match='a title that is not empty'):
-        manager.create('plain', title='', columns=COLUMNS)
+        manager.create('plain', title=title, columns=COLUMNS)
     assert definitions.labels() == []
     label = manager.create('plain', title='Morning', columns=COLUMNS)
 
     with pytest.raises(ValueError, match='a title that is not empty'):
-        manager.change(label, title='')
+        manager.change(label, title=title)
     assert manager.headers()[label].title == 'Morning'
 
 
