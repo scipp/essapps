@@ -44,25 +44,26 @@ def rows(state: dict[str, Any]) -> dict[str, str]:
     return {row['name']: row['status'] for row in state['rows']}
 
 
-def test_a_sample_whose_runs_arrived_is_reduced_by_hand_or_by_a_step_of_follow(
+def test_a_sample_whose_runs_arrived_is_added_and_reduced_by_a_step_of_follow(
     page: tuple[TestClient, Instrument, Client],
 ) -> None:
     http, instrument, client = page
     plan = [(role, sample, source) for sample, role, source in arrivals(4)]
+    pages = http.app.state.pages  # type: ignore[attr-defined]
+    pages.manager.follow(pages.home())
     for arrival in plan[:3]:
         instrument.measure(*arrival)
 
-    scanned = http.post('/api/scan').json()
-    reduced = http.post('/api/reduce', json={'which': 'remaining'}).json()
+    relisted = http.post('/api/relist').json()
+    pages.tick()
     client.wait(client.records())
+    first = http.get('/api/state').json()
     instrument.measure(*plan[3])
-    pages = http.app.state.pages  # type: ignore[attr-defined]
-    pages.manager.follow(pages.home())
     pages.tick()
     client.wait(client.records())
 
-    assert rows(scanned) == {'AgBeh': 'ready', 'porous silica': 'incomplete'}
-    assert reduced['notice'] == 'Reducing 1 sample run.'
+    assert rows(relisted) == {}
+    assert rows(first) == {'AgBeh': 'done'}
     assert rows(http.get('/api/state').json()) == {
         'AgBeh': 'done',
         'porous silica': 'done',
