@@ -21,13 +21,12 @@ from ess.apps.batch import (
     DefinitionStore,
     FileInfo,
     FolderDefinitions,
-    NotKept,
     Row,
     RowSource,
     Scope,
     Source,
 )
-from ess.apps.batch.auto import Automatic, Follow, every
+from ess.apps.batch.auto import Automatic, every
 from ess.apps.folder import open_folder
 from ess.apps.testing import FakeFiles, StagedFunction
 from ess.spec import Binding, FileRef, function_binding
@@ -40,11 +39,9 @@ from .toys import (
     REPEATED,
     SAMPLES,
     SERIES,
-    SOURCES,
     STAGED,
     Gate,
     Measure,
-    Refusing,
     pair,
 )
 
@@ -785,162 +782,6 @@ def test_a_loop_reduces_the_rows_of_the_scope_and_those_arriving_in_it(
     assert (list(first), list(second)) == (['2'], ['3'])
 
 
-# One loop of Follow
-
-
-@pytest.fixture
-def follow(manager: BatchManager, refusing: Refusing) -> Follow:
-    manager.create('plain', title='A', source='pairs', label='a')
-    manager.create('plain', title='B', source='pairs', label='b')
-    return Follow(manager, refusing)
-
-
-def _reduced(client: Client) -> list[tuple[str | None, str | None]]:
-    return [(r.label, r.member) for r in client.records()]
-
-
-def test_follow_steps_only_the_batch_that_follows(
-    follow: Follow, client: Client, sample: Measure
-) -> None:
-    sample(1, 'water')
-    follow.on('a')
-
-    client.wait(follow.step())
-
-    assert _reduced(client) == [('a', '1')]
-
-
-def test_turning_follow_on_for_one_batch_turns_it_off_for_the_other(
-    follow: Follow, client: Client, sample: Measure
-) -> None:
-    sample(1, 'water')
-    follow.on('a')
-    follow.on('b')
-
-    client.wait(follow.step())
-
-    assert follow.label == 'b'
-    assert _reduced(client) == [('b', '1')]
-
-
-def test_the_batch_that_follows_is_kept_and_a_follow_made_again_resumes(
-    follow: Follow,
-    manager: BatchManager,
-    definitions: FolderDefinitions,
-    client: Client,
-    sample: Measure,
-) -> None:
-    follow.on('b')
-    sample(1, 'water')
-
-    again = Follow(manager, definitions)
-    client.wait(again.step())
-
-    assert again.label == 'b'
-    assert _reduced(client) == [('b', '1')]
-
-
-def test_follow_turns_itself_off_when_its_batch_is_removed(
-    follow: Follow,
-    manager: BatchManager,
-    definitions: FolderDefinitions,
-    sample: Measure,
-) -> None:
-    follow.on('a')
-    manager.remove('a')
-    sample(1, 'water')
-
-    assert follow.step() == {}
-    assert follow.label is None
-    assert Follow(manager, definitions).label is None
-
-
-def test_follow_refuses_a_batch_without_a_source(
-    follow: Follow, manager: BatchManager
-) -> None:
-    follow.on('a')
-    manager.create('plain', title='C', columns=COLUMNS, label='c')
-
-    with pytest.raises(ValueError, match='no source'):
-        follow.on('c')
-    with pytest.raises(KeyError):
-        follow.on('d')
-    assert follow.label == 'a'
-
-
-def test_follow_refuses_a_batch_whose_source_is_not_registered(
-    client: Client, definitions: FolderDefinitions
-) -> None:
-    sources = {**SOURCES, 'other': PAIRS}
-    BatchManager(client, sources=sources, definitions=definitions).create(
-        'plain', title='B', source='other', label='b'
-    )
-    follow = Follow(
-        BatchManager(client, sources=SOURCES, definitions=definitions), definitions
-    )
-
-    with pytest.raises(KeyError, match='the source other is not registered'):
-        follow.on('b')
-    assert follow.label is None
-
-
-def test_follow_keeps_its_label_when_the_definitions_refuse_a_change(
-    follow: Follow, refusing: Refusing
-) -> None:
-    follow.on('a')
-    refusing.part = 'following'
-
-    with pytest.raises(NotKept):
-        follow.on('b')
-    with pytest.raises(NotKept):
-        follow.off()
-    assert follow.label == 'a'
-
-
-def test_follow_says_why_rows_of_its_last_step_were_refused_until_switched(
-    follow: Follow, manager: BatchManager, sample: Measure
-) -> None:
-    sample(1, 'water')
-    follow.on('a')
-    manager.batch('a').settings = {'binning': {'bins': 0}}
-
-    assert follow.step() == {}
-    assert list(follow.refused) == ['1']
-    follow.on('a')
-    assert follow.refused == {}
-    follow.step()
-    follow.off()
-    assert follow.refused == {}
-
-
-def test_follow_forgets_why_rows_were_refused_until_its_next_step(
-    follow: Follow, manager: BatchManager, sample: Measure
-) -> None:
-    sample(1, 'water')
-    follow.on('a')
-    manager.batch('a').settings = {'binning': {'bins': 0}}
-    follow.step()
-
-    follow.forget()
-
-    assert follow.refused == {}
-    assert follow.label == 'a'
-    follow.step()
-    assert list(follow.refused) == ['1']
-
-
-def test_follow_off_steps_nothing(
-    follow: Follow, client: Client, sample: Measure
-) -> None:
-    follow.on('a')
-    follow.off()
-    sample(1, 'water')
-
-    assert follow.step() == {}
-    assert follow.label is None
-    assert _reduced(client) == []
-
-
 def test_every_calls_the_actions_in_turn_until_the_block_ends() -> None:
     called: list[int] = []
     all_called = threading.Event()
@@ -958,18 +799,17 @@ def test_every_calls_the_actions_in_turn_until_the_block_ends() -> None:
     assert called == [0, 1, 2]
 
 
-def test_widening_the_scope_of_the_batch_that_follows_reduces_the_rows_it_now_holds(
-    manager: BatchManager, refusing: Refusing, client: Client, sample: Measure
+def test_widening_the_scope_of_a_batch_of_the_manager_reduces_the_rows_it_now_holds(
+    manager: BatchManager, client: Client, sample: Measure
 ) -> None:
     for run, name in enumerate(['water', 'oil', 'sds'], start=1):
         sample(run, name)
     manager.create('plain', title='A', source='pairs', scope=Scope(start=3), label='a')
-    follow = Follow(manager, refusing)
-    follow.on('a')
-    client.wait(follow.step())
+    loop = Automatic(manager.batch('a'))
+    client.wait(loop.step())
 
     manager.change('a', scope=Scope())
-    records = follow.step()
+    records = loop.step()
 
     client.wait(records)
     assert sorted(records) == ['1', '2']

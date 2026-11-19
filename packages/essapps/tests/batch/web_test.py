@@ -31,7 +31,6 @@ from ess.apps.batch import (
     Scope,
     Source,
 )
-from ess.apps.batch.auto import Follow
 from ess.apps.batch.definition import Key, NotKept, settings_key
 from ess.apps.batch.web import Pages, Shown, create_app, demo, plots
 from ess.apps.batch.web.page import Missing
@@ -75,10 +74,9 @@ def batch(manager: BatchManager, label: str) -> Batch:
 
 
 @pytest.fixture
-def pages(manager: BatchManager, refusing: Refusing, files: CorrectedFiles) -> Pages:
+def pages(manager: BatchManager, files: CorrectedFiles) -> Pages:
     return Pages(
         manager,
-        Follow(manager, refusing),
         draw={STAGED.name: draw},
         files=files,
         marks=Marks,
@@ -102,7 +100,7 @@ def started(client: Client, definitions: DefinitionStore) -> Pages:
     manager = BatchManager(
         client, sources=SOURCES, definitions=definitions, staged=STAGED_NAMES
     )
-    return Pages(manager, Follow(manager, definitions))
+    return Pages(manager)
 
 
 @pytest.fixture
@@ -864,9 +862,7 @@ def kept(client: Client, fake: FakeFiles, sample: Measure, flaky: Flaky) -> Test
         STAGED.name, title='Kept', source='pairs', columns=COLUMNS, label='kept'
     )
     files = CorrectedFiles(fake, definitions=flaky)
-    return opened(
-        Pages(manager, Follow(manager, flaky), files=files, marks=Marks), label
-    )
+    return opened(Pages(manager, files=files, marks=Marks), label)
 
 
 def test_a_change_the_definitions_cannot_keep_answers_422_and_nothing_changes(
@@ -1119,7 +1115,6 @@ def test_the_plot_draws_the_results_of_the_rows_asked_for_in_their_colours(
 
 def test_a_drawing_that_raises_says_so_in_place_of_the_figure(
     manager: BatchManager,
-    refusing: Refusing,
     label: str,
     client: Client,
     sample: Measure,
@@ -1128,7 +1123,7 @@ def test_a_drawing_that_raises_says_so_in_place_of_the_figure(
         raise RuntimeError('released')
 
     sample(1, 'water')
-    pages = Pages(manager, Follow(manager, refusing), draw={STAGED.name: broken})
+    pages = Pages(manager, draw={STAGED.name: broken})
     page = opened(pages, label)
     page.post('/api/scan')
     reduced(page, client)
@@ -1155,7 +1150,7 @@ def test_plotting_and_saving_chosen_rows_reads_their_records_only(
     label = manager.create(STAGED.name, title='Scan', source='pairs', columns=COLUMNS)
     for run in (1, 2, 3):
         sample(run, f's{run}')
-    pages = Pages(manager, Follow(manager, definitions), draw={STAGED.name: draw})
+    pages = Pages(manager, draw={STAGED.name: draw})
     page = opened(pages, label)
     reduced(page, client, 'all')
     chosen = {'keys': ['1']}
@@ -1465,7 +1460,7 @@ def test_the_root_redirects_to_the_batch_that_follows(
     http = TestClient(create_app(pages), follow_redirects=False)
     for label in ('a', 'b'):
         manager.create(STAGED.name, title=label, source='pairs', label=label)
-    pages.follow.on('b')
+    pages.manager.follow('b')
 
     page = http.get('/')
 
@@ -1527,7 +1522,7 @@ def test_the_batches_view_lists_every_batch_and_the_one_that_follows(
         description='The second series',
         label='other',
     )
-    pages.follow.on(other)
+    pages.manager.follow(other)
 
     listed = http.get('/api/batches').json()
 
@@ -1742,7 +1737,7 @@ def test_a_batch_that_cannot_be_counted_has_its_reason_and_its_source_no_outside
         }
     manager = BatchManager(client, sources=sources, definitions=definitions)
 
-    counted = Pages(manager, Follow(manager, definitions)).counts()
+    counted = Pages(manager).counts()
 
     reason = {
         'not registered': 'the source other is not registered',
@@ -1768,7 +1763,7 @@ def test_a_count_calls_a_source_once_per_batch_of_it(
     for label in ('a', 'b'):
         manager.create('plain', title=label, source='pairs', label=label)
         manager.batch(label)
-    pages = Pages(manager, Follow(manager, definitions))
+    pages = Pages(manager)
     before = len(calls)
 
     pages.counts()
@@ -1866,7 +1861,7 @@ def test_a_source_that_no_spec_fits_is_not_offered_and_no_source_always_is(
     odd = Source(pair, fills=('sample', 'background'))
     manager = BatchManager(client, sources={'odd': odd}, definitions=definitions)
 
-    pages = Pages(manager, Follow(manager, definitions))
+    pages = Pages(manager)
     offered = TestClient(create_app(pages)).get('/api/sources').json()
 
     assert [s['name'] for s in offered] == [None]
@@ -1904,7 +1899,7 @@ def test_a_batch_made_from_the_page_starts_with_the_settings_of_its_spec(
     manager = BatchManager(
         client, sources=SOURCES, definitions=definitions, settings=settings
     )
-    pages = Pages(manager, Follow(manager, definitions))
+    pages = Pages(manager)
 
     made = TestClient(create_app(pages)).post('/api/batches', json=new_batch())
 
@@ -2013,7 +2008,7 @@ def test_a_batch_whose_rows_cannot_be_read_answers_422_and_the_list_stays(
     label = manager.create(
         STAGED.name, title='Odd', source='texts', scope=Scope(start='a')
     )
-    pages = Pages(manager, Follow(manager, definitions))
+    pages = Pages(manager)
 
     shown = opened(pages, label).get('/api/state')
 
@@ -2116,11 +2111,11 @@ def test_the_next_batch_takes_follow_from_the_batch_that_followed(
 ) -> None:
     manager.create(STAGED.name, title='Other', source='pairs', label='other')
     if follows is not None:
-        pages.follow.on(follows)
+        pages.manager.follow(follows)
 
     made = next_batch(http, '2').json()
 
-    assert pages.follow.label == (made['label'] if after == 'new' else after)
+    assert pages.manager.following == (made['label'] if after == 'new' else after)
 
 
 @pytest.mark.parametrize(
@@ -2179,11 +2174,11 @@ def test_a_batch_removed_from_its_page_is_gone_and_its_results_stay(
 def test_removing_the_batch_that_follows_turns_follow_off(
     http: TestClient, pages: Pages
 ) -> None:
-    pages.follow.on('scan')
+    pages.manager.follow('scan')
 
     http.post('/api/batch/remove')
 
-    assert pages.follow.label is None
+    assert pages.manager.following is None
 
 
 def test_a_removal_the_definitions_refuse_answers_422_and_the_batch_stays(

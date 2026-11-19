@@ -90,7 +90,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     The app owns the timer of Follow: a thread that the app's lifespan starts,
     and stops at its end once a step that runs has finished. It calls
-    :meth:`Pages.tick <.pages.Pages.tick>` every ``pages.follow.interval``
+    :meth:`Pages.tick <.pages.Pages.tick>` every ``pages.interval``
     seconds, which steps the batch that follows, if one does. A parent app
     that mounts this one runs its lifespan, since Starlette does not (see
     ``README.md``).
@@ -98,7 +98,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        with every(pages.follow.interval, itertools.repeat(pages.tick)):
+        with every(pages.interval, itertools.repeat(pages.tick)):
             yield
 
     app = FastAPI(title=pages.title or 'Batches', lifespan=lifespan)

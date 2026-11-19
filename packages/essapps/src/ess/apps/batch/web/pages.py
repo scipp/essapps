@@ -26,11 +26,12 @@ be shown (:meth:`Pages.page`), with the reason, and that of a batch removed
 (:meth:`Pages.remove`): a :class:`~.page.Page` handed out before answers
 :class:`~.page.Missing` from then on.
 
-Follow is the one loop of the application
-(:class:`~ess.apps.batch.auto.Follow`). :meth:`Pages.tick` steps it, with or
-without a page open, keeps what the step raised, and has the page of the batch
-that follows show what the step changed. :func:`~.api.create_app` owns the
-timer that calls it.
+The manager keeps which batch follows
+(:attr:`~ess.apps.batch.BatchManager.following`). :meth:`Pages.tick` steps it
+with :class:`~ess.apps.batch.auto.Automatic`, with or without a page open,
+keeps why rows were refused and what the step raised, and has the page of the
+batch that follows show what the step changed. :func:`~.api.create_app` owns
+the timer that calls it, every :attr:`Pages.interval` seconds.
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ from ...errors import SubmitError
 from ...fields import UNSET, Fields
 from ...files import Selector
 from ...listing import Listing
-from ..auto import Follow
+from ..auto import Automatic
 from ..corrections import CorrectedFiles
 from ..definition import NotKept
 from ..manager import BatchManager, fits
@@ -93,8 +94,9 @@ class Pages:
     ----------
     manager:
         The batches.
-    follow:
-        The loop of the application over them.
+    interval:
+        The seconds between two steps of Follow, for the timer of
+        :func:`~.api.create_app`.
     title:
         The title of the application.
     draw:
@@ -119,13 +121,17 @@ class Pages:
         again at its next poll after one.
     failure:
         What the last step of Follow raised, ``None`` if it raised nothing.
+    refused:
+        Why the last step of Follow that did not raise refused rows, by key
+        (:attr:`~ess.apps.batch.auto.Automatic.refused`); emptied when a
+        page turns Follow on and when it applies settings.
     """
 
     def __init__(
         self,
         manager: BatchManager,
-        follow: Follow,
         *,
+        interval: float = 5.0,
         title: str = '',
         draw: Mapping[str, Draw] | None = None,
         files: CorrectedFiles | None = None,
@@ -133,7 +139,7 @@ class Pages:
         folder: str = '',
     ) -> None:
         self.manager = manager
-        self.follow = follow
+        self.interval = interval
         self.title = title
         self.draw = {} if draw is None else draw
         # What a person corrects of a run, and where; None if nothing.
@@ -151,6 +157,7 @@ class Pages:
         self._batches_version = 0
         self.corrected = 0
         self.failure: str | None = None
+        self.refused: dict[str, str] = {}
         self._pages: dict[str, Page] = {}
 
     def page(self, label: str) -> Page:
@@ -182,30 +189,34 @@ class Pages:
         ``/`` lists them rather than guess.
         """
         with self.lock:
+            if (label := self.manager.following) is not None:
+                return label
             headers = self.manager.headers()
-            if self.follow.label in headers:
-                return self.follow.label
             return next(iter(headers)) if len(headers) == 1 else None
 
     def tick(self) -> None:
         """
-        A step of Follow, then :meth:`Page.stepped <.page.Page.stepped>`
-        of the page of the batch that follows; :func:`~.api.create_app` calls
-        it on a timer. What the step raises is :attr:`failure`, and the next
-        step tries again.
+        A step of Follow: one step of :class:`~ess.apps.batch.auto.Automatic`
+        on the batch that follows, if one does; then
+        :meth:`Page.stepped <.page.Page.stepped>` of its page.
+        :func:`~.api.create_app` calls it on a timer. What the step raises is
+        :attr:`failure`, and the next step tries again.
         """
         # Under the lock, so that a tick that waited for a request sees what
         # that request did: no step after "Stopped following". What cannot be
         # said, such as an exception whose text raises, or a page that cannot
         # be made, must not end the timer.
         with self.lock, suppress(Exception):
+            if (label := self.manager.following) is None:
+                return
             try:
-                self.follow.step()
+                loop = Automatic(self.manager.batch(label))
+                loop.step()
+                self.refused = loop.refused
                 self.failure = None
             except Exception as error:  # the next step tries again
                 self.failure = f'Follow could not step: {str(error) or repr(error)}'
-            if (label := self.follow.label) is not None:
-                self.page(label).stepped()
+            self.page(label).stepped()
 
     def runs_listed(
         self, runs: Mapping[FileRef, Mapping[str, Any]], *, changed: bool = False
@@ -337,7 +348,7 @@ class Pages:
         changed them.
         """
         with self.lock:
-            listed = (tuple(self.manager.headers().items()), self.follow.label)
+            listed = (tuple(self.manager.headers().items()), self.manager.following)
             if listed != self._batches:
                 self._batches = listed
                 self._batches_version += 1
@@ -349,11 +360,11 @@ class Pages:
         would submit again, by key; none unless the batch of ``label`` follows.
         """
         source = self.manager.batch(label).source
-        if source is None or self.follow.label != label:
+        if source is None or self.manager.following != label:
             return {}
         reasons = {
             key: f'Follow could not reduce it: {forms.message(reason)}'
-            for key, reason in self.follow.refused.items()
+            for key, reason in self.refused.items()
         }
         return refused_again(states, source.fills, reasons)
 
@@ -374,7 +385,7 @@ class Pages:
                         description=header.description,
                         words=words,
                         scope=_scope_text(header.scope, index),
-                        follows=label == self.follow.label,
+                        follows=label == self.manager.following,
                     )
                 )
             return Batches(
@@ -442,12 +453,10 @@ class Pages:
         """
         Remove the batch of ``label`` with the manager
         (:meth:`~ess.apps.batch.BatchManager.remove`): its definitions go,
-        its records stay. Its page goes, and a page handed out before
-        answers :class:`~.page.Missing`. If it follows, Follow is turned off
-        at once, rather than at its next step, so that a batch made later
-        under the label does not follow. Raises :class:`~.page.Missing` if no batch
-        has the label, and :class:`~.page.Problem` if the definitions refuse
-        a write.
+        its records stay, and if it follows, none follows. Its page goes, and
+        a page handed out before answers :class:`~.page.Missing`. Raises
+        :class:`~.page.Missing` if no batch has the label, and
+        :class:`~.page.Problem` if the definitions refuse a write.
         """
         with self.lock:
             if label not in self.manager.headers():
@@ -455,8 +464,6 @@ class Pages:
             try:
                 self.manager.remove(label)
                 self._pages.pop(label, None)
-                if self.follow.label == label:
-                    self.follow.off()
             except NotKept as error:
                 raise Problem(f'The change was not kept: {error}') from None
 

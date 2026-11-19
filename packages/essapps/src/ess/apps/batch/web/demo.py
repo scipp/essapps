@@ -59,7 +59,7 @@ from .. import (
     Source,
     Words,
 )
-from ..auto import Follow, every
+from ..auto import every
 from . import Pages, create_app, plots
 from .api import STATIC
 from .page import Shown
@@ -337,7 +337,7 @@ def build(
 
     pages = Pages(
         manager,
-        Follow(manager, definitions, interval=interval),
+        interval=interval,
         title=DEMO.title,
         draw={DEMO.name: draw},
         files=files,

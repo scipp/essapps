@@ -712,3 +712,83 @@ def test_a_batch_without_a_source_has_only_rows_added_by_hand(
     assert list(batch.rows) == []
     batch.put([Row('mine', {'sample': sample(2, 'oil')})])
     assert [r.key for r in manager.batch(label).rows] == ['mine']
+
+
+# Which batch follows
+
+
+@pytest.fixture
+def two(manager: BatchManager) -> BatchManager:
+    """``manager`` with two batches of a source, ``a`` and ``b``."""
+    manager.create('plain', title='A', source='pairs', label='a')
+    manager.create('plain', title='B', source='pairs', label='b')
+    return manager
+
+
+def test_one_batch_follows_and_a_manager_made_again_has_it(
+    two: BatchManager, client: Client, definitions: FolderDefinitions
+) -> None:
+    assert two.following is None
+
+    two.follow('a')
+    two.follow('b')
+
+    assert two.following == 'b'
+    assert _again(client, definitions).following == 'b'
+    two.follow(None)
+    assert _again(client, definitions).following is None
+
+
+def test_a_batch_removed_follows_no_longer(
+    two: BatchManager, client: Client, definitions: FolderDefinitions
+) -> None:
+    two.follow('a')
+
+    two.remove('a')
+
+    assert two.following is None
+    assert _again(client, definitions).following is None
+
+
+def test_a_kept_label_without_a_header_follows_not(
+    two: BatchManager, client: Client, definitions: FolderDefinitions
+) -> None:
+    two.follow('a')
+    definitions.delete(('labels', 'a', 'header'))
+
+    assert _again(client, definitions).following is None
+
+
+def test_a_batch_that_cannot_follow_is_refused_and_nothing_changes(
+    two: BatchManager, client: Client, definitions: FolderDefinitions
+) -> None:
+    two.follow('a')
+    two.create('plain', title='C', columns=COLUMNS, label='c')
+    BatchManager(
+        client, sources={**SOURCES, 'other': PAIRS}, definitions=definitions
+    ).create('plain', title='D', source='other', label='d')
+    again = _again(client, definitions)
+
+    with pytest.raises(ValueError, match='no source'):
+        again.follow('c')
+    with pytest.raises(ValueError, match='the source other is not registered'):
+        again.follow('d')
+    with pytest.raises(KeyError):
+        again.follow('e')
+    assert again.following == 'a'
+
+
+def test_which_batch_follows_stays_if_the_definitions_refuse_a_change(
+    two: BatchManager, refusing: Refusing
+) -> None:
+    two.follow('a')
+    refusing.part = 'following'
+
+    with pytest.raises(NotKept):
+        two.follow('b')
+    with pytest.raises(NotKept):
+        two.follow(None)
+    with pytest.raises(NotKept):
+        two.remove('a')
+    assert two.following == 'a'
+    assert list(two.headers()) == ['a', 'b']

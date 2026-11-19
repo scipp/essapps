@@ -42,9 +42,12 @@ from ess.spec import WorkflowSpec
 from ..client import Client
 from ..records import Template
 from .definition import (
+    FOLLOWING,
     DefinitionStore,
     Header,
     edits_key,
+    following_data,
+    following_of,
     header_data,
     header_key,
     header_of,
@@ -119,8 +122,9 @@ def check_label(label: str) -> None:
 
 class BatchManager:
     """
-    Makes, lists, changes and removes the batches of a workspace, and holds
-    the one :class:`~.reduction.Batch` of each label. See
+    Makes, lists, changes and removes the batches of a workspace, holds the
+    one :class:`~.reduction.Batch` of each label, and keeps which batch
+    follows. See
     ``packages/essapps/docs/batch.md``.
 
     Every refusal of what is asked raises ``ValueError``, with a message for a
@@ -175,6 +179,33 @@ class BatchManager:
             if (header := definitions.load(header_key(label), header_of)) is not None:
                 self._headers[label] = header
         self._batches: dict[str, Batch] = {}
+        following = definitions.load(FOLLOWING, following_of)
+        self._following = following if following in self._headers else None
+
+    @property
+    def following(self) -> str | None:
+        """
+        The label of the batch that follows, ``None`` if none does. It is
+        kept in the definitions and read when the manager is made; a label
+        kept without a header counts as none.
+        """
+        return self._following
+
+    def follow(self, label: str | None) -> None:
+        """
+        Make the batch of ``label`` the one that follows, so that no other
+        does; with ``None``, let none follow. It makes no ``Batch``. Raises
+        ``KeyError`` if no batch has the label, and ``ValueError`` if the
+        batch has no source or its source is not registered.
+        """
+        if label is not None:
+            if (name := self._headers[label].source) is None:
+                raise ValueError(
+                    f'{label} has no source of rows, so it cannot follow the files'
+                )
+            self._source(name)
+        self._definitions.save(FOLLOWING, following_data(label))
+        self._following = label
 
     def create(
         self,
@@ -414,14 +445,17 @@ class BatchManager:
     def remove(self, label: str) -> None:
         """
         Forget the batch of ``label`` and remove its definitions; its records
-        stay, and those running keep running. A ``Batch`` of the label handed
-        out before must not be used after: it would write its definitions
-        again. Raises ``KeyError`` if no batch has the label.
+        stay, and those running keep running. If the batch follows, none
+        follows from then on. A ``Batch`` of the label handed out before must
+        not be used after: it would write its definitions again. Raises
+        ``KeyError`` if no batch has the label.
 
         The header is deleted first, so a batch is never listed half removed.
         """
         if label not in self._headers:
             raise KeyError(label)
+        if label == self._following:
+            self.follow(None)
         self._definitions.delete(header_key(label))
         del self._headers[label]
         if (batch := self._batches.pop(label, None)) is not None:

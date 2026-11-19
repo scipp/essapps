@@ -63,8 +63,8 @@ a row and make the next one from there. Removing a batch is :meth:`Pages.remove
 :class:`Missing`.
 
 A batch with a source offers to follow the files. The switch "Follow" makes
-the batch the one that the application's Follow steps
-(:class:`~ess.apps.batch.auto.Follow`), so no other batch follows. While it
+the batch the one that follows (:meth:`~ess.apps.batch.BatchManager.follow`),
+so no other batch follows. While it
 follows, :meth:`Pages.tick <.pages.Pages.tick>` steps it every ``interval``
 seconds, which scans as "Rescan runs" does and reduces the rows that
 :func:`~ess.apps.batch.arrived` gives, at the columns of the source, under the
@@ -289,8 +289,8 @@ class Page:
     Parameters
     ----------
     pages:
-        What the pages share: the manager of the batch, Follow, the lock, and
-        what the application gives every page.
+        What the pages share: the manager of the batch, how the last step of
+        Follow went, the lock, and what the application gives every page.
     label:
         The label of the batch. The source of the batch says what a row is
         called, and which entries of :attr:`Row.info` name and describe it.
@@ -344,7 +344,7 @@ class Page:
 
     def _follows(self) -> bool:
         """Whether this batch is the one that follows."""
-        return self.pages.follow.label == self.label
+        return self.pages.manager.following == self.label
 
     # Reading
 
@@ -360,8 +360,8 @@ class Page:
             self._listing.cursor,
             pages.runs_version,
             pages.batches_version(),
-            pages.follow.label,
-            pages.follow.refused,
+            pages.manager.following,
+            pages.refused,
             pages.failure,
         )
 
@@ -567,12 +567,12 @@ class Page:
     def _follow(self) -> Following | None:
         if (source := self.batch.source) is None:
             return None
-        label, headers = self.pages.follow.label, self.pages.manager.headers()
-        on = label == self.label
+        manager = self.pages.manager
+        label, on = manager.following, self._follows()
         return Following(
             on=on,
-            other=headers[label].title if not on and label in headers else None,
-            interval=self.pages.follow.interval,
+            other=None if on or label is None else manager.headers()[label].title,
+            interval=self.pages.interval,
             at=sorted(self._cells.titles[c] for c in source.fills),
             failure=self.pages.failure if on else None,
         )
@@ -901,14 +901,16 @@ class Page:
         Make this batch the one that follows, with a first step at once; or,
         if it follows, let none follow.
         """
-        if self.batch.source is None:
-            raise Problem('This batch has no source, so it cannot follow the files.')
         if not on:
             if not self._follows():
                 return ''  # another batch follows, or none
-            self.pages.follow.off()
+            self.pages.manager.follow(None)
             return 'Stopped following.'
-        self.pages.follow.on(self.label)
+        try:
+            self.pages.manager.follow(self.label)
+        except ValueError as error:
+            raise Problem(f'{why(error)}.') from None
+        self.pages.refused = {}
         self.pages.tick()
         return 'Following.'
 
@@ -952,7 +954,7 @@ class Page:
         # Follow tries every row again with these at its next step.
         self.refused = [e for e in self.refused if e.entry]
         if self._follows():
-            self.pages.follow.forget()
+            self.pages.refused = {}
         return 'Applied the settings.'
 
     @_action
@@ -1024,7 +1026,7 @@ class Page:
                 self.label, row.index, title=request.title
             )
             if self._follows():
-                self.pages.follow.on(label)
+                self.pages.manager.follow(label)
         except NotKept as error:
             raise Problem(f'The change was not kept: {error}') from None
         except Exception as error:  # the scan runs code of the application

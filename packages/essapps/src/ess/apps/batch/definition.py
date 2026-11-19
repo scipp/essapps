@@ -14,7 +14,7 @@ on:
     settings      the parameters that are not columns         Batch.settings
     header        spec, columns, source, title, description,  the manager
                   scope
-    following     the label of the batch that follows         Follow
+    following     the label of the batch that follows         the manager
 
 The corrections are about files, and every batch of a workspace reads the
 files through one :class:`~.corrections.CorrectedFiles`, so a workspace has
