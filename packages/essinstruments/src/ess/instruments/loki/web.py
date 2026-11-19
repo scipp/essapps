@@ -9,8 +9,8 @@ The batch page of LoKI's I(Q) on a workspace folder, as a web page
 ``FOLDER`` is a workspace folder (:mod:`ess.apps.folder`): its ``files.csv``
 says the run, role and sample of each file, as ``essapps-batch files`` writes
 it. A row is a sample run, paired with the transmission run of its sample
-(:func:`~.batch.pair_by_sample`). Whenever no batch is listed, a start
-makes a batch of all sample runs. The batches with their edits and settings,
+(:func:`~.batch.pair_by_sample`). A start at which no batch is listed makes
+a batch of all sample runs. The batches with their edits and settings,
 the batch that follows, and the corrections of runs are kept in
 ``FOLDER/definitions/``, the results in ``FOLDER/store/``.
 
@@ -114,9 +114,9 @@ def build(
     """
     The pages of the batches of ``client``, kept in ``definitions``, with a
     step of Follow every ``interval`` seconds while a batch follows. A new
-    batch of I(Q) starts with ``settings``. Whenever no batch is listed, a
-    batch of all sample runs is made, also after a person removed the last
-    one; it follows from the start if ``follow``. A folder with only the
+    batch of I(Q) starts with ``settings``. If no batch is listed, a batch of
+    all sample runs is made, so also at a start after a person removed the
+    last one; it follows from the start if ``follow``. A folder with only the
     detector and the masks that the command reduced has batches, so a person
     makes the batch of I(Q) with "New batch".
     """

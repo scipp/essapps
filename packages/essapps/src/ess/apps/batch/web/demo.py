@@ -315,9 +315,9 @@ def build(
 ) -> FastAPI:
     """
     The application on what :func:`open_demo` returns, with a step of Follow
-    every ``interval`` seconds while a batch follows. Whenever no batch is
-    listed, a batch of all samples is made, also after a person removed the
-    last one.
+    every ``interval`` seconds while a batch follows. If no batch is listed,
+    a batch of all samples is made, so also at a start after a person removed
+    the last one.
     """
     manager = BatchManager(
         client, sources=SOURCES, definitions=definitions, staged=STAGED

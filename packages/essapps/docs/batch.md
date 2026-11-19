@@ -67,11 +67,11 @@ batch.reduce(left_to_reduce(batch.state(), batch.columns))
 batch.cancel()
 ```
 
-`batch.settings` is a read-only mapping of the parameters that are not columns, as `Form.params` gives them. `Batch(..., settings=...)` gives the settings that a new batch starts with, such as the technique's defaults. Every state and every reduction reads them. Only an assignment of all of them changes them: `batch.settings` is a copy, so `batch.settings['q'] = ...` raises, and a change inside a value changes only the copy.
+`batch.settings` is a read-only mapping of the parameters that are not columns, as `Form.params` gives them. `Batch(..., settings=...)` gives the settings that a `Batch` starts with, such as the technique's defaults. Every state and every reduction reads them. Only an assignment of all of them changes them: `batch.settings` is a copy, so `batch.settings['q'] = ...` raises, and a change inside a value changes only the copy.
 
 ## The model: tables and one cycle
 
-A batch and what it reads are a set of tables. Six of them are stored, and each has one writer. All others are derived: they are computed from the stored tables at each read and stored nowhere.
+A batch and what it reads are a set of tables. Seven of them are stored, and each has one writer. All others are derived: they are computed from the stored tables at each read and stored nowhere.
 
 | Stored table | Written by | Holds | One table per |
 |---|---|---|---|
@@ -80,6 +80,7 @@ A batch and what it reads are a set of tables. Six of them are stored, and each 
 | header | `BatchManager` | the names of the spec and the source, the columns, the title, the description, the scope | label of a batch of the manager |
 | edits | `Batch.rows` | cells set, rows added or removed, by key | label |
 | settings | `Batch.settings`; the first by the manager, before any `Batch` of the label exists | the parameters that are not columns | label |
+| following | `BatchManager` | the label of the batch that follows, or none | workspace |
 | records | the workspace | a record per submission, with its status | workspace |
 
 ```python
@@ -211,7 +212,7 @@ A failed or cancelled row reads `failed` or `cancelled` whether or not its reque
 - A row's **index** is a value that orders the rows, such as the run number or the start time. The source gives it (`Row(..., index=60339)`); a row added by hand has none.
 - The **scope** of a batch is which rows of the scan it holds: a slice of index values ([Rules](#rules)).
 - An **edit** is a cell set, a row added, or a row removed, by hand: by a person or by your code.
-- A row's **result** is the newest record with the batch's label and the row's key as its member, of any spec and whoever submitted it. So two `Batch` objects with the same label are one batch: give each batch its own label. An application that wants a table per person puts the person in the label.
+- A row's **result** is the newest record with the batch's label and the row's key as its member, of any spec and whoever submitted it. So two `Batch` objects with the same label share their results: give each `Batch` its own label. An application that wants a table per person puts the person in the label.
 - A row's **request** is what `reduce` would submit for it now: the settings and its cells. A result is **outdated** if the row's request differs from the result's, or if the result is of another spec than the one bound ([Rules](#rules)).
 
 Choose a key that does not change from one scan to the next, such as the run number. Results and edits are found by key. Put the name of the sample in `info`, under a name that is not a column.
@@ -380,7 +381,7 @@ definitions/labels/20261118-130204/header.json      spec, columns, source, title
 definitions/following.json                          the label of the batch that follows; written by the manager
 ```
 
-The manager refuses a label with `/` (`check_label`); a `Batch` made in code may still have one, written as `%2F` in the name of its folder, and no manager lists it, since it has no header.
+The manager refuses a label with `/` (`check_label`). A `Batch` made in code may have one; it keeps nothing, so it writes no folder.
 
 ```json
 {"added": [{"key": "mine", "values": {"sample": {"@ref": "file", "file": "run:60400"}}, "info": {"name": "mine"}}],
@@ -396,11 +397,11 @@ The edits hold only what was set by hand, so a cell from the scan follows the fi
 - An edit at a column that is gone makes its row `incomplete` (`not a column`). The page offers to remove it.
 - Settings of another version of the spec are read as they are. The settings form shows those that fit, and the page names the others with their values above it. `state()` and `reduce` refuse what the spec bound does not take. Nothing is written until a person presses **Apply**, which writes the settings of the form.
 - Settings of a spec of another name raise `ValueError` when the batch is made, naming the file and both specs.
-- Settings at a column of the batch raise `ValueError` when the batch is made, naming the file and the columns. A `Batch` made in code on the label with fewer columns writes such settings.
+- Settings at a column of the batch raise `ValueError` when the batch is made, naming the file and the columns.
 - A correction of a file no longer listed is kept, and not used.
 - A file that is not of the shape described raises `ValueError` naming the file and the entry, when the batch or the `CorrectedFiles` is made.
 
-Two `Batch` objects on one label and one folder each write their whole table of edits at each change. A change made through the other since it was made is lost, and neither sees the other's changes. So a label has one `Batch` in a process: the manager holds one per label ([The batches of a workspace](#the-batches-of-a-workspace)), and the page shows one batch to every browser that opens it.
+A `Batch` given the definitions writes its whole table of edits at each change, so two of them on one label would lose each other's changes. Only the manager gives a `Batch` the definitions, and it holds one per label ([The batches of a workspace](#the-batches-of-a-workspace)); the page shows that one to every browser that opens it.
 
 The files that a person loads and writes ([The UI](#the-ui)) are copies, for other people and other tools. The definitions are the one place that a batch is kept, for an application and for the command ([The app and the command on one folder](#the-app-and-the-command-on-one-folder)).
 
@@ -577,13 +578,13 @@ The page of a batch has a switch "Follow", which makes its batch the one that fo
 Which rows a step reduces follows from the files, the batch's rows and settings, and the records under its label. The loop keeps nothing else, so a step that raises, in the settings, the source, or a submission, loses nothing. For the rows with no change by hand that is not reduced yet, the loop keeps the results under its label equal to its batch's rows at the columns of `at`:
 
 ```python
-page = Batch(client, IOFQ, columns=..., label='auto/iofq', source=SAMPLE_RUNS)  # a second batch on the label
+page = Batch(client, IOFQ, columns=..., label='auto/iofq', source=SAMPLE_RUNS)  # a second Batch on the label
 page.rows = page.rows.edit('60339', {'sample': file(run=60400)})
 page.reduce(['60339'])               # a record with run 60400 at `sample`
 loop.step()                          # reduces '60339' again with the source's file: the loop's rows win
 ```
 
-The edit is in another batch, so the loop's row still has the scan's cell. So a label has one batch. A person who wants another file for a row edits the loop's own batch and reduces the row, and the loop leaves the cell set by hand as it is; or the person corrects the file's metadata so that the source gives the row another file ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)), which the loop reduces. Two loops never share a label: if their rows differ at `at`, each replaces the other's records at every step. A record under the label that equals the loop's row at `at`, from any submitter, counts as the row's result.
+The edit is in another `Batch`, so the loop's row still has the scan's cell. So a label has one `Batch`. A person who wants another file for a row edits the loop's own `Batch` and reduces the row, and the loop leaves the cell set by hand as it is; or the person corrects the file's metadata so that the source gives the row another file ([When the metadata is wrong or missing](#when-the-metadata-is-wrong-or-missing)), which the loop reduces. Two loops never share a label: if their rows differ at `at`, each replaces the other's records at every step. A record under the label that equals the loop's row at `at`, from any submitter, counts as the row's result.
 
 A restart starts from a new scan, with the edits that the batch's definitions kept. So after a restart, a row is not reduced again unless the files changed it at `at`. Without definitions the edits are gone, and a row that was edited at a column of `at` is reduced again with the source's cells. A record that was running when the workspace ended is failed at the restart; the loop does not run a failed row again, and a person retries it.
 
@@ -720,7 +721,7 @@ Each label is then a batch in the list of batches of a page ([The app and the co
 
 `{'@latest': label, output: name}` is read when the command starts, as the output of the newest record under the label, of `member` if given, whoever submitted it. It is for a template, not for a cell of a table. The record of each row holds the ID that it was read as. A reference by ID is `{'@ref': output, record: ..., output: ...}`.
 
-One command holds the folder at a time. If a command was killed, the next one first finishes the rows that had not started, but fails those of a spec it does not bind with the same version and models. A row that was running fails, since its workflow may have been what ended the process. Reduce again with `--remaining` to submit every row that has not completed, the failed ones included. A command that binds another version of a spec, or the same version with changed models, reads the old results as plain scipp data, and reduces their rows again with `--remaining`, whatever settings the template gives. Nothing removes the files of the store.
+One command holds the folder at a time. If a command was killed, the next one first finishes the rows that had not started, but fails those of a spec it does not bind with the same version and models. A row that was running fails, since its workflow may have been what ended the process. Reduce again with `--remaining` to submit every row that has not completed, the failed ones included. A command that binds another version of a spec, or the same version with changed models, reads the old results as plain scipp data, and reduces their rows again with `--remaining`. A template given must be of the version bound: the command refuses one of another version, since its settings may mean something else there, so check them and set the version in the template. Without a template, the settings that the batch keeps are used. Nothing removes the files of the store.
 
 ## The UI
 
@@ -803,7 +804,7 @@ Raise in the fake to make a row fail; hold it back on a `threading.Event` to kee
 ## What it does not do
 
 - Keep a result that is not persisted. A `Batch` finds results by key in its workspace, so `local()` per session starts with none, and a result that is not persisted is gone once its workspace closes.
-- Merge two writers of one definition, or lock it. Two `Batch` objects on one label each write their whole table of edits, so a change made through the other since is lost ([Where the definition is kept](#where-the-definition-is-kept)).
+- Merge two writers of one definition, or lock it. Two `Batch` objects given the definitions of one label each write their whole table of edits, so a change made through the other since is lost ([Where the definition is kept](#where-the-definition-is-kept)).
 - Keep settings of one row apart from the others. A row's request is its cells and the batch's settings, so a parameter that differs between rows is a column.
 - Free the values of replaced results. They stay until the workspace closes or they are released, unless the batch persists them (`persist=`).
 - Offer preparatory steps with a **Use** button. A `Referenced[...]` setting offers each record in the settings form.

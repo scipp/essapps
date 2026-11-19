@@ -18,7 +18,7 @@ python -m ess.instruments.loki.arrivals --follow 2                      # the sa
 
 Open `http://localhost:8000/`: it redirects to the page of the batch that follows, else to that of the only batch; otherwise it shows the list of batches, to open one or make one (see [Making a batch](#making-a-batch)).
 Each `FOLDER` is a workspace folder (`ess.apps.folder`); the demos make a temporary one if none is given, and say which.
-The demo and the LoKI page make a batch of all sample runs whenever no batch is listed, also after a person removed the last one; the batches and the batch that follows are kept in the folder.
+At a start, the demo and the LoKI page make a batch of all sample runs if no batch is listed, so also at a start after a person removed the last one; the batches and the batch that follows are kept in the folder.
 The demo needs the extra `essapps[web]`, the LoKI modules `essinstruments[loki-app]`.
 The LoKI page reads the masks from a record, so reduce the detector and the masks on the folder first, with two `essapps-batch` commands that [the docstring of `ess.instruments.loki.web`](../../../../../../essinstruments/src/ess/instruments/loki/web.py) gives; the LoKI arrivals do this themselves.
 The two commands make the batches `detector` and `masks`, so the LoKI page then makes no batch of I(Q): make it with **+ New batch**.

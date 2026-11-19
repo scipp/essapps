@@ -31,7 +31,7 @@ as a page does, so a label is one batch whoever works on it:
   label as title; it refuses a label that has definitions or records. A batch
   made so is removed again if the run raises before a row of it was
   submitted.
- The template becomes the batch's settings, and the table is
+  The template becomes the batch's settings, and the table is
   imported as an application imports one (:meth:`.reduction.Batch.put`): set
   by hand on the rows that the source makes from the files, and on those that
   the definitions hold. It then reduces the rows of the table; without a
