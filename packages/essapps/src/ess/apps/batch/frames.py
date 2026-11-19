@@ -1,69 +1,37 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The rows of a batch as a table of text, a pandas ``DataFrame``, which a person
-writes in a spreadsheet and a program writes to a file. It needs pandas.
+A batch run as a command: reduce its rows, wait, and return its table with
+what came of each row. It needs pandas.
 
-A table read from a file holds text; one made in a notebook may hold numbers,
-gaps (``None``, ``NaN``), and any value that a request takes.
+The table is the frame of a batch (:mod:`.table`): the key of each row as
+index, a column per blank, and notes. :func:`reduce_table` reduces a table
+with a template, keeping nothing; :func:`reduce_batch` reduces the rows of a
+batch, such as one of a manager. Both return the table with the columns of
+:data:`RESULT`, so the table that comes back is the table that went in::
 
-The first column holds the key of each row. A column named as a parameter holds
-the cells of that column of the batch, and any other column is ``info``. The key
-column may itself be a parameter, such as the sample run::
+    key    sample     name    status     record    failure
+    60339  run:60339  water   completed  3f2a...
+    60340  run:60340  sds     failed     81c0...   refused: ...
 
-    sample,sample_transmission,name
-    60339,60394,water
-    60340,60395,sds
-
-:mod:`.text` says how a cell is read. :func:`reduce_table` gives the same table
-with what came of each row, so the table that comes back is the table that went
-in.
+:func:`described` gives the table of files of a folder what a person's run
+table says of each file.
 """
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Mapping, Sequence
-from pathlib import Path
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel
 
 from ..client import Client
 from ..records import Template
 from . import state
 from .reduction import Batch
 from .state import RowState
-from .table import Row
-from .text import read_cell, with_named_files, write_cell
-
-_READERS = {
-    '.csv': lambda path: pd.read_csv(path, dtype=str, keep_default_na=False),
-    '.tsv': lambda path: pd.read_csv(path, dtype=str, keep_default_na=False, sep='\t'),
-    '.xlsx': lambda path: pd.read_excel(path, dtype=str, keep_default_na=False),
-}
-
-
-SUFFIXES = tuple(_READERS)
-"""The suffixes of the files that hold a table."""
-
-
-def read_table(path: Path) -> pd.DataFrame:
-    """The table in a ``.csv``, ``.tsv``, or ``.xlsx`` file, each cell as text."""
-    if (reader := _READERS.get(path.suffix)) is None:
-        raise ValueError(f'{path}: a table is one of {", ".join(_READERS)}')
-    return reader(path)
-
-
-def write_table(table: pd.DataFrame, path: Path) -> None:
-    """Write ``table`` as :func:`read_table` reads it, by the suffix of ``path``."""
-    if path.suffix == '.xlsx':
-        table.to_excel(path, index=False)
-    elif path.suffix in _READERS:
-        table.to_csv(path, index=False, sep='\t' if path.suffix == '.tsv' else ',')
-    else:
-        raise ValueError(f'{path}: a table is one of {", ".join(_READERS)}')
+from .table import RESULT, as_request
 
 
 def _empty(cell: Any) -> bool:
@@ -73,66 +41,11 @@ def _empty(cell: Any) -> bool:
     return isinstance(cell, str | float) and (cell == '' or cell != cell)
 
 
-def _value(cell: Any) -> Any:
-    """A cell of text as :func:`.text.read_cell` reads it; any other as it is."""
-    if isinstance(cell, str):
-        return read_cell(cell)
+def _text(cell: Any) -> str:
+    """A cell that names a run or a file as text; ``1.0`` as ``'1'``."""
     cell = cell.item() if isinstance(cell, np.generic) else cell
     # pandas holds whole numbers next to a gap as floats
-    return int(cell) if isinstance(cell, float) and cell.is_integer() else cell
-
-
-def rows_of(
-    table: pd.DataFrame, model: type[BaseModel], columns: Collection[str]
-) -> list[Row]:
-    """
-    A row of a batch for each row of ``table``, keyed by its first column.
-
-    ``columns`` are the columns of the batch, parameters of ``model``. An empty
-    cell is left out of the row's values. A cell that is not text, as in a table
-    made in a notebook, is its value. The other columns are info, but for
-    ``key``, which :func:`table_of` writes. Raises ``ValueError`` if the table
-    lacks one of ``columns``, so that a misspelt header is not read as info, or
-    has a column of another parameter, whose cells no row would use.
-    """
-    if missing := sorted(set(columns) - set(table.columns)):
-        raise ValueError(f'the table has no column {", ".join(missing)}')
-    fixed = set(table.columns) & model.model_fields.keys() - set(columns)
-    if fixed:
-        raise ValueError(
-            f'the column {", ".join(sorted(fixed))} is a parameter, but not a '
-            'blank of the template: name it as a blank, or rename the column'
-        )
-    rows = []
-    for record in table.to_dict('records'):
-        cells = {name: cell for name, cell in record.items() if not _empty(cell)}
-        values = {c: _value(cells[c]) for c in columns if c in cells}
-        info = {n: str(c) for n, c in cells.items() if n not in {*columns, 'key'}}
-        key = str(_value(record[table.columns[0]]))
-        rows.append(Row(key, with_named_files(model, values), info))
-    return rows
-
-
-def table_of(rows: Iterable[Row], columns: Sequence[str] = ()) -> pd.DataFrame:
-    """
-    The table that :func:`rows_of` reads as ``rows``: key, values, then info.
-    It has a column for each of ``columns``, also one that no row has a value
-    of. Raises ``ValueError`` if a row's info has the name of a value or
-    ``key``, since a table has one column of a name.
-    """
-    rows = list(rows)
-    names = {'key', *columns, *(name for row in rows for name in row.values)}
-    records = []
-    for row in rows:
-        if twice := sorted(row.info.keys() & names):
-            raise ValueError(f'{row.key}: info named as a column: {", ".join(twice)}')
-        cells = {name: write_cell(value) for name, value in row.values.items()}
-        records.append(
-            {'key': row.key, **dict.fromkeys(columns, ''), **cells, **row.info}
-        )
-    # A table without rows still has its columns.
-    header = None if records else ['key', *columns]
-    return pd.DataFrame(records, columns=header, dtype=str).fillna('')
+    return str(int(cell) if isinstance(cell, float) and cell.is_integer() else cell)
 
 
 def described(files: pd.DataFrame, run_table: pd.DataFrame) -> pd.DataFrame:
@@ -155,7 +68,7 @@ def described(files: pd.DataFrame, run_table: pd.DataFrame) -> pd.DataFrame:
         column = 'file' if _empty(record.get('run')) else 'run'
         if _empty(record.get(column)):
             raise ValueError('a row of the run table names neither a run nor a file')
-        key = str(_value(record[column]))
+        key = _text(record[column])
         if key in by[column]:
             raise ValueError(f'two rows of the run table describe the {column} {key}')
         by[column][key] = {
@@ -165,25 +78,14 @@ def described(files: pd.DataFrame, run_table: pd.DataFrame) -> pd.DataFrame:
         }
     rows = [
         record
-        | by['file'].get(str(_value(record['file'])), {})
-        | (
-            {}
-            if _empty(run := record.get('run'))
-            else by['run'].get(str(_value(run)), {})
-        )
+        | by['file'].get(_text(record['file']), {})
+        | ({} if _empty(run := record.get('run')) else by['run'].get(_text(run), {}))
         for record in files.to_dict('records')
     ]
     columns = dict.fromkeys(
         [*files.columns, *run_table.columns.drop(list(by), 'ignore')]
     )
     return pd.DataFrame(rows, columns=list(columns)).fillna('')
-
-
-RESULT = ('status', 'record', 'failure')
-"""
-The columns that :func:`reduce_batch`, :func:`batch_table`, and
-:func:`with_results` add, or replace.
-"""
 
 
 def reduce_table(
@@ -198,21 +100,23 @@ def reduce_table(
     earlier_settings: bool = False,
 ) -> pd.DataFrame:
     """
-    Reduce each row of ``table`` with ``template``, wait, and return the table
-    with what came of each row (see :func:`reduce_batch`). The batch is of the
-    spec of the template's name that the workspace binds, the highest version
-    if it binds several (:meth:`~ess.apps.Client.spec_named`). It keeps nothing in
-    definitions, so no manager lists it.
+    Reduce each row of ``table`` with the settings of ``template``, wait, and
+    return the table with what came of each row (see :func:`reduce_batch`).
+    The batch is of the spec of the template's name that the workspace binds,
+    the highest version if it binds several
+    (:meth:`~ess.apps.Client.spec_named`). It keeps nothing in definitions, so
+    no manager lists it.
 
     Parameters
     ----------
     client:
         The client that submits.
     template:
-        The settings, and the blanks, each a column of ``table``. A file in it
-        may be named as in a table (see :mod:`.text`).
+        The settings. Its blanks are not read: the parameter columns of
+        ``table`` are the blanks, and a setting at one of them is left out.
+        A file in it may be named as in a cell (:func:`~.table.as_request`).
     table:
-        The rows, as :func:`rows_of` reads them.
+        The rows, as :meth:`~.reduction.Batch.put` takes them.
     label:
         The label of the records. A batch is found again by it, so each batch
         has its own.
@@ -228,56 +132,39 @@ def reduce_table(
     KeyError
         If the workspace binds no spec of the template's name.
     SubmitError, ValueError
-        As :func:`reduce_batch` raises them.
+        As :func:`reduce_batch` and :class:`~.reduction.Batch` raise them.
     """
+    spec = client.spec_named(template.spec.name)
     batch = Batch(
         client,
-        client.spec_named(template.spec.name),
-        columns=template.blanks,
+        spec,
         label=label,
+        settings=as_request(spec.params, template.params),
+        rows=table,
         staged=staged,
         persist=persist,
     )
-    return reduce_batch(
-        batch,
-        table,
-        settings=template.params,
-        remaining=remaining,
-        earlier_settings=earlier_settings,
-    )
+    return reduce_batch(batch, remaining=remaining, earlier_settings=earlier_settings)
 
 
 def reduce_batch(
     batch: Batch,
-    table: pd.DataFrame | None,
+    keys: Sequence[str] | None = None,
     *,
-    settings: Mapping[str, Any] | None = None,
     remaining: bool = False,
     earlier_settings: bool = False,
 ) -> pd.DataFrame:
     """
-    Reduce the rows of ``batch`` that ``table`` gives, wait, close the batch,
-    and return the table with what came of each row: its ``status``, the ID
-    of its ``record``, and why it failed in ``failure``.
-
-    ``settings`` and ``table`` are imported into the batch, as an application
-    imports them: the settings are the batch's, and the table's rows are set
-    by hand (:meth:`~.reduction.Batch.put`) on the rows of its last scan, so
-    that a batch with definitions keeps both. Both are checked before either
-    is written, so a table refused changes nothing; a ``SubmitError`` leaves
-    them imported, as "Apply" and a refused "Reduce" of a page do.
+    Reduce the rows of ``keys`` of ``batch``, or all of its rows, wait, close
+    the batch, and return those rows of its table with what came of each
+    (:func:`with_results`).
 
     Parameters
     ----------
     batch:
         The batch to reduce.
-    table:
-        The rows, as :func:`rows_of` reads them for the columns of ``batch``.
-        ``None`` for every row of the batch; the table returned is then
-        :func:`batch_table`.
-    settings:
-        The settings, in place of those of the batch. A file in them may be
-        named as in a table (see :mod:`.text`).
+    keys:
+        The rows to reduce, all if not given.
     remaining:
         Reduce only the rows that :func:`~.state.left_to_reduce` gives: those
         whose newest record under the label did not complete, or is outdated
@@ -292,23 +179,14 @@ def reduce_batch(
     Raises
     ------
     SubmitError
-        If a row cannot run; nothing is submitted.
+        If a row cannot run, or the settings are refused; nothing is
+        submitted.
     ValueError
-        If the table does not fit the batch (see :func:`rows_of` and
-        :meth:`~.reduction.Batch.put`), or a column is named as one of
-        :data:`RESULT`.
+        If a blank is named as one of :data:`RESULT`.
     """
     if taken := sorted(set(batch.columns) & set(RESULT)):
         raise ValueError(f'a table cannot hold the blank {", ".join(taken)}')
-    client, model = batch.client, batch.spec.params
-    rows = None if table is None else rows_of(table, model, batch.columns)
-    if settings is not None:
-        settings = with_named_files(model, settings)
-    if rows is not None:
-        batch.put(rows)
-    if settings is not None:
-        batch.settings = settings
-    keys = None if rows is None else [row.key for row in rows]
+    client = batch.client
     try:
         # Records that a workspace went on with after a restart finish first.
         client.wait([s.record for s in batch.results(keys).values() if s.record])
@@ -333,43 +211,30 @@ def reduce_batch(
         raise
     finally:
         batch.close()
-    states = batch.state(keys)
-    if table is None:
-        table = batch_table(batch, states)
-    return with_results(client, states, table, batch.columns)
-
-
-def batch_table(
-    batch: Batch, states: Mapping[str, RowState], keys: Sequence[str] | None = None
-) -> pd.DataFrame:
-    """
-    The rows of ``batch``, or those of ``keys`` in that order, as
-    :func:`table_of` gives them with a column for each column of the batch, and
-    what ``states`` say of each (:func:`with_results`).
-    """
-    rows = batch.rows if keys is None else [batch.rows[key] for key in keys]
-    table = table_of(rows, batch.columns)
-    return with_results(batch.client, states, table, batch.columns)
+    frame = batch.frame()
+    if keys is not None:
+        frame = frame.loc[list(keys)]
+    return with_results(client, batch.state(keys), frame)
 
 
 def with_results(
-    client: Client,
-    states: Mapping[str, RowState],
-    table: pd.DataFrame,
-    columns: Collection[str],
+    client: Client, states: Mapping[str, RowState], frame: pd.DataFrame
 ) -> pd.DataFrame:
     """
-    ``table`` with the columns of :data:`RESULT`, replaced if it has them: what
-    ``states`` say of the row of each key in its first column, for a batch of
-    ``columns``. ``status`` is the row's status as a table shows it
-    (:func:`~.state.status_texts`).
+    ``frame``, the table of a batch or some of its rows, with the columns of
+    :data:`RESULT`, replaced if it has them: what ``states`` say of the row of
+    each key. ``status`` is the row's status as a table shows it
+    (:func:`~.state.status_texts`), ``record`` the ID of its result, and
+    ``failure`` why that failed; each is empty where there is nothing to say.
     """
-    texts = state.status_texts(states, columns)
-    keys = table[table.columns[0]].astype(str)
+    # The parameter columns of the frame are the batch's; a note is never in
+    # RowState.changed, which names parameters.
+    texts = state.status_texts(states, frame.columns)
+    keys = list(frame.index)
     records = [states[key].record for key in keys]
     found = [r for r in records if r is not None]
     failure = dict(zip((r.id for r in found), client.failure(found), strict=True))
-    return table.drop(columns=list(RESULT), errors='ignore').assign(
+    return frame.drop(columns=list(RESULT), errors='ignore').assign(
         status=[texts[key] for key in keys],
         record=['' if r is None else r.id for r in records],
         failure=['' if r is None else failure[r.id] or '' for r in records],

@@ -15,6 +15,7 @@ from ess.apps.batch import (
     CorrectedFiles,
     FolderDefinitions,
 )
+from ess.apps.batch.table import KEY
 from ess.apps.folder import open_folder
 from ess.apps.testing import FakeFiles, FakeStore, StagedFunction, read_file
 from ess.spec import Binding, FileRef, function_binding
@@ -225,7 +226,12 @@ def template() -> Template:
 
 @pytest.fixture
 def table() -> pd.DataFrame:
+    """Two rows for the template: samples 1 and 2, each with a transmission."""
     return pd.DataFrame(
-        {'name': ['a', 'b'], 'sample': ['1', '2'], 'transmission': ['1001', '1002']},
-        dtype=str,
+        {
+            'name': ['water', 'sds'],
+            'sample': ['run:1', 'run:2'],
+            'transmission': ['run:1001', 'run:1002'],
+        },
+        index=pd.Index(['a', 'b'], name=KEY),
     )
