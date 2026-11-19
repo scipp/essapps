@@ -10,7 +10,15 @@ for application developers is ``packages/essapps/docs/batch.md``.
 
 from .corrections import CorrectedFiles
 from .definition import DefinitionStore, FolderDefinitions, Header, NotKept
-from .manager import BatchManager, Counts, Defaults, bound_spec, fits, scope_of
+from .manager import (
+    BatchManager,
+    Counts,
+    Defaults,
+    NotEnded,
+    bound_spec,
+    fits,
+    scope_of,
+)
 from .reduction import Batch, FileInfo, RowSource, Source, Words, file_infos
 from .state import (
     EARLIER,
@@ -38,6 +46,7 @@ __all__ = [
     'FolderDefinitions',
     'Header',
     'Index',
+    'NotEnded',
     'NotKept',
     'Row',
     'RowSource',

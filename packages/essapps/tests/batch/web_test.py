@@ -2024,56 +2024,18 @@ def next_batch(http: TestClient, key: str, title: str = 'Afternoon') -> Any:
     return http.post('/api/batch/next', json={'key': key, 'title': title})
 
 
-def test_the_next_batch_starts_at_the_row_with_the_same_header_and_settings_applied(
-    http: TestClient, pages: Pages, manager: BatchManager
+def test_the_next_batch_starts_at_the_row_with_the_settings_applied(
+    http: TestClient, pages: Pages
 ) -> None:
     bins(http, 5)
     draft(http, 9)  # not applied
 
     made = next_batch(http, '2').json()
 
-    assert manager.headers()[made['label']] == Header(
-        spec=STAGED.name,
-        columns=COLUMNS,
-        source='pairs',
-        title='Afternoon',
-        scope=Scope(start=2),
-    )
     assert list(rows(http)) == ['1']
     following = opened(pages, made['label'])
     assert list(rows(following)) == ['2', '3']
     assert form_bins(state(following)) == 5
-
-
-@pytest.mark.parametrize(
-    ('scope', 'ended', 'starts'),
-    [
-        (Scope(), Scope(stop=2), Scope(start=2)),
-        (Scope(start=1), Scope(start=1, stop=2), Scope(start=2)),
-        (Scope(start=1, stop=3), Scope(start=1, stop=2), Scope(start=2, stop=3)),
-    ],
-    ids=['open', 'start', 'stop'],
-)
-def test_the_next_batch_takes_the_rows_of_this_batch_from_the_row_on(
-    http: TestClient,
-    pages: Pages,
-    manager: BatchManager,
-    batch: Batch,
-    sample: Measure,
-    scope: Scope,
-    ended: Scope,
-    starts: Scope,
-) -> None:
-    sample(4, 'dmso')
-    batch.scan()
-    manager.change('scan', scope=scope)
-
-    made = next_batch(http, '2').json()
-
-    assert manager.headers()['scan'].scope == ended
-    assert manager.headers()[made['label']].scope == starts
-    held = list(rows(opened(pages, made['label'])))
-    assert held == (['2'] if scope.stop is not None else ['2', '3', '4'])
 
 
 @pytest.mark.parametrize(
@@ -2095,51 +2057,6 @@ def test_the_next_batch_takes_follow_from_the_batch_that_followed(
     assert pages.follow.label == (made['label'] if after == 'new' else after)
 
 
-def test_a_row_that_moves_keeps_its_cell_set_by_hand_and_waits_for_a_person(
-    http: TestClient,
-    pages: Pages,
-    client: Client,
-    batch: Batch,
-    sample: Measure,
-) -> None:
-    sample(4, 'dmso')
-    batch.scan()
-    thickness(http, ['2'], 7)
-    pages.follow.on('scan')
-
-    made = next_batch(http, '2').json()
-    pages.tick()
-    client.wait(client.records())
-
-    moved = rows(opened(pages, made['label']))['2']
-    assert (moved['cells']['thickness']['text'], moved['status']) == ('7.0', 'ready')
-    assert moved['cells']['thickness']['edited']
-    assert [r.member for r in client.records(label=made['label'])] == ['4']
-
-
-def test_a_row_removed_by_hand_that_moves_stays_removed(
-    http: TestClient, pages: Pages
-) -> None:
-    http.post('/api/rows/remove', json={'keys': ['3']})
-
-    made = next_batch(http, '2').json()
-
-    following = state(opened(pages, made['label']))
-    assert [row['key'] for row in following['rows']] == ['2']
-    assert following['removed'] == 1
-
-
-def test_a_row_added_by_hand_stays_in_this_batch(
-    http: TestClient, pages: Pages
-) -> None:
-    http.post('/api/rows/add', json={'key': 'added'})
-
-    made = next_batch(http, '2').json()
-
-    assert list(rows(http)) == ['1', 'added']
-    assert 'added' not in rows(opened(pages, made['label']))
-
-
 def test_the_rows_that_move_and_their_results_here_are_counted_first(
     http: TestClient, batch: Batch, client: Client
 ) -> None:
@@ -2151,35 +2068,22 @@ def test_the_rows_that_move_and_their_results_here_are_counted_first(
 
 
 @pytest.mark.parametrize(
-    ('key', 'scope', 'said'),
+    ('key', 'said'),
     [
-        ('added', Scope(), 'added has no run, so no batch can start at it.'),
-        ('9', Scope(), 'There is no row 9.'),
-        (
-            '2',
-            Scope(keys={'1', '2'}),
-            'This batch names its rows, so it has no end to set.',
-        ),
+        ('added', 'added has no run, so no batch can start at it.'),
+        ('9', 'There is no row 9.'),
         (
             '1',
-            Scope(),
-            'water is the first row of this batch, which would then hold none: '
-            'select a later one.',
-        ),
-        (
-            '2',
-            Scope(start=2),
-            'sds is the first row of this batch, which would then hold none: '
-            'select a later one.',
+            'No batch can start at water: the batch holds no row before 1, so it '
+            'would then hold none.',
         ),
     ],
-    ids=['unindexed', 'unknown', 'keys', 'first', 'first-of-scope'],
+    ids=['unindexed', 'unknown', 'refused'],
 )
 def test_the_next_batch_is_refused_at_such_a_row_and_nothing_changes(
-    http: TestClient, manager: BatchManager, key: str, scope: Scope, said: str
+    http: TestClient, manager: BatchManager, key: str, said: str
 ) -> None:
     http.post('/api/rows/add', json={'key': 'added'})
-    manager.change('scan', scope=scope)
     before = manager.headers()
 
     moved = http.post('/api/batch/moved', json={'key': key})
@@ -2190,36 +2094,21 @@ def test_the_next_batch_is_refused_at_such_a_row_and_nothing_changes(
     assert manager.headers() == before
 
 
-def test_a_next_batch_without_a_title_is_refused_and_nothing_changes(
-    http: TestClient, manager: BatchManager
+def test_a_next_batch_without_a_title_says_it_was_not_made(
+    http: TestClient,
 ) -> None:
-    before = manager.headers()
-
     answer = next_batch(http, '2', ' ')
 
     assert answer.status_code == 422
     assert answer.json()['message'] == (
         'The next batch was not made: a batch has a title that is not empty.'
     )
-    assert manager.headers() == before
-
-
-def test_a_next_batch_that_cannot_take_what_was_set_by_hand_is_not_made(
-    http: TestClient, manager: BatchManager, refusing: Refusing
-) -> None:
-    before = manager.headers()
-    refusing.part = 'edits'
-
-    answer = next_batch(http, '2')
-
-    assert answer.status_code == 422
-    assert answer.json()['message'].startswith('The next batch was not made: ')
-    assert manager.headers() == before
 
 
 def test_a_batch_not_ended_after_the_next_was_made_says_both_hold_the_rows(
-    http: TestClient, manager: BatchManager, refusing: Refusing
+    http: TestClient, pages: Pages, refusing: Refusing
 ) -> None:
+    pages.follow.on('scan')
     refusing.part = header_key('scan')
 
     answer = next_batch(http, '2')
@@ -2229,9 +2118,7 @@ def test_a_batch_not_ended_after_the_next_was_made_says_both_hold_the_rows(
         'Afternoon was made, but this batch was not ended, so both hold the rows '
         'that move: '
     )
-    (new,) = set(manager.headers()) - {'scan'}
-    assert manager.headers()['scan'].scope == Scope()
-    assert manager.headers()[new].scope == Scope(start=2)
+    assert pages.follow.label == 'scan'
 
 
 def test_a_batch_removed_from_its_page_is_gone_and_its_results_stay(

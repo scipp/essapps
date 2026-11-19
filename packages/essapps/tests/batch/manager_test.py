@@ -18,6 +18,7 @@ from ess.apps.batch import (
     Defaults,
     FolderDefinitions,
     Header,
+    NotEnded,
     NotKept,
     Row,
     Scope,
@@ -25,7 +26,7 @@ from ess.apps.batch import (
     scope_of,
     status_texts,
 )
-from ess.apps.batch.definition import settings_key
+from ess.apps.batch.definition import header_key, settings_key
 from ess.apps.testing import FakeStore, StagedFunction
 from ess.spec import function_binding
 
@@ -483,6 +484,141 @@ def test_a_batch_without_a_source_takes_no_start_or_stop(manager: BatchManager) 
     with pytest.raises(ValueError, match='no start or stop'):
         manager.create('plain', title='Morning', columns=COLUMNS, scope=Scope(stop=2))
     assert manager.headers() == {}
+
+
+@pytest.fixture
+def scanned(manager: BatchManager, label: str, sample: Measure) -> Batch:
+    """The batch of ``label``, scanned with the runs 1 to 3."""
+    for run, name in enumerate(['water', 'sds', 'oil'], start=1):
+        sample(run, name)
+    return manager.batch(label)
+
+
+def test_the_next_batch_has_the_spec_source_columns_and_settings_of_the_batch(
+    manager: BatchManager, scanned: Batch
+) -> None:
+    scanned.settings = {'binning': {'bins': 5}}
+
+    made = manager.start_next('scan', 2, title='Afternoon')
+
+    assert manager.headers()[made] == Header(
+        spec=STAGED.name,
+        columns=COLUMNS,
+        source='pairs',
+        title='Afternoon',
+        scope=Scope(start=2),
+    )
+    assert manager.batch(made).settings == {'binning': {'bins': 5}}
+
+
+@pytest.mark.parametrize(
+    ('scope', 'ended', 'starts'),
+    [
+        (Scope(), Scope(stop=2), Scope(start=2)),
+        (Scope(start=1), Scope(start=1, stop=2), Scope(start=2)),
+        (Scope(start=1, stop=3), Scope(start=1, stop=2), Scope(start=2, stop=3)),
+    ],
+    ids=['open', 'start', 'stop'],
+)
+def test_the_next_batch_takes_the_rows_of_the_batch_from_the_index_on(
+    manager: BatchManager, scanned: Batch, scope: Scope, ended: Scope, starts: Scope
+) -> None:
+    manager.change('scan', scope=scope)
+
+    assert manager.next_scope('scan', 2) == starts
+    made = manager.start_next('scan', 2, title='Afternoon')
+
+    assert manager.headers()['scan'].scope == ended
+    assert manager.headers()[made].scope == starts
+    assert [row.key for row in manager.batch('scan').rows] == ['1']
+    moved = [row.key for row in manager.batch(made).rows]
+    assert moved == (['2'] if scope.stop is not None else ['2', '3'])
+
+
+def test_what_was_set_by_hand_on_the_rows_that_move_goes_with_them(
+    manager: BatchManager, scanned: Batch, client: Client
+) -> None:
+    client.wait(scanned.reduce(['2']))
+    scanned.rows = (
+        scanned.rows.edit('1', {'thickness': 1.0})
+        .edit('2', {'thickness': 2.0})
+        .remove('3')
+        .add(Row('mine'))
+    )
+
+    made = manager.start_next('scan', 2, title='Afternoon')
+
+    moved = manager.batch(made).rows
+    assert (moved.edits, moved.removed) == ({'2': {'thickness': 2.0}}, {'3'})
+    assert [row.key for row in moved] == ['2']
+    assert [row.key for row in manager.batch('scan').rows] == ['1', 'mine']
+    assert [r.member for r in client.records(label='scan')] == ['2']
+    assert client.records(label=made) == []
+
+
+@pytest.mark.parametrize(
+    ('scope', 'index', 'said'),
+    [
+        (
+            Scope(keys={'1', '2'}),
+            2,
+            'the batch names its rows, so it has no end to set',
+        ),
+        (Scope(), 1, 'the batch holds no row before 1, so it would then hold none'),
+        (
+            Scope(start=2),
+            2,
+            'the batch holds no row before 2, so it would then hold none',
+        ),
+        (Scope(start=2), 1, 'the stop of a scope, 1, is below its start, 2'),
+        (Scope(stop=2), 3, 'the stop of a scope, 2, is below its start, 3'),
+    ],
+    ids=['keys', 'first', 'first-of-scope', 'below', 'above'],
+)
+def test_the_next_batch_is_refused_at_such_an_index_and_nothing_changes(
+    manager: BatchManager, scanned: Batch, scope: Scope, index: Any, said: str
+) -> None:
+    manager.change('scan', scope=scope)
+    before = manager.headers()
+
+    with pytest.raises(ValueError, match=re.escape(said)):
+        manager.next_scope('scan', index)
+    with pytest.raises(ValueError, match=re.escape(said)):
+        manager.start_next('scan', index, title='Afternoon')
+    assert manager.headers() == before
+
+
+def test_a_next_batch_that_create_refuses_changes_nothing(
+    manager: BatchManager, scanned: Batch
+) -> None:
+    before = manager.headers()
+
+    with pytest.raises(ValueError, match='a title that is not empty'):
+        manager.start_next('scan', 2, title=' ')
+    assert manager.headers() == before
+
+
+def test_a_next_batch_that_cannot_take_what_was_set_by_hand_is_removed_again(
+    manager: BatchManager, scanned: Batch, refusing: Refusing
+) -> None:
+    before = manager.headers()
+    refusing.part = 'edits'
+
+    with pytest.raises(NotKept):
+        manager.start_next('scan', 2, title='Afternoon')
+    assert manager.headers() == before
+
+
+def test_a_batch_not_ended_after_the_next_was_made_raises_and_both_hold_the_rows(
+    manager: BatchManager, scanned: Batch, refusing: Refusing
+) -> None:
+    refusing.part = header_key('scan')
+
+    with pytest.raises(NotEnded):
+        manager.start_next('scan', 2, title='Afternoon')
+    (made,) = set(manager.headers()) - {'scan'}
+    assert manager.headers()['scan'].scope == Scope()
+    assert manager.headers()[made].scope == Scope(start=2)
 
 
 def test_a_batch_removed_is_gone_with_its_definitions_and_its_records_stay(

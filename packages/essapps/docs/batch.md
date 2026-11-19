@@ -432,6 +432,8 @@ counts.outside         # {source: rows that no batch of it shows}
 batch = manager.batch(label)   # the Batch, made and scanned at the first call
 manager.change(label, title='Afternoon, 2 mm cells')
 manager.change(label, scope=Scope(start=60339, stop=60421))   # the series ends
+manager.next_scope(label, 60400)   # Scope(start=60400, stop=60421): what the next batch holds
+evening = manager.start_next(label, 60400, title='Evening')   # the next batch; this one ends before 60400
 manager.remove(label)
 ```
 
@@ -470,6 +472,7 @@ What the manager gives the `Batch` of a label:
 - `change` changes the title, the description and the scope, and refuses an empty title; a scope is written to the header, then given to the `Batch` of the label if it was made, whose rows change at once.
 - A header without `settings.json` is a batch with the default settings of its spec, as registered at each start.
 - A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. `create` refuses a label that has definitions or records.
+- `start_next` ends a batch before an index and makes the next batch from there up to the old stop (`next_scope`), with the same spec, source, columns and settings. The cells set by hand and the removals of the rows that move go with them; the rows added by hand stay, and so do the results, under the old label, so the next batch reduces those rows again. It refuses a scope of keys, which has no end to set, and an index with no row of the scan before it, which would leave the batch none. The next batch is made first, so a refusal of `create` changes nothing, and it is removed again if its scan raises or it cannot take what was set by hand; if the old batch then cannot be ended, it raises `NotEnded`, and both hold the rows that move. `Follow` is the caller's to move.
 - `remove` removes the header, the edits and the settings of a batch, and releases its stage. Its records stay, and those running keep running. A `Batch` handed out before must not be used after its removal, so ask the manager for the batch each time.
 - A `Batch` made in code without the manager has no header and is not listed.
 - `counts` makes every batch not made yet, which scans it, and scans every other batch with a source, so the rows of each batch are those of the files now. It gives the state of each row of each batch, and the rows of each source that no batch of it shows: a row counts as shown if any batch shows it, so a row outside the scope of every batch of its source counts there. A source is called once more only if no batch of it was scanned. A batch that cannot be made or scanned, such as one whose source is no longer registered or raises, gets its reason in `failed`, and its source is left out of `outside`. It costs one scan per batch, so call it when a person asks.
@@ -766,7 +769,7 @@ Each `reduce` exits 3: the demo's run 60345 holds no neutron events, so its row 
 | **Download settings** | `text.write_template(batch.template(), path)`, refused while the settings form holds a change |
 | **Download selected**, **Download all** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows, zipped with their table |
 | **Save** in the tab **Batch** | `manager.change(label, title=..., description=..., scope=scope_of(batch.source, start, stop))` |
-| **Start the next batch here** | `manager.create(old.spec, title=..., source=old.source, columns=old.columns, scope=Scope(start=index, stop=old.scope.stop), settings=batch.settings)`, then the edits and removals of the rows that move set on the new batch's `rows`, then `manager.change(label, scope=Scope(start=old.scope.start, stop=index))`, with `old = manager.headers()[label]` and `index` that of the row selected; Follow moves to the new batch if this one follows. Rows added by hand stay, and the results of the rows that move stay under the old label, so the new batch reduces them again |
+| **Start the next batch here** | `manager.start_next(label, index, title=...)`, with `index` that of the row selected, then `follow.on(...)` with its label if this batch follows; the counts of the dialog are of the rows that `manager.next_scope(label, index)` holds |
 | **Remove this batch** | `follow.off()` if it follows, then `manager.remove(label)` |
 
 `reduce` refuses a table or a batch with a row that cannot run, so remove the incomplete rows on the page first. A table loaded is set by hand: each cell that differs from the row shown is an edit, a row the batch removed is brought back, and a row the batch does not show is added, so it stays after **Rescan runs**, and the definitions keep it. A table with a row that the source makes and the scope leaves out is refused, and nothing is set. The `status` of a table written is what the page shows, such as `outdated`, `not reduced`, or `completed, earlier settings` (`status_texts`). `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table.

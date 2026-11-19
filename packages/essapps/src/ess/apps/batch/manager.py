@@ -2,8 +2,9 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 The batches of a workspace: :class:`BatchManager` makes, lists, changes and
-removes them. The guide is the section "The batches of a workspace" of
-``packages/essapps/docs/batch.md``; the decision is
+removes them, and ends one at a row to start the next. The guide is the
+section "The batches of a workspace" of ``packages/essapps/docs/batch.md``;
+the decision is
 ``docs/developer/adr/0011-a-person-makes-the-batches-of-a-workspace.md``.
 
 A batch is kept as three tables of the definitions (:mod:`.definition`), each
@@ -53,7 +54,7 @@ from .definition import (
 )
 from .reduction import Batch, Source, check_fills, file_infos
 from .state import RowState
-from .table import Scope
+from .table import Index, Scope
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,13 @@ class Counts:
     states: dict[str, dict[str, RowState]]
     failed: dict[str, str]
     outside: dict[str, int]
+
+
+class NotEnded(NotKept):
+    """
+    :meth:`BatchManager.start_next` made the next batch, but the definitions
+    refused to end the batch before it, so both hold the rows that move.
+    """
 
 
 def _said(error: Exception) -> str:
@@ -194,8 +202,9 @@ class BatchManager:
     The headers are read when the manager is made. Each change of a header is
     written to the definitions before the manager holds it, and one that
     they refuse raises :class:`~.definition.NotKept`, so the manager lists
-    the batches whose header the definitions keep. :meth:`create` and
-    :meth:`remove` say what they leave when a write is refused.
+    the batches whose header the definitions keep. :meth:`create`,
+    :meth:`start_next` and :meth:`remove` say what they leave when a write is
+    refused.
 
     Parameters
     ----------
@@ -454,6 +463,71 @@ class BatchManager:
         if (batch := self._batches.get(label)) is not None:
             batch.scope = header.scope
         return header
+
+    def next_scope(self, label: str, index: Index) -> Scope:
+        """
+        The scope of the next batch if the batch of ``label`` ended before
+        ``index``: from ``index`` up to its stop. Raises ``KeyError`` as
+        :meth:`batch` does; ``ValueError`` if the batch names its rows, which
+        have no end to set, if ``index`` is below the start or above the stop
+        of its scope, or if it holds no row of the scan before ``index``,
+        which would leave it none.
+        """
+        batch = self.batch(label)
+        scope = batch.scope
+        if scope.keys is not None:
+            raise ValueError('the batch names its rows, so it has no end to set')
+        before = Scope(start=scope.start, stop=index)
+        if not any(before.holds(row) for row in batch.rows.scan):
+            raise ValueError(
+                f'the batch holds no row before {index}, so it would then hold none'
+            )
+        return Scope(start=index, stop=scope.stop)
+
+    def start_next(self, label: str, index: Index, *, title: str) -> str:
+        """
+        End the batch of ``label`` before ``index``, and make the next batch,
+        called ``title``, of :meth:`next_scope`, with the same spec, source,
+        columns and settings; its label. The cells set by hand and the
+        removals of the rows that move go with them; the rows added by hand
+        stay, and so do the results, under ``label``.
+
+        It raises what :meth:`next_scope` and :meth:`create` raise, with the
+        batch of ``label`` as it was. The next batch is made first; if its
+        scan raises, or the definitions refuse what was set by hand on it, it
+        is removed again (:meth:`remove`) and the error raised. If the batch
+        of ``label`` then cannot be ended, :class:`NotEnded` is raised, and
+        both batches hold the rows that move.
+        """
+        scope = self.next_scope(label, index)
+        batch = self.batch(label)
+        header = self._headers[label]
+        rows = batch.rows
+        moving = {row.key for row in rows.scan if scope.holds(row)}
+        made = self.create(
+            header.spec,
+            title=title,
+            source=header.source,
+            columns=header.columns,
+            scope=scope,
+            settings=batch.settings,
+        )
+        try:
+            next_batch = self.batch(made)  # scanned
+            next_batch.rows = replace(
+                next_batch.rows,
+                edits={k: v for k, v in rows.edits.items() if k in moving},
+                removed=rows.removed & moving,
+            )
+        except Exception:
+            with suppress(NotKept):
+                self.remove(made)
+            raise
+        try:
+            self.change(label, scope=Scope(start=header.scope.start, stop=scope.start))
+        except NotKept as error:
+            raise NotEnded(str(error)) from error
+        return made
 
     def remove(self, label: str) -> None:
         """

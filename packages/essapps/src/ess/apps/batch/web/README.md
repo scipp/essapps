@@ -109,14 +109,11 @@ A scope that names its rows, which only code makes, is shown as "2 rows named", 
 A wider scope of the batch that follows makes its next step reduce the rows it adds, so Save first asks `POST api/batch/added` how many rows the scope adds that have no result and no cell set by hand, and asks the person to confirm if there are any.
 
 **Start the next batch here** splits the batch at the row selected: this batch ends before the row, and the next batch holds the rows of this one from the row on (`POST api/batch/next`).
-In code, with `old = manager.headers()[label]` and `index` that of the row:
+The manager decides what moves and what it refuses (`BatchManager.start_next`); the page finds the index of the row and moves Follow.
+In code, with `index` that of the row:
 
 ```python
-new = manager.create(old.spec, title=title, source=old.source, columns=old.columns,
-                     scope=Scope(start=index, stop=old.scope.stop),
-                     settings=manager.batch(label).settings)
-manager.batch(new).rows = ...   # the edits and removals of the rows that move
-manager.change(label, scope=Scope(start=old.scope.start, stop=index))
+new = manager.start_next(label, index, title=title)
 if follow.label == label:
     follow.on(new)
 ```
@@ -127,9 +124,10 @@ The results of the rows that move stay under the label of this batch, as every r
 So the page first asks the server what moves (`POST api/batch/moved`), and asks for the title of the next batch with that said: how many rows move, how many of them have a result here, and whether Follow moves and reduces them again.
 Cancel changes nothing; otherwise the page goes to the page of the next batch.
 The next batch gets the settings in force, not a change of the settings form that is not applied.
-It needs one row selected, with an index, that is not the first row of this batch, and a batch whose scope is a range: the page says so otherwise, and nothing changes.
+It needs one row selected, with an index; the manager refuses the first row of this batch, and a batch whose scope names its rows (`BatchManager.next_scope`).
+The page says why, and nothing changes.
 A row of the scan without an index is in neither batch afterwards, since both scopes then have an end.
-The next batch is made first, so a title that the manager refuses changes nothing, and it is removed again if it cannot take what was set by hand; if this batch then cannot be ended, both hold the rows that move, and the page says so.
+The next batch is made first, so a title that the manager refuses changes nothing, and it is removed again if it cannot take what was set by hand; if this batch then cannot be ended, both hold the rows that move, Follow stays where it is, and the page says so.
 
 **Remove this batch**, after a confirmation, removes the header, the settings and the edits of the batch (`POST api/batch/remove`, `BatchManager.remove`); its results stay in the workspace.
 If the batch follows, Follow is turned off at once; if the definitions refuse the removal, the batch and Follow stay as they were.
