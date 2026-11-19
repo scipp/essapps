@@ -105,7 +105,7 @@ The tab **Batch**, next to **Result**, **Settings** and the row tab, shows the h
 Its workflow, source, columns and label are fixed when the batch is made, and shown as text.
 Its title, description and scope are a form, which **Save** sends to `POST api/batch` (`BatchManager.change`); the scope is written as in the form "New batch".
 What the manager refuses, such as an empty title or a stop below the start, shows at the form, and nothing changes.
-A wider scope of the batch that follows makes its next step reduce the rows it adds, so Save first asks `POST api/batch/added` how many rows the scope adds that have no result and no cell set by hand, and asks the person to confirm if there are any.
+A wider scope of the batch that follows makes its next step reduce the rows it adds that have no result.
 
 **Start the next batch here** splits the batch at the row selected: this batch ends before the row, and the next batch holds the rows of this one from the row on (`POST api/batch/next`).
 The manager decides what moves and what it refuses (`BatchManager.start_next`); the page finds the index of the row and moves Follow.
@@ -119,11 +119,10 @@ if follow.label == label:
 
 What a person did to the rows that move goes with them: their cells set by hand, and their removal by hand, so Follow still leaves a row set by hand to the person.
 A row added by hand stays in this batch, since such a row is in its batch whatever the scope.
-The results of the rows that move stay under the label of this batch, as every result does, so the next batch shows those rows as not reduced, and Follow, if it moves, reduces them again.
-So the page first asks the server what moves (`POST api/batch/moved`), and asks for the title of the next batch with that said: how many rows move, how many of them have a result here, and whether Follow moves and reduces them again.
-Cancel changes nothing; otherwise the page goes to the page of the next batch.
+The results of the rows that move stay under the label of this batch, as every result does, so the next batch shows those rows as not reduced, and Follow, if it moves, reduces them again; the text under the button says so.
+The page asks for the title of the next batch; Cancel changes nothing, otherwise the page goes to the page of the next batch.
 The next batch gets the settings in force, not a change of the settings form that is not applied.
-It needs one row selected, with an index; the manager refuses the first row of this batch, and a batch whose scope names its rows (`BatchManager.next_scope`).
+It needs one row selected, with an index; the manager refuses the first row of this batch.
 The page says why, and nothing changes.
 A row of the scan without an index is in neither batch afterwards, since both scopes then have an end.
 The next batch is made first, so a title that the manager refuses changes nothing, and it is removed again if it cannot take what was set by hand; if this batch then cannot be ended, both hold the rows that move, Follow stays where it is, and the page says so.
@@ -198,7 +197,6 @@ See [Where the definition is kept](../../../../../docs/batch.md#where-the-defini
 - One `Batch` per label. Another one on the page's label writes its whole table of edits at each change, over those of the page ([Where the definition is kept](../../../../../docs/batch.md#where-the-definition-is-kept)).
 - One user. Two open pages of one batch show and edit the same state.
 - One lock for all pages: a request waits while a step of Follow runs on another batch.
-- The confirmation of a wider scope counts the rows of the last scan without a result and not set by hand, incomplete ones too, which Follow does not reduce; it leaves out the rows with an outdated result, which Follow reduces too if a cell changed at its columns.
 - A batch that cannot be shown, such as one whose source raises, has no tab **Batch**, so it is removed only in code.
 - The confirmations and the title of the next batch are the browser's dialogs (`confirm`, `prompt`).
 

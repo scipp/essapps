@@ -1065,33 +1065,6 @@ def test_a_refused_header_shows_at_the_form_and_changes_nothing(
     page.errors.clear()
 
 
-def test_a_wider_scope_of_the_batch_that_follows_is_saved_after_a_confirmation(
-    page: Any, pages: Pages, manager: BatchManager
-) -> None:
-    manager.change('scan', scope=Scope(stop=2))
-    pages.follow.on('scan')
-    page.reload()
-    page.wait_for_selector('#follow input:checked')
-    page.click('[data-tab=batch]')
-    asked: list[str] = []
-
-    def answer(dialog: Any) -> None:
-        asked.append(dialog.message)
-        dialog.dismiss() if len(asked) == 1 else dialog.accept()
-
-    page.on('dialog', answer)
-    page.fill('#tab-batch [name=stop]', '')
-    with page.expect_event('dialog'):
-        page.click('#batch-form [type=submit]')
-    assert manager.headers()['scan'].scope == Scope(stop=2)
-    page.click('#batch-form [type=submit]')
-
-    page.wait_for_selector('.chip.st-all .n:text-is("3")')
-    assert asked[0].startswith('This scope adds 2 rows without a result.')
-    assert len(asked) == 2
-    assert manager.headers()['scan'].scope == Scope()
-
-
 def test_a_person_ends_a_series_and_starts_the_next_at_a_row(
     page: Any, manager: BatchManager
 ) -> None:
@@ -1107,7 +1080,7 @@ def test_a_person_ends_a_series_and_starts_the_next_at_a_row(
     page.click('#next-batch')
 
     page.wait_for_selector('#title:has-text("Afternoon")')
-    assert asked[0].startswith('2 rows move to the next batch, from sds on,')
+    assert asked[0].startswith('The next batch starts at sds.')
     (label,) = set(manager.headers()) - {'scan'}
     assert page.url.endswith(f'/batches/{label}/')
     assert manager.headers()['scan'].scope == Scope(stop=2)

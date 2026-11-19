@@ -419,17 +419,6 @@ class Next(BaseModel):
     title: str
 
 
-class Moved(BaseModel):
-    """
-    What starting the next batch at a row moves: how many ``rows`` the next
-    batch holds in place of this one, and how many of them have a result
-    under this batch's label, which the next batch does not show.
-    """
-
-    rows: int
-    results: int
-
-
 class Made(BaseModel):
     """The label of the batch made."""
 

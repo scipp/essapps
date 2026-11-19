@@ -97,7 +97,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import AbstractContextManager, contextmanager, suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -114,7 +114,6 @@ from .. import (
     EARLIER,
     EMPTY,
     Batch,
-    Index,
     NotEnded,
     NotKept,
     RowState,
@@ -124,7 +123,6 @@ from .. import (
     frames,
     left_to_reduce,
     ready,
-    scope_of,
     status_texts,
 )
 from .. import Row as TableRow
@@ -138,12 +136,10 @@ from .models import (
     Cells,
     Column,
     Edit,
-    Ends,
     Following,
     HeaderEdit,
     HeaderShown,
     Made,
-    Moved,
     Next,
     Plot,
     Reduce,
@@ -1011,56 +1007,6 @@ class Page:
         return 'Saved.'
 
     @_locked
-    def added(self, ends: Ends) -> int:
-        """
-        How many rows of the last scan the scope of ``ends`` holds that the
-        batch does not, with no result and no cell set by hand. If the scope
-        is saved while the batch follows, Follow reduces those of them that
-        are complete at its next step (:func:`~ess.apps.batch.arrived`).
-        """
-        try:
-            scope = scope_of(self.batch.source, Scope(start=ends.start, stop=ends.stop))
-        except ValueError as error:
-            raise Problem(f'The scope is refused: {why(error)}.') from None
-        rows = self.batch.rows
-        held = replace(rows, scope=scope)
-        reduced = {r.member for r in self.batch.client.records(label=self.label)}
-        return sum(
-            r.key not in rows and r.key not in reduced and r.key not in rows.edits
-            for r in held
-        )
-
-    def _next_scope(self, key: str) -> tuple[Index, Scope]:
-        """
-        The index of row ``key``, and the scope of the next batch if it starts
-        there (:meth:`~ess.apps.batch.BatchManager.next_scope`).
-        :class:`Problem` if the row has no index, or the manager refuses it.
-        """
-        row = self._row_of(key)
-        name = self._named(row)
-        if row.index is None:
-            source = self.batch.source
-            what = 'index' if source is None else source.index_title.lower()
-            raise Problem(f'{name} has no {what}, so no batch can start at it.')
-        try:
-            return row.index, self.pages.manager.next_scope(self.label, row.index)
-        except ValueError as error:
-            raise Problem(f'No batch can start at {name}: {why(error)}.') from None
-
-    @_locked
-    def moved(self, key: str) -> Moved:
-        """
-        What "Start the next batch here" at row ``key`` moves: how many rows
-        this batch shows that the next batch holds instead, and how many of
-        them have a result here, which stays under this batch's label.
-        :class:`Problem` as :meth:`start_next` refuses.
-        """
-        _, scope = self._next_scope(key)
-        moving = [r.key for r in self.batch.rows if scope.holds(r)]
-        reduced = {r.member for r in self.batch.client.records(label=self.label)}
-        return Moved(rows=len(moving), results=len(reduced.intersection(moving)))
-
-    @_locked
     def start_next(self, request: Next) -> Made:
         """
         End the batch before row ``request.key``, and start the next batch
@@ -1071,11 +1017,18 @@ class Page:
         both hold the rows that move, Follow stays where it is, and the
         :class:`Problem` says so.
         """
-        index, _ = self._next_scope(request.key)
+        row = self._row_of(request.key)
+        if row.index is None:
+            source = self.batch.source
+            what = 'index' if source is None else source.index_title.lower()
+            raise Problem(
+                f'{self._named(row)} has no {what}, so no batch can start at it.'
+            )
         try:
             label = self.pages.manager.start_next(
-                self.label, index, title=request.title
+                self.label, row.index, title=request.title
             )
+
         except NotEnded as error:
             raise Problem(
                 f'{request.title} was made, but this batch was not ended, so both '

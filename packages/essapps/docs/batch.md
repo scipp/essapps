@@ -431,7 +431,6 @@ counts.outside         # {source: rows that no batch of it shows}
 batch = manager.batch(label)   # the Batch, made and scanned at the first call
 manager.change(label, title='Afternoon, 2 mm cells')
 manager.change(label, scope=Scope(start=60339, stop=60421))   # the series ends
-manager.next_scope(label, 60400)   # Scope(start=60400, stop=60421): what the next batch holds
 evening = manager.start_next(label, 60400, title='Evening')   # the next batch; this one ends before 60400
 manager.remove(label)
 ```
@@ -471,7 +470,7 @@ What the manager gives the `Batch` of a label:
 - `change` changes the title, the description and the scope, and refuses an empty title; a scope is written to the header, then given to the `Batch` of the label if it was made, whose rows change at once.
 - A header without `settings.json` is a batch with the default settings of its spec, as registered at each start.
 - A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. `create` refuses a label that has definitions or records.
-- `start_next` ends a batch before an index and makes the next batch from there up to the old stop (`next_scope`), with the same spec, source, columns and settings. The cells set by hand and the removals of the rows that move go with them; the rows added by hand stay, and so do the results, under the old label, so the next batch reduces those rows again. It refuses an index with no row of the scan before it, which would leave the batch none.
+- `start_next` ends a batch before an index and makes the next batch from there up to the old stop, with the same spec, source, columns and settings. The cells set by hand and the removals of the rows that move go with them; the rows added by hand stay, and so do the results, under the old label, so the next batch reduces those rows again. It refuses an index with no row of the scan before it, which would leave the batch none.
  The next batch is made first, so a refusal of `create` changes nothing, and it is removed again if its scan raises or it cannot take what was set by hand; if the old batch then cannot be ended, it raises `NotEnded`, and both hold the rows that move. `Follow` is the caller's to move.
 - `remove` removes the header, the edits and the settings of a batch, and releases its stage. Its records stay, and those running keep running. A `Batch` handed out before must not be used after its removal, so ask the manager for the batch each time.
 - A `Batch` made in code without the manager has no header and is not listed.
@@ -770,7 +769,7 @@ Each `reduce` exits 3: the demo's run 60345 holds no neutron events, so its row 
 | **Download settings** | `text.write_template(batch.template(), path)`, refused while the settings form holds a change |
 | **Download selected**, **Download all** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows, zipped with their table |
 | **Save** in the tab **Batch** | `manager.change(label, title=..., description=..., scope=Scope(start=start, stop=stop))`, with the ends as typed |
-| **Start the next batch here** | `manager.start_next(label, index, title=...)`, with `index` that of the row selected, then `follow.on(...)` with its label if this batch follows; the counts of the dialog are of the rows that `manager.next_scope(label, index)` holds |
+| **Start the next batch here** | `manager.start_next(label, index, title=...)`, with `index` that of the row selected, then `follow.on(...)` with its label if this batch follows |
 | **Remove this batch** | `follow.off()` if it follows, then `manager.remove(label)` |
 
 `reduce` refuses a table or a batch with a row that cannot run, so remove the incomplete rows on the page first. A table loaded is set by hand: each cell that differs from the row shown is an edit, a row the batch removed is brought back, and a row the batch does not show is added, so it stays after **Rescan runs**, and the definitions keep it. A table with a row that the source makes and the scope leaves out is refused, and nothing is set. The `status` of a table written is what the page shows, such as `outdated`, `not reduced`, or `completed, earlier settings` (`status_texts`). `reduce` replaces the result columns, and `export` reads only the `record` column, so both take such a table.

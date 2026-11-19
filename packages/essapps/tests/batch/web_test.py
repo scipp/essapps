@@ -1986,26 +1986,6 @@ def test_a_header_the_manager_refuses_answers_422_and_changes_nothing(
     assert manager.headers() == before
 
 
-def test_the_rows_a_wider_scope_adds_are_those_with_no_result_and_not_set_by_hand(
-    http: TestClient,
-    manager: BatchManager,
-    batch: Batch,
-    client: Client,
-    sample: Measure,
-) -> None:
-    sample(4, 'dmso')
-    sample(5, 'thf')
-    batch.scan()
-    client.wait(batch.reduce(['2']))
-    thickness(http, ['3'], 2)
-    manager.change('scan', scope=Scope(stop=2))
-
-    added = http.post('/api/batch/added', json={'start': None, 'stop': '5'})
-
-    assert added.json() == 1  # 4: 2 has a result and 3 a cell set by hand
-    assert http.post('/api/batch/added', json={'stop': 'x'}).status_code == 422
-
-
 def next_batch(http: TestClient, key: str, title: str = 'Afternoon') -> Any:
     return http.post('/api/batch/next', json={'key': key, 'title': title})
 
@@ -2043,16 +2023,6 @@ def test_the_next_batch_takes_follow_from_the_batch_that_followed(
     assert pages.follow.label == (made['label'] if after == 'new' else after)
 
 
-def test_the_rows_that_move_and_their_results_here_are_counted_first(
-    http: TestClient, batch: Batch, client: Client
-) -> None:
-    client.wait(batch.reduce(['1', '2']))
-
-    moved = http.post('/api/batch/moved', json={'key': '2'})
-
-    assert moved.json() == {'rows': 2, 'results': 1}
-
-
 @pytest.mark.parametrize(
     ('key', 'said'),
     [
@@ -2060,7 +2030,7 @@ def test_the_rows_that_move_and_their_results_here_are_counted_first(
         ('9', 'There is no row 9.'),
         (
             '1',
-            'No batch can start at water: the batch holds no row before 1, so it '
+            'The next batch was not made: the batch holds no row before 1, so it '
             'would then hold none.',
         ),
     ],
@@ -2072,10 +2042,8 @@ def test_the_next_batch_is_refused_at_such_a_row_and_nothing_changes(
     http.post('/api/rows/add', json={'key': 'added'})
     before = manager.headers()
 
-    moved = http.post('/api/batch/moved', json={'key': key})
     answer = next_batch(http, key)
 
-    assert (moved.status_code, moved.json()) == (422, {'message': said})
     assert (answer.status_code, answer.json()) == (422, {'message': said})
     assert manager.headers() == before
 

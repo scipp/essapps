@@ -552,7 +552,6 @@ def test_the_next_batch_takes_the_rows_of_the_batch_from_the_index_on(
 ) -> None:
     manager.change('scan', scope=scope)
 
-    assert manager.next_scope('scan', 2) == starts
     made = manager.start_next('scan', 2, title='Afternoon')
 
     assert manager.headers()['scan'].scope == ended
@@ -603,8 +602,6 @@ def test_the_next_batch_is_refused_at_such_an_index_and_nothing_changes(
     manager.change('scan', scope=scope)
     before = manager.headers()
 
-    with pytest.raises(ValueError, match=re.escape(said)):
-        manager.next_scope('scan', index)
     with pytest.raises(ValueError, match=re.escape(said)):
         manager.start_next('scan', index, title='Afternoon')
     assert manager.headers() == before

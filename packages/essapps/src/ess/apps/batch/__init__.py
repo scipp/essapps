@@ -10,7 +10,7 @@ for application developers is ``packages/essapps/docs/batch.md``.
 
 from .corrections import CorrectedFiles
 from .definition import DefinitionStore, FolderDefinitions, Header, NotKept
-from .manager import BatchManager, Counts, Defaults, NotEnded, fits, scope_of
+from .manager import BatchManager, Counts, Defaults, NotEnded, fits
 from .reduction import Batch, FileInfo, RowSource, Source, Words, file_infos
 from .state import (
     EARLIER,
@@ -55,6 +55,5 @@ __all__ = [
     'left_to_reduce',
     'ready',
     'refused_again',
-    'scope_of',
     'status_texts',
 ]

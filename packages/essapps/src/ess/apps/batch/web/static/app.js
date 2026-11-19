@@ -584,7 +584,7 @@ function renderBatch(state) {
   $('batch-to').textContent = `up to, not including, ${index}`;
   $('batch-scope').hidden = header.source === null;
   const follows = state.follow?.on ? ' Follow moves to it.' : '';
-  $('next-hint').textContent = `Ends this batch before the ${words().one} selected. The next batch takes its ${words().many} from there on, with the same workflow, columns and settings.${follows}`;
+  $('next-hint').textContent = `Ends this batch before the ${words().one} selected. The next batch takes its ${words().many} from there on, with the same workflow, columns and settings. The results of the ${words().many} that move stay in this batch.${follows}`;
   const form = $('batch-form');
   const shown = JSON.stringify([state.title, header]);
   if (shown === form.shown) return;
@@ -595,42 +595,28 @@ function renderBatch(state) {
   form.elements.stop.value = header.stop ?? '';
 }
 
-// Save the form of the tab "Batch"; a refusal shows at the form. A wider scope
-// of the batch that follows makes Follow reduce the rows it adds, so Save asks
-// first, naming how many.
-async function saveBatch(event) {
+// Save the form of the tab "Batch"; a refusal shows at the form.
+function saveBatch(event) {
   event.preventDefault();
   const {elements} = $('batch-form');
   const say = (text) => ($('batch-problem').textContent = text);
   const end = (input) => input.value.trim() || null;
-  const ends = {start: end(elements.start), stop: end(elements.stop)};
   say('');
-  if (view.state.follow?.on) {
-    const n = await request('batch/added', {body: ends, say});
-    if (n === null) return;
-    const question = `This scope adds ${count(n)} without a result. Follow reduces those it can at its next step. Save?`;
-    if (n > 0 && !confirm(question)) return;
-  }
-  const body = {...ends, title: elements.title.value.trim(), description: elements.description.value.trim()};
-  act('batch', body, say);
+  act('batch', {
+    start: end(elements.start),
+    stop: end(elements.stop),
+    title: elements.title.value.trim(),
+    description: elements.description.value.trim(),
+  }, say);
 }
 
 // End this batch at the row selected, and go to the next batch, which starts
-// there. The server says first what moves, or why it cannot; the title is
-// asked with that, so that Cancel changes nothing.
+// there; a refusal shows as a message, and Cancel of the title changes nothing.
 async function startNext() {
   const chosen = selectedRows();
   if (chosen.length !== 1) return showMessage(`Select one ${words().one}: the next batch starts at it.`);
   const [row] = chosen;
-  const moved = await request('batch/moved', {body: {key: row.key}});
-  if (!moved) return;
-  const follows = view.state.follow?.on;
-  const said = [`${count(moved.rows)} move to the next batch, from ${row.name} on, with the values set by hand on them.`];
-  if (moved.results) {
-    const again = follows ? ', and Follow, which moves to it, reduces them again' : '';
-    said.push(`${moved.results} of them have a result in this batch, which stays here: the next batch shows them as not reduced${again}.`);
-  } else if (follows) said.push('Follow moves to the next batch.');
-  const title = prompt(`${said.join(' ')}\n\nTitle of the next batch:`);
+  const title = prompt(`The next batch starts at ${row.name}.\n\nTitle of the next batch:`);
   if (title === null) return;
   const made = await queued(() => request('batch/next', {body: {key: row.key, title: title.trim()}}));
   if (made) location.href = batchUrl(made.label);

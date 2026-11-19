@@ -132,7 +132,7 @@ def fits(spec: WorkflowSpec[Any, Any], source: Source | None) -> bool:
 _KINDS = {int: 'a whole number', float: 'a number', str: 'text'}
 
 
-def scope_of(source: Source | None, scope: Scope) -> Scope:
+def _scope_of(source: Source | None, scope: Scope) -> Scope:
     """
     ``scope`` as a slice of the rows of ``source``: each end converted to the
     type of its index (:attr:`~.reduction.Source.index_type`), such as
@@ -267,7 +267,7 @@ class BatchManager:
         scope:
             The rows of the source that the batch holds; every row if not
             given. Its ends are converted to the type of the index of the
-            source (:func:`scope_of`).
+            source, such as ``'60339'`` to ``60339``.
         settings:
             The settings to start with, in place of the defaults of the spec.
             Those that are columns are left out.
@@ -284,8 +284,9 @@ class BatchManager:
             source ``source`` is registered; if the workspace binds no spec
             ``spec``, or it does not fit the source (:func:`fits`); if a column
             is not a parameter of the spec, or is named twice; if the source
-            fills a parameter that is not among the columns; or if
-            :func:`scope_of` refuses an end of the scope.
+            fills a parameter that is not among the columns; or for an end
+            of the scope that does not convert, an end without a source, or a
+            stop below the start.
         """
         if label is None:
             stamp = time.strftime('%Y%m%d-%H%M%S')
@@ -315,7 +316,7 @@ class BatchManager:
             source=source,
             title=title,
             description=description,
-            scope=scope_of(registered, Scope() if scope is None else scope),
+            scope=_scope_of(registered, Scope() if scope is None else scope),
         )
         if settings is None:
             settings = self._defaults.get(spec, Defaults()).settings
@@ -457,14 +458,14 @@ class BatchManager:
         """
         The header of ``label`` with what is given changed, as kept. A scope
         changes the rows of the batch at once, without a scan; its ends are
-        converted as :func:`scope_of` does. Raises ``KeyError`` if no batch
-        has the label; ``ValueError`` for an empty title, and, if a scope is
-        given, if the source of the batch is not registered, or
-        :func:`scope_of` refuses an end of the scope.
+        converted as :meth:`create` converts them. Raises ``KeyError`` if no
+        batch has the label; ``ValueError`` for an empty title, and, if a
+        scope is given, if the source of the batch is not registered, or for
+        an end of the scope as :meth:`create` refuses it.
         """
         header = self._headers[label]
         if scope is not None:
-            scope = scope_of(self._source(header.source), scope)
+            scope = _scope_of(self._source(header.source), scope)
         header = replace(
             header,
             title=header.title if title is None else title,
@@ -477,41 +478,32 @@ class BatchManager:
             batch.scope = header.scope
         return header
 
-    def next_scope(self, label: str, index: Index) -> Scope:
-        """
-        The scope of the next batch if the batch of ``label`` ended before
-        ``index``: from ``index`` up to its stop. Raises ``KeyError`` as
-        :meth:`batch` does; ``ValueError`` if ``index`` is below the start or
-        above the stop of its scope, or if it holds no row of the scan before
-        ``index``, which would leave it none.
-        """
-        batch = self.batch(label)
-        scope = batch.scope
-        before = scope_of(batch.source, Scope(start=scope.start, stop=index))
-        if not any(before.holds(row) for row in batch.rows.scan):
-            raise ValueError(
-                f'the batch holds no row before {index}, so it would then hold none'
-            )
-        return scope_of(batch.source, Scope(start=index, stop=scope.stop))
-
     def start_next(self, label: str, index: Index, *, title: str) -> str:
         """
         End the batch of ``label`` before ``index``, and make the next batch,
-        called ``title``, of :meth:`next_scope`, with the same spec, source,
-        columns and settings; its label. The cells set by hand and the
-        removals of the rows that move go with them; the rows added by hand
-        stay, and so do the results, under ``label``.
+        called ``title``, from ``index`` up to the stop of the batch, with the
+        same spec, source, columns and settings; its label. The cells set by
+        hand and the removals of the rows that move go with them; the rows
+        added by hand stay, and so do the results, under ``label``.
 
-        It raises what :meth:`next_scope` and :meth:`create` raise, with the
-        batch of ``label`` as it was. The next batch is made first; if its
+        It raises what :meth:`batch` and :meth:`create` raise, and
+        ``ValueError`` if ``index`` is below the start or above the stop of
+        the scope of the batch, or if the batch holds no row of the scan
+        before ``index``, which would leave it none; with the batch of
+        ``label`` as it was. The next batch is made first; if its
         scan raises, or the definitions refuse what was set by hand on it, it
         is removed again (:meth:`remove`) and the error raised. If the batch
         of ``label`` then cannot be ended, :class:`NotEnded` is raised, and
         both batches hold the rows that move.
         """
-        scope = self.next_scope(label, index)
         batch = self.batch(label)
         header = self._headers[label]
+        ended = _scope_of(batch.source, Scope(start=header.scope.start, stop=index))
+        if not any(ended.holds(row) for row in batch.rows.scan):
+            raise ValueError(
+                f'the batch holds no row before {index}, so it would then hold none'
+            )
+        scope = _scope_of(batch.source, Scope(start=index, stop=header.scope.stop))
         rows = batch.rows
         moving = {row.key for row in rows.scan if scope.holds(row)}
         made = self.create(
@@ -534,7 +526,7 @@ class BatchManager:
                 self.remove(made)
             raise
         try:
-            self.change(label, scope=Scope(start=header.scope.start, stop=scope.start))
+            self.change(label, scope=ended)
         except NotKept as error:
             raise NotEnded(str(error)) from error
         return made
