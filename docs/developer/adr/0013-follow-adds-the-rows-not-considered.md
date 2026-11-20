@@ -87,15 +87,18 @@ The rows that are ready and have no record under the label of the batch. A row w
 
 The rule is on the state of the rows, as in ADR 0011. So in a batch that follows, a row that a person adds is reduced as soon as it is complete.
 
-### "Start the next batch here" moves the source
+### The next batch is a batch made from the source
+
+No row moves from one batch to another. A person who wants the runs from 60400 on in a batch of their own makes it, and turns Follow on for it:
 
 ```python
-at = rows.index.get_loc('60400')
-this, following = rows.iloc[:at], rows.iloc[at:]     # ADR 0012
-# source.json moves to the next batch: this batch has no source any more and takes no new row
+given = manager.rows_of('sample-runs')
+label = manager.create('loki-iofq', title='Evening', source='sample-runs',
+                       rows=given[given.run >= 60400], settings=manager.batch('afternoon').settings)
+manager.follow(label)                                # the batch 'afternoon' follows no longer
 ```
 
-If this batch followed, no batch follows afterwards. A person changes the settings of the next batch and turns Follow on for it; a step would otherwise reduce the rows that moved with settings nobody has changed yet.
+The earlier batch keeps its rows, also those from 60400 on, until a person removes them. It has considered the keys it has seen, and takes the rows that arrive later only if it follows again.
 
 ### At most one batch follows
 
@@ -113,7 +116,6 @@ A batch made from `sample-runs` with the rows from run 60339 on, which follows.
 | 4 | a person removes row 60340 | 60339, 60341 | unchanged, so 60340 is not added again |
 | 5 | the application is restarted; sample run 60343 arrived meanwhile, with its transmission run | 60343 is added at the first step | + 60343 |
 | 6 | the transmission of the sample of 60339 is measured again | unchanged: row 60339 keeps its cell | unchanged |
-| 7 | "Start the next batch here" at 60343 | this batch: 60339, 60341; the next: 60343 | moves to the next batch; no batch follows |
 
 ## Alternatives considered
 
@@ -122,7 +124,7 @@ A batch made from `sample-runs` with the rows from run 60339 on, which follows.
 - **A mark over files.** A source makes a row from several files: a transmission run is a new file and no new row, and it completes a row whose own file is old. The step compares rows either way, so the keys of rows are what it remembers.
 - **Add a row at once and fill its empty cells later.** It needs no memory of what waits. But it fills a cell again that a person emptied, and an empty cell of a parameter that takes `None` is a value (ADR 0012), so "not listed yet" and "none" cannot be told apart.
 - **A step changes cells that have a value**, as today, so that a transmission run measured again reaches the earlier rows and they are reduced again. It needs to know who wrote each cell, and results change with nobody asking. A person can do it for the rows they choose.
-- **A scope kept in the header** (ADR 0011): a slice of an index that a source gives each row. With `considered`, the start of the slice is the choice of rows at making, and its end is "Start the next batch here". The index, its type, and the conversion of the ends go.
+- **A scope kept in the header** (ADR 0011): a slice of an index that a source gives each row. With `considered`, the start of the slice is the choice of rows at making, and it has no end: the next batch is made from the source and follows in its place. The index, its type, and the conversion of the ends go.
 - **A row is added once it can be reduced**, in place of once the source has filled it. A column that the source does not fill would hold the row back for ever, and a parameter that takes `None` would let a row through before its file is listed.
 
 ## Consequences
@@ -135,7 +137,7 @@ A batch made from `sample-runs` with the rows from run 60339 on, which follows.
 - `considered` grows by one key for each row that the source ever gave: some tens of bytes per row.
 - A source whose keys change, by a change of its code, gives every row a key that is not considered, and a step adds them all.
 - A step still asks the source for its rows of all files. Its cost is as today ([#223](https://github.com/scipp/essapps/issues/223)).
-- What ADR 0011 says of the scope, of the source in the header, and of what a step reduces is replaced by this. "Start the next batch here" no longer leaves Follow where it is: it ends it.
+- What ADR 0011 says of the scope, of the source in the header, and of what a step reduces is replaced by this. "Start the next batch here" goes: no rule moves rows between batches.
 
 ## Open
 
