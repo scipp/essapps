@@ -22,11 +22,8 @@ or removed, a table file loaded, which replaces the table. A cell is plain
 data (:mod:`..table`): a value that a picker gives is kept as
 :func:`~..table.cell_of` makes it, and shown as the listing names it. A row is
 named by its note ``name`` if the table has one, else by its key, and "Add
-row" takes its key. "Add rows from the runs", on the page of a batch made from
-a source, lists the rows of the source that the table lacks
-(:meth:`Pages.offered <.pages.Pages.offered>`) and adds those that a person
-picks (:meth:`Page.take`). "List runs again" lists the files again, for the
-pickers and the Runs view, and changes no row. If the file source raises, the page
+row" takes its key. "List runs again" lists the files again, for the pickers
+and the Runs view, and changes no row. If the file source raises, the page
 shows the table, the results and the plots all the same: the pickers offer
 no file, the Runs view is empty, and the state says why
 (:attr:`~.models.State.files_problem`).
@@ -42,14 +39,12 @@ show, such as those kept for another version of the spec, are named in the
 state's ``settings_problem`` and kept until Apply. A ``Page`` writes the
 batch's settings only at Apply and at "Make this a setting": the form does
 not show an assignment by code while the server runs. The columns of the
-table are the blanks of the template, so a table loaded with other columns
-changes the parameters of the cells and of the form: the page builds both
-again when the columns of the batch change, and the form then shows the
-batch's settings. "Make this a column" on a setting and "Make this a setting"
-on a column (:meth:`~ess.apps.batch.Batch.make_column`,
-:meth:`~ess.apps.batch.Batch.make_setting`) change the columns so; both are
-refused while the form holds a change, which the new form would drop. The
-page offers as a column only a setting whose cell it edits.
+table are the blanks of the template, so a table loaded with other columns,
+or a column made a setting or back, changes the parameters of the cells and
+of the form: the page builds both again when the columns of the batch
+change, and the form then shows the batch's settings. So "Make this a
+column" and "Make this a setting" are refused while the form holds a change,
+which the new form would drop.
 
 The page in the browser holds only what it shows: the selection, the
 filter, the tab. Each action returns the :class:`~.models.State` after it, and
@@ -151,7 +146,7 @@ from ..state import (
     ready,
     to_reduce,
 )
-from ..table import KEY, cell_of, data_of, read_table, write_table
+from ..table import KEY, as_request, cell_of, data_of, read_table, write_table
 from ..templates import checked_settings, load_template, write_template
 from . import forms, plots
 from .models import (
@@ -169,7 +164,10 @@ from .models import (
     Refused,
     Row,
     RowDetail,
+    SourceRow,
+    SourceRows,
     State,
+    Value,
 )
 
 if TYPE_CHECKING:
@@ -237,6 +235,41 @@ def names(frame: pd.DataFrame, columns: Collection[str]) -> dict[str, str]:
     }
 
 
+def listed(given: pd.DataFrame, fills: Collection[str]) -> SourceRows:
+    """
+    The rows of ``given``, a table that a source makes with a column
+    ``waits``, and maybe a column ``taken``, as a dialog lists them: each
+    named as :func:`names` names it, with the text of each note, the columns
+    but ``fills``, and its mark.
+    """
+    named = names(given, ())
+    marks = {'waits', 'taken'}
+    shown = [c for c in given.columns if c not in {NAME, *fills, *marks}]
+
+    def text(value: Any) -> str:
+        return '' if pd.api.types.is_scalar(value) and pd.isna(value) else str(value)
+
+    def mark(row: Mapping[str, Any]) -> str:
+        if row['waits']:
+            return 'waits'
+        if 'taken' not in row:
+            return ''
+        return 'taken' if row['taken'] else 'left out'
+
+    return SourceRows(
+        columns=[note(c) for c in shown],
+        rows=[
+            SourceRow(
+                key=key,
+                name=named[key],
+                cells={c: text(row[c]) for c in shown},
+                mark=mark(row),
+            )
+            for key, row in given.to_dict('index').items()
+        ],
+    )
+
+
 class Problem(Exception):
     """A request that cannot be done, with what to tell the person."""
 
@@ -293,6 +326,27 @@ def named_file(name: str, content: bytes | None = None) -> Iterator[Path]:
         if content is not None:
             path.write_bytes(content)
         yield path
+
+
+def read_file[T](name: str, content: bytes, read: Callable[[Path], T]) -> T:
+    """
+    What ``read`` gives for the file ``name`` that a person chose, holding
+    ``content``. Raises ``ValueError`` for an empty file, and for what
+    ``read`` raises, with ``name`` in place of the path read.
+    """
+    if not content:
+        raise ValueError('the file is empty')
+    with named_file(name, content) as path:
+        try:
+            return read(path)
+        except (OSError, ValueError, KeyError) as error:
+            said = why(error).replace(f'{path}: ', '').replace(str(path), name)
+            raise ValueError(said) from None
+
+
+def note(name: str) -> Column:
+    """The column of the note ``name``, titled as the page shows it."""
+    return Column(name=name, title=name.replace('_', ' ').capitalize())
 
 
 def _locked[**P, T](method: Callable[P, T]) -> Callable[P, T]:
@@ -556,9 +610,7 @@ class Page:
             ),
             application=self.pages.title,
             folder=self.pages.folder,
-            notes=[
-                Column(name=n, title=n.replace('_', ' ').capitalize()) for n in notes
-            ],
+            notes=[note(n) for n in notes],
             columns=[
                 Column(
                     name=c,
@@ -576,11 +628,7 @@ class Page:
             settings=forms.tree(self.settings, marks),
             settings_problem=problem,
             settings_changed=unapplied is not None,
-            may_be_columns=[
-                n
-                for n, f in self.settings.fields.items()
-                if forms.editor(f) is not None
-            ],
+            may_be_columns=forms.edited(self.settings),
             refused=[self._refused(e, named) for e in self.refused],
             follow=self._follow(),
             files_problem=self._listing.failure,
@@ -806,6 +854,21 @@ class Page:
         self._put(frame.reindex(pd.Index([*frame.index, key], name=KEY)))
         return f'Added {key}: fill in its cells.'
 
+    @_locked
+    def offered(self) -> SourceRows:
+        """
+        The rows of the source that the table lacks, those that wait marked
+        (:meth:`~ess.apps.batch.BatchManager.offered`), for :meth:`take`.
+        """
+        manager = self.pages.manager
+        try:
+            given = manager.offered(self.label)
+        except Exception as error:  # a source is code of the application
+            raise Problem(
+                f'The rows of the source cannot be listed: {why(error)}.'
+            ) from None
+        return listed(given, manager.sources[manager.source(self.label)].fills)
+
     @_action
     def take(self, keys: Sequence[str]) -> str:
         """
@@ -825,13 +888,39 @@ class Page:
 
     # Columns and settings
 
-    def _unchanged(self) -> None:
-        """A :class:`Problem` while the form holds a change, which a new form drops."""
+    @_locked
+    def values(self, name: str) -> list[Value]:
+        """
+        The different values of the column ``name``, each with a row that has
+        it (:meth:`~ess.apps.batch.Batch.values`), for "Make this a setting".
+        """
+        try:
+            values = self.batch.values(name)
+        except ValueError as error:
+            raise Problem(f'{why(error)}.') from None
+        model = self.batch.spec.params
+        return [
+            Value(
+                key=key,
+                text=''
+                if cell is None
+                else self._text(as_request(model, {name: cell})[name]),
+            )
+            for key, cell in values.items()
+        ]
+
+    def _reshape(self, name: str, change: Callable[[], None]) -> None:
+        """
+        Make ``change`` of the columns at the parameter ``name``, unless the
+        form holds a change, which the new form would drop; then forget the
+        refusals at ``name``.
+        """
         if unapplied := self._unapplied():
             raise Problem(f'Nothing was changed: {unapplied.lower()} first.')
-
-    def _forget_at(self, name: str) -> None:
-        """Forget the reasons of a refusal at the parameter ``name``."""
+        try:
+            change()
+        except ValueError as error:
+            raise Problem(f'Nothing was changed: {why(error)}.') from None
         self.refused = [e for e in self.refused if not (e.loc and e.loc[0] == name)]
 
     @_action
@@ -840,14 +929,9 @@ class Page:
         Make the setting ``name`` a column, of its value in every row
         (:meth:`~ess.apps.batch.Batch.make_column`).
         """
-        self._unchanged()
         title = self.settings.titles.get(name, name)
-        try:
-            self.batch.make_column(name)
-        except ValueError as error:
-            raise Problem(f'Nothing was changed: {why(error)}.') from None
-        self._forget_at(name)
-        return f'{title} is a column: each row has its own.'
+        self._reshape(name, lambda: self.batch.make_column(name))
+        return f'{title} is a column: each row has the value in its cell.'
 
     @_action
     def make_setting(self, made: MakeSetting) -> str:
@@ -855,13 +939,8 @@ class Page:
         Make a column a setting, of the value of a row, or of every row
         (:meth:`~ess.apps.batch.Batch.make_setting`).
         """
-        self._unchanged()
         title = self._cells.titles.get(made.name, made.name)
-        try:
-            self.batch.make_setting(made.name, made.key)
-        except ValueError as error:
-            raise Problem(f'Nothing was changed: {why(error)}.') from None
-        self._forget_at(made.name)
+        self._reshape(made.name, lambda: self.batch.make_setting(made.name, made.key))
         return f'{title} is a setting: one value for every row.'
 
     # Reducing
@@ -1087,8 +1166,8 @@ class Page:
     def load_table(self, name: str, content: bytes) -> str:
         """Make the table of a table file the table of the batch."""
         try:
-            with named_file(name, content) as path:
-                frame = read_table(path, self.batch.spec.params)
+            params = self.batch.spec.params
+            frame = read_file(name, content, lambda path: read_table(path, params))
             self.batch.put(frame)
         except NotKept:
             raise  # a fault of the definitions, not of the file

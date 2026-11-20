@@ -52,7 +52,7 @@ from ess.spec import WorkflowSpec
 
 from ..client import Client
 from . import auto
-from .auto import SourceError, Step, added
+from .auto import SourceError, Step
 from .definition import (
     FOLLOWING,
     DefinitionStore,
@@ -73,7 +73,7 @@ from .definition import (
     template_of,
 )
 from .reduction import Batch
-from .source import Source, filled, rows_of
+from .source import Source, between, filled, rows_of
 from .table import frame_of, typed
 
 
@@ -206,6 +206,31 @@ class BatchManager:
         """
         return rows_of(self.client, self._source(source))
 
+    def _given(self, source: Source, fills: Collection[str]) -> pd.DataFrame:
+        """
+        What ``source`` makes now, with a column ``waits``: whether a cell of
+        ``fills`` is empty (:func:`~.source.filled`). A column of the source
+        named ``waits`` is replaced by it.
+        """
+        given = rows_of(self.client, source)
+        return given.assign(waits=~filled(given, fills))
+
+    def marked(
+        self, source: str, first: str | None = None, last: str | None = None
+    ) -> pd.DataFrame:
+        """
+        The table that the source registered as ``source`` makes now, with a
+        column ``waits``, whether the row waits, and a column ``taken``,
+        whether :meth:`create` takes it with
+        ``choose=lambda arrived: between(arrived, first, last)``
+        (:func:`~.source.between`). Raises ``ValueError`` if no source is
+        registered so, and as ``between``.
+        """
+        found = self._source(source)
+        given = self._given(found, found.fills)
+        taken = between(given[~given['waits']], first, last).index
+        return given.assign(taken=given.index.isin(taken))
+
     def create(
         self,
         spec: str,
@@ -297,8 +322,8 @@ class BatchManager:
         made = None
         if source is not None:
             found = self._source(source)
-            given = rows_of(self.client, found)
-            arrived = given[filled(given, found.fills)]
+            given = self._given(found, found.fills)
+            arrived = given[~given['waits']].drop(columns='waits')
             rows = arrived if choose is None else choose(arrived)
             _check_chosen(rows, arrived)
             made = FromSource(source, frozenset(arrived.index))
@@ -476,22 +501,22 @@ class BatchManager:
         """
         The rows that the source of the batch of ``label`` makes now and its
         table lacks, with the columns of the source and a column ``waits``:
-        whether the row waits, so that Follow adds it once it is filled. A row
-        that does not wait was left out when the batch was made, or removed
-        from it, and is considered, so Follow does not add it; or it was
-        filled while the batch did not follow, and Follow adds it at its next
-        step. A column of the source named ``waits`` is replaced by it.
+        whether a cell that the source fills and the table has is empty, so
+        that Follow adds the row once it is filled, unless it is considered.
+        A row that does not wait was left out when the batch was made, or
+        removed from it, and is considered, so Follow does not add it; or it
+        was filled while the batch did not follow, and Follow adds it at its
+        next step. A column of the source named ``waits`` is replaced by it.
 
         Raises ``KeyError`` if no batch has the label, and ``ValueError`` if
         it was not made from a source, or its source is not registered.
         """
         made = self._made(label)
         source = self._source(made.source)
-        given = rows_of(self.client, source)
         table = self.batch(label).frame()
-        _, waiting = added(table, given, source.fills, made.considered)
-        offered = given[~given.index.isin(table.index)]
-        return offered.assign(waits=offered.index.isin(waiting))
+        fills = [c for c in source.fills if c in table.columns]
+        given = self._given(source, fills)
+        return given[~given.index.isin(table.index)]
 
     def take(self, label: str, keys: Iterable[str]) -> None:
         """

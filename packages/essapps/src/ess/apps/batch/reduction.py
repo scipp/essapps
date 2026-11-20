@@ -305,29 +305,52 @@ class Batch:
         """
         Make the column ``name`` a setting, whose value is the cell of the row
         of ``key``, or, if not given, the cell that every row has; an empty
-        cell gives the setting no value. A :meth:`put` without the column,
-        then an assignment of :attr:`settings`: if the definitions refuse the
-        second, the setting has no value.
+        cell gives the setting no value.
+
+        The settings with the value are written before the table without the
+        column. A value at a column is dropped when a batch is read, so if the
+        definitions refuse the table, the batch read again has the column as
+        it was, and this one is unchanged.
 
         Raises ``ValueError`` if ``name`` is not a column, if the table has
-        no row of ``key``, or if ``key`` is not given and the cells differ;
-        and as :meth:`put`.
+        no row of ``key``, or if ``key`` is not given and the cells differ
+        (:meth:`values`); :class:`~.definition.NotKept` if the definitions
+        refuse a write.
+        """
+        values = self.values(name)
+        if key is None:
+            if len(values) > 1:
+                raise ValueError(f'the rows differ at {name}: choose the value to keep')
+            cell = next(iter(values.values()), None)
+        elif key in self._rows.index:
+            cell = self._rows[[name]].loc[[key]].to_dict('index')[key][name]
+        else:
+            raise ValueError(f'the batch has no row {key}')
+        params = dict(self._template.params)
+        if cell is not None:
+            params[name] = as_request(self.spec.params, {name: cell})[name]
+        blanks = [c for c in self.columns if c != name]
+        rows = typed(self._rows.drop(columns=name), self.spec.params)
+        self._save(Template(self.spec, params=params, blanks=blanks))
+        if self._definitions is not None:
+            self._definitions.save(definition.rows_key(self.label), data_of(rows))
+        self._template = Template(self.spec, params=params)
+        self._resolved.clear()
+        self._set(rows)
+
+    def values(self, name: str) -> dict[str, Any]:
+        """
+        The different cells of the column ``name``, each by the key of the
+        first row that has it, in the order of the table; ``None`` for an
+        empty cell. Raises ``ValueError`` if ``name`` is not a column.
         """
         if name not in self.columns:
             raise ValueError(f'{name} is not a column of the batch')
         cells = {k: row[name] for k, row in self._rows[[name]].to_dict('index').items()}
-        if key is not None:
-            if key not in cells:
-                raise ValueError(f'the batch has no row {key}')
-            cell = cells[key]
-        elif len({to_json(c) for c in cells.values()}) > 1:
-            raise ValueError(f'the rows differ at {name}: choose the value to keep')
-        else:
-            cell = next(iter(cells.values()), None)
-        self.put(self.frame().drop(columns=name))
-        if cell is not None:
-            value = as_request(self.spec.params, {name: cell})[name]
-            self.settings = {**self.settings, name: value}
+        first: dict[bytes, str] = {}
+        for key, cell in cells.items():
+            first.setdefault(to_json(cell), key)
+        return {key: cells[key] for key in first.values()}
 
     def _save(self, template: Template) -> None:
         """Write ``template`` as the settings of the label, if kept."""

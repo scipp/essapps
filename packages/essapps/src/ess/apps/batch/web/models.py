@@ -323,14 +323,15 @@ class SourceChoice(BaseModel):
 class SourceRow(BaseModel):
     """
     A row of the table that a source makes: its key, its ``name`` (as
-    :class:`Row` has it), the text of each other column, and whether it
-    ``waits``: a cell that the source fills is empty.
+    :class:`Row` has it), the text of each note, and its ``mark``:
+    ``waits`` if a cell that the source fills is empty; for a range of a new
+    batch, ``taken`` or ``left out``; else empty.
     """
 
     key: str
     name: str
     cells: dict[str, str]
-    waits: bool
+    mark: Literal['waits', 'taken', 'left out', '']
 
 
 class SourceRows(BaseModel):
@@ -402,12 +403,13 @@ class On(BaseModel):
 class NewBatch(BaseModel):
     """
     Make a batch of ``spec``: with a ``source``, of the rows that the source
-    has filled now from the row of key ``first`` to that of ``last``, in the
-    order of the source, the ends included, each end open if not given;
-    without, of no rows. ``columns`` are the parameter columns, those that the
-    source fills among them. The batch starts with the settings of the batch
-    of label ``settings_from``, which is of ``spec``, if given; else with
-    those that the application gives ``spec``.
+    has filled now from the row of key ``first`` to that of ``last``
+    (:func:`~ess.apps.batch.source.between`); without, of no rows, or of
+    those of a table file. ``columns`` are the parameter columns, those that
+    the source fills among them. The batch starts with the settings of the
+    batch of label ``settings_from`` if given, else with those that the
+    application gives ``spec``; a setting of the batch at a column fills its
+    cells.
     """
 
     title: str
@@ -416,8 +418,15 @@ class NewBatch(BaseModel):
     first: str | None = None
     last: str | None = None
     spec: str
-    columns: list[str]
+    columns: list[str] = []
     settings_from: str | None = None
+
+
+class Value(BaseModel):
+    """A value of a column, as ``text``, and the ``key`` of a row that has it."""
+
+    key: str
+    text: str
 
 
 class MakeColumn(BaseModel):

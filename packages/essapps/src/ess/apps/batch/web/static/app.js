@@ -455,14 +455,13 @@ function chooseSource() {
 }
 
 // The parameters of the workflow chosen: those that the source fills are
-// columns, the others a person may make columns. Of the workflow of the batch
-// of the page, its columns are ticked, and its settings offered.
+// columns, the others a person may make columns. On the page of a batch, its
+// columns are ticked, and its settings offered.
 function chooseSpec() {
   const {name, fills} = chosenSource();
   const spec = chosenSpec();
   const batch = view.state;
-  const same = Boolean(batch) && spec?.name === batch.header.spec;
-  const ticked = same ? batch.columns.map((c) => c.name) : [];
+  const ticked = batch ? batch.columns.map((c) => c.name) : [];
   $('new-columns').replaceChildren(
     ...(spec?.params ?? []).map((p) => {
       const fixed = fills.includes(p.name);
@@ -470,57 +469,65 @@ function chooseSpec() {
       return h('label', {title: fixed ? `Filled by ${name}` : null}, box, p.title);
     }),
   );
-  $('new-settings').hidden = !same;
-  $('new-like').textContent = same ? `Start with the settings of ${batch.title}` : '';
+  $('new-settings').hidden = !batch;
+  $('new-like').textContent = batch ? `Start with the settings of ${batch.title}` : '';
 }
 
-// The rows that the source makes now, for the range.
+// The rows that the source makes now, for the range; the first and the last
+// row are chosen among those that are filled.
 async function loadSourceRows(name) {
   const {elements} = $('new-batch');
   sourceRows = null;
   for (const end of [elements.first, elements.last]) end.replaceChildren();
   drawRange();
-  const say = (text) => ($('new-problem').textContent = text);
-  const loaded = await request(`sources/rows?${query({name})}`, {kind: 'source-rows', say});
-  if (!loaded || way() !== 'source' || chosenSource().name !== name) return;
-  sourceRows = loaded;
-  const filled = loaded.rows.filter((row) => !row.waits);
+  const loaded = await markRange(name);
+  if (!loaded) return;
+  const filled = loaded.rows.filter((row) => row.mark !== 'waits');
   const option = (row) => h('option', {value: row.key, text: row.name === row.key ? row.key : `${row.name} (${row.key})`});
   elements.first.replaceChildren(h('option', {value: '', text: 'the first'}), ...filled.map(option));
   elements.last.replaceChildren(h('option', {value: '', text: 'the last'}), ...filled.map(option));
-  drawRange();
 }
 
-// The rows of the source, each marked as taken, left out, or waiting; the
-// server takes the range among the rows filled.
-function drawRange() {
+// Ask the server how the range chosen marks each row of the source, and show
+// it; a range it refuses is said, and its rows are shown without marks.
+async function markRange(name = chosenSource().name) {
+  const {first, last} = $('new-batch').elements;
+  const ends = {name, ...(first.value && {first: first.value}), ...(last.value && {last: last.value})};
+  const said = (text) => {
+    $('new-rows').textContent = text;
+    if (sourceRows) drawRange(false);
+  };
+  const loaded = await request(`sources/rows?${query(ends)}`, {kind: 'source-rows', say: said});
+  if (!loaded || way() !== 'source' || chosenSource().name !== name) return null;
+  sourceRows = loaded;
+  drawRange();
+  return loaded;
+}
+
+// The rows of the source, each with the mark the server gave it, or none.
+function drawRange(marked = true) {
   const box = $('new-source-rows');
   if (!sourceRows) {
     $('new-rows').textContent = '';
     return box.replaceChildren(h('div', {class: 'empty', text: 'Listing the rows…'}));
   }
-  const {first, last} = $('new-batch').elements;
-  const keys = sourceRows.rows.map((row) => row.key);
-  const from = first.value ? keys.indexOf(first.value) : 0;
-  const to = last.value ? keys.indexOf(last.value) : keys.length - 1;
-  const status = (row, i) => (row.waits ? 'waits' : i >= from && i <= to ? 'taken' : 'left out');
-  const said = sourceRows.rows.map(status);
-  const n = (word) => said.filter((s) => s === word).length;
+  box.replaceChildren(sourceTable(sourceRows, (row) => (marked ? row.mark : '')));
+  if (!marked) return;
+  const n = (mark) => sourceRows.rows.filter((row) => row.mark === mark).length;
   const waits = n('waits');
   const waiting = waits ? `; ${count(waits)} ${waits === 1 ? 'waits' : 'wait'} for a run, which Follow adds once filled` : '';
   $('new-rows').textContent = `The batch gets ${count(n('taken'))}${waiting}.`;
-  box.replaceChildren(sourceTable(sourceRows, status));
 }
 
 // A table of the rows of a source: the name, each column, and what
-// `status(row, i)` says; with a box to pick each row if given `picked`, which
-// is told the keys picked at each change.
+// `status(row)` says; with a box to pick each row if given `picked`, which is
+// told the keys picked at each change.
 function sourceTable({columns, rows: listed}, status, picked) {
   if (!listed.length) return h('div', {class: 'empty', text: 'No rows.'});
   const boxes = [];
   const pills = {waits: 'st-incomplete', taken: 'st-done'};
-  const body = listed.map((row, i) => {
-    const said = status(row, i);
+  const body = listed.map((row) => {
+    const said = status(row);
     const box = picked && h('input', {type: 'checkbox', value: row.key, 'aria-label': row.name});
     if (box) {
       box.onchange = () => picked(boxes.filter((b) => b.checked).map((b) => b.value));
@@ -589,7 +596,7 @@ async function openTake() {
   picked([]);
   $('take-rows').replaceChildren(
     listed.rows.length
-      ? sourceTable(listed, (row) => (row.waits ? 'waits' : ''), picked)
+      ? sourceTable(listed, (row) => row.mark, picked)
       : h('div', {class: 'empty', text: 'Every row of the source is in the batch.'}),
   );
   dialog.returnValue = '';
@@ -599,19 +606,16 @@ async function openTake() {
 
 // "Make this a setting" on the header of a column: of the value that every
 // row has, or, where the rows differ, of the value a person chooses, sent as
-// the key of a row that has it.
-function makeSetting(column) {
-  const values = new Map();
-  for (const row of view.state.rows) {
-    const {text} = row.cells[column.name];
-    if (!values.has(text)) values.set(text, row.key);
-  }
-  if (values.size < 2) return act('columns/setting', {name: column.name});
+// the key of a row that has it. The server says which values there are.
+async function makeSetting(column) {
+  const values = await request(`columns/values?${query({name: column.name})}`);
+  if (!values) return;
+  if (values.length < 2) return act('columns/setting', {name: column.name});
   const dialog = $('make-setting');
   dialog.querySelector('h3').textContent = `Make ${column.title} a setting`;
   const empty = column.default ? `empty: the default, ${column.default}` : 'empty';
   $('setting-values').replaceChildren(
-    ...[...values].map(([text, key], i) =>
+    ...values.map(({key, text}, i) =>
       h('label', {}, h('input', {type: 'radio', name: 'value', value: key, checked: i === 0}), text || empty),
     ),
   );
@@ -741,7 +745,7 @@ function renderSettings(state) {
       type: 'button',
       class: 'quiet small',
       text: 'Make this a column',
-      title: 'Each row then has its own value, at first this one.',
+      title: 'Each row of the table gets this value in its cell. A row added later has an empty cell: the default, or an incomplete row if there is none.',
       onclick: () => act('settings/column', {name: node.path[0]}),
     });
   renderForm($('settings'), state.settings, (edit) => act('settings', edit), offer);
@@ -1023,8 +1027,8 @@ function wire() {
   newBatch.onsubmit = makeBatch;
   newBatch.elements.source.onchange = chooseSource;
   newBatch.elements.spec.onchange = chooseSpec;
-  newBatch.elements.first.onchange = drawRange;
-  newBatch.elements.last.onchange = drawRange;
+  newBatch.elements.first.onchange = () => markRange();
+  newBatch.elements.last.onchange = () => markRange();
   $('take-open').onclick = openTake;
   newBatch.querySelector('[data-cancel]').onclick = closeNewBatch;
   newBatch.addEventListener('keydown', (event) => event.key === 'Escape' && closeNewBatch());

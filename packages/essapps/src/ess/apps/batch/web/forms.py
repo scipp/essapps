@@ -234,6 +234,11 @@ def editor(field: Field) -> Editor | None:
     return None
 
 
+def edited(fields: Fields) -> list[str]:
+    """The names of the fields of ``fields`` that a cell edits (:func:`editor`)."""
+    return [n for n, f in fields.fields.items() if editor(f) is not None]
+
+
 def cell(field: Field, value: Any) -> Any:
     """
     What the editor of a cell holding ``value`` starts at: the label of its
