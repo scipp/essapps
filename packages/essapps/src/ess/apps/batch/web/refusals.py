@@ -21,10 +21,14 @@ raised by the batch layer               said
 So the page copies no rule of the batch layer: it adds what the person
 asked for, such as "The batch was not made: ", and says the rest as given.
 
-A call that runs a source, which is code of the application, is said by
-:func:`refused`: a source refuses with ``ValueError``, and the files it is
-given may fail to list with ``OSError``, such as a mount that went away.
-Anything else that it raises is a defect of its code, and not said.
+Code of the application, such as a source, the file source or a drawing,
+may raise anything; the page says it and keeps working (:func:`said`). A
+``ValueError`` or an ``OSError``, such as a mount that went away, is a
+refusal, said as its text. Anything else is a defect of that code, and is
+said with its type, so that a person can tell: ``RuntimeError: boom``,
+``KeyError: 'run'``. A request that runs such code says it with
+:func:`refused`; the listing of the files, the step of Follow and the plot
+show it in place of what they could not give.
 """
 
 from __future__ import annotations
@@ -67,22 +71,36 @@ def why(error: Exception) -> str:
     return str(error)
 
 
+def said(error: Exception) -> str:
+    """
+    What code of the application raised, as a person reads it: a refusal
+    (``ValueError``, ``OSError``) as :func:`why` says it, a defect with the
+    name of its type.
+    """
+    name = type(error).__name__
+    if isinstance(error, ValueError | OSError):
+        return why(error) or name
+    return f'{name}: {error}' if str(error) else name
+
+
 @contextmanager
 def refused(doing: str = '') -> Iterator[None]:
     """
-    A block that runs a source, whose refusals raise :class:`Problem`: a
-    write that the definitions refuse as :func:`kept` says it, and
-    ``ValueError``, ``KeyError`` and ``OSError`` as ``'<doing>: <why>.'``,
-    or as the sentence of :func:`why` if ``doing`` is empty.
+    A block that runs code of the application, such as a source, and so
+    may raise anything: a write that the definitions refuse raises
+    :class:`Problem` as :func:`kept` says it, and any other exception as
+    ``'<doing>: <said>.'``, or as the sentence of :func:`said` if ``doing``
+    is empty (:func:`said`).
     """
     try:
-        yield
-    except NotKept as error:
-        raise _not_kept(error) from None
-    except (ValueError, KeyError, OSError) as error:
-        said = why(error)
-        text = f'{doing}: {said}' if doing else f'{said[:1].upper()}{said[1:]}'
-        raise Problem(f'{text}.') from None
+        with kept():
+            yield
+    except Problem:
+        raise
+    except Exception as error:  # code of the application
+        text = said(error)
+        text = f'{doing}: {text}' if doing else f'{text[:1].upper()}{text[1:]}'
+        raise Problem(text if text.endswith('.') else f'{text}.') from None
 
 
 @contextmanager
@@ -94,8 +112,4 @@ def kept() -> Iterator[None]:
     try:
         yield
     except NotKept as error:
-        raise _not_kept(error) from None
-
-
-def _not_kept(error: NotKept) -> Problem:
-    return Problem(f'The change was not kept: {error}')
+        raise Problem(f'The change was not kept: {error}') from None

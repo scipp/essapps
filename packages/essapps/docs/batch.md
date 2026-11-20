@@ -207,7 +207,7 @@ label = manager.create('loki-iofq', title='Evening', source='sample-runs',
 No row moves between batches.
 `afternoon` keeps its rows, also those from 60400 on that it added before, until a person removes them.
 A batch that follows has no last row: the rows filled between a last row and the making would never be added.
-`create` refuses `follow=True` with a `Range` that has a `last` (see [The batches of a workspace](#the-batches-of-a-workspace)).
+`create` refuses `follow=True` with a `Range` that has a `last` (see [The batches of a workspace](#the-batches-of-a-workspace)); a function as `choose` may pick any rows, and the filled rows it leaves out are considered.
 For a batch of only the rows that arrive from now on, `choose` takes none: `choose=Range(later=True)`.
 Every row filled now is then considered, and none is reduced again.
 
@@ -463,7 +463,7 @@ manager.create(..., choose=Range(later=True), follow=True)
 ```
 
 `Range` refuses an end that is not a key of the rows that arrived (a row that waits is not one), a first row after the last, and an end with `later=True`.
-`create` refuses a `Range` with a `last` and `follow=True`.
+`create` refuses a `Range` with a `last` and `follow=True`; a function as `choose` picks any rows, also with `follow=True`, and the filled rows it leaves out are considered.
 `columns` are parameters that are columns of empty cells, besides those of the table.
 
 - `create` refuses a label that has definitions or records, a spec that the workspace does not bind, and rows that `put` refuses.

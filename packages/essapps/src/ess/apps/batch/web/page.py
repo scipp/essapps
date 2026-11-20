@@ -47,8 +47,8 @@ table are the blanks of the template, so a table loaded with other columns,
 or a column made a setting or back, changes the parameters of the cells and
 of the form: the page builds both again when the columns of the batch
 change, and the form then shows the batch's settings. So "Make this a
-column" and "Make this a setting" are refused while the form holds a change,
-which the new form would drop.
+column", "Make this a setting" and "Load table" are refused while the form
+holds a change, which the new form would drop.
 
 The page in the browser holds only what it shows: the selection, the
 filter, the tab. Each action returns the :class:`~.models.State` after it, and
@@ -170,7 +170,7 @@ from .models import (
     State,
     Value,
 )
-from .refusals import Problem, kept, refused, say, why
+from .refusals import Problem, kept, refused, said, say, why
 
 if TYPE_CHECKING:
     from .pages import Pages
@@ -860,14 +860,22 @@ class Page:
             for key, cell in values.items()
         ]
 
+    def _settled(self) -> None:
+        """
+        Raise :class:`~.refusals.Problem` while the form holds a change: a
+        change of which parameters are columns builds the form again, which
+        would drop it.
+        """
+        if unapplied := self._unapplied():
+            raise Problem(f'Nothing was changed: {unapplied.lower()} first.')
+
     def _reshape(self, name: str, change: Callable[[], None]) -> None:
         """
         Make ``change`` of the columns at the parameter ``name``, unless the
         form holds a change, which the new form would drop; then forget the
         refusals at ``name``.
         """
-        if unapplied := self._unapplied():
-            raise Problem(f'Nothing was changed: {unapplied.lower()} first.')
+        self._settled()
         try:
             change()
         except ValueError as error:
@@ -1107,7 +1115,7 @@ class Page:
                 colors={s.key: s.color for s in shown},
             )
         except Exception as error:  # a drawing is code of the application
-            return Plot(figure=None, note=f'Cannot draw: {error}')
+            return Plot(figure=None, note=f'Cannot draw: {said(error)}')
 
     # Files
 
@@ -1122,12 +1130,17 @@ class Page:
 
     @_action
     def load_table(self, name: str, content: bytes) -> str:
-        """Make the table of a table file the table of the batch."""
+        """
+        Make the table of a table file the table of the batch. Its columns may
+        differ, so it is refused while the form holds a change (:meth:`_settled`).
+        """
+        self._settled()
         try:
             params = self.batch.spec.params
             frame = read_file(name, content, lambda path: read_table(path, params))
-            self.batch.put(frame)
-        except ValueError as error:
+            with kept():  # a fault of the definitions, not of the file
+                self.batch.put(frame)
+        except (ValueError, OSError) as error:
             raise Problem(f'Cannot load {name}: {why(error)}') from None
         finally:
             # The rows may name files that the listing lacks, even if the

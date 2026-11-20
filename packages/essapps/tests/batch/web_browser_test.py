@@ -1856,6 +1856,7 @@ def test_remove_goes_to_another_batch_then_to_the_root_without_one(
     page.click('#remove-batch')
 
     page.wait_for_selector('#new-batch:not([hidden])')
+    page.wait_for_selector('#toast:has-text("Removed Other.")')
     assert manager.headers() == {}
     assert page.is_hidden('.right')
     # A poll on its way while the batch is removed answers 404.

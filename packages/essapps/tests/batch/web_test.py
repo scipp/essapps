@@ -933,6 +933,7 @@ def test_a_change_the_definitions_cannot_keep_answers_422_and_nothing_changes(
     draft(kept, 7)
     setting = kept.post('/api/settings/apply')
     cell = thickness(kept, ['1'], 3)
+    kept.post('/api/settings/discard')  # a table is not loaded over a draft
     table = kept.post(
         '/api/table',
         params={'name': 'rows.csv'},
@@ -1170,7 +1171,7 @@ def test_a_drawing_that_raises_says_so_in_place_of_the_figure(
     plot = page.post('/api/plot', json={}).json()
 
     assert plot['figure'] is None
-    assert 'Cannot draw: released' in plot['note']
+    assert 'Cannot draw: RuntimeError: released' in plot['note']
 
 
 def test_no_two_curves_of_a_figure_share_a_colour() -> None:
@@ -1372,13 +1373,25 @@ def test_a_file_source_that_cannot_list_is_said_on_each_call_that_runs_a_source(
     ]
 
 
-def test_a_source_that_raises_other_than_a_refusal_is_a_defect_and_not_said(
+def test_a_defect_of_a_source_is_said_with_its_type_and_the_page_works_on(
     http: TestClient, fake: FakeFiles
 ) -> None:
-    fake.list = failing(TypeError('a bug'))
+    fake.list = failing(KeyError('run'))
 
-    with pytest.raises(TypeError, match='a bug'):
-        http.get('/api/rows/offered')
+    answers = [
+        http.get('/api/rows/offered'),
+        http.post('/api/rows/take', json={'keys': ['4']}),
+        http.get('/api/sources/rows', params={'name': 'pairs'}),
+        http.post('/api/batches', json=new_batch()),
+    ]
+
+    assert [(a.status_code, a.json()['message']) for a in answers] == [
+        (422, "The rows of the source cannot be listed: KeyError: 'run'."),
+        (422, "No row was added: KeyError: 'run'."),
+        (422, "KeyError: 'run'."),
+        (422, "The batch was not made: KeyError: 'run'."),
+    ]
+    assert http.get('/api/state').status_code == 200
 
 
 def test_a_source_that_no_longer_gives_a_column_of_the_batch_is_said(
@@ -1510,18 +1523,26 @@ def test_a_group_setting_made_a_column_and_a_setting_again_keeps_its_value(
     assert form_bins(setting) == 5
 
 
+@pytest.mark.parametrize('way', ['make a column', 'load a table'])
 def test_columns_do_not_change_while_the_form_holds_a_change(
-    http: TestClient, batch: Batch
+    http: TestClient, batch: Batch, way: str
 ) -> None:
     draft(http, 9)
+    table = b'key,sample,transmission,name\na,run:1,run:1001,first\n'
 
-    answer = http.post('/api/settings/column', json={'name': 'binning'})
+    answer = (
+        http.post('/api/settings/column', json={'name': 'binning'})
+        if way == 'make a column'
+        else http.post('/api/table', params={'name': 'rows.csv'}, content=table)
+    )
 
     assert answer.status_code == 422
     assert answer.json()['message'] == (
         'Nothing was changed: apply or discard the settings first.'
     )
     assert batch.columns == ('sample', 'transmission', 'thickness')
+    assert list(batch.frame().index) == ['1', '2', '3']
+    assert form_bins(state(http)) == 9
 
 
 def test_a_correction_of_a_run_changes_no_row_and_can_be_taken_back(
@@ -2300,6 +2321,18 @@ def test_a_batch_made_on_the_page_is_made_as_asked_or_not_at_all(
     assert batch.frame()['thickness'].isna().tolist() == [True]
     assert batch.settings['thickness'] == 2.0
     assert pages.manager.following == made.label
+
+
+def test_a_batch_that_starts_with_the_settings_of_no_batch_is_not_made(
+    http: TestClient, manager: BatchManager
+) -> None:
+    answer = http.post('/api/batches', json=new_batch(settings_from='gone'))
+
+    assert (answer.status_code, answer.json()['message']) == (
+        422,
+        'The batch was not made: there is no batch gone to start from.',
+    )
+    assert list(manager.headers()) == ['scan']
 
 
 def test_a_batch_made_from_the_page_of_a_batch_starts_with_its_settings(

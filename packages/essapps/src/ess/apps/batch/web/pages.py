@@ -94,7 +94,7 @@ from .models import (
     SpecChoice,
 )
 from .page import Draw, Page, listed, read, read_file
-from .refusals import Missing, Problem, kept, refused, why
+from .refusals import Missing, Problem, kept, refused, said, why
 
 
 class SafeListing(Listing):
@@ -124,14 +124,14 @@ class SafeListing(Listing):
         try:
             return super().files(marker)
         except Exception as error:  # the file source is code of the application
-            self.error = str(error)
+            self.error = said(error)
             return {}
 
     def listed(self, selector: Selector) -> dict[FileRef, dict[str, Any]]:
         try:
             return super().listed(selector)
         except Exception as error:  # the file source is code of the application
-            self.error = str(error)
+            self.error = said(error)
             return {}
 
 
@@ -220,7 +220,9 @@ class Pages:
     def check(self, label: str) -> None:
         """
         Raise :class:`~.refusals.Missing` unless a batch has ``label``; the
-        page of a label that has none is forgotten.
+        page of a label that has none is forgotten, whoever asks, since no
+        request is served by it again and a batch made later with the label
+        gets a page of its own.
         """
         with self.lock:
             if label not in self.manager.headers():
@@ -261,7 +263,7 @@ class Pages:
                 self._last = (label, done)
                 self._failure = None
             except Exception as error:  # the next step tries again
-                self._failure = f'Follow could not step: {str(error) or repr(error)}'
+                self._failure = f'Follow could not step: {said(error)}'
             self.page(label).stepped()
 
     @property
@@ -552,21 +554,21 @@ class Pages:
         whose cells are those of the source.
 
         Raises :class:`~.refusals.Problem` with what the file, the manager or
-        the source refuses, with a label of ``settings_from`` that is no
-        batch or a spec that the workspace does not bind, and if the
-        definitions refuse a write (:func:`~.refusals.refused`).
+        the source refuses, for a label of ``settings_from`` that is no
+        batch, if the definitions refuse a write, and with what the source
+        raises otherwise (:func:`~.refusals.refused`).
         """
         with self.lock, refused('The batch was not made'):
             manager = self.manager
-            settings = (
-                None
-                if new.settings_from is None
-                else manager.batch(new.settings_from).settings
-            )
+            settings = None
+            if (other := new.settings_from) is not None:
+                if other not in manager.headers():
+                    raise ValueError(f'there is no batch {other} to start from')
+                settings = manager.batch(other).settings
             rows = choose = source = None
             if file is not None:
                 name, content = file
-                params = manager.client.spec_named(new.spec).params
+                params = manager.spec_named(new.spec).params
                 try:
                     rows = read_file(name, content, lambda p: read_table(p, params))
                 except ValueError as error:

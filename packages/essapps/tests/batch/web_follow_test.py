@@ -387,7 +387,7 @@ def test_a_step_that_raises_is_said_and_the_next_step_runs(
     page.pages.tick()
 
     assert failed is not None
-    assert failed.failure == "Follow could not step: 'sample'"
+    assert failed.failure == "Follow could not step: KeyError: 'sample'"
     assert page.state().follow.failure is None  # type: ignore[union-attr]
     assert statuses(done(page, client)) == {'water': 'done'}
 

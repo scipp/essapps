@@ -331,8 +331,10 @@ class BatchManager:
             Whether the batch follows its source from the time it is made, in
             place of the batch that followed before. A batch made without
             ``follow`` never follows. Only a batch made from a source can
-            follow, and it has no last row: ``choose`` is no
-            :class:`~.source.Range` with a ``last``.
+            follow. A :class:`~.source.Range` with a ``last`` is refused with
+            ``follow``; a function may choose any rows, and the filled rows
+            that it leaves out are considered, so Follow adds only the rows
+            that arrive later.
 
         Raises
         ------
@@ -370,7 +372,7 @@ class BatchManager:
             if self._taken(label):
                 raise ValueError(f'{label}: the label has definitions or records')
         header = Header(title, description)
-        bound = self._bound(spec)
+        bound = self.spec_named(spec)
         if settings is None:
             settings = self._settings.get(spec, {})
         made = None
@@ -416,10 +418,10 @@ class BatchManager:
             raise ValueError(f'the source {name} is not registered')
         return self.sources[name]
 
-    def _bound(self, spec: str) -> WorkflowSpec[Any, Any]:
+    def spec_named(self, spec: str) -> WorkflowSpec[Any, Any]:
         """
-        The spec of name ``spec`` that the workspace binds; ``ValueError`` if
-        it binds none.
+        The spec of name ``spec`` that the workspace binds, the highest
+        version if several; ``ValueError`` if it binds none.
         """
         try:
             return self.client.spec_named(spec)
@@ -488,7 +490,7 @@ class BatchManager:
         template = self._definitions.load(settings_key(label), template_of)
         if template is None:
             raise ValueError(f'{label}: no settings are kept')
-        spec = self._bound(template.spec.name)
+        spec = self.spec_named(template.spec.name)
         rows = self._definitions.load(
             rows_key(label), lambda data: typed(frame_of(data), spec.params)
         )
