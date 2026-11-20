@@ -18,15 +18,15 @@ export function h(tag, props = {}, ...children) {
 
 // Each call returns {ok, status, body}; a refusal (422) is not thrown. A file
 // is sent as it is, anything else as JSON. `path` is relative to the API, which
-// is next to the page, so that the page works under any prefix.
-async function call(method, path, body) {
+// is next to the page at `page`, so that the page works under any prefix.
+async function call(method, path, body, page) {
   const init = {method, headers: {}};
   if (body !== undefined) {
     const raw = body instanceof Blob;
     init.headers['Content-Type'] = raw ? 'application/octet-stream' : 'application/json';
     init.body = raw ? body : JSON.stringify(body);
   }
-  const response = await fetch(`api/${path}`, init);
+  const response = await fetch(new URL(`api/${path}`, page), init);
   const isJson = response.headers.get('Content-Type')?.includes('json');
   return {
     ok: response.ok,
@@ -35,8 +35,8 @@ async function call(method, path, body) {
   };
 }
 
-export const get = (url) => call('GET', url);
-export const post = (url, body = {}) => call('POST', url, body);
+export const get = (url, page) => call('GET', url, undefined, page);
+export const post = (url, body, page) => call('POST', url, body, page);
 
 export function query(params) {
   const search = new URLSearchParams();

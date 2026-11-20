@@ -816,38 +816,18 @@ def test_a_button_of_the_row_tab_keeps_the_focus_when_the_row_changes(
 # The list of batches
 
 
-def test_the_batches_view_links_to_the_page_of_another_batch(
-    page: Any, pages: Pages, manager: BatchManager
-) -> None:
-    other = manager.create(
-        STAGED.name, title='Other', source='pairs', description='The second series'
-    )
-    pages.manager.follow(other)
-    page.reload()
-
-    page.click('[data-view=batches]')
-
-    page.wait_for_selector('#batches tbody tr:has-text("Other")')
-    assert page.inner_text('#batches tr[aria-current=page] a') == 'Scan'
-    listed = page.locator('#batches tbody tr', has_text='Other').inner_text()
-    assert 'The second series' in listed
-    assert 'follows' in listed
-    page.click('#batches a:text-is("Other")')
-    page.wait_for_selector('#title:has-text("Other")')
-    assert page.url.endswith(f'/batches/{other}/')
-
-
-def test_the_batches_view_counts_the_rows_when_opened_and_again_on_request(
+def test_the_batches_view_counts_the_rows_every_two_seconds_while_shown(
     page: Any, batch: Batch, client: Client
 ) -> None:
     batch.put(batch.frame().drop(index=['3']))
-
     page.click('[data-view=batches]')
-
     page.wait_for_selector('#batches .pill.st-ready:text-is("2 ready")')
+
     client.wait(batch.reduce(['1']))
-    page.click('#count')
-    page.wait_for_selector('#batches .pill.st-done:text-is("1 done")')
+
+    page.wait_for_selector('#batches .pill.st-done:text-is("1 done")', timeout=5000)
+    page.click('[data-view=rows]')
+    assert asked(page, '/api/batches/counts', seconds=2.5) == 0
 
 
 def test_a_count_that_fails_says_why_in_the_batches_view_and_shows_no_counts(
@@ -855,14 +835,15 @@ def test_a_count_that_fails_says_why_in_the_batches_view_and_shows_no_counts(
 ) -> None:
     page.click('[data-view=batches]')
     page.wait_for_selector('#batches .pill')
+
     refused = {'message': 'Cannot count.'}
     page.route('**/api/batches/counts', lambda r: r.fulfill(status=422, json=refused))
-
-    page.click('#count')
 
     page.wait_for_selector('#message:has-text("Cannot count.")')
     assert page.is_visible('#message')
     assert page.locator('#batches .pill').count() == 0
+    page.click('[data-view=rows]')  # no count after this one
+    page.wait_for_timeout(300)
     assert all('status of 422' in e for e in page.errors)
     page.errors.clear()
 
@@ -874,6 +855,409 @@ def test_a_batch_that_could_not_be_counted_shows_why_in_its_row(page: Any) -> No
     page.click('[data-view=batches]')
 
     page.wait_for_selector('#batches td.bad:text-is("half written")')
+
+
+# A change of batch
+
+
+def asked(page: Any, part: str, seconds: float) -> int:
+    """The number of requests whose URL holds ``part`` in the next ``seconds``."""
+    urls: list[str] = []
+
+    def heard(request: Any) -> None:
+        if part in request.url:
+            urls.append(request.url)
+
+    page.on('request', heard)
+    page.wait_for_timeout(seconds * 1000)
+    page.remove_listener('request', heard)
+    return len(urls)
+
+
+@pytest.fixture
+def second(manager: BatchManager, url: str) -> str:
+    """
+    A second batch, ``other``, of the row ``2`` of the source, sds, with a
+    thickness of 5; the batch ``scan`` has the same row, with no thickness.
+    """
+    return manager.create(
+        STAGED.name,
+        title='Other',
+        description='The second series',
+        source='pairs',
+        choose=lambda given: given.loc[['2']].assign(thickness=5.0),
+        label='other',
+    )
+
+
+KEEP = 'window.kept = true'
+"""A mark that a load of the document forgets."""
+KEPT = 'window.kept === true'
+
+
+def to_batch(page: Any, title: str) -> None:
+    """Show the batch of ``title`` by a click on its title in the Batches view."""
+    page.click('[data-view=batches]')
+    page.click(f'#batches a:text-is("{title}")')
+    page.wait_for_selector(f'#title:has-text("{title}")')
+
+
+def shows(page: Any, title: str) -> None:
+    """Wait until the page has drawn the first state of the batch of ``title``."""
+    page.wait_for_selector(f'#title:has-text("{title}")')
+    page.wait_for_selector('body:not([inert])')
+
+
+def test_a_click_on_a_title_shows_its_batch_in_place_in_the_rows_view(
+    second: str, page: Any, pages: Pages
+) -> None:
+    pages.manager.follow(second)
+    page.evaluate(KEEP)
+    page.click('[data-tab=settings]')
+    page.click('[data-view=batches]')
+    listed = page.locator('#batches tbody tr', has_text='Other')
+    listed.locator('.follows:text-is("follows")').wait_for()
+    assert 'The second series' in listed.inner_text()
+    assert page.inner_text('#batches tr[aria-current=page] a') == 'Scan'
+
+    page.click('#batches a:text-is("Other")')
+
+    shows(page, 'Other')
+    assert page.url.endswith(f'/batches/{second}/')
+    assert page.evaluate(KEPT)
+    assert page.get_attribute('[data-view=rows]', 'aria-pressed') == 'true'
+    assert page.get_attribute('[data-tab=settings]', 'aria-selected') == 'true'
+    assert page.locator('#rows .tabulator-row').count() == 1
+    assert cell(page, 'sds', 'thickness').inner_text() == '5.0'
+
+
+def test_a_click_on_a_row_of_the_list_shows_its_batch_and_stays_in_the_list(
+    second: str, page: Any
+) -> None:
+    page.evaluate(KEEP)
+    page.click('[data-tab=batch]')
+    page.click('[data-view=batches]')
+
+    page.click('#batches tr:has-text("Other") td.n')
+
+    page.wait_for_selector('#batch-fixed dd:text-is("other")')
+    assert page.inner_text('#batches tr[aria-current=page] a') == 'Other'
+    assert page.get_attribute('[data-view=batches]', 'aria-pressed') == 'true'
+    assert page.url.endswith(f'/batches/{second}/')
+    assert page.evaluate(KEPT)
+
+
+def test_a_click_on_a_title_with_a_modifier_key_opens_the_batch_in_a_new_tab(
+    second: str, page: Any
+) -> None:
+    page.click('[data-view=batches]')
+
+    with page.context.expect_page() as opened:
+        page.click('#batches a:text-is("Other")', modifiers=['Control'])
+
+    opened.value.wait_for_selector('#title:has-text("Other")')
+    assert opened.value.url.endswith(f'/batches/{second}/')
+    assert page.url.endswith('/batches/scan/')
+    assert 'Scan' in page.inner_text('#title')
+    opened.value.close()
+
+
+def test_back_and_forward_change_the_batch_in_place(second: str, page: Any) -> None:
+    page.evaluate(KEEP)
+    to_batch(page, 'Other')
+
+    page.go_back()
+    shows(page, 'Scan')
+    assert page.locator('#rows .tabulator-row').count() == 3
+    page.go_forward()
+    shows(page, 'Other')
+
+    assert page.locator('#rows .tabulator-row').count() == 1
+    assert page.evaluate(KEPT)
+
+
+def test_each_batch_keeps_its_filter_selection_and_sort_and_the_page_its_tab(
+    second: str, page: Any
+) -> None:
+    page.click('#rows .tabulator-col[tabulator-field=name]')
+    select(page, 'water')
+    page.click('.chip.st-ready')
+    page.click('[data-tab=row]')
+
+    to_batch(page, 'Other')
+    page.wait_for_selector('.chip.st-all[aria-pressed=true]')
+    assert page.inner_text('#selection') == ''
+    assert page.get_attribute('[data-tab=row]', 'aria-selected') == 'true'
+    page.go_back()
+
+    shows(page, 'Scan')
+    page.wait_for_selector('#tab-row h2:text-is("water")')
+    assert page.inner_text('#selection') == '1 selected'
+    assert page.get_attribute('.chip.st-ready', 'aria-pressed') == 'true'
+    assert page.evaluate(PILLS) == ['ready'] * 3
+    names = page.locator('#rows .tabulator-row [tabulator-field=name]')
+    assert names.all_inner_texts() == ['oil', 'sds', 'water']
+
+
+def test_nothing_of_the_batch_before_stays_after_a_change(
+    second: str, page: Any, url: str, client: Client, manager: BatchManager
+) -> None:
+    sent: list[str] = []
+    page.on('request', lambda r: sent.append(r.url) if r.method == 'POST' else None)
+    to_batch(page, 'Other')
+    reduce_rows(page, url.replace('/scan/', f'/{second}/'), client, '2')
+    page.wait_for_selector('#plot .main-svg')
+    select(page, 'sds')
+    page.click('.chip.st-done')
+    cell(page, 'sds', 'thickness').click()
+    editor(page).fill('thick')
+    editor(page).press('Enter')
+    page.wait_for_selector('#message:has-text("thick is not a number")')
+    page.click('[data-tab=settings]')
+    page.click(BINS)
+    page.keyboard.press('Control+a')
+    page.keyboard.type('9')
+    sent.clear()
+
+    page.go_back()
+
+    shows(page, 'Scan')
+    page.wait_for_selector('#plot[hidden]', state='attached')  # in the tab Result
+    assert page.evaluate(PILLS) == ['ready'] * 3
+    assert page.inner_text('#selection') == ''
+    assert page.is_hidden('#message')
+    assert page.input_value(BINS) != '9'
+    assert page.is_hidden('#draft.changed')
+    page.click('[data-tab=row]')
+    assert 'Select a row' in page.inner_text('#tab-row')
+    # The value typed goes to the draft of the batch it was typed for.
+    other = url.replace('/scan/', f'/{second}/')
+    assert [u for u in sent if '/api/settings' in u] == [f'{other}api/settings']
+    assert manager.batch(second).settings == {}
+
+
+def test_a_change_closes_the_menus_dialogs_and_forms_of_the_batch_before(
+    second: str, page: Any
+) -> None:
+    to_batch(page, 'Other')
+    page.click('[data-tab=batch]')
+    page.fill('#batch-title', 'Typed')
+    page.click('#add-row')
+    page.keyboard.type('typed')
+    page.click('#files .menu-button')
+    page.go_back()
+    shows(page, 'Scan')
+    assert page.input_value('#batch-title') == 'Scan'
+    assert page.is_hidden('#add-form')
+    assert page.is_hidden('#files .menu-items')
+    page.click('#take-open')
+    page.wait_for_selector('#take[open]')
+
+    page.go_forward()
+
+    shows(page, 'Other')
+    assert page.is_hidden('#take')
+    assert page.input_value('#batch-title') == 'Other'
+
+
+def test_an_answer_for_the_batch_before_is_dropped(
+    second: str, page: Any, batch: Batch, manager: BatchManager
+) -> None:
+    hold(page, 'api/cells')
+    cell(page, 'water', 'thickness').click()
+    editor(page).fill('2.5')
+    editor(page).press('Enter')
+    held(page, 1)
+
+    to_batch(page, 'Other')
+    release(page, 0)
+    page.wait_for_timeout(300)
+
+    assert page.locator('#rows .tabulator-row').count() == 1
+    assert 'Other' in page.inner_text('#title')
+    assert batch.frame().at['1', 'thickness'] == 2.5
+    assert list(manager.batch(second).frame()['thickness']) == [5.0]
+
+
+def test_a_value_typed_goes_to_its_batch_after_an_action_on_its_way(
+    second: str, page: Any
+) -> None:
+    hold(page, 'api/relist')
+    page.click('#relist')
+    held(page, 1)
+    page.click('[data-tab=settings]')
+    page.click(BINS)
+    page.keyboard.press('Control+a')
+    page.keyboard.type('9')
+
+    to_batch(page, 'Other')
+    release(page, 0)
+    page.wait_for_timeout(300)
+    assert 'Other' in page.inner_text('#title')
+    page.go_back()
+
+    shows(page, 'Scan')
+    page.wait_for_selector('#draft.changed')
+    assert page.input_value(BINS) == '9'
+
+
+def test_a_file_asked_for_before_a_change_is_saved(second: str, page: Any) -> None:
+    hold(page, 'api/table.csv')
+    page.click('#files .menu-button')
+    page.click('[data-file="table.csv"]')
+    held(page, 1)
+    to_batch(page, 'Other')
+
+    with page.expect_download() as saved:
+        release(page, 0)
+
+    assert saved.value.suggested_filename == 'rows.csv'
+    assert 'water' in Path(saved.value.path()).read_text()
+
+
+def test_the_focus_on_a_title_in_the_list_stays_while_it_counts(
+    second: str, page: Any
+) -> None:
+    page.click('[data-view=batches]')
+    page.wait_for_selector('#batches .pill')
+    page.focus('#batches a:text-is("Other")')
+
+    with page.expect_response('**/api/batches/counts'):
+        pass
+    page.wait_for_timeout(100)
+    assert page.evaluate('document.activeElement.textContent') == 'Other'
+    page.keyboard.press('Enter')
+
+    shows(page, 'Other')
+
+
+def test_selecting_the_text_of_a_batch_in_the_list_does_not_show_it(
+    second: str, page: Any
+) -> None:
+    page.click('[data-view=batches]')
+
+    page.dblclick(f'#batches small:text-is("{second}")')
+    assert page.evaluate('getSelection().toString()') == second
+    description = page.locator('#batches .hint:text-is("The second series")')
+    description.click(position={'x': 2, 'y': 5})
+    page.mouse.down()
+    page.mouse.move(400, description.bounding_box()['y'] + 5)
+    page.mouse.up()
+    page.wait_for_timeout(300)
+
+    assert page.url.endswith('/batches/scan/')
+    assert page.evaluate('getSelection().toString()') != ''
+
+
+def test_a_change_while_the_server_does_not_answer_says_so_and_shows_no_batch(
+    second: str, page: Any
+) -> None:
+    page.route(f'**/{second}/api/state*', lambda route: route.abort())
+    page.click('[data-view=batches]')
+    page.click('#batches a:text-is("Other")')
+
+    page.wait_for_selector('#offline:has-text("The server does not answer.")')
+    page.wait_for_selector('body.no-batch:not([inert])')
+    assert page.is_hidden('#view-rows')
+    assert 'Scan' not in page.inner_text('#title')
+    page.unroute(f'**/{second}/api/state*')
+    shows(page, 'Other')
+    page.wait_for_selector('#offline', state='hidden')
+    assert page.is_visible('.right')
+    assert all('ERR_FAILED' in e for e in page.errors)
+    page.errors.clear()
+    # The view chosen by the click on the title, also after a reload.
+    assert page.is_visible('#view-rows')
+    page.reload()
+    page.wait_for_selector('#rows .tabulator-row')
+    assert page.get_attribute('[data-view=rows]', 'aria-pressed') == 'true'
+
+
+def test_a_refused_header_of_the_batch_before_is_the_message_of_the_page(
+    second: str, page: Any
+) -> None:
+    hold(page, 'api/batch')  # also the list and its counts, which do not matter
+    page.click('[data-tab=batch]')
+    page.fill('#batch-title', ' ')
+    page.click('#batch-form [type=submit]')
+    held(page, 1)
+
+    page.click('[data-view=batches]')
+    page.click('#batches a:text-is("Other")')
+    shows(page, 'Other')
+    release(page, 0)
+
+    page.wait_for_selector('#message:has-text("a title that is not empty")')
+    assert page.inner_text('#message .message-text strong').startswith('Scan: ')
+    assert page.inner_text('#batch-problem') == ''
+    assert page.input_value('#batch-title') == 'Other'
+    assert all('status of 422' in e for e in page.errors)
+    page.errors.clear()
+
+
+def test_a_refused_table_of_the_batch_before_is_the_message_of_the_page(
+    second: str, page: Any, tmp_path: Path
+) -> None:
+    bad = tmp_path / 'bad.csv'
+    bad.write_text('name,thickness\nwater,1\n')
+    hold(page, 'api/table?')
+    page.set_input_files('#pick-table', bad)
+    held(page, 1)
+
+    to_batch(page, 'Other')
+    release(page, 0)
+
+    page.wait_for_selector('#message:has-text("bad.csv")')
+    assert page.inner_text('#message .message-text strong').startswith('Scan: ')
+    assert page.locator('#rows .tabulator-row').count() == 1
+    assert all('status of 422' in e for e in page.errors)
+    page.errors.clear()
+
+
+@pytest.mark.parametrize('start', ['', 'batches/gone/'])
+def test_one_poll_runs_after_changes_from_the_root_or_a_batch_not_shown(
+    browser: Any, second: str, url: str, start: str
+) -> None:
+    page = watched(browser)
+    page.goto(url.removesuffix('batches/scan/') + start)
+    page.wait_for_selector('#batches tbody tr:has-text("Other")')
+    page.errors.clear()  # the batch gone answers 404
+    page.evaluate(KEEP)
+
+    for title in ['Scan', 'Other', 'Scan', 'Other']:
+        to_batch(page, title)
+        shows(page, title)
+    page.go_back()
+    shows(page, 'Scan')
+
+    assert asked(page, '/api/state', seconds=3) <= 4
+    assert page.evaluate(KEPT)
+    page.close()
+    assert page.errors == []
+
+
+def test_a_change_while_rows_run_ends_with_the_counts_of_both_batches_right(
+    second: str, page: Any, client: Client, gate: Gate
+) -> None:
+    gate.close()
+    page.click('#reduce')
+    page.wait_for_selector('#reduce.running')
+    page.click('[data-view=batches]')
+    page.wait_for_selector('#batches tr:has-text("Scan") .pill:text-is("3 running")')
+
+    page.click('#batches a:text-is("Other")')
+    shows(page, 'Other')
+    gate.open()
+    client.wait(client.records())
+    page.click('[data-view=batches]')
+
+    page.wait_for_selector('#batches tr:has-text("Scan") .pill:text-is("3 done")')
+    assert page.inner_text('#batches tr:has-text("Other") td:nth-child(3)') == '1 ready'
+    page.go_back()
+    shows(page, 'Scan')
+    page.click('[data-view=rows]')
+    page.wait_for_selector('.chip.st-done .n:text-is("3")')
+    assert page.locator('.chip.st-running').count() == 0
 
 
 # Making a batch
