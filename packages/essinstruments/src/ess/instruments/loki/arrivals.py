@@ -6,12 +6,15 @@ time, as if the instrument wrote them. It needs the extra ``[loki-app]`` and
 esssans' tutorial data, which ``ess.loki.data`` downloads at the first start::
 
     python -m ess.instruments.loki.arrivals [FOLDER] [--port 8000] [--arrive 15]
-        [--follow [SECONDS]]
+        [--count N] [--start M] [--follow [SECONDS]]
 
 ``FOLDER`` must be new or empty; a new temporary folder if not given. The can
 and its transmission run, the masks and the direct beam are there from the
 start, and the settings of the one batch are filled in. Then a run arrives
-every ``--arrive`` seconds, in the order of :data:`EXPERIMENT`. Turn on
+every ``--arrive`` seconds, in the order of :data:`EXPERIMENT`: ``--count``
+runs in all (12), the experiment again with the samples named ``#2``, ``#3``...
+beyond that, and the first ``--start`` of them (0) there from the start, in the
+first batch. Turn on
 "Follow" to add the rows that the runs fill and reduce them, a step every few
 seconds; "List runs again" lists the runs in the Runs view and changes no
 row.
@@ -209,6 +212,9 @@ def main() -> None:
     )
     parser.add_argument('--count', type=int, default=len(EXPERIMENT), help='runs')
     parser.add_argument(
+        '--start', type=int, default=0, metavar='M', help='runs there at the start'
+    )
+    parser.add_argument(
         '--follow',
         type=float,
         nargs='?',
@@ -227,6 +233,15 @@ def main() -> None:
     _say(f'folder {directory}; reducing the detector and the masks')
     with client:
         given = settings(client, instrument)
+
+        def arrive(sample: str, role: str, source: int) -> None:
+            ref = instrument.measure(role, sample, source)
+            name = ref.file.removeprefix('path:')
+            _say(f'arrived {name}: {role} run of {sample!r}, data of {source}')
+
+        plan = arrivals(args.count)
+        for arrival in plan[: args.start]:
+            arrive(*arrival)
         app = build(
             client,
             files,
@@ -237,14 +252,9 @@ def main() -> None:
             follow=args.follow is not None,
         )
 
-        def arrive(sample: str, role: str, source: int) -> None:
-            ref = instrument.measure(role, sample, source)
-            name = ref.file.removeprefix('path:')
-            _say(f'arrived {name}: {role} run of {sample!r}, data of {source}')
-
-        plan = [functools.partial(arrive, *arrival) for arrival in arrivals(args.count)]
+        later = [functools.partial(arrive, *a) for a in plan[args.start :]]
         _say(f'serving http://localhost:{args.port}/; Ctrl-C stops')
-        with every(args.arrive, plan):
+        with every(args.arrive, later):
             uvicorn.run(app, host='localhost', port=args.port, log_level='warning')
 
 
