@@ -849,7 +849,7 @@ def test_a_count_that_fails_says_why_in_the_batches_view_and_shows_no_counts(
 
 
 def test_a_batch_that_could_not_be_counted_shows_why_in_its_row(page: Any) -> None:
-    counted = {'rows': {}, 'failed': {'scan': 'half written'}}
+    counted = {'rows': {}, 'files': {}, 'failed': {'scan': 'half written'}}
     page.route('**/api/batches/counts', lambda r: r.fulfill(json=counted))
 
     page.click('[data-view=batches]')
@@ -960,6 +960,81 @@ def test_a_click_on_a_title_with_a_modifier_key_opens_the_batch_in_a_new_tab(
     assert page.url.endswith('/batches/scan/')
     assert 'Scan' in page.inner_text('#title')
     opened.value.close()
+
+
+# The batches of each run
+
+BATCHES = '.tabulator-cell[tabulator-field="batches"]'
+"""The cells of the column Batches of the Runs view."""
+
+
+def batches_of(page: Any, run: str) -> Any:
+    """The cell Batches of the run labelled ``run``, such as ``run 2``."""
+    label = page.locator(f'.tabulator-cell[tabulator-field="file"]:text-is("{run}")')
+    return page.locator('#runs .tabulator-row', has=label).locator(BATCHES)
+
+
+def test_the_runs_view_names_the_batches_of_each_run_and_sorts_those_in_none_first(
+    second: str, page: Any, batch: Batch
+) -> None:
+    batch.put(batch.frame().drop(index=['3']))  # runs 3 and 1003 in no batch
+    page.click('[data-view=runs]')
+
+    page.wait_for_selector(f'#runs {BATCHES}:has-text("Other, Scan")')
+    assert batches_of(page, 'run 1').inner_text() == 'Scan'
+    assert batches_of(page, 'run 1002').inner_text() == 'Other, Scan'  # as listed
+    page.wait_for_function(
+        "[...document.querySelectorAll('#runs .tabulator-row')]"
+        ".filter(r => r.innerText.includes('Scan')).length === 4"
+    )
+
+    page.click('#runs .tabulator-col[tabulator-field="batches"] .tabulator-col-title')
+
+    first = page.locator('#runs .tabulator-row').nth(0)
+    assert first.locator('[tabulator-field="file"]').inner_text() in (
+        'run 3',
+        'run 1003',
+    )
+    assert first.locator(BATCHES).inner_text() == ''
+
+
+def test_a_click_on_a_title_in_the_runs_view_shows_its_batch(
+    second: str, page: Any
+) -> None:
+    page.evaluate(KEEP)
+    page.click('[data-view=runs]')
+
+    page.click(f'#runs {BATCHES} a:text-is("Other")')
+
+    shows(page, 'Other')
+    assert page.url.endswith(f'/batches/{second}/')
+    assert page.get_attribute('[data-view=rows]', 'aria-pressed') == 'true'
+    assert page.evaluate(KEPT)
+
+
+def test_a_correction_typed_in_the_runs_view_stays_while_the_batches_change(
+    page: Any, batch: Batch
+) -> None:
+    page.click('[data-view=runs]')
+    page.wait_for_selector(f'#runs {BATCHES}:has-text("Scan")')
+    roles = '#runs .tabulator-cell[tabulator-field="cells.role.value"]'
+    page.locator(f'{roles}:has-text("sample")').first.click()
+    page.keyboard.type('backgr')
+
+    batch.put(batch.frame().drop(index=['3']))
+    for _ in range(2):
+        with page.expect_response('**/api/batches/counts'):
+            pass
+
+    typing = page.locator('#runs .tabulator-cell.tabulator-editing input')
+    assert typing.input_value() == 'backgr'
+    assert typing.evaluate('e => e === document.activeElement')
+    page.keyboard.press('Enter')
+    page.wait_for_selector('#toast:has-text("Role corrected on 1 run.")')
+    page.wait_for_function(
+        "[...document.querySelectorAll('#runs .tabulator-row')]"
+        ".filter(r => r.innerText.includes('Scan')).length === 4"
+    )
 
 
 def test_back_and_forward_change_the_batch_in_place(second: str, page: Any) -> None:

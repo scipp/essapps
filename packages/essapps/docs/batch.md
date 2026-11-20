@@ -493,6 +493,7 @@ Each action of the page is one call of the batch layer:
 | "Make this a column" | `batch.make_column(name)` |
 | "Make this a setting" | `batch.values(name)`, then `batch.make_setting(name, key)` |
 | **Follow** | `manager.follow(label)`; the timer calls `manager.step()` |
+| the column **Batches** of the Runs view | `batch.files()` of each batch, joined to the runs by identity |
 
 ## Testing an application
 

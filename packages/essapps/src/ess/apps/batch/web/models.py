@@ -343,11 +343,13 @@ class SourceRows(BaseModel):
 
 class BatchCounts(BaseModel):
     """
-    The rows of each batch by status, in the words of the page, by label; and
-    why each other batch could not be counted, by label.
+    The rows of each batch by status, in the words of the page, and the
+    identities of the files that it names, sorted, each by label; and why
+    each other batch could not be counted, by label.
     """
 
     rows: dict[str, dict[str, int]]
+    files: dict[str, list[str]]
     failed: dict[str, str]
 
 

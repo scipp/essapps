@@ -416,8 +416,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
   text-align: left;
 }
 .list td { padding: 6px 8px; border-bottom: 1px solid #eef0f3; vertical-align: top; }
-.list a { color: var(--accent); text-decoration: none; }
-.list a:hover { text-decoration: underline; }
+.list a, .batch-links a { color: var(--accent); text-decoration: none; }
+.list a:hover, .batch-links a:hover { text-decoration: underline; }
 .list td small { margin-left: 8px; }
 .list td .pill { margin: 0 4px 2px 0; }
 .list tr.batch { cursor: pointer; }

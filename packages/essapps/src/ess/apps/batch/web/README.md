@@ -88,6 +88,17 @@ Apply forgets why Follow could not reduce a row, since the next step tries again
 The page of the batch that follows shows "Following, every N s", how many rows wait, why the last step failed if it did, and, at the row, why a row could not be submitted; the row keeps its status, such as `ready`.
 Whatever a step raises, from the files, the workflow or the workspace, is the step's failure, said on the page of the batch that follows; the next step tries again.
 
+## The runs
+
+The view **Runs** lists the runs of the workspace (`Pages.runs`), with the fields of a run that a person corrects, and the column **Batches**.
+The column **Batches** names each batch that uses the run, by its title, in the order of the list of batches; it is empty for a run in no batch.
+A batch uses a run if a cell of its table names it, such as a sample run or an element of a list of runs, or one of its settings does, such as the run of the can (`Batch.files`).
+A run is matched by its identity, as the workspace resolves a name: a cell that names `run:70003` names the run that the view lists as `path:raw/70003.nxs`.
+A name resolved is kept until the next change of the table, as the state of the rows keeps it; so a run that gains a catalogue identifier is matched by it after that change.
+A title is a link that shows its batch as a click on its title in the list of batches does: in place, in the Rows view; a click with a modifier key is left to the browser.
+A click on the header of the column sorts the runs by it, the runs in no batch first, so that a run left out of every batch is found.
+The column also shows which batches a correction of a run does not reach, since a row that a table has keeps its cells.
+
 ## The list of batches
 
 The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, and which batch follows; the batch shown is marked.
@@ -95,10 +106,13 @@ A click on a row of the list shows its batch, and the view stays Batches: the ri
 The page shows one batch, so the list has no checkboxes.
 The title is a link to the page of its batch, so a click with a modifier key, or with the middle button, opens it in another tab.
 The label and the description are text to select and copy: a click on them, or one that selects text, shows no batch.
-While the view is shown, the page counts the rows of each batch by status (`Pages.counts`), the next count 2 s after the answer of the one before; nothing counts while another view is shown, or while the tab of the browser is hidden.
+While the view Batches or the view Runs is shown, the page counts the rows of each batch by status (`Pages.counts`), the next count 2 s after the answer of the one before; nothing counts while the view Rows is shown, or while the tab of the browser is hidden.
+The answer of a count also gives the files that each batch names, which the Runs view joins to its runs.
 A count updates the cells of the rows; the rows are made again only when the list changes, so the keyboard focus on a title and a text selected stay.
+The Runs view so updates only the runs whose batches changed, and not while a person types a correction in a cell.
 The statuses are those of the chips of each batch's page (`RowState.text`).
-A count reads the state of every batch under the lock of all pages, so the pages and Follow wait until it ends; one count of a batch of 875 rows takes 50 to 85 ms.
+A count reads the state of every batch under the lock of all pages, so the pages and Follow wait until it ends.
+One count of a batch of 1,000 toy rows, half of them reduced, takes 45 ms; the first count after a change of its table takes 0.2 s, since each value that names a file is resolved again.
 A batch that cannot be counted, such as one whose table cannot be read, shows why in its row.
 The counts shown stay until the next answer replaces them; a count that fails shows none.
 The list and the Runs view are the same on every page.
@@ -208,6 +222,7 @@ The server answers 204 if nothing changed since `version`, and else the whole `S
 The server learns of these by numbers that count them, `Batch.version`, `BatchManager.version` and `Pages.runs_version`, and compares only these at each poll.
 `start` is new at each start of the server; a page that sees another one loads again.
 `State.runs` counts the changes of the runs, which all pages share; the Runs view asks for `api/runs` when it moves.
+The batches of each run come with the counts (`api/batches/counts`), every 2 s while the Runs view is shown, and not with `api/runs`: Follow adds rows that name runs without a change of the runs.
 `State.batches` lists the batches, so the version moves when the headers of the batches or the batch that follows change, whoever changed them; only a page that polls no state asks for `api/batches`.
 `api/batches`, `api/batches/counts`, `api/sources`, `api/runs` and the corrections of runs (`api/runs/cells`, `api/runs/cells/revert`) belong to the workspace: they answer the same under any label, and at `/api/...`.
 

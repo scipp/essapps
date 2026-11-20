@@ -1721,10 +1721,8 @@ def test_counts_are_given_in_the_words_of_the_page(
 
     counted = http.get('/api/batches/counts').json()
 
-    assert counted == {
-        'rows': {'scan': {'done': 1, 'ready': 1, 'incomplete': 1}},
-        'failed': {},
-    }
+    assert counted['rows'] == {'scan': {'done': 1, 'ready': 1, 'incomplete': 1}}
+    assert counted['failed'] == {}
 
 
 def counted(http: TestClient) -> dict[str, int]:
@@ -1787,8 +1785,58 @@ def test_a_batch_that_cannot_be_counted_has_its_reason(
 
     counted = Pages(manager).counts()
 
-    assert list(counted.rows) == ['a']
+    assert list(counted.rows) == list(counted.files) == ['a']
     assert 'rows.json: not a table' in counted.failed['b']
+
+
+# The batches of each run
+
+
+def named(http: TestClient) -> dict[str, list[str]]:
+    """The identities of the files that each batch names, by label."""
+    return http.get('/api/batches/counts').json()['files']
+
+
+def test_the_counts_name_the_runs_of_each_batch_also_a_run_two_share(
+    http: TestClient, manager: BatchManager, client: Client
+) -> None:
+    manager.create('plain', title='Water', rows=toys.rows(client).loc[['1']], label='w')
+
+    assert named(http) == {
+        'scan': [
+            'uuid:run-1',
+            'uuid:run-1001',
+            'uuid:run-1002',
+            'uuid:run-2',
+            'uuid:run-3',
+        ],
+        'w': ['uuid:run-1', 'uuid:run-1001'],
+    }
+
+
+def test_a_row_that_follow_adds_names_its_runs_in_the_next_count(
+    pages: Pages, manager: BatchManager, label: str, sample: Measure
+) -> None:
+    manager.follow(label)
+    page = TestClient(create_app(pages))
+    before = named(page)[label]
+    sample(1, 'water')
+
+    pages.tick()
+
+    assert (before, named(page)[label]) == ([], ['uuid:run-1', 'uuid:run-1001'])
+
+
+def test_a_run_named_otherwise_than_the_runs_view_lists_it_is_matched(
+    http: TestClient, batch: Batch, fake: FakeFiles
+) -> None:
+    fake.measure(7, 1.0, role='sample', sample='oil')
+    toys.edit(batch, '3', transmission='run:7')
+
+    listed = {r['key'] for r in http.get('/api/runs').json()['rows']}
+
+    assert 'uuid:run-7' in listed
+    assert 'uuid:run-7' in named(http)['scan']
 
 
 # Making a batch

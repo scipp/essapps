@@ -24,9 +24,10 @@ from ess.apps.batch import (
 from ess.apps.batch.definition import settings_key, template_of
 from ess.apps.batch.table import as_request, cell_of, data_of
 from ess.apps.log import Log
-from ess.apps.testing import CountingClient, FakeStore, StagedFunction
+from ess.apps.testing import CountingClient, FakeFiles, FakeStore, StagedFunction
 from ess.spec import (
     FileRef,
+    Referenced,
     RunFile,
     SampleRunFile,
     WorkflowSpec,
@@ -41,6 +42,7 @@ from .toys import (
     STAGED,
     Gate,
     Measure,
+    Offset,
     Outputs,
     Refusing,
     edit,
@@ -1067,3 +1069,85 @@ def test_the_version_moves_when_a_record_that_a_cell_reads_finishes(
     assert measured.version != version
     problems = measured.shown()[0]['2'].problems
     assert [e.msg for e in problems] == ['the record it reads is failed']
+
+
+# The files that a batch names
+
+
+class Background(BaseModel):
+    run: RunFile | None = None
+
+
+class NamingParams(BaseModel):
+    sample: RunFile
+    runs: list[RunFile] = Field(default_factory=list)
+    can: RunFile | None = None
+    background: Background = Field(default_factory=Background)
+    offset: Offset | Referenced[Offset] | None = None
+
+
+NAMING = WorkflowSpec(
+    name='naming',
+    version=1,
+    title='Naming',
+    description='A toy that names files in cells, lists, settings and groups.',
+    params=NamingParams,
+    outputs=Outputs,
+)
+
+
+@pytest.fixture
+def naming(files: CorrectedFiles, fake: FakeFiles) -> Iterator[Client]:
+    """A client that runs NAMING, with runs 1 to 5, identified as ``uuid:run-N``."""
+    for run in range(1, 6):
+        fake.measure(run, float(run))
+    bind = [function_binding(NAMING, lambda _: Outputs(total=1.0))]
+    with local(proposal='p1', files=files, bind=bind) as client:
+        yield client
+
+
+def identities(*numbers: int) -> set[FileRef]:
+    return {FileRef(file=f'uuid:run-{n}') for n in numbers}
+
+
+def naming_batch(
+    client: Client, cells: dict[str, dict[str, Any]], **settings: Any
+) -> Batch:
+    table = pd.DataFrame.from_dict(
+        {k: {'runs': None, 'offset': None, **c} for k, c in cells.items()},
+        orient='index',
+    )
+    return Batch(client, NAMING, label='n', rows=table, settings=settings)
+
+
+def test_a_batch_names_the_files_of_its_cells_at_any_depth_by_identity(
+    naming: Client,
+) -> None:
+    batch = naming_batch(
+        naming,
+        {
+            'a': {'sample': 'run:1', 'runs': ['uuid:run-2', 'run:3']},
+            'b': {'sample': 'uuid:run-4', 'offset': 'r1.offset'},  # runs empty
+        },
+    )
+
+    assert batch.files() == identities(1, 2, 3, 4)
+
+
+def test_a_batch_names_the_files_of_its_settings_at_any_depth(naming: Client) -> None:
+    batch = naming_batch(
+        naming,
+        {'a': {'sample': 'run:1'}},
+        can=file(run=2),
+        background={'run': file(run=3)},
+    )
+
+    assert batch.files() == identities(1, 2, 3)
+
+
+def test_a_value_refused_names_no_file_and_hides_no_other(naming: Client) -> None:
+    batch = naming_batch(
+        naming, {'a': {'sample': 'run:1', 'runs': ['run:99']}}, can=file(run=98)
+    )
+
+    assert batch.files() == identities(1)
