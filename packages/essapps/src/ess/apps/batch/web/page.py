@@ -49,10 +49,10 @@ which the new form would drop.
 The page in the browser holds only what it shows: the selection, the
 filter, the tab. Each action returns the :class:`~.models.State` after it, and
 the browser polls the state about once a second with the ``version`` it has,
-to see results arrive. The version counts the changes made here and those of
-the client's records, which a ``Page`` reads from ``client.changes`` at each
-poll. ``start`` tells a page that the server started again, so that the same
-version may be another state.
+to see results arrive. The version counts the changes made here, and those
+that the batch, the manager, the runs and Follow count, which a poll compares
+(such as :attr:`~ess.apps.batch.Batch.version`). ``start`` tells a page that
+the server started again, so that the same version may be another state.
 
 A reduction refused raises :class:`Problem`. It says the reasons that no cell
 or setting shows. The others stay in the state until the value of each is
@@ -146,7 +146,7 @@ from ..state import (
     ready,
     to_reduce,
 )
-from ..table import KEY, as_request, cell_of, data_of, read_table, write_table
+from ..table import KEY, as_request, cell_of, read_table, write_table
 from ..templates import checked_settings, load_template, write_template
 from . import forms, plots
 from .models import (
@@ -452,25 +452,22 @@ class Page:
 
     def _live(self) -> tuple[object, ...]:
         """
-        What the page shows that changes without an action: the table, the
-        records, the runs and why they cannot be listed, the headers of the
-        batches, which batch follows, and how the last step of Follow went.
+        What the page shows that changes without an action, each by what
+        counts its changes: the batch (its table, its template and the
+        records), the records listed, the runs and why they cannot be
+        listed, the headers of the batches and which batch follows, and how
+        the last step of Follow went.
         """
         pages = self.pages
         return (
-            data_of(self.batch.frame()),
+            self.batch.version,
             self._listing.cursor,
             self._listing.failure,
             pages.runs_version,
-            pages.manager.headers(),
-            pages.manager.following,
+            pages.manager.version,
             pages.last,
             pages.failure,
         )
-
-    def _moved(self) -> bool:
-        """Whether what :meth:`_live` gives changed since the version moved."""
-        return self._live() != self._seen
 
     def _new_version(self) -> None:
         self.version += 1
@@ -521,9 +518,11 @@ class Page:
     @_locked
     def poll(self, after: int, start: str = '') -> State | None:
         """The state, or ``None`` if it is still that of version ``after``."""
+        # The feed catches a record that ended after the last relist but before
+        # ``_seen`` was read, which ``_live`` holds already and the listing lacks.
         changes = self.batch.client.changes(after=self._listing.cursor)
         # A table changed by another caller may name files that the listing lacks.
-        if changes.records or self._moved():
+        if changes.records or self._live() != self._seen:
             self._relist()
             self._new_version()
         if after == self.version and start == self.start:
@@ -1009,7 +1008,7 @@ class Page:
                 self._relist()
                 self.pages.runs_listed(self._runs_seen())
             finally:
-                if self._moved():
+                if self._live() != self._seen:
                     self._new_version()
 
     # Settings

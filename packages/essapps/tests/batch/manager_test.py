@@ -745,13 +745,38 @@ def test_a_removal_whose_header_is_refused_leaves_the_batch_not_following(
 ) -> None:
     two.follow('a')
     refusing.part = 'header'
+    version = two.version
 
     with pytest.raises(NotKept):
         two.remove('a')
 
     assert list(two.headers()) == ['a', 'b']
     assert two.following is None
+    assert two.version != version
     assert _again(client, definitions).following is None
+
+
+# The version
+
+
+@pytest.mark.parametrize(
+    'change',
+    [
+        lambda m: m.create('plain', title='C', label='c'),
+        lambda m: m.remove('b'),
+        lambda m: m.change('b', title='Other'),
+        lambda m: m.follow('b'),
+    ],
+    ids=['create', 'remove', 'change', 'follow'],
+)
+def test_the_version_moves_at_each_change_of_the_headers_or_of_which_follows(
+    two: BatchManager, change: Callable[[BatchManager], object]
+) -> None:
+    before = two.version
+
+    change(two)
+
+    assert two.version != before
 
 
 # A create or remove cut off

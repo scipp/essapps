@@ -22,7 +22,7 @@ from ess.apps.batch import (
     rows_of,
 )
 from ess.apps.batch.definition import settings_key, template_of
-from ess.apps.batch.table import as_request, cell_of
+from ess.apps.batch.table import as_request, cell_of, data_of
 from ess.apps.log import Log
 from ess.apps.testing import CountingClient, FakeStore, StagedFunction
 from ess.spec import (
@@ -969,3 +969,101 @@ def test_cancel_reaches_a_row_removed_since(
     gate.open()
 
     assert client.wait(records) == {'1': 'cancelled'}
+
+
+# The version
+
+
+def _shown(batch: Batch) -> tuple[Any, ...]:
+    """What the version stands for."""
+    return data_of(batch.frame()), batch.template(), batch.shown()
+
+
+@pytest.mark.parametrize(
+    'change',
+    [
+        lambda b: edit(b, '1', thickness=2.0),
+        lambda b: setattr(b, 'settings', OTHER_SETTINGS),
+        lambda b: b.make_column('binning'),
+        lambda b: b.make_setting('thickness'),
+    ],
+    ids=['put', 'settings', 'make_column', 'make_setting'],
+)
+def test_the_version_moves_at_each_change_of_the_table_or_the_template(
+    measured: Batch, change: Any
+) -> None:
+    before = measured.version
+
+    change(measured)
+
+    assert measured.version != before
+
+
+@pytest.mark.parametrize(
+    'read',
+    [
+        lambda b: b.put(b.frame()),
+        lambda b: b.frame(),
+        lambda b: b.template(),
+        lambda b: b.settings,
+        lambda b: b.cells(),
+        lambda b: b.values('sample'),
+        lambda b: b.state(),
+        lambda b: b.state(compare=False),
+        lambda b: b.shown(['1']),
+    ],
+    ids=[
+        'put an equal table',
+        'frame',
+        'template',
+        'settings',
+        'cells',
+        'values',
+        'state',
+        'state not compared',
+        'shown',
+    ],
+)
+def test_the_version_stays_at_a_read_and_at_a_put_of_an_equal_table(
+    measured: Batch, client: Client, read: Any
+) -> None:
+    client.wait(measured.reduce(['1']))
+    before = measured.version
+
+    read(measured)
+
+    assert measured.version == before
+
+
+def test_while_the_version_stays_a_row_reduced_reads_the_same_until_it_finishes(
+    measured: Batch, client: Client, gate: Gate
+) -> None:
+    gate.close()
+    records = measured.reduce(['1'])
+    version, running = measured.version, _shown(measured)
+
+    assert (measured.version, _shown(measured)) == (version, running)
+    gate.open()
+    client.wait(records)
+
+    assert measured.version != version
+    assert measured.shown()[0]['1'].status is Status.COMPLETED
+
+
+def test_the_version_moves_when_a_record_that_a_cell_reads_finishes(
+    measured: Batch, client: Client, gate: Gate
+) -> None:
+    upstream = Batch(client, PLAIN, label='up', rows=measured.frame())
+    upstream.settings = {'binning': {'bins': 1}}  # the toy fails with one bin
+    gate.close()
+    found = upstream.reduce(['1'])
+    edit(measured, '2', offset=cell_of(found['1'].ref('total')))
+    version, running = measured.version, _shown(measured)
+
+    assert (measured.version, _shown(measured)) == (version, running)
+    gate.open()
+    client.wait(found)
+
+    assert measured.version != version
+    problems = measured.shown()[0]['2'].problems
+    assert [e.msg for e in problems] == ['the record it reads is failed']
