@@ -136,8 +136,11 @@ async function perform(url, body, say, page, at) {
   return true;
 }
 
+// Save a file of the batch shown, asked for in the queue so that it holds the
+// actions sent before, such as an edit at the blur that the click caused.
 async function download(url, name, body) {
-  const file = await request(url, {body});
+  const page = here;
+  const file = await queued(() => request(url, {body, page}));
   if (file) save(file, name);
 }
 
@@ -770,7 +773,8 @@ function sourceTable({columns, rows: listed}, status, picked) {
   return h('table', {}, h('thead', {}, head), h('tbody', {}, body));
 }
 
-// Make the batch of the form, once at a time.
+// Make the batch of the form, once at a time, in the queue, so that it starts
+// with the settings that an Apply sent before has put in force.
 async function makeBatch(event) {
   event.preventDefault();
   const form = $('new-batch');
@@ -787,18 +791,20 @@ async function makeBatch(event) {
   const [file] = elements.table.files;
   if (way() === FILE && !file) return say('Choose a table file.');
   button.disabled = true;
-  const made = way() === FILE
-    ? await request(`batches/table?${query({...header, name: file.name})}`, {body: file, say})
-    : await request('batches', {
-        say,
-        body: {
+  const [url, body] = way() === FILE
+    ? [`batches/table?${query({...header, name: file.name})}`, file]
+    : [
+        'batches',
+        {
           ...header,
           source: chosenSource().name,
           ...rangeChosen(),
           columns: [...form.querySelectorAll('[name=column]:checked')].map((box) => box.value),
           follow: way() === 'source' && elements.follow.checked,
         },
-      });
+      ];
+  const page = here;
+  const made = await queued(() => request(url, {body, say, page}));
   if (made) show(batchUrl(made.label), 'rows', 'pushState');
   else button.disabled = false;
 }
