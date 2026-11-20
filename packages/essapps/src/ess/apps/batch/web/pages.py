@@ -23,8 +23,10 @@ A person makes a batch from the list of batches, of the sources and specs
 that :meth:`Pages.sources` offers, in one of three ways
 (:meth:`Pages.create`): from a source, of a range of the rows that it makes
 now (:meth:`Pages.rows_of`); from a table file; or without rows. Made from
-the page of a batch, it may start with the settings of that batch. The
-manager decides what can be made. With no batch at all, the page is served
+the page of a batch, it may start with the settings of that batch. A batch
+made from a source may follow it from then on, in place of the batch that
+followed before; no other action makes a batch follow. The manager decides
+what can be made. With no batch at all, the page is served
 without one: it shows the list of batches and the runs. So is the page of a
 batch that cannot be made (:meth:`Pages.page`), with the reason, and that of
 a batch removed (:meth:`Pages.remove`): a :class:`~.page.Page` handed out
@@ -433,7 +435,9 @@ class Pages:
         empty column for each other of ``new.columns``; with a table
         ``file``, its name and content, of its table
         (:func:`~ess.apps.batch.table.read_table`); else of a table of
-        ``new.columns`` without rows.
+        ``new.columns`` without rows. With ``new.follow``, the batch follows
+        from then on, in place of the batch that followed before, and the
+        timer steps it.
 
         It starts with the settings of the batch ``new.settings_from``, else
         with those that the application gives its spec. A setting of that
@@ -477,7 +481,10 @@ class Pages:
                     source=None if rows is not None else new.source,
                     choose=choose,
                     settings=settings,
+                    follow=new.follow,
                 )
+                if new.follow:
+                    self.failure = None  # said of the batch that followed before
                 for name in moved:
                     manager.batch(label).make_column(name)
             except Exception as error:  # a source is code of the application

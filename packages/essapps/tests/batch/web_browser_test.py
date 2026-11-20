@@ -614,21 +614,21 @@ def test_a_click_on_a_row_mostly_shown_at_the_bottom_does_not_scroll(
 
 
 @pytest.fixture
-def following(browser: Any, pages: Pages, label: str) -> Iterator[Any]:
-    """The page of a batch with no rows yet, following its files."""
-    pages.manager.follow(label)
+def following(browser: Any, pages: Pages, manager: BatchManager) -> Iterator[Any]:
+    """The page of the batch ``scan`` with no rows yet, made to follow."""
+    toys.from_pairs(manager, STAGED.name, title='Scan', label='scan', follow=True)
     with serve(create_app(pages)) as url:
         page = browser.new_page(viewport={'width': 1440, 'height': 900})
         errors: list[str] = []
         page.on('pageerror', lambda e: errors.append(str(e)))
         page.goto(url)
-        page.wait_for_selector('#follow input:checked')
+        page.wait_for_selector('#stop-follow:not([hidden])')
         yield page
         page.close()
     assert errors == []
 
 
-def test_with_follow_on_rows_appear_and_are_reduced_without_a_click(
+def test_while_a_batch_follows_rows_appear_and_are_reduced_without_a_click(
     following: Any, sample: Measure
 ) -> None:
     for run, name in enumerate(['water', 'sds'], start=1):
@@ -639,15 +639,40 @@ def test_with_follow_on_rows_appear_and_are_reduced_without_a_click(
     assert following.inner_text('#follow-status') == 'Following, every 0.2 s'
 
 
-def test_the_page_says_which_other_batch_follows(
-    page: Any, pages: Pages, manager: BatchManager
+def test_stop_following_asks_once_and_then_the_page_has_no_follow_control(
+    following: Any, manager: BatchManager
 ) -> None:
-    other = manager.create(STAGED.name, title='Other', source='pairs')
+    asked: list[str] = []
 
-    pages.manager.follow(other)
+    def answer(dialog: Any) -> None:
+        asked.append(dialog.message)
+        dialog.accept() if len(asked) > 1 else dialog.dismiss()
 
-    page.wait_for_selector('#follow-status:text-is("Other follows")')
-    assert not page.is_checked('#follow input')
+    following.on('dialog', answer)
+    following.click('#stop-follow')
+    assert manager.following == 'scan'
+
+    following.click('#stop-follow')
+
+    following.wait_for_selector('#stop-follow', state='hidden')
+    assert following.is_hidden('#follow-status')
+    assert manager.following is None
+    assert 'cannot follow again' in asked[0]
+    assert 'Add rows from the runs' in asked[0]
+
+
+def test_a_batch_that_does_not_follow_has_no_follow_control(
+    page: Any, manager: BatchManager
+) -> None:
+    toys.from_pairs(manager, STAGED.name, title='Other', follow=True)
+
+    page.click('[data-view=batches]')
+
+    listed = page.locator('#batches tbody tr', has_text='Other')
+    listed.locator('.follows:text-is("follows")').wait_for()
+    page.click('[data-view=rows]')
+    assert page.is_hidden('#stop-follow')
+    assert page.is_hidden('#follow-status')
 
 
 HTML = '<img src=x onerror="window.__xss = 1">'
@@ -874,8 +899,7 @@ def asked(page: Any, part: str, seconds: float) -> int:
     return len(urls)
 
 
-@pytest.fixture
-def second(manager: BatchManager, url: str) -> str:
+def make_second(manager: BatchManager, *, follow: bool = False) -> str:
     """
     A second batch, ``other``, of the row ``2`` of the source, sds, with a
     thickness of 5; the batch ``scan`` has the same row, with no thickness.
@@ -887,7 +911,14 @@ def second(manager: BatchManager, url: str) -> str:
         source='pairs',
         choose=lambda given: given.loc[['2']].assign(thickness=5.0),
         label='other',
+        follow=follow,
     )
+
+
+@pytest.fixture
+def second(manager: BatchManager, url: str) -> str:
+    """The batch of :func:`make_second`, made after the page is served."""
+    return make_second(manager)
 
 
 KEEP = 'window.kept = true'
@@ -909,9 +940,9 @@ def shows(page: Any, title: str) -> None:
 
 
 def test_a_click_on_a_title_shows_its_batch_in_place_in_the_rows_view(
-    second: str, page: Any, pages: Pages
+    page: Any, manager: BatchManager
 ) -> None:
-    pages.manager.follow(second)
+    second = make_second(manager, follow=True)
     page.evaluate(KEEP)
     page.click('[data-tab=settings]')
     page.click('[data-view=batches]')
@@ -1387,6 +1418,31 @@ def test_a_person_makes_a_batch_and_lands_on_its_page(
     assert page.url.endswith(f'/batches/{label}/')
     page.wait_for_selector('.chip.st-all .n:text-is("3")')
     assert manager.batch(label).columns == ('sample', 'transmission', 'thickness')
+    assert manager.following is None  # Follow is off unless ticked
+    assert page.is_hidden('#stop-follow')
+
+
+def test_a_batch_made_with_follow_follows_in_place_of_the_one_named_at_the_box(
+    page: Any, manager: BatchManager
+) -> None:
+    toys.from_pairs(manager, STAGED.name, title='Other', follow=True)
+    page.click('[data-view=batches]')
+    page.click('#new-batch-open')
+    page.wait_for_selector('#new-follow-other:text-is("Other follows.")')
+    assert not page.is_checked('#new-follow input')
+
+    page.check('#new-follow input')
+    page.wait_for_selector('#new-follow-other:text-is("Other stops following.")')
+    page.select_option('#new-source', label='none: no rows')
+    assert page.is_hidden('#new-follow')
+    page.select_option('#new-source', label='from pairs')
+    fill_new_batch(page, 'Evening')
+    page.click('#new-batch [type=submit]')
+
+    page.wait_for_selector('#title:has-text("Evening")')
+    page.wait_for_selector('#stop-follow:not([hidden])')
+    (label,) = (k for k, h in manager.headers().items() if h.title == 'Evening')
+    assert manager.following == label
 
 
 def test_a_refusal_of_the_manager_shows_at_the_form_and_makes_nothing(

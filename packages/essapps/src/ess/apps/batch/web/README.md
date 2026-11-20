@@ -14,7 +14,7 @@ python -m ess.apps.batch.web.demo --arrive 10 [--start M]               # fake r
 python -m ess.apps.batch.web.demo --samples 150 --arrive 2 --start 100  # 150 samples: 100 at the start, one more every 2 s
 python -m ess.instruments.loki.web FOLDER --port 8000                   # LoKI's I(Q) on a workspace folder
 python -m ess.instruments.loki.arrivals [FOLDER] --arrive 15 [--count N] [--start M] # LoKI's I(Q), runs arriving in a new folder
-python -m ess.instruments.loki.arrivals --follow 2                      # the same, following the files, a step every 2 s
+python -m ess.instruments.loki.arrivals --follow 2                      # the same, the first batch following the files, a step every 2 s
 ```
 
 Open `http://localhost:8000/`: it redirects to the page of the batch that follows, else to that of the only batch; otherwise it shows the list of batches, to show one or make one (see [Making a batch](#making-a-batch)).
@@ -25,10 +25,10 @@ The LoKI page reads the masks from a record, so reduce the detector and the mask
 The two commands make the batches `detector` and `masks`, so the LoKI page then makes no batch of I(Q): make it with **+ New batch**.
 With `--arrive`, the runs of one sample (fake demo) or one run (LoKI) arrive every `SECONDS`, until all have arrived.
 `--samples N` (fake demo, 24) and `--count N` (LoKI, 12 runs) say how many there are in all; beyond the samples that the module names, the same are measured again as `<name> #2`, `#3`...
-`--start M` says how many of them are there at the start, in the first batch (fake demo: 3 samples; LoKI: 0 runs). Turn on **Follow** to add the rows they fill and reduce them; **List runs again** lists them in the Runs view and in the choices of a cell, and changes no row.
+`--start M` says how many of them are there at the start, in the first batch (fake demo: 3 samples; LoKI: 0 runs). The first batch does not follow; make a batch with **Follow** in **+ New batch** to add the rows that the runs fill and reduce them. **List runs again** lists them in the Runs view and in the choices of a cell, and changes no row.
 Each page reads `files.csv` again when it is replaced (`ess.apps.folder.ArrivingFiles`), so a run registered by hand, with `ess.apps.folder.write_files_table`, shows too.
 The demo and the LoKI page take `--interval SECONDS`, the time between two steps of Follow (5).
-The LoKI arrivals take `--follow [SECONDS]`, which turns the switch of their one batch on from the start, with a step every `SECONDS` (5).
+The LoKI arrivals take `--follow [SECONDS]`, which makes their first batch with Follow, with a step every `SECONDS` (5).
 
 ## The table
 
@@ -37,7 +37,7 @@ A row is shown by its note `name`, else by its key; **+ Add row** takes its key.
 Each change of rows on the page, an edit of cells, **+ Add row**, **Remove selected** and **Load table**, makes the new table and puts it to the batch (`Batch.put`); what the batch refuses is said, and nothing changes.
 A run chosen in a cell is kept as the text of its file (`table.cell_of`).
 **Load table** replaces the whole table, its columns too; the page then shows the cells and the settings form of the columns loaded.
-**+ Add rows from the runs**, on the page of a batch made from a source, lists the rows of the source that the table lacks (`BatchManager.offered`): those left out when the batch was made, those removed, and those that wait for a run, marked.
+**+ Add rows from the runs**, on the page of a batch made from a source, lists the rows of the source that the table lacks (`BatchManager.offered`): those left out when the batch was made, those removed, those that wait for a run, marked, and, in a batch that does not follow, those filled after it was made or after it stopped.
 The rows a person picks are added as the source makes them now (`BatchManager.take`), and Follow does not add them again once removed; so a removed row comes back this way.
 
 "Make this a column", at a setting in the Settings tab, makes the setting a column with the setting's value in the cell of each row of the table (`Batch.make_column`); it is offered only for a setting whose cell the page edits.
@@ -60,12 +60,14 @@ A row reduced before stays `done`, marked "earlier settings", and **Reduce** lea
 To try settings on one row, change them, **Apply**, select the row, and choose **Reduce selected** in the menu ▾ next to **Reduce**.
 The row tab then shows what the row was reduced with.
 To keep the settings, press **Reduce them again**; to drop them, change them back and **Apply**, and the row tried reads "earlier settings".
-With Follow on, the settings applied for the trial are also those of the rows that Follow reduces meanwhile, such as the rows of runs that arrive.
+In a batch that follows, the settings applied for the trial are also those of the rows that Follow reduces meanwhile, such as the rows of runs that arrive. To try settings on a few rows first, make a batch without Follow, then the batch that follows with "Start with the settings of" the first.
 The page sends its actions in the order a person did them, so a value typed and Apply clicked at once are applied with one click.
 Each state replaces the form, but not while the focused input holds a value typed and not sent; Escape puts back the value sent last.
 
-**Follow** is a switch next to **List runs again**, on the page of a batch made from a source (`BatchManager.source`).
-Turning the switch on makes this batch the one that follows, and no other (`BatchManager.follow`); the page of another batch then says which batch follows.
+A batch follows from the time it is made, if **Follow** is ticked in **+ New batch** (see [Making a batch](#making-a-batch)), until it is stopped.
+At most one batch follows: making one with Follow stops the batch that followed before, and the list of batches marks the one that follows.
+The page of the batch that follows has **Stop following** next to **List runs again** (`POST api/follow/stop`, `BatchManager.stop`). It asks once, since the batch cannot follow again; rows that arrive later are then added with **+ Add rows from the runs**, or go to a new batch.
+The page of a batch that does not follow has no Follow control.
 While a batch follows, a timer in the server runs a step every `interval` seconds (5 by default; `Pages(manager, interval=...)`, or `--interval SECONDS`), under the lock of every request, with or without a page open.
 A step is `BatchManager.step`:
 
@@ -148,10 +150,11 @@ The page remembers in the session of the browser, so that a reload or a return t
 | Table file | from a table file: a `.csv`, `.tsv` or `.xlsx` file with a column `key` (`table.read_table`) |
 | Workflow | a spec that the workspace binds and that has a parameter for each column that the source fills; any spec without a source |
 | Settings | on the page of a batch: start with the settings of that batch, else with those that the application gives; a setting of that batch at a column ticked fills the cells of that column |
+| Follow | with a source: add the rows that arrive later, and reduce them; off unless ticked. Beside it, the batch that follows now, which stops following if ticked |
 | Columns | the columns that the source fills, fixed; the other parameters of the spec whose cell the page edits, to tick (a group of fields, such as a Q binning, stays a setting); none for a table file, whose columns are those of the file |
 
 **Make** sends the form to `POST api/batches`, or the file to `POST api/batches/table`, and the page shows the new batch in the Rows view.
-With a source, the batch holds the rows of the range that the source has filled now, with an empty column for each column ticked that the source does not fill; a row that waits cannot be taken, and Follow adds it once filled, as it adds those that arrive later.
+With a source, the batch holds the rows of the range that the source has filled now, with an empty column for each column ticked that the source does not fill; a row that waits cannot be taken; if the batch follows, Follow adds it once filled, as it adds those that arrive later.
 A table file refused, or empty, is named as the person chose it.
 From a table file, the batch has no source; a column of the file named as no parameter is a note, so a misspelt column is a note, and the parameter it meant is a setting that the settings form asks for.
 Without a source, the batch holds no rows and the columns ticked; rows are added on its page or by **Load table**.
@@ -160,11 +163,13 @@ In code:
 ```python
 label = manager.create(spec, title=title, source=source,
                        choose=lambda given: between(given, first, last),
-                       settings=manager.batch(other).settings)  # thickness among them
+                       settings=manager.batch(other).settings,  # thickness among them
+                       follow=follow)                           # Follow ticked
 manager.batch(label).make_column('thickness')                   # ticked: each row has its value
 ```
 
-Opened on the page of a batch, the form starts at that batch's source, workflow, columns and settings, so the next batch is this form with a range that starts later.
+Opened on the page of a batch, the form starts at that batch's source, workflow, columns and settings, so the next batch is this form with a range that starts later, and Follow ticked by the person.
+Follow is off unless ticked, since it stops the batch that follows, for good, and reduces the rows taken within seconds, with the settings chosen.
 
 The choices come from `GET api/sources`; what can be made is decided by `BatchManager.create`, and what it refuses, such as an empty title, shows at the form, with nothing made.
 **Make** is disabled while it is sent, so a double click makes one batch.

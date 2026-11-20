@@ -57,7 +57,6 @@ from .models import (
     MakeSetting,
     NewBatch,
     Notice,
-    On,
     Plot,
     Reduce,
     RowDetail,
@@ -221,10 +220,10 @@ def create_app(pages: Pages) -> FastAPI:
     def cancel(page: PageOfLabel) -> State:
         return page.cancel()
 
-    @batch.post('/api/follow')
-    def follow_files(page: PageOfLabel, body: On) -> State:
-        """Make this batch the one that follows, with a step at once, or stop."""
-        return page.follow(body.on)
+    @batch.post('/api/follow/stop')
+    def stop_following(page: PageOfLabel) -> State:
+        """Stop Follow, if this batch follows; it cannot follow again."""
+        return page.stop_following()
 
     @batch.post('/api/settings')
     def edit_settings(page: PageOfLabel, body: Edit) -> State:

@@ -11,7 +11,7 @@ says the run, role and sample of each file, as ``essapps-batch files`` writes
 it. A row is a sample run, paired with the transmission run of its sample
 (:func:`~.batch.pair_by_sample`). A start at which no batch is listed makes
 a batch from the source of sample runs, with the rows that have both runs
-then; Follow adds the others once their transmission run is listed. The
+then; it does not follow (but see :mod:`.arrivals`). The
 batches with their tables and settings, the batch that follows, and the
 corrections of runs are kept in ``FOLDER/definitions/``, the results in
 ``FOLDER/store/``.
@@ -43,12 +43,14 @@ masks as batches without a source, of one row each, and so makes no batch of
 I(Q) in such a folder: a person makes it with "New batch".
 
 "List runs again" lists the files again, for the Runs view and the choices of
-a cell, and changes no row. The switch "Follow" of the page of a batch made from
-the source makes it the batch that follows: a step every ``SECONDS`` (5) adds
-each sample run that arrived since, once both its runs are listed, and reduces
-it. A step never changes a row that the table has: a newer transmission run of
-its sample does not replace the one in its cell. A row with a result waits for
-the person's "Reduce". The batch that follows is kept, so a restart resumes.
+a cell, and changes no row. A person makes a batch that follows the source
+with "New batch", Follow ticked: from then on, a step every ``SECONDS`` (5)
+adds each sample run that arrived since, once both its runs are listed, and
+reduces it, until a person clicks "Stop following" or makes another batch
+that follows. A step never changes a row that the table has: a newer
+transmission run of its sample does not replace the one in its cell. A row
+with a result waits for the person's "Reduce". The batch that follows is
+kept, so a restart resumes.
 """
 
 from __future__ import annotations
@@ -134,9 +136,9 @@ def build(
         staged=STAGED,
     )
     if not manager.headers():
-        label = manager.create(IOFQ.name, title='Sample runs', source='sample-runs')
-        if follow:
-            manager.follow(label)
+        manager.create(
+            IOFQ.name, title='Sample runs', source='sample-runs', follow=follow
+        )
     pages = Pages(
         manager,
         interval=interval,

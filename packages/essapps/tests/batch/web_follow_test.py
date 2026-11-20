@@ -21,7 +21,7 @@ from ess.apps import Client, Status
 from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions
 from ess.apps.batch.web import Page, Pages, create_app
 from ess.apps.batch.web.api import every
-from ess.apps.batch.web.models import CellEdit, Edit, Reduce, State
+from ess.apps.batch.web.models import CellEdit, Edit, NewBatch, Reduce, State
 from ess.apps.batch.web.page import Problem
 from ess.apps.testing import FakeFiles
 
@@ -42,9 +42,16 @@ def pages(manager: BatchManager, files: CorrectedFiles) -> Pages:
 
 
 @pytest.fixture
+def label(manager: BatchManager) -> str:
+    """The batch ``scan`` of the conftest, made to follow."""
+    return toys.from_pairs(
+        manager, STAGED.name, title='Scan', label='scan', follow=True
+    )
+
+
+@pytest.fixture
 def page(pages: Pages, label: str) -> Page:
     """The page of ``label``, the batch that follows."""
-    pages.manager.follow(label)
     return pages.page(label)
 
 
@@ -169,7 +176,7 @@ def test_a_step_that_changes_one_thing_the_page_shows_tells_the_page(
         sample(2, 'oil')
         page.batch.put(toys.rows(client))
         page.edit(CellEdit(keys=['2'], column='thickness', value=-1.0))
-    page.follow(True)
+    page.pages.tick()
     client.wait(client.records())
     page.pages.tick()
     seen = page.version
@@ -231,10 +238,9 @@ def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_p
         definitions=definitions,
         staged=STAGED_NAMES,
     )
-    label = toys.from_pairs(manager, STAGED.name, title='Scan')
+    label = toys.from_pairs(manager, STAGED.name, title='Scan', follow=True)
     sample(1, 'water')
     pages = Pages(manager)
-    pages.manager.follow(label)
     http = opened(pages, label)
     page = pages.page(label)
     gate.close()
@@ -282,7 +288,6 @@ def test_a_run_that_a_step_finds_can_be_chosen_in_a_cell_without_a_runs_view(
     manager: BatchManager, label: str, sample: Measure
 ) -> None:
     pages = Pages(manager)
-    pages.manager.follow(label)
     page = pages.page(label)
     page.pages.tick()
     sample(1, 'water', partner=False)  # a row that waits, so no record is made
@@ -316,14 +321,14 @@ def test_a_row_the_step_could_not_submit_shows_why(
     sample(1, 'water')
     bins(page, 0)
 
-    page.follow(True)
+    page.pages.tick()
 
     (row,) = page.state().rows
     assert row.status == 'ready'
     assert row.reason.startswith('Follow could not reduce it: ')
     assert 'greater than or equal to 1' in row.reason
     assert client.records() == []
-    (stopped,) = page.follow(False).rows
+    (stopped,) = page.stop_following().rows
     assert (stopped.status, stopped.reason) == ('ready', '')
 
 
@@ -331,7 +336,7 @@ def test_apply_while_following_reduces_nothing_and_the_next_step_uses_it(
     page: Page, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    page.follow(True)
+    page.pages.tick()
     done(page, client)
     sample(2, 'oil')
     bins(page, 0)
@@ -354,7 +359,7 @@ def test_a_done_row_reads_outdated_while_follow_is_refused_the_settings(
     page: Page, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    page.follow(True)
+    page.pages.tick()
     done(page, client)
     sample(2, 'oil')
     bins(page, 0)
@@ -404,34 +409,33 @@ def test_a_step_waits_for_a_request_that_holds_the_lock(
     assert [row.name for row in page.state().rows] == ['water']
 
 
-def test_turning_follow_on_steps_at_once_and_off_stops(
+def test_stop_following_ends_the_steps_and_leaves_the_rows_running(
     page: Page, client: Client, sample: Measure, gate: Gate
 ) -> None:
     sample(1, 'water')
-
     gate.close()
-    on = page.follow(True)
+    page.pages.tick()
     sample(2, 'oil')
-    off = page.follow(False)
+
+    off = page.stop_following()
+    page.pages.tick()
     gate.open()
 
-    assert on.follow is not None
-    assert (on.follow.on, on.notice) == (True, 'Following.')
-    assert statuses(on) == {'water': 'running'}
-    assert (off.follow.on, off.notice) == (False, 'Stopped following.')  # type: ignore[union-attr]
+    assert (off.follow.on, off.notice) == (False, 'Stopped following.')
     assert statuses(off) == {'water': 'running'}
+    assert statuses(done(page, client)) == {'water': 'done'}
 
 
-def test_a_batch_not_made_from_a_source_has_no_source_and_cannot_follow(
-    pages: Pages, manager: BatchManager, label: str
+def test_a_page_that_does_not_follow_stops_nothing(
+    page: Page, pages: Pages, manager: BatchManager
 ) -> None:
-    page = pages.page(manager.create(STAGED.name, title='By hand'))
+    other = pages.page(manager.create(STAGED.name, title='By hand'))
 
-    with pytest.raises(Problem, match='was not made from a source'):
-        page.follow(True)
-    shown = page.state().follow
-    assert (shown.on, shown.source) == (False, None)
-    assert pages.page(label).state().follow.source == 'pairs'
+    stopped = other.stop_following()
+
+    assert (stopped.notice, manager.following) == ('', page.label)
+    assert (stopped.follow.on, stopped.follow.source) == (False, None)
+    assert page.state().follow.source == 'pairs'
 
 
 def option(page: Page, column: str, run: int) -> str:
@@ -446,7 +450,7 @@ def test_a_refusal_of_a_running_row_is_said_once_and_not_kept(
 ) -> None:
     sample(1, 'water')
     gate.close()
-    page.follow(True)
+    page.pages.tick()
     request = Reduce(which='selected', keys=['1'])
 
     with pytest.raises(Problem, match=r'Nothing was reduced: .*still running'):
@@ -469,7 +473,7 @@ def test_a_row_a_person_put_without_a_result_is_reduced_by_the_next_step(
     page.batch.put(toys.rows(client))
     page.edit(CellEdit(keys=['1'], column='thickness', value=2.0))
 
-    page.follow(True)
+    page.pages.tick()
 
     assert statuses(done(page, client)) == {'water': 'done'}
     assert client.latest('scan', '1').request.params['thickness'] == 2.0
@@ -479,7 +483,6 @@ def test_a_row_a_person_put_without_a_result_is_reduced_by_the_next_step(
 def test_follow_reduces_with_the_batch_s_settings_whatever_the_form_holds(
     page: Page, client: Client, sample: Measure, value: int | None
 ) -> None:
-    page.follow(True)
     page.edit_settings(Edit(path=BINS, op='set', value=value))
     sample(1, 'water')
 
@@ -496,15 +499,12 @@ def test_a_step_that_raises_anywhere_is_said_and_follow_stays_on(
     listed = fake.list
     fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
 
-    on = page.follow(True)
     pages.tick()
     failed = page.state().follow
     fake.list = listed
     pages.tick()
 
-    assert on.follow is not None
-    assert (on.follow.on, on.notice) == (True, 'Following.')
-    assert failed is not None
+    assert failed.on
     assert 'half written' in (failed.failure or '')
     assert statuses(done(page, client)) == {'water': 'done'}
 
@@ -535,7 +535,7 @@ def test_a_tick_whose_step_raises_what_cannot_be_said_lets_the_next_tick_run(
 def test_a_tick_does_nothing_while_not_following(
     page: Page, pages: Pages, sample: Measure
 ) -> None:
-    pages.manager.follow(None)
+    pages.manager.stop()
     sample(1, 'water')
 
     pages.tick()
@@ -570,7 +570,7 @@ def test_a_tick_that_waited_for_the_request_that_stops_following_does_nothing(
         timer.start()
         assert lock.waited.wait(30)  # the tick waits for the lock
         sample(1, 'water')
-        page.follow(False)
+        page.stop_following()
     timer.join()
 
     assert page.state().rows == []
@@ -584,7 +584,6 @@ def test_the_app_steps_while_following_and_stops_with_the_app(
     client: Client,
 ) -> None:
     sample(1, 'water')
-    manager.follow(label)
 
     with opened(Pages(manager, interval=0.01), label) as http:
         give_up = time.monotonic() + 10
@@ -604,7 +603,6 @@ def test_a_parent_that_runs_the_lifespan_of_the_app_it_mounts_steps_follow(
     client: Client,
 ) -> None:
     sample(1, 'water')
-    manager.follow(label)
     batch = create_app(Pages(manager, interval=0.01))
     parent = FastAPI(lifespan=lambda _: batch.router.lifespan_context(batch))
     parent.mount('/batch', batch)
@@ -620,22 +618,20 @@ def test_a_parent_that_runs_the_lifespan_of_the_app_it_mounts_steps_follow(
 # One Follow for all batches
 
 
-def test_follow_turned_on_on_one_page_shows_on_the_other_which_batch_follows(
-    page: Page, pages: Pages, manager: BatchManager
+def test_a_batch_made_to_follow_ends_follow_on_the_page_of_the_one_before(
+    page: Page, pages: Pages
 ) -> None:
-    other = pages.page(manager.create(STAGED.name, title='Other', source='pairs'))
     seen = page.version
 
-    on = other.follow(True)
+    made = pages.create(
+        NewBatch(title='Other', spec=STAGED.name, source='pairs', follow=True)
+    )
 
     shown = page.poll(seen, page.start)
     assert shown is not None
-    assert shown.follow is not None
-    assert (shown.follow.on, shown.follow.other) == (False, 'Other')
-    assert on.follow is not None
-    assert (on.follow.on, on.follow.other) == (True, None)
-    off = page.follow(False)  # a page that does not follow stops nothing
-    assert (off.notice, pages.manager.following) == ('', other.label)
+    assert shown.follow.on is False
+    assert pages.page(made.label).state().follow.on
+    assert pages.manager.following == made.label
 
 
 def test_follow_resumes_after_a_restart(
@@ -662,7 +658,6 @@ def test_follow_resumes_after_a_restart(
 def test_a_tick_steps_the_batch_that_follows_without_a_page_open(
     pages: Pages, label: str, client: Client, sample: Measure
 ) -> None:
-    pages.manager.follow(label)
     sample(1, 'water')
 
     pages.tick()
@@ -674,8 +669,7 @@ def test_a_tick_steps_the_batch_that_follows_without_a_page_open(
 def test_a_tick_after_follow_moved_steps_the_batch_that_follows_now(
     page: Page, pages: Pages, manager: BatchManager, client: Client, sample: Measure
 ) -> None:
-    other = toys.from_pairs(manager, STAGED.name, title='Other')
-    pages.manager.follow(other)
+    other = toys.from_pairs(manager, STAGED.name, title='Other', follow=True)
     sample(1, 'water')
 
     pages.tick()
@@ -699,7 +693,7 @@ def test_the_failure_of_a_step_shows_on_the_page_of_the_batch_that_follows_only(
     assert shown.failure is None
 
 
-@pytest.mark.parametrize('turned', ['on its page', 'in code'])
+@pytest.mark.parametrize('made', ['on the page', 'in code'])
 def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follows(
     page: Page,
     pages: Pages,
@@ -707,23 +701,26 @@ def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follo
     sample: Measure,
     fake: FakeFiles,
     client: Client,
-    turned: str,
+    made: str,
 ) -> None:
     sample(1, 'water')
     bins(page, 0)
-    refused = page.follow(True)  # Follow cannot submit water with these settings
-    other = pages.page(toys.from_pairs(manager, STAGED.name, title='Other'))
-    # No step runs on the other batch: its first step raises, or none runs.
-    fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
+    pages.tick()  # Follow cannot submit water with these settings
+    refused = page.state()
 
-    if turned == 'on its page':
-        shown = other.follow(True)
+    if made == 'on the page':
+        new = NewBatch(title='Other', spec=STAGED.name, source='pairs', follow=True)
+        other = pages.page(pages.create(new).label)
     else:
-        manager.follow(other.label)
-        shown = other.state()
+        other = pages.page(
+            toys.from_pairs(manager, STAGED.name, title='Other', follow=True)
+        )
+    # No step runs on the other batch: its first step raises.
+    fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
+    pages.tick()
 
     assert reasons(refused)['water'].startswith('Follow could not reduce it: ')
-    assert reasons(shown) == {'water': ''}
+    assert reasons(other.state()) == {'water': ''}
 
 
 def test_a_correction_on_another_page_moves_the_version_of_the_runs_once(
@@ -747,7 +744,7 @@ def test_the_counts_of_the_batch_that_follows_are_the_chips_of_its_page(
     page: Page, pages: Pages, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    page.follow(True)
+    page.pages.tick()
     done(page, client)
     sample(2, 'oil')
     bins(page, 0)

@@ -35,7 +35,7 @@ def page(tmp_path: Path) -> Iterator[tuple[TestClient, Instrument, Client]]:
     client, files, definitions = open_loki(tmp_path)
     with client:
         given = settings(client, instrument)
-        app = build(client, files, definitions, settings=given)
+        app = build(client, files, definitions, settings=given, follow=True)
         page = TestClient(app).get('/').url
         yield TestClient(app, base_url=str(page)), instrument, client
 
@@ -50,7 +50,6 @@ def test_a_sample_whose_runs_arrived_is_added_and_reduced_by_a_step_of_follow(
     http, instrument, client = page
     plan = [(role, sample, source) for sample, role, source in arrivals(4)]
     pages = http.app.state.pages  # type: ignore[attr-defined]
-    pages.manager.follow(pages.home())
     for arrival in plan[:3]:
         instrument.measure(*arrival)
 

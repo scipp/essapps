@@ -538,8 +538,8 @@ def following(manager: BatchManager, client: Client, sample: Measure) -> BatchMa
         source='pairs',
         choose=lambda given: given[given.run >= 3],
         label='a',
+        follow=True,
     )
-    manager.follow('a')
     return manager
 
 
@@ -624,8 +624,7 @@ def test_an_error_of_a_step_is_said_also_if_considered_is_refused_after_it(
     client: Client, refusing: Refusing, sample: Measure
 ) -> None:
     manager = BatchManager(Flaky(client), sources=SOURCES, definitions=refusing)
-    manager.create(PLAIN.name, title='A', source='pairs', label='a')
-    manager.follow('a')
+    manager.create(PLAIN.name, title='A', source='pairs', label='a', follow=True)
     sample(1, 'water')
     manager.client.fail = 1  # type: ignore[attr-defined]
     refusing.part = 'source'
@@ -645,8 +644,7 @@ def test_a_value_error_of_a_submission_is_not_said_as_one_of_the_source(
     client: Client, definitions: FolderDefinitions, sample: Measure
 ) -> None:
     manager = BatchManager(_Refusing(client), sources=SOURCES, definitions=definitions)
-    manager.create(PLAIN.name, title='A', source='pairs', label='a')
-    manager.follow('a')
+    manager.create(PLAIN.name, title='A', source='pairs', label='a', follow=True)
     sample(1, 'water')
 
     with pytest.raises(ValueError, match=r'^the service refused the connection$'):
@@ -658,8 +656,7 @@ def test_a_row_added_by_a_step_whose_submission_raised_stays_away_once_removed(
 ) -> None:
     flaky = Flaky(client)
     manager = BatchManager(flaky, sources={'pairs': PAIRS}, definitions=definitions)
-    from_pairs(manager, PLAIN.name, title='A', label='a')
-    manager.follow('a')
+    from_pairs(manager, PLAIN.name, title='A', label='a', follow=True)
     sample(1, 'water')
     flaky.fail = 1
     with pytest.raises(ConnectionError):
@@ -678,8 +675,7 @@ def test_a_cell_of_the_source_that_the_batch_refuses_is_named_with_the_source(
 ) -> None:
     thick = Source(_changed(pair, **{'1': {'thickness': 'thick'}}), PAIRS.fills)
     manager = BatchManager(client, sources={'pairs': thick}, definitions=definitions)
-    from_pairs(manager, PLAIN.name, title='A', label='a')
-    manager.follow('a')
+    from_pairs(manager, PLAIN.name, title='A', label='a', follow=True)
     sample(1, 'water')
 
     with pytest.raises(

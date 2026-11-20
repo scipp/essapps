@@ -61,7 +61,7 @@
           <span class="spacer"></span>
           <span class="status-line bad" id="files-problem" hidden></span>
           <span class="status-line" id="follow-status"></span>
-          <label class="follow" id="follow"><input type="checkbox"> Follow</label>
+          <button type="button" class="quiet" id="stop-follow" hidden>Stop following</button>
           <button type="button" class="quiet" id="relist" title="List the runs again. No row changes.">↻ List runs again</button>
         </div>
         <div class="chips" id="chips" role="group" aria-label="Show rows that are"></div>
@@ -96,6 +96,7 @@
             </div>
             <div class="source-rows" id="new-source-rows"></div>
           </div>
+          <div class="field" id="new-follow"><span>Follow</span><label><input type="checkbox" name="follow"> Add the rows that arrive later, and reduce them</label><small id="new-follow-other"></small></div>
           <div class="field" id="new-file"><label for="new-table">Table file</label><input type="file" id="new-table" name="table" accept=".csv,.tsv,.xlsx"><small>Its column "key" names the rows; a column named as no parameter is a note.</small></div>
           <div class="field"><label for="new-spec">Workflow</label><select id="new-spec" name="spec"></select></div>
           <div class="field" id="new-settings"><span>Settings</span><label><input type="checkbox" name="like" checked> <span id="new-like"></span></label></div>

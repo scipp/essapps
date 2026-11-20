@@ -1215,17 +1215,19 @@ def test_rows_taken_are_added_as_the_source_makes_them(
 
 
 def test_a_row_taken_then_removed_is_offered_again_and_follow_does_not_add_it(
-    http: TestClient, sample: Measure
+    http: TestClient, pages: Pages, manager: BatchManager, sample: Measure
 ) -> None:
+    label = toys.from_pairs(manager, STAGED.name, title='Later', follow=True)
+    following = opened(pages, label)
     sample(4, 'ethanol')
-    http.post('/api/rows/take', json={'keys': ['4']})
-    http.post('/api/rows/remove', json={'keys': ['4']})
+    following.post('/api/rows/take', json={'keys': ['4']})
+    following.post('/api/rows/remove', json={'keys': ['4']})
     sample(5, 'acetone')
 
-    following = http.post('/api/follow', json={'on': True}).json()
+    pages.tick()
 
-    assert [r['key'] for r in following['rows']] == ['1', '2', '3', '5']
-    assert offered(http) == {'4': ''}
+    assert list(rows(following)) == ['1', '2', '5']
+    assert offered(following) == {'3': 'waits', '4': ''}
 
 
 def test_rows_the_manager_does_not_take_answer_422_and_none_is_added(
@@ -1511,20 +1513,29 @@ def test_the_demo_makes_a_batch_of_its_samples_and_follow_adds_those_that_arrive
     client, files, definitions = demo.open_demo(tmp_path)
 
     with client:
-        page = home(demo.build(client, files, definitions))
-        before = rows(page)
+        app = demo.build(client, files, definitions)
+        page = home(app)
+        first = state(page)
+        columns = ['sample', 'transmission', 'thickness']
+        made = page.post(
+            '/api/batches',
+            json={
+                'title': 'Arriving',
+                'source': 'sample-runs',
+                'spec': demo.DEMO.name,
+                'columns': columns,
+                'follow': True,
+            },
+        ).json()
         demo.measure(tmp_path, groups[0] + groups[1] + groups[2])
-        after = page.post('/api/follow', json={'on': True}).json()
-        page.post('/api/follow', json={'on': False})
+        app.state.pages.tick()
         client.wait(client.records())
+        after = state(opened(app.state.pages, made['label']))
 
-    assert [row['name'] for row in before.values()] == ['H2O buffer']
+    assert [row['name'] for row in first['rows']] == ['H2O buffer']
+    assert first['follow']['on'] is False
     assert [row['name'] for row in after['rows']] == ['H2O buffer', 'D2O buffer']
-    assert [c['name'] for c in after['columns']] == [
-        'sample',
-        'transmission',
-        'thickness',
-    ]
+    assert [c['name'] for c in after['columns']] == columns
 
 
 def test_the_page_and_the_files_it_names_are_served_under_a_path_prefix(
@@ -1587,8 +1598,9 @@ def test_the_root_redirects_to_the_batch_that_follows(
 ) -> None:
     http = TestClient(create_app(pages), follow_redirects=False)
     for label in ('a', 'b'):
-        manager.create(STAGED.name, title=label, source='pairs', label=label)
-    pages.manager.follow('b')
+        manager.create(
+            STAGED.name, title=label, source='pairs', label=label, follow=label == 'b'
+        )
 
     page = http.get('/')
 
@@ -1643,14 +1655,14 @@ def test_a_label_that_is_no_batch_answers_404_and_its_page_says_so(
 def test_the_batches_view_lists_every_batch_and_the_one_that_follows(
     http: TestClient, pages: Pages, manager: BatchManager
 ) -> None:
-    other = manager.create(
+    manager.create(
         STAGED.name,
         title='Other',
         source='pairs',
         description='The second series',
         label='other',
+        follow=True,
     )
-    pages.manager.follow(other)
 
     listed = http.get('/api/batches').json()
 
@@ -1679,10 +1691,9 @@ def test_the_list_of_batches_is_the_same_from_every_page(
 def test_a_page_learns_from_its_poll_that_another_batch_follows(
     http: TestClient, pages: Pages, manager: BatchManager
 ) -> None:
-    other = opened(pages, manager.create(STAGED.name, title='Other', source='pairs'))
     now = state(http)
 
-    other.post('/api/follow', json={'on': True})
+    http.post('/api/batches', json=new_batch(title='Other', follow=True))
 
     polled = http.get(
         '/api/state', params={'after': now['version'], 'start': now['start']}
@@ -1815,9 +1826,9 @@ def test_the_counts_name_the_runs_of_each_batch_also_a_run_two_share(
 
 
 def test_a_row_that_follow_adds_names_its_runs_in_the_next_count(
-    pages: Pages, manager: BatchManager, label: str, sample: Measure
+    pages: Pages, manager: BatchManager, sample: Measure
 ) -> None:
-    manager.follow(label)
+    label = toys.from_pairs(manager, STAGED.name, title='Scan', follow=True)
     page = TestClient(create_app(pages))
     before = named(page)[label]
     sample(1, 'water')
@@ -1918,6 +1929,33 @@ def test_a_batch_made_from_a_source_has_every_row_it_filled_and_the_columns_sent
     ]
     listed = {b['label']: b['title'] for b in state(http)['batches']}
     assert listed == {'scan': 'Scan', made['label']: 'Afternoon'}
+
+
+def test_a_batch_made_to_follow_follows_and_one_without_a_source_cannot(
+    http: TestClient, manager: BatchManager
+) -> None:
+    made = http.post('/api/batches', json=new_batch(follow=True)).json()
+    refused = http.post('/api/batches', json=new_batch(source=None, follow=True))
+
+    assert manager.following == made['label']
+    assert (refused.status_code, refused.json()) == (
+        422,
+        {
+            'message': 'The batch was not made: '
+            'a batch follows its source, and none is given.'
+        },
+    )
+
+
+def test_stop_following_answers_the_page_of_a_batch_that_follows_no_more(
+    pages: Pages, manager: BatchManager
+) -> None:
+    label = toys.from_pairs(manager, STAGED.name, title='F', follow=True)
+
+    stopped = opened(pages, label).post('/api/follow/stop').json()
+
+    assert (stopped['notice'], stopped['follow']['on']) == ('Stopped following.', False)
+    assert manager.following is None
 
 
 def test_a_batch_made_from_the_page_starts_with_the_settings_of_its_spec(
@@ -2252,19 +2290,18 @@ def test_a_header_change_the_definitions_refuse_answers_422_and_changes_nothing(
     )
 
 
-def test_follow_the_definitions_refuse_answers_422_and_follow_stays_off(
+def test_a_batch_to_follow_whose_follow_the_definitions_refuse_is_not_made(
     http: TestClient, manager: BatchManager, refusing: Refusing
 ) -> None:
     refusing.part = 'following'
 
-    answer = http.post('/api/follow', json={'on': True})
+    answer = http.post('/api/batches', json=new_batch(follow=True))
 
     assert (answer.status_code, answer.json()) == (
         422,
-        {'message': "The change was not kept: ('following',): refused"},
+        {'message': "The batch was not made: ('following',): refused."},
     )
-    assert manager.following is None
-    assert state(http)['follow']['on'] is False
+    assert (list(manager.headers()), manager.following) == (['scan'], None)
 
 
 def test_a_title_and_description_saved_on_the_page_are_kept(
@@ -2310,29 +2347,29 @@ def test_a_batch_removed_from_its_page_is_gone_and_its_results_stay(
 
 
 def test_removing_the_batch_that_follows_turns_follow_off(
-    http: TestClient, pages: Pages
+    pages: Pages, manager: BatchManager
 ) -> None:
-    pages.manager.follow('scan')
+    label = toys.from_pairs(manager, STAGED.name, title='F', follow=True)
 
-    http.post('/api/batch/remove')
+    opened(pages, label).post('/api/batch/remove')
 
     assert pages.manager.following is None
 
 
 def test_a_removal_the_definitions_refuse_answers_422_and_the_batch_stays(
-    http: TestClient, manager: BatchManager, refusing: Refusing
+    pages: Pages, manager: BatchManager, refusing: Refusing
 ) -> None:
-    manager.follow('scan')
+    label = toys.from_pairs(manager, STAGED.name, title='F', label='f', follow=True)
     refusing.part = 'header'
 
-    answer = http.post('/api/batch/remove')
+    answer = opened(pages, label).post('/api/batch/remove')
 
     assert answer.status_code == 422
     assert answer.json()['message'] == (
-        "The change was not kept: ('labels', 'scan', 'header'): refused"
+        "The change was not kept: ('labels', 'f', 'header'): refused"
     )
     # It follows no longer, so that no label without a header follows.
-    assert list(manager.headers()) == ['scan']
+    assert list(manager.headers()) == ['f']
     assert manager.following is None
 
 

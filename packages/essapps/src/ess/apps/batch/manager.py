@@ -23,11 +23,16 @@ Making a batch makes its ``Batch``, which writes the settings and the rows;
 then the manager writes the source, then the header: a label without a header
 is not a batch. Removing a batch deletes the header first. So a ``create`` or
 a ``remove`` cut off at any write leaves a label with tables and no header,
-which :meth:`BatchManager.remove` removes. After a restart, the ``Batch`` of a
-label is made at the first call of :meth:`BatchManager.batch`.
+or a batch that does not follow, which :meth:`BatchManager.remove` removes.
+After a restart, the ``Batch`` of a label is made at the first call of
+:meth:`BatchManager.batch`.
 
 The manager writes one more table, ``following``: the label of the batch that
-follows, or none. :meth:`BatchManager.step` is one step of Follow on it::
+follows, or none. A batch follows from the time it is made, if made so, until
+:meth:`BatchManager.stop` or its removal; nothing turns Follow on for a batch
+made before. ``create`` writes ``following`` after the header, ``remove``
+before deleting it, so it never names a label without a header.
+:meth:`BatchManager.step` is one step of Follow on the batch that follows::
 
     made = source_of(label)                                  # source.json
     done = step(batch(label), sources[made.source], made.considered)  # put, reduce
@@ -196,17 +201,15 @@ class BatchManager:
         """
         return self._following
 
-    def follow(self, label: str | None) -> None:
+    def stop(self) -> None:
         """
-        Make the batch of ``label`` the one that follows, so that no other
-        does; with ``None``, let none follow. It makes no ``Batch``. Raises
-        ``KeyError`` if no batch has the label, and ``ValueError`` if the
-        batch was not made from a source, or its source is not registered.
+        End Follow: no batch follows from then on, and the batch that followed
+        cannot follow again. Nothing is done if no batch follows.
         """
-        if label is not None:
-            self._source(self._made(label).source)
-        self._definitions.save(FOLLOWING, following_data(label))
-        self._following = label
+        if self._following is None:
+            return
+        self._definitions.save(FOLLOWING, following_data(None))
+        self._following = None
         self._version += 1
 
     def rows_of(self, source: str) -> pd.DataFrame:
@@ -253,11 +256,19 @@ class BatchManager:
         description: str = '',
         settings: Mapping[str, Any] | None = None,
         label: str | None = None,
+        follow: bool = False,
     ) -> str:
         """
         Make a batch and keep it; its label. Nothing is written if a check
-        fails. The header is written last, so a label without a header is no
-        batch.
+        fails. The header is written after the other tables of the batch, so
+        a label without a header is no batch; with ``follow``, ``following``
+        is written last, so that it never names a label without a header.
+
+        If the definitions refuse a write, the tables written are deleted,
+        and what was kept before stays, also which batch follows. If a delete
+        is refused too, as when the process stops, what is left is either a
+        label with tables and no header, or, with ``follow``, a batch that
+        does not follow. :meth:`remove` removes either.
 
         With a source, the source is listed once, and the rows that are
         filled (:func:`~.source.filled`) are taken and considered::
@@ -268,7 +279,7 @@ class BatchManager:
             considered = arrived.index       # the rows taken and those left out
 
         A row that waits is neither taken nor considered: Follow adds it once
-        it is filled.
+        it is filled, if the batch follows.
 
         Parameters
         ----------
@@ -284,7 +295,7 @@ class BatchManager:
             not given.
         source:
             The name of a registered source to take the rows from. The batch
-            keeps it, so that it can follow.
+            keeps it, to offer the rows that its table lacks and to follow.
         choose:
             Makes the table of the batch from the rows of the source that are
             filled: some of its rows, with any columns, such as
@@ -299,6 +310,11 @@ class BatchManager:
             The label of the batch. If not given, the time of making,
             ``YYYYMMDD-HHMMSS``, with ``-2``, ``-3``, ... added if that is
             taken.
+        follow:
+            Whether the batch follows its source from the time it is made, in
+            place of the batch that followed before. A batch made without
+            ``follow`` never follows. Only a batch made from a source can
+            follow.
 
         Raises
         ------
@@ -307,7 +323,8 @@ class BatchManager:
             digits, ``_``, ``.`` and ``-``, starting with none of the last
             two, or has definitions or records; if
             ``rows`` and ``source`` are both given, or ``choose`` without
-            ``source``; if no source ``source`` is registered; if ``choose``
+            ``source``, or ``follow`` without ``source``; if no source
+            ``source`` is registered; if ``choose``
             gives a row that the source did not; if the workspace
             binds no spec ``spec``; or if the rows are refused, as ``put``
             refuses them.
@@ -316,6 +333,8 @@ class BatchManager:
             raise ValueError('a batch made from a source takes its rows from it')
         if choose is not None and source is None:
             raise ValueError('choose picks rows of a source, and none is given')
+        if follow and source is None:
+            raise ValueError('a batch follows its source, and none is given')
         if label is None:
             stamp = time.strftime('%Y%m%d-%H%M%S')
             label, n = stamp, 1
@@ -341,19 +360,25 @@ class BatchManager:
         # Refused here, before anything is written.
         table = typed(pd.DataFrame() if rows is None else rows, bound.params)
         batch = self._kept(label, bound, {}, None)
+        written = list(_parts(label))  # what to delete if a write is refused
         try:
             batch.settings = settings
             batch.put(table)
             if made is not None:
                 self._definitions.save(source_key(label), source_data(made))
-            self._definitions.save(header_key(label), header_data(header))  # last
+            self._definitions.save(header_key(label), header_data(header))
+            written.insert(0, header_key(label))
+            if follow:
+                self._definitions.save(FOLLOWING, following_data(label))
         except NotKept:
             with suppress(NotKept):  # the first error is what to say
-                for key in _parts(label):
+                for key in written:
                     self._definitions.delete(key)
             raise
         self._headers[label] = header
         self._batches[label] = batch
+        if follow:
+            self._following = label
         self._version += 1
         return label
 
@@ -518,8 +543,9 @@ class BatchManager:
         that Follow adds the row once it is filled, unless it is considered.
         A row that does not wait was left out when the batch was made, or
         removed from it, and is considered, so Follow does not add it; or it
-        was filled while the batch did not follow, and Follow adds it at its
-        next step. A column of the source named ``waits`` is replaced by it.
+        was filled after the batch was made and is not considered, so Follow
+        adds it at its next step if the batch follows. A column of the source
+        named ``waits`` is replaced by it.
 
         Raises ``KeyError`` if no batch has the label, and ``ValueError`` if
         it was not made from a source, or its source is not registered.

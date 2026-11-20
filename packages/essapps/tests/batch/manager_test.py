@@ -21,13 +21,18 @@ from ess.apps.batch import (
     Header,
     NotKept,
 )
-from ess.apps.batch.definition import Key, header_key, source_key, source_of
+from ess.apps.batch.definition import (
+    FOLLOWING,
+    Key,
+    header_key,
+    source_key,
+    source_of,
+)
 from ess.apps.testing import FakeFiles, FakeStore, StagedFunction
 from ess.spec import function_binding
 
 from .toys import (
     COLUMNS,
-    PAIRS,
     PLAIN,
     SOURCES,
     STAGED,
@@ -360,12 +365,12 @@ def test_a_batch_whose_header_is_refused_is_not_made(
     assert manager.create('plain', title='Morning', label='c') == 'c'
 
 
-def test_the_header_of_a_batch_is_written_last(
+def test_the_header_of_a_batch_is_written_after_its_tables_and_following_last(
     manager: BatchManager, refusing: Refusing
 ) -> None:
-    manager.create('plain', title='Morning', source='pairs', label='b')
+    manager.create('plain', title='Morning', source='pairs', label='b', follow=True)
 
-    assert refusing.saved[-1] == header_key('b')
+    assert refusing.saved[-2:] == [header_key('b'), FOLLOWING]
 
 
 def test_a_setting_keeps_its_value_if_the_table_that_makes_it_a_column_is_refused(
@@ -498,8 +503,7 @@ def test_a_row_that_waits_when_a_batch_is_made_is_added_by_follow_once_filled(
 ) -> None:
     sample(1, 'water')
     sample(2, 'oil', partner=False)
-    manager.create('plain', title='A', source='pairs', label='a')
-    manager.follow('a')
+    manager.create('plain', title='A', source='pairs', label='a', follow=True)
     fake.measure(1002, 1.0, role='transmission', sample='oil')
 
     manager.step()
@@ -580,8 +584,7 @@ def test_rows_taken_are_put_as_the_source_makes_them_and_considered(
     definitions: FolderDefinitions,
 ) -> None:
     sample(1, 'water')
-    manager.create('plain', title='A', source='pairs', label='a')
-    manager.follow('a')
+    manager.create('plain', title='A', source='pairs', label='a', follow=True)
     sample(2, 'oil', partner=False)
 
     manager.take('a', ['2'])
@@ -603,8 +606,7 @@ def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(
     sample(1, 'water')
     sources = dict(SOURCES)
     manager = BatchManager(client, sources=sources, definitions=definitions)
-    manager.create('plain', title='A', source='pairs', label='a')
-    manager.follow('a')
+    manager.create('plain', title='A', source='pairs', label='a', follow=True)
     batch = manager.batch('a')
     typed = batch.frame().rename(index={'1': 'typed'})
     batch.put(pd.concat([batch.frame(), typed]))
@@ -651,32 +653,66 @@ def test_a_batch_made_without_a_source_offers_and_takes_no_rows(
 
 @pytest.fixture
 def two(manager: BatchManager) -> BatchManager:
-    """``manager`` with two batches of a source, ``a`` and ``b``."""
-    manager.create('plain', title='A', source='pairs', label='a')
+    """
+    ``manager`` with two batches of a source: ``a``, which follows, and
+    ``b``, made without Follow.
+    """
+    manager.create('plain', title='A', source='pairs', label='a', follow=True)
     manager.create('plain', title='B', source='pairs', label='b')
     return manager
 
 
-def test_one_batch_follows_and_a_manager_made_again_has_it(
+def test_a_batch_made_to_follow_follows_in_place_of_the_one_before(
     two: BatchManager, client: Client, definitions: FolderDefinitions
 ) -> None:
+    assert two.following == 'a'  # b was made without Follow
+
+    two.create('plain', title='C', source='pairs', label='c', follow=True)
+
+    assert two.following == 'c'
+    assert _again(client, definitions).following == 'c'
+
+
+def test_a_batch_that_follows_without_a_source_is_refused_and_nothing_changes(
+    two: BatchManager, definitions: FolderDefinitions
+) -> None:
+    with pytest.raises(ValueError, match='a batch follows its source, and none'):
+        two.create('plain', title='C', label='c', follow=True)
+
+    assert (list(two.headers()), two.following) == (['a', 'b'], 'a')
+    assert 'c' not in definitions.labels()
+
+
+def test_after_a_stop_no_batch_follows_and_a_manager_made_again_has_none(
+    two: BatchManager, client: Client, definitions: FolderDefinitions
+) -> None:
+    two.stop()
+
     assert two.following is None
     assert two.step() is None
-
-    two.follow('a')
-    two.follow('b')
-
-    assert two.following == 'b'
-    assert _again(client, definitions).following == 'b'
-    two.follow(None)
     assert _again(client, definitions).following is None
+    version = two.version
+    two.stop()  # none follows: nothing is done
+    assert two.version == version
+
+
+def test_a_stopped_batch_gets_no_rows_at_a_step(
+    manager: BatchManager, sample: Measure
+) -> None:
+    sample(1, 'water')
+    manager.create('plain', title='A', source='pairs', label='a', follow=True)
+    manager.stop()
+    sample(2, 'oil')
+
+    manager.step()
+
+    assert list(manager.batch('a').frame().index) == ['1']
+    assert manager.offered('a')['waits'].to_dict() == {'2': False}
 
 
 def test_a_batch_removed_follows_no_longer(
     two: BatchManager, client: Client, definitions: FolderDefinitions
 ) -> None:
-    two.follow('a')
-
     two.remove('a')
 
     assert two.following is None
@@ -686,48 +722,27 @@ def test_a_batch_removed_follows_no_longer(
 def test_a_kept_label_without_a_header_follows_not(
     two: BatchManager, client: Client, definitions: FolderDefinitions
 ) -> None:
-    two.follow('a')
     definitions.delete(('labels', 'a', 'header'))
 
     assert _again(client, definitions).following is None
 
 
-def test_a_batch_that_cannot_follow_is_refused_and_nothing_changes(
-    two: BatchManager, client: Client, definitions: FolderDefinitions
-) -> None:
-    two.follow('a')
-    two.create('plain', title='C', label='c')
-    BatchManager(
-        client, sources={**SOURCES, 'other': PAIRS}, definitions=definitions
-    ).create('plain', title='D', source='other', label='d')
-    again = _again(client, definitions)
-
-    with pytest.raises(ValueError, match='c was not made from a source'):
-        again.follow('c')
-    with pytest.raises(ValueError, match='the source other is not registered'):
-        again.follow('d')
-    with pytest.raises(KeyError):
-        again.follow('e')
-    assert again.following == 'a'
-
-
 def test_which_batch_follows_stays_if_the_definitions_refuse_a_change(
     two: BatchManager, refusing: Refusing
 ) -> None:
-    two.follow('a')
     refusing.part = 'following'
 
     with pytest.raises(NotKept):
-        two.follow('b')
+        two.create('plain', title='C', source='pairs', label='c', follow=True)
     with pytest.raises(NotKept):
-        two.follow(None)
-    assert two.following == 'a'
+        two.stop()
+    assert (list(two.headers()), two.following) == (['a', 'b'], 'a')
+    assert 'c' not in refusing.labels()
 
 
 def test_a_removal_whose_end_of_follow_is_refused_changes_nothing(
     two: BatchManager, refusing: Refusing
 ) -> None:
-    two.follow('a')
     refusing.part = 'following'
 
     with pytest.raises(NotKept):
@@ -743,7 +758,6 @@ def test_a_removal_whose_header_is_refused_leaves_the_batch_not_following(
     client: Client,
     definitions: FolderDefinitions,
 ) -> None:
-    two.follow('a')
     refusing.part = 'header'
     version = two.version
 
@@ -765,9 +779,9 @@ def test_a_removal_whose_header_is_refused_leaves_the_batch_not_following(
         lambda m: m.create('plain', title='C', label='c'),
         lambda m: m.remove('b'),
         lambda m: m.change('b', title='Other'),
-        lambda m: m.follow('b'),
+        lambda m: m.stop(),
     ],
-    ids=['create', 'remove', 'change', 'follow'],
+    ids=['create', 'remove', 'change', 'stop'],
 )
 def test_the_version_moves_at_each_change_of_the_headers_or_of_which_follows(
     two: BatchManager, change: Callable[[BatchManager], object]
@@ -813,24 +827,32 @@ class Stopping:
             raise NotKept('stopped')
 
 
-def _create(manager: BatchManager) -> None:
+def _create(manager: BatchManager, *, follow: bool) -> None:
     """Make the batch ``a`` with every table: settings, rows and source."""
     manager.create(
-        'plain', title='A', source='pairs', settings={'thickness': 2.0}, label='a'
+        'plain',
+        title='A',
+        source='pairs',
+        settings={'thickness': 2.0},
+        label='a',
+        follow=follow,
     )
 
 
-def _made_again(client: Client, definitions: FolderDefinitions) -> None:
+def _made_again(
+    client: Client, definitions: FolderDefinitions, *, follow: bool
+) -> None:
     """
     As after a restart: remove what is kept of ``a``, if anything, then make
-    it again; it is then the one batch, and none follows.
+    it again, following if ``follow``; with ``follow``, it is the batch that
+    follows, and else none follows.
     """
     again = _again(client, definitions)
     if 'a' in definitions.labels():
         again.remove('a')
-    _create(again)
-    assert list(again.headers()) == ['a']
-    assert _again(client, definitions).following is None
+    _create(again, follow=follow)
+    assert 'a' in again.headers()
+    assert _again(client, definitions).following == ('a' if follow else None)
 
 
 def test_a_create_cut_off_at_any_write_leaves_what_remove_removes(
@@ -839,16 +861,22 @@ def test_a_create_cut_off_at_any_write_leaves_what_remove_removes(
     sample(1, 'water')
     for at in itertools.count(1):
         definitions = FolderDefinitions(tmp_path / str(at))
+        _again(client, definitions).create(
+            'plain', title='Z', source='pairs', label='z', follow=True
+        )
         stopping = Stopping(definitions, at)
         manager = BatchManager(client, sources=SOURCES, definitions=stopping)
         try:
-            _create(manager)
+            _create(manager, follow=True)
         except NotKept:
-            assert _again(client, definitions).headers() == {}
-            _made_again(client, definitions)
+            # No batch a, or one that does not follow; z follows still.
+            again = _again(client, definitions)
+            assert set(again.headers()) - {'z'} <= {'a'}
+            assert again.following == 'z'
+            _made_again(client, definitions, follow=True)
         else:
             break
-    assert at > 4  # settings, rows, settings, source, header
+    assert at > 6  # settings, rows, settings, source, header, following
 
 
 def test_a_remove_cut_off_at_any_write_leaves_what_remove_removes(
@@ -857,14 +885,13 @@ def test_a_remove_cut_off_at_any_write_leaves_what_remove_removes(
     sample(1, 'water')
     for at in itertools.count(1):
         definitions = FolderDefinitions(tmp_path / str(at))
-        _create(_again(client, definitions))
-        _again(client, definitions).follow('a')
+        _create(_again(client, definitions), follow=True)
         stopping = Stopping(definitions, at)
         manager = BatchManager(client, sources=SOURCES, definitions=stopping)
         try:
             manager.remove('a')
         except NotKept:
-            _made_again(client, definitions)
+            _made_again(client, definitions, follow=False)
         else:
             break
     assert at > 4  # following, header, source, rows, settings

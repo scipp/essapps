@@ -1,6 +1,6 @@
 # ADR 0011: A person makes the batches of a workspace, each with a scope over the rows of a source
 
-- Status: accepted. Several workflows on one batch are described below and not decided. Amended 2026-11-18: the header holds the spec and the columns. Amended 2026-11-19: the manager keeps which batch follows; "Start the next batch here" leaves Follow where it is. [ADR 0012](0012-a-batch-is-a-table.md) replaces what is said here of the spec and the columns in the header and of `edits.json`. [ADR 0013](0013-follow-adds-the-rows-not-considered.md) replaces what is said here of the scope, of the source in the header, of what a step of Follow reduces, and of "Start the next batch here".
+- Status: accepted. Several workflows on one batch are described below and not decided. Amended 2026-11-18: the header holds the spec and the columns. Amended 2026-11-19: the manager keeps which batch follows; "Start the next batch here" leaves Follow where it is. [ADR 0012](0012-a-batch-is-a-table.md) replaces what is said here of the spec and the columns in the header and of `edits.json`. [ADR 0013](0013-follow-adds-the-rows-not-considered.md) replaces what is said here of the scope, of the source in the header, of what a step of Follow reduces, of "Start the next batch here", and of how a batch comes to follow: Follow is chosen when a batch is made.
 - Deciders: Simon
 - Date: 2026-11-18
 
@@ -141,12 +141,12 @@ manager.remove(label)
 The manager keeps the label of the batch that follows, or none:
 
 ```python
-manager.follow(label)   # this batch follows, and no other
-manager.follow(None)    # none follows
-manager.following       # what the switch of a page shows
+manager.create(..., source='sample-runs', follow=True)   # this batch follows, and no other
+manager.stop()                                           # none follows
+manager.following                                        # what the page and the list of batches show
 ```
 
-- One value means that at most one batch follows, with no rule to enforce. Turning Follow on for one batch turns it off for the other.
+- One value means that at most one batch follows, with no rule to enforce. Making a batch that follows stops the batch that followed before.
 - The manager keeps the value in the definitions, apart from any batch, so a restart resumes. Removing the batch that follows ends Follow.
 - A step of Follow is one step of `Automatic` on `manager.batch(manager.following)`.
 - Whoever serves the pages owns the timer that steps it, and the lock. The manager has no thread, no timer and no lock. It reads and writes definitions and hands out `Batch` objects.

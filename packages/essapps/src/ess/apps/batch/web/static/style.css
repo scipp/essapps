@@ -543,7 +543,6 @@ main.wide .right { display: none; }
 }
 .status { display: inline-flex; align-items: center; gap: 6px; }
 .status .earlier { color: var(--muted); font-size: 11px; white-space: nowrap; }
-.follow { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; cursor: pointer; white-space: nowrap; }
 .status-line { margin-right: 12px; color: var(--muted); font-size: 12px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-line.bad { color: var(--bad); }
 .earlier { display: flex; align-items: center; gap: 8px; }

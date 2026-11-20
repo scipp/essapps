@@ -425,6 +425,7 @@ function showBatches(listed) {
   view.batchData = listed;
   $('n-batches').textContent = listed.rows.length;
   drawBatches();
+  drawFollowChoice();
 }
 
 // Count the rows of each batch, and ask for the files that each names, while
@@ -565,7 +566,9 @@ async function show(url, page, how) {
 // The rows come from a source, a range of those that it has filled now; from
 // a table file; or none. Opened on the page of a batch, the form starts at
 // that batch's source, workflow, columns and settings, so that the next batch
-// is this form with a range that starts later.
+// is this form with a range that starts later. A batch from a source may
+// follow it; Follow is off unless ticked, since it stops the batch that
+// follows, for good, and reduces rows at once with the settings chosen.
 let choices = []; // what a new batch can be made with, as last loaded
 let none = 0; // the index of the choice without a source
 let sourceRows = null; // the rows of the source chosen, as last loaded
@@ -588,6 +591,7 @@ async function openNewBatch() {
     form.elements.source.value = at >= 0 ? at : none;
   }
   chooseSource();
+  drawFollowChoice();
   $('new-problem').textContent = '';
   form.querySelector('[type=submit]').disabled = false;
   form.hidden = false;
@@ -621,10 +625,18 @@ function chooseSource() {
     source: '',
   }[kind];
   $('new-range').hidden = kind !== 'source';
+  $('new-follow').hidden = kind !== 'source';
   $('new-file').hidden = kind !== FILE;
   $('new-columns-field').hidden = kind === FILE;
   chooseSpec();
   if (kind === 'source') loadSourceRows(source.name);
+}
+
+// Which batch stops following if the batch made follows.
+function drawFollowChoice() {
+  const other = view.batchData?.rows.find((batch) => batch.follows);
+  const ticked = $('new-batch').elements.follow.checked;
+  $('new-follow-other').textContent = other ? `${other.title} ${ticked ? 'stops following' : 'follows'}.` : '';
 }
 
 // The parameters of the workflow chosen: those that the source fills are
@@ -688,7 +700,7 @@ function drawRange(marked = true) {
   if (!marked) return;
   const n = (mark) => sourceRows.rows.filter((row) => row.mark === mark).length;
   const waits = n('waits');
-  const waiting = waits ? `; ${count(waits)} ${waits === 1 ? 'waits' : 'wait'} for a run, which Follow adds once filled` : '';
+  const waiting = waits ? `; ${count(waits)} ${waits === 1 ? 'waits' : 'wait'} for a run, which Follow adds once filled if the batch follows` : '';
   $('new-rows').textContent = `The batch gets ${count(n('taken'))}${waiting}.`;
 }
 
@@ -746,6 +758,7 @@ async function makeBatch(event) {
           first: elements.first.value || null,
           last: elements.last.value || null,
           columns: [...form.querySelectorAll('[name=column]:checked')].map((box) => box.value),
+          follow: way() === 'source' && elements.follow.checked,
         },
       });
   if (made) show(batchUrl(made.label), 'rows', 'pushState');
@@ -879,21 +892,23 @@ function renderRefused(refused) {
   showMessage('Nothing was reduced.', refused.map((e) => e.text), key);
 }
 
-// The switch of Follow and "Add rows from the runs", unless the batch has no
-// source, and why the last step failed, if it did, how many rows wait, or
-// which other batch follows.
+// "Add rows from the runs", unless the batch has no source; and while the
+// batch follows, "Stop following" and why the last step failed, if it did,
+// else how many rows wait. A batch that does not follow has no Follow control.
 function renderFollow(follow) {
-  $('follow').hidden = follow.source === null;
   $('take-open').hidden = follow.source === null;
-  $('follow-status').hidden = !follow.on && !follow.other;
-  $('follow').querySelector('input').checked = follow.on;
-  $('follow').title = `Every ${follow.interval} s, add the new rows of the source that are filled, and reduce the rows not reduced yet.`;
+  $('follow-status').hidden = $('stop-follow').hidden = !follow.on;
   const status = $('follow-status');
   status.classList.toggle('bad', Boolean(follow.failure));
   const waiting = follow.waiting ? `; ${count(follow.waiting)} of the source wait to be filled` : '';
-  status.textContent = follow.failure
-    ?? (follow.on ? `Following, every ${follow.interval} s${waiting}` : `${follow.other} follows`);
+  status.textContent = follow.failure ?? `Following, every ${follow.interval} s${waiting}`;
   status.title = status.textContent;
+}
+
+// Stop Follow, once the person agrees that it cannot be turned on again.
+function stopFollowing() {
+  const question = `Stop following? "${view.state.title}" cannot follow again. Rows that arrive later are added with "Add rows from the runs", or go to a new batch.`;
+  if (confirm(question)) act('follow/stop');
 }
 
 // The settings form, which holds changes until Apply; and the rows reduced
@@ -1196,7 +1211,7 @@ function wire() {
     };
   });
   $('cancel').onclick = () => act('cancel');
-  $('follow').querySelector('input').onchange = (event) => act('follow', {on: event.target.checked});
+  $('stop-follow').onclick = stopFollowing;
   $('settings-apply').onclick = () => act('settings/apply');
   $('settings-discard').onclick = () => act('settings/discard');
   $('reduce-earlier').onclick = () => {
@@ -1212,6 +1227,7 @@ function wire() {
   newBatch.elements.spec.onchange = chooseSpec;
   newBatch.elements.first.onchange = () => markRange();
   newBatch.elements.last.onchange = () => markRange();
+  newBatch.elements.follow.onchange = drawFollowChoice;
   $('take-open').onclick = openTake;
   newBatch.querySelector('[data-cancel]').onclick = closeNewBatch;
   newBatch.addEventListener('keydown', (event) => event.key === 'Escape' && closeNewBatch());
