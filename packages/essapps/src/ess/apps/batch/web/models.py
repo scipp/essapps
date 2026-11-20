@@ -112,8 +112,9 @@ class Row(BaseModel):
     One row: its key, its ``name`` (its note ``name``, else its key), the
     text of each of its other notes by column, and a :class:`Cell` per
     parameter column. ``result`` says whether it has a result to show,
-    ``current`` or ``outdated``. ``earlier`` if it was reduced with earlier
-    settings, which differ from the settings now at settings only.
+    ``current`` or ``outdated``. ``changed`` names, for a row that reads
+    ``earlier``, the settings that changed since its result, such as
+    ``'Binning changed'``.
     """
 
     key: str
@@ -121,7 +122,7 @@ class Row(BaseModel):
     notes: dict[str, str]
     status: str
     reason: str
-    earlier: bool = False
+    changed: str = ''
     record: str | None
     result: Literal['current', 'outdated'] | None
     cells: dict[str, Cell]
@@ -131,8 +132,9 @@ class Action(BaseModel):
     """
     What the primary button does, ``label``, or why it cannot, ``blocked``;
     how many rows each way of reducing takes: ``remaining``, ``again`` (all),
-    and ``earlier``, those reduced with earlier settings, which "Reduce them
-    again" in the Settings tab reduces; and while rows run, how many of the
+    and ``earlier``, those reduced with earlier settings, which "Reduce rows
+    of earlier settings" and "Reduce them again" in the Settings tab reduce;
+    and while rows run, how many of the
     rows submitted with them are finished, as ``[finished, all]``.
     """
 

@@ -244,7 +244,7 @@ function render(state) {
   renderAction(state.action);
   renderChips(state.counts);
   if (old?.action.running && !state.action.running) {
-    const ended = ['done', 'failed', 'cancelled'].filter((s) => state.counts[s]).map((s) => `${state.counts[s]} ${s}`);
+    const ended = ['done', 'earlier', 'failed', 'cancelled'].filter((s) => state.counts[s]).map((s) => `${state.counts[s]} ${s}`);
     toast(`Reducing ended: ${ended.join(', ')}.`);
   }
   showColumns(state);
@@ -475,7 +475,7 @@ function drawBatches() {
             h('a', {href: batchUrl(batch.label), text: batch.title}),
             ' ', // so that a double click selects the label alone
             h('small', {class: 'text', text: batch.label}),
-            batch.description && h('div', {class: 'hint text', text: batch.description}),
+            batch.description && h('div', {class: 'hint text description', text: batch.description}),
           ),
           h('td', {class: 'n'}),
           h('td'),
@@ -815,17 +815,21 @@ function renderAction(action) {
   $('cancel').classList.toggle('danger', action.running > 0);
   $('n-remaining').textContent = action.remaining;
   $('n-again').textContent = action.again;
-  for (const which of ['remaining', 'all']) {
-    document.querySelector(`[data-reduce="${which}"]`).disabled =
-      Boolean(action.blocked) || (which === 'remaining' ? action.remaining : action.again) === 0;
+  $('n-earlier').textContent = action.earlier;
+  const counted = {remaining: action.remaining, earlier: action.earlier, all: action.again};
+  for (const [which, n] of Object.entries(counted)) {
+    document.querySelector(`[data-reduce="${which}"]`).disabled = Boolean(action.blocked) || n === 0;
   }
   $('reduce-more').disabled = Boolean(action.blocked);
   for (const id of ['reduce-more', 'reduce-earlier']) $(id).title = action.blocked ?? '';
   $('settings-badge').hidden = !action.blocked;
   $('settings-badge').title = action.blocked ?? '';
+  $('earlier-badge').hidden = action.earlier === 0;
+  $('earlier-badge').textContent = action.earlier;
+  $('earlier-badge').title = `${count(action.earlier)} reduced with earlier settings`;
 }
 
-const CHIPS = ['all', 'ready', 'running', 'done', 'outdated', 'failed', 'incomplete', 'cancelled'];
+const CHIPS = ['all', 'ready', 'running', 'done', 'earlier', 'outdated', 'failed', 'incomplete', 'cancelled'];
 
 // The chip of each status is made once and updated in place, so that a chip
 // that has the keyboard focus keeps it.
@@ -902,7 +906,7 @@ function renderFollow(follow) {
 function renderSettings(state) {
   const {action, settings_changed: changed, settings_problem: problem} = state;
   $('earlier').hidden = action.earlier === 0;
-  $('earlier-hint').textContent = `${count(action.earlier)} reduced with earlier settings.`;
+  $('earlier-state').textContent = `${count(action.earlier)} reduced with earlier settings.`;
   $('reduce-earlier').disabled = Boolean(action.blocked);
   $('draft').classList.toggle('changed', changed);
   const said = problem ? ` ${problem}.` : '';
@@ -1103,7 +1107,7 @@ function renderRow(detail) {
   if (json === view.detail) return;
   view.detail = json;
   const tried = row.status === 'failed' || row.status === 'cancelled';
-  const reasonClass = row.earlier ? 'info' : {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info'}[row.status];
+  const reasonClass = {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info', earlier: 'earlier'}[row.status];
   const useSettings = () => replaceChanges() && act('row/use-settings', {key: row.key}).then((done) => done && showTab('settings'));
   const settingsNames = Object.fromEntries(view.state.settings.map((n) => [n.path[0], n.label]));
   const parts = [
@@ -1182,6 +1186,14 @@ function showTab(tab) {
   if (tab === 'result' && !$('plot').hidden) Plotly.Plots.resize($('plot'));
 }
 
+// Reduce the rows of earlier settings, from the reduce menu or the Settings
+// tab, once the person confirms.
+function reduceEarlier() {
+  const n = view.state.action.earlier;
+  const question = `Reduce the ${count(n)} reduced with earlier settings again, with the settings now?`;
+  if (confirm(question)) act('reduce', {which: 'earlier'});
+}
+
 function wire() {
   // Plotly fits the plot to its box only when the window changes size; the
   // box also changes with the legend below it.
@@ -1192,18 +1204,15 @@ function wire() {
   document.querySelectorAll('[data-reduce]').forEach((item) => {
     item.onclick = () => {
       $('reduce-split').querySelector('.menu-items').hidden = true;
-      act('reduce', {which: item.dataset.reduce, keys: view.selected});
+      if (item.dataset.reduce === 'earlier') reduceEarlier();
+      else act('reduce', {which: item.dataset.reduce, keys: view.selected});
     };
   });
   $('cancel').onclick = () => act('cancel');
   $('follow').querySelector('input').onchange = (event) => act('follow', {on: event.target.checked});
   $('settings-apply').onclick = () => act('settings/apply');
   $('settings-discard').onclick = () => act('settings/discard');
-  $('reduce-earlier').onclick = () => {
-    const n = view.state.action.earlier;
-    const question = `Reduce the ${count(n)} reduced with earlier settings again, with the settings now?`;
-    if (confirm(question)) act('reduce', {which: 'earlier'});
-  };
+  $('reduce-earlier').onclick = reduceEarlier;
   $('relist').onclick = () => act('relist');
   const newBatch = $('new-batch');
   $('new-batch-open').onclick = openNewBatch;

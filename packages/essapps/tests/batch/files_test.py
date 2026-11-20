@@ -282,8 +282,7 @@ def test_main_with_remaining_leaves_the_rows_reduced_with_earlier_settings(
     )
 
     table = read_text(settings_changed)
-    assert list(table['status']) == ['done'] * 2
-    assert list(table['earlier']) == ['True'] * 2
+    assert list(table['status']) == ['earlier'] * 2
     assert code == 3
     assert 'left 2 rows' in capsys.readouterr().err
     with app(folder) as batch:
@@ -308,7 +307,6 @@ def test_main_with_remaining_and_earlier_settings_reduces_those_rows_too(
     table = read_text(settings_changed)
     assert code == 0
     assert list(table['status']) == ['done'] * 2
-    assert list(table['earlier']) == ['False'] * 2
     with app(folder) as batch:
         assert len(batch.client.records(label='x')) == 4
 
@@ -704,7 +702,6 @@ def test_reduce_on_a_batch_without_rows_writes_a_table_of_its_columns(
         'run',
         'sample',
         'status',
-        'earlier',
         'record',
         'failure',
     ]
