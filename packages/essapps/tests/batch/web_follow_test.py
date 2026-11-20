@@ -225,9 +225,7 @@ def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_p
         definitions=definitions,
         staged=STAGED_NAMES,
     )
-    label = manager.create(
-        STAGED.name, title='Scan', rows=toys.rows(client), source='pairs'
-    )
+    label = toys.from_pairs(manager, STAGED.name, title='Scan')
     sample(1, 'water')
     pages = Pages(manager)
     pages.manager.follow(label)
@@ -667,9 +665,7 @@ def test_a_tick_steps_the_batch_that_follows_without_a_page_open(
 def test_a_tick_after_follow_moved_steps_the_batch_that_follows_now(
     page: Page, pages: Pages, manager: BatchManager, client: Client, sample: Measure
 ) -> None:
-    other = manager.create(
-        STAGED.name, title='Other', rows=toys.rows(client), source='pairs'
-    )
+    other = toys.from_pairs(manager, STAGED.name, title='Other')
     pages.manager.follow(other)
     sample(1, 'water')
 
@@ -707,11 +703,7 @@ def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follo
     sample(1, 'water')
     bins(page, 0)
     refused = page.follow(True)  # Follow cannot submit water with these settings
-    other = pages.page(
-        manager.create(
-            STAGED.name, title='Other', rows=toys.rows(client), source='pairs'
-        )
-    )
+    other = pages.page(toys.from_pairs(manager, STAGED.name, title='Other'))
     # No step runs on the other batch: its first step raises, or none runs.
     fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
 

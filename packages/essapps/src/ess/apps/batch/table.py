@@ -75,15 +75,17 @@ column's type, never a NumPy scalar or a ``Float64`` in place of an ``Int64``.
 
 A table file, ``.csv``, ``.tsv`` or ``.xlsx``, is the frame as text
 (:func:`write_table`), with the key as its column ``key``; :func:`read_table`
-reads it back equal. A list or a group is JSON text, as is a cell of an
-``object`` column that would read back as something else
+reads its parameter columns back equal. A list or a group is JSON text, as is
+a cell of an ``object`` column that would read back as something else
 (:func:`write_cell`)::
 
     key,sample,thickness,binning,name
     60339,run:60339,1.5,"{""bins"": 4}",water
     60340,run:60340,,,NA
 
-Empty is the only missing marker, so a note ``NA`` is text.
+Empty is the only missing marker, so a note ``NA`` is text. A note has no
+type in a file of text, so it reads back as text; only ``rows.json`` keeps the
+dtype of every column.
 """
 
 from __future__ import annotations
@@ -91,7 +93,7 @@ from __future__ import annotations
 import copy
 import json
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
@@ -472,40 +474,71 @@ def read_table(path: Path, model: type[BaseModel]) -> pd.DataFrame:
     The table in a file of one of :data:`SUFFIXES`, as :func:`typed` gives it
     for the params model ``model``. The file has a column :data:`KEY`. A column
     of a parameter is read with its dtype, an ``object`` column cell by cell
-    with :func:`read_cell`, and a note as pandas infers it; the columns of
-    :data:`RESULT` are dropped. Only an empty cell is missing.
+    with :func:`read_cell`; the columns of :data:`RESULT` are dropped. Only an
+    empty cell is missing.
 
-    Raises ``ValueError`` if the file has no column :data:`KEY`, a cell is not
-    of the kind of its column, or :func:`typed` refuses the table.
+    The type of a note is never guessed from text. A note of a ``.csv`` or
+    ``.tsv`` file is text, so ``0342`` stays ``'0342'``. A cell of a ``.xlsx``
+    file has a type, so a note of one keeps the dtype of its cells if that is
+    one of the five of a table, and is text otherwise, such as for dates or
+    for cells of several types. Only ``rows.json`` keeps the dtype of every
+    column (:func:`frame_of`). A ``.xlsx`` file keeps 15 significant digits
+    of a number, as Excel does: ``0.1 + 0.2`` reads back as ``0.3``.
+
+    Raises ``ValueError``, naming the file, if the file has no column
+    :data:`KEY`, a cell is not of the kind of its column, or :func:`typed`
+    refuses the table.
     """
+    reader = _reader(path)
+    try:
+        return _read_table(reader, path, model)
+    except (TypeError, ValueError) as error:
+        # TypeError: what pandas raises for 2.5 in an Int64 column
+        raise ValueError(f'{path}: {error}') from None
+
+
+def _read_table(
+    reader: Callable[..., pd.DataFrame], path: Path, model: type[BaseModel]
+) -> pd.DataFrame:
     types = dtypes(model)
-    text: dict[str, Any] = {
+    xlsx = path.suffix == '.xlsx'
+    read_as: dict[str, Any] = {
         n: 'string' if t == 'object' else t for n, t in types.items()
     }
-    if path.suffix == '.xlsx':
+    if xlsx:
         # pandas reads an empty cell of .xlsx as the text 'nan' for a boolean
         # dtype; a cell of .xlsx is a bool already, which typed() checks.
-        text = {n: object if t == 'boolean' else t for n, t in text.items()}
-    try:
-        frame = _reader(path)(
-            path,
-            dtype={**text, KEY: 'string'},
-            keep_default_na=False,
-            na_values=[''],
-        )
-    except TypeError as error:  # what pandas raises for 2.5 in an Int64 column
-        raise ValueError(f'{path}: {error}') from None
+        read_as = {n: object if t == 'boolean' else t for n, t in read_as.items()}
+    # A note: each cell as the file holds it, text if the file is text.
+    notes = object if xlsx else 'string'
+    frame = reader(
+        path,
+        dtype=defaultdict(lambda: notes, {**read_as, KEY: 'string'}),
+        keep_default_na=False,
+        na_values=[''],
+    )
     if KEY not in frame.columns:
-        raise ValueError(f'{path}: a table has a column {KEY!r}, the key of each row')
+        raise ValueError(f'a table has a column {KEY!r}, the key of each row')
     frame = frame.drop(columns=list(RESULT), errors='ignore').set_index(KEY)
-    for name in frame.columns:
+    for name, column in frame.items():
         if types.get(name) == 'object':
             frame[name] = pd.Series(
-                [None if pd.isna(v) else read_cell(v) for v in frame[name]],
+                [None if pd.isna(v) else read_cell(v) for v in column],
                 index=frame.index,
                 dtype=object,
             )
+        elif name not in types and xlsx:
+            frame[name] = _note(column)
     return typed(frame, model)
+
+
+def _note(column: pd.Series) -> pd.Series:
+    """A note of a ``.xlsx`` file: of the dtype of its cells, or text."""
+    typed_column = column.convert_dtypes()
+    if str(typed_column.dtype) in _WORDS.keys() - {'object'}:
+        return typed_column
+    cells = [None if _empty(v) else str(v) for v in column]
+    return pd.Series(cells, index=column.index, dtype='string')
 
 
 def write_table(frame: pd.DataFrame, out: Path | TextIO) -> None:

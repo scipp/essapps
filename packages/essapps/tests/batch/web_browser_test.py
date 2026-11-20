@@ -845,7 +845,6 @@ def test_the_batches_view_counts_the_rows_when_opened_and_again_on_request(
     page.click('[data-view=batches]')
 
     page.wait_for_selector('#batches .pill.st-ready:text-is("2 ready")')
-    assert page.inner_text('#outside') == '1 row of pairs in no batch.'
     client.wait(batch.reduce(['1']))
     page.click('#count')
     page.wait_for_selector('#batches .pill.st-done:text-is("1 done")')
@@ -869,7 +868,7 @@ def test_a_count_that_fails_says_why_in_the_batches_view_and_shows_no_counts(
 
 
 def test_a_batch_that_could_not_be_counted_shows_why_in_its_row(page: Any) -> None:
-    counted = {'rows': {}, 'failed': {'scan': 'half written'}, 'outside': {}}
+    counted = {'rows': {}, 'failed': {'scan': 'half written'}}
     page.route('**/api/batches/counts', lambda r: r.fulfill(json=counted))
 
     page.click('[data-view=batches]')
@@ -981,10 +980,11 @@ def test_a_batch_that_cannot_be_shown_says_why_and_shows_the_list(
     sample: Measure,
 ) -> None:
     sample(1, 'water')
-    manager = BatchManager(client, sources=SOURCES, definitions=refusing)
-    manager.create(STAGED.name, title='Good', rows=toys.rows(client), label='good')
-    manager.create(STAGED.name, title='Broken', label='broken')
+    first = BatchManager(client, sources=SOURCES, definitions=refusing)
+    first.create(STAGED.name, title='Good', rows=toys.rows(client), label='good')
+    first.create(STAGED.name, title='Broken', label='broken')
     refusing.save(rows_key('broken'), {'nonsense': 1})
+    manager = BatchManager(client, sources=SOURCES, definitions=refusing)
     pages = Pages(manager, files=files, marks=Marks)
     with serve(create_app(pages)) as url:
         page = watched(browser)

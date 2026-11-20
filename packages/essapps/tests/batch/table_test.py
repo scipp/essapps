@@ -370,14 +370,55 @@ def filed() -> pd.DataFrame:
 
 
 @pytest.mark.parametrize('suffix', ['.csv', '.tsv', '.xlsx'])
-def test_a_table_written_to_a_file_is_read_back_equal(
+def test_a_table_written_to_a_file_is_read_back_equal_but_notes_of_text(
     tmp_path: Path, filed: pd.DataFrame, suffix: str
 ) -> None:
     path = tmp_path / f'table{suffix}'
 
     write_table(filed, path)
 
-    pd.testing.assert_frame_equal(read_table(path, Filed), filed)
+    # A cell of .xlsx has a type; a cell of .csv is text.
+    expected = filed if suffix == '.xlsx' else filed.astype({'run': 'string'})
+    pd.testing.assert_frame_equal(read_table(path, Filed), expected)
+
+
+def test_a_note_of_a_text_file_is_text(tmp_path: Path) -> None:
+    path = tmp_path / 'table.csv'
+    path.write_text('key,run,flag,x\na,0342,True,1\nb,,False,2\n')
+
+    table = read_table(path, Filed)
+
+    assert table['run'].tolist() == ['0342', pd.NA]
+    assert table['flag'].tolist() == ['True', 'False']
+    assert str(table['run'].dtype) == str(table['flag'].dtype) == 'string'
+
+
+def test_a_note_of_an_xlsx_file_keeps_the_type_of_its_cells_or_is_text(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'table.xlsx'
+    notes = {
+        'whole': [1, None],
+        'number': [0.5, None],
+        'truth': [True, None],
+        'text': ['0342', None],
+        'mixed': [1, 'x'],
+        'date': [pd.Timestamp('2026-11-19'), None],
+    }
+    pd.DataFrame({KEY: ['a', 'b'], **notes}).to_excel(path, index=False)
+
+    table = read_table(path, Filed)
+
+    assert {c: str(t) for c, t in table.dtypes.items()} == {
+        'whole': 'Int64',
+        'number': 'Float64',
+        'truth': 'boolean',
+        'text': 'string',
+        'mixed': 'string',
+        'date': 'string',
+    }
+    assert table['mixed'].tolist() == ['1', 'x']
+    assert table['date'].tolist() == ['2026-11-19 00:00:00', pd.NA]
 
 
 def test_a_list_or_a_group_is_json_text_in_a_table_file(
@@ -395,7 +436,7 @@ def test_a_list_or_a_group_is_json_text_in_a_table_file(
 def test_the_columns_of_what_came_of_each_row_are_dropped_when_read(
     tmp_path: Path, filed: pd.DataFrame
 ) -> None:
-    path = tmp_path / 'done.csv'
+    path = tmp_path / 'done.xlsx'
     write_table(filed.assign(status='completed', record='r1', failure=''), path)
 
     pd.testing.assert_frame_equal(read_table(path, Filed), filed)
@@ -407,19 +448,28 @@ def test_the_columns_of_what_came_of_each_row_are_dropped_when_read(
         ('sample,x\nrun:1,1\n', "a table has a column 'key'"),
         ('key,x\na,thick\n', 'thick'),
         ('key,n\na,2.5\n', 'cast'),
+        ('key,n\na,abc\n', 'abc'),
         ('key,f\na,yes\n', 'yes'),
         ('key,x\na,1\na,2\n', "the key 'a' is given twice"),
     ],
-    ids=['no-key', 'not-a-number', 'not-whole', 'not-true-or-false', 'key-twice'],
+    ids=[
+        'no-key',
+        'not-a-number',
+        'not-whole',
+        'not-whole-text',
+        'not-true-or-false',
+        'key-twice',
+    ],
 )
-def test_a_table_file_that_is_not_a_table_is_refused_saying_why(
+def test_a_table_file_that_is_not_a_table_is_refused_naming_the_file_and_why(
     tmp_path: Path, text: str, message: str
 ) -> None:
     path = tmp_path / 'table.csv'
     path.write_text(text)
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError, match=message) as error:
         read_table(path, Filed)
+    assert str(error.value).startswith(f'{path}: ')
 
 
 @pytest.mark.parametrize(

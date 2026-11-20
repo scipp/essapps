@@ -23,6 +23,7 @@ from ess.apps.batch import (
     CorrectedFiles,
     FileInfo,
     FolderDefinitions,
+    NotKept,
     RowSource,
     Source,
     rows_of,
@@ -40,10 +41,13 @@ from .toys import (
     PLAIN,
     REPEATED,
     SAMPLES,
+    SOURCES,
     STAGED,
     Flaky,
     Measure,
+    Refusing,
     edit,
+    from_pairs,
     pair,
     rows,
 )
@@ -524,9 +528,12 @@ def following(manager: BatchManager, client: Client, sample: Measure) -> BatchMa
     """
     for run, name in enumerate(['water', 'sds', 'dmso', 'd2o'], start=1):
         sample(run, name)
-    given = manager.rows_of('pairs')
     manager.create(
-        PLAIN.name, title='A', rows=given[given.run >= 3], source='pairs', label='a'
+        PLAIN.name,
+        title='A',
+        source='pairs',
+        choose=lambda given: given[given.run >= 3],
+        label='a',
     )
     manager.follow('a')
     return manager
@@ -577,12 +584,77 @@ def test_a_row_that_a_person_removes_stays_away(following: BatchManager) -> None
     assert list(batch.frame().index) == ['3']
 
 
+def test_a_row_added_by_hand_with_a_key_the_source_gives_later_stays_away_once_removed(
+    following: BatchManager, sample: Measure
+) -> None:
+    batch = following.batch('a')
+    edit(batch, '5', sample='uuid:run-1', transmission='uuid:run-1')
+    sample(5, 'oil')
+    following.step()  # the table has 5: the step adds no row, and considers it
+    batch.put(batch.frame().drop('5'))
+
+    following.step()
+
+    assert list(batch.frame().index) == ['3', '4']
+
+
+def test_a_row_of_a_step_cut_off_before_considered_stays_away_once_removed(
+    following: BatchManager, refusing: Refusing, client: Client, sample: Measure
+) -> None:
+    sample(5, 'oil')
+    refusing.part = 'source'  # as a process that stops after rows.json
+    with pytest.raises(NotKept):
+        following.step()
+    refusing.part = None
+    client.wait(client.records(label='a'))
+    following.step()  # the table has 5: the step considers it
+    batch = following.batch('a')
+    batch.put(batch.frame().drop('5'))
+
+    following.step()
+
+    assert list(batch.frame().index) == ['3', '4']
+
+
+def test_an_error_of_a_step_is_said_also_if_considered_is_refused_after_it(
+    client: Client, refusing: Refusing, sample: Measure
+) -> None:
+    manager = BatchManager(Flaky(client), sources=SOURCES, definitions=refusing)
+    manager.create(PLAIN.name, title='A', source='pairs', label='a')
+    manager.follow('a')
+    sample(1, 'water')
+    manager.client.fail = 1  # type: ignore[attr-defined]
+    refusing.part = 'source'
+
+    with pytest.raises(ConnectionError):
+        manager.step()
+
+
+class _Refusing(Flaky):
+    """A client whose submissions raise ``ValueError``, as a service may."""
+
+    def submit(self, *args: Any, **kwargs: Any) -> Any:
+        raise ValueError('the service refused the connection')
+
+
+def test_a_value_error_of_a_submission_is_not_said_as_one_of_the_source(
+    client: Client, definitions: FolderDefinitions, sample: Measure
+) -> None:
+    manager = BatchManager(_Refusing(client), sources=SOURCES, definitions=definitions)
+    manager.create(PLAIN.name, title='A', source='pairs', label='a')
+    manager.follow('a')
+    sample(1, 'water')
+
+    with pytest.raises(ValueError, match=r'^the service refused the connection$'):
+        manager.step()
+
+
 def test_a_row_added_by_a_step_whose_submission_raised_stays_away_once_removed(
     client: Client, definitions: FolderDefinitions, sample: Measure
 ) -> None:
     flaky = Flaky(client)
     manager = BatchManager(flaky, sources={'pairs': PAIRS}, definitions=definitions)
-    manager.create(PLAIN.name, title='A', rows=rows(client), source='pairs', label='a')
+    from_pairs(manager, PLAIN.name, title='A', label='a')
     manager.follow('a')
     sample(1, 'water')
     flaky.fail = 1
@@ -602,7 +674,7 @@ def test_a_cell_of_the_source_that_the_batch_refuses_is_named_with_the_source(
 ) -> None:
     thick = Source(_changed(pair, **{'1': {'thickness': 'thick'}}), PAIRS.fills)
     manager = BatchManager(client, sources={'pairs': thick}, definitions=definitions)
-    manager.create(PLAIN.name, title='A', rows=rows(client), source='pairs', label='a')
+    from_pairs(manager, PLAIN.name, title='A', label='a')
     manager.follow('a')
     sample(1, 'water')
 

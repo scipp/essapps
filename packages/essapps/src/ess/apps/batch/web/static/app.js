@@ -381,8 +381,6 @@ function drawBatches() {
       );
     }),
   );
-  const outside = Object.entries(view.counts?.outside ?? {});
-  $('outside').textContent = outside.map(([source, n]) => `${count(n)} of ${source} in no batch.`).join(' ');
 }
 
 // The form "New batch". The server says what a batch can be made with

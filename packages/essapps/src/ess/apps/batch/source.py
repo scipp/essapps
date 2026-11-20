@@ -14,15 +14,16 @@ their metadata and returns a frame, the form that ``Batch.put`` takes::
 
 The key of each row as index, as text; a column per parameter that it fills,
 each file as its name (``str(f.ref)``); and notes, such as ``run`` and
-``name``. :func:`rows_of` is what a source makes from the files now. A batch
-is made from it, and Follow adds its rows that are new and filled
-(:mod:`~.auto`). A batch never asks its source again: how its table was made
-is not part of it.
+``name``. :func:`rows_of` is what a source makes from the files now. A row
+is *filled* (:func:`filled`) once it has a value in each column that the
+source fills; until then it *waits*. A batch is made from the filled rows,
+and Follow adds the rows that are new and filled (:mod:`~.auto`). A batch
+never asks its source again: how its table was made is not part of it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -98,3 +99,11 @@ def rows_of(client: Client, source: Source) -> pd.DataFrame:
     }
     # Every column a note: the source knows no spec.
     return typed(frame.assign(**empty), BaseModel)
+
+
+def filled(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
+    """
+    Whether each row of ``given`` has a value in each of ``columns``, such as
+    the columns that a source fills: a row that has not waits.
+    """
+    return given[list(columns)].notna().all(axis=1)

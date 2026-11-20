@@ -26,8 +26,8 @@ as a page does, so a label is one batch whoever works on it:
   For a label without a batch, it needs a template, and the manager makes
   the batch (:meth:`~.manager.BatchManager.create`) of the template's spec,
   with the label as title. Its table is the table given
-  (:func:`.table.read_table`); without one, the rows that the source
-  ``--source NAME`` makes now; without either, one row keyed by the label.
+  (:func:`.table.read_table`), or the rows that the source ``--source NAME``
+  has filled now, not both; without either, one row keyed by the label.
   With ``--source``, the batch keeps its source, so that it can follow on a
   page. ``create`` refuses a label that has definitions or records.
 
@@ -226,10 +226,10 @@ def _reduce(
         rows = read_table(args.table, spec.params)
     elif batch is not None:
         rows = batch.frame()
-    elif args.source is not None:
-        rows = manager.rows_of(args.source)
-    else:
+    elif args.source is None:
         rows = pd.DataFrame(index=pd.Index([label], name=KEY))
+    else:
+        rows = None  # create takes them from the source
     settings = None
     if template is not None:
         # Checked on the rows to be, before anything is written.
@@ -298,6 +298,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == 'reduce' and args.earlier_settings and not args.remaining:
         parser.error('--earlier-settings needs --remaining')
+    if args.command == 'reduce' and args.table is not None and args.source:
+        parser.error('give a table or --source, not both')
     if args.bind is None:
         # a workspace goes on with pending records, which need their bindings
         parser.error('--bind is required: the bindings of the workspace')

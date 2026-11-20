@@ -257,6 +257,7 @@ def test_the_settings_change_only_by_an_assignment_of_all_of_them(
     measured.settings = given
     given['binning']['bins'] = 4
     measured.settings['binning']['bins'] = 5
+    measured.template().params['binning']['bins'] = 7
 
     with pytest.raises(TypeError):
         measured.settings['binning'] = {'bins': 6}  # type: ignore[index]

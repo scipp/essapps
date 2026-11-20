@@ -10,7 +10,8 @@ The batch page of LoKI's I(Q) on a workspace folder, as a web page
 says the run, role and sample of each file, as ``essapps-batch files`` writes
 it. A row is a sample run, paired with the transmission run of its sample
 (:func:`~.batch.pair_by_sample`). A start at which no batch is listed makes
-a batch from the source of sample runs, with the rows it gives then. The
+a batch from the source of sample runs, with the rows that have both runs
+then; Follow adds the others once their transmission run is listed. The
 batches with their tables and settings, the batch that follows, and the
 corrections of runs are kept in ``FOLDER/definitions/``, the results in
 ``FOLDER/store/``.
@@ -119,7 +120,7 @@ def build(
     The pages of the batches of ``client``, kept in ``definitions``, with a
     step of Follow every ``interval`` seconds while a batch follows. A new
     batch of I(Q) starts with ``settings``. If no batch is listed, a batch is
-    made from the source of sample runs, with the rows it gives now, so also
+    made from the source of sample runs, with the rows it has filled now, so also
     at a start after a person removed the last one; it follows from the start
     if ``follow``. A folder with only the
     detector and the masks that the command reduced has batches, so a person
@@ -133,12 +134,7 @@ def build(
         staged=STAGED,
     )
     if not manager.headers():
-        label = manager.create(
-            IOFQ.name,
-            title='Sample runs',
-            rows=manager.rows_of('sample-runs'),
-            source='sample-runs',
-        )
+        label = manager.create(IOFQ.name, title='Sample runs', source='sample-runs')
         if follow:
             manager.follow(label)
     pages = Pages(

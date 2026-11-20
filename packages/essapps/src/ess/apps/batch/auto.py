@@ -17,16 +17,18 @@ with ``put``, then reduces the rows that are ready and have no result::
     given = rows_of(batch.client, source)        # every row the source makes now
     new, waiting = added(batch.frame(), given, source.fills, considered)
     batch.put(pd.concat([batch.frame(), new]))
-    considered |= set(new.index)
+    considered |= set(new.index) | (set(given.index) & set(batch.frame().index))
     candidates = not_reduced(batch.results())    # ready as given, no result
     batch.reduce(not_reduced(batch.state(candidates)))
 
 A step never changes a row that the table has, and never changes the blanks of
 the template: it takes only the columns that the table has. A row whose key is
 considered, such as one a person removed, is never added again; the caller
-keeps :attr:`Automatic.considered` (the manager in ``source.json``). A key
-that the table has counts as considered, so a step cut off between ``put`` and
-keeping ``considered`` adds no row twice.
+keeps :attr:`Automatic.considered` (the manager in ``source.json``). A key of
+the source that the table has is considered, whoever added the row, and the
+step keeps it so. So a row that a person added by hand with a key that the
+source gives later stays away once removed, and so does a row of a step cut
+off between ``put`` and keeping ``considered``: the next step considers it.
 
 The rule of what a step reduces is on the state, not on who changed it:
 :func:`~.state.not_reduced` gives the ready rows that have no result under the
@@ -56,8 +58,15 @@ import pandas as pd
 from ..errors import SubmitError
 from ..records import Record
 from .reduction import Batch
-from .source import Source, rows_of
+from .source import Source, filled, rows_of
 from .state import not_reduced
+
+
+class SourceError(ValueError):
+    """
+    The source of a step cannot list its rows, or the batch refuses the rows
+    that it made: a defect of the code of the application.
+    """
 
 
 def added(
@@ -74,9 +83,8 @@ def added(
     that is a column of ``table``, and waits until then. The rows added have
     the columns of ``table``, those of ``given`` that it lacks left out.
     """
-    filled = [c for c in fills if c in table.columns]
     is_new = ~given.index.isin(list(considered)) & ~given.index.isin(table.index)
-    is_ready = given[filled].notna().all(axis=1)
+    is_ready = filled(given, [c for c in fills if c in table.columns])
     new = given[is_new & is_ready].reindex(columns=table.columns)
     return new, given.index[is_new & ~is_ready]
 
@@ -101,7 +109,8 @@ class Automatic:
     Attributes
     ----------
     considered:
-        The keys given, and those of the rows that the steps added.
+        The keys given, those of the rows that the steps added, and those of
+        the source that the table has.
     refused:
         Why the last step's submission refused each row, by key: the rows it
         submitted that a ``SubmitError`` names, or every row it submitted if
@@ -132,14 +141,21 @@ class Automatic:
         If the settings are refused, no row can run: the step reduces none,
         and :attr:`refused` gives the reason for each row without a result
         that is ready as given, its cells not resolved.
+
+        Raises :class:`SourceError` if the source raises ``ValueError`` or
+        the batch refuses the rows it made, and what the step raises
+        otherwise.
         """
         batch = self.batch
         table = batch.frame()
-        given = rows_of(batch.client, self.source)
-        new, waiting = added(table, given, self.source.fills, self.considered)
-        if len(new):
-            batch.put(pd.concat([table, new]))
-        self.considered |= set(new.index)
+        try:
+            given = rows_of(batch.client, self.source)
+            new, waiting = added(table, given, self.source.fills, self.considered)
+            if len(new):
+                batch.put(pd.concat([table, new]))
+        except ValueError as error:
+            raise SourceError(str(error)) from error
+        self.considered |= set(new.index) | (set(given.index) & set(table.index))
         self.waiting = tuple(waiting)
         # Only the rows without a result are compared: a step reduces no other.
         candidates = not_reduced(batch.results())

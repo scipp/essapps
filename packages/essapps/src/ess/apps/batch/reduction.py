@@ -287,8 +287,12 @@ class Batch:
             self._definitions.save(key, definition.template_data(template))
 
     def template(self) -> Template:
-        """The template of the settings, with the columns as its blanks."""
-        return self._template
+        """
+        A copy of the template of the settings, with the columns as its
+        blanks, so that changing it changes the batch only by
+        :attr:`settings`.
+        """
+        return copy.deepcopy(self._template)
 
     def _cells(self, keys: Sequence[str] | None) -> dict[str, dict[str, Any]]:
         """
@@ -424,7 +428,7 @@ class Batch:
         settings differs from its result's; and the reasons of the rows whose
         cells are refused. Raises ``SubmitError`` if the settings are.
         """
-        resolved = self.client.resolve(self.template())
+        resolved = self.client.resolve(self._template)
         if isinstance(resolved, SubmitError):
             raise resolved
         asked = {}
@@ -512,7 +516,7 @@ class Batch:
         if not cells:
             return {}
         try:
-            records = self._submit(self.template(), cells)
+            records = self._submit(self._template, cells)
         except SubmitError as error:
             raise SubmitError(self._once(error.errors)) from None
         return records

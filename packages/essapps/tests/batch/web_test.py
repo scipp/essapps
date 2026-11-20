@@ -552,9 +552,7 @@ def test_a_row_reduced_by_another_spec_version_is_outdated(
     sample(1, 'water')
     with local(proposal='p1', files=files, bind=bind) as client:
         pages = started(client, definitions)
-        label = pages.manager.create(
-            PLAIN.name, title='New', rows=toys.rows(client), source='pairs'
-        )
+        label = toys.from_pairs(pages.manager, PLAIN.name, title='New')
         old = Batch(client, PLAIN, label=label, rows=toys.rows(client))
         client.wait(old.reduce(['1']))
         page = opened(pages, label)
@@ -705,7 +703,11 @@ def test_the_table_downloaded_and_uploaded_gives_the_same_table(
     )
 
     assert loaded.json()['notice'] == f'Loaded 3 rows from rows.{suffix}.'
-    pd.testing.assert_frame_equal(manager.batch(other).frame(), batch.frame())
+    # A cell of .xlsx has a type; a note of .csv is text.
+    expected = batch.frame()
+    if suffix == 'csv':
+        expected = expected.astype({'run': 'string'})
+    pd.testing.assert_frame_equal(manager.batch(other).frame(), expected)
 
 
 def test_a_table_loaded_replaces_the_rows_the_columns_and_so_the_forms(
@@ -821,9 +823,7 @@ def kept(client: Client, fake: FakeFiles, sample: Measure, flaky: Flaky) -> Test
     sample(1, 'water')
     sample(2, 'sds')
     manager = BatchManager(client, sources=SOURCES, definitions=flaky)
-    label = manager.create(
-        STAGED.name, title='Kept', rows=toys.rows(client), source='pairs', label='kept'
-    )
+    label = toys.from_pairs(manager, STAGED.name, title='Kept', label='kept')
     files = CorrectedFiles(fake, definitions=flaky)
     return opened(Pages(manager, files=files, marks=Marks), label)
 
@@ -1539,11 +1539,10 @@ def test_counts_are_given_in_the_words_of_the_page(
     assert counted == {
         'rows': {'scan': {'done': 1, 'ready': 1, 'incomplete': 1}},
         'failed': {},
-        'outside': {'pairs': 0},
     }
 
 
-def test_the_counts_give_the_rows_of_each_batch_by_status_and_those_in_no_batch(
+def test_the_counts_give_the_rows_of_each_batch_by_status(
     pages: Pages, manager: BatchManager, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
@@ -1551,7 +1550,6 @@ def test_the_counts_give_the_rows_of_each_batch_by_status_and_those_in_no_batch(
     manager.create('plain', title='Morning', rows=toys.rows(client), label='a')
     manager.create('plain', title='Afternoon', rows=toys.rows(client), label='b')
     client.wait(manager.batch('a').reduce(['1']))
-    sample(3, 'sds')
 
     counted = pages.counts()
 
@@ -1560,24 +1558,9 @@ def test_the_counts_give_the_rows_of_each_batch_by_status_and_those_in_no_batch(
         'b': {'ready': 1, 'incomplete': 1},
     }
     assert counted.failed == {}
-    assert counted.outside == {'pairs': 1}  # row 3, in no table
 
 
-def test_a_row_counts_as_in_a_batch_if_any_table_has_it(
-    pages: Pages, manager: BatchManager, sample: Measure, client: Client
-) -> None:
-    for run, name in enumerate(['water', 'oil', 'sds', 'salt'], start=1):
-        sample(run, name)
-    for label, removed in [('a', ['2', '3']), ('b', ['3'])]:
-        manager.create('plain', title=label, rows=toys.rows(client), label=label)
-        toys.edit(manager.batch(label), f'mine-{label}', thickness=1.0)
-        batch = manager.batch(label)
-        batch.put(batch.frame().drop(index=removed))
-
-    assert pages.counts().outside == {'pairs': 1}  # row 3, removed in both
-
-
-def test_a_batch_that_cannot_be_counted_has_its_reason_and_no_outside_is_said(
+def test_a_batch_that_cannot_be_counted_has_its_reason(
     client: Client, definitions: FolderDefinitions, sample: Measure
 ) -> None:
     sample(1, 'water')
@@ -1591,36 +1574,6 @@ def test_a_batch_that_cannot_be_counted_has_its_reason_and_no_outside_is_said(
 
     assert list(counted.rows) == ['a']
     assert 'rows.json: not a table' in counted.failed['b']
-    assert counted.outside == {}
-
-
-def test_a_count_asks_each_source_once_and_leaves_out_one_that_raises(
-    client: Client, definitions: FolderDefinitions, sample: Measure
-) -> None:
-    sample(1, 'water')
-    calls = []
-
-    def counted(files: Any) -> pd.DataFrame:
-        calls.append(1)
-        return pair(files)
-
-    def raising(files: Any) -> pd.DataFrame:
-        raise OSError('half written')
-
-    sources = {
-        'pairs': Source(counted, fills=('sample', 'transmission')),
-        'broken': Source(raising, fills=('sample',)),
-    }
-    manager = BatchManager(client, sources=sources, definitions=definitions)
-    for label in ('a', 'b'):
-        manager.create('plain', title=label, rows=toys.rows(client), label=label)
-    pages = Pages(manager)
-    before = len(calls)
-
-    counted_rows = pages.counts()
-
-    assert len(calls) - before == 1
-    assert counted_rows.outside == {'pairs': 0}
 
 
 # Making a batch
@@ -1683,7 +1636,7 @@ def test_a_source_that_no_spec_fits_is_not_offered_and_no_source_always_is(
     assert [s['name'] for s in offered] == [None]
 
 
-def test_a_batch_made_from_a_source_has_every_row_it_gives_and_the_columns_sent(
+def test_a_batch_made_from_a_source_has_every_row_it_filled_and_the_columns_sent(
     http: TestClient, pages: Pages, manager: BatchManager
 ) -> None:
     sent = new_batch(
@@ -1694,7 +1647,7 @@ def test_a_batch_made_from_a_source_has_every_row_it_gives_and_the_columns_sent(
 
     assert manager.headers()[made['label']] == Header('Afternoon', 'Thicker cells')
     page = state(opened(pages, made['label']))
-    assert [r['key'] for r in page['rows']] == ['1', '2', '3']
+    assert [r['key'] for r in page['rows']] == ['1', '2']  # 3 has no transmission
     assert [c['name'] for c in page['columns']] == [
         'sample',
         'transmission',
@@ -1803,9 +1756,10 @@ def test_runs_are_corrected_without_a_batch(pages: Pages, sample: Measure) -> No
 def test_a_batch_whose_rows_cannot_be_read_answers_422_and_the_list_stays(
     client: Client, definitions: DefinitionStore
 ) -> None:
-    manager = BatchManager(client, sources=SOURCES, definitions=definitions)
-    label = manager.create(STAGED.name, title='Odd')
+    first = BatchManager(client, sources=SOURCES, definitions=definitions)
+    label = first.create(STAGED.name, title='Odd')
     definitions.save(rows_key(label), {'nonsense': 1})
+    manager = BatchManager(client, sources=SOURCES, definitions=definitions)
     pages = Pages(manager)
 
     shown = opened(pages, label).get('/api/state')
@@ -1931,8 +1885,9 @@ def test_a_removal_the_definitions_refuse_answers_422_and_the_batch_stays(
     assert answer.json()['message'] == (
         "The change was not kept: ('labels', 'scan', 'header'): refused"
     )
+    # It follows no longer, so that no label without a header follows.
     assert list(manager.headers()) == ['scan']
-    assert manager.following == 'scan'
+    assert manager.following is None
 
 
 def test_another_page_of_a_removed_batch_answers_404_at_its_next_poll(

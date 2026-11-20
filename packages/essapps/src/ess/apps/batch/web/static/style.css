@@ -423,7 +423,6 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .list tr[aria-current="page"] a { font-weight: 600; }
 .list .follows { color: var(--done); font-weight: 600; }
 .list .bad { color: var(--bad); }
-#outside { padding: 8px; }
 .new-batch {
   display: flex;
   flex-direction: column;

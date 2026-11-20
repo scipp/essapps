@@ -34,7 +34,7 @@ def step(batch, source, considered):
     is_ready = given[filled].notna().all(axis=1)
     new = given[is_new & is_ready].reindex(columns=table.columns)
     batch.put(pd.concat([table, new]))                     # ADR 0012: the table is changed with `put`
-    considered |= set(new.index)                           # kept, after the table is
+    considered |= set(new.index) | (set(given.index) & set(table.index))   # kept, after the table is
     waiting = given.index[is_new & ~is_ready]              # shown on the page, not kept
     batch.reduce(ready_without_result(batch.state()))
 ```
@@ -46,8 +46,8 @@ definitions/labels/20261118-130204/source.json     {"source": "sample-runs", "co
 definitions/following.json                         the label of the batch that follows, or none (ADR 0011)
 ```
 
-- A key is *considered* by a batch once a row of that key was put into the batch from the source, or was left out when the batch was made.
-- A key that the table has counts as considered, whoever added the row. So a step that stops between writing the table and writing `source.json` adds no row twice.
+- A key is *considered* by a batch once a row of that key was put into the batch from the source, or was filled and left out when the batch was made.
+- A key of the source that the table has is considered, whoever added the row, and each step keeps it so. So a step that stops between writing the table and writing `source.json` adds no row twice, and a row that a person added by hand with a key that the source gives later stays away once removed.
 - A batch made without a source, such as one from a table file, has no `source.json` and cannot follow.
 
 ### A row that a person removes stays away
@@ -69,17 +69,28 @@ A source says which columns it fills (`Source.fills`, such as `sample` and `samp
 
 ### Making a batch from a source
 
+`create` lists the source once, and chooses from the rows that are filled:
+
 ```python
-given = manager.rows_of('sample-runs')               # the table the source makes now
-manager.create('loki-iofq', title='Afternoon', source='sample-runs', rows=given[given.run >= 60339])
-# considered: every key of `given`, the rows taken and the rows left out
+manager.create('loki-iofq', title='Afternoon', source='sample-runs',
+               choose=lambda given: given[given.run >= 60339])
+
+# in create:
+given = rows_of(client, source)                  # one listing
+arrived = given[filled]                          # the rows that have a value in each of source.fills
+table = arrived if choose is None else choose(arrived)
+considered = arrived.index                       # the rows taken and the rows left out
 ```
 
-A person sees what they take, so the rows taken may be incomplete or waiting. No scope is kept: "from run 60339 on" is the choice of rows at making, and what arrives later is what Follow adds.
+- A row that waits when the batch is made is neither taken nor considered. It keeps waiting, and Follow adds it once it is filled.
+- `choose` gives rows of `arrived`, with its columns or fewer; `create` refuses anything else. Without `choose`, every filled row is taken.
+- A batch made from a source takes no `rows`: its rows come from the one listing, so no file listed in between is considered without being seen.
+
+No scope is kept: "from run 60339 on" is the choice of rows at making, and what arrives later is what Follow adds.
 
 ### A person adds rows of the source
 
-"Add rows from the runs" shows the rows that the source gives and the table lacks: the rows that wait, the rows left out at making, and the rows a person removed. The person picks rows, and they are put into the table as the source gives them now. This is also how a removed row is brought back.
+"Add rows from the runs" shows the rows that the source gives and the table lacks: the rows that wait, the rows left out at making, the rows a person removed, and the rows filled while the batch did not follow. A person sees what they take, so the rows taken may be incomplete or waiting. The person picks rows, and they are put into the table as the source gives them now. This is also how a removed row is brought back.
 
 ### What a step reduces
 
@@ -92,9 +103,9 @@ The rule is on the state of the rows, as in ADR 0011. So in a batch that follows
 No row moves from one batch to another. A person who wants the runs from 60400 on in a batch of their own makes it, and turns Follow on for it:
 
 ```python
-given = manager.rows_of('sample-runs')
 label = manager.create('loki-iofq', title='Evening', source='sample-runs',
-                       rows=given[given.run >= 60400], settings=manager.batch('afternoon').settings)
+                       choose=lambda given: given[given.run >= 60400],
+                       settings=manager.batch('afternoon').settings)
 manager.follow(label)                                # the batch 'afternoon' follows no longer
 ```
 

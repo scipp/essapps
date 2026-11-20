@@ -82,10 +82,10 @@ Whatever a step raises, from the files, the workflow or the workspace, is the st
 
 The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, and which batch follows; the batch of the page is marked.
 Each title is a link to the page of its batch.
-Opening the view, and **Count again**, counts the rows of each batch by status, and for each registered source the rows that no table has, such as a row removed in every batch (`Pages.counts`).
+Opening the view, and **Count again**, counts the rows of each batch by status (`Pages.counts`).
 The statuses are those of the chips of each batch's page, the rows that Follow could not submit `incomplete` too.
-A count reads the state of every batch, and asks each source once for its rows, under the lock of all pages, so the pages and Follow wait until it ends.
-A batch that cannot be counted, such as one whose table cannot be read, shows why in its row, and the rows in no batch are not said.
+A count reads the state of every batch under the lock of all pages, so the pages and Follow wait until it ends.
+A batch that cannot be counted, such as one whose table cannot be read, shows why in its row.
 No poll counts, so the counts shown are those of the last count; a count that fails shows none.
 The list and the Runs view are the same on every page.
 
@@ -101,13 +101,14 @@ The list and the Runs view are the same on every page.
 | Columns | the columns that the source fills, fixed; the other parameters of the spec whose cell the page edits, to tick (a group of fields, such as a Q binning, stays a setting) |
 
 **Make** sends the form to `POST api/batches`, and the page goes to the page of the new batch.
-With a source, the batch holds every row that the source gives now, with an empty column for each column ticked that the source does not fill, and Follow adds the rows that arrive later.
+With a source, the batch holds every row that the source has filled now, then gets an empty column for each column ticked that the source does not fill; Follow adds the rows that wait and those that arrive later.
 Without a source, the batch holds no rows and the columns ticked; rows are added on its page or by **Load table**.
 In code:
 
 ```python
-rows = manager.rows_of(source).assign(thickness=None)
-label = manager.create(spec, title=title, rows=rows, source=source)
+label = manager.create(spec, title=title, source=source)
+batch = manager.batch(label)
+batch.put(batch.frame().assign(thickness=None))
 ```
 
 The choices come from `GET api/sources`; what can be made is decided by `BatchManager.create`, and what it refuses, such as an empty title, shows at the form, with nothing made.

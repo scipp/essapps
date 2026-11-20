@@ -388,7 +388,7 @@ The manager refuses a label with `/` (`check_label`). A `Batch` made in code may
  "removed": ["60340"]}
 ```
 
-A file is written to a temporary file next to it, which then replaces it, so a reader never sees half of one; a temporary file left by a write that was cut off is removed when the file is read. A label too long to name a folder, once written so, is refused with `ValueError` when the batch is made. Labels that differ only in case share a folder on a file system that ignores case, such as that of macOS.
+A file is written to a temporary file next to it, which then replaces it, so a reader never sees half of one; a temporary file left by a write that was cut off stays until its table is deleted, since a reader cannot tell it from that of a write of another process. A label too long to name a folder, once written so, is refused with `ValueError` when the batch is made. Labels that differ only in case share a folder on a file system that ignores case, such as that of macOS.
 
 The edits hold only what was set by hand, so a cell from the scan follows the files after a restart. A definition kept that no longer fits the code:
 

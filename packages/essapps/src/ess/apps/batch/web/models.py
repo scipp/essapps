@@ -301,15 +301,12 @@ class SourceChoice(BaseModel):
 
 class BatchCounts(BaseModel):
     """
-    The rows of each batch by status, in the words of the page, by label; why
-    each other batch could not be counted, by label; and how many rows of
-    each registered source no table of a batch has, by its name. ``outside``
-    is empty while a batch could not be counted, since its rows are not known.
+    The rows of each batch by status, in the words of the page, by label; and
+    why each other batch could not be counted, by label.
     """
 
     rows: dict[str, dict[str, int]]
     failed: dict[str, str]
-    outside: dict[str, int]
 
 
 class Plot(BaseModel):

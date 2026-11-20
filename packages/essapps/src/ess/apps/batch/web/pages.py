@@ -398,7 +398,7 @@ class Pages:
         Make the batch of ``new`` with the manager
         (:meth:`~ess.apps.batch.BatchManager.create`), with the settings that
         the application gives its spec: with a source, of every row that the
-        source gives now, and an empty column for each other of
+        source has filled now, then with an empty column for each other of
         ``new.columns``; without, of a table of ``new.columns`` without rows.
         Raises :class:`~.page.Problem` with what the manager refuses, or what
         the source raises.
@@ -407,17 +407,23 @@ class Pages:
             try:
                 if new.source is None:
                     rows = pd.DataFrame(columns=new.columns)
+                    label = self.manager.create(
+                        new.spec,
+                        title=new.title,
+                        rows=rows,
+                        description=new.description,
+                    )
                 else:
-                    given = self.manager.rows_of(new.source)
-                    empty = [c for c in new.columns if c not in given.columns]
-                    rows = given.assign(**dict.fromkeys(empty))
-                label = self.manager.create(
-                    new.spec,
-                    title=new.title,
-                    rows=rows,
-                    source=new.source,
-                    description=new.description,
-                )
+                    label = self.manager.create(
+                        new.spec,
+                        title=new.title,
+                        source=new.source,
+                        description=new.description,
+                    )
+                    batch = self.manager.batch(label)
+                    frame = batch.frame()
+                    if empty := [c for c in new.columns if c not in frame.columns]:
+                        batch.put(frame.assign(**dict.fromkeys(empty)))
             except Exception as error:  # a source is code of the application
                 raise Problem(f'The batch was not made: {why(error)}.') from None
             return Made(label=label)
@@ -443,23 +449,19 @@ class Pages:
     def counts(self) -> BatchCounts:
         """
         The rows of each batch by status, in the words of the page of each
-        batch (:func:`~.page.page_statuses`), and how many rows of each
-        registered source no table of a batch has. Every page and Follow wait
+        batch (:func:`~.page.page_statuses`). Every page and Follow wait
         while it counts.
 
         The state of each batch is read as its page reads it, without asking
         its source; while the settings of a batch are refused, its rows are
-        as :meth:`~ess.apps.batch.Batch.results` gives them. Each source is
-        asked once for its rows now. A batch that cannot be made, such as one
-        whose table cannot be read, has its reason in ``failed``, and then
-        ``outside`` is empty, since the rows of that batch are not known; so
-        is a source that raises left out of it.
+        as :meth:`~ess.apps.batch.Batch.results` gives them. A batch that
+        cannot be made, such as one whose table cannot be read, has its
+        reason in ``failed``.
         """
         with self.lock:
             manager = self.manager
             rows: dict[str, dict[str, int]] = {}
             failed: dict[str, str] = {}
-            held: set[str] = set()  # the keys of the tables of every batch
             for label in manager.headers():
                 try:
                     batch = manager.batch(label)
@@ -473,12 +475,7 @@ class Pages:
                 refused = self.refusals(label, states)
                 statuses = page_statuses(states, batch.columns, refused)
                 rows[label] = dict(Counter(statuses.values()))
-                held |= set(states)
-            outside = {}
-            for name in [] if failed else manager.sources:
-                with suppress(Exception):  # a source is code of the application
-                    outside[name] = len(set(manager.rows_of(name).index) - held)
-            return BatchCounts(rows=rows, failed=failed, outside=outside)
+            return BatchCounts(rows=rows, failed=failed)
 
 
 def _spec_choice(

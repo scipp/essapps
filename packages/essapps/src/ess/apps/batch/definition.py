@@ -5,9 +5,7 @@ Where the definition of batches is kept: what a person makes of them, so that a
 batch made again, after a restart or in another process, has it.
 
 The definition is these tables, each with one writer. The settings and the
-rows of a batch that the manager makes are written by the manager once, when
-it makes the batch, before any ``Batch`` of it exists, and by the ``Batch``
-from then on:
+rows of a batch are written by its ``Batch``, which the manager makes:
 
     corrections   metadata of a file set by hand, by file     CorrectedFiles
     header        title, description                          the manager
@@ -141,7 +139,9 @@ class FolderDefinitions:
     its folder. A name that is too long for a file name so written raises
     ``ValueError``. A file is written whole: to a temporary file next to it,
     which then replaces it, so a reader never sees half of one. A temporary
-    file left by a write that was cut off is removed when the file is read.
+    file left by a write that was cut off stays, a few bytes, until its table
+    is deleted: a reader cannot tell it from that of a write of another
+    process that runs.
     """
 
     def __init__(self, directory: Path) -> None:
@@ -167,8 +167,6 @@ class FolderDefinitions:
 
     def load[T](self, key: Key, read: Callable[[Any], T]) -> T | None:
         path = self.path(key)
-        for left in path.parent.glob(f'.{path.name}.*'):
-            left.unlink(missing_ok=True)
         try:
             content = path.read_bytes()
         except FileNotFoundError:

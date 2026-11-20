@@ -2,9 +2,11 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The batches of a workspace, made, kept, changed and removed by a manager."""
 
+import itertools
 import re
 from collections.abc import Callable
 from contextlib import closing
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -19,7 +21,7 @@ from ess.apps.batch import (
     Header,
     NotKept,
 )
-from ess.apps.batch.definition import header_key, source_key, source_of
+from ess.apps.batch.definition import Key, header_key, source_key, source_of
 from ess.apps.testing import FakeFiles, FakeStore, StagedFunction
 from ess.spec import function_binding
 
@@ -33,6 +35,7 @@ from .toys import (
     Measure,
     Refusing,
     edit,
+    from_pairs,
     rows,
 )
 
@@ -295,7 +298,7 @@ def test_a_batch_removed_is_gone_with_its_definitions_and_its_records_stay(
     sample: Measure,
 ) -> None:
     sample(1, 'water')
-    label = manager.create('plain', title='Morning', rows=rows(client), source='pairs')
+    label = from_pairs(manager, 'plain', title='Morning')
     batch = manager.batch(label)
     edit(batch, '1', thickness=2.0)
     client.wait(batch.reduce(['1']))
@@ -447,25 +450,87 @@ def test_a_batch_made_without_rows_takes_the_rows_put(
 def made(manager: BatchManager, sample: Measure) -> BatchManager:
     """
     ``manager`` with runs 1 to 4 measured, run 5 without its transmission
-    run, and the batch ``a`` of the rows from run 3 on, and a row ``mine``.
+    run, and the batch ``a`` of the rows from run 3 on, and a row ``mine``
+    added by hand.
     """
     for run, name in enumerate(['water', 'sds', 'dmso', 'd2o'], start=1):
         sample(run, name)
     sample(5, 'oil', partner=False)
-    given = manager.rows_of('pairs')
-    table = given[given.run.isin([3, 4])].copy()
-    table.loc['mine', 'sample'] = 'run:1'
-    manager.create(PLAIN.name, title='A', rows=table, source='pairs', label='a')
+    manager.create(
+        PLAIN.name,
+        title='A',
+        source='pairs',
+        choose=lambda given: given[given.run >= 3],
+        label='a',
+    )
+    edit(manager.batch('a'), 'mine', sample='run:1')
     return manager
 
 
-def test_a_batch_made_from_a_source_considers_its_keys_and_those_of_its_rows(
+def test_a_batch_made_from_a_source_takes_and_considers_its_filled_rows(
     made: BatchManager, definitions: FolderDefinitions
 ) -> None:
     kept = definitions.load(source_key('a'), source_of)
 
-    assert kept.source == 'pairs'
-    assert kept.considered == {'1', '2', '3', '4', '5', 'mine'}
+    assert list(made.batch('a').frame().index) == ['3', '4', 'mine']
+    assert made.source('a') == 'pairs'
+    assert kept.considered == {'1', '2', '3', '4'}  # not 5, which waits
+
+
+def test_a_row_that_waits_when_a_batch_is_made_is_added_by_follow_once_filled(
+    manager: BatchManager, fake: FakeFiles, sample: Measure
+) -> None:
+    sample(1, 'water')
+    sample(2, 'oil', partner=False)
+    manager.create('plain', title='A', source='pairs', label='a')
+    manager.follow('a')
+    fake.measure(1002, 1.0, role='transmission', sample='oil')
+
+    manager.step()
+
+    assert list(manager.batch('a').frame().index) == ['1', '2']
+
+
+def test_a_batch_made_without_a_source_has_none(manager: BatchManager) -> None:
+    manager.create('plain', title='A', label='a')
+
+    assert manager.source('a') is None
+    with pytest.raises(KeyError):
+        manager.source('b')
+
+
+@pytest.mark.parametrize(
+    ('options', 'said'),
+    [
+        (
+            {'source': 'pairs', 'rows': pd.DataFrame()},
+            'a batch made from a source takes its rows from it',
+        ),
+        ({'choose': lambda given: given}, 'choose picks rows of a source'),
+        (
+            {'source': 'pairs', 'choose': lambda given: given.rename({'1': '9'})},
+            r"choose gives rows \['9'\] that the source does not",
+        ),
+        (
+            {'source': 'pairs', 'choose': lambda given: given.assign(thickness=1.0)},
+            r"choose gives columns \['thickness'\] that the source does not",
+        ),
+    ],
+    ids=['rows and source', 'choose without source', 'other row', 'other column'],
+)
+def test_rows_of_a_source_that_cannot_be_chosen_are_refused_and_nothing_is_kept(
+    manager: BatchManager,
+    definitions: FolderDefinitions,
+    sample: Measure,
+    options: dict[str, Any],
+    said: str,
+) -> None:
+    sample(1, 'water')
+
+    with pytest.raises(ValueError, match=said):
+        manager.create('plain', title='A', **options)
+    assert manager.headers() == {}
+    assert definitions.labels() == []
 
 
 def test_the_rows_offered_are_those_of_the_source_that_the_table_lacks(
@@ -480,7 +545,7 @@ def test_the_rows_offered_are_those_of_the_source_that_the_table_lacks(
         '1': False,
         '2': False,
         '4': False,
-        '5': False,
+        '5': True,
     }
     assert list(offered.columns) == [*made.rows_of('pairs').columns, 'waits']
 
@@ -489,7 +554,7 @@ def test_a_row_of_the_source_that_waits_is_offered_as_waiting(
     manager: BatchManager, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    manager.create('plain', title='A', rows=rows(client), source='pairs', label='a')
+    manager.create('plain', title='A', source='pairs', label='a')
     sample(2, 'oil', partner=False)
 
     assert manager.offered('a')['waits'].to_dict() == {'2': True}
@@ -503,7 +568,7 @@ def test_rows_taken_are_put_as_the_source_makes_them_and_considered(
     definitions: FolderDefinitions,
 ) -> None:
     sample(1, 'water')
-    manager.create('plain', title='A', rows=rows(client), source='pairs', label='a')
+    manager.create('plain', title='A', source='pairs', label='a')
     manager.follow('a')
     sample(2, 'oil', partner=False)
 
@@ -627,11 +692,11 @@ def test_which_batch_follows_stays_if_the_definitions_refuse_a_change(
     assert two.following == 'a'
 
 
-def test_a_removal_that_the_definitions_refuse_leaves_the_batch_following(
+def test_a_removal_whose_end_of_follow_is_refused_changes_nothing(
     two: BatchManager, refusing: Refusing
 ) -> None:
     two.follow('a')
-    refusing.part = 'header'
+    refusing.part = 'following'
 
     with pytest.raises(NotKept):
         two.remove('a')
@@ -640,18 +705,109 @@ def test_a_removal_that_the_definitions_refuse_leaves_the_batch_following(
     assert two.following == 'a'
 
 
-def test_a_removal_whose_end_of_follow_is_refused_leaves_none_following(
+def test_a_removal_whose_header_is_refused_leaves_the_batch_not_following(
     two: BatchManager,
     refusing: Refusing,
     client: Client,
     definitions: FolderDefinitions,
 ) -> None:
     two.follow('a')
-    refusing.part = 'following'
+    refusing.part = 'header'
 
     with pytest.raises(NotKept):
         two.remove('a')
 
-    assert list(two.headers()) == ['b']
+    assert list(two.headers()) == ['a', 'b']
     assert two.following is None
     assert _again(client, definitions).following is None
+
+
+# A create or remove cut off
+
+
+class Stopping:
+    """
+    Definitions that refuse the ``at``-th write, a save or a delete, and every
+    write after it, as a process that stops there; ``writes`` counts them.
+    """
+
+    def __init__(self, definitions: FolderDefinitions, at: int) -> None:
+        self.at = at
+        self.writes = 0
+        self._definitions = definitions
+
+    def load[T](self, key: Key, read: Callable[[Any], T]) -> T | None:
+        return self._definitions.load(key, read)
+
+    def save(self, key: Key, data: Any) -> None:
+        self._write()
+        self._definitions.save(key, data)
+
+    def delete(self, key: Key) -> None:
+        self._write()
+        self._definitions.delete(key)
+
+    def labels(self) -> list[str]:
+        return self._definitions.labels()
+
+    def _write(self) -> None:
+        self.writes += 1
+        if self.writes >= self.at:
+            raise NotKept('stopped')
+
+
+def _create(manager: BatchManager) -> None:
+    """Make the batch ``a`` with every table: settings, rows and source."""
+    manager.create(
+        'plain', title='A', source='pairs', settings={'thickness': 2.0}, label='a'
+    )
+
+
+def _made_again(client: Client, definitions: FolderDefinitions) -> None:
+    """
+    As after a restart: remove what is kept of ``a``, if anything, then make
+    it again; it is then the one batch, and none follows.
+    """
+    again = _again(client, definitions)
+    if 'a' in definitions.labels():
+        again.remove('a')
+    _create(again)
+    assert list(again.headers()) == ['a']
+    assert _again(client, definitions).following is None
+
+
+def test_a_create_cut_off_at_any_write_leaves_what_remove_removes(
+    client: Client, sample: Measure, tmp_path: Path
+) -> None:
+    sample(1, 'water')
+    for at in itertools.count(1):
+        definitions = FolderDefinitions(tmp_path / str(at))
+        stopping = Stopping(definitions, at)
+        manager = BatchManager(client, sources=SOURCES, definitions=stopping)
+        try:
+            _create(manager)
+        except NotKept:
+            assert _again(client, definitions).headers() == {}
+            _made_again(client, definitions)
+        else:
+            break
+    assert at > 4  # settings, rows, settings, source, header
+
+
+def test_a_remove_cut_off_at_any_write_leaves_what_remove_removes(
+    client: Client, sample: Measure, tmp_path: Path
+) -> None:
+    sample(1, 'water')
+    for at in itertools.count(1):
+        definitions = FolderDefinitions(tmp_path / str(at))
+        _create(_again(client, definitions))
+        _again(client, definitions).follow('a')
+        stopping = Stopping(definitions, at)
+        manager = BatchManager(client, sources=SOURCES, definitions=stopping)
+        try:
+            manager.remove('a')
+        except NotKept:
+            _made_again(client, definitions)
+        else:
+            break
+    assert at > 4  # following, header, source, rows, settings

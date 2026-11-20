@@ -403,22 +403,20 @@ def test_a_table_given_to_the_command_takes_the_place_of_an_edit_of_an_app(
         assert batch.frame().loc['row-1', 'sample'] == 'run:2'
 
 
-def test_a_table_given_with_a_source_is_the_table_of_a_batch_that_keeps_the_source(
-    command: list[str], cli_template: Path, folder: Path
+def test_a_table_given_with_a_source_is_refused(
+    command: list[str],
+    cli_template: Path,
+    folder: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    runs = folder / 'runs.csv'
-    assert main([*command, 'rows', 'cli_toys_batch_files:PAIRS', '-o', str(runs)]) == 0
-    runs.write_text(runs.read_text().replace('3,path:run-3.json', '3,path:run-1.json'))
+    runs = write_rows(folder, ['1'])
     source = ['-s', 'cli_toys_batch_files:SOURCES', '--source', 'pairs']
 
-    assert (
+    with pytest.raises(SystemExit):
         main([*command, 'reduce', *source, str(cli_template), str(runs), '-l', 'x'])
-        == 0
-    )
 
-    with manager(folder) as batches:
-        assert batches.batch('x').frame().loc['3', 'sample'] == 'path:run-1.json'
-        assert batches.offered('x').empty
+    assert 'give a table or --source, not both' in capsys.readouterr().err
+    assert FolderDefinitions(folder).labels() == []
 
 
 # The command and the batches of a manager on one folder
@@ -440,8 +438,7 @@ SOURCES = ['-s', 'cli_toys_batch_files:SOURCES']
 def test_reduce_on_a_new_label_writes_a_header_so_the_manager_lists_it(
     command: list[str], cli_template: Path, folder: Path
 ) -> None:
-    runs = write_rows(folder, ['1'])
-    reduce = [str(cli_template), str(runs), '-l', 'x', '--source', 'pairs']
+    reduce = [str(cli_template), '-l', 'x', '--source', 'pairs']
 
     assert main([*command, 'reduce', *SOURCES, *reduce]) == 0
 
@@ -489,9 +486,12 @@ def test_reduce_refuses_a_label_that_has_definitions_but_no_batch(
 
 def later(batches: BatchManager, **options: object) -> str:
     """A batch of the samples 2 and 3 of the source, which it keeps."""
-    rows = batches.rows_of('pairs').loc[['2', '3']]
     return batches.create(
-        'cli-toy', title='Later', rows=rows, source='pairs', **options
+        'cli-toy',
+        title='Later',
+        source='pairs',
+        choose=lambda given: given.loc[['2', '3']],
+        **options,
     )
 
 
@@ -644,8 +644,7 @@ def test_a_template_refused_on_a_new_label_leaves_no_batch(
 def test_a_source_that_raises_is_an_error_and_leaves_no_batch(
     command: list[str], cli_template: Path, folder: Path
 ) -> None:
-    runs = write_rows(folder, ['1'])
-    reduce = [str(cli_template), str(runs), '-l', 'x', '--source', 'broken']
+    reduce = [str(cli_template), '-l', 'x', '--source', 'broken']
 
     with pytest.raises(KeyError, match='nope'):
         main([*command, 'reduce', *SOURCES, *reduce])
@@ -689,8 +688,9 @@ def test_reduce_on_a_batch_without_rows_writes_a_table_of_its_columns(
     command: list[str], folder: Path
 ) -> None:
     with manager(folder) as batches:
-        rows = batches.rows_of('pairs').iloc[:0]
-        label = batches.create('cli-toy', title='None', rows=rows, source='pairs')
+        label = batches.create(
+            'cli-toy', title='None', source='pairs', choose=lambda given: given[:0]
+        )
     out = folder / 'done.csv'
 
     code = main([*command, 'reduce', '-l', label, '-o', str(out)])

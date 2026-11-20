@@ -12,17 +12,19 @@ each batch. A batch is kept as these tables of the definitions
 (:mod:`.definition`), each with one writer::
 
     header      title, description                      BatchManager
-    settings    the template                            the Batch; the first by
-    rows        the table                               the manager
+    settings    the template                            the Batch
+    rows        the table                               the Batch
     source      the source and the keys considered      BatchManager; only for
                                                         a batch made from a source
 
 so a manager made again, after a restart, makes the same ``Batch`` of a label
 from them, the specs that the workspace binds, and the specs that run staged.
-Making a batch writes its settings, rows and source, then its header: a label
-without a header is not a batch. The ``Batch`` of a label is made at the first
-call of :meth:`BatchManager.batch`, and writes the settings and the rows from
-then on.
+Making a batch makes its ``Batch``, which writes the settings and the rows;
+then the manager writes the source, then the header: a label without a header
+is not a batch. Removing a batch deletes the header first. So a ``create`` or
+a ``remove`` cut off at any write leaves a label with tables and no header,
+which :meth:`BatchManager.remove` removes. After a restart, the ``Batch`` of a
+label is made at the first call of :meth:`BatchManager.batch`.
 
 The manager writes one more table, ``following``: the label of the batch that
 follows, or none. :meth:`BatchManager.step` is one step of Follow on it::
@@ -30,7 +32,8 @@ follows, or none. :meth:`BatchManager.step` is one step of Follow on it::
     made = source_of(label)                                  # source.json
     loop = Automatic(batch(label), sources[made.source], considered=made.considered)
     loop.step()                                              # put, then reduce
-    source.json = FromSource(made.source, loop.considered)   # after the table
+    source.json = FromSource(made.source, loop.considered)   # after the table,
+                                                             # also if it raised
 
 Whoever serves owns the timer that calls it, and the lock. The manager has
 neither.
@@ -40,7 +43,7 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from contextlib import suppress
 from typing import Any
 
@@ -49,13 +52,13 @@ import pandas as pd
 from ess.spec import WorkflowSpec
 
 from ..client import Client
-from ..errors import SubmitError
-from .auto import Automatic, added
+from .auto import Automatic, SourceError, added
 from .definition import (
     FOLLOWING,
     DefinitionStore,
     FromSource,
     Header,
+    Key,
     NotKept,
     following_data,
     following_of,
@@ -67,12 +70,11 @@ from .definition import (
     source_data,
     source_key,
     source_of,
-    template_data,
     template_of,
 )
 from .reduction import Batch
-from .source import Source, rows_of
-from .table import data_of, frame_of, typed
+from .source import Source, filled, rows_of
+from .table import frame_of, typed
 
 
 def fits(spec: WorkflowSpec[Any, Any], source: Source | None) -> bool:
@@ -96,6 +98,24 @@ def check_label(label: str) -> None:
             f'{label!r}: a label is letters, digits, "_", "." and "-", '
             'and starts with a letter, a digit or "_"'
         )
+
+
+def _parts(label: str) -> tuple[Key, ...]:
+    """The tables of ``label`` but its header, in the order they are deleted."""
+    return source_key(label), rows_key(label), settings_key(label)
+
+
+def _check_chosen(chosen: pd.DataFrame, arrived: pd.DataFrame) -> None:
+    """
+    Raise ``ValueError`` unless ``chosen`` holds rows of ``arrived``, with
+    its columns or fewer.
+    """
+    if not isinstance(chosen, pd.DataFrame):
+        raise ValueError(f'choose gives a {type(chosen).__name__}, not a frame')
+    if rows := [k for k in chosen.index if k not in arrived.index]:
+        raise ValueError(f'choose gives rows {rows} that the source does not')
+    if columns := [c for c in chosen.columns if c not in arrived.columns]:
+        raise ValueError(f'choose gives columns {columns} that the source does not')
 
 
 class BatchManager:
@@ -195,6 +215,7 @@ class BatchManager:
         title: str,
         rows: pd.DataFrame | None = None,
         source: str | None = None,
+        choose: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
         description: str = '',
         settings: Mapping[str, Any] | None = None,
         label: str | None = None,
@@ -204,6 +225,17 @@ class BatchManager:
         fails. The header is written last, so a label without a header is no
         batch.
 
+        With a source, the source is listed once, and the rows that are
+        filled (:func:`~.source.filled`) are taken and considered::
+
+            given = rows_of(client, source)
+            arrived = given[filled]          # a value in each of source.fills
+            table = arrived if choose is None else choose(arrived)
+            considered = arrived.index       # the rows taken and those left out
+
+        A row that waits is neither taken nor considered: Follow adds it once
+        it is filled.
+
         Parameters
         ----------
         spec:
@@ -212,15 +244,17 @@ class BatchManager:
         title:
             What the batch is called.
         rows:
-            The first table, as :meth:`~.reduction.Batch.put` takes it; its
-            parameter columns are the blanks of the template. A table without
-            rows or columns if not given.
+            The first table of a batch without a source, as
+            :meth:`~.reduction.Batch.put` takes it; its parameter columns are
+            the blanks of the template. A table without rows or columns if
+            not given.
         source:
-            The name of the registered source that the rows were made from,
-            such as with :meth:`rows_of`. The batch keeps it, so that it can
-            follow, and considers every key that the source gives now and
-            every key of ``rows``: Follow adds only the rows of the source
-            that arrive later.
+            The name of a registered source to take the rows from. The batch
+            keeps it, so that it can follow.
+        choose:
+            Picks the rows to take from those of the source that are filled,
+            such as ``lambda given: given[given.run >= 60339]``: some of its
+            rows, with its columns or fewer. All if not given.
         description:
             What a person says of the batch.
         settings:
@@ -235,10 +269,17 @@ class BatchManager:
         ------
         ValueError
             If ``title`` is empty or only spaces; if ``label`` is not one that
-            :func:`check_label` takes, or has definitions or records; if no
-            source ``source`` is registered; if the workspace binds no spec
-            ``spec``; or if ``rows`` are refused, as ``put`` refuses them.
+            :func:`check_label` takes, or has definitions or records; if
+            ``rows`` and ``source`` are both given, or ``choose`` without
+            ``source``; if no source ``source`` is registered; if ``choose``
+            gives a row or a column that the source did not; if the workspace
+            binds no spec ``spec``; or if the rows are refused, as ``put``
+            refuses them.
         """
+        if rows is not None and source is not None:
+            raise ValueError('a batch made from a source takes its rows from it')
+        if choose is not None and source is None:
+            raise ValueError('choose picks rows of a source, and none is given')
         if label is None:
             stamp = time.strftime('%Y%m%d-%H%M%S')
             label, n = stamp, 1
@@ -250,32 +291,33 @@ class BatchManager:
             if self._taken(label):
                 raise ValueError(f'{label}: the label has definitions or records')
         header = Header(title, description)
+        bound = self._bound(spec)
         if settings is None:
             settings = self._settings.get(spec, {})
-        first = Batch(
-            self.client, self._bound(spec), label=label, settings=settings, rows=rows
-        )
-        table = first.frame()
-        writes = {
-            settings_key(label): template_data(first.template()),
-            rows_key(label): data_of(table),
-        }
+        made = None
         if source is not None:
-            given = self.rows_of(source)
-            made = FromSource(source, frozenset(given.index) | frozenset(table.index))
-            writes[source_key(label)] = source_data(made)
-        writes[header_key(label)] = header_data(header)  # last: then it is a batch
-        written = []
+            found = self._source(source)
+            given = rows_of(self.client, found)
+            arrived = given[filled(given, found.fills)]
+            rows = arrived if choose is None else choose(arrived)
+            _check_chosen(rows, arrived)
+            made = FromSource(source, frozenset(arrived.index))
+        # Refused here, before anything is written.
+        table = typed(pd.DataFrame() if rows is None else rows, bound.params)
+        batch = self._kept(label, bound, {}, None)
         try:
-            for key, data in writes.items():
-                self._definitions.save(key, data)
-                written.append(key)
+            batch.settings = settings
+            batch.put(table)
+            if made is not None:
+                self._definitions.save(source_key(label), source_data(made))
+            self._definitions.save(header_key(label), header_data(header))  # last
         except NotKept:
             with suppress(NotKept):  # the first error is what to say
-                for key in written:
+                for key in _parts(label):
                     self._definitions.delete(key)
             raise
         self._headers[label] = header
+        self._batches[label] = batch
         return label
 
     def _source(self, name: str) -> Source:
@@ -300,17 +342,33 @@ class BatchManager:
             self.client.records(label=label)
         )
 
+    def _from(self, label: str) -> FromSource | None:
+        """
+        What the batch of ``label`` keeps of its source, ``None`` if it was
+        not made from one. Raises ``KeyError`` if no batch has the label.
+        """
+        if label not in self._headers:
+            raise KeyError(label)
+        return self._definitions.load(source_key(label), source_of)
+
     def _made(self, label: str) -> FromSource:
         """
         What the batch of ``label`` keeps of its source. Raises ``KeyError``
         if no batch has the label, and ``ValueError`` if it was not made from
         a source.
         """
-        if label not in self._headers:
-            raise KeyError(label)
-        if (made := self._definitions.load(source_key(label), source_of)) is None:
+        if (made := self._from(label)) is None:
             raise ValueError(f'{label} was not made from a source of rows')
         return made
+
+    def source(self, label: str) -> str | None:
+        """
+        The name of the source that the batch of ``label`` was made from,
+        ``None`` if it was made without one and cannot follow. Raises
+        ``KeyError`` if no batch has the label.
+        """
+        made = self._from(label)
+        return None if made is None else made.source
 
     def headers(self) -> dict[str, Header]:
         """The header of each batch, by label, sorted by label."""
@@ -340,18 +398,28 @@ class BatchManager:
         rows = self._definitions.load(
             rows_key(label), lambda data: typed(frame_of(data), spec.params)
         )
-        batch = Batch(
+        batch = self._kept(label, spec, template.params, rows)
+        self._batches[label] = batch
+        return batch
+
+    def _kept(
+        self,
+        label: str,
+        spec: WorkflowSpec[Any, Any],
+        settings: Mapping[str, Any],
+        rows: pd.DataFrame | None,
+    ) -> Batch:
+        """The ``Batch`` of ``label``, which writes to the definitions."""
+        return Batch(
             self.client,
             spec,
             label=label,
-            settings=template.params,
+            settings=settings,
             rows=rows,
             staged=spec.name in self._staged,
             persist=True,
             definitions=self._definitions,
         )
-        self._batches[label] = batch
-        return batch
 
     def change(
         self, label: str, *, title: str | None = None, description: str | None = None
@@ -383,8 +451,10 @@ class BatchManager:
         person removes would come back.
 
         Raises ``ValueError`` if the source of the batch is not registered,
-        or if the batch refuses a row that the source makes, naming the
-        source, the row and the column; and what the step raises otherwise.
+        if the source raises ``ValueError``, or if the batch refuses a row
+        that the source makes, naming the source, the row and the column;
+        and what the step raises otherwise, also if the definitions then
+        refuse the keys considered.
         """
         if (label := self._following) is None:
             return None
@@ -394,12 +464,13 @@ class BatchManager:
         )
         try:
             loop.step()
-        except SubmitError:
+        except BaseException as error:
+            with suppress(NotKept):  # the exception of the step is what to say
+                self._consider(label, made, loop.considered)
+            if isinstance(error, SourceError):  # a defect of the code of the source
+                raise ValueError(f'the source {made.source}: {error}') from error
             raise
-        except ValueError as error:  # made by the source: a defect of its code
-            raise ValueError(f'the source {made.source}: {error}') from error
-        finally:
-            self._consider(label, made, loop.considered)
+        self._consider(label, made, loop.considered)
         return loop
 
     def offered(self, label: str) -> pd.DataFrame:
@@ -408,7 +479,9 @@ class BatchManager:
         table lacks, with the columns of the source and a column ``waits``:
         whether the row waits, so that Follow adds it once it is filled. A row
         that does not wait was left out when the batch was made, or removed
-        from it. A column of the source named ``waits`` is replaced by it.
+        from it, and is considered, so Follow does not add it; or it was
+        filled while the batch did not follow, and Follow adds it at its next
+        step. A column of the source named ``waits`` is replaced by it.
 
         Raises ``KeyError`` if no batch has the label, and ``ValueError`` if
         it was not made from a source, or its source is not registered.
@@ -456,21 +529,23 @@ class BatchManager:
         Forget the batch of ``label`` and remove its definitions; its records
         stay, and those running keep running. If the batch follows, none
         follows from then on. A ``Batch`` of the label handed out before must
-        not be used after: it would write its definitions again. Raises
-        ``KeyError`` if no batch has the label.
+        not be used after: it would write its definitions again. A label that
+        keeps tables but no header, as a ``create`` or ``remove`` cut off
+        leaves it, is removed too, and can then be made again. Raises
+        ``KeyError`` if no batch has the label and no table is kept of it.
 
-        The header is deleted first, so a batch is never listed half removed.
+        If the batch follows, ``following`` is written first, so that it
+        never names a label without a header. Then the header is deleted, so
+        a batch is never listed half removed.
         """
-        if label not in self._headers:
+        if label not in self._headers and label not in self._definitions.labels():
             raise KeyError(label)
-        self._definitions.delete(header_key(label))
-        del self._headers[label]
-        # A kept label without a header counts as none, so if this write is
-        # refused, none follows after a restart either.
         if label == self._following:
-            self._following = None
             self._definitions.save(FOLLOWING, following_data(None))
+            self._following = None
+        self._definitions.delete(header_key(label))
+        self._headers.pop(label, None)
         if (batch := self._batches.pop(label, None)) is not None:
             batch.close()
-        for key in (source_key(label), rows_key(label), settings_key(label)):
+        for key in _parts(label):
             self._definitions.delete(key)
