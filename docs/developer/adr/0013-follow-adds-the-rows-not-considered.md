@@ -85,8 +85,7 @@ A source says which columns it fills (`Source.fills`, such as `sample` and `samp
 
 ```python
 manager.create('loki-iofq', title='Afternoon', source='sample-runs',
-               choose=lambda given: given[given.run >= 60339].assign(thickness=pd.NA),
-               follow=True)
+               choose=Range(first='60339'), columns=['thickness'], follow=True)
 
 # in create:
 given = rows_of(client, source)                  # one listing
@@ -96,7 +95,8 @@ considered = arrived.index                       # the rows taken and the rows l
 ```
 
 - A row that waits when the batch is made is neither taken nor considered. It keeps waiting, and Follow adds it once it is filled, if the batch follows.
-- `choose` gives rows of `arrived`, with any columns, such as an empty column for the thickness; `create` refuses a key that `arrived` lacks. Without `choose`, every filled row is taken as the source gives it.
+- A person picks a range of `arrived`: `Range(first, last, later)`, a value that `create` calls as `choose` and reads, each end open if not given, or no row now with `later`. `columns` adds an empty column for each parameter named, such as the thickness.
+- In code, `choose` may be any function that gives rows of `arrived`, with any columns, such as `lambda given: given[given.run >= 60339]`; `create` refuses a key that `arrived` lacks. Without `choose`, every filled row is taken as the source gives it.
 - A batch made from a source takes no `rows`: its rows come from the one listing, so no file listed in between is considered without being seen.
 
 No scope is kept: "from run 60339 on" is the choice of rows at making, and what arrives later is what Follow adds.
@@ -117,7 +117,7 @@ No row moves from one batch to another. A person who wants the runs from 60400 o
 
 ```python
 label = manager.create('loki-iofq', title='Evening', source='sample-runs',
-                       choose=lambda given: given[given.run >= 60400],
+                       choose=Range(first='60400'),
                        settings=manager.batch('afternoon').settings,
                        follow=True)          # the batch 'afternoon' stops following
 ```
@@ -128,7 +128,7 @@ A batch of only the rows that arrive later takes no row at making. Every row fil
 
 ```python
 manager.create('loki-iofq', title='Night', source='sample-runs',
-               choose=lambda arrived: arrived.iloc[:0], follow=True)
+               choose=Range(later=True), follow=True)
 ```
 
 ### A batch follows from the time it is made, until it is stopped
@@ -143,7 +143,7 @@ manager.stop()                                           # none follows; that ba
 
 - At most one batch follows, as in ADR 0011: the manager keeps its label in `following.json`, a restart resumes, and removing that batch ends Follow. Since `considered` is kept, the first step after a restart adds the rows that arrived in between.
 - A batch made without a source cannot follow; `create` refuses `follow=True` without a source.
-- A batch that follows has no last row. With one, the rows filled between the last row chosen and the making would be considered and never added, and the rows that arrive later would be. `choose` is code, so the manager cannot see a last row; the page leaves the end of the range open while Follow is ticked, and refuses a last row with Follow.
+- A batch that follows has no last row. With one, the rows filled between the last row chosen and the making would be considered and never added, and the rows that arrive later would be. The range is a value, `Range(first, last, later)`, which the manager reads: `create(follow=True)` with a `Range` that has a `last` is refused there, for the page, the command and code alike. The page leaves the end of the range open while Follow is ticked, to say so before a person sends the form.
 - Nothing is kept that says a batch has followed. A batch is stopped when another label, or none, is in `following.json`, and no call writes its label there again.
 - So the next batch is one form, "New batch" with Follow, and a step never takes a row that another batch took since.
 - On the page, Follow is a state with one action, "Stop following", not a switch.

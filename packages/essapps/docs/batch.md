@@ -129,11 +129,11 @@ manager.rows_of('sample-runs')        # what the source makes now
 # ...
 # 60340  60340  sample A  run:60340  run:60306
 label = manager.create('loki-iofq', title='Afternoon', source='sample-runs',
-                       choose=lambda given: given[given.run >= 60339], label='afternoon',
+                       choose=Range(first='60339'), label='afternoon',
                        follow=True)
 ```
 
-`create` lists the source once and gives `choose` the rows that are filled; `choose` picks some and may add columns.
+`create` lists the source once and gives `choose` the rows that are filled; a `Range` picks those from 60339 on. In code, `choose` may be any function that picks rows and adds columns.
 On disk: `header.json`, `settings.json`, `rows.json` with rows 60339 and 60340, `source.json` with `considered` = 60337 to 60340, and `following.json` with `afternoon`.
 Rows 60337 and 60338 are considered and not in the table: they were left out when the batch was made, so Follow never adds them.
 A row that waits when the batch is made, such as a sample run whose transmission run is not listed yet, is neither taken nor considered: Follow adds it once it is filled.
@@ -199,7 +199,7 @@ They make it from the source, with the settings of the afternoon, and with Follo
 
 ```python
 label = manager.create('loki-iofq', title='Evening', source='sample-runs',
-                       choose=lambda given: given[given.run >= 60400],
+                       choose=Range(first='60400'),
                        settings=manager.batch('afternoon').settings, label='evening',
                        follow=True)  # 'afternoon' stops following, and cannot follow again
 ```

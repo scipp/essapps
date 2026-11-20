@@ -169,7 +169,7 @@ from .models import (
     State,
     Value,
 )
-from .refusals import Problem, kept, say, why
+from .refusals import Problem, kept, refused, say, why
 
 if TYPE_CHECKING:
     from .pages import Pages
@@ -819,15 +819,12 @@ class Page:
     def offered(self) -> SourceRows:
         """
         The rows of the source that the table lacks, those that wait marked
-        (:meth:`~ess.apps.batch.BatchManager.offered`), for :meth:`take`.
+        (:meth:`~ess.apps.batch.BatchManager.offered`), for :meth:`take`;
+        what the source refuses is a :class:`~.refusals.Problem`
+        (:func:`~.refusals.refused`).
         """
-        manager = self.pages.manager
-        try:
-            given = manager.offered(self.label)
-        except Exception as error:  # a source is code of the application
-            raise Problem(
-                f'The rows of the source cannot be listed: {why(error)}.'
-            ) from None
+        with refused('The rows of the source cannot be listed'):
+            given = self.pages.manager.offered(self.label)
         return listed(given, self.batch.fills)
 
     @_action
@@ -835,15 +832,12 @@ class Page:
         """
         Add the rows of ``keys`` as the source makes them now, so that Follow
         does not add them again once removed
-        (:meth:`~ess.apps.batch.BatchManager.take`). What the manager refuses
-        (``ValueError``), also what the source refuses, is a
-        :class:`~.refusals.Problem`; anything else that the source raises is a
-        defect of its code, and not said.
+        (:meth:`~ess.apps.batch.BatchManager.take`). What the manager or the
+        source refuses is a :class:`~.refusals.Problem`
+        (:func:`~.refusals.refused`).
         """
-        try:
+        with refused('No row was added'):
             self.pages.manager.take(self.label, keys)
-        except ValueError as error:
-            raise Problem(f'No row was added: {why(error)}.') from None
         # The rows may name files that the listing lacks.
         self._list_again()
         return f'Added {_rows(len(keys))}.'

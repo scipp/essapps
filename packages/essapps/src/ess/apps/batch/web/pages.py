@@ -94,7 +94,7 @@ from .models import (
     SpecChoice,
 )
 from .page import Draw, Page, listed, read, read_file
-from .refusals import Missing, Problem, kept, why
+from .refusals import Missing, Problem, kept, refused, why
 
 
 class SafeListing(Listing):
@@ -522,15 +522,13 @@ class Pages:
         row marked as taken, left out, or waiting, for a new batch of the
         :class:`~ess.apps.batch.Range` of ``first``, ``last`` and ``later``
         (:meth:`~ess.apps.batch.BatchManager.marked`). Raises
-        :class:`~.refusals.Problem` if no source is registered so, with what the
-        source raises, or if the range is refused.
+        :class:`~.refusals.Problem` if no source is registered so, if the
+        range is refused, and with what the source refuses
+        (:func:`~.refusals.refused`).
         """
         with self.lock:
-            try:
+            with refused():
                 given = self.manager.marked(source, Range(first, last, later))
-            except Exception as error:  # a source is code of the application
-                said = why(error)
-                raise Problem(f'{said[:1].upper()}{said[1:]}.') from None
             return listed(given, self.manager.sources[source].fills)
 
     def create(self, new: NewBatch, file: tuple[str, bytes] | None = None) -> Made:
@@ -554,47 +552,42 @@ class Pages:
         whose cells are those of the source.
 
         Raises :class:`~.refusals.Problem` with what the file, the manager or
-        the source refuses (``ValueError``), with a label of ``settings_from``
-        that is no batch or a spec that the workspace does not bind
-        (``KeyError``), and if the definitions refuse a write
-        (:func:`~.refusals.kept`). Anything else that the source raises is a
-        defect of its code, and not said.
+        the source refuses, with a label of ``settings_from`` that is no
+        batch or a spec that the workspace does not bind, and if the
+        definitions refuse a write (:func:`~.refusals.refused`).
         """
-        with self.lock, kept():
-            try:
-                manager = self.manager
-                settings = (
-                    None
-                    if new.settings_from is None
-                    else manager.batch(new.settings_from).settings
-                )
-                rows = choose = source = None
-                if file is not None:
-                    name, content = file
-                    params = manager.client.spec_named(new.spec).params
-                    try:
-                        rows = read_file(name, content, lambda p: read_table(p, params))
-                    except ValueError as error:
-                        raise ValueError(f'{name}: {error}') from None
-                elif new.source is not None:
-                    source = new.source
-                    choose = Range(new.first, new.last, new.later)
-                label = manager.create(
-                    new.spec,
-                    title=new.title,
-                    description=new.description,
-                    rows=rows,
-                    source=source,
-                    choose=choose,
-                    columns=new.columns,
-                    settings=settings,
-                    follow=new.follow,
-                )
-                if new.follow:
-                    self._failure = None  # said of the batch that followed before
-            except (ValueError, KeyError) as error:
-                raise Problem(f'The batch was not made: {why(error)}.') from None
-            return Made(label=label)
+        with self.lock, refused('The batch was not made'):
+            manager = self.manager
+            settings = (
+                None
+                if new.settings_from is None
+                else manager.batch(new.settings_from).settings
+            )
+            rows = choose = source = None
+            if file is not None:
+                name, content = file
+                params = manager.client.spec_named(new.spec).params
+                try:
+                    rows = read_file(name, content, lambda p: read_table(p, params))
+                except ValueError as error:
+                    raise ValueError(f'{name}: {error}') from None
+            elif new.source is not None:
+                source = new.source
+                choose = Range(new.first, new.last, new.later)
+            label = manager.create(
+                new.spec,
+                title=new.title,
+                description=new.description,
+                rows=rows,
+                source=source,
+                choose=choose,
+                columns=new.columns,
+                settings=settings,
+                follow=new.follow,
+            )
+            if new.follow:
+                self._failure = None  # said of the batch that followed before
+        return Made(label=label)
 
     def remove(self, label: str) -> Notice:
         """

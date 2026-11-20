@@ -1343,6 +1343,60 @@ def test_rows_the_manager_does_not_take_answer_422_and_none_is_added(
     assert list(batch.frame().index) == ['1', '2', '3']
 
 
+def failing(error: Exception) -> Callable[[Any], Any]:
+    """A ``list`` of the file source that raises ``error``."""
+
+    def listing(selector: Any) -> Any:
+        raise error
+
+    return listing
+
+
+def test_a_file_source_that_cannot_list_is_said_on_each_call_that_runs_a_source(
+    http: TestClient, fake: FakeFiles
+) -> None:
+    fake.list = failing(OSError('the mount went away'))
+
+    answers = [
+        http.get('/api/rows/offered'),
+        http.post('/api/rows/take', json={'keys': ['4']}),
+        http.get('/api/sources/rows', params={'name': 'pairs'}),
+        http.post('/api/batches', json=new_batch()),
+    ]
+
+    assert [(a.status_code, a.json()['message']) for a in answers] == [
+        (422, 'The rows of the source cannot be listed: the mount went away.'),
+        (422, 'No row was added: the mount went away.'),
+        (422, 'The mount went away.'),
+        (422, 'The batch was not made: the mount went away.'),
+    ]
+
+
+def test_a_source_that_raises_other_than_a_refusal_is_a_defect_and_not_said(
+    http: TestClient, fake: FakeFiles
+) -> None:
+    fake.list = failing(TypeError('a bug'))
+
+    with pytest.raises(TypeError, match='a bug'):
+        http.get('/api/rows/offered')
+
+
+def test_a_source_that_no_longer_gives_a_column_of_the_batch_is_said(
+    pages: Pages, label: str, client: Client, definitions: DefinitionStore
+) -> None:
+    sources = {'pairs': toys.SAMPLES}  # its code now fills sample only
+    again = Pages(BatchManager(client, sources=sources, definitions=definitions))
+
+    answer = opened(again, label).get('/api/rows/offered')
+
+    assert (answer.status_code, answer.json()['message']) == (
+        422,
+        'The rows of the source cannot be listed: the source pairs: it no '
+        'longer gives the column transmission that the batch keeps as filled '
+        'by it.',
+    )
+
+
 # Columns and settings
 
 
