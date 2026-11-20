@@ -172,19 +172,20 @@ client.output(records[60339], 'iofq', select={'Q': slice(0, 10)})` },
     code: `client = connect('https://reduce.example', proposal='p1')
 app = App(client)` },
   { level: 11, caller: 'trigger', placement: 'service', planned: SERVICE, title: 'A loop instead of a person',
-    body: `<p>Automatic reduction is one more controller. It scans a batch as files arrive, and reduces each row that holds a new file at its trigger column, persisted. The application's source says which files make a row.</p>
+    body: `<p>Automatic reduction is one more controller. A batch made with <code>follow=True</code> is stepped every few seconds. Each step adds the rows of its source that are new and filled, and reduces the rows that have no result, persisted. The application's source says which files make a row.</p>
            <p>It runs on a server at DMSC, outside the workspace. The workspace never decides what to run.</p>`,
     code: `def angles(files):
     runs = {}
     for f in sorted(files, key=lambda f: f.metadata['run']):
-        runs.setdefault(f.metadata['sample'], []).append(f.ref)
-    return [Row(s, {'runs': refs}) for s, refs in runs.items()]
+        runs.setdefault(f.metadata['sample'], []).append(str(f.ref))
+    return pd.DataFrame({'runs': runs.values()}, index=list(runs))
 
 source = Source(angles, fills=('runs',), selector=Selector(role='sample'))
-batch = Batch(client, STITCH, columns=('runs',),
-              label='reflectivity', source=source, persist=True,
-              settings={'reference': file(run=500)})
-run([Automatic(batch)])` },
+manager = BatchManager(client, sources={'angles': source},
+                       definitions=FolderDefinitions(folder))
+manager.create('stitch', title='reflectivity', source='angles', follow=True,
+               settings={'reference': file(run=500)})
+manager.step()   # called every few seconds` },
   { level: 11, caller: 'all', placement: 'service', planned: SERVICE, title: 'Many controllers, one history',
     body: `<p>All clients of a proposal share its history. A notebook can reference a transmission that the automatic reduction computed, and the app lists that record in its pickers.</p>
            <p>Every client of a workspace reads the same values. The automatic reduction persists its outputs, so they outlive the workspace. A proposal has one workspace. Whether its users share the values in memory, or the service separates or bounds them per user, is open. Provenance follows each reference back to the files.</p>`,
@@ -282,14 +283,14 @@ client.output(r[60339],
     <div class="row">transmission <span class="in">record ▾</span></div>
     <div class="btn">Submit</div></div>`),
   trigger: h('Automatic reduction', 'a batch, stepped', `<pre class="mini">at each step:
-  scan the files
-  reduce each row with
-  a new file</pre>`),
+  add rows for new files
+  reduce rows with
+  no result</pre>`),
 };
 const CALLER_SMALL = [
   h('Jupyter notebook', '', '<pre class="mini">client.submit(IOFQ, ...)</pre>'),
   h('Panel app', '', '<pre class="mini">App(client)</pre>'),
-  h('Automatic reduction', '', '<pre class="mini">run([Automatic(batch)])</pre>'),
+  h('Automatic reduction', '', '<pre class="mini">manager.step()</pre>'),
 ];
 
 function layout(cfg, { box, arrow }) {
@@ -385,7 +386,7 @@ const ABOUT = {
   caller: {
     notebook: 'A notebook submits requests and reads outputs through the client.',
     app: 'The Panel app makes a form per spec from its params schema and submits through the client.',
-    trigger: 'The loop of automatic reduction scans a batch, and submits each row with a new file at its trigger column under the batch\'s label.',
+    trigger: 'The loop of automatic reduction steps a batch that follows: it adds the rows for new files, and submits each row that has no result under the batch\'s label.',
     all: 'Several controllers share one proposal\'s history, each through its own client.',
   },
   placement: {
@@ -404,8 +405,8 @@ const CODE = {
   caller: {
     notebook: `record = client.submit(SPEC, params={...})\nclient.output(record, ...)`,
     app: 'app = App(client)',
-    trigger: 'run([Automatic(batch)])',
-    all: '# each in its own process, with its own client\nclient.submit(SPEC, params={...})\nApp(client)\nrun([Automatic(batch)])',
+    trigger: 'manager.step()   # every few seconds',
+    all: '# each in its own process, with its own client\nclient.submit(SPEC, params={...})\nApp(client)\nmanager.step()   # every few seconds',
   },
 };
 

@@ -4,8 +4,9 @@ The terms *workspace*, *client*, *controller*, *binding*, and *history* are defi
 An *application* is a program that holds a client: a controller, and a *screen* if a person uses it.
 In each deployment of the first release, one Python process holds the application, its client, and the workspace:
 
-```
- screen ──(a)──▶ application ──(b)──▶ workspace ──(c)──▶ binding
+```mermaid
+flowchart LR
+    screen -->|"(a)"| application -->|"(b)"| workspace -->|"(c)"| binding
 ```
 
 | Boundary | Interface | Between two processes? |
@@ -20,32 +21,43 @@ So the client is an interface for Python code, and the HTTP interface of a page 
 
 ## Notebook
 
-```
- VISA machine or laptop, one process
- ┌───────────────────────────────────────────────┐
- │ notebook cells                                │
- │ Client                                        │
- │ Workspace      local(...): history in memory  │
- │                open_folder(directory): folder │
- │   1 thread runs the bindings                  │
- └───────────────────────────────────────────────┘
+What the process holds; an arrow points from a caller to what it calls:
+
+```mermaid
+flowchart TD
+    subgraph process ["VISA machine or laptop, one process"]
+        cells["notebook cells"] --> client["Client"]
+        client --> workspace["Workspace: local(...), history in memory; or open_folder(directory), a folder"]
+        workspace --> thread["1 thread runs the bindings"]
+    end
 ```
 
-One process holds the cells, the client, and the workspace.
 An application of widgets in a notebook is the same case: its controller runs in the notebook's process, and the browser only draws the widgets.
 This deployment is implemented.
 
 ## Technique application with a batch page
 
-```
- browser                     VISA machine, one process per folder
- ┌─────────────┐   HTTP      ┌───────────────────────────────────────────────┐
- │ page:       │ ──────────▶ │ web server     rows, edits, settings (memory) │
- │ selection,  │  the page's │ batch logic, Client                           │
- │ filter, tab │  own API    │ Workspace      open_folder(directory)         │
- └─────────────┘             │   1 thread runs the bindings                  │
-                             └───────────────────────────────────────────────┘
-                               folder: files.csv  log.jsonl  store/<record>/<output>.h5
+What the browser and the process hold, and what the process keeps in the folder; an arrow points from a caller to what it calls or writes:
+
+```mermaid
+flowchart TD
+    subgraph browser
+        page["page: selection, filter, tab"]
+    end
+    subgraph process ["VISA machine, one process per folder"]
+        server["web server: the settings form until Apply"]
+        logic["batch logic"]
+        client["Client"]
+        workspace["Workspace: open_folder(directory); 1 thread runs the bindings"]
+        server --> logic --> client --> workspace
+    end
+    subgraph folder
+        definitions["definitions/"]
+        kept["files.csv, log.jsonl, store/"]
+    end
+    page -->|"HTTP: the page's own API"| server
+    logic --> definitions
+    workspace --> kept
 ```
 
 The page holds only what it shows, and every rule is in the Python process.
@@ -56,17 +68,20 @@ The web page (`ess.apps.batch.web`) is experimental and runs as a demo.
 
 ## Automatic reduction
 
-```
- DMSC server, one process per instrument
- ┌──────────────────────────────────────────────────────────────────┐
- │ loop: scan each batch, reduce the rows with a new file           │
- │ page to configure the reduction                                  │
- │ configuration: per instrument, adjusted per proposal             │
- │ a Client and a Workspace per proposal: history and store on disk │
- │   threads run the bindings                                       │
- └──────────────────────────────────────────────────────────────────┘
-      │ reads new raw files                │ writes result files, creates
-      ▼ through a file source              ▼ derived datasets in SciCat
+What the process holds, and what it reads and writes outside:
+
+```mermaid
+flowchart TD
+    subgraph process ["DMSC server, one process per instrument"]
+        follow["Follow: a step every few seconds on the batch that follows, per proposal"]
+        page["page to configure the reduction"]
+        configuration["configuration: per instrument, adjusted per proposal"]
+        workspaces["a Client and a Workspace per proposal: history and store on disk; threads run the bindings"]
+        follow --> workspaces
+        page --> configuration
+    end
+    process -->|"reads new raw files through a file source"| raw["raw files"]
+    process -->|"writes result files, creates derived datasets"| scicat["SciCat"]
 ```
 
 An instrument has one stream of new files, so it has one automatic reduction.
@@ -74,27 +89,39 @@ The process holds a workspace for each proposal that has new files.
 It runs with no page open, and users find its results through SciCat, not by connecting to it.
 For the first release, the same process may run on a VISA machine ([requirements](../requirements/users.md)).
 A scientist who needs a variant of the automatic reduction runs a batch.
-Of this deployment, only the loop exists (`ess.apps.batch.auto`, [automatic-reduction.md](automatic-reduction.md)).
+Of this deployment, only Follow exists (`ess.apps.batch.auto`, [automatic-reduction.md](automatic-reduction.md)).
 
 ## One proposal, several histories
 
 A workspace holds one proposal.
 A proposal has several workspaces, each with its own history: one in the automatic reduction, and one for each folder or notebook of a user.
 
-```
- automatic reduction        user A's batch folder        user B's notebook
-   history 1                  history 2                    history 3
-       └───────────── a value passes only as a file ───────────┘
+```mermaid
+flowchart LR
+    auto["automatic reduction: history 1"]
+    a["user A's batch folder: history 2"]
+    b["user B's notebook: history 3"]
+    file["a file: the only way a value passes"]
+    auto --- file
+    a --- file
+    b --- file
 ```
 
 A reference names a record of the same history.
 So a batch of user A cannot reference the beam centre that the automatic reduction computed, and two users of a proposal do not see each other's records.
 A value reaches another history as a file:
 
-```
- record's output ──▶ written ──▶ named ──▶ published
-                                               │
- record in another history ◀── loaded ◀── listed
+```mermaid
+flowchart TD
+    subgraph from ["out of a history"]
+        direction LR
+        output["record's output"] --> written --> named --> published
+    end
+    subgraph into ["into another history"]
+        direction LR
+        listed --> loaded --> record["record"]
+    end
+    from --> into
 ```
 
 | Step | What happens |

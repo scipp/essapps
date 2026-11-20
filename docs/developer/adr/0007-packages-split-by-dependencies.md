@@ -66,11 +66,14 @@ The *framework* is `essspec` and `essapps`; the *core* is the plain install of `
 Of these, `essspec`, `essapps`, and `ess.apps.panel` exist.
 Each of the others is created with its first module, so none is an empty scaffold.
 
-```text
-essspec  <-  essapps  <-  frontends (over HTTP)
-   ^            ^
-   |            +- - - -  essinstruments[<instrument>-app]  (an instrument's app)
-   +------------------  essinstruments, workflow packages
+An arrow points from a distribution to one it depends on; the dashed arrow is a dependency through an extra:
+
+```mermaid
+flowchart BT
+    essapps --> essspec
+    frontends -->|over HTTP| essapps
+    app["essinstruments[...-app], an instrument's app"] -.-> essapps
+    instruments["essinstruments, workflow packages"] --> essspec
 ```
 
 `essapps` does not depend on `essinstruments`: it finds bindings through entry points (below), and an app that needs an instrument's specs depends on both.
