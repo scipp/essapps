@@ -34,7 +34,7 @@ from ess.apps.batch import (
 from ess.apps.batch.definition import Key, NotKept, rows_key, settings_key
 from ess.apps.batch.web import Pages, Shown, create_app, demo, plots
 from ess.apps.batch.web.models import NewBatch
-from ess.apps.batch.web.page import Missing, Problem
+from ess.apps.batch.web.refusals import Missing, Problem
 from ess.apps.testing import CountingClient, FakeFiles
 from ess.spec import FileRef, SampleRunFile, WorkflowSpec, function_binding
 
@@ -2564,7 +2564,7 @@ def test_a_batch_to_follow_whose_follow_the_definitions_refuse_is_not_made(
 
     assert (answer.status_code, answer.json()) == (
         422,
-        {'message': "The batch was not made: ('following',): refused."},
+        {'message': "The change was not kept: ('following',): refused"},
     )
     assert (list(manager.headers()), manager.following) == (['scan'], None)
 
@@ -2601,7 +2601,7 @@ def test_a_batch_removed_from_its_page_is_gone_and_its_results_stay(
 
     removed = http.post('/api/batch/remove')
 
-    assert removed.status_code == 200
+    assert (removed.status_code, removed.json()) == (200, {'notice': 'Removed Scan.'})
     assert manager.headers() == {}
     assert client.records(label='scan') != []
     gone = http.get('/api/state')

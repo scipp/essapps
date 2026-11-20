@@ -37,7 +37,7 @@ what can be made. With no batch at all, the page is served
 without one: it shows the list of batches and the runs. So is the page of a
 batch that cannot be made (:meth:`Pages.page`), with the reason, and that of
 a batch removed (:meth:`Pages.remove`): a :class:`~.page.Page` handed out
-before answers :class:`~.page.Missing` from then on.
+before answers :class:`~.refusals.Missing` from then on.
 
 The manager keeps which batch follows
 (:attr:`~ess.apps.batch.BatchManager.following`). :meth:`Pages.tick` is one
@@ -70,7 +70,6 @@ from ...files import Selector
 from ...listing import Listing
 from ..auto import Step
 from ..corrections import CorrectedFiles
-from ..definition import NotKept
 from ..manager import BatchManager, fits
 from ..source import Source, between
 from ..state import RowState, not_reduced
@@ -95,16 +94,8 @@ from .models import (
     SourceRows,
     SpecChoice,
 )
-from .page import (
-    Draw,
-    Missing,
-    Page,
-    Problem,
-    listed,
-    read,
-    read_file,
-    why,
-)
+from .page import Draw, Page, listed, read, read_file
+from .refusals import Missing, Problem, kept, why
 
 
 class SafeListing(Listing):
@@ -212,15 +203,13 @@ class Pages:
     def page(self, label: str) -> Page:
         """
         The page of ``label``, made at the first call. Raises
-        :class:`Missing` if no batch has the label, and
-        :class:`~.page.Problem` if its batch cannot be made, such as when the
-        workspace binds no spec of its name, or its table cannot be read
-        (:meth:`~ess.apps.batch.BatchManager.batch`).
+        :class:`~.refusals.Missing` if no batch has the label
+        (:meth:`check`), and :class:`~.refusals.Problem` if its batch cannot
+        be made, such as when the workspace binds no spec of its name, or its
+        table cannot be read (:meth:`~ess.apps.batch.BatchManager.batch`).
         """
         with self.lock:
-            if label not in self.manager.headers():
-                self._pages.pop(label, None)
-                raise Missing(f'There is no batch {label}.')
+            self.check(label)
             if (page := self._pages.get(label)) is None:
                 try:
                     page = Page(self, label)
@@ -228,6 +217,16 @@ class Pages:
                     raise Problem(f'Cannot show {label}: {error}') from None
                 self._pages[label] = page
             return page
+
+    def check(self, label: str) -> None:
+        """
+        Raise :class:`~.refusals.Missing` unless a batch has ``label``; the
+        page of a label that has none is forgotten.
+        """
+        with self.lock:
+            if label not in self.manager.headers():
+                self._pages.pop(label, None)
+                raise Missing(f'There is no batch {label}.')
 
     def home(self) -> str | None:
         """
@@ -314,7 +313,7 @@ class Pages:
     def _marks(self) -> tuple[Fields, CorrectedFiles]:
         """
         The form of what a person corrects of a run, and the files to
-        correct; :class:`~.page.Problem` if the application corrects no runs.
+        correct; :class:`~.refusals.Problem` if the application corrects no runs.
         """
         if self._marking is None:
             raise Problem('This application corrects no runs.')
@@ -326,7 +325,7 @@ class Pages:
         The runs, listed again, with what a person corrected of each, as the
         Runs view of every page shows them, and that of the page without a
         batch; none, with why, if the file source raises. Raises
-        :class:`~.page.Problem` if the application corrects no runs.
+        :class:`~.refusals.Problem` if the application corrects no runs.
         """
         with self.lock:
             marks, files = self._marks()
@@ -394,13 +393,11 @@ class Pages:
     def _kept(self, correction: Callable[[], None]) -> None:
         """
         Make ``correction``, then list again, so that the pages show the runs
-        again. Raises :class:`~.page.Problem` if the definitions do not keep
+        again. Raises :class:`~.refusals.Problem` if the definitions do not keep
         it, or if the runs cannot be listed after it.
         """
-        try:
+        with kept():
             correction()
-        except NotKept as error:
-            raise Problem(f'The change was not kept: {error}') from None
         self.list_again()
         if (error := self._listing.error) is not None:
             raise Problem(f'Corrected, but the runs cannot be listed: {error}')
@@ -526,7 +523,7 @@ class Pages:
         row marked as taken, left out, or waiting, for a new batch of the
         rows that :func:`taken` gives
         (:meth:`~ess.apps.batch.BatchManager.marked`). Raises
-        :class:`~.page.Problem` if no source is registered so, with what the
+        :class:`~.refusals.Problem` if no source is registered so, with what the
         source raises, or if the range is refused.
         """
         with self.lock:
@@ -554,10 +551,16 @@ class Pages:
         with those that the application gives its spec. A setting at a column
         of ``new.columns`` stays, and each row with an empty cell takes it;
         the manager leaves out the setting of a column that the source fills,
-        whose cells are those of the source. Raises :class:`~.page.Problem`
-        with what the file, the manager or the source refuses.
+        whose cells are those of the source.
+
+        Raises :class:`~.refusals.Problem` with what the file, the manager or
+        the source refuses (``ValueError``), with a label of ``settings_from``
+        that is no batch or a spec that the workspace does not bind
+        (``KeyError``), and if the definitions refuse a write
+        (:func:`~.refusals.kept`). Anything else that the source raises is a
+        defect of its code, and not said.
         """
-        with self.lock:
+        with self.lock, kept():
             try:
                 manager = self.manager
                 settings = (
@@ -607,27 +610,26 @@ class Pages:
                 )
                 if new.follow:
                     self._failure = None  # said of the batch that followed before
-            except Exception as error:  # a source is code of the application
+            except (ValueError, KeyError) as error:
                 raise Problem(f'The batch was not made: {why(error)}.') from None
             return Made(label=label)
 
-    def remove(self, label: str) -> None:
+    def remove(self, label: str) -> Notice:
         """
         Remove the batch of ``label`` with the manager
         (:meth:`~ess.apps.batch.BatchManager.remove`): its definitions go,
         its records stay, and if it follows, none follows. Its page goes, and
-        a page handed out before answers :class:`~.page.Missing`. Raises
-        :class:`~.page.Missing` if no batch has the label, and
-        :class:`~.page.Problem` if the definitions refuse a write.
+        a page handed out before answers :class:`~.refusals.Missing`. What
+        it did, in words. Raises :class:`~.refusals.Missing` if no batch has
+        the label, and :class:`~.refusals.Problem` if the definitions refuse
+        a write.
         """
-        with self.lock:
-            if label not in self.manager.headers():
-                raise Missing(f'There is no batch {label}.')
-            try:
-                self.manager.remove(label)
-                self._pages.pop(label, None)
-            except NotKept as error:
-                raise Problem(f'The change was not kept: {error}') from None
+        with self.lock, kept():
+            self.check(label)
+            title = self.manager.headers()[label].title
+            self.manager.remove(label)
+            self._pages.pop(label, None)
+            return Notice(notice=f'Removed {title}.')
 
     def counts(self) -> BatchCounts:
         """

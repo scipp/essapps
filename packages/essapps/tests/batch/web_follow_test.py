@@ -22,7 +22,7 @@ from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions
 from ess.apps.batch.web import Page, Pages, create_app
 from ess.apps.batch.web.api import every
 from ess.apps.batch.web.models import CellEdit, Edit, NewBatch, Reduce, State
-from ess.apps.batch.web.page import Problem
+from ess.apps.batch.web.refusals import Problem
 from ess.apps.testing import FakeFiles
 
 from . import toys
