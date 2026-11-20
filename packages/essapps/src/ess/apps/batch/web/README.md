@@ -216,15 +216,17 @@ api.py            HTTP: create_app(pages); each action is a POST that
                   answers with the new State (models.py), 422 {message}, or
                   404 for a label that is no batch
    ▼
-pages.py          Pages: what the pages share, without HTTP, and only it writes:
-                  the manager, the step of Follow (tick) and what it said, the
-                  runs, their version and their corrections, the list of
-                  batches and its counts, making and removing a batch, one
-                  lock around every request and step
-page.py           Page: what the page of one batch does, without HTTP: the
-                  rows (each change a frame put to the batch), the settings
-                  form (a draft until Apply), the refusals, its version, its
-                  header; it asks Pages what to show of Follow and the runs
+pages.py          Pages: what the pages share, without HTTP: the manager, one
+                  lock around every request and step, the list of batches and
+                  its counts, making and removing a batch; it alone writes the
+                  listing of the files and its version, the corrections of
+                  runs, and the step of Follow (tick) and what it said
+page.py           Page: what the page of one batch does, without HTTP; it
+                  alone writes the settings form (a draft until Apply), the
+                  refusals and its version; through the manager it writes its
+                  batch: the rows (each change a frame put to the batch), the
+                  settings at Apply, its header, Follow's stop; it asks Pages
+                  for the listing and what to show of Follow
    ▼
 ess.apps.batch    the logic: BatchManager, step, Batch, table, states,
                   CorrectedFiles; shared with the command essapps-batch
@@ -237,9 +239,9 @@ ess.apps.batch    the logic: BatchManager, step, Batch, table, states,
 The page asks for `GET api/state?after=<version>&start=<start>`, relative to its own URL `batches/<label>/`, every second.
 The server answers 204 if nothing changed since `version`, and else the whole `State`.
 `version` counts each action, each step of Follow that changes what the page shows (the rows, the runs, the records, the refusals, or its failure), each change of the batch that follows, and each change of the workspace's records, such as a reduction that finished.
-The server learns of these by numbers that count them, `Batch.version`, `BatchManager.version` and `Pages.runs_version`, and compares only these at each poll.
+At each poll the server compares what the page saw at its last version with: `Batch.version` (the table, the template, the records of the batch), the position of the listing in the workspace's records, `Pages.files_version` (the files listed and why they cannot be), `BatchManager.version` (the headers and the batch that follows), and what the page shows of the last step of Follow (`Pages.follow_token`).
 `start` is new at each start of the server; a page that sees another one loads again.
-`State.runs` counts the changes of the runs, which all pages share; the Runs view asks for `api/runs` when it moves.
+`State.runs` is `Pages.files_version`, the changes of the runs, which all pages share, and `null` if the application corrects no runs; the Runs view asks for `api/runs` when it moves.
 The batches of each run come with the counts (`api/batches/counts`), every 2 s while the Runs view is shown, and not with `api/runs`: Follow adds rows that name runs without a change of the runs.
 `State.batches` lists the batches, so the version moves when the headers of the batches or the batch that follows change, whoever changed them; only a page that polls no state asks for `api/batches`.
 `api/batches`, `api/batches/counts`, `api/sources`, `api/runs` and the corrections of runs (`api/runs/cells`, `api/runs/cells/revert`) belong to the workspace: they answer the same under any label, and at `/api/...`.

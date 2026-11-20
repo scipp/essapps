@@ -132,12 +132,8 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 from pydantic import ValidationError
 
-from ess.spec import File, FileRef
-
 from ...errors import FieldError, SubmitError
 from ...fields import UNSET, Fields
-from ...files import Selector
-from ...listing import Listing
 from ...records import Record, Status
 from .. import frames
 from ..definition import NotKept
@@ -206,32 +202,6 @@ _ORDER = (
 _ENDED = (Status.FAILED, Status.CANCELLED)
 _DRAWN = 12
 """How many results the plot shows when no row is selected."""
-
-
-class SafeListing(Listing):
-    """
-    What the client lists now, as :class:`Listing` gives it, but without files
-    if the file source raises: a picker then offers none, the Runs view lists
-    none, and :attr:`failure` says why.
-    """
-
-    failure: str | None = None
-
-    def files(self, marker: File) -> dict[str, FileRef]:
-        try:
-            return super().files(marker)
-        except Exception as error:  # the file source is code of the application
-            return self._failed(error, {})
-
-    def listed(self, selector: Selector) -> dict[FileRef, dict[str, Any]]:
-        try:
-            return super().listed(selector)
-        except Exception as error:  # the file source is code of the application
-            return self._failed(error, {})
-
-    def _failed[T](self, error: Exception, empty: T) -> T:
-        self.failure = f'The files cannot be listed: {error}'
-        return empty
 
 
 def names(frame: pd.DataFrame, columns: Collection[str]) -> dict[str, str]:
@@ -399,8 +369,9 @@ class Page:
     Parameters
     ----------
     pages:
-        What the pages share: the manager of the batch, the lock, the runs,
-        Follow, and what the application gives every page.
+        What the pages share: the manager of the batch, the lock, the
+        listing of the files, Follow, and what the application gives every
+        page.
     label:
         The label of the batch.
     """
@@ -408,7 +379,7 @@ class Page:
     def __init__(self, pages: Pages, label: str) -> None:
         self.pages = pages
         self.label = label
-        self._listing = pages.relist()
+        pages.list_again()
         self._columns: tuple[str, ...] | None = None
         self._fit()
         self.refused: list[FieldError] = []
@@ -451,7 +422,9 @@ class Page:
         if batch.columns == self._columns:
             return
         self._columns = batch.columns
-        self._cells = Fields(batch.spec.params, self._listing, fields=batch.columns)
+        self._cells = Fields(
+            batch.spec.params, self.pages.listing, fields=batch.columns
+        )
         self.settings = self._form()
         self._show_settings()
 
@@ -465,47 +438,46 @@ class Page:
         """
         What the page shows that changes without an action, each by what
         counts its changes: the batch (its table, its template and the
-        records), the records listed, the runs and why they cannot be
-        listed, the headers of the batches and which batch follows, and what
-        Follow said of this batch (:meth:`Pages.said <.pages.Pages.said>`).
+        records), the records listed, the files listed and why they cannot
+        be (:attr:`Pages.files_version <.pages.Pages.files_version>`), the
+        headers of the batches and which batch follows, and what Follow
+        said of this batch (:meth:`Pages.follow_token
+        <.pages.Pages.follow_token>`).
         """
         pages = self.pages
         return (
             self.batch.version,
-            self._listing.cursor,
-            self._listing.failure,
-            pages.runs_version,
+            pages.listing.cursor,
+            pages.files_version,
             pages.manager.version,
-            pages.said(self.label),
+            pages.follow_token(self.label),
         )
 
     def _new_version(self) -> None:
         self.version += 1
         self._seen = self._live()
 
-    def _relist(self, *, files: bool = False) -> None:
+    def _list_again(self) -> None:
         """
-        List again, for the pickers and the forms; with ``files``, by
-        :meth:`Pages.relist <.pages.Pages.relist>`, which lists the runs too.
+        List again (:meth:`Pages.list_again <.pages.Pages.list_again>`), and
+        give the pickers and the forms what is listed now.
         """
-        self._listing = (
-            self.pages.relist()
-            if files
-            else SafeListing(self.batch.client, previous=self._listing)
-        )
+        self.pages.list_again()
         for fields in (self.settings, self._cells):
-            fields.refresh(self._listing)
+            fields.refresh(self.pages.listing)
 
     def _form(self) -> Fields:
         """A form of the settings, at the fields' defaults."""
         batch = self.batch
-        return Fields(batch.spec.params, self._listing, fields=batch.settings_fields)
+        return Fields(
+            batch.spec.params, self.pages.listing, fields=batch.settings_fields
+        )
 
     def _show_settings(self) -> None:
         """Show the batch's settings in the form, which then holds no change."""
         # Settings kept for another version of the spec may not fit the form;
         # the batch keeps them, and the page names them, until Apply.
-        self._unfit = self.settings.set_fitting(self.batch.settings, self._listing)
+        self._unfit = self.settings.set_fitting(self.batch.settings, self.pages.listing)
         # What the form holds while it shows the batch's settings.
         self._shown = self.settings.held()
 
@@ -534,10 +506,10 @@ class Page:
         """The state, or ``None`` if it is still that of version ``after``."""
         # The feed catches a record that ended after the last relist but before
         # ``_seen`` was read, which ``_live`` holds already and the listing lacks.
-        changes = self.batch.client.changes(after=self._listing.cursor)
+        changes = self.batch.client.changes(after=self.pages.listing.cursor)
         # A table changed by another caller may name files that the listing lacks.
         if changes.records or self._live() != self._seen:
-            self._relist()
+            self._list_again()
             self._new_version()
         if after == self.version and start == self.start:
             return None
@@ -567,7 +539,7 @@ class Page:
         batch = self.batch
         columns = batch.columns
         states, unusable = self._states()
-        follow, unsubmitted = self.pages.following(self.label, states)
+        unsubmitted = self.pages.unsubmitted(self.label, states)
         failures = self._failures(states)
         frame = batch.frame()
         requested = batch.cells()
@@ -640,8 +612,8 @@ class Page:
             settings_changed=unapplied is not None,
             may_be_columns=forms.edited(self.settings),
             refused=[self._refused(e, named) for e in self.refused],
-            follow=follow,
-            files_problem=self._listing.failure,
+            follow=self.pages.follow_shown(self.label),
+            files_problem=self.pages.listing.failure,
             notice=notice,
         )
 
@@ -664,8 +636,11 @@ class Page:
         }
 
     def _text(self, value: Any) -> str:
-        """What a cell shows (:meth:`Listing.text`); nothing if it is unset."""
-        return '' if value is UNSET else self._listing.text(value)
+        """
+        What a cell shows (:meth:`~ess.apps.listing.Listing.text`); nothing if
+        it is unset.
+        """
+        return '' if value is UNSET else self.pages.listing.text(value)
 
     def _outdated(self, state: RowState) -> str:
         """Why the result of a row is outdated: what changed since."""
@@ -806,7 +781,7 @@ class Page:
     @_action
     def relist(self) -> str:
         """List the files again, for the pickers and the Runs view; no row changes."""
-        self._relist(files=True)
+        self._list_again()
         return 'Listed the runs again.'
 
     @_action
@@ -879,7 +854,7 @@ class Page:
         except Exception as error:  # a source is code of the application
             raise Problem(f'No row was added: {why(error)}.') from None
         # The rows may name files that the listing lacks.
-        self._relist()
+        self._list_again()
         return f'Added {_rows(len(keys))}.'
 
     # Columns and settings
@@ -962,7 +937,7 @@ class Page:
                 [self._refused(e, named).text for e in unplaced], len(self.refused)
             ) from None
         self.refused = []
-        self._relist()
+        self._list_again()
         n = len(records)
         return f'Reducing {_rows(n)}.' if n else ''
 
@@ -994,7 +969,7 @@ class Page:
         """
         with self.lock:
             try:
-                self._relist(files=True)
+                self._list_again()
             finally:
                 if self._live() != self._seen:
                     self._new_version()
@@ -1031,7 +1006,7 @@ class Page:
     def _fill(self, params: Mapping[str, Any]) -> None:
         """Show ``params`` in the form, all or none; raises as :meth:`Fields.set`."""
         form = self._form()
-        form.set(params, self._listing)
+        form.set(params, self.pages.listing)
         self.settings = form
 
     @_action
@@ -1080,7 +1055,7 @@ class Page:
             # another spec's params are not this one's
             return RowDetail(key=key, reduced_with=None, created=None, differs=[])
         given = self._form()
-        given.set(record.request.params, self._listing)
+        given.set(record.request.params, self.pages.listing)
         return RowDetail(
             key=key,
             reduced_with=forms.tree(given),
@@ -1162,7 +1137,7 @@ class Page:
         finally:
             # The rows may name files that the listing lacks, even if the
             # table is then refused.
-            self._relist()
+            self._list_again()
         return f'Loaded {_rows(len(frame))} from {name}.'
 
     @_locked
