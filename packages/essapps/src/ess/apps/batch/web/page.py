@@ -21,9 +21,12 @@ gives it to :meth:`~ess.apps.batch.Batch.put`: an edit of cells, a row added
 or removed, a table file loaded, which replaces the table. A cell is plain
 data (:mod:`..table`): a value that a picker gives is kept as
 :func:`~..table.cell_of` makes it, and shown as the listing names it. A row is
-named by its note ``name`` if the table has one, else by its key. "Rescan
-runs" lists the files again, for the pickers and the Runs view, and changes
-no row.
+named by its note ``name`` if the table has one, else by its key, and "Add
+row" takes its key. "List runs again" lists the files again, for the pickers
+and the Runs view, and changes no row. If the file source raises, the page
+shows the table, the results and the plots all the same: the pickers offer
+no file, the Runs view is empty, and the state says why
+(:attr:`~.models.State.files_problem`).
 
 The form of the settings is a draft of the batch's settings. An edit changes
 the form only; :meth:`Page.apply_settings` writes it to the batch, and is
@@ -52,6 +55,10 @@ A reduction refused raises :class:`Problem`. It says the reasons that no cell
 or setting shows. The others stay in the state until the value of each is
 changed, a setting's by Apply, or a reduction succeeds, so that the page marks
 each at its cell, or at its setting while the form shows the batch's settings.
+The state of the batch reports most refusals of a cell as problems of its row,
+but not those that only a submission finds, since they read the records: a
+reference to a record that the workspace does not know, or to an output whose
+type does not fit the cell.
 Any other request that cannot be done raises :class:`Problem` too, with what
 to tell the person; a refusal of the batch layer (``ValueError``) is said as
 it is, so the page copies no rule. A ``Page`` serves one batch to one person,
@@ -76,8 +83,8 @@ description with the manager (:meth:`Page.change`). Removing a batch is
 removed answers :class:`Missing`.
 
 The switch "Follow" makes the batch the one that follows
-(:meth:`~ess.apps.batch.BatchManager.follow`), so no other batch follows; the
-manager refuses a batch not made from a source, and the page says so. While
+(:meth:`~ess.apps.batch.BatchManager.follow`), so no other batch follows; a
+batch made without a source has no switch, and the manager refuses it. While
 it follows, :meth:`Pages.tick <.pages.Pages.tick>` steps it every
 ``interval`` seconds (:meth:`~ess.apps.batch.BatchManager.step`), which adds
 the rows of its source that are new and filled, and reduces the rows that
@@ -85,12 +92,13 @@ the rows of its source that are new and filled, and reduces the rows that
 no result, under the lock of all pages, with the batch's settings, whatever
 the form holds; then :meth:`Page.stepped` shows what the step changed. The
 page of the batch that follows says what the last step raised, why rows were
-not reduced, and how many rows of the source wait to be filled; the next step
-runs all the same. A row with a result is left to a person, also one that is
-outdated. An action submits only what a person asks to reduce, and the next
-step reduces what the rule gives after it. Apply forgets why Follow could not
-reduce rows, since its next step tries them with the settings applied. Which
-batch follows is kept in the definitions, so a restart resumes.
+not reduced, at each such row, whose status stays that of its state, and how
+many rows of the source wait to be filled; the next step runs all the same. A
+row with a result is left to a person, also one that is outdated. An action
+submits only what a person asks to reduce, and the next step reduces what the
+rule gives after it. Apply forgets why Follow could not reduce rows, since its
+next step tries them with the settings applied. Which batch follows is kept in
+the definitions, so a restart resumes.
 """
 
 from __future__ import annotations
@@ -117,7 +125,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 from pydantic import ValidationError
 
-from ess.spec import FileRef
+from ess.spec import File, FileRef
 
 from ...errors import FieldError, SubmitError
 from ...fields import UNSET, Fields
@@ -182,18 +190,30 @@ _DRAWN = 12
 """How many results the plot shows when no row is selected."""
 
 
-def page_statuses(
-    states: Mapping[str, RowState], refused: Collection[str] = ()
-) -> dict[str, str]:
+class _Listing(Listing):
     """
-    The status of each row in the words of the page (see the module), by key:
-    its :attr:`~ess.apps.batch.RowState.text`, but ``incomplete`` for a row
-    of ``refused``, which Follow could not submit. The page and the counts of
-    the batches both use it.
+    What the client lists now, as :class:`Listing` gives it, but without files
+    if the file source raises: a picker then offers none, the Runs view lists
+    none, and :attr:`failure` says why.
     """
-    return {
-        key: 'incomplete' if key in refused else s.text for key, s in states.items()
-    }
+
+    failure: str | None = None
+
+    def files(self, marker: File) -> dict[str, FileRef]:
+        try:
+            return super().files(marker)
+        except Exception as error:  # the file source is code of the application
+            return self._failed(error, {})
+
+    def listed(self, selector: Selector) -> dict[FileRef, dict[str, Any]]:
+        try:
+            return super().listed(selector)
+        except Exception as error:  # the file source is code of the application
+            return self._failed(error, {})
+
+    def _failed[T](self, error: Exception, empty: T) -> T:
+        self.failure = f'The files cannot be listed: {error}'
+        return empty
 
 
 def names(frame: pd.DataFrame, columns: Collection[str]) -> dict[str, str]:
@@ -313,7 +333,7 @@ class Page:
     def __init__(self, pages: Pages, label: str) -> None:
         self.pages = pages
         self.label = label
-        self._listing = Listing(self.batch.client)
+        self._listing = _Listing(self.batch.client)
         self._columns: tuple[str, ...] | None = None
         self._fit()
         self.refused: list[FieldError] = []
@@ -370,13 +390,14 @@ class Page:
     def _live(self) -> tuple[object, ...]:
         """
         What the page shows that changes without an action: the table, the
-        records, the runs, the headers of the batches, which batch follows,
-        and how the last step of Follow went.
+        records, the runs and why they cannot be listed, the headers of the
+        batches, which batch follows, and how the last step of Follow went.
         """
         pages = self.pages
         return (
             data_of(self.batch.frame()),
             self._listing.cursor,
+            self._listing.failure,
             pages.runs_version,
             pages.manager.headers(),
             pages.manager.following,
@@ -393,7 +414,7 @@ class Page:
         self._seen = self._live()
 
     def _relist(self) -> None:
-        self._listing = Listing(self.batch.client, previous=self._listing)
+        self._listing = _Listing(self.batch.client, previous=self._listing)
         for fields in (self.settings, self._cells):
             fields.refresh(self._listing)
 
@@ -472,8 +493,7 @@ class Page:
         states, unusable = self._states()
         # With the settings refused, the rows are not compared, so none is earlier.
         earlier = set(earlier_settings(states))
-        refused = self.pages.refusals(self.label, states)
-        statuses = page_statuses(states, refused)
+        unsubmitted = self.pages.unsubmitted(self.label, states)
         failures = self._failures(states)
         frame = batch.frame()
         requested = batch.cells()
@@ -487,16 +507,15 @@ class Page:
                 named[key],
                 notes,
                 states[key],
-                statuses[key],
                 key in earlier,
-                refused.get(key, ''),
+                unsubmitted.get(key, ''),
                 failures,
             )
             for key, cells in frame.to_dict('index').items()
         ]
         counts = dict.fromkeys(_ORDER, 0)
-        for status in statuses.values():
-            counts[status] += 1
+        for s in states.values():
+            counts[s.text] += 1
         given, missing = self.settings.held()
 
         # A refusal of the batch's settings is said, and marked at its field,
@@ -542,14 +561,13 @@ class Page:
             ],
             rows=rows,
             counts={'all': len(states), **counts},
-            action=self._primary(
-                states, statuses, unapplied or problem, len(earlier), unapplied
-            ),
+            action=self._primary(states, unapplied or problem, len(earlier), unapplied),
             settings=forms.tree(self.settings, marks),
             settings_problem=problem,
             settings_changed=unapplied is not None,
             refused=[self._refused(e, named) for e in self.refused],
             follow=self._follow(),
+            files_problem=self._listing.failure,
             notice=notice,
         )
 
@@ -565,6 +583,7 @@ class Page:
         last = pages.last
         return Following(
             on=on,
+            source=manager.source(self.label),
             other=None if on or label is None else manager.headers()[label].title,
             interval=pages.interval,
             failure=pages.failure if on else None,
@@ -611,9 +630,8 @@ class Page:
         name: str,
         notes: Sequence[str],
         state: RowState,
-        status: str,
         earlier: bool,
-        refused: str,
+        unsubmitted: str,
         failures: Mapping[str, str],
     ) -> Row:
         titles = {**self.settings.titles, **self._cells.titles}
@@ -623,9 +641,10 @@ class Page:
             if e.entry == key and e.loc
         }
         record = state.record
+        status = state.text
         reason = ''
-        if refused:
-            reason = refused
+        if unsubmitted:
+            reason = unsubmitted
         elif status in ('failed', 'cancelled') and record is not None:
             reason = failures.get(record.id, '')
         elif problems:
@@ -664,14 +683,13 @@ class Page:
     def _primary(
         self,
         states: Mapping[str, RowState],
-        statuses: Mapping[str, str],
         blocked: str | None,
         earlier: int,
         label: str | None = None,
     ) -> Action:
         """What the button does now, or ``label`` if blocked; how far rows run."""
         left = [] if blocked else left_to_reduce(states)
-        kinds = {statuses[k] for k in left}
+        kinds = {states[k].text for k in left}
         n = len(left)
         if blocked:
             label = label or 'Check the settings'
@@ -764,13 +782,11 @@ class Page:
 
     @_action
     def add(self, key: str) -> str:
-        """Add an empty row of ``key``, unless a row is named so already."""
+        """Add an empty row of ``key``; what the batch refuses is a ``Problem``."""
         key = key.strip()
         if not key:
-            raise Problem('Give the new row a name.')
+            raise Problem('Give the new row a key.')
         frame = self._frame()
-        if key in names(frame, self.batch.columns).values():
-            raise Problem(f'There is a row named {key} already.')
         self._put(frame.reindex(pd.Index([*frame.index, key], name=KEY)))
         return f'Added {key}: fill in its cells.'
 
@@ -837,11 +853,8 @@ class Page:
         """
         with self.lock:
             try:
-                self._listing = Listing(self.batch.client, previous=self._listing)
+                self._relist()
                 self.pages.runs_listed(self._runs_seen())
-                if self._moved():
-                    for fields in (self.settings, self._cells):
-                        fields.refresh(self._listing)
             finally:
                 if self._moved():
                     self._new_version()
@@ -953,7 +966,6 @@ class Page:
             if keys
             else None
         )
-        statuses = page_statuses(states)
         done = [
             s
             for s in states.values()
@@ -973,7 +985,7 @@ class Page:
         colors = plots.colors([order[s.key] for s in chosen])
         named = names(frame, self.batch.columns)
         shown = [
-            Shown(s.key, named[s.key], s.record, statuses[s.key] == 'outdated', c)
+            Shown(s.key, named[s.key], s.record, s.text == 'outdated', c)
             for s, c in zip(chosen, colors, strict=True)
             if s.record is not None
         ]

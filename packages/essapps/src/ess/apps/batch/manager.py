@@ -459,8 +459,9 @@ class BatchManager:
             return None
         made = self._made(label)
         batch = self.batch(label)
+        source = self._source(made.source)
         try:
-            done = auto.step(batch, self._source(made.source), made.considered)
+            done = auto.step(batch, source, made.considered)
         except SourceError as error:  # a defect of the code of the source
             raise ValueError(f'the source {made.source}: {error}') from error
         except BaseException:

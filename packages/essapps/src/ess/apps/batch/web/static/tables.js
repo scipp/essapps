@@ -173,11 +173,11 @@ function cellFormatter(column, revert) {
     const c = data.cells[column.name];
     const element = cell.getElement();
     element.classList.toggle('bad', Boolean(c.problem));
-    element.classList.toggle('edited', c.edited);
+    element.classList.toggle('edited', Boolean(c.edited));
     const shown = c.text
       ? h('span', {class: 'text', text: c.text})
       : h('span', {class: 'text muted', text: c.problem ? 'missing' : column.default || '—'});
-    const back = c.scanned || empty(column);
+    const back = c.original || empty(column);
     return h(
       'span',
       {class: 'cell'},
@@ -203,7 +203,7 @@ function cellTooltip(column) {
   return (event, cell) => {
     const c = cell.getData().cells[column.name];
     if (c.problem) return c.problem;
-    if (c.edited) return `${c.text || empty(column)}, set by hand; it was ${c.scanned || empty(column)}`;
+    if (c.edited) return `${c.text || empty(column)}, set by hand; it was ${c.original || empty(column)}`;
     return c.text;
   };
 }

@@ -7,8 +7,8 @@ This module does not depend on HTTP: it imports neither ``fastapi`` nor
 ``starlette``.
 
 A page reads :class:`State` and sends the requests at the end. A form is a
-list of :class:`Node`; a cell of the table, of a sample or of a run, is a
-:class:`Cell`.
+list of :class:`Node`; a cell of the table of a batch is a :class:`Cell`, and
+one of a run a :class:`RunCell`.
 """
 
 from __future__ import annotations
@@ -89,16 +89,22 @@ class Column(BaseModel):
 class Cell(BaseModel):
     """
     One cell: ``value`` is where its editor starts, ``text`` what it shows.
-    ``problem`` is why the row cannot be reduced, if it is this cell. A cell
-    of a run is ``edited`` if a person corrected it, with ``scanned`` the text
-    that the file gives.
+    ``problem`` is why the row cannot be reduced, if it is this cell.
     """
 
     value: Any = None
     text: str = ''
-    edited: bool = False
-    scanned: str = ''
     problem: str | None = None
+
+
+class RunCell(Cell):
+    """
+    A cell of a run: ``edited`` if a person corrected it, with ``original``
+    the text that the file gives.
+    """
+
+    edited: bool = False
+    original: str = ''
 
 
 class Row(BaseModel):
@@ -156,6 +162,8 @@ class Following(BaseModel):
     Whether the batch of the page follows its source, ``on``: a step every
     ``interval`` seconds adds the rows of the source that are new and filled,
     and reduces the rows not reduced yet: ready and without a result.
+    ``source`` names the source that the batch was made from, ``None`` if it
+    was made without one and cannot follow.
     ``other`` is the title of the batch that follows, if another one does.
     While this batch follows, ``failure`` says why the last step raised, and
     ``waiting`` counts the rows of the source that the last step did not add
@@ -163,6 +171,7 @@ class Following(BaseModel):
     """
 
     on: bool
+    source: str | None
     other: str | None
     interval: float
     failure: str | None
@@ -195,8 +204,9 @@ class State(BaseModel):
     has not applied the change; the rows read as with the batch's settings.
     ``settings_problem`` names the batch's settings that the form cannot show,
     what the form misses, and why the batch's settings are refused where the
-    form shows them. ``notice`` says what the action that answers with this
-    state did.
+    form shows them. ``files_problem`` says why the files cannot be listed,
+    if the file source raises: the pickers then offer none. ``notice`` says
+    what the action that answers with this state did.
     """
 
     version: int
@@ -218,6 +228,7 @@ class State(BaseModel):
     settings_changed: bool
     refused: list[Refused]
     follow: Following
+    files_problem: str | None
     notice: str = ''
 
 
@@ -236,13 +247,19 @@ class RowDetail(BaseModel):
 class RunRow(BaseModel):
     key: str
     file: str
-    cells: dict[str, Cell]
+    cells: dict[str, RunCell]
 
 
 class Runs(BaseModel):
+    """
+    The runs, with their columns; none if the file source raises, and
+    ``problem`` says why.
+    """
+
     version: int
     columns: list[Column]
     rows: list[RunRow]
+    problem: str | None = None
 
 
 class BatchRow(BaseModel):
@@ -360,8 +377,8 @@ class On(BaseModel):
 
 class NewBatch(BaseModel):
     """
-    Make a batch of ``spec``: with a ``source``, of every row that the source
-    gives now; without, of no rows. ``columns`` are the parameter columns,
+    Make a batch of ``spec``: with a ``source``, of the rows that the source
+    has filled now; without, of no rows. ``columns`` are the parameter columns,
     those that the source fills among them.
     """
 

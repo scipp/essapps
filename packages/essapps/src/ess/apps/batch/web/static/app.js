@@ -21,7 +21,7 @@ const view = {
   state: null,
   filter: 'all',
   tab: 'result',
-  page: 'samples',
+  page: 'rows',
   selected: [],
   sort: [],
   log: {x: true, y: true},
@@ -132,9 +132,6 @@ async function refresh() {
     throw view.state && response.status !== 404 ? new Offline(message) : new Unshown(message);
   }
   render(response.body);
-  // A poll says only what failed without an action, such as a scan after a
-  // correction made on another page.
-  if (response.body.notice) showMessage(response.body.notice);
 }
 
 // Ask for the state every second; say so while the server does not give it.
@@ -195,7 +192,7 @@ function render(state) {
   document.title = named.join(' · ');
   $('title').textContent = named.reverse().join(' · ');
   $('folder').textContent = state.folder;
-  $('n-samples').textContent = state.counts.all;
+  $('n-rows').textContent = state.counts.all;
   renderAction(state.action);
   renderChips(state.counts);
   if (old?.action.running && !state.action.running) {
@@ -209,6 +206,8 @@ function render(state) {
   showBatches({application: state.application, runs: state.runs, rows: state.batches});
   renderRefused(state.refused);
   renderFollow(state.follow);
+  $('files-problem').hidden = !state.files_problem;
+  $('files-problem').textContent = $('files-problem').title = state.files_problem ?? '';
   renderSettings(state);
   renderBatch(state);
   renderSelection();
@@ -265,7 +264,7 @@ function build(state) {
   });
   rows.filter(view.filter);
   if (state.runs === null) document.querySelector('[data-view="runs"]').hidden = true;
-  showPage(state.runs === null && view.page === 'runs' ? 'samples' : view.page);
+  showPage(state.runs === null && view.page === 'runs' ? 'rows' : view.page);
   showTab(view.tab);
 }
 
@@ -288,13 +287,15 @@ async function loadRuns() {
 }
 
 // Show the runs last loaded. The grid is built and filled when the Runs view
-// is shown, and again after each change while it is.
+// is shown, and again after each change while it is. If the files cannot be
+// listed, the hint says why.
 function drawRuns() {
-  const {columns, rows: shown} = view.runData ?? {};
+  const {columns, rows: shown, problem} = view.runData ?? {};
   if (!shown) return;
+  const fields = columns.map((c) => c.title.toLowerCase()).join(' or ');
+  $('runs-hint').textContent = problem ?? `Correct the ${fields} of a run. It changes no row of a batch; Follow adds the rows it fills.`;
+  $('runs-hint').classList.toggle('bad', Boolean(problem));
   if (!runs) {
-    const fields = columns.map((c) => c.title.toLowerCase()).join(' or ');
-    $('runs-hint').textContent = `Correct the ${fields} of a run. The rows of each batch follow.`;
     runs = new Grid($('runs'), {
       columns: [
         {title: 'Run', field: 'file', minWidth: 160, widthGrow: 2},
@@ -314,8 +315,8 @@ function drawRuns() {
 }
 
 // Correct runs, an action of the workspace; whether it was done. The page of
-// a batch then asks for its state at once, which scans the batch and brings
-// the runs; a page without a batch asks for the runs.
+// a batch then asks for its state at once, whose version of the runs has
+// moved, so that it loads the runs; a page without a batch asks for the runs.
 function correctRuns(url, body) {
   return queued(async () => {
     const done = await request(url, {body});
@@ -412,13 +413,13 @@ const chosenSource = () => choices[$('new-batch').elements.source.value];
 const chosenSpec = () => chosenSource().specs[$('new-batch').elements.spec.value];
 
 // The workflows that fit the source chosen. A batch made from a source gets
-// every row that it gives now; one without a source starts without rows.
+// the rows that it has filled now; one without a source starts without rows.
 function chooseSource() {
   const source = chosenSource();
   $('new-batch').elements.spec.replaceChildren(...source.specs.map((s, i) => h('option', {value: i, text: s.title})));
   $('new-rows').textContent = source.name === null
     ? 'The batch starts without rows: add them, or load a table.'
-    : `The batch gets every row that ${source.name} gives now.`;
+    : `The batch gets the rows that ${source.name} has filled now; Follow adds the others once filled.`;
   chooseSpec();
 }
 
@@ -534,9 +535,10 @@ function renderRefused(refused) {
   showMessage('Nothing was reduced.', refused.map((e) => e.text), key);
 }
 
-// The switch of Follow, and why its last step failed, if it did, how many
-// rows wait, or which other batch follows.
+// The switch of Follow, unless the batch has no source, and why its last step
+// failed, if it did, how many rows wait, or which other batch follows.
 function renderFollow(follow) {
+  $('follow').hidden = follow.source === null;
   $('follow-status').hidden = !follow.on && !follow.other;
   $('follow').querySelector('input').checked = follow.on;
   $('follow').title = `Every ${follow.interval} s, add the new rows of the source that are filled, and reduce the rows not reduced yet.`;
@@ -794,13 +796,13 @@ function showPage(page) {
   view.page = page;
   remember();
   document.querySelectorAll('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === page)));
-  $('view-samples').hidden = page !== 'samples';
+  $('view-rows').hidden = page !== 'rows';
   $('view-runs').hidden = page !== 'runs';
   $('view-batches').hidden = page !== 'batches';
   document.querySelector('main').classList.toggle('wide', page === 'runs');
   if (page === 'runs') drawRuns();
   if (page === 'batches') countBatches();
-  const grid = {samples: rows, runs}[page];
+  const grid = {rows, runs}[page];
   grid?.built.then(() => grid.table.redraw());
 }
 
@@ -835,7 +837,7 @@ function wire() {
     const question = `Reduce the ${count(n)} reduced with earlier settings again, with the settings now?`;
     if (confirm(question)) act('reduce', {which: 'earlier'});
   };
-  $('rescan').onclick = () => act('relist');
+  $('relist').onclick = () => act('relist');
   $('count').onclick = countBatches;
   const newBatch = $('new-batch');
   $('new-batch-open').onclick = openNewBatch;

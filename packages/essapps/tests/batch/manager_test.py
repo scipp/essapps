@@ -597,6 +597,26 @@ def test_rows_taken_are_put_as_the_source_makes_them_and_considered(
     assert definitions.load(source_key('a'), source_of).considered == {'1', '2'}
 
 
+def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(
+    client: Client, sample: Measure, definitions: FolderDefinitions
+) -> None:
+    sample(1, 'water')
+    sources = dict(SOURCES)
+    manager = BatchManager(client, sources=sources, definitions=definitions)
+    manager.create('plain', title='A', source='pairs', label='a')
+    manager.follow('a')
+    batch = manager.batch('a')
+    typed = batch.frame().rename(index={'1': 'typed'})
+    batch.put(pd.concat([batch.frame(), typed]))
+    del sources['pairs']
+
+    with pytest.raises(ValueError, match='the source pairs is not registered'):
+        manager.step()
+
+    # A key typed by hand is considered only by a step that reads the source.
+    assert definitions.load(source_key('a'), source_of).considered == {'1'}
+
+
 @pytest.mark.parametrize(
     ('keys', 'said'),
     [

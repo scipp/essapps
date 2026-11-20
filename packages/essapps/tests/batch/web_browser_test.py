@@ -543,7 +543,7 @@ def test_escape_after_a_value_sent_puts_that_value_back_and_sends_nothing(
     page.keyboard.press('Escape')
     # Actions are sent in order, so an edit at the blur would come before this.
     with page.expect_response('**/api/relist'):
-        page.click('#rescan')
+        page.click('#relist')
 
     assert sent == ['{"path":["binning","bins"],"op":"set","value":7}']
     assert page.input_value(BINS) == '7'
@@ -572,7 +572,7 @@ def holder(page: Any, batch: Batch, sample: Measure, client: Client) -> Any:
     for run in range(4, 60):
         sample(run, f'r{run}')
     batch.put(toys.rows(client))
-    page.wait_for_selector('#n-samples:text-is("59")')
+    page.wait_for_selector('#n-rows:text-is("59")')
     return page.locator('#rows .tabulator-tableholder')
 
 
@@ -683,7 +683,7 @@ def test_html_in_a_cell_shows_as_text_in_its_tooltip(page: Any) -> None:
 
 def test_a_run_that_arrives_can_be_chosen_in_a_cell(page: Any, sample: Measure) -> None:
     sample(4, 'ice')
-    page.click('#rescan')
+    page.click('#relist')
     page.wait_for_selector('#toast:has-text("Listed the runs again.")')
 
     cell(page, 'water', 'transmission').click()
@@ -770,7 +770,7 @@ def test_a_run_corrected_on_its_page_changes_no_row(page: Any) -> None:
     correct_first_sample(page, 'background')
 
     page.wait_for_selector('#toast:has-text("Role corrected on 1 run.")')
-    page.click('[data-view=samples]')
+    page.click('[data-view=rows]')
     assert page.locator('#rows .tabulator-row').count() == 3
 
 
@@ -953,7 +953,7 @@ def no_batch(browser: Any, pages: Pages, sample: Measure) -> Iterator[Any]:
 def test_the_root_without_a_batch_shows_the_batches_and_runs_and_makes_one(
     no_batch: Any, manager: BatchManager
 ) -> None:
-    assert no_batch.is_hidden('[data-view=samples]')
+    assert no_batch.is_hidden('[data-view=rows]')
     assert no_batch.is_hidden('.right')
     no_batch.wait_for_selector('[data-view=runs] .n:text-is("2")')
 
