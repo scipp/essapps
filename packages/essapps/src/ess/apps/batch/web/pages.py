@@ -15,7 +15,9 @@ the counts (:meth:`Pages.counts`), which read the state of every batch.
 The runs are the same on every page (:meth:`Pages.runs`), and a person
 corrects them on any page, with or without a batch (:meth:`Pages.correct`).
 A correction changes no row of a batch: a table names files, and the page
-shows each with its metadata now.
+shows each with its metadata now. The Runs view names the batches of each
+run from the files that each batch names, which come with the counts
+(:meth:`Pages.counts`), since Follow adds rows without a change of the runs.
 
 A person makes a batch from the list of batches, of the sources and specs
 that :meth:`Pages.sources` offers, in one of three ways
@@ -503,28 +505,32 @@ class Pages:
     def counts(self) -> BatchCounts:
         """
         The rows of each batch by status, in the words of the page of each
-        batch (:attr:`~ess.apps.batch.RowState.text`). Every page and Follow
-        wait while it counts.
+        batch (:attr:`~ess.apps.batch.RowState.text`), and the files that
+        each batch names (:meth:`~ess.apps.batch.Batch.files`), which the Runs
+        view joins to its runs. Every page and Follow wait while it counts.
 
         The state of each batch is read as its page reads it, without asking
         its source, and not compared while its settings are refused
         (:meth:`~ess.apps.batch.Batch.shown`). A batch that
         cannot be made, such as one whose table cannot be read, has its
-        reason in ``failed``.
+        reason in ``failed``, and names no files.
         """
         with self.lock:
             manager = self.manager
             rows: dict[str, dict[str, int]] = {}
+            files: dict[str, list[str]] = {}
             failed: dict[str, str] = {}
             for label in manager.headers():
                 try:
                     batch = manager.batch(label)
                     states, _ = batch.shown()
+                    named = batch.files()
                 except (ValueError, OSError) as error:
                     failed[label] = why(error)
                     continue
                 rows[label] = dict(Counter(s.text for s in states.values()))
-            return BatchCounts(rows=rows, failed=failed)
+                files[label] = sorted(ref.file for ref in named)
+            return BatchCounts(rows=rows, files=files, failed=failed)
 
 
 def _spec_choice(

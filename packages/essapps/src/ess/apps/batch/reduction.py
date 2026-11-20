@@ -50,7 +50,9 @@ worked out on both as a record holds them, resolving as little as it can::
 
 A parameter resolves the same whatever the other parameters are, so a cell is
 resolved on its own, and a value resolved once is kept by its column and value
-until the next ``put`` (:meth:`Batch._resolve_cells`).
+until the next ``put`` (:meth:`Batch._resolve_cells`). The files that a batch
+names (:meth:`Batch.files`) are read from the same: each cell and each setting
+that names a file is resolved alone, as a template of that one parameter.
 
 A stage is opened lazily and kept with the template it was opened from, as
 given, since the stage's own holds resolved values. A refusal with no position
@@ -71,7 +73,8 @@ from typing import Any
 import pandas as pd
 from pydantic_core import to_json
 
-from ess.spec import WorkflowSpec, field_types
+from ess.spec import FileRef, WorkflowSpec, field_types
+from ess.spec.refs import iter_refs
 
 from ..client import Client, Stage
 from ..errors import FieldError, SubmitError
@@ -105,6 +108,11 @@ def _typed(value: Any) -> tuple[type, Any]:
         return (type(value), tuple(_typed(v) for v in value))
     hash(value)
     return (type(value), value)
+
+
+def _files_in(params: Mapping[str, Any]) -> list[FileRef]:
+    """The references to files in ``params``, at any depth."""
+    return [ref for _, ref in iter_refs(params) if isinstance(ref, FileRef)]
 
 
 def _running(row: RowState) -> list[FieldError]:
@@ -196,7 +204,8 @@ class Batch:
         self._seen: set[str] = set()
         self._found: dict[str, Record] = {}
         self._unbound: set[str] = set()
-        # A cell's value as a record holds it, by its column and value as given.
+        # A cell's value as a record holds it, by its column and value as given;
+        # also a setting's, for :meth:`files`.
         # A state of 1000 toy rows without results takes 21 ms with it, and
         # 198 ms without; with every row reduced, 23 ms either way, since a
         # row with a result resolves only the cells that differ.
@@ -410,6 +419,41 @@ class Batch:
             }
             for key, row in rows.to_dict('index').items()
         }
+
+    def files(self) -> set[FileRef]:
+        """
+        The files that the batch names, each by its identity: in a cell of a
+        row or in a setting, at any depth, such as an element of a list.
+
+        A name is resolved by the workspace, so ``run:60339`` gives the
+        identity under which the file source lists the file. Each value
+        that names a file is resolved on its own, so that a value refused,
+        such as one that names a file not listed, names no file and hides
+        no other; the elements of a list refused are resolved each on its
+        own, so that one not listed hides no other. In a group, such as a
+        setting of several fields, a file refused hides the group's other
+        files. A value resolved is kept as :meth:`state` keeps it, until
+        the next :meth:`put`.
+        """
+        given = [
+            *self._template.params.items(),
+            *(item for cells in self.cells().values() for item in cells.items()),
+        ]
+        unique = {
+            _kept(n, v) or object(): {n: v} for n, v in given if _files_in({n: v})
+        }
+        asked = {str(i): a for i, a in enumerate(unique.values())}
+        resolved, refused = self._resolve_cells(asked)
+        alone = [
+            {n: [x]}
+            for key in refused
+            for n, v in asked[key].items()
+            if isinstance(v, list)
+            for x in v
+        ]
+        more, _ = self._resolve_cells({str(i): a for i, a in enumerate(alone)})
+        named = [*resolved.values(), *more.values()]
+        return {ref for cells in named for ref in _files_in(cells)}
 
     def state(
         self, keys: Sequence[str] | None = None, *, compare: bool = True
