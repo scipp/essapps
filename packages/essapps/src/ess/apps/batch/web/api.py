@@ -53,6 +53,8 @@ from .models import (
     Key,
     Keys,
     Made,
+    MakeColumn,
+    MakeSetting,
     NewBatch,
     Notice,
     On,
@@ -61,6 +63,7 @@ from .models import (
     RowDetail,
     Runs,
     SourceChoice,
+    SourceRows,
     State,
 )
 from .page import Missing, Page, Problem
@@ -184,6 +187,26 @@ def create_app(pages: Pages) -> FastAPI:
     def add(page: PageOfLabel, body: Key) -> State:
         return page.add(body.key)
 
+    @batch.get('/api/rows/offered')
+    def offered(label: str) -> SourceRows:
+        """The rows of the source of the batch that its table lacks."""
+        return pages.offered(label)
+
+    @batch.post('/api/rows/take')
+    def take(page: PageOfLabel, body: Keys) -> State:
+        """Add rows of the source, as it makes them now."""
+        return page.take(body.keys)
+
+    @batch.post('/api/settings/column')
+    def make_column(page: PageOfLabel, body: MakeColumn) -> State:
+        """Make a setting a column, of its value in every row."""
+        return page.make_column(body.name)
+
+    @batch.post('/api/columns/setting')
+    def make_setting(page: PageOfLabel, body: MakeSetting) -> State:
+        """Make a column a setting, of the value of a row or of every row."""
+        return page.make_setting(body)
+
     @batch.post('/api/reduce')
     def reduce(page: PageOfLabel, body: Reduce) -> State:
         return page.reduce(body)
@@ -279,10 +302,34 @@ def create_app(pages: Pages) -> FastAPI:
     def create(body: NewBatch) -> Made:
         return pages.create(body)
 
+    @workspace.post('/api/batches/table')
+    def create_from_table(
+        spec: str,
+        title: str,
+        name: str,
+        content: Annotated[bytes, Body()],
+        description: str = '',
+        settings_from: str | None = None,
+    ) -> Made:
+        """Make a batch without a source, of the table of a table file."""
+        return pages.create_from_table(
+            spec,
+            title,
+            name,
+            content,
+            description=description,
+            settings_from=settings_from,
+        )
+
     @workspace.get('/api/sources')
     def sources() -> list[SourceChoice]:
         """What a new batch can be made with."""
         return pages.sources()
+
+    @workspace.get('/api/sources/rows')
+    def rows_of(name: str) -> SourceRows:
+        """The rows that the source ``name`` makes now, those that wait marked."""
+        return pages.rows_of(name)
 
     @workspace.get('/api/runs')
     def runs() -> Runs:

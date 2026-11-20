@@ -170,7 +170,8 @@ const editorOf = (column, options, say) =>
 function cellFormatter(column, revert) {
   return (cell) => {
     const data = cell.getData();
-    const c = data.cells[column.name];
+    // A row drawn before the rows of new columns arrive has no such cell.
+    const c = data.cells[column.name] ?? {};
     const element = cell.getElement();
     element.classList.toggle('bad', Boolean(c.problem));
     element.classList.toggle('edited', Boolean(c.edited));
@@ -201,7 +202,7 @@ function cellFormatter(column, revert) {
 
 function cellTooltip(column) {
   return (event, cell) => {
-    const c = cell.getData().cells[column.name];
+    const c = cell.getData().cells[column.name] ?? {};
     if (c.problem) return c.problem;
     if (c.edited) return `${c.text || empty(column)}, set by hand; it was ${c.original || empty(column)}`;
     return c.text;
@@ -211,8 +212,9 @@ function cellTooltip(column) {
 // A column for each cell, given {name, title, editor, default} as the server
 // sends them. `current()` gives the columns of the state shown, whose options
 // an editor offers. `revert(key, name)`, if given, takes a cell set by hand
-// back.
-export function cellColumns(columns, {current, revert, say}) {
+// back. `menu(column)`, if given, gives the items of the menu of its header,
+// as Tabulator's `headerMenu` takes them.
+export function cellColumns(columns, {current, revert, say, menu}) {
   const options = (column) => () => current().find((c) => c.name === column.name).editor.options;
   return columns.map((column) => ({
     title: column.title,
@@ -223,6 +225,7 @@ export function cellColumns(columns, {current, revert, say}) {
     cssClass: column.editor ? `editable ${column.editor.type}` : '',
     formatter: cellFormatter(column, revert),
     tooltip: cellTooltip(column),
+    ...(menu && {headerMenu: menu(column)}),
     ...editorOf(column, options(column), say),
   }));
 }

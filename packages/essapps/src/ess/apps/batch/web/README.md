@@ -34,6 +34,12 @@ A row is shown by its note `name`, else by its key; **+ Add row** takes its key.
 Each change of rows on the page, an edit of cells, **+ Add row**, **Remove selected** and **Load table**, makes the new table and puts it to the batch (`Batch.put`); what the batch refuses is said, and nothing changes.
 A run chosen in a cell is kept as the text of its file (`table.cell_of`).
 **Load table** replaces the whole table, its columns too; the page then shows the cells and the settings form of the columns loaded.
+**+ Add rows from the runs**, on the page of a batch made from a source, lists the rows of the source that the table lacks (`BatchManager.offered`): those left out when the batch was made, those removed, and those that wait for a run, marked.
+The rows a person picks are added as the source makes them now (`BatchManager.take`), and Follow does not add them again once removed; so a removed row comes back this way.
+
+"Make this a column", at a setting in the Settings tab, makes the setting a column with the setting's value in every cell (`Batch.make_column`); it is offered only for a setting whose cell the page edits.
+"Make this a setting", in the menu of the header of a column, makes the column a setting (`Batch.make_setting`): of the value of every row, or, where the rows differ, of the value a person chooses in a dialog.
+Both are refused while the settings form holds a change, since the page then builds the form and the cell editors again.
 **Download as CSV** and **Download as XLSX** give the table with the results of its rows (`frames.with_results`).
 If the file source raises, the page shows the table, the results and the plots all the same; the pickers offer no file, the Runs view is empty, and both say why.
 
@@ -96,19 +102,26 @@ The list and the Runs view are the same on every page.
 | Field | What it is |
 |---|---|
 | Title, Description | the header of the batch; the title is required |
-| Source | a source that the application registers (`BatchManager(sources=...)`), or "none: no rows" |
+| Rows | from a source that the application registers (`BatchManager(sources=...)`), from a table file, or "none: no rows" |
+| Range | with a source: the first and the last row to take, each open if not chosen, among the rows that the source has filled now; the table below lists every row the source makes (`GET api/sources/rows?name=...`), marked taken, left out, or waiting |
+| Table file | from a table file: a `.csv`, `.tsv` or `.xlsx` file with a column `key` (`table.read_table`) |
 | Workflow | a spec that the workspace binds and that has a parameter for each column that the source fills; any spec without a source |
-| Columns | the columns that the source fills, fixed; the other parameters of the spec whose cell the page edits, to tick (a group of fields, such as a Q binning, stays a setting) |
+| Settings | on the page of a batch, for its workflow: start with the settings of that batch, else with those that the application gives |
+| Columns | the columns that the source fills, fixed; the other parameters of the spec whose cell the page edits, to tick (a group of fields, such as a Q binning, stays a setting); none for a table file, whose columns are those of the file |
 
-**Make** sends the form to `POST api/batches`, and the page goes to the page of the new batch.
-With a source, the batch holds every row that the source has filled now, with an empty column for each column ticked that the source does not fill; Follow adds the rows that wait and those that arrive later.
+**Make** sends the form to `POST api/batches`, or the file to `POST api/batches/table`, and the page goes to the page of the new batch.
+With a source, the batch holds the rows of the range that the source has filled now, with an empty column for each column ticked that the source does not fill; a row that waits cannot be taken, and Follow adds it once filled, as it adds those that arrive later.
+From a table file, the batch has no source; a column of the file named as no parameter is a note, so a misspelt column is a note, and the parameter it meant is a setting that the settings form asks for.
 Without a source, the batch holds no rows and the columns ticked; rows are added on its page or by **Load table**.
 In code:
 
 ```python
 label = manager.create(spec, title=title, source=source,
-                       choose=lambda given: given.assign(thickness=None))
+                       choose=lambda given: given.loc[first:last].assign(thickness=None),
+                       settings=manager.batch(other).settings)
 ```
+
+Opened on the page of a batch, the form starts at that batch's source, workflow, columns and settings, so the next batch is this form with a range that starts later.
 
 The choices come from `GET api/sources`; what can be made is decided by `BatchManager.create`, and what it refuses, such as an empty title, shows at the form, with nothing made.
 **Make** is disabled while it is sent, so a double click makes one batch.

@@ -18,9 +18,13 @@ A correction changes no row of a batch: a table names files, and the page
 shows each with its metadata now.
 
 A person makes a batch from the list of batches, of the sources and specs
-that :meth:`Pages.sources` offers (:meth:`Pages.create`); the manager decides
-what can be made. With no batch at all, the page is served without one: it
-shows the list of batches and the runs. So is the page of a batch that cannot
+that :meth:`Pages.sources` offers, in one of three ways: from a source, of a
+range of the rows that it makes now (:meth:`Pages.rows_of`,
+:meth:`Pages.create`); from a table file (:meth:`Pages.create_from_table`);
+or without rows. Made from the page of a batch, it may start with the
+settings of that batch. The manager decides what can be made. With no batch
+at all, the page is served without one: it shows the list of batches and the
+runs. So is the page of a batch that cannot
 be made (:meth:`Pages.page`), with the reason, and that of a batch removed
 (:meth:`Pages.remove`): a :class:`~.page.Page` handed out before answers
 :class:`~.page.Missing` from then on.
@@ -38,7 +42,7 @@ from __future__ import annotations
 
 import threading
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import suppress
 from typing import Any
 
@@ -54,8 +58,9 @@ from ..auto import Step
 from ..corrections import CorrectedFiles
 from ..definition import NotKept
 from ..manager import BatchManager, fits
-from ..source import Source
+from ..source import Source, filled
 from ..state import RowState, not_reduced
+from ..table import read_table
 from . import forms
 from .models import (
     BatchCounts,
@@ -72,13 +77,18 @@ from .models import (
     RunRow,
     Runs,
     SourceChoice,
+    SourceRow,
+    SourceRows,
     SpecChoice,
 )
 from .page import (
+    NAME,
     Draw,
     Missing,
     Page,
     Problem,
+    named_file,
+    names,
     read,
     why,
 )
@@ -396,18 +406,62 @@ class Pages:
             given = [choice(n, s) for n, s in self.manager.sources.items()]
             return [c for c in given if c.specs] + [choice(None, None)]
 
-    def create(self, new: NewBatch) -> Made:
+    def rows_of(self, source: str) -> SourceRows:
         """
-        Make the batch of ``new`` with the manager
-        (:meth:`~ess.apps.batch.BatchManager.create`), with the settings that
-        the application gives its spec: with a source, of every row that the
-        source has filled now, with an empty column for each other of
-        ``new.columns``; without, of a table of ``new.columns`` without rows.
-        Raises :class:`~.page.Problem` with what the manager refuses, or what
+        The table that the source registered as ``source`` makes now
+        (:meth:`~ess.apps.batch.BatchManager.rows_of`), with the rows that
+        wait marked (:func:`~ess.apps.batch.source.filled`), for a person to
+        choose the rows of a new batch among them. Raises
+        :class:`~.page.Problem` if no source is registered so, or with what
         the source raises.
         """
         with self.lock:
             try:
+                given = self.manager.rows_of(source)
+            except Exception as error:  # a source is code of the application
+                raise Problem(
+                    f'The rows of {source} cannot be listed: {why(error)}.'
+                ) from None
+            fills = self.manager.sources[source].fills
+            return _listed(given, ~filled(given, fills), fills)
+
+    def offered(self, label: str) -> SourceRows:
+        """
+        The rows of the source of the batch of ``label`` that its table
+        lacks, those that wait marked
+        (:meth:`~ess.apps.batch.BatchManager.offered`), for "Add rows from the
+        runs" on its page (:meth:`Page.take <.page.Page.take>`). Raises
+        :class:`~.page.Missing` if no batch has the label, and
+        :class:`~.page.Problem` if it has no source, or with what the source
+        raises.
+        """
+        with self.lock:
+            if label not in self.manager.headers():
+                raise Missing(f'There is no batch {label}.')
+            try:
+                given = self.manager.offered(label)
+            except Exception as error:  # a source is code of the application
+                raise Problem(
+                    f'The rows of the source cannot be listed: {why(error)}.'
+                ) from None
+            fills = self.manager.sources[self.manager.source(label)].fills
+            return _listed(given.drop(columns='waits'), given['waits'], fills)
+
+    def create(self, new: NewBatch) -> Made:
+        """
+        Make the batch of ``new`` with the manager
+        (:meth:`~ess.apps.batch.BatchManager.create`): with a source, of the
+        rows from ``new.first`` to ``new.last`` among those that the source
+        has filled now, with an empty column for each other of
+        ``new.columns``; without, of a table of ``new.columns`` without rows.
+        It starts with the settings of the batch ``new.settings_from``, else
+        with those that the application gives its spec. Raises
+        :class:`~.page.Problem` with what the manager refuses, or what the
+        source raises.
+        """
+        with self.lock:
+            try:
+                settings = self._settings(new.spec, new.settings_from)
                 if new.source is None:
                     rows = pd.DataFrame(columns=new.columns)
                     label = self.manager.create(
@@ -415,12 +469,19 @@ class Pages:
                         title=new.title,
                         rows=rows,
                         description=new.description,
+                        settings=settings,
                     )
                 else:
 
                     def choose(given: pd.DataFrame) -> pd.DataFrame:
-                        empty = [c for c in new.columns if c not in given.columns]
-                        return given.assign(**dict.fromkeys(empty))
+                        for end in (new.first, new.last):
+                            if end is not None and end not in given.index:
+                                raise ValueError(
+                                    f'{new.source} has no filled row {end}'
+                                )
+                        taken = given.loc[new.first : new.last]
+                        empty = [c for c in new.columns if c not in taken.columns]
+                        return taken.assign(**dict.fromkeys(empty))
 
                     label = self.manager.create(
                         new.spec,
@@ -428,10 +489,61 @@ class Pages:
                         source=new.source,
                         choose=choose,
                         description=new.description,
+                        settings=settings,
                     )
             except Exception as error:  # a source is code of the application
                 raise Problem(f'The batch was not made: {why(error)}.') from None
             return Made(label=label)
+
+    def create_from_table(
+        self,
+        spec: str,
+        title: str,
+        name: str,
+        content: bytes,
+        *,
+        description: str = '',
+        settings_from: str | None = None,
+    ) -> Made:
+        """
+        Make a batch of ``spec`` without a source, of the table of the table
+        file ``name`` that holds ``content``
+        (:func:`~ess.apps.batch.table.read_table`), with settings as
+        :meth:`create` gives them. A column of the file named as no parameter
+        is a note, also one misspelt. Raises :class:`~.page.Problem` with what
+        the file or the manager refuses.
+        """
+        with self.lock:
+            try:
+                settings = self._settings(spec, settings_from)
+                with named_file(name, content) as path:
+                    rows = read_table(path, self.manager.client.spec_named(spec).params)
+                label = self.manager.create(
+                    spec,
+                    title=title,
+                    rows=rows,
+                    description=description,
+                    settings=settings,
+                )
+            except (OSError, ValueError, KeyError) as error:
+                raise Problem(f'The batch was not made: {why(error)}.') from None
+            return Made(label=label)
+
+    def _settings(self, spec: str, label: str | None) -> Mapping[str, Any] | None:
+        """
+        The settings of the batch of ``label``, for a new batch of ``spec``;
+        ``None``, those that the application gives ``spec``, if no label.
+        Raises ``ValueError`` if no batch has the label, or if its spec is
+        another.
+        """
+        if label is None:
+            return None
+        if label not in self.manager.headers():
+            raise ValueError(f'there is no batch {label}')
+        batch = self.manager.batch(label)
+        if batch.spec.name != spec:
+            raise ValueError(f'the settings of {label} are of another workflow')
+        return batch.settings
 
     def remove(self, label: str) -> None:
         """
@@ -476,6 +588,34 @@ class Pages:
                     continue
                 rows[label] = dict(Counter(s.text for s in states.values()))
             return BatchCounts(rows=rows, failed=failed)
+
+
+def _listed(
+    frame: pd.DataFrame, waits: pd.Series, fills: Collection[str]
+) -> SourceRows:
+    """
+    The rows of ``frame``, a table that a source makes, as a dialog lists
+    them: each named as :func:`~.page.names` names it, with the text of its
+    notes, the columns but ``fills``, and marked if it ``waits``.
+    """
+    named = names(frame, ())
+    shown = [c for c in frame.columns if c != NAME and c not in fills]
+
+    def text(value: Any) -> str:
+        return '' if pd.api.types.is_scalar(value) and pd.isna(value) else str(value)
+
+    return SourceRows(
+        columns=[Column(name=c, title=c.replace('_', ' ').capitalize()) for c in shown],
+        rows=[
+            SourceRow(
+                key=key,
+                name=named[key],
+                cells={c: text(row[c]) for c in shown},
+                waits=bool(waits[key]),
+            )
+            for key, row in frame[shown].to_dict('index').items()
+        ],
+    )
 
 
 def _spec_choice(

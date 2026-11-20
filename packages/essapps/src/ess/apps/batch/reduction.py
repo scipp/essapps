@@ -79,7 +79,7 @@ from ..records import Record, SpecId, Status, Template
 from . import definition, state
 from .definition import DefinitionStore
 from .state import RowState
-from .table import as_request, data_of, typed
+from .table import as_request, cell_of, data_of, typed
 
 _NONE = object()
 
@@ -283,6 +283,51 @@ class Batch:
         )
         self._save(template)
         self._template = template
+
+    def make_column(self, name: str) -> None:
+        """
+        Make the setting ``name`` a column, with the setting's value in every
+        cell, or empty cells if it has none: one :meth:`put`. Raises
+        ``ValueError`` if ``name`` is not a setting, and as :meth:`put`.
+        """
+        if name not in self.settings_fields:
+            raise ValueError(f'{name} is not a setting of {self.spec.name}')
+        params = self._template.params
+        cell = cell_of(params[name]) if name in params else None
+        frame = self.frame()
+        # A list given to a column would be spread over the rows, and a dict
+        # read as a value per key of the index.
+        cells = [copy.deepcopy(cell) for _ in frame.index]
+        frame[name] = pd.Series(cells, index=frame.index, dtype=object)
+        self.put(frame)
+
+    def make_setting(self, name: str, key: str | None = None) -> None:
+        """
+        Make the column ``name`` a setting, whose value is the cell of the row
+        of ``key``, or, if not given, the cell that every row has; an empty
+        cell gives the setting no value. A :meth:`put` without the column,
+        then an assignment of :attr:`settings`: if the definitions refuse the
+        second, the setting has no value.
+
+        Raises ``ValueError`` if ``name`` is not a column, if the table has
+        no row of ``key``, or if ``key`` is not given and the cells differ;
+        and as :meth:`put`.
+        """
+        if name not in self.columns:
+            raise ValueError(f'{name} is not a column of the batch')
+        cells = {k: row[name] for k, row in self._rows[[name]].to_dict('index').items()}
+        if key is not None:
+            if key not in cells:
+                raise ValueError(f'the batch has no row {key}')
+            cell = cells[key]
+        elif len({to_json(c) for c in cells.values()}) > 1:
+            raise ValueError(f'the rows differ at {name}: choose the value to keep')
+        else:
+            cell = next(iter(cells.values()), None)
+        self.put(self.frame().drop(columns=name))
+        if cell is not None:
+            value = as_request(self.spec.params, {name: cell})[name]
+            self.settings = {**self.settings, name: value}
 
     def _save(self, template: Template) -> None:
         """Write ``template`` as the settings of the label, if kept."""

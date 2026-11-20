@@ -22,8 +22,11 @@ or removed, a table file loaded, which replaces the table. A cell is plain
 data (:mod:`..table`): a value that a picker gives is kept as
 :func:`~..table.cell_of` makes it, and shown as the listing names it. A row is
 named by its note ``name`` if the table has one, else by its key, and "Add
-row" takes its key. "List runs again" lists the files again, for the pickers
-and the Runs view, and changes no row. If the file source raises, the page
+row" takes its key. "Add rows from the runs", on the page of a batch made from
+a source, lists the rows of the source that the table lacks
+(:meth:`Pages.offered <.pages.Pages.offered>`) and adds those that a person
+picks (:meth:`Page.take`). "List runs again" lists the files again, for the
+pickers and the Runs view, and changes no row. If the file source raises, the page
 shows the table, the results and the plots all the same: the pickers offer
 no file, the Runs view is empty, and the state says why
 (:attr:`~.models.State.files_problem`).
@@ -37,11 +40,16 @@ and a download of the settings are refused, so that nothing is reduced or
 saved with settings other than those shown. Settings that the form cannot
 show, such as those kept for another version of the spec, are named in the
 state's ``settings_problem`` and kept until Apply. A ``Page`` writes the
-batch's settings only at Apply: the form does not show an assignment by code
-while the server runs. The columns of the table are the blanks of the
-template, so a table loaded with other columns changes the parameters of the
-cells and of the form: the page builds both again when the columns of the
-batch change, and the form then shows the batch's settings.
+batch's settings only at Apply and at "Make this a setting": the form does
+not show an assignment by code while the server runs. The columns of the
+table are the blanks of the template, so a table loaded with other columns
+changes the parameters of the cells and of the form: the page builds both
+again when the columns of the batch change, and the form then shows the
+batch's settings. "Make this a column" on a setting and "Make this a setting"
+on a column (:meth:`~ess.apps.batch.Batch.make_column`,
+:meth:`~ess.apps.batch.Batch.make_setting`) change the columns so; both are
+refused while the form holds a change, which the new form would drop. The
+page offers as a column only a setting whose cell it edits.
 
 The page in the browser holds only what it shows: the selection, the
 filter, the tab. Each action returns the :class:`~.models.State` after it, and
@@ -155,6 +163,7 @@ from .models import (
     Following,
     HeaderEdit,
     HeaderShown,
+    MakeSetting,
     Plot,
     Reduce,
     Refused,
@@ -277,7 +286,7 @@ def _rows(n: int) -> str:
 
 
 @contextmanager
-def _file(name: str, content: bytes | None = None) -> Iterator[Path]:
+def named_file(name: str, content: bytes | None = None) -> Iterator[Path]:
     """A path named ``name`` in a folder of its own, holding ``content`` if given."""
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / Path(name).name
@@ -541,7 +550,9 @@ class Page:
             label=self.label,
             title=header.title,
             header=HeaderShown(
-                workflow=batch.spec.title, description=header.description
+                workflow=batch.spec.title,
+                spec=batch.spec.name,
+                description=header.description,
             ),
             application=self.pages.title,
             folder=self.pages.folder,
@@ -565,6 +576,11 @@ class Page:
             settings=forms.tree(self.settings, marks),
             settings_problem=problem,
             settings_changed=unapplied is not None,
+            may_be_columns=[
+                n
+                for n, f in self.settings.fields.items()
+                if forms.editor(f) is not None
+            ],
             refused=[self._refused(e, named) for e in self.refused],
             follow=self._follow(),
             files_problem=self._listing.failure,
@@ -790,6 +806,64 @@ class Page:
         self._put(frame.reindex(pd.Index([*frame.index, key], name=KEY)))
         return f'Added {key}: fill in its cells.'
 
+    @_action
+    def take(self, keys: Sequence[str]) -> str:
+        """
+        Add the rows of ``keys`` as the source makes them now, so that Follow
+        does not add them again once removed
+        (:meth:`~ess.apps.batch.BatchManager.take`).
+        """
+        try:
+            self.pages.manager.take(self.label, keys)
+        except NotKept:
+            raise
+        except Exception as error:  # a source is code of the application
+            raise Problem(f'No row was added: {why(error)}.') from None
+        # The rows may name files that the listing lacks.
+        self._relist()
+        return f'Added {_rows(len(keys))}.'
+
+    # Columns and settings
+
+    def _unchanged(self) -> None:
+        """A :class:`Problem` while the form holds a change, which a new form drops."""
+        if unapplied := self._unapplied():
+            raise Problem(f'Nothing was changed: {unapplied.lower()} first.')
+
+    def _forget_at(self, name: str) -> None:
+        """Forget the reasons of a refusal at the parameter ``name``."""
+        self.refused = [e for e in self.refused if not (e.loc and e.loc[0] == name)]
+
+    @_action
+    def make_column(self, name: str) -> str:
+        """
+        Make the setting ``name`` a column, of its value in every row
+        (:meth:`~ess.apps.batch.Batch.make_column`).
+        """
+        self._unchanged()
+        title = self.settings.titles.get(name, name)
+        try:
+            self.batch.make_column(name)
+        except ValueError as error:
+            raise Problem(f'Nothing was changed: {why(error)}.') from None
+        self._forget_at(name)
+        return f'{title} is a column: each row has its own.'
+
+    @_action
+    def make_setting(self, made: MakeSetting) -> str:
+        """
+        Make a column a setting, of the value of a row, or of every row
+        (:meth:`~ess.apps.batch.Batch.make_setting`).
+        """
+        self._unchanged()
+        title = self._cells.titles.get(made.name, made.name)
+        try:
+            self.batch.make_setting(made.name, made.key)
+        except ValueError as error:
+            raise Problem(f'Nothing was changed: {why(error)}.') from None
+        self._forget_at(made.name)
+        return f'{title} is a setting: one value for every row.'
+
     # Reducing
 
     @_action
@@ -1005,7 +1079,7 @@ class Page:
         """The table with what came of each row, as a ``.csv`` or ``.xlsx`` file."""
         batch = self.batch
         table = frames.with_results(batch.client, self._states()[0], batch.frame())
-        with _file(f'rows{suffix}') as path:
+        with named_file(f'rows{suffix}') as path:
             write_table(table, path)
             return path.read_bytes()
 
@@ -1013,7 +1087,7 @@ class Page:
     def load_table(self, name: str, content: bytes) -> str:
         """Make the table of a table file the table of the batch."""
         try:
-            with _file(name, content) as path:
+            with named_file(name, content) as path:
                 frame = read_table(path, self.batch.spec.params)
             self.batch.put(frame)
         except NotKept:
@@ -1033,7 +1107,7 @@ class Page:
             raise Problem(f'{unapplied} first.')
         if missing := self.settings.held()[1]:
             raise Problem(f'Fill in the settings first: {SubmitError(missing)}')
-        with _file('settings.yaml') as path:
+        with named_file('settings.yaml') as path:
             write_template(self.batch.template(), path)
             return path.read_bytes()
 
@@ -1041,7 +1115,7 @@ class Page:
     def load_settings(self, name: str, content: bytes) -> str:
         """Show the settings of a YAML template in the form, all or none."""
         cannot = f'Cannot load {name}:'
-        with _file('settings.yaml', content) as path:
+        with named_file('settings.yaml', content) as path:
             try:
                 template = load_template(path)
             except (OSError, ValueError):
@@ -1066,7 +1140,7 @@ class Page:
         if not done:
             raise Problem('None of these rows has a result.')
         buffer = io.BytesIO()
-        with _file('results') as folder:
+        with named_file('results') as folder:
             table = frames.with_results(batch.client, states, frame.loc[done])
             exported = export_table(batch.client, table, folder)
             write_table(exported, folder / 'results.csv')

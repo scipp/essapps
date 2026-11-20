@@ -225,7 +225,11 @@ function gridColumns(state) {
     tooltip: (event, cell) => cell.getValue(),
   };
   const notes = state.notes.map((c) => ({title: c.title, field: `notes.${c.name}`, minWidth: 96, headerSort: false}));
-  const cells = cellColumns(state.columns, {current: () => view.state.columns, say: showMessage});
+  const cells = cellColumns(state.columns, {
+    current: () => view.state.columns,
+    say: showMessage,
+    menu: (column) => [{label: 'Make this a setting', action: () => makeSetting(column)}],
+  });
   return {
     columns: [named, ...notes, ...cells, statusColumn],
     edits: Object.fromEntries(state.columns.map((c) => [`cells.${c.name}.value`, c])),
@@ -386,17 +390,31 @@ function drawBatches() {
 
 // The form "New batch". The server says what a batch can be made with
 // (api/sources) and decides what can be made: a refusal shows at the form.
+// The rows come from a source, a range of those that it has filled now; from
+// a table file; or none. Opened on the page of a batch, the form starts at
+// that batch's source, workflow, columns and settings, so that the next batch
+// is this form with a range that starts later.
 let choices = []; // what a new batch can be made with, as last loaded
+let none = 0; // the index of the choice without a source
+let sourceRows = null; // the rows of the source chosen, as last loaded
+const FILE = 'file'; // the value of the choice "from a table file"
 
 async function openNewBatch() {
   const form = $('new-batch');
   const loaded = await request('sources');
   if (!loaded) return;
   choices = loaded;
+  none = choices.findIndex((c) => c.name === null);
   form.reset();
   form.elements.source.replaceChildren(
-    ...choices.map((c, i) => h('option', {value: i, text: c.name ?? 'none: no rows'})),
+    ...choices.flatMap((c, i) => (c.name === null ? [] : [h('option', {value: i, text: `from ${c.name}`})])),
+    h('option', {value: FILE, text: 'from a table file'}),
+    h('option', {value: none, text: 'none: no rows'}),
   );
+  if (view.state) {
+    const at = choices.findIndex((c) => c.name === view.state.follow.source);
+    form.elements.source.value = at >= 0 ? at : none;
+  }
   chooseSource();
   $('new-problem').textContent = '';
   form.hidden = false;
@@ -409,31 +427,116 @@ function closeNewBatch() {
   $('new-batch-open').hidden = false;
 }
 
-const chosenSource = () => choices[$('new-batch').elements.source.value];
+const way = () => {
+  const chosen = $('new-batch').elements.source.value;
+  return chosen === FILE ? FILE : choices[chosen].name === null ? 'none' : 'source';
+};
+const chosenSource = () => choices[way() === FILE ? none : $('new-batch').elements.source.value];
 const chosenSpec = () => chosenSource().specs[$('new-batch').elements.spec.value];
 
-// The workflows that fit the source chosen. A batch made from a source gets
-// the rows that it has filled now; one without a source starts without rows.
+// The workflows that fit the way chosen, and its fields.
 function chooseSource() {
   const source = chosenSource();
-  $('new-batch').elements.spec.replaceChildren(...source.specs.map((s, i) => h('option', {value: i, text: s.title})));
-  $('new-rows').textContent = source.name === null
-    ? 'The batch starts without rows: add them, or load a table.'
-    : `The batch gets the rows that ${source.name} has filled now; Follow adds the others once filled.`;
+  const kind = way();
+  const {elements} = $('new-batch');
+  elements.spec.replaceChildren(...source.specs.map((s, i) => h('option', {value: i, text: s.title})));
+  const same = view.state ? source.specs.findIndex((s) => s.name === view.state.header.spec) : -1;
+  if (same >= 0) elements.spec.value = same;
+  $('new-rows').textContent = {
+    none: 'The batch starts without rows: add them, or load a table.',
+    [FILE]: 'The batch gets the rows and the columns of the file.',
+    source: '',
+  }[kind];
+  $('new-range').hidden = kind !== 'source';
+  $('new-file').hidden = kind !== FILE;
+  $('new-columns-field').hidden = kind === FILE;
   chooseSpec();
+  if (kind === 'source') loadSourceRows(source.name);
 }
 
 // The parameters of the workflow chosen: those that the source fills are
-// columns, the others a person may make columns.
+// columns, the others a person may make columns. Of the workflow of the batch
+// of the page, its columns are ticked, and its settings offered.
 function chooseSpec() {
   const {name, fills} = chosenSource();
+  const spec = chosenSpec();
+  const batch = view.state;
+  const same = Boolean(batch) && spec?.name === batch.header.spec;
+  const ticked = same ? batch.columns.map((c) => c.name) : [];
   $('new-columns').replaceChildren(
-    ...(chosenSpec()?.params ?? []).map((p) => {
+    ...(spec?.params ?? []).map((p) => {
       const fixed = fills.includes(p.name);
-      const box = h('input', {type: 'checkbox', name: 'column', value: p.name, checked: fixed, disabled: fixed});
+      const box = h('input', {type: 'checkbox', name: 'column', value: p.name, checked: fixed || ticked.includes(p.name), disabled: fixed});
       return h('label', {title: fixed ? `Filled by ${name}` : null}, box, p.title);
     }),
   );
+  $('new-settings').hidden = !same;
+  $('new-like').textContent = same ? `Start with the settings of ${batch.title}` : '';
+}
+
+// The rows that the source makes now, for the range.
+async function loadSourceRows(name) {
+  const {elements} = $('new-batch');
+  sourceRows = null;
+  for (const end of [elements.first, elements.last]) end.replaceChildren();
+  drawRange();
+  const say = (text) => ($('new-problem').textContent = text);
+  const loaded = await request(`sources/rows?${query({name})}`, {kind: 'source-rows', say});
+  if (!loaded || way() !== 'source' || chosenSource().name !== name) return;
+  sourceRows = loaded;
+  const filled = loaded.rows.filter((row) => !row.waits);
+  const option = (row) => h('option', {value: row.key, text: row.name === row.key ? row.key : `${row.name} (${row.key})`});
+  elements.first.replaceChildren(h('option', {value: '', text: 'the first'}), ...filled.map(option));
+  elements.last.replaceChildren(h('option', {value: '', text: 'the last'}), ...filled.map(option));
+  drawRange();
+}
+
+// The rows of the source, each marked as taken, left out, or waiting; the
+// server takes the range among the rows filled.
+function drawRange() {
+  const box = $('new-source-rows');
+  if (!sourceRows) {
+    $('new-rows').textContent = '';
+    return box.replaceChildren(h('div', {class: 'empty', text: 'Listing the rows…'}));
+  }
+  const {first, last} = $('new-batch').elements;
+  const keys = sourceRows.rows.map((row) => row.key);
+  const from = first.value ? keys.indexOf(first.value) : 0;
+  const to = last.value ? keys.indexOf(last.value) : keys.length - 1;
+  const status = (row, i) => (row.waits ? 'waits' : i >= from && i <= to ? 'taken' : 'left out');
+  const said = sourceRows.rows.map(status);
+  const n = (word) => said.filter((s) => s === word).length;
+  const waits = n('waits');
+  const waiting = waits ? `; ${count(waits)} ${waits === 1 ? 'waits' : 'wait'} for a run, which Follow adds once filled` : '';
+  $('new-rows').textContent = `The batch gets ${count(n('taken'))}${waiting}.`;
+  box.replaceChildren(sourceTable(sourceRows, status));
+}
+
+// A table of the rows of a source: the name, each column, and what
+// `status(row, i)` says; with a box to pick each row if given `picked`, which
+// is told the keys picked at each change.
+function sourceTable({columns, rows: listed}, status, picked) {
+  if (!listed.length) return h('div', {class: 'empty', text: 'No rows.'});
+  const boxes = [];
+  const pills = {waits: 'st-incomplete', taken: 'st-done'};
+  const body = listed.map((row, i) => {
+    const said = status(row, i);
+    const box = picked && h('input', {type: 'checkbox', value: row.key, 'aria-label': row.name});
+    if (box) {
+      box.onchange = () => picked(boxes.filter((b) => b.checked).map((b) => b.value));
+      boxes.push(box);
+    }
+    return h(
+      'tr',
+      {class: said === 'left out' ? 'out' : null},
+      box && h('td', {}, box),
+      h('td', {text: row.name}),
+      columns.map((c) => h('td', {text: row.cells[c.name]})),
+      h('td', {}, said && h('span', {class: `pill ${pills[said] ?? 'st-cancelled'}`, text: said})),
+    );
+  });
+  const head = h('tr', {}, picked && h('th'), h('th', {text: 'Name'}), columns.map((c) => h('th', {text: c.title})), h('th'));
+  return h('table', {}, h('thead', {}, head), h('tbody', {}, body));
 }
 
 // Make the batch of the form, once at a time.
@@ -443,17 +546,81 @@ async function makeBatch(event) {
   const button = form.querySelector('[type=submit]');
   if (button.disabled) return;
   const {elements} = form;
-  const body = {
+  const say = (text) => ($('new-problem').textContent = text);
+  const header = {
     title: elements.title.value.trim(),
     description: elements.description.value.trim(),
-    source: chosenSource().name,
     spec: chosenSpec()?.name ?? '',
-    columns: [...form.querySelectorAll('[name=column]:checked')].map((box) => box.value),
+    ...(!$('new-settings').hidden && elements.like.checked && {settings_from: view.state.label}),
   };
+  const [file] = elements.table.files;
+  if (way() === FILE && !file) return say('Choose a table file.');
   button.disabled = true;
-  const made = await request('batches', {body, say: (text) => ($('new-problem').textContent = text)});
+  const made = way() === FILE
+    ? await request(`batches/table?${query({...header, name: file.name})}`, {body: file, say})
+    : await request('batches', {
+        say,
+        body: {
+          ...header,
+          source: chosenSource().name,
+          first: elements.first.value || null,
+          last: elements.last.value || null,
+          columns: [...form.querySelectorAll('[name=column]:checked')].map((box) => box.value),
+        },
+      });
   if (made) location.href = batchUrl(made.label);
   else button.disabled = false;
+}
+
+// The dialog "Add rows from the runs": the rows of the source that the table
+// lacks, those that wait marked. The rows picked are added as the source makes
+// them now.
+async function openTake() {
+  const listed = await request('rows/offered');
+  if (!listed) return;
+  const dialog = $('take');
+  const add = dialog.querySelector('[value=take]');
+  let keys = [];
+  const picked = (chosen) => {
+    keys = chosen;
+    add.disabled = keys.length === 0;
+    add.textContent = keys.length ? `Add ${count(keys.length)}` : 'Add';
+  };
+  picked([]);
+  $('take-rows').replaceChildren(
+    listed.rows.length
+      ? sourceTable(listed, (row) => (row.waits ? 'waits' : ''), picked)
+      : h('div', {class: 'empty', text: 'Every row of the source is in the batch.'}),
+  );
+  dialog.returnValue = '';
+  dialog.onclose = () => dialog.returnValue === 'take' && act('rows/take', {keys});
+  dialog.showModal();
+}
+
+// "Make this a setting" on the header of a column: of the value that every
+// row has, or, where the rows differ, of the value a person chooses, sent as
+// the key of a row that has it.
+function makeSetting(column) {
+  const values = new Map();
+  for (const row of view.state.rows) {
+    const {text} = row.cells[column.name];
+    if (!values.has(text)) values.set(text, row.key);
+  }
+  if (values.size < 2) return act('columns/setting', {name: column.name});
+  const dialog = $('make-setting');
+  dialog.querySelector('h3').textContent = `Make ${column.title} a setting`;
+  const empty = column.default ? `empty: the default, ${column.default}` : 'empty';
+  $('setting-values').replaceChildren(
+    ...[...values].map(([text, key], i) =>
+      h('label', {}, h('input', {type: 'radio', name: 'value', value: key, checked: i === 0}), text || empty),
+    ),
+  );
+  dialog.returnValue = '';
+  dialog.onclose = () => {
+    if (dialog.returnValue !== 'make') return;
+    act('columns/setting', {name: column.name, key: dialog.querySelector('[name=value]:checked').value});
+  };
+  dialog.showModal();
 }
 
 function renderAction(action) {
@@ -535,10 +702,12 @@ function renderRefused(refused) {
   showMessage('Nothing was reduced.', refused.map((e) => e.text), key);
 }
 
-// The switch of Follow, unless the batch has no source, and why its last step
-// failed, if it did, how many rows wait, or which other batch follows.
+// The switch of Follow and "Add rows from the runs", unless the batch has no
+// source, and why the last step failed, if it did, how many rows wait, or
+// which other batch follows.
 function renderFollow(follow) {
   $('follow').hidden = follow.source === null;
+  $('take-open').hidden = follow.source === null;
   $('follow-status').hidden = !follow.on && !follow.other;
   $('follow').querySelector('input').checked = follow.on;
   $('follow').title = `Every ${follow.interval} s, add the new rows of the source that are filled, and reduce the rows not reduced yet.`;
@@ -565,7 +734,17 @@ function renderSettings(state) {
   const download = document.querySelector('[data-file="settings.yaml"]');
   download.disabled = changed;
   download.title = changed ? `${action.blocked} first.` : '';
-  renderForm($('settings'), state.settings, (edit) => act('settings', edit));
+  // A setting whose cell the page edits may be a column.
+  const offer = (node) =>
+    state.may_be_columns.includes(node.path[0]) &&
+    h('button', {
+      type: 'button',
+      class: 'quiet small',
+      text: 'Make this a column',
+      title: 'Each row then has its own value, at first this one.',
+      onclick: () => act('settings/column', {name: node.path[0]}),
+    });
+  renderForm($('settings'), state.settings, (edit) => act('settings', edit), offer);
 }
 
 // The tab "Batch": its workflow, columns and label, and a form of its title
@@ -844,6 +1023,9 @@ function wire() {
   newBatch.onsubmit = makeBatch;
   newBatch.elements.source.onchange = chooseSource;
   newBatch.elements.spec.onchange = chooseSpec;
+  newBatch.elements.first.onchange = drawRange;
+  newBatch.elements.last.onchange = drawRange;
+  $('take-open').onclick = openTake;
   newBatch.querySelector('[data-cancel]').onclick = closeNewBatch;
   newBatch.addEventListener('keydown', (event) => event.key === 'Escape' && closeNewBatch());
   $('batch-form').onsubmit = saveBatch;

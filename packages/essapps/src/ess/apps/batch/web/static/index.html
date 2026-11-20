@@ -68,6 +68,7 @@
         <div class="grid" id="rows"></div>
         <div class="table-foot">
           <button type="button" class="quiet" id="add-row">+ Add row</button>
+          <button type="button" class="quiet" id="take-open" hidden>+ Add rows from the runs</button>
           <form class="add-form" id="add-form" hidden>
             <input type="text" name="key" placeholder="Key" aria-label="Key of the new row" required>
             <button type="submit">Add</button>
@@ -89,9 +90,19 @@
         <form class="new-batch header-form" id="new-batch" hidden>
           <div class="field"><label for="new-title">Title</label><input type="text" id="new-title" name="title"></div>
           <div class="field"><label for="new-description">Description</label><input type="text" id="new-description" name="description"></div>
-          <div class="field"><label for="new-source">Source</label><select id="new-source" name="source"></select><small id="new-rows"></small></div>
+          <div class="field"><label for="new-source">Rows</label><select id="new-source" name="source"></select><small id="new-rows"></small></div>
+          <div class="field" id="new-range">
+            <span>Range</span>
+            <div class="range">
+              <label>From <select name="first" aria-label="First row"></select></label>
+              <label>to <select name="last" aria-label="Last row"></select></label>
+            </div>
+            <div class="source-rows" id="new-source-rows"></div>
+          </div>
+          <div class="field" id="new-file"><label for="new-table">Table file</label><input type="file" id="new-table" name="table" accept=".csv,.tsv,.xlsx"><small>Its column "key" names the rows; a column named as no parameter is a note.</small></div>
           <div class="field"><label for="new-spec">Workflow</label><select id="new-spec" name="spec"></select></div>
-          <div class="field">
+          <div class="field" id="new-settings"><span>Settings</span><label><input type="checkbox" name="like" checked> <span id="new-like"></span></label></div>
+          <div class="field" id="new-columns-field">
             <span>Columns</span>
             <div class="columns" id="new-columns"></div>
             <small>The others are settings, shared by every row.</small>
@@ -174,6 +185,29 @@
       </div>
     </aside>
   </main>
+
+  <dialog class="dialog" id="take">
+    <form method="dialog">
+      <h3>Add rows from the runs</h3>
+      <p class="hint">The rows of the source that the batch lacks: those left out when it was made, those removed, and those that wait for a run. A row added is not added by Follow again once removed.</p>
+      <div class="source-rows" id="take-rows"></div>
+      <div class="buttons">
+        <button type="submit" class="primary" value="take" disabled>Add</button>
+        <button type="submit" class="quiet" value="">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog class="dialog" id="make-setting">
+    <form method="dialog">
+      <h3></h3>
+      <p class="hint">The rows differ. Choose the value of the setting, which every row then takes.</p>
+      <div class="values" id="setting-values"></div>
+      <div class="buttons">
+        <button type="submit" class="primary" value="make">Make it a setting</button>
+        <button type="submit" class="quiet" value="">Cancel</button>
+      </div>
+    </form>
+  </dialog>
 
   <div class="toast" id="toast" role="status" hidden></div>
 </body>
