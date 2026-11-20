@@ -17,7 +17,7 @@ each file as its cell (``cell_of(f.ref)``, :func:`~.table.cell_of`); and
 notes, such as ``run`` and ``name``. :func:`rows_of` is what a source makes
 from the files now. A row is *filled* (:func:`filled`) once it has a value
 in each column that the source fills; until then it *waits*. A batch is made
-from the filled rows, or from a range of them (:func:`between`), and Follow
+from the filled rows, or from a range of them (:class:`Range`), and Follow
 adds the rows that are new and filled (:mod:`~.auto`). A batch never asks
 its source again: how its table was made is not part of it.
 """
@@ -117,18 +117,47 @@ def filled(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
     return given[list(columns)].notna().all(axis=1)
 
 
-def between(arrived: pd.DataFrame, first: str | None, last: str | None) -> pd.DataFrame:
+@dataclass(frozen=True)
+class Range:
     """
-    The rows of ``arrived``, such as the filled rows of a source, from the row
-    of key ``first`` to the row of key ``last``, both included, in the order
-    of ``arrived``; an end not given is open. Raises ``ValueError`` for an end
-    that is not a key of ``arrived``, and for a ``first`` after the ``last``.
+    Which rows a new batch takes of those that its source has filled now, as
+    a person picks them, given as ``choose`` to
+    :meth:`~.manager.BatchManager.create` and
+    :meth:`~.manager.BatchManager.marked`: called on the filled rows, it gives
+    the rows from the row of key ``first`` to the row of key ``last``, both
+    included, in their order; an end not given is open. With ``later``, it
+    gives none, so that the batch gets only the rows added later, by Follow
+    or by a person.
+
+    Raises ``ValueError`` for ``later`` with an end; called, for an end that
+    is not a key of the rows given, and for a ``first`` after the ``last``.
+    ``create`` refuses a ``Range`` with a ``last`` and ``follow``: the rows
+    filled between the last row and the making would be considered, so
+    Follow would never add them, but would add the rows that arrive later.
+    A ``choose`` that is a function may pick any rows, also with
+    ``follow``: a person chose them in code, and the filled rows that it
+    leaves out are considered, so Follow adds only what arrives later.
     """
-    for end in (first, last):
-        if end is not None and end not in arrived.index:
-            raise ValueError(f'{end} is not a filled row')
-    start = 0 if first is None else arrived.index.get_loc(first)
-    stop = len(arrived) if last is None else arrived.index.get_loc(last) + 1
-    if first is not None and last is not None and stop <= start:
-        raise ValueError(f'the row {first} comes after the row {last}')
-    return arrived.iloc[start:stop]
+
+    first: str | None = None
+    last: str | None = None
+    later: bool = False
+
+    def __post_init__(self) -> None:
+        if self.later and (self.first is not None or self.last is not None):
+            raise ValueError(
+                'a batch of the rows that arrive later has no first or last'
+            )
+
+    def __call__(self, arrived: pd.DataFrame) -> pd.DataFrame:
+        if self.later:
+            return arrived.iloc[:0]
+        first, last = self.first, self.last
+        for end in (first, last):
+            if end is not None and end not in arrived.index:
+                raise ValueError(f'{end} is not a filled row')
+        start = 0 if first is None else arrived.index.get_loc(first)
+        stop = len(arrived) if last is None else arrived.index.get_loc(last) + 1
+        if first is not None and last is not None and stop <= start:
+            raise ValueError(f'the row {first} comes after the row {last}')
+        return arrived.iloc[start:stop]

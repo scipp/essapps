@@ -66,8 +66,9 @@ from .models import (
     State,
     Value,
 )
-from .page import Missing, Page, Problem
+from .page import Page
 from .pages import Pages
+from .refusals import Missing, Problem
 
 STATIC = Path(__file__).parent / 'static'
 _XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -280,10 +281,9 @@ def create_app(pages: Pages) -> FastAPI:
         return page.change(body)
 
     @batch.post('/api/batch/remove')
-    def remove_batch(label: str) -> dict[str, str]:
+    def remove_batch(label: str) -> Notice:
         """Remove the batch; its results stay in the workspace."""
-        pages.remove(label)
-        return {}
+        return pages.remove(label)
 
     @batch.post('/api/results.zip', response_class=Response)
     def results_file(page: PageOfLabel, body: Keys) -> Response:

@@ -37,7 +37,7 @@ what can be made. With no batch at all, the page is served
 without one: it shows the list of batches and the runs. So is the page of a
 batch that cannot be made (:meth:`Pages.page`), with the reason, and that of
 a batch removed (:meth:`Pages.remove`): a :class:`~.page.Page` handed out
-before answers :class:`~.page.Missing` from then on.
+before answers :class:`~.refusals.Missing` from then on.
 
 The manager keeps which batch follows
 (:attr:`~ess.apps.batch.BatchManager.following`). :meth:`Pages.tick` is one
@@ -59,7 +59,6 @@ from contextlib import suppress
 from dataclasses import replace
 from typing import Any
 
-import pandas as pd
 from pydantic import BaseModel
 
 from ess.spec import File, FileRef, WorkflowSpec
@@ -70,9 +69,8 @@ from ...files import Selector
 from ...listing import Listing
 from ..auto import Step
 from ..corrections import CorrectedFiles
-from ..definition import NotKept
 from ..manager import BatchManager, fits
-from ..source import Source, between
+from ..source import Range, Source
 from ..state import RowState, not_reduced
 from ..table import read_table
 from . import forms
@@ -95,16 +93,8 @@ from .models import (
     SourceRows,
     SpecChoice,
 )
-from .page import (
-    Draw,
-    Missing,
-    Page,
-    Problem,
-    listed,
-    read,
-    read_file,
-    why,
-)
+from .page import Draw, Page, listed, read, read_file
+from .refusals import Missing, Problem, kept, refused, said, why
 
 
 class SafeListing(Listing):
@@ -134,14 +124,14 @@ class SafeListing(Listing):
         try:
             return super().files(marker)
         except Exception as error:  # the file source is code of the application
-            self.error = str(error)
+            self.error = said(error)
             return {}
 
     def listed(self, selector: Selector) -> dict[FileRef, dict[str, Any]]:
         try:
             return super().listed(selector)
         except Exception as error:  # the file source is code of the application
-            self.error = str(error)
+            self.error = said(error)
             return {}
 
 
@@ -212,15 +202,13 @@ class Pages:
     def page(self, label: str) -> Page:
         """
         The page of ``label``, made at the first call. Raises
-        :class:`Missing` if no batch has the label, and
-        :class:`~.page.Problem` if its batch cannot be made, such as when the
-        workspace binds no spec of its name, or its table cannot be read
-        (:meth:`~ess.apps.batch.BatchManager.batch`).
+        :class:`~.refusals.Missing` if no batch has the label
+        (:meth:`check`), and :class:`~.refusals.Problem` if its batch cannot
+        be made, such as when the workspace binds no spec of its name, or its
+        table cannot be read (:meth:`~ess.apps.batch.BatchManager.batch`).
         """
         with self.lock:
-            if label not in self.manager.headers():
-                self._pages.pop(label, None)
-                raise Missing(f'There is no batch {label}.')
+            self.check(label)
             if (page := self._pages.get(label)) is None:
                 try:
                     page = Page(self, label)
@@ -228,6 +216,18 @@ class Pages:
                     raise Problem(f'Cannot show {label}: {error}') from None
                 self._pages[label] = page
             return page
+
+    def check(self, label: str) -> None:
+        """
+        Raise :class:`~.refusals.Missing` unless a batch has ``label``; the
+        page of a label that has none is forgotten, whoever asks, since no
+        request is served by it again and a batch made later with the label
+        gets a page of its own.
+        """
+        with self.lock:
+            if label not in self.manager.headers():
+                self._pages.pop(label, None)
+                raise Missing(f'There is no batch {label}.')
 
     def home(self) -> str | None:
         """
@@ -263,7 +263,7 @@ class Pages:
                 self._last = (label, done)
                 self._failure = None
             except Exception as error:  # the next step tries again
-                self._failure = f'Follow could not step: {str(error) or repr(error)}'
+                self._failure = f'Follow could not step: {said(error)}'
             self.page(label).stepped()
 
     @property
@@ -314,7 +314,7 @@ class Pages:
     def _marks(self) -> tuple[Fields, CorrectedFiles]:
         """
         The form of what a person corrects of a run, and the files to
-        correct; :class:`~.page.Problem` if the application corrects no runs.
+        correct; :class:`~.refusals.Problem` if the application corrects no runs.
         """
         if self._marking is None:
             raise Problem('This application corrects no runs.')
@@ -326,7 +326,7 @@ class Pages:
         The runs, listed again, with what a person corrected of each, as the
         Runs view of every page shows them, and that of the page without a
         batch; none, with why, if the file source raises. Raises
-        :class:`~.page.Problem` if the application corrects no runs.
+        :class:`~.refusals.Problem` if the application corrects no runs.
         """
         with self.lock:
             marks, files = self._marks()
@@ -394,13 +394,11 @@ class Pages:
     def _kept(self, correction: Callable[[], None]) -> None:
         """
         Make ``correction``, then list again, so that the pages show the runs
-        again. Raises :class:`~.page.Problem` if the definitions do not keep
+        again. Raises :class:`~.refusals.Problem` if the definitions do not keep
         it, or if the runs cannot be listed after it.
         """
-        try:
+        with kept():
             correction()
-        except NotKept as error:
-            raise Problem(f'The change was not kept: {error}') from None
         self.list_again()
         if (error := self._listing.error) is not None:
             raise Problem(f'Corrected, but the runs cannot be listed: {error}')
@@ -524,110 +522,91 @@ class Pages:
         """
         The table that the source registered as ``source`` makes now, each
         row marked as taken, left out, or waiting, for a new batch of the
-        rows that :func:`taken` gives
+        :class:`~ess.apps.batch.Range` of ``first``, ``last`` and ``later``
         (:meth:`~ess.apps.batch.BatchManager.marked`). Raises
-        :class:`~.page.Problem` if no source is registered so, with what the
-        source raises, or if the range is refused.
+        :class:`~.refusals.Problem` if no source is registered so, if the
+        range is refused, and with what the source refuses
+        (:func:`~.refusals.refused`).
         """
         with self.lock:
-            try:
-                given = self.manager.marked(source, taken(first, last, later))
-            except Exception as error:  # a source is code of the application
-                said = why(error)
-                raise Problem(f'{said[:1].upper()}{said[1:]}.') from None
+            with refused():
+                given = self.manager.marked(source, Range(first, last, later))
             return listed(given, self.manager.sources[source].fills)
 
     def create(self, new: NewBatch, file: tuple[str, bytes] | None = None) -> Made:
         """
         Make the batch of ``new`` with the manager, in one call
         (:meth:`~ess.apps.batch.BatchManager.create`), so that it is made as
-        asked or not at all: with a source, of the rows that :func:`taken`
-        gives of those that the source has filled now, with an empty column
-        for each other of ``new.columns``; with a table ``file``, its name
-        and content, of its table (:func:`~ess.apps.batch.table.read_table`);
-        else of a table of ``new.columns`` without rows. With ``new.follow``,
-        the batch follows from then on, in place of the batch that followed
-        before, and the timer steps it; it has no last row, since Follow adds
-        every row that arrives later.
+        asked or not at all: with a source, of the rows of the
+        :class:`~ess.apps.batch.Range` of ``new.first``, ``new.last`` and
+        ``new.later`` of those that the source has filled now, with an empty
+        column for each other of ``new.columns``; with a table ``file``, its
+        name and content, of its table
+        (:func:`~ess.apps.batch.table.read_table`); else of a table of
+        ``new.columns`` without rows. With ``new.follow``, the batch follows
+        from then on, in place of the batch that followed before, and the
+        timer steps it. The batch layer decides which ranges it takes.
 
         It starts with the settings of the batch ``new.settings_from``, else
         with those that the application gives its spec. A setting at a column
         of ``new.columns`` stays, and each row with an empty cell takes it;
         the manager leaves out the setting of a column that the source fills,
-        whose cells are those of the source. Raises :class:`~.page.Problem`
-        with what the file, the manager or the source refuses.
+        whose cells are those of the source.
+
+        Raises :class:`~.refusals.Problem` with what the file, the manager or
+        the source refuses, for a label of ``settings_from`` that is no
+        batch, if the definitions refuse a write, and with what the source
+        raises otherwise (:func:`~.refusals.refused`).
         """
-        with self.lock:
-            try:
-                manager = self.manager
-                settings = (
-                    None
-                    if new.settings_from is None
-                    else manager.batch(new.settings_from).settings
-                )
-                if new.follow and new.last is not None:
-                    raise ValueError(
-                        'a batch that follows takes every row that arrives '
-                        'later, so it has no last row'
-                    )
+        with self.lock, refused('The batch was not made'):
+            manager = self.manager
+            settings = None
+            if (other := new.settings_from) is not None:
+                if other not in manager.headers():
+                    raise ValueError(f'there is no batch {other} to start from')
+                settings = manager.batch(other).settings
+            rows = choose = source = None
+            if file is not None:
+                name, content = file
+                params = manager.spec_named(new.spec).params
+                try:
+                    rows = read_file(name, content, lambda p: read_table(p, params))
+                except ValueError as error:
+                    raise ValueError(f'{name}: {error}') from None
+            elif new.source is not None:
+                source = new.source
+                choose = Range(new.first, new.last, new.later)
+            label = manager.create(
+                new.spec,
+                title=new.title,
+                description=new.description,
+                rows=rows,
+                source=source,
+                choose=choose,
+                columns=new.columns,
+                settings=settings,
+                follow=new.follow,
+            )
+            if new.follow:
+                self._failure = None  # said of the batch that followed before
+        return Made(label=label)
 
-                def completed(table: pd.DataFrame) -> pd.DataFrame:
-                    """
-                    ``table`` with an empty column for each of ``new.columns``
-                    it lacks: a column that the source fills keeps its cells.
-                    """
-                    empty = [c for c in new.columns if c not in table.columns]
-                    return table.assign(**dict.fromkeys(empty))
-
-                rows = choose = None
-                if file is not None:
-                    name, content = file
-                    params = manager.client.spec_named(new.spec).params
-                    try:
-                        rows = read_file(name, content, lambda p: read_table(p, params))
-                    except ValueError as error:
-                        raise ValueError(f'{name}: {error}') from None
-                elif new.source is None:
-                    rows = completed(pd.DataFrame())
-                else:
-                    chosen = taken(new.first, new.last, new.later)
-
-                    def choose(arrived: pd.DataFrame) -> pd.DataFrame:
-                        return completed(chosen(arrived))
-
-                label = manager.create(
-                    new.spec,
-                    title=new.title,
-                    description=new.description,
-                    rows=rows,
-                    source=None if rows is not None else new.source,
-                    choose=choose,
-                    settings=settings,
-                    follow=new.follow,
-                )
-                if new.follow:
-                    self._failure = None  # said of the batch that followed before
-            except Exception as error:  # a source is code of the application
-                raise Problem(f'The batch was not made: {why(error)}.') from None
-            return Made(label=label)
-
-    def remove(self, label: str) -> None:
+    def remove(self, label: str) -> Notice:
         """
         Remove the batch of ``label`` with the manager
         (:meth:`~ess.apps.batch.BatchManager.remove`): its definitions go,
         its records stay, and if it follows, none follows. Its page goes, and
-        a page handed out before answers :class:`~.page.Missing`. Raises
-        :class:`~.page.Missing` if no batch has the label, and
-        :class:`~.page.Problem` if the definitions refuse a write.
+        a page handed out before answers :class:`~.refusals.Missing`. What
+        it did, in words. Raises :class:`~.refusals.Missing` if no batch has
+        the label, and :class:`~.refusals.Problem` if the definitions refuse
+        a write.
         """
-        with self.lock:
-            if label not in self.manager.headers():
-                raise Missing(f'There is no batch {label}.')
-            try:
-                self.manager.remove(label)
-                self._pages.pop(label, None)
-            except NotKept as error:
-                raise Problem(f'The change was not kept: {error}') from None
+        with self.lock, kept():
+            self.check(label)
+            title = self.manager.headers()[label].title
+            self.manager.remove(label)
+            self._pages.pop(label, None)
+            return Notice(notice=f'Removed {title}.')
 
     def counts(self) -> BatchCounts:
         """
@@ -658,22 +637,6 @@ class Pages:
                 rows[label] = dict(Counter(s.text for s in states.values()))
                 files[label] = sorted(ref.file for ref in named)
             return BatchCounts(rows=rows, files=files, failed=failed)
-
-
-def taken(
-    first: str | None, last: str | None, later: bool
-) -> Callable[[pd.DataFrame], pd.DataFrame]:
-    """
-    Which rows a new batch takes of those that its source has filled now: the
-    rows from ``first`` to ``last`` (:func:`~ess.apps.batch.source.between`),
-    or, if ``later``, none, so that it gets only the rows added later, by
-    Follow or by a person. Raises ``ValueError`` for ``later`` with an end.
-    """
-    if not later:
-        return lambda arrived: between(arrived, first, last)
-    if first is not None or last is not None:
-        raise ValueError('a batch of the rows that arrive later has no first or last')
-    return lambda arrived: arrived.iloc[:0]
 
 
 def _spec_choice(

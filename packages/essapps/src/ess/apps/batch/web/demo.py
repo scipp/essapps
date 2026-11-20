@@ -327,7 +327,7 @@ def build(
             DEMO.name,
             title='Samples',
             source='sample-runs',
-            choose=lambda given: given.assign(thickness=None),
+            columns=['thickness'],
         )
 
     def draw(shown: Sequence[Shown]) -> dict[str, object]:

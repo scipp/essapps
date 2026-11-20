@@ -37,6 +37,7 @@ A row is shown by its note `name`, else by its key; **+ Add row** takes its key.
 Each change of rows on the page, an edit of cells, **+ Add row**, **Remove selected** and **Load table**, makes the new table and puts it to the batch (`Batch.put`); what the batch refuses is said, and nothing changes.
 A run chosen in a cell is kept as the text of its file (`table.cell_of`).
 **Load table** replaces the whole table, its columns too; the page then shows the cells and the settings form of the columns loaded.
+It is refused while the settings form holds a change, which the new form would drop, as "Make this a column" and "Make this a setting" are.
 **+ Add rows from the runs**, on the page of a batch made from a source, lists the rows of the source that the table lacks (`BatchManager.offered`): those left out when the batch was made, those removed, those that wait for a run, marked, and, in a batch that does not follow, those filled after it was made or after it stopped.
 The rows a person picks are added as the source makes them now (`BatchManager.take`), and Follow does not add them again once removed; so a removed row comes back this way.
 
@@ -159,11 +160,11 @@ The page remembers in the session of the browser, so that a reload or a return t
 |---|---|
 | Title, Description | the header of the batch; the title is required |
 | Rows | from a source that the application registers (`BatchManager(sources=...)`), from a table file, or "none: no rows" |
-| Range | with a source: the first and the last row to take, each open if not chosen, among the rows that the source has filled now (`source.between`); or, as the last choice of "From", no row now (`later`): the batch gets only the rows added later, by Follow if ticked, else with **+ Add rows from the runs**; the table below lists every row the source makes, marked by the server as taken, left out, or waiting (`GET api/sources/rows?name=...&first=...&last=...&later=...`) |
+| Range | with a source: the first and the last row to take, each open if not chosen, among the rows that the source has filled now (`Range`); or, as the last choice of "From", no row now (`later`): the batch gets only the rows added later, by Follow if ticked, else with **+ Add rows from the runs**; the table below lists every row the source makes, marked by the server as taken, left out, or waiting (`GET api/sources/rows?name=...&first=...&last=...&later=...`) |
 | Table file | from a table file: a `.csv`, `.tsv` or `.xlsx` file with a column `key` (`table.read_table`) |
 | Workflow | a spec that the workspace binds and that has a parameter for each column that the source fills; any spec without a source |
 | Settings | on the page of a batch: start with the settings of that batch, else with those that the application gives; a setting at a column ticked stays, and each row whose cell is empty takes it, also a row that Follow adds; a column that the source fills gets no setting |
-| Follow | with a source: add the rows that arrive later, and reduce them; off unless ticked. While ticked, the end of the range is open and cannot be chosen, since a last row would leave out the rows filled between it and the making for good; the server refuses a last row with Follow. Beside it, how many rows taken are reduced at once, and the batch that follows now, which stops following if ticked |
+| Follow | with a source: add the rows that arrive later, and reduce them; off unless ticked. While ticked, the end of the range is open and cannot be chosen, since a last row would leave out the rows filled between it and the making for good; the manager refuses a last row with Follow (`BatchManager.create`). Beside it, how many rows taken are reduced at once, and the batch that follows now, which stops following if ticked |
 | Columns | the columns that the source fills, fixed; the other parameters of the spec whose cell the page edits, to tick (a group of fields, such as a Q binning, stays a setting); none for a table file, whose columns are those of the file |
 
 **Make** sends the form to `POST api/batches`, or the file to `POST api/batches/table`, and the page shows the new batch in the Rows view.
@@ -176,8 +177,8 @@ In code:
 ```python
 settings = manager.batch(other).settings                        # thickness among them
 label = manager.create(spec, title=title, source=source,
-                       choose=lambda given: between(given, first, last)
-                           .assign(thickness=None),             # ticked: an empty column
+                       choose=Range(first, last, later),
+                       columns=['thickness'],                   # ticked: an empty column
                        settings=settings,                       # less those of source.fills
                        follow=follow)                           # Follow ticked
 ```
@@ -213,6 +214,28 @@ What the manager refuses, such as an empty title, shows at the form, and nothing
 If the batch follows, none follows from then on.
 The page then shows `/` in place of the batch in the history of the browser: the batch that `/` redirects to, the one that follows or the only one left, else the page without a batch.
 
+## The rules of the design
+
+The web layer follows eight rules. Each says where a reader finds a kind of thing, so a change that breaks one needs a reason.
+
+1. **The batch layer decides.** Every rule of rows, settings, sources, reduction and Follow is in `ess.apps.batch`. The web layer says what the batch layer refuses in words for a person and copies no rule. The form in the browser may know a rule to be helpful, such as that a batch that follows has no last row, but the server does not decide it here.
+2. **One lock.** `Pages.lock` is around every request, every step of Follow and every count. Each public method of `Pages` takes it, and a caller may hold it already; a property of `Pages` (`listing`, `files_version`, `runs_version`, `corrects_runs`) reads one value without it.
+3. **Each piece of state has one owner, which alone writes it.**
+
+   | Owner | State |
+   |---|---|
+   | the batch layer | the batches: table, settings, header, which batch follows |
+   | `Pages` | the listing of the files and its version, the corrections of runs, what the last step of Follow said |
+   | `Page` | the draft of the settings form, the refusals of the last reduction, its version |
+   | the browser | what is shown: selection, filter, view, tab, sort, axes |
+
+   A `Page` changes its batch through the batch layer, and asks `Pages` for the listing and for what to show of Follow.
+4. **A request answers what the page needs next.** An action that changes a batch answers the `State` after it. A request that reads answers what it reads, also when it is a POST because its body is long (`api/plot`, `api/results.zip`). An action of the workspace answers what the page shows next, since the page without a batch has no state: a `Notice` for correcting a run or removing a batch, `Made` for a new batch. Any request may answer 422 with a message, or 404 for a label that is no batch.
+5. **A change is noticed by counters.** At each poll the server compares versions and answers 204 until one moved ([How the page learns of changes](#how-the-page-learns-of-changes)). No signal says that a file arrived, so nothing read from the files is kept by the version of a batch; the listing has a version of its own.
+6. **A refusal is a `Problem` (422) or a `Missing` (404); how an exception reads as a message is in `refusals.py`.** Code of the application, such as a source, the file source or a drawing, may raise anything: the page says it and keeps working (`refused`, `said`), a refusal (`ValueError`, `OSError`) as its text and a defect with its type. Elsewhere an action catches only the refusals it expects of the batch layer, or of a file or a value that a person gave, and says them with `why` after what it was doing, such as "Cannot load rows.csv: ...".
+7. **The browser draws from the state and sends its actions in one queue** ([How the page asks](#how-the-page-asks)).
+8. **The settings form is a draft.** Only **Apply** and **Make this a setting** write settings. While the form holds a change, the page refuses to reduce, to change which parameters are columns, and to give the settings as a file.
+
 ## Layers
 
 The objects of the server; an arrow points from a caller to what it calls, and `Page.poll` compares the numbers named `version` and `files_version` (see [How the page learns of changes](#how-the-page-learns-of-changes)):
@@ -241,6 +264,7 @@ flowchart TD
 | `api.py` | HTTP: `create_app(pages)`; each action is a POST that answers with the new `State` (`models.py`), 422 `{message}`, or 404 for a label that is no batch |
 | `pages.py` | `Pages`: what the pages share, without HTTP: the manager, one lock around every request and step, the list of batches and its counts, making and removing a batch. It alone writes the listing of the files and its version, the corrections of runs, and the step of Follow (`tick`) and what it said |
 | `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a draft until Apply), the refusals and its version. Through the manager it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, Follow's stop. It asks `Pages` for the listing and for what to show of Follow |
+| `refusals.py` | how `Pages` and `Page` refuse a request: `Problem` (422) or `Missing` (404); how an exception of the batch layer reads as a message (`why`, `kept`), and which exceptions of a source are said (`refused`: `ValueError`, `KeyError`, `OSError`; anything else is a defect) |
 | `ess.apps.batch` | the logic: `BatchManager`, `step`, `Batch`, `table`, states, `CorrectedFiles`; shared with the command `essapps-batch` |
 
 `/docs` on a running server lists the API.

@@ -22,7 +22,7 @@ from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions
 from ess.apps.batch.web import Page, Pages, create_app
 from ess.apps.batch.web.api import every
 from ess.apps.batch.web.models import CellEdit, Edit, NewBatch, Reduce, State
-from ess.apps.batch.web.page import Problem
+from ess.apps.batch.web.refusals import Problem
 from ess.apps.testing import FakeFiles
 
 from . import toys
@@ -387,7 +387,7 @@ def test_a_step_that_raises_is_said_and_the_next_step_runs(
     page.pages.tick()
 
     assert failed is not None
-    assert failed.failure == "Follow could not step: 'sample'"
+    assert failed.failure == "Follow could not step: KeyError: 'sample'"
     assert page.state().follow.failure is None  # type: ignore[union-attr]
     assert statuses(done(page, client)) == {'water': 'done'}
 

@@ -20,6 +20,7 @@ from ess.apps.batch import (
     FolderDefinitions,
     Header,
     NotKept,
+    Range,
 )
 from ess.apps.batch.definition import (
     FOLLOWING,
@@ -514,6 +515,93 @@ def test_choose_may_give_columns_that_the_source_does_not(
     assert manager.batch(label).frame()['thickness'].tolist() == [2.0]
 
 
+def test_columns_given_are_empty_and_a_column_of_the_table_keeps_its_cells(
+    manager: BatchManager, sample: Measure
+) -> None:
+    sample(1, 'water')
+
+    label = manager.create(
+        PLAIN.name, title='A', source='pairs', columns=['sample', 'thickness']
+    )
+
+    frame = manager.batch(label).frame()
+    assert frame['sample'].tolist() == ['uuid:run-1']
+    assert frame['thickness'].isna().tolist() == [True]
+
+
+@pytest.fixture
+def four(manager: BatchManager, sample: Measure) -> BatchManager:
+    """``manager`` with runs 1, 2 and 4 measured, and run 3 without its partner."""
+    for run, name in [(1, 'water'), (2, 'sds'), (4, 'ethanol')]:
+        sample(run, name)
+    sample(3, 'oil', partner=False)
+    return manager
+
+
+@pytest.mark.parametrize(
+    ('chosen', 'taken'),
+    [
+        (Range(first='2'), ['2', '4']),
+        (Range(last='2'), ['1', '2']),
+        (Range('2', '2'), ['2']),
+        (Range(later=True), []),
+    ],
+    ids=['from', 'to', 'one', 'later'],
+)
+def test_a_range_takes_the_filled_rows_between_its_ends_and_considers_all(
+    four: BatchManager,
+    definitions: FolderDefinitions,
+    chosen: Range,
+    taken: list[str],
+) -> None:
+    four.create(PLAIN.name, title='A', source='pairs', choose=chosen, label='a')
+
+    assert list(four.batch('a').frame().index) == taken
+    considered = definitions.load(source_key('a'), source_of).considered
+    assert considered == {'1', '2', '4'}  # not 3, which waits
+
+
+@pytest.mark.parametrize(
+    ('chosen', 'said'),
+    [
+        (Range(first='3'), '3 is not a filled row'),
+        (Range('2', '1'), 'the row 2 comes after the row 1'),
+    ],
+    ids=['waits', 'reversed'],
+)
+def test_a_range_that_takes_no_row_of_its_ends_is_refused_and_nothing_is_kept(
+    four: BatchManager, definitions: FolderDefinitions, chosen: Range, said: str
+) -> None:
+    with pytest.raises(ValueError, match=f'^{said}$'):
+        four.create(PLAIN.name, title='A', source='pairs', choose=chosen)
+
+    assert (four.headers(), definitions.labels()) == ({}, [])
+
+
+def test_a_range_of_the_rows_that_arrive_later_has_no_end() -> None:
+    with pytest.raises(ValueError, match='arrive later has no first or last'):
+        Range(first='1', later=True)
+
+
+def test_a_batch_of_the_rows_that_arrive_later_that_follows_gets_only_those(
+    four: BatchManager, fake: FakeFiles, sample: Measure
+) -> None:
+    four.create(
+        'plain',
+        title='A',
+        source='pairs',
+        choose=Range(later=True),
+        label='a',
+        follow=True,
+    )
+    sample(5, 'dmso')
+    fake.measure(1003, 1.0, role='transmission', sample='oil')  # 3 waited
+
+    four.step()
+
+    assert list(four.batch('a').frame().index) == ['3', '5']
+
+
 def test_a_row_that_waits_when_a_batch_is_made_is_added_by_follow_once_filled(
     manager: BatchManager, fake: FakeFiles, sample: Measure
 ) -> None:
@@ -759,6 +847,25 @@ def test_a_batch_that_follows_without_a_source_is_refused_and_nothing_changes(
 ) -> None:
     with pytest.raises(ValueError, match='a batch follows its source, and none'):
         two.create('plain', title='C', label='c', follow=True)
+
+    assert (list(two.headers()), two.following) == (['a', 'b'], 'a')
+    assert 'c' not in definitions.labels()
+
+
+def test_a_batch_that_follows_with_a_last_row_is_refused_and_nothing_changes(
+    two: BatchManager, definitions: FolderDefinitions, sample: Measure
+) -> None:
+    sample(1, 'water')
+
+    with pytest.raises(ValueError, match='so it has no last row'):
+        two.create(
+            'plain',
+            title='C',
+            source='pairs',
+            choose=Range(last='1'),
+            label='c',
+            follow=True,
+        )
 
     assert (list(two.headers()), two.following) == (['a', 'b'], 'a')
     assert 'c' not in definitions.labels()

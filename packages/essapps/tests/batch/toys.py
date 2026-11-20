@@ -270,6 +270,6 @@ def from_pairs(manager: BatchManager, spec: str, **options: Any) -> str:
     return manager.create(
         spec,
         source='pairs',
-        choose=lambda given: given.assign(thickness=None),
+        columns=['thickness'],
         **options,
     )

@@ -18,6 +18,7 @@ from ess.apps.batch import (
     CorrectedFiles,
     FolderDefinitions,
     Header,
+    Range,
     left_to_reduce,
 )
 from ess.apps.batch.cli import main
@@ -737,7 +738,7 @@ def test_reduce_on_a_batch_without_rows_writes_a_table_of_its_columns(
 ) -> None:
     with manager(folder) as batches:
         label = batches.create(
-            'cli-toy', title='None', source='pairs', choose=lambda given: given[:0]
+            'cli-toy', title='None', source='pairs', choose=Range(later=True)
         )
     out = folder / 'done.csv'
 

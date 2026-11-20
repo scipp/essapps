@@ -413,16 +413,17 @@ class Reduce(BaseModel):
 class NewBatch(BaseModel):
     """
     Make a batch of ``spec``: with a ``source``, of the rows that the source
-    has filled now from the row of key ``first`` to that of ``last``
-    (:func:`~ess.apps.batch.source.between`), or of none of them if
-    ``later``, so that it gets only the rows added later; without, of no
+    has filled now from the row of key ``first`` to that of ``last``, or of
+    none of them if ``later``, so that it gets only the rows added later
+    (:class:`~ess.apps.batch.Range`); without, of no
     rows, or of those of a table file. ``columns`` are the parameter columns,
     those that the source fills among them. The batch starts with the
     settings of the batch of label ``settings_from`` if given, else with
     those that the application gives ``spec``; a setting at a column stays,
     the value of each row whose cell is empty, but at a column that the
     source fills. With ``follow``, the batch follows its source from then
-    on, in place of the batch that followed before, and has no ``last``.
+    on, in place of the batch that followed before; the manager refuses it
+    with a ``last``.
     """
 
     title: str

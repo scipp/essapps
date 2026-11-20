@@ -662,7 +662,8 @@ function rangeChosen() {
 }
 
 // Follow ticked: the range has no last row, since Follow adds every row that
-// arrives later; nor has a range of no row now. "to" is then open, disabled,
+// arrives later; nor has a range of no row now. The manager refuses either
+// (`Range`, `BatchManager.create`); the form says so. "to" is then open, disabled,
 // and says so. Whether "to" was set and is open now, so that the rows are to
 // be marked again.
 function chooseFollow() {
@@ -1035,15 +1036,17 @@ function saveBatch(event) {
   act('batch', {title: elements.title.value.trim(), description: elements.description.value.trim()}, say);
 }
 
-// Remove this batch, then show the root in its place in the history: the
-// server redirects it to the batch that follows or the only one left, else it
-// is the page without a batch.
+// Remove this batch, then show the root in its place in the history, and what
+// the server did: it redirects the root to the batch that follows or the only
+// one left, else it is the page without a batch.
 async function removeBatch() {
   const question = `Remove the batch "${view.state.title}"? Its title, description, settings and table are removed. Its results stay in the workspace.`;
   if (!confirm(question)) return;
   const [page, at] = [here, changes];
   const done = await queued(() => request('batch/remove', {body: {}, page}));
-  if (done && at === changes) show(root(), null, 'replaceState');
+  if (!done || at !== changes) return;
+  await show(root(), null, 'replaceState');
+  toast(done.notice);
 }
 
 // Whether to replace the changes of the settings form that are not applied.

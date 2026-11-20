@@ -34,7 +34,7 @@ from ess.apps.batch import (
 from ess.apps.batch.definition import Key, NotKept, rows_key, settings_key
 from ess.apps.batch.web import Pages, Shown, create_app, demo, plots
 from ess.apps.batch.web.models import NewBatch
-from ess.apps.batch.web.page import Missing, Problem
+from ess.apps.batch.web.refusals import Missing, Problem
 from ess.apps.testing import CountingClient, FakeFiles
 from ess.spec import FileRef, SampleRunFile, WorkflowSpec, function_binding
 
@@ -933,6 +933,7 @@ def test_a_change_the_definitions_cannot_keep_answers_422_and_nothing_changes(
     draft(kept, 7)
     setting = kept.post('/api/settings/apply')
     cell = thickness(kept, ['1'], 3)
+    kept.post('/api/settings/discard')  # a table is not loaded over a draft
     table = kept.post(
         '/api/table',
         params={'name': 'rows.csv'},
@@ -1170,7 +1171,7 @@ def test_a_drawing_that_raises_says_so_in_place_of_the_figure(
     plot = page.post('/api/plot', json={}).json()
 
     assert plot['figure'] is None
-    assert 'Cannot draw: released' in plot['note']
+    assert 'Cannot draw: RuntimeError: released' in plot['note']
 
 
 def test_no_two_curves_of_a_figure_share_a_colour() -> None:
@@ -1343,6 +1344,72 @@ def test_rows_the_manager_does_not_take_answer_422_and_none_is_added(
     assert list(batch.frame().index) == ['1', '2', '3']
 
 
+def failing(error: Exception) -> Callable[[Any], Any]:
+    """A ``list`` of the file source that raises ``error``."""
+
+    def listing(selector: Any) -> Any:
+        raise error
+
+    return listing
+
+
+def test_a_file_source_that_cannot_list_is_said_on_each_call_that_runs_a_source(
+    http: TestClient, fake: FakeFiles
+) -> None:
+    fake.list = failing(OSError('the mount went away'))
+
+    answers = [
+        http.get('/api/rows/offered'),
+        http.post('/api/rows/take', json={'keys': ['4']}),
+        http.get('/api/sources/rows', params={'name': 'pairs'}),
+        http.post('/api/batches', json=new_batch()),
+    ]
+
+    assert [(a.status_code, a.json()['message']) for a in answers] == [
+        (422, 'The rows of the source cannot be listed: the mount went away.'),
+        (422, 'No row was added: the mount went away.'),
+        (422, 'The mount went away.'),
+        (422, 'The batch was not made: the mount went away.'),
+    ]
+
+
+def test_a_defect_of_a_source_is_said_with_its_type_and_the_page_works_on(
+    http: TestClient, fake: FakeFiles
+) -> None:
+    fake.list = failing(KeyError('run'))
+
+    answers = [
+        http.get('/api/rows/offered'),
+        http.post('/api/rows/take', json={'keys': ['4']}),
+        http.get('/api/sources/rows', params={'name': 'pairs'}),
+        http.post('/api/batches', json=new_batch()),
+    ]
+
+    assert [(a.status_code, a.json()['message']) for a in answers] == [
+        (422, "The rows of the source cannot be listed: KeyError: 'run'."),
+        (422, "No row was added: KeyError: 'run'."),
+        (422, "KeyError: 'run'."),
+        (422, "The batch was not made: KeyError: 'run'."),
+    ]
+    assert http.get('/api/state').status_code == 200
+
+
+def test_a_source_that_no_longer_gives_a_column_of_the_batch_is_said(
+    pages: Pages, label: str, client: Client, definitions: DefinitionStore
+) -> None:
+    sources = {'pairs': toys.SAMPLES}  # its code now fills sample only
+    again = Pages(BatchManager(client, sources=sources, definitions=definitions))
+
+    answer = opened(again, label).get('/api/rows/offered')
+
+    assert (answer.status_code, answer.json()['message']) == (
+        422,
+        'The rows of the source cannot be listed: the source pairs: it no '
+        'longer gives the column transmission that the batch keeps as filled '
+        'by it.',
+    )
+
+
 # Columns and settings
 
 
@@ -1456,18 +1523,26 @@ def test_a_group_setting_made_a_column_and_a_setting_again_keeps_its_value(
     assert form_bins(setting) == 5
 
 
+@pytest.mark.parametrize('way', ['make a column', 'load a table'])
 def test_columns_do_not_change_while_the_form_holds_a_change(
-    http: TestClient, batch: Batch
+    http: TestClient, batch: Batch, way: str
 ) -> None:
     draft(http, 9)
+    table = b'key,sample,transmission,name\na,run:1,run:1001,first\n'
 
-    answer = http.post('/api/settings/column', json={'name': 'binning'})
+    answer = (
+        http.post('/api/settings/column', json={'name': 'binning'})
+        if way == 'make a column'
+        else http.post('/api/table', params={'name': 'rows.csv'}, content=table)
+    )
 
     assert answer.status_code == 422
     assert answer.json()['message'] == (
         'Nothing was changed: apply or discard the settings first.'
     )
     assert batch.columns == ('sample', 'transmission', 'thickness')
+    assert list(batch.frame().index) == ['1', '2', '3']
+    assert form_bins(state(http)) == 9
 
 
 def test_a_correction_of_a_run_changes_no_row_and_can_be_taken_back(
@@ -2126,36 +2201,12 @@ def test_the_rows_of_a_source_are_marked_as_a_range_takes_them(
 
 
 @pytest.mark.parametrize(
-    ('first', 'last', 'taken'),
-    [('2', None, ['2', '4']), (None, '2', ['1', '2']), ('2', '2', ['2'])],
-    ids=['from', 'to', 'one'],
-)
-def test_a_batch_made_from_a_range_of_a_source_has_its_rows_filled_between_the_ends(
-    http: TestClient,
-    manager: BatchManager,
-    sample: Measure,
-    first: str | None,
-    last: str | None,
-    taken: list[str],
-) -> None:
-    sample(4, 'ethanol')
-
-    made = http.post('/api/batches', json=new_batch(first=first, last=last)).json()
-
-    assert list(manager.batch(made['label']).frame().index) == taken
-
-
-@pytest.mark.parametrize(
     ('ends', 'said'),
     [
         ({'first': '3'}, '3 is not a filled row'),
         ({'first': '2', 'last': '1'}, 'the row 2 comes after the row 1'),
-        (
-            {'first': '2', 'later': 'true'},
-            'a batch of the rows that arrive later has no first or last',
-        ),
     ],
-    ids=['waits', 'reversed', 'later with an end'],
+    ids=['waits', 'reversed'],
 )
 def test_a_range_that_takes_no_row_of_its_ends_makes_no_batch(
     http: TestClient, manager: BatchManager, ends: dict[str, str], said: str
@@ -2270,6 +2321,18 @@ def test_a_batch_made_on_the_page_is_made_as_asked_or_not_at_all(
     assert batch.frame()['thickness'].isna().tolist() == [True]
     assert batch.settings['thickness'] == 2.0
     assert pages.manager.following == made.label
+
+
+def test_a_batch_that_starts_with_the_settings_of_no_batch_is_not_made(
+    http: TestClient, manager: BatchManager
+) -> None:
+    answer = http.post('/api/batches', json=new_batch(settings_from='gone'))
+
+    assert (answer.status_code, answer.json()['message']) == (
+        422,
+        'The batch was not made: there is no batch gone to start from.',
+    )
+    assert list(manager.headers()) == ['scan']
 
 
 def test_a_batch_made_from_the_page_of_a_batch_starts_with_its_settings(
@@ -2584,7 +2647,7 @@ def test_a_batch_to_follow_whose_follow_the_definitions_refuse_is_not_made(
 
     assert (answer.status_code, answer.json()) == (
         422,
-        {'message': "The batch was not made: ('following',): refused."},
+        {'message': "The change was not kept: ('following',): refused"},
     )
     assert (list(manager.headers()), manager.following) == (['scan'], None)
 
@@ -2621,7 +2684,7 @@ def test_a_batch_removed_from_its_page_is_gone_and_its_results_stay(
 
     removed = http.post('/api/batch/remove')
 
-    assert removed.status_code == 200
+    assert (removed.status_code, removed.json()) == (200, {'notice': 'Removed Scan.'})
     assert manager.headers() == {}
     assert client.records(label='scan') != []
     gone = http.get('/api/state')
