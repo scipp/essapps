@@ -13,7 +13,7 @@ Four more are used here:
 - The *label* of a batch names its results: a row's result is the newest record under the label with the row's key.
 - A *template* is a spec with values for some of its parameters; the parameters left out are its *blanks*.
 - The *definitions* are where a workspace keeps what a person made of a batch: per label, the edits, and the settings as a template whose blanks are the columns.
-- *Follow* scans the batch that follows at an interval and reduces a row once its files are listed, and again when the files change it at one of the columns `at` (`Automatic`).
+- *Follow* scans the batch that follows at an interval and reduces a row once its files are listed, and again when the files change it at one of the columns `at`.
 
 A batch is one workflow over every row that the files of a workspace give:
 
@@ -32,7 +32,7 @@ A person cannot do three things:
 
 1. **End a series.** If the settings change after lunch, every row of the morning reads `completed, earlier settings` from then on, and "Reduce them again" offers to reduce it with the new settings. Nothing says that those rows are finished.
 2. **Work on two sets of runs.** A person wants to reduce yesterday's runs again while the runs measured now are reduced as they arrive, and to look at one without stopping the other.
-3. **Give each row the output of another workflow.** A beam centre per sample needs two batches and a source written for the pair (`with_centre` in batch.md, "Chains").
+3. **Give each row the output of another workflow.** A beam centre per sample needs two batches and a source written for the pair. A cell can name an output of another record ([batch.md, "Chains"](../../../packages/essapps/docs/batch.md#chains)), but the column is filled in code.
 
 A batch also grows with its proposal: at 30 000 rows a state of the page takes 1.6 s and 18 MB ([#223](https://github.com/scipp/essapps/issues/223)).
 
@@ -62,7 +62,7 @@ The definitions keep one more part per label, the *header*:
 
 ```
 definitions/labels/20261118-130204/header.json     spec, columns, source, title, description, scope
-definitions/labels/20261118-130204/edits.json      cells set, rows added or removed
+definitions/labels/20261118-130204/rows.json       the table
 definitions/labels/20261118-130204/settings.json   a template: the settings, with a copy of the spec and the columns
 definitions/following.json                         the label of the batch that follows, or none
 ```
@@ -123,11 +123,10 @@ Nothing checks that the batches cover every row or that they do not overlap.
 ```python
 manager = BatchManager(client, sources=SOURCES, definitions=definitions)
 label = manager.create('loki-iofq', title='Afternoon', source='sample-runs',
-                       columns=('sample', 'sample_transmission', 'can'),
-                       scope=Scope(start=60339))
+                       columns=('sample', 'sample_transmission', 'can'))
 manager.headers()              # the header of each batch, by label
 manager.batch(label)           # the Batch: state(), reduce(), cancel(), settings
-manager.change(label, scope=Scope(start=60339, stop=60421))
+manager.change(label, title='Afternoon, 2 mm cells')
 manager.remove(label)
 ```
 
@@ -148,7 +147,7 @@ manager.following                                        # what the page and the
 
 - One value means that at most one batch follows, with no rule to enforce. Making a batch that follows stops the batch that followed before.
 - The manager keeps the value in the definitions, apart from any batch, so a restart resumes. Removing the batch that follows ends Follow.
-- A step of Follow is one step of `Automatic` on `manager.batch(manager.following)`.
+- A step of Follow is one step of `auto.step` on `manager.batch(manager.following)`.
 - Whoever serves the pages owns the timer that steps it, and the lock. The manager has no thread, no timer and no lock. It reads and writes definitions and hands out `Batch` objects.
 
 A batch has no state "closed".
@@ -184,7 +183,7 @@ Each has its own settings and one result per row, says which column each of its 
              "beam_centre": "centre.centre"}}]}
 ```
 
-`Batch` and `Automatic` as they are can run this, with one `Batch` per workflow: a cell may reference a record that is still running, so one pass of Follow submits every workflow for a new row.
+`Batch` and `auto.step` as they are can run this, with one `Batch` per workflow: a cell may reference a record that is still running, so one pass of Follow submits every workflow for a new row.
 `test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before` shows it for two.
 
 It needs these decisions, and the first three change what a person sees:

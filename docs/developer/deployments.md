@@ -59,7 +59,7 @@ The web page (`ess.apps.batch.web`) is experimental and runs as a demo.
 ```
  DMSC server, one process per instrument
  ┌──────────────────────────────────────────────────────────────────┐
- │ loop: scan each batch, reduce the rows with a new file           │
+ │ loop: add the rows for new files, reduce the rows with no result │
  │ page to configure the reduction                                  │
  │ configuration: per instrument, adjusted per proposal             │
  │ a Client and a Workspace per proposal: history and store on disk │
