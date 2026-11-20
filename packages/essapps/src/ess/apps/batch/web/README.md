@@ -286,7 +286,15 @@ It answers the body, or shows the message of the failure (the server's `message`
 It also drops an answer when a newer request of the same kind was sent (`/api/row`, `/api/runs`, `/api/plot`), or when what it was for changed, such as a row that is no longer the only one selected.
 An older answer of the poll is dropped by its `version`.
 An action is sent to the API of the batch shown when it was made, also if another batch is shown when its turn in the queue comes; the state it answers is then dropped, as is a state of the poll of the batch before. A change of batch also drops the answers on their way of each kind, such as `api/plot`, so that nothing of the batch before is drawn.
-Actions wait for each other in a queue, so that the server gets them in the order a person did them.
+Every request that depends on the actions before it waits in one queue (`queued` in `app.js`), so that the server gets them in the order a person did them and each acts on what the ones before left:
+
+| In the queue | Why |
+|---|---|
+| each action of a batch (`act`), the corrections of runs, the removal of a batch | each changes what the next one reads |
+| a file asked for (the table, the settings, the results) | it holds an edit that the click sent at the blur of its input |
+| **Make** of a new batch | it starts with the settings that an **Apply** sent before put in force |
+
+The poll, the counts, and the other reads (`api/runs`, `api/sources`, `api/sources/rows`, `api/rows/offered`, `api/columns/values`, `api/plot`, `api/row`) go at once: they change nothing, and what they draw follows the next state; a dialog filled by one leaves the check to the server at its action, which waits in the queue.
 The keys of many rows (a plot, the results as a zip) go in the body of a POST, since a URL has a limit.
 The page asks for `api/...`, relative to its own URL, and `/` redirects by a relative URL, so a parent app can mount it under a prefix, and the answers are gzipped for a client that accepts it.
 Starlette does not run the lifespan of a mounted app, which owns the timer of Follow, so the parent runs it:

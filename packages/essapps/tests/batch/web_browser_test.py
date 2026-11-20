@@ -581,6 +581,36 @@ def test_a_value_typed_and_apply_clicked_at_once_are_applied_with_one_click(
     assert batch.settings['binning'] == {'bins': 5}
 
 
+def stop(page: Any, part: str) -> list[Any]:
+    """
+    Keep each request to ``api/<part>`` from the server, as a slow network
+    would, until :func:`send` lets it go: the list of those kept.
+    """
+    kept: list[Any] = []
+    page.route(f'**/api/{part}', lambda route: kept.append(route))
+    return kept
+
+
+def send(page: Any, kept: list[Any]) -> None:
+    """Let the first request kept by :func:`stop` go, once there is one."""
+    while not kept:
+        page.wait_for_timeout(10)
+    kept.pop(0).continue_()
+
+
+def test_a_file_asked_for_after_an_edit_has_the_edit(page: Any) -> None:
+    kept = stop(page, 'cells')
+    cell(page, 'sds', 'thickness').click()
+    editor(page).fill('2.5')
+
+    with page.expect_download() as saved:
+        page.click('#files .menu-button')
+        page.click('[data-file="table.csv"]')
+        send(page, kept)
+
+    assert '2.5' in Path(saved.value.path()).read_text()
+
+
 def test_escape_after_a_value_sent_puts_that_value_back_and_sends_nothing(
     page: Any,
 ) -> None:
@@ -1478,6 +1508,26 @@ def test_a_person_makes_a_batch_and_lands_on_its_page(
     assert manager.batch(label).columns == ('sample', 'transmission', 'thickness')
     assert manager.following is None  # Follow is off unless ticked
     assert page.is_hidden('#stop-follow')
+
+
+def test_a_batch_made_after_apply_starts_with_the_settings_applied(
+    page: Any, batch: Batch, manager: BatchManager
+) -> None:
+    kept = stop(page, 'settings/apply')
+    page.click('[data-tab=settings]')
+    page.fill(BINS, '5')
+    page.click('#settings-apply')
+    page.click('[data-view=batches]')
+    page.click('#new-batch-open')
+    fill_new_batch(page, 'Afternoon')
+
+    page.click('#new-batch [type=submit]')
+    send(page, kept)
+
+    page.wait_for_selector('#title:has-text("Afternoon")')
+    (label,) = (k for k, h in manager.headers().items() if h.title == 'Afternoon')
+    assert batch.settings['binning'] == {'bins': 5}
+    assert manager.batch(label).settings['binning'] == {'bins': 5}
 
 
 def test_a_batch_made_with_follow_follows_in_place_of_the_one_named_at_the_box(
