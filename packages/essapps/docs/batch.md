@@ -9,35 +9,48 @@ The decisions behind it are [ADR 0012](../../../docs/developer/adr/0012-a-batch-
 
 ### Picture
 
-```
- person, browser          person, shell            notebook, test
-        │                       │                        │
- web: Pages, Page         cli: essapps-batch             │
- (one lock, a timer)      (frames, templates)            │
-────────┼───────────────────────┼────────────────────────┼─────────
-        └───────────┬───────────┘                        │
-                    ▼                                    │
-                 manager ─────────────┬──────────┐       │
-                    │ step()          │ batch()  │       │
-                    ▼                 ▼          │       │
-                  step ───────────► Batch ◄──────┼───────┘
-                    │                 │          ▼
-                    ▼                 ├─────► definitions
-                  source              │
-                                      ├─────► table
-                                      ├─────► state
-                                      └─────► Client
+Who calls whom; an arrow points from a caller to what it calls:
+
+```mermaid
+flowchart TD
+    subgraph callers [" "]
+        page["page: ess.apps.batch.web"]
+        command["command: essapps-batch"]
+        notebook["notebook, test"]
+    end
+    subgraph layer ["batch layer"]
+        manager["manager: BatchManager"]
+        subgraph batch ["Batch"]
+            template
+            table
+        end
+        step["step: auto.step"]
+        source["source: Source"]
+    end
+    definitions["definitions"]
+    client["Client: files, records"]
+    callers --> batch
+    callers --> manager
+    manager --> batch
+    manager --> step
+    manager --> source
+    manager --> definitions
+    step --> batch
+    step --> source
+    batch --> definitions
+    batch --> client
+    source --> client
 ```
 
-An arrow points from the user of a thing to the thing.
-Nothing below the line imports anything above it.
-`table` and `state` are functions on plain data, which any part below the line may use.
+Not drawn: the page lists the runs, and the manager finds the specs bound, through the client.
+Nothing in the batch layer imports the page or the command.
+`table` and `state` are functions on plain data, which any part may use.
 
 | Component | Code | Owns |
 |---|---|---|
 | table | `table.py` | the form of a table: dtypes, cells, cell to request value and back, `rows.json`, table files |
 | source | `source.py`: `Source`, `rows_of` | the code of the application that makes rows from the files |
-| batch | `reduction.py`: `Batch` | the template and the table of one label: `put`, `state`, `reduce`, `cancel`, and `version`, which moves when the table, the template or a record changes; the only part that calls the client |
+| batch | `reduction.py`: `Batch` | the template and the table of one label: `put`, `state`, `reduce`, `cancel`, and `version`, which moves when the table, the template or a record changes; the only part that submits to the client |
 | state | `state.py`: `RowState`, the rules | where each row stands; the rules are functions from the states of rows to keys |
 | step | `auto.py`: `step`, `Step` | one step of Follow on one batch: add rows of the source, reduce rows |
 | manager | `manager.py`: `BatchManager` | the batches of a workspace: make, list, change, remove; which batch follows; `considered` |
@@ -315,6 +328,27 @@ So a reader that wants the rows with a completed result reads `status` (the fiel
 While the settings are refused, its states are not compared.
 The page shows these states.
 
+What moves a row from one word of `text` to another:
+
+```mermaid
+stateDiagram-v2
+    [*] --> incomplete: a row put, a cell empty
+    [*] --> ready: a row put, complete
+    incomplete --> ready: a cell filled
+    ready --> running: reduce
+    running --> done: the record completed
+    running --> failed: the record failed
+    running --> cancelled: cancel
+    state "with a result" as result {
+        done --> earlier: a setting applied
+        done --> outdated: a cell changed
+        earlier --> outdated: a cell changed
+        failed
+        cancelled
+    }
+    result --> running: reduce again
+```
+
 The rules, in `ess.apps.batch`:
 
 | Rule | Keys |
@@ -378,6 +412,18 @@ manager.marked('sample-runs', lambda given: between(given, '60339', None))
 ## Follow
 
 At most one batch follows: the last one made with `follow=True`, until it is stopped.
+The life of a batch; a batch made without Follow and a batch that stopped are in the same state:
+
+```mermaid
+stateDiagram-v2
+    follows: follows
+    still: does not follow
+    [*] --> still: create(...)
+    [*] --> follows: create(source=..., follow=True)
+    follows --> still: stop(), or another batch made with Follow
+    still --> removed: remove()
+    follows --> removed: remove()
+```
 
 ```python
 manager.create(..., source='sample-runs', follow=True)   # follows; the batch that followed stops
@@ -400,7 +446,33 @@ candidates = not_reduced(batch.state(compare=False))   # ready as given, no resu
 batch.reduce(not_reduced(batch.state(candidates)))
 ```
 
-The manager keeps `considered` in `source.json`, written after the table.
+One step of Follow, from the timer to `considered` kept:
+
+```mermaid
+sequenceDiagram
+    participant timer as timer: Pages.tick
+    participant manager as manager: BatchManager
+    participant step as step: auto.step
+    participant source as source: Source
+    participant batch as Batch
+    participant definitions
+    timer->>manager: step()
+    manager->>definitions: read source.json: the source, considered
+    manager->>step: step(batch, source, considered)
+    step->>batch: frame()
+    step->>source: rows_of(client, source)
+    Note over source: lists the files
+    source-->>step: given: every row the source makes now
+    Note over step: new: not considered, not in the table, filled. Waiting: not filled yet.
+    opt rows are new
+        step->>batch: put(table + new)
+        batch->>definitions: write rows.json
+    end
+    step->>batch: reduce(rows ready and without a result)
+    step-->>manager: Step: considered, refused, waiting, records
+    manager->>definitions: write source.json: considered, if it changed
+    manager-->>timer: Step
+```
 
 - A row is new if its key is neither considered nor in the table. A key of the source that the table has is considered, so a row added by hand, or by a step cut off before `source.json` is written, stays away once removed.
 - A new row is added once each of `fills` that is a column of the table has a value. Until then it waits.
@@ -408,7 +480,6 @@ The manager keeps `considered` in `source.json`, written after the table.
 - A row with a result is never reduced by a step, also when it is outdated, failed or cancelled.
 - A row whose request is refused does not hold back the others; `done.refused` says why, and the next step tries again.
 - A batch of the manager persists what it submits.
-- Removing the batch that follows ends Follow.
 
 A source whose row grows, such as the runs of a sample so far, gives the grown list a new key:
 

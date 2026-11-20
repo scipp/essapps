@@ -4,7 +4,7 @@
 A batch on a client: its template and its table, the request of each row,
 reducing rows, and reading their results.
 
-:class:`Batch` is the only part of the toolbox's logic that calls the client.
+:class:`Batch` is the only part of the toolbox's logic that submits to the client.
 It needs no interface of its own over the client: tests and UI work run it on
 ``local()`` with fake workflows, which start in milliseconds and refuse and fail
 as real ones do.
