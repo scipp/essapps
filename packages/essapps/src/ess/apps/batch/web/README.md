@@ -55,11 +55,15 @@ Apply is refused while the form misses something, and the bar says what; it also
 While the form holds a change, **Reduce**, the ways of its menu, **Reduce them again** and **Download settings** are refused, so that nothing is reduced or saved with settings other than those shown.
 **Load settings** and "Put these settings in the form" in the row tab fill the form, after a confirmation if it holds a change; a file that cannot be read whole leaves the form as it was.
 A change of the settings applies to the rows not reduced yet.
-A row reduced before stays `done`, marked "earlier settings", and **Reduce** leaves it (`ess.apps.batch.left_to_reduce`).
-**Reduce them again** in the Settings tab reduces those rows (`earlier_settings`), after a confirmation that names how many.
+A row reduced before reads `earlier`, reduced with earlier settings, and **Reduce** leaves it (`ess.apps.batch.left_to_reduce`).
+Its pill is teal, neither the green of `done` nor the amber of `outdated`, and the text beside it names the settings that changed, such as "Binning changed".
+Its result counts as one of a `done` row: the plot, **Download all** and the count of results take it.
+The label of the Settings tab shows how many rows read `earlier`, and the tab a bar above the form, "N rows reduced with earlier settings", with **Reduce them again**.
+That button, and **Reduce rows of earlier settings** in the menu ▾ next to **Reduce**, reduce those rows (`earlier_settings`), after a confirmation that names how many.
+**Reduce** never reduces them: with only such rows left, it reads "Nothing left to reduce".
 To try settings on one row, change them, **Apply**, select the row, and choose **Reduce selected** in the menu ▾ next to **Reduce**.
 The row tab then shows what the row was reduced with.
-To keep the settings, press **Reduce them again**; to drop them, change them back and **Apply**, and the row tried reads "earlier settings".
+To keep the settings, press **Reduce them again**; to drop them, change them back and **Apply**, and the row tried reads `earlier`.
 In a batch that follows, the settings applied for the trial are also those of the rows that Follow reduces meanwhile, such as the rows of runs that arrive. To try settings on a few rows first, make a batch without Follow, then the batch that follows with "Start with the settings of" the first.
 The page sends its actions in the order a person did them, so a value typed and Apply clicked at once are applied with one click.
 Each state replaces the form, but not while the focused input holds a value typed and not sent; Escape puts back the value sent last.
@@ -109,6 +113,7 @@ A click on a row of the list shows its batch, and the view stays Batches: the ri
 The page shows one batch, so the list has no checkboxes.
 The title is a link to the page of its batch, so a click with a modifier key, or with the middle button, opens it in another tab.
 The label and the description are text to select and copy: a click on them, or one that selects text, shows no batch.
+The description keeps its line breaks, here and in the forms "New batch" and of the tab Batch, where it is a field of several lines.
 While the view Batches or the view Runs is shown, the page counts the rows of each batch by status (`Pages.counts`), the next count 2 s after the answer of the one before; nothing counts while the view Rows is shown, or while the tab of the browser is hidden.
 The answer of a count also gives the files that each batch names, which the Runs view joins to its runs.
 A count updates the cells of the rows; the rows are made again only when the list changes, so the keyboard focus on a title and a text selected stay.

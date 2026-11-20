@@ -24,7 +24,7 @@ a change: the row cannot run with it, and a change would offer it to
 
 A change of settings applies to the rows not reduced yet. A completed result
 whose request differs from the row's only at settings is reduced with
-*earlier settings* (:attr:`RowState.earlier`): it reads ``done``, and
+*earlier settings* (:attr:`RowState.earlier`): it reads ``earlier``, and
 :func:`left_to_reduce` leaves it until a person reduces it again.
 
 Automatic reduction reduces the rows of :func:`not_reduced`: ready, and
@@ -81,12 +81,13 @@ class RowState:
         """
         The status of the row, as the page, a table written and the command
         say it: ``running``, ``incomplete``, ``ready`` (no result),
-        ``failed``, ``cancelled``, ``done`` or ``outdated``. A failed or
-        cancelled result reads as its status whether or not the request
-        changed since, since the row needs reducing either way. A row of
-        earlier settings reads ``done``. A completed result not compared with
-        the settings, as while they are refused, reads ``outdated``: it cannot
-        be told to match them.
+        ``failed``, ``cancelled``, ``done``, ``earlier`` or ``outdated``. A
+        failed or cancelled result reads as its status whether or not the
+        request changed since, since the row needs reducing either way. A row
+        of earlier settings (:attr:`earlier`) reads ``earlier``: its result is
+        completed, as one that reads ``done``. A completed result not compared
+        with the settings, as while they are refused, reads ``outdated``: it
+        cannot be told to match them.
         """
         if self.status is Status.PENDING:
             return 'running'
@@ -96,7 +97,9 @@ class RowState:
             return 'ready'
         if self.status in _RERUN:
             return str(self.status)
-        return 'done' if self.earlier or self.outdated is False else 'outdated'
+        if self.earlier:
+            return 'earlier'
+        return 'done' if self.outdated is False else 'outdated'
 
 
 def problems(

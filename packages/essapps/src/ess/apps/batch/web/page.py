@@ -69,12 +69,14 @@ and takes one request at a time, under the lock of all pages.
 
 Statuses are named in a scientist's words (:attr:`RowState.text
 <ess.apps.batch.RowState.text>`): ``ready``, ``running``, ``done``,
-``outdated``, ``failed``, ``cancelled`` and ``incomplete``. A change of
-settings applies to rows not reduced yet: a done row whose result differs from
-its request only at settings (:func:`~ess.apps.batch.earlier_settings`) stays
-``done``, marked as reduced with earlier settings, and "Reduce" leaves it
+``earlier``, ``outdated``, ``failed``, ``cancelled`` and ``incomplete``. A
+change of settings applies to rows not reduced yet: a done row whose result
+differs from its request only at settings
+(:func:`~ess.apps.batch.earlier_settings`) reads ``earlier``, reduced with
+earlier settings, and "Reduce" leaves it
 (:func:`~ess.apps.batch.left_to_reduce`) until a person reduces it with the
-settings now. A failed or cancelled row stays so when the settings change,
+settings now. Its result counts as one of a done row: the plot and the
+downloads take it. A failed or cancelled row stays so when the settings change,
 since it needs reducing either way. The rows read as with the batch's
 settings, whatever the form holds. While the workflow refuses the
 batch's settings, no result can be said to be current, so a done row is
@@ -143,7 +145,6 @@ from ..export import export_table
 from ..reduction import Batch
 from ..state import (
     RowState,
-    earlier_settings,
     left_to_reduce,
     ready,
     to_reduce,
@@ -193,7 +194,16 @@ type Draw = Callable[[Sequence[Shown]], dict[str, Any]]
 NAME = 'name'
 """The note that names a row on the page; a row without one is named by its key."""
 
-_ORDER = ('ready', 'running', 'done', 'outdated', 'failed', 'cancelled', 'incomplete')
+_ORDER = (
+    'ready',
+    'running',
+    'done',
+    'earlier',
+    'outdated',
+    'failed',
+    'cancelled',
+    'incomplete',
+)
 _ENDED = (Status.FAILED, Status.CANCELLED)
 _DRAWN = 12
 """How many results the plot shows when no row is selected."""
@@ -555,8 +565,6 @@ class Page:
         batch = self.batch
         columns = batch.columns
         states, unusable = self._states()
-        # With the settings refused, the rows are not compared, so none is earlier.
-        earlier = set(earlier_settings(states))
         unsubmitted = self.pages.unsubmitted(self.label, states)
         failures = self._failures(states)
         frame = batch.frame()
@@ -571,7 +579,6 @@ class Page:
                 named[key],
                 notes,
                 states[key],
-                key in earlier,
                 unsubmitted.get(key, ''),
                 failures,
             )
@@ -625,7 +632,7 @@ class Page:
             ],
             rows=rows,
             counts={'all': len(states), **counts},
-            action=self._primary(states, unapplied or problem, len(earlier), unapplied),
+            action=self._primary(states, unapplied or problem, unapplied),
             settings=forms.tree(self.settings, marks),
             settings_problem=problem,
             settings_changed=unapplied is not None,
@@ -693,7 +700,6 @@ class Page:
         name: str,
         notes: Sequence[str],
         state: RowState,
-        earlier: bool,
         unsubmitted: str,
         failures: Mapping[str, str],
     ) -> Row:
@@ -705,16 +711,21 @@ class Page:
         }
         record = state.record
         status = state.text
-        reason = ''
+        reason = changed = ''
         if unsubmitted:
             reason = unsubmitted
         elif status in ('failed', 'cancelled') and record is not None:
             reason = failures.get(record.id, '')
         elif problems:
             reason = '; '.join(problems.values())
-        elif earlier:
-            changed = self._changed(state, self.batch.settings_fields)
-            reason = f'Reduced with earlier settings: {changed} changed since.'
+        elif status == 'earlier':
+            if named := self._changed(state, self.batch.settings_fields):
+                changed = f'{named} changed'
+            since = f': {changed} since' if changed else ''
+            reason = (
+                f'Reduced with earlier settings{since}. "Reduce" leaves such rows;'
+                ' "Reduce rows of earlier settings" reduces them with the settings now.'
+            )
         elif status == 'outdated' and state.outdated:
             reason = self._outdated(state)
         elif status == 'outdated':
@@ -730,7 +741,7 @@ class Page:
             notes={n: '' if cells[n] is None else str(cells[n]) for n in notes},
             status=status,
             reason=reason,
-            earlier=earlier,
+            changed=changed,
             record=None if record is None else record.id,
             result=result,
             cells={
@@ -747,7 +758,6 @@ class Page:
         self,
         states: Mapping[str, RowState],
         blocked: str | None,
-        earlier: int,
         label: str | None = None,
     ) -> Action:
         """What the button does now, or ``label`` if blocked; how far rows run."""
@@ -773,7 +783,6 @@ class Page:
             blocked=blocked,
             remaining=n,
             again=len(ready(states)),
-            earlier=earlier,
             running=sum(s.status is Status.PENDING for s in states.values()),
             progress=_progress(states),
         )

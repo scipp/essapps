@@ -290,9 +290,9 @@ def test_a_title_and_description_changed_are_kept(
     label = manager.create('plain', title='Morning', description='a')
 
     manager.change(label, title='Afternoon')
-    manager.change(label, description='b')
+    manager.change(label, description='1 mm cells\n2 mm cells')
 
-    header = Header('Afternoon', 'b')
+    header = Header('Afternoon', '1 mm cells\n2 mm cells')
     assert manager.headers() == {label: header}
     assert _again(client, definitions).headers() == {label: header}
 

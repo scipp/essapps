@@ -482,6 +482,64 @@ def test_a_setting_is_in_force_after_apply_and_discard_takes_a_change_back(
     assert batch.settings['binning'] == {'bins': 5}
 
 
+@pytest.fixture
+def earlier(page: Any, url: str, client: Client) -> Any:
+    """The page with rows ``1`` and ``2`` reduced, then the bins changed."""
+    reduce_rows(page, url, client, '1', '2')
+    page.click('[data-tab=settings]')
+    page.fill(BINS, '5')
+    page.press(BINS, 'Tab')
+    page.click('#settings-apply')
+    page.wait_for_selector('.chip.st-earlier .n:text-is("2")')
+    return page
+
+
+def test_rows_reduced_with_earlier_settings_read_earlier_with_what_changed(
+    earlier: Any,
+) -> None:
+    page = earlier
+
+    assert pills(page) == ['earlier', 'earlier', 'ready']
+    assert page.inner_text('#rows .status .changed >> nth=0') == 'Binning changed'
+    assert page.inner_text('#earlier-badge') == '2'
+    assert page.is_visible('#earlier')
+    assert page.inner_text('#earlier-state') == '2 rows reduced with earlier settings.'
+    page.click('.chip.st-earlier')
+    page.wait_for_function(f'{PILLS}.length === 2')
+    assert pills(page) == ['earlier', 'earlier']
+
+
+def test_the_reduce_menu_reduces_the_rows_of_earlier_settings(
+    earlier: Any, client: Client, batch: Batch
+) -> None:
+    page = earlier
+    page.on('dialog', lambda dialog: dialog.accept())
+
+    page.click('#reduce-more')
+    assert page.inner_text('#n-earlier') == '2'
+    page.click('[data-reduce=earlier]')
+    client.wait(client.records())
+
+    page.wait_for_selector('.chip.st-done .n:text-is("2")')
+    assert page.is_hidden('#earlier-badge')
+    assert page.is_hidden('#earlier')
+    assert {k: s.text for k, s in batch.state().items()} == {
+        '1': 'done',
+        '2': 'done',
+        '3': 'ready',
+    }
+
+
+def test_the_progress_strip_of_an_idle_reduce_button_has_no_width(
+    earlier: Any,
+) -> None:
+    width = earlier.evaluate(
+        "document.querySelector('#reduce .bar').getBoundingClientRect().width"
+    )
+
+    assert width == 0
+
+
 def test_typing_in_the_settings_form_while_a_poll_arrives_sends_what_was_typed(
     page: Any, url: str
 ) -> None:
@@ -1488,6 +1546,26 @@ def test_a_batch_of_the_rows_that_arrive_later_is_made_without_rows_and_follows(
     (label,) = (k for k, h in manager.headers().items() if h.title == 'Later')
     assert manager.following == label
     assert manager.batch(label).frame().empty
+
+
+def test_a_description_of_two_lines_shows_in_two_lines(
+    page: Any, manager: BatchManager
+) -> None:
+    page.click('[data-view=batches]')
+    page.click('#new-batch-open')
+    fill_new_batch(page, 'Afternoon')
+    page.fill('#new-description', '1 mm cells\n2 mm cells')
+    page.click('#new-batch [type=submit]')
+    page.wait_for_selector('#title:has-text("Afternoon")')
+
+    page.click('[data-view=batches]')
+    page.click('[data-tab=batch]')
+
+    (header,) = (h for h in manager.headers().values() if h.title == 'Afternoon')
+    assert header.description == '1 mm cells\n2 mm cells'
+    listed = page.locator('#batches .description', has_text='1 mm cells')
+    assert listed.inner_text() == '1 mm cells\n2 mm cells'
+    assert page.input_value('#batch-description') == '1 mm cells\n2 mm cells'
 
 
 def test_a_refusal_of_the_manager_shows_at_the_form_and_makes_nothing(

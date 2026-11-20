@@ -305,9 +305,10 @@ A row added after `make_column` has an empty cell: the default of the parameter,
 | `spec_changed` | the result is of another spec than the one bound |
 | `outdated` | `spec_changed`, or `changed` is not empty |
 | `earlier` | the row is ready, its result completed, and its request differs from that of the result only at settings |
-| `text` | what the page, a table written and the command say: `running`, `incomplete`, `ready`, `done`, `outdated`, `failed` or `cancelled` |
+| `text` | what the page, a table written and the command say: `running`, `incomplete`, `ready`, `done`, `earlier`, `outdated`, `failed` or `cancelled` |
 
-A row with `earlier` reads `done`.
+A row with `earlier` reads `earlier`: its result is completed, as that of a row that reads `done`, and is plotted and downloaded as one.
+So a reader that wants the rows with a completed result reads `status` (the field), not `text`.
 `batch.state` raises `SubmitError` if the settings are refused: then no row can run.
 `batch.state(compare=False)` resolves nothing: `changed` is `None`, and so is `outdated` unless the result is of another spec.
 `batch.shown(keys=None)` gives the states and the reasons the settings are refused.
@@ -436,7 +437,7 @@ key,sample,thickness,binning,name
 
 - `table.write_table(table, path)` and `table.read_table(path, spec.params)` are the only writer and reader.
 - A list or a group is JSON text. Empty is the only missing marker, so the note `NA` is text.
-- `read_table` reads columns with their dtypes, and drops `status`, `earlier`, `record` and `failure`.
+- `read_table` reads columns with their dtypes, and drops `status`, `record` and `failure`.
 - A note of a `.csv` or `.tsv` file is text, so `0342` stays `'0342'`. A note of a `.xlsx` file keeps the type of its cells.
 - A header that is not exactly a parameter name, such as `Sample`, is read as a note, and `sample` becomes a setting with no value.
 
@@ -451,9 +452,10 @@ essapps-batch -b ... reduce iofq.yaml -l water2 -s package.module:SOURCES --sour
                                                                # a batch of the rows that the source has filled
 ```
 
-The table written has the notes `status` (the words of `RowState.text`), `earlier`, `record` and `failure`.
+The table written has the notes `status` (the words of `RowState.text`), `record` and `failure`.
 For a label that exists, the template becomes the settings and the table replaces the table.
 `--remaining` reduces only `left_to_reduce`; `--earlier-settings` adds `earlier_settings` to it.
+A row that `--remaining` leaves reads `earlier`, and the command exits with 3.
 A label without a batch and with neither a table nor `--source` gets one row, keyed by the label: every parameter is a setting.
 The command does no step of Follow.
 
