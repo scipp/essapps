@@ -78,7 +78,7 @@ from .definition import (
     template_of,
 )
 from .reduction import Batch
-from .source import Source, between, filled, rows_of
+from .source import Source, filled, rows_of
 from .table import frame_of, typed
 
 
@@ -230,19 +230,23 @@ class BatchManager:
         return given.assign(waits=~filled(given, fills))
 
     def marked(
-        self, source: str, first: str | None = None, last: str | None = None
+        self,
+        source: str,
+        choose: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
     ) -> pd.DataFrame:
         """
         The table that the source registered as ``source`` makes now, with a
         column ``waits``, whether the row waits, and a column ``taken``,
-        whether :meth:`create` takes it with
-        ``choose=lambda arrived: between(arrived, first, last)``
-        (:func:`~.source.between`). Raises ``ValueError`` if no source is
-        registered so, and as ``between``.
+        whether :meth:`create` takes it with ``choose``, such as
+        ``lambda arrived: between(arrived, '60339', None)``
+        (:func:`~.source.between`); every row that does not wait if not
+        given. Raises ``ValueError`` if no source is registered so, and what
+        ``choose`` raises.
         """
         found = self._source(source)
         given = self._given(found, found.fills)
-        taken = between(given[~given['waits']], first, last).index
+        arrived = given[~given['waits']].drop(columns='waits')
+        taken = arrived.index if choose is None else choose(arrived).index
         return given.assign(taken=given.index.isin(taken))
 
     def create(

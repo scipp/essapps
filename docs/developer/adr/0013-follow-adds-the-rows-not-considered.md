@@ -124,6 +124,13 @@ label = manager.create('loki-iofq', title='Evening', source='sample-runs',
 
 The earlier batch keeps its rows, also those from 60400 on, until a person removes them. It has considered the keys it has seen, and takes no row that arrives later, since it cannot follow again.
 
+A batch of only the rows that arrive later takes no row at making. Every row filled then is considered, so no row is reduced again:
+
+```python
+manager.create('loki-iofq', title='Night', source='sample-runs',
+               choose=lambda arrived: arrived.iloc[:0], follow=True)
+```
+
 ### A batch follows from the time it is made, until it is stopped
 
 Follow is chosen when a batch is made. A batch that follows can be stopped. A batch that does not follow cannot be made to follow.
@@ -136,6 +143,7 @@ manager.stop()                                           # none follows; that ba
 
 - At most one batch follows, as in ADR 0011: the manager keeps its label in `following.json`, a restart resumes, and removing that batch ends Follow. Since `considered` is kept, the first step after a restart adds the rows that arrived in between.
 - A batch made without a source cannot follow; `create` refuses `follow=True` without a source.
+- A batch that follows has no last row. With one, the rows filled between the last row chosen and the making would be considered and never added, and the rows that arrive later would be. `choose` is code, so the manager cannot see a last row; the page leaves the end of the range open while Follow is ticked, and refuses a last row with Follow.
 - Nothing is kept that says a batch has followed. A batch is stopped when another label, or none, is in `following.json`, and no call writes its label there again.
 - So the next batch is one form, "New batch" with Follow, and a step never takes a row that another batch took since.
 - On the page, Follow is a state with one action, "Stop following", not a switch.

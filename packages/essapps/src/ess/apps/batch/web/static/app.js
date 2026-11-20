@@ -633,10 +633,39 @@ function chooseSource() {
 }
 
 // Which batch stops following if the batch made follows.
+// Beside Follow: how many rows taken are reduced at once if ticked, and which
+// batch stops following.
 function drawFollowChoice() {
   const other = view.batchData?.rows.find((batch) => batch.follows);
   const ticked = $('new-batch').elements.follow.checked;
-  $('new-follow-other').textContent = other ? `${other.title} ${ticked ? 'stops following' : 'follows'}.` : '';
+  const n = ticked && sourceRows ? sourceRows.rows.filter((row) => row.mark === 'taken').length : 0;
+  $('new-follow-other').textContent = [
+    n ? `${count(n)} taken ${n === 1 ? 'is' : 'are'} reduced at once.` : '',
+    other ? `${other.title} ${ticked ? 'stops following' : 'follows'}.` : '',
+  ].join(' ').trim();
+}
+
+// The range chosen: its first and last keys, null where open, or `later`, no
+// row now, so that the batch gets only the rows added later.
+function rangeChosen() {
+  const {first, last} = $('new-batch').elements;
+  const later = first.selectedOptions[0]?.hasAttribute('data-later') ?? false;
+  return later ? {first: null, last: null, later} : {first: first.value || null, last: last.value || null, later};
+}
+
+// Follow ticked: the range has no last row, since Follow adds every row that
+// arrives later; nor has a range of no row now. "to" is then open, disabled,
+// and says so. Whether "to" was set and is open now, so that the rows are to
+// be marked again.
+function chooseFollow() {
+  const {follow, last} = $('new-batch').elements;
+  const open = follow.checked || rangeChosen().later;
+  const cleared = open && last.value !== '';
+  if (open) last.value = '';
+  last.disabled = open;
+  if (last.options[0]) last.options[0].textContent = follow.checked ? 'open: Follow adds every later row' : open ? 'no row now' : 'the last';
+  drawFollowChoice();
+  return cleared;
 }
 
 // The parameters of the workflow chosen: those that the source fills are
@@ -669,15 +698,20 @@ async function loadSourceRows(name) {
   if (!loaded) return;
   const filled = loaded.rows.filter((row) => row.mark !== 'waits');
   const option = (row) => h('option', {value: row.key, text: row.name === row.key ? row.key : `${row.name} (${row.key})`});
-  elements.first.replaceChildren(h('option', {value: '', text: 'the first'}), ...filled.map(option));
+  elements.first.replaceChildren(
+    h('option', {value: '', text: 'the first'}),
+    ...filled.map(option),
+    h('option', {value: '', 'data-later': true, text: 'no row now, only the rows that arrive later'}),
+  );
   elements.last.replaceChildren(h('option', {value: '', text: 'the last'}), ...filled.map(option));
+  chooseFollow();
 }
 
 // Ask the server how the range chosen marks each row of the source, and show
 // it; a range it refuses is said, and its rows are shown without marks.
 async function markRange(name = chosenSource().name) {
-  const {first, last} = $('new-batch').elements;
-  const ends = {name, ...(first.value && {first: first.value}), ...(last.value && {last: last.value})};
+  const {first, last, later} = rangeChosen();
+  const ends = {name, ...(first && {first}), ...(last && {last}), ...(later && {later})};
   const said = (text) => {
     $('new-rows').textContent = text;
     if (sourceRows) drawRange(false);
@@ -702,6 +736,7 @@ function drawRange(marked = true) {
   const waits = n('waits');
   const waiting = waits ? `; ${count(waits)} ${waits === 1 ? 'waits' : 'wait'} for a run, which Follow adds once filled if the batch follows` : '';
   $('new-rows').textContent = `The batch gets ${count(n('taken'))}${waiting}.`;
+  drawFollowChoice();
 }
 
 // A table of the rows of a source: the name, each column, and what
@@ -755,8 +790,7 @@ async function makeBatch(event) {
         body: {
           ...header,
           source: chosenSource().name,
-          first: elements.first.value || null,
-          last: elements.last.value || null,
+          ...rangeChosen(),
           columns: [...form.querySelectorAll('[name=column]:checked')].map((box) => box.value),
           follow: way() === 'source' && elements.follow.checked,
         },
@@ -1225,9 +1259,12 @@ function wire() {
   newBatch.onsubmit = makeBatch;
   newBatch.elements.source.onchange = chooseSource;
   newBatch.elements.spec.onchange = chooseSpec;
-  newBatch.elements.first.onchange = () => markRange();
+  newBatch.elements.first.onchange = () => {
+    chooseFollow();
+    markRange();
+  };
   newBatch.elements.last.onchange = () => markRange();
-  newBatch.elements.follow.onchange = drawFollowChoice;
+  newBatch.elements.follow.onchange = () => chooseFollow() && markRange();
   $('take-open').onclick = openTake;
   newBatch.querySelector('[data-cancel]').onclick = closeNewBatch;
   newBatch.addEventListener('keydown', (event) => event.key === 'Escape' && closeNewBatch());

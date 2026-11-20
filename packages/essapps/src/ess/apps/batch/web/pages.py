@@ -63,7 +63,7 @@ from ..definition import NotKept
 from ..manager import BatchManager, fits
 from ..source import Source, between
 from ..state import RowState, not_reduced
-from ..table import read_table
+from ..table import read_table, with_column
 from . import forms
 from .models import (
     BatchCounts,
@@ -408,19 +408,23 @@ class Pages:
             return [c for c in given if c.specs] + [choice(None, None)]
 
     def rows_of(
-        self, source: str, first: str | None = None, last: str | None = None
+        self,
+        source: str,
+        first: str | None = None,
+        last: str | None = None,
+        later: bool = False,
     ) -> SourceRows:
         """
         The table that the source registered as ``source`` makes now, each
         row marked as taken, left out, or waiting, for a new batch of the
-        rows from ``first`` to ``last``
+        rows that :func:`taken` gives
         (:meth:`~ess.apps.batch.BatchManager.marked`). Raises
         :class:`~.page.Problem` if no source is registered so, with what the
         source raises, or if the range is refused.
         """
         with self.lock:
             try:
-                given = self.manager.marked(source, first, last)
+                given = self.manager.marked(source, taken(first, last, later))
             except Exception as error:  # a source is code of the application
                 said = why(error)
                 raise Problem(f'{said[:1].upper()}{said[1:]}.') from None
@@ -428,23 +432,23 @@ class Pages:
 
     def create(self, new: NewBatch, file: tuple[str, bytes] | None = None) -> Made:
         """
-        Make the batch of ``new`` with the manager
-        (:meth:`~ess.apps.batch.BatchManager.create`): with a source, of the
-        rows from ``new.first`` to ``new.last`` among those that the source
-        has filled now (:func:`~ess.apps.batch.source.between`), with an
-        empty column for each other of ``new.columns``; with a table
-        ``file``, its name and content, of its table
-        (:func:`~ess.apps.batch.table.read_table`); else of a table of
-        ``new.columns`` without rows. With ``new.follow``, the batch follows
-        from then on, in place of the batch that followed before, and the
-        timer steps it.
+        Make the batch of ``new`` with the manager, in one call
+        (:meth:`~ess.apps.batch.BatchManager.create`), so that it is made as
+        asked or not at all: with a source, of the rows that :func:`taken`
+        gives of those that the source has filled now, with an empty column
+        for each other of ``new.columns``; with a table ``file``, its name
+        and content, of its table (:func:`~ess.apps.batch.table.read_table`);
+        else of a table of ``new.columns`` without rows. With ``new.follow``,
+        the batch follows from then on, in place of the batch that followed
+        before, and the timer steps it; it has no last row, since Follow adds
+        every row that arrives later.
 
         It starts with the settings of the batch ``new.settings_from``, else
         with those that the application gives its spec. A setting of that
-        batch at a column of ``new.columns`` is first a setting, then made a
-        column (:meth:`~ess.apps.batch.Batch.make_column`), so each row has
-        its value. Raises :class:`~.page.Problem` with what the file, the
-        manager or the source refuses.
+        batch at a column of ``new.columns`` is a column with the setting's
+        value in each row (:func:`~ess.apps.batch.table.with_column`). Raises
+        :class:`~.page.Problem` with what the file, the manager or the source
+        refuses.
         """
         with self.lock:
             try:
@@ -454,8 +458,23 @@ class Pages:
                     if new.settings_from is None
                     else manager.batch(new.settings_from).settings
                 )
-                moved = [c for c in new.columns if c in (settings or {})]
+                if new.follow and new.last is not None:
+                    raise ValueError(
+                        'a batch that follows takes every row that arrives '
+                        'later, so it has no last row'
+                    )
+                given = settings or {}
+                moved = [c for c in new.columns if c in given]
                 columns = [c for c in new.columns if c not in moved]
+
+                def completed(table: pd.DataFrame) -> pd.DataFrame:
+                    """``table`` with the columns of ``new.columns`` it lacks."""
+                    empty = [c for c in columns if c not in table.columns]
+                    table = table.assign(**dict.fromkeys(empty))
+                    for name in moved:
+                        table = with_column(table, name, given[name])
+                    return table
+
                 rows = choose = None
                 if file is not None:
                     name, content = file
@@ -465,13 +484,12 @@ class Pages:
                     except ValueError as error:
                         raise ValueError(f'{name}: {error}') from None
                 elif new.source is None:
-                    rows = pd.DataFrame(columns=columns)
+                    rows = completed(pd.DataFrame())
                 else:
+                    chosen = taken(new.first, new.last, new.later)
 
                     def choose(arrived: pd.DataFrame) -> pd.DataFrame:
-                        taken = between(arrived, new.first, new.last)
-                        empty = [c for c in columns if c not in taken.columns]
-                        return taken.assign(**dict.fromkeys(empty))
+                        return completed(chosen(arrived))
 
                 label = manager.create(
                     new.spec,
@@ -485,8 +503,6 @@ class Pages:
                 )
                 if new.follow:
                     self.failure = None  # said of the batch that followed before
-                for name in moved:
-                    manager.batch(label).make_column(name)
             except Exception as error:  # a source is code of the application
                 raise Problem(f'The batch was not made: {why(error)}.') from None
             return Made(label=label)
@@ -538,6 +554,22 @@ class Pages:
                 rows[label] = dict(Counter(s.text for s in states.values()))
                 files[label] = sorted(ref.file for ref in named)
             return BatchCounts(rows=rows, files=files, failed=failed)
+
+
+def taken(
+    first: str | None, last: str | None, later: bool
+) -> Callable[[pd.DataFrame], pd.DataFrame]:
+    """
+    Which rows a new batch takes of those that its source has filled now: the
+    rows from ``first`` to ``last`` (:func:`~ess.apps.batch.source.between`),
+    or, if ``later``, none, so that it gets only the rows added later, by
+    Follow or by a person. Raises ``ValueError`` for ``later`` with an end.
+    """
+    if not later:
+        return lambda arrived: between(arrived, first, last)
+    if first is not None or last is not None:
+        raise ValueError('a batch of the rows that arrive later has no first or last')
+    return lambda arrived: arrived.iloc[:0]
 
 
 def _spec_choice(

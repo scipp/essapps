@@ -1432,7 +1432,10 @@ def test_a_batch_made_with_follow_follows_in_place_of_the_one_named_at_the_box(
     assert not page.is_checked('#new-follow input')
 
     page.check('#new-follow input')
-    page.wait_for_selector('#new-follow-other:text-is("Other stops following.")')
+    page.wait_for_selector(
+        '#new-follow-other:text-is('
+        '"3 rows taken are reduced at once. Other stops following.")'
+    )
     page.select_option('#new-source', label='none: no rows')
     assert page.is_hidden('#new-follow')
     page.select_option('#new-source', label='from pairs')
@@ -1443,6 +1446,48 @@ def test_a_batch_made_with_follow_follows_in_place_of_the_one_named_at_the_box(
     page.wait_for_selector('#stop-follow:not([hidden])')
     (label,) = (k for k, h in manager.headers().items() if h.title == 'Evening')
     assert manager.following == label
+
+
+def test_follow_opens_the_end_of_the_range(page: Any, manager: BatchManager) -> None:
+    page.click('[data-view=batches]')
+    page.click('#new-batch-open')
+    last = '#new-batch select[name=last]'
+    page.wait_for_selector(f'{last} option[value="2"]', state='attached')
+    page.select_option(last, '2')
+    page.wait_for_selector('#new-rows:text-is("The batch gets 2 rows.")')
+
+    page.check('#new-follow input')
+
+    page.wait_for_selector('#new-rows:text-is("The batch gets 3 rows.")')
+    assert page.is_disabled(last)
+    assert page.inner_text(f'{last} option:checked') == (
+        'open: Follow adds every later row'
+    )
+    page.uncheck('#new-follow input')
+    assert page.is_enabled(last)
+
+
+def test_a_batch_of_the_rows_that_arrive_later_is_made_without_rows_and_follows(
+    page: Any, manager: BatchManager
+) -> None:
+    page.click('[data-view=batches]')
+    page.click('#new-batch-open')
+    first = '#new-batch select[name=first]'
+    later = 'no row now, only the rows that arrive later'
+    page.wait_for_selector(f'{first} option:text-is("{later}")', state='attached')
+
+    page.select_option(first, label=later)
+    page.wait_for_selector('#new-rows:text-is("The batch gets 0 rows.")')
+    page.check('#new-follow input')
+    assert page.inner_text('#new-follow-other') == ''
+    fill_new_batch(page, 'Later')
+    page.click('#new-batch [type=submit]')
+
+    page.wait_for_selector('#title:has-text("Later")')
+    page.wait_for_selector('#stop-follow:not([hidden])')
+    (label,) = (k for k, h in manager.headers().items() if h.title == 'Later')
+    assert manager.following == label
+    assert manager.batch(label).frame().empty
 
 
 def test_a_refusal_of_the_manager_shows_at_the_form_and_makes_nothing(

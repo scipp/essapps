@@ -400,13 +400,14 @@ class NewBatch(BaseModel):
     """
     Make a batch of ``spec``: with a ``source``, of the rows that the source
     has filled now from the row of key ``first`` to that of ``last``
-    (:func:`~ess.apps.batch.source.between`); without, of no rows, or of
-    those of a table file. ``columns`` are the parameter columns, those that
+    (:func:`~ess.apps.batch.source.between`), or of none of them if
+    ``later``, so that it gets only the rows added later; without, of no
+    rows, or of those of a table file. ``columns`` are the parameter columns, those that
     the source fills among them. The batch starts with the settings of the
     batch of label ``settings_from`` if given, else with those that the
     application gives ``spec``; a setting of the batch at a column fills its
     cells. With ``follow``, the batch follows its source from then on, in
-    place of the batch that followed before.
+    place of the batch that followed before, and has no ``last``.
     """
 
     title: str
@@ -417,6 +418,7 @@ class NewBatch(BaseModel):
     spec: str
     columns: list[str] = []
     settings_from: str | None = None
+    later: bool = False
     follow: bool = False
 
 

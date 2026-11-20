@@ -190,6 +190,9 @@ label = manager.create('loki-iofq', title='Evening', source='sample-runs',
 
 No row moves between batches.
 `afternoon` keeps its rows, also those from 60400 on that it added before, until a person removes them.
+A batch that follows has no last row: the rows filled between a last row and the making would never be added.
+For a batch of only the rows that arrive from now on, `choose` takes none: `choose=lambda given: given.iloc[:0]`.
+Every row filled now is then considered, and none is reduced again.
 
 ## Writing a source
 
@@ -359,7 +362,8 @@ A range of the rows that arrived, as a person picks it, is `between`, open at an
 ```python
 manager.create('loki-iofq', title='Afternoon', source='sample-runs',
                choose=lambda given: between(given, '60339', None))
-manager.marked('sample-runs', '60339')   # rows_of, with columns waits and taken
+manager.marked('sample-runs', lambda given: between(given, '60339', None))
+                                         # rows_of, with columns waits and taken
 ```
 
 `between` refuses an end that is not a key of the rows that arrived (a row that waits is not one), and a first row after the last.
@@ -490,7 +494,7 @@ Each action of the page is one call of the batch layer:
 | **Apply** | `batch.settings = settings` |
 | **Reduce** and its ways | `batch.reduce(keys)` |
 | **+ New batch** | `manager.create(...)`, with `choose=lambda given: between(given, first, last)` for a range |
-| the range's marks | `manager.marked(source, first, last)` |
+| the range's marks | `manager.marked(source, choose)` |
 | **+ Add rows from the runs** | `manager.offered(label)`, then `manager.take(label, keys)` |
 | "Make this a column" | `batch.make_column(name)` |
 | "Make this a setting" | `batch.values(name)`, then `batch.make_setting(name, key)` |

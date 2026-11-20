@@ -329,14 +329,17 @@ def create_app(pages: Pages) -> FastAPI:
 
     @workspace.get('/api/sources/rows')
     def rows_of(
-        name: str, first: str | None = None, last: str | None = None
+        name: str,
+        first: str | None = None,
+        last: str | None = None,
+        later: bool = False,
     ) -> SourceRows:
         """
         The rows that the source ``name`` makes now, each marked as taken,
         left out or waiting for a new batch of the rows from ``first`` to
-        ``last``.
+        ``last``, or of none if ``later``.
         """
-        return pages.rows_of(name, first, last)
+        return pages.rows_of(name, first, last, later)
 
     @workspace.get('/api/runs')
     def runs() -> Runs:

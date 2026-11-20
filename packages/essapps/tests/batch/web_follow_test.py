@@ -693,6 +693,21 @@ def test_the_failure_of_a_step_shows_on_the_page_of_the_batch_that_follows_only(
     assert shown.failure is None
 
 
+def test_the_failure_of_the_batch_that_followed_is_not_said_on_the_next_that_follows(
+    page: Page, pages: Pages, fake: FakeFiles
+) -> None:
+    listed = fake.list
+    fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
+    pages.tick()
+    fake.list = listed
+
+    new = NewBatch(title='Next', spec=STAGED.name, source='pairs', follow=True)
+    made = pages.page(pages.create(new).label)
+
+    assert page.state().follow.on is False
+    assert made.state().follow.failure is None
+
+
 @pytest.mark.parametrize('made', ['on the page', 'in code'])
 def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follows(
     page: Page,

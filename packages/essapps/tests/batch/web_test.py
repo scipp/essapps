@@ -3,6 +3,7 @@
 """The batch page's API over HTTP, on a real in-process workspace."""
 
 import io
+import itertools
 import re
 import tempfile
 import zipfile
@@ -32,7 +33,8 @@ from ess.apps.batch import (
 )
 from ess.apps.batch.definition import Key, NotKept, rows_key, settings_key
 from ess.apps.batch.web import Pages, Shown, create_app, demo, plots
-from ess.apps.batch.web.page import Missing
+from ess.apps.batch.web.models import NewBatch
+from ess.apps.batch.web.page import Missing, Problem
 from ess.apps.testing import CountingClient, FakeFiles
 from ess.spec import FileRef, SampleRunFile, WorkflowSpec, function_binding
 
@@ -1653,7 +1655,7 @@ def test_a_label_that_is_no_batch_answers_404_and_its_page_says_so(
 
 
 def test_the_batches_view_lists_every_batch_and_the_one_that_follows(
-    http: TestClient, pages: Pages, manager: BatchManager
+    http: TestClient, manager: BatchManager
 ) -> None:
     manager.create(
         STAGED.name,
@@ -1689,7 +1691,7 @@ def test_the_list_of_batches_is_the_same_from_every_page(
 
 
 def test_a_page_learns_from_its_poll_that_another_batch_follows(
-    http: TestClient, pages: Pages, manager: BatchManager
+    http: TestClient, manager: BatchManager
 ) -> None:
     now = state(http)
 
@@ -2035,8 +2037,12 @@ def test_a_batch_made_from_a_range_of_a_source_has_its_rows_filled_between_the_e
     [
         ({'first': '3'}, '3 is not a filled row'),
         ({'first': '2', 'last': '1'}, 'the row 2 comes after the row 1'),
+        (
+            {'first': '2', 'later': 'true'},
+            'a batch of the rows that arrive later has no first or last',
+        ),
     ],
-    ids=['waits', 'reversed'],
+    ids=['waits', 'reversed', 'later with an end'],
 )
 def test_a_range_that_takes_no_row_of_its_ends_makes_no_batch(
     http: TestClient, manager: BatchManager, ends: dict[str, str], said: str
@@ -2051,6 +2057,106 @@ def test_a_range_that_takes_no_row_of_its_ends_makes_no_batch(
         f'{said[:1].upper()}{said[1:]}.',
     )
     assert list(manager.headers()) == ['scan']
+
+
+def test_a_batch_that_follows_with_a_last_row_is_not_made(
+    http: TestClient, manager: BatchManager
+) -> None:
+    answer = http.post('/api/batches', json=new_batch(last='2', follow=True))
+
+    assert (answer.status_code, answer.json()['message']) == (
+        422,
+        'The batch was not made: a batch that follows takes every row that '
+        'arrives later, so it has no last row.',
+    )
+    assert (list(manager.headers()), manager.following) == (['scan'], None)
+
+
+def test_a_batch_of_the_rows_that_arrive_later_takes_none_now_and_follow_adds_them(
+    http: TestClient,
+    pages: Pages,
+    manager: BatchManager,
+    sample: Measure,
+    fake: FakeFiles,
+) -> None:
+    listed = source_rows(http, later='true').json()['rows']
+
+    made = http.post('/api/batches', json=new_batch(later=True, follow=True)).json()
+    empty = list(manager.batch(made['label']).frame().index)
+    sample(4, 'ethanol')
+    fake.measure(1003, 1.0, role='transmission', sample='oil')  # 3 waited
+    pages.tick()
+
+    assert [(r['key'], r['mark']) for r in listed] == [
+        ('1', 'left out'),
+        ('2', 'left out'),
+        ('3', 'waits'),
+    ]
+    assert empty == []
+    assert list(manager.batch(made['label']).frame().index) == ['3', '4']
+
+
+class RefusingAt:
+    """Definitions that refuse the ``at``-th save, and keep every other write."""
+
+    def __init__(self, definitions: DefinitionStore, at: int) -> None:
+        self._definitions = definitions
+        self.at = at
+        self.saves = 0
+
+    def load(self, key: Key, read: Callable[[Any], Any]) -> Any:
+        return self._definitions.load(key, read)
+
+    def save(self, key: Key, data: Any) -> None:
+        self.saves += 1
+        if self.saves == self.at:
+            raise NotKept(f'{key}: refused')
+        self._definitions.save(key, data)
+
+    def delete(self, key: Key) -> None:
+        self._definitions.delete(key)
+
+    def labels(self) -> list[str]:
+        return self._definitions.labels()
+
+
+def test_a_batch_made_on_the_page_is_made_as_asked_or_not_at_all(
+    client: Client, sample: Measure, tmp_path: Path
+) -> None:
+    sample(1, 'water')
+    new = NewBatch(
+        title='New',
+        spec=STAGED.name,
+        source='pairs',
+        columns=['sample', 'transmission', 'thickness'],
+        settings_from='old',
+        follow=True,
+    )
+    for at in itertools.count(1):
+        definitions = FolderDefinitions(tmp_path / str(at))
+        BatchManager(client, sources=SOURCES, definitions=definitions).create(
+            STAGED.name,
+            title='Old',
+            source='pairs',
+            settings={'thickness': 2.0},
+            label='old',
+            follow=True,
+        )
+        refusing = RefusingAt(definitions, at)
+        pages = Pages(BatchManager(client, sources=SOURCES, definitions=refusing))
+        try:
+            made = pages.create(new)
+        except Problem:
+            manager = pages.manager
+            assert (list(manager.headers()), manager.following) == (['old'], 'old')
+        else:
+            break
+
+    batch = pages.manager.batch(made.label)
+    assert at > 4  # settings, rows, source, header, following
+    assert batch.frame()['thickness'].tolist() == [2.0]
+    assert 'thickness' not in batch.settings
+    assert pages.manager.following == made.label
 
 
 def test_a_batch_made_from_the_page_of_a_batch_starts_with_its_settings(

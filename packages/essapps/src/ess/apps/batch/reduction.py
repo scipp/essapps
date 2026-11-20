@@ -82,7 +82,7 @@ from ..records import Record, SpecId, Status, Template
 from . import definition, state
 from .definition import DefinitionStore
 from .state import RowState
-from .table import as_request, cell_of, data_of, typed
+from .table import as_request, data_of, typed, with_column
 
 _NONE = object()
 
@@ -319,14 +319,7 @@ class Batch:
         """
         if name not in self.settings_fields:
             raise ValueError(f'{name} is not a setting of {self.spec.name}')
-        params = self._template.params
-        cell = cell_of(params[name]) if name in params else None
-        frame = self.frame()
-        # A list given to a column would be spread over the rows, and a dict
-        # read as a value per key of the index.
-        cells = [copy.deepcopy(cell) for _ in frame.index]
-        frame[name] = pd.Series(cells, index=frame.index, dtype=object)
-        self.put(frame)
+        self.put(with_column(self.frame(), name, self._template.params.get(name)))
 
     def make_setting(self, name: str, key: str | None = None) -> None:
         """
