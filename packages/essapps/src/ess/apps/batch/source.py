@@ -105,8 +105,15 @@ def rows_of(client: Client, source: Source) -> pd.DataFrame:
 def filled(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
     """
     Whether each row of ``given`` has a value in each of ``columns``, such as
-    the columns that a source fills: a row that has not waits.
+    the columns that a source fills: a row that has not waits. Raises
+    ``ValueError`` if ``given`` lacks one of ``columns``, as when the code of
+    a source no longer fills a column that a batch keeps as filled by it.
     """
+    if lacking := [c for c in columns if c not in given.columns]:
+        raise ValueError(
+            f'it no longer gives the column {", ".join(sorted(lacking))} that '
+            'the batch keeps as filled by it'
+        )
     return given[list(columns)].notna().all(axis=1)
 
 

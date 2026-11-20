@@ -21,7 +21,7 @@ from ess.apps.batch import (
     left_to_reduce,
 )
 from ess.apps.batch.cli import main
-from ess.apps.batch.table import read_text
+from ess.apps.batch.table import KEY, read_text
 from ess.apps.batch.templates import load_template
 from ess.apps.folder import folder_files, open_folder
 
@@ -404,6 +404,56 @@ def test_a_table_given_to_the_command_takes_the_place_of_an_edit_of_an_app(
         assert batch.frame().loc['row-1', 'sample'] == 'run:2'
 
 
+def test_a_value_of_the_template_at_a_column_is_that_of_each_empty_cell(
+    command: list[str], folder: Path
+) -> None:
+    template = folder / 'one.yaml'
+    template.write_text('spec: {name: cli-toy, version: 1}\nparams: {sample: run:1}\n')
+    runs = write_rows(folder, ['2', ''])
+    again = folder / 'three.yaml'
+    again.write_text('spec: {name: cli-toy, version: 1}\nparams: {sample: run:3}\n')
+
+    assert main([*command, 'reduce', str(template), str(runs), '-l', 'x']) == 0
+    with app(folder) as batch:
+        state = batch.state()
+        totals = {k: batch.client.output(s.record, 'total') for k, s in state.items()}
+    assert main([*command, 'reduce', str(again), '-l', 'x']) == 0
+
+    assert totals == {'row-0': 2.0, 'row-1': 1.0}
+    with app(folder) as batch:
+        assert batch.frame()['sample'].isna().tolist() == [False, True]
+        state = batch.state()
+        totals = {k: batch.client.output(s.record, 'total') for k, s in state.items()}
+    assert totals == {'row-0': 2.0, 'row-1': 3.0}
+
+
+SOURCES = ['-s', 'cli_toys_batch_files:SOURCES']
+
+
+@pytest.mark.parametrize('sources', [SOURCES, []], ids=['sources', 'no-sources'])
+def test_a_template_leaves_out_a_value_at_a_column_that_the_source_fills(
+    command: list[str], folder: Path, sources: list[str]
+) -> None:
+    with manager(folder) as batches:
+        label = later(batches)
+        batch = batches.batch(label)
+        waits = pd.DataFrame({'sample': [None]}, index=pd.Index(['9'], name=KEY))
+        batch.put(pd.concat([batch.frame(), waits]))
+    template = folder / 'one.yaml'
+    template.write_text(
+        'spec: {name: cli-toy, version: 1}\n'
+        'params: {sample: run:1, offset: {value: 0.5}}\n'
+    )
+
+    main([*command, 'reduce', *sources, str(template), '-l', label])
+
+    with manager(folder) as batches:
+        batch = batches.batch(label)
+        assert batch.settings == {'offset': {'value': 0.5}}
+        assert batch.state()['9'].text == 'incomplete'
+        assert '9' not in {r.member for r in batches.client.records(label=label)}
+
+
 def test_a_table_given_with_a_source_is_refused(
     command: list[str],
     cli_template: Path,
@@ -431,9 +481,6 @@ def manager(folder: Path) -> Iterator[BatchManager]:
     files = CorrectedFiles(folder_files(folder), definitions=definitions)
     with open_folder(folder, module.BINDINGS, files=files) as client:
         yield BatchManager(client, sources=module.SOURCES, definitions=definitions)
-
-
-SOURCES = ['-s', 'cli_toys_batch_files:SOURCES']
 
 
 def test_reduce_on_a_new_label_writes_a_header_so_the_manager_lists_it(

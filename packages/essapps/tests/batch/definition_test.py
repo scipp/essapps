@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from ess.apps import Client, Selector, SubmitError
+from ess.apps import Client, Selector, SubmitError, Template
 from ess.apps.batch import (
     Batch,
     BatchManager,
@@ -136,17 +136,20 @@ def test_the_corrections_of_the_files_are_there_after_a_restart(
         assert '4' in manager.rows_of('first').index
 
 
-def test_the_settings_kept_are_a_template_that_the_command_reads(
+def test_the_settings_kept_are_a_template_of_all_settings_that_the_command_reads(
     opened: Opened, made: str, folder: Path
 ) -> None:
+    settings = {'binning': {'bins': 3}, 'thickness': 2.0}  # thickness: a column
     with opened() as (manager, _):
         batch = manager.batch(made)
-        batch.settings = {'binning': {'bins': 3}}
-        template = batch.template()
+        batch.settings = settings
+        batch.make_column('thickness')
 
     path = FolderDefinitions(folder).path(settings_key(made))
 
-    assert load_template(path) == template
+    assert load_template(path) == Template(batch.spec, params=settings)
+    with opened() as (manager, _):
+        assert manager.batch(made).settings == settings
 
 
 @pytest.mark.parametrize(
@@ -366,14 +369,14 @@ def test_a_header_that_cannot_be_read_is_refused_naming_the_file_and_the_entry(
 
 def test_the_source_of_a_batch_is_kept_with_its_keys_sorted(folder: Path) -> None:
     store = FolderDefinitions(folder)
-    made = FromSource('pairs', frozenset({'60340', '0342', '60339'}))
+    made = FromSource('pairs', frozenset({'60340', '0342', '60339'}), ('sample',))
     key = source_key('a')
 
     store.save(key, source_data(made))
 
     assert source_data(made)['considered'] == ['0342', '60339', '60340']
     assert store.load(key, source_of) == made
-    store.save(key, {'source': 'pairs', 'considered': '60339'})
+    store.save(key, {'source': 'pairs', 'considered': '60339', 'fills': []})
     with pytest.raises(ValueError, match=r'source\.json: considered: '):
         store.load(key, source_of)
 

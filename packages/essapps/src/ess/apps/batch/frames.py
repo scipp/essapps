@@ -115,9 +115,9 @@ def reduce_table(
     template:
         The settings, of the spec and the version that the workspace binds.
         Its blanks are not read: the parameter columns of ``table`` are the
-        blanks, and a setting at one of them is left out. A file in it may be
-        named as in a cell (:func:`~.table.as_request`), and a record by
-        ``@latest``.
+        blanks, and a value at one of them is the value of each row whose
+        cell is empty. A file in it may be named as in a cell
+        (:func:`~.table.as_request`), and a record by ``@latest``.
     table:
         The rows, as :meth:`~.reduction.Batch.put` takes them.
     label:

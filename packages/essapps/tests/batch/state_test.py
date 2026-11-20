@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """What is ready, left to do, and shown, on plain values: no client."""
 
+from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -31,6 +32,8 @@ class Model(BaseModel):
 
 
 COLUMNS = ('sample', 'thickness')
+OWN: defaultdict[str, frozenset[str]] = defaultdict(lambda: frozenset(COLUMNS))
+"""Each row gives every column itself, in its cell."""
 
 
 def record(
@@ -56,7 +59,7 @@ def row(**cells: Any) -> dict[str, Any]:
 def states(
     cells: dict[str, dict[str, Any]], *found: Record, **status: Status
 ) -> dict[str, RowState]:
-    return row_states(cells, COLUMNS, {r.member: r for r in found}, status)
+    return row_states(cells, COLUMNS, {r.member: r for r in found}, status, own=OWN)
 
 
 def test_a_row_with_an_empty_required_cell_is_not_ready() -> None:
@@ -111,6 +114,7 @@ def test_an_outdated_row_is_left_to_do_and_shown_as_outdated(
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
         **outdated,
+        own=OWN,
     )
 
     assert left_to_reduce(found) == ['a']
@@ -130,6 +134,7 @@ def test_a_failed_or_cancelled_row_reads_so_when_its_request_changed(
         {'a': record('1', 'a')},
         {'1': status},
         **outdated,
+        own=OWN,
     )
 
     assert left_to_reduce(found) == ['a']
@@ -161,11 +166,25 @@ def test_a_result_that_differs_only_at_settings_is_not_left_to_reduce(
         {'1': status},
         changed={'a': frozenset(changed)},
         **other,
+        own=OWN,
     )
 
     assert found['a'].earlier is earlier
     assert earlier_settings(found) == (['a'] if earlier else [])
     assert left_to_reduce(found) == (['a'] if left else [])
+
+
+def test_a_change_at_a_column_where_the_cell_is_empty_is_of_earlier_settings() -> None:
+    found = row_states(
+        {'a': row(sample='x'), 'b': row(sample='y')},
+        COLUMNS,
+        {'a': record('1', 'a'), 'b': record('2', 'b')},
+        {'1': Status.COMPLETED, '2': Status.COMPLETED},
+        changed={'a': frozenset({'thickness'}), 'b': frozenset({'thickness'})},
+        own={'a': {'sample'}, 'b': {'sample', 'thickness'}},
+    )
+
+    assert {k: s.text for k, s in found.items()} == {'a': 'earlier', 'b': 'outdated'}
 
 
 def test_a_row_that_cannot_run_is_not_one_of_earlier_settings() -> None:
@@ -175,6 +194,7 @@ def test_a_row_that_cannot_run_is_not_one_of_earlier_settings() -> None:
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
         changed={'a': frozenset({'shared'})},
+        own=OWN,
     )
 
     assert found['a'].problems
@@ -189,6 +209,7 @@ def earlier_and_new() -> dict[str, RowState]:
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
         changed={'a': frozenset({'shared'}), 'b': frozenset()},
+        own=OWN,
     )
 
 
@@ -256,6 +277,7 @@ def test_a_row_with_a_result_is_not_reduced_by_a_step(
         {'a': record('1', 'a')},
         {'1': status},
         **other,
+        own=OWN,
     )
 
     assert not_reduced(found) == []
@@ -266,7 +288,7 @@ def test_a_ready_row_without_a_result_is_reduced_by_a_step(
     changed: dict[str, frozenset[str]] | None,
 ) -> None:
     found = row_states(
-        {'a': row(sample='x'), 'b': row()}, COLUMNS, {}, {}, changed=changed
+        {'a': row(sample='x'), 'b': row()}, COLUMNS, {}, {}, changed=changed, own=OWN
     )
 
     assert not_reduced(found) == ['a']
@@ -280,6 +302,7 @@ def test_a_refused_value_is_a_problem_of_its_row() -> None:
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
         refused={'a': (reason,)},
+        own=OWN,
     )
 
     assert found['a'].problems == (reason,)
@@ -316,6 +339,7 @@ def not_compared() -> dict[str, RowState]:
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
         changed=None,
+        own=OWN,
     )
 
 

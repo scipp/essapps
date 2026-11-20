@@ -1708,12 +1708,40 @@ def test_a_column_made_a_setting_and_a_column_again_keeps_its_cell_editors(
         '#settings h3:has-text("Thickness") button:text-is("Make this a column")'
     )
 
-    cell(page, 'water', 'thickness').filter(has_text='2.5').wait_for()
+    # An empty cell shows the setting that it takes, in grey.
+    cell(page, 'water', 'thickness').locator('.muted', has_text='2.5').wait_for()
+    page.locator('#settings h3:has-text("Thickness") .column-note').wait_for()
     cell(page, 'water', 'thickness').click()
     editor(page).fill('3')
     editor(page).press('Enter')
     cell(page, 'water', 'thickness').filter(has_text='3').wait_for()
-    assert batch.frame()['thickness'].tolist() == [3.0, 2.5, 2.5]
+    assert batch.frame()['thickness'].isna().tolist() == [False, True, True]
+    assert (batch.frame().loc['1', 'thickness'], batch.settings['thickness']) == (
+        3.0,
+        2.5,
+    )
+
+
+def test_a_column_that_the_source_fills_has_no_setting_and_another_goes_to_default(
+    page: Any, batch: Batch
+) -> None:
+    field = '#settings input[data-path=\'["thickness"]\']'
+    page.click('[data-tab=settings]')
+    page.fill(field, '2.5')
+    page.press(field, 'Tab')
+    page.click('#settings-apply')
+    page.wait_for_selector('#draft:not(.changed)')
+    cell(page, 'water', 'thickness').locator('.muted', has_text='2.5').wait_for()
+
+    page.click('#settings h3:has-text("Thickness") button:text-is("Default")')
+    page.wait_for_selector('#draft.changed')
+    page.click('#settings-apply')
+    page.wait_for_selector('#draft:not(.changed)')
+
+    assert page.locator('#settings h3:has-text("Transmission")').count() == 0
+    assert page.locator('#settings h3:has-text("Sample")').count() == 0
+    assert page.input_value(field) == '1'
+    assert batch.settings['thickness'] == 1.0  # the default, as the form starts
 
 
 @pytest.fixture

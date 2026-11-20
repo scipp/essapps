@@ -22,7 +22,8 @@ A file that is written before the records it reads exist names them by label
 reads back as the same, the form of ``settings.json`` of a batch
 (:mod:`.definition`). :func:`checked_settings` reads settings from a
 template, which must be of the spec and its version, and
-``write_template(batch.template(), path)`` writes the settings of a batch.
+``write_template(Template(batch.spec, params=batch.settings), path)`` writes
+the settings of a batch, those at its columns included.
 """
 
 from __future__ import annotations
@@ -84,9 +85,9 @@ def checked_settings(
     The settings of ``spec`` that ``template`` holds: the value of each
     parameter, with files named as in a cell (:func:`~.table.as_request`) and
     ``@latest`` read (:func:`with_latest`) on ``client``. Its blanks are not
-    read: the columns of a batch are its blanks, and a batch leaves out a
-    setting at a column when it is made, or refuses one when it is given
-    settings (:attr:`~.reduction.Batch.settings`).
+    read: the columns of a batch are its blanks, and a value at a column is
+    the setting that each row with an empty cell takes
+    (:attr:`~.reduction.Batch.settings`).
 
     Raises ``ValueError``, saying why in a person's words, if the template is
     of another spec or of another version of it, or if a value cannot be read.

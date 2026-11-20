@@ -40,29 +40,36 @@ A run chosen in a cell is kept as the text of its file (`table.cell_of`).
 **+ Add rows from the runs**, on the page of a batch made from a source, lists the rows of the source that the table lacks (`BatchManager.offered`): those left out when the batch was made, those removed, those that wait for a run, marked, and, in a batch that does not follow, those filled after it was made or after it stopped.
 The rows a person picks are added as the source makes them now (`BatchManager.take`), and Follow does not add them again once removed; so a removed row comes back this way.
 
-"Make this a column", at a setting in the Settings tab, makes the setting a column with the setting's value in the cell of each row of the table (`Batch.make_column`); it is offered only for a setting whose cell the page edits.
-A row added later, by Follow or by a person, has an empty cell: the default of the parameter, or an incomplete row if it has none.
-"Make this a setting", in the menu of the header of a column, makes the column a setting (`Batch.make_setting`): of the value of every row, or, where the rows differ, of the value a person chooses in a dialog, which lists the values that the batch names (`GET api/columns/values?name=...`).
+"Make this a column", at a setting in the Settings tab, makes the parameter a column with an empty cell in each row (`Batch.make_column`); it is offered only for a parameter that is no column and whose cell the page edits.
+The setting stays: a row whose cell is empty takes it, also a row added later, by Follow or by a person, until its cell is set.
+The grid shows such a cell in grey as the value it takes: the setting, or the default of the parameter if the batch has none.
+The field of a column in the Settings tab has **Default**, which sets it back to the default of the parameter, for every kind of field; once applied, that default is the setting, and a parameter without a default has no setting, so a row whose cell is empty is incomplete.
+A column that the source of the batch fills has no field in the Settings tab and no "Make this a setting": its empty cell means that the row waits for a run (`Batch.fills`), and the table keeps the column, so a table file loaded without it is refused.
+"Make this a setting", in the menu of the header of a column, drops the column (`Batch.make_setting`): the setting becomes the value that every row takes, or, where the rows differ, the value a person chooses in a dialog, which lists the values that the rows take (`GET api/columns/values?name=...`).
 Both are refused while the settings form holds a change, since the page then builds the form and the cell editors again.
 **Download as CSV** and **Download as XLSX** give the table with the results of its rows (`frames.with_results`).
 If the file source raises, the page shows the table, the results and the plots all the same; the pickers offer no file, the Runs view is empty, and both say why.
 
 ## Settings and Follow
 
+The settings form has a field per parameter.
+The field of a column is marked "A column: a row may give its own": its value is the setting that each row with an empty cell takes, and it may be left unset, as for a column of files.
 The settings form holds a change until **Apply** writes it to the batch; **Discard** shows the batch's settings again.
 While a person has changed the form and not applied the change, the bar above it reads "Changed, not applied yet", and the rows still read as with the batch's settings.
 Apply is refused while the form misses something, and the bar says what; it also names the settings kept that the form cannot show, which Apply replaces.
 While the form holds a change, **Reduce**, the ways of its menu, **Reduce them again** and **Download settings** are refused, so that nothing is reduced or saved with settings other than those shown.
-**Load settings** and "Put these settings in the form" in the row tab fill the form, after a confirmation if it holds a change; a file that cannot be read whole leaves the form as it was.
+**Load settings** and "Put these settings in the form" in the row tab fill the form, after a confirmation if it holds a change; a file that cannot be read whole leaves the form as it was. A value at a column that the source fills is left out (`Batch.settable`).
+"Put these settings in the form" puts the value that the row was reduced with at each column where its cell is empty, and leaves the batch's setting where the row gives its own value, which is no setting of the batch.
+**Download settings** writes every setting, those at the columns too, as a template without blanks.
 A change of the settings applies to the rows not reduced yet.
-A row reduced before reads `earlier`, reduced with earlier settings, and **Reduce** leaves it (`ess.apps.batch.left_to_reduce`).
+A row reduced before that takes the setting changed reads `earlier`, reduced with earlier settings, and **Reduce** leaves it (`ess.apps.batch.left_to_reduce`); a row that gives its own value in the column of the setting stays `done`.
 Its pill is teal, neither the green of `done` nor the amber of `outdated`, and the text beside it names the settings that changed, such as "Binning changed".
 Its result counts as one of a `done` row: the plot, **Download all** and the count of results take it.
 The label of the Settings tab shows how many rows read `earlier`, and the tab a bar above the form, "N rows reduced with earlier settings", with **Reduce them again**.
 That button, and **Reduce rows of earlier settings** in the menu ▾ next to **Reduce**, reduce those rows (`earlier_settings`), after a confirmation that names how many.
 **Reduce** never reduces them: with only such rows left, it reads "Nothing left to reduce".
 To try settings on one row, change them, **Apply**, select the row, and choose **Reduce selected** in the menu ▾ next to **Reduce**.
-The row tab then shows what the row was reduced with.
+The row tab then shows what the row was reduced with: the value of each parameter that the row took, from its cells and the settings, and marks those that differ from what the row takes now.
 To keep the settings, press **Reduce them again**; to drop them, change them back and **Apply**, and the row tried reads `earlier`.
 In a batch that follows, the settings applied for the trial are also those of the rows that Follow reduces meanwhile, such as the rows of runs that arrive. To try settings on a few rows first, make a batch without Follow, then the batch that follows with "Start with the settings of" the first.
 The page sends its actions in the order a person did them, so a value typed and Apply clicked at once are applied with one click.
@@ -154,7 +161,7 @@ The page remembers in the session of the browser, so that a reload or a return t
 | Range | with a source: the first and the last row to take, each open if not chosen, among the rows that the source has filled now (`source.between`); or, as the last choice of "From", no row now (`later`): the batch gets only the rows added later, by Follow if ticked, else with **+ Add rows from the runs**; the table below lists every row the source makes, marked by the server as taken, left out, or waiting (`GET api/sources/rows?name=...&first=...&last=...&later=...`) |
 | Table file | from a table file: a `.csv`, `.tsv` or `.xlsx` file with a column `key` (`table.read_table`) |
 | Workflow | a spec that the workspace binds and that has a parameter for each column that the source fills; any spec without a source |
-| Settings | on the page of a batch: start with the settings of that batch, else with those that the application gives; a setting of that batch at a column ticked fills the cells of that column |
+| Settings | on the page of a batch: start with the settings of that batch, else with those that the application gives; a setting at a column ticked stays, and each row whose cell is empty takes it, also a row that Follow adds; a column that the source fills gets no setting |
 | Follow | with a source: add the rows that arrive later, and reduce them; off unless ticked. While ticked, the end of the range is open and cannot be chosen, since a last row would leave out the rows filled between it and the making for good; the server refuses a last row with Follow. Beside it, how many rows taken are reduced at once, and the batch that follows now, which stops following if ticked |
 | Columns | the columns that the source fills, fixed; the other parameters of the spec whose cell the page edits, to tick (a group of fields, such as a Q binning, stays a setting); none for a table file, whose columns are those of the file |
 
@@ -168,9 +175,9 @@ In code:
 ```python
 settings = manager.batch(other).settings                        # thickness among them
 label = manager.create(spec, title=title, source=source,
-                       choose=lambda given: with_column(        # ticked: each row has its value
-                           between(given, first, last), 'thickness', settings['thickness']),
-                       settings=settings,                       # less the columns
+                       choose=lambda given: between(given, first, last)
+                           .assign(thickness=None),             # ticked: an empty column
+                       settings=settings,                       # less those of source.fills
                        follow=follow)                           # Follow ticked
 ```
 

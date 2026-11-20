@@ -74,7 +74,7 @@ from ..definition import NotKept
 from ..manager import BatchManager, fits
 from ..source import Source, between
 from ..state import RowState, not_reduced
-from ..table import read_table, with_column
+from ..table import read_table
 from . import forms
 from .models import (
     BatchCounts,
@@ -551,12 +551,11 @@ class Pages:
         every row that arrives later.
 
         It starts with the settings of the batch ``new.settings_from``, else
-        with those that the application gives its spec. A setting of that
-        batch at a column of ``new.columns`` is a column with the setting's
-        value in each row (:func:`~ess.apps.batch.table.with_column`), unless
-        the source fills the column: its cells are those of the source. Raises
-        :class:`~.page.Problem` with what the file, the manager or the source
-        refuses.
+        with those that the application gives its spec. A setting at a column
+        of ``new.columns`` stays, and each row with an empty cell takes it;
+        the manager leaves out the setting of a column that the source fills,
+        whose cells are those of the source. Raises :class:`~.page.Problem`
+        with what the file, the manager or the source refuses.
         """
         with self.lock:
             try:
@@ -571,21 +570,14 @@ class Pages:
                         'a batch that follows takes every row that arrives '
                         'later, so it has no last row'
                     )
-                given = settings or {}
-                moved = [c for c in new.columns if c in given]
-                columns = [c for c in new.columns if c not in moved]
 
                 def completed(table: pd.DataFrame) -> pd.DataFrame:
                     """
-                    ``table`` with the columns of ``new.columns`` it lacks: a
-                    column that the source fills keeps its cells.
+                    ``table`` with an empty column for each of ``new.columns``
+                    it lacks: a column that the source fills keeps its cells.
                     """
-                    empty = [c for c in columns if c not in table.columns]
-                    table = table.assign(**dict.fromkeys(empty))
-                    for name in moved:
-                        if name not in table.columns:
-                            table = with_column(table, name, given[name])
-                    return table
+                    empty = [c for c in new.columns if c not in table.columns]
+                    return table.assign(**dict.fromkeys(empty))
 
                 rows = choose = None
                 if file is not None:

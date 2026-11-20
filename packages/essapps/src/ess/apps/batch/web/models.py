@@ -39,6 +39,9 @@ class Node(BaseModel):
       field of the way chosen as ``child``;
     - ``rows``: ``columns`` of text, shown but not edited;
     - ``nothing``: none.
+
+    ``column`` marks a parameter of a form of settings that is a column of
+    the batch: its value is the setting of each row whose cell is empty.
     """
 
     kind: Literal['input', 'scalars', 'group', 'choice', 'nothing', 'rows']
@@ -56,17 +59,19 @@ class Node(BaseModel):
     selector: bool = False
     child: Node | None = None
     columns: Any = None
+    column: bool = False
 
 
 class Edit(BaseModel):
     """
     What a person did to a form at ``path``: ``set`` an input to ``value`` (the
     label of an option for a picker), ``choose`` the way ``value`` of a choice,
-    or ``add`` or ``remove`` the last element of a list.
+    ``add`` or ``remove`` the last element of a list, or ``reset`` a whole
+    parameter to its default, or unset if it has none.
     """
 
     path: list[str | int]
-    op: Literal['set', 'choose', 'add', 'remove']
+    op: Literal['set', 'choose', 'add', 'remove', 'reset']
     value: Any = None
 
 
@@ -78,12 +83,19 @@ class Editor(BaseModel):
 
 
 class Column(BaseModel):
-    """A column of a table; ``default`` is the text an empty cell stands for."""
+    """
+    A column of a table; ``default`` is the text of the value that an empty
+    cell takes: the setting of the batch, else the default of the parameter.
+    ``waits`` says that the source of the batch fills it: an empty cell
+    there means that the row waits for its file, and "Make this a setting"
+    is not offered.
+    """
 
     name: str
     title: str
     editor: Editor | None = None
     default: str = ''
+    waits: bool = False
 
 
 class Cell(BaseModel):
@@ -204,8 +216,9 @@ class State(BaseModel):
     has not applied the change; the rows read as with the batch's settings.
     ``settings_problem`` names the batch's settings that the form cannot show,
     what the form misses, and why the batch's settings are refused where the
-    form shows them. ``may_be_columns`` names the settings that "Make this a
-    column" offers: those whose cell the page edits.
+    form shows them; it has a field per parameter, a column's for its setting.
+    ``may_be_columns`` names the parameters that "Make this a column" offers:
+    those that are no column and whose cell the page edits.
     ``files_problem`` says why the files cannot be listed,
     if the file source raises: the pickers then offer none. ``notice`` says
     what the action that answers with this state did.
@@ -403,12 +416,13 @@ class NewBatch(BaseModel):
     has filled now from the row of key ``first`` to that of ``last``
     (:func:`~ess.apps.batch.source.between`), or of none of them if
     ``later``, so that it gets only the rows added later; without, of no
-    rows, or of those of a table file. ``columns`` are the parameter columns, those that
-    the source fills among them. The batch starts with the settings of the
-    batch of label ``settings_from`` if given, else with those that the
-    application gives ``spec``; a setting of the batch at a column fills its
-    cells. With ``follow``, the batch follows its source from then on, in
-    place of the batch that followed before, and has no ``last``.
+    rows, or of those of a table file. ``columns`` are the parameter columns,
+    those that the source fills among them. The batch starts with the
+    settings of the batch of label ``settings_from`` if given, else with
+    those that the application gives ``spec``; a setting at a column stays,
+    the value of each row whose cell is empty, but at a column that the
+    source fills. With ``follow``, the batch follows its source from then
+    on, in place of the batch that followed before, and has no ``last``.
     """
 
     title: str
@@ -431,15 +445,15 @@ class Value(BaseModel):
 
 
 class MakeColumn(BaseModel):
-    """Make the setting ``name`` a column."""
+    """Make the parameter ``name`` a column, with empty cells."""
 
     name: str
 
 
 class MakeSetting(BaseModel):
     """
-    Make the column ``name`` a setting, of the value of the row of ``key``,
-    or of the value of every row if not given.
+    Make the column ``name`` a setting, of the value that the row of ``key``
+    takes, or that every row takes if not given.
     """
 
     name: str

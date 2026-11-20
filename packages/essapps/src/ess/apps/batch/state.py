@@ -16,16 +16,20 @@ with :func:`differs` on both as a record holds them. A result is *outdated*
 (:func:`row_states`).
 
 The cells of a row are given here as its request takes them, each empty cell
-given its default, or ``None`` if its parameter takes ``None``
-(:meth:`~.reduction.Batch.cells`). A column left out of them is empty, and a
+given the setting, else its default, or ``None`` if its parameter takes
+``None`` (:meth:`~.reduction.Batch.cells`). A column left out of them is empty, and a
 problem of the row. A value refused when resolved is a problem of the row, not
 a change: the row cannot run with it, and a change would offer it to
 :func:`left_to_reduce`.
 
-A change of settings applies to the rows not reduced yet. A completed result
-whose request differs from the row's only at settings is reduced with
-*earlier settings* (:attr:`RowState.earlier`): it reads ``earlier``, and
-:func:`left_to_reduce` leaves it until a person reduces it again.
+A change of settings applies to the rows not reduced yet. For one row, a
+parameter counts as a setting if it is no column or the row's cell there is
+empty, since the row then takes the setting of the batch. A completed result
+whose request differs from the row's only at settings so counted is reduced
+with *earlier settings* (:attr:`RowState.earlier`): it reads ``earlier``, and
+:func:`left_to_reduce` leaves it until a person reduces it again. A row whose
+own cell changed reads ``outdated``. Which cells are empty is read from the
+table now, so a cell emptied after the row was reduced counts as a setting.
 
 Automatic reduction reduces the rows of :func:`not_reduced`: ready, and
 without a result. A row with a result is left to a person, whether it is
@@ -63,8 +67,8 @@ class RowState:
     bound. ``outdated`` is true if the result is of another spec, or if the
     request changed; ``None`` if that is not known, since the requests were not
     compared. ``earlier`` is true if the row is ready and its completed result
-    differs from its request only at settings: not at a column, and of the
-    same spec.
+    differs from its request only at settings: not at a column where the
+    row's cell holds a value, and of the same spec.
     """
 
     key: str
@@ -160,6 +164,8 @@ def row_states(
     changed: Mapping[str, frozenset[str]] | None = MappingProxyType({}),
     refused: Mapping[str, tuple[FieldError, ...]] | None = None,
     spec_changed: AbstractSet[str] = frozenset(),
+    *,
+    own: Mapping[str, AbstractSet[str]],
 ) -> dict[str, RowState]:
     """
     The state of each row of ``cells``, which hold its cells by key.
@@ -167,8 +173,9 @@ def row_states(
     of the records their cells reference, by record ID, ``changed`` the names
     at which a row differs from its result, ``None`` if the rows were not
     compared with their results, ``refused`` the reasons a row's cells were
-    refused when resolved, and ``spec_changed`` the keys whose result is of
-    another spec.
+    refused when resolved, ``spec_changed`` the keys whose result is of
+    another spec, and ``own`` the columns at which each row's cell holds a
+    value, by key.
     """
     refused = refused or {}
     states = {}
@@ -192,7 +199,7 @@ def row_states(
             earlier=not found_problems
             and row_status is Status.COMPLETED
             and bool(names)
-            and names.isdisjoint(columns)
+            and names.isdisjoint(own[key])
             and key not in spec_changed,
         )
     return states

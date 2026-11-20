@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 from pydantic import BaseModel, Field, StrictInt
 
-from ess.apps import Client, Status, SubmitError, Workspace, file, local
+from ess.apps import Client, Status, SubmitError, Template, Workspace, file, local
 from ess.apps.batch import (
     Batch,
     CorrectedFiles,
@@ -154,29 +154,23 @@ def test_a_table_put_again_writes_nothing(
     assert batch.frame().loc['1', 'thickness'] == 2.0
 
 
-def test_a_setting_made_a_column_loses_its_value_and_a_column_dropped_has_none(
+def test_a_put_keeps_the_settings_at_a_column_added_and_at_a_column_dropped(
     client: Client, sample: Measure, definitions: FolderDefinitions
 ) -> None:
     sample(1, 'water')
     settings = {**SETTINGS, 'offset': {'value': 1.0}}
-    batch = Batch(
-        client,
-        PLAIN,
-        label='s',
-        rows=rows(client),
-        settings=settings,
-        definitions=definitions,
-    )
+    batch = Batch(client, PLAIN, label='s', rows=rows(client), definitions=definitions)
+    batch.settings = settings
 
     batch.put(batch.frame().assign(offset=None))
-    as_column = (batch.settings, batch.columns)
+    as_column = (batch.settings, batch.columns, batch.template().params)
     batch.put(batch.frame().drop(columns=['offset', 'thickness']))
 
-    assert as_column == (SETTINGS, (*COLUMNS, 'offset'))
-    assert (batch.settings, batch.columns) == (SETTINGS, ('sample', 'transmission'))
+    assert as_column == (settings, (*COLUMNS, 'offset'), SETTINGS)
+    assert (batch.settings, batch.columns) == (settings, ('sample', 'transmission'))
+    assert batch.template().params == settings
     kept = definitions.load(settings_key('s'), template_of)
-    assert kept == batch.template()
-    assert kept.blanks == ('sample', 'transmission')
+    assert kept == Template(PLAIN, params=settings)
 
 
 def test_rows_are_reduced_and_found_by_their_key(
@@ -217,22 +211,6 @@ def test_a_batch_starts_with_a_copy_of_the_settings_given(
     records = batch.reduce(['1'])
 
     assert records['1'].request.params['binning'] == {'bins': 3}
-
-
-def test_settings_at_a_column_are_refused_and_given_at_making_left_out(
-    measured: Batch,
-) -> None:
-    with pytest.raises(ValueError, match='thickness'):
-        measured.settings = {**SETTINGS, 'thickness': 4.0}
-    made = Batch(
-        measured.client,
-        PLAIN,
-        label='s',
-        rows=measured.frame(),
-        settings={**SETTINGS, 'thickness': 4.0},
-    )
-
-    assert measured.settings == made.settings == SETTINGS
 
 
 def test_a_reduction_compares_no_row_and_a_state_resolves_the_settings_once(
@@ -468,19 +446,212 @@ def test_changed_names_the_cell_and_the_setting_that_differ(
     assert changed == {'1': {'binning', 'thickness'}, '2': {'binning'}}
 
 
-def test_a_column_made_with_the_value_of_its_setting_changes_no_row(
+def test_a_setting_made_a_column_changes_no_row(
     measured: Batch, client: Client
 ) -> None:
     measured.settings = {**SETTINGS, 'offset': {'value': 0.5}}
     client.wait(measured.reduce(['1', '2']))
-    offset = pd.Series([{'value': 0.5}] * 2, index=measured.frame().index, dtype=object)
 
-    measured.put(measured.frame().assign(offset=offset))
+    measured.make_column('offset')
 
     assert {k: s.changed for k, s in measured.state().items()} == {
         '1': set(),
         '2': set(),
     }
+
+
+# A column and its setting
+
+
+@pytest.mark.parametrize(
+    ('cell', 'setting', 'value'),
+    [
+        (1.5, {'thickness': 2.0}, 1.5),
+        (pd.NA, {'thickness': 2.0}, 2.0),
+        (pd.NA, {}, 1.0),
+    ],
+    ids=['cell', 'empty cell, setting', 'empty cell, no setting: default'],
+)
+def test_a_row_takes_its_cell_else_the_setting_else_the_default(
+    measured: Batch, cell: Any, setting: dict[str, Any], value: float
+) -> None:
+    measured.settings = {**SETTINGS, **setting}
+    edit(measured, '1', thickness=cell)
+
+    records = measured.reduce(['1'])
+
+    assert records['1'].request.params['thickness'] == value
+
+
+def test_a_row_takes_the_setting_of_a_parameter_that_is_no_column(
+    measured: Batch,
+) -> None:
+    measured.settings = {**SETTINGS, 'thickness': 2.0}
+    measured.put(measured.frame().drop(columns='thickness'))
+
+    records = measured.reduce(['1'])
+
+    assert records['1'].request.params['thickness'] == 2.0
+
+
+def test_make_column_adds_empty_cells_and_keeps_the_setting_for_every_row(
+    measured: Batch,
+) -> None:
+    settings = {**SETTINGS, 'offset': {'value': 0.5}}
+    measured.settings = settings
+
+    measured.make_column('offset')
+    edit(measured, 'mine', sample='run:1', transmission='run:1001')
+
+    assert measured.frame()['offset'].isna().all()
+    assert measured.settings == settings
+    assert {k: c['offset'] for k, c in measured.cells().items()} == {
+        '1': {'value': 0.5},
+        '2': {'value': 0.5},
+        'mine': {'value': 0.5},
+    }
+
+
+@pytest.mark.parametrize('name', ['thickness', 'nope'])
+def test_make_column_refuses_a_column_and_a_name_that_is_no_parameter(
+    measured: Batch, name: str
+) -> None:
+    with pytest.raises(ValueError, match=f'{name} is not a setting'):
+        measured.make_column(name)
+
+
+@pytest.mark.parametrize(
+    ('cells', 'key', 'setting'),
+    [
+        ((pd.NA, pd.NA), None, 2.0),
+        ((2.0, pd.NA), None, 2.0),
+        ((3.0, 3.0), None, 3.0),
+        ((3.0, pd.NA), '1', 3.0),
+        ((3.0, pd.NA), '2', 2.0),
+    ],
+    ids=[
+        'all empty: the setting stays',
+        'a cell equal to the setting',
+        'every cell the same',
+        'the cell of the row chosen',
+        'the row chosen takes the setting',
+    ],
+)
+def test_make_setting_gives_the_setting_the_value_that_the_row_takes(
+    measured: Batch, cells: tuple[Any, Any], key: str | None, setting: float
+) -> None:
+    measured.settings = {**SETTINGS, 'thickness': 2.0}
+    edit(measured, '1', thickness=cells[0])
+    edit(measured, '2', thickness=cells[1])
+
+    measured.make_setting('thickness', key)
+
+    assert 'thickness' not in measured.columns
+    assert measured.settings == {**SETTINGS, 'thickness': setting}
+
+
+def test_make_setting_of_empty_cells_without_a_setting_leaves_the_default(
+    measured: Batch,
+) -> None:
+    measured.make_setting('thickness')
+
+    assert measured.settings == SETTINGS
+    assert measured.reduce(['1'])['1'].request.params['thickness'] == 1.0
+
+
+def test_make_setting_refuses_rows_that_take_different_values_without_a_row(
+    measured: Batch,
+) -> None:
+    measured.settings = {**SETTINGS, 'thickness': 2.0}
+    edit(measured, '1', thickness=3.0)
+
+    assert measured.values('thickness') == {'1': 3.0, '2': 2.0}
+    with pytest.raises(ValueError, match='the rows differ at thickness'):
+        measured.make_setting('thickness')
+    assert 'thickness' in measured.columns
+
+
+def test_make_setting_of_a_batch_without_rows_keeps_the_setting(
+    batch: Batch,
+) -> None:
+    batch.settings = {'thickness': 2.0}
+
+    batch.make_setting('thickness')
+
+    assert batch.settings == {'thickness': 2.0}
+
+
+FILLS = ('sample', 'transmission', 'offset')
+
+
+@pytest.fixture
+def from_source(client: Client, sample: Measure) -> Batch:
+    """
+    A batch of the rows of sample 1, whose source fills sample, transmission
+    and offset, made with a setting at transmission, as definitions may hold.
+    """
+    sample(1, 'water')
+    table = rows(client).assign(transmission=None, offset=None)
+    stale = {'transmission': 'run:1001'}
+    return Batch(client, PLAIN, label='s', rows=table, settings=stale, fills=FILLS)
+
+
+def test_a_column_that_the_source_fills_takes_its_value_from_the_cell_only(
+    from_source: Batch,
+) -> None:
+    from_source.settings = {**from_source.settings, 'thickness': 3.0}
+    (row,) = from_source.state().values()
+
+    # The setting is never read, and offset waits although it has a default.
+    assert from_source.settings == {'thickness': 3.0}
+    assert row.text == 'incomplete'
+    assert sorted(e.loc for e in row.problems) == [('offset',), ('transmission',)]
+    assert from_source.values('transmission') == {'1': None}
+    assert 'transmission' not in from_source.cells()['1']
+
+
+def test_a_batch_from_a_source_refuses_a_setting_at_and_a_table_without_a_column(
+    from_source: Batch,
+) -> None:
+    given = {'transmission': 'run:1001', 'thickness': 2.0}
+
+    with pytest.raises(ValueError, match='the source of the batch fills transmission'):
+        from_source.settings = given
+    with pytest.raises(ValueError, match='fills transmission: a row waits'):
+        from_source.put(from_source.frame().drop(columns='transmission'))
+    with pytest.raises(ValueError, match='fills transmission: a row waits'):
+        from_source.make_setting('transmission')
+    from_source.settings = from_source.settable(given)
+
+    assert from_source.settings == {'thickness': 2.0}
+    assert set(FILLS) <= set(from_source.columns)
+
+
+def test_a_batch_is_not_made_on_a_table_without_a_column_of_its_fills(
+    from_source: Batch,
+) -> None:
+    # As rows.json without offset, whose parameter has a default, would be.
+    table = from_source.frame().drop(columns='offset')
+
+    with pytest.raises(ValueError, match='fills offset: a row waits'):
+        Batch(from_source.client, PLAIN, label='s', rows=table, fills=FILLS)
+
+
+def test_a_changed_setting_at_a_column_is_earlier_for_rows_that_take_it(
+    measured: Batch, client: Client
+) -> None:
+    measured.settings = {**SETTINGS, 'thickness': 2.0}
+    edit(measured, '2', thickness=1.5)
+    client.wait(measured.reduce(['1', '2']))
+
+    measured.settings = {**SETTINGS, 'thickness': 3.0}
+    states = measured.state()
+    edit(measured, '2', thickness=2.5)
+    edited = measured.state()['2']
+
+    assert (states['1'].text, states['1'].changed) == ('earlier', {'thickness'})
+    assert (states['2'].text, states['2'].changed) == ('done', set())
+    assert (edited.text, edited.changed) == ('outdated', {'thickness'})
 
 
 def test_a_second_batch_on_the_label_reads_the_same_changed(

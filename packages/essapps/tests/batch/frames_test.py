@@ -124,12 +124,14 @@ def test_a_row_that_cannot_run_is_refused_by_key_and_nothing_is_submitted(
     assert folder_client.records(label='scan') == []
 
 
-def test_a_column_named_as_a_setting_of_the_template_is_a_blank(
+def test_a_value_of_the_template_at_a_column_is_that_of_each_empty_cell(
     folder_client: Client, template: Template, table: pd.DataFrame
 ) -> None:
-    reduce_table(folder_client, template, table.assign(thickness=[4, 4]), label='s')
+    given = table.assign(thickness=[4, None])  # the template's thickness: 2.0
 
-    assert totals(folder_client, 's') == {'a': 0.25, 'b': 0.5}
+    reduce_table(folder_client, template, given, label='s')
+
+    assert totals(folder_client, 's') == {'a': 0.25, 'b': 1.0}
 
 
 def test_a_blank_named_as_a_result_column_is_refused(

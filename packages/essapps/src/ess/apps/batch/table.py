@@ -370,21 +370,6 @@ def cell_of(value: Any) -> Any:
     return to_jsonable_python(value)
 
 
-def with_column(frame: pd.DataFrame, name: str, value: Any) -> pd.DataFrame:
-    """
-    A copy of ``frame`` with the column ``name`` whose every cell is the cell
-    of ``value`` (:func:`cell_of`), empty for ``None``: a setting made a
-    column, so that each row has its value.
-    """
-    cell = cell_of(value)
-    frame = frame.copy()
-    # A list given to a column would be spread over the rows, and a dict
-    # read as a value per key of the index.
-    cells = [copy.deepcopy(cell) for _ in frame.index]
-    frame[name] = pd.Series(cells, index=frame.index, dtype=object)
-    return frame
-
-
 def data_of(frame: pd.DataFrame) -> dict[str, Any]:
     """
     The plain data of ``frame``, a table as :func:`typed` gives it, as

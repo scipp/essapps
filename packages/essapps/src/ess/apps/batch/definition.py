@@ -9,7 +9,8 @@ rows of a batch are written by its ``Batch``, which the manager makes:
 
     corrections   metadata of a file set by hand, by file     CorrectedFiles
     header        title, description                          the manager
-    settings      the template: spec, settings, blanks        Batch.settings, Batch.put
+    settings      the template: spec, settings                Batch.settings,
+                                                              Batch.make_setting
     rows          the table                                  Batch.put
     source        the source a batch was made from, and the  the manager
                   keys of it that the batch has considered
@@ -37,14 +38,16 @@ The plain data of each table, as the functions below give and read it::
 
     corrections   {'pid:20.500.12269/abc': {'role': 'sample'}}
     header        {'title': 'Sample runs', 'description': ''}
-    settings      the template, as a template file holds it
+    settings      {'spec': ..., 'params': {...}, 'blanks': []}: a template
     rows          {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
     source        {'source': 'sample-runs', 'considered': ['60337', '60338']}
     following     {'label': '20261118-130204'}, or {'label': None}
 
-The settings are a template, in the format of the file that a person saves
-from a page. Its blanks are written so that the file is a template a person
-can load, and are not read: the parameter columns of the rows are the blanks.
+The settings are a template without blanks, in the format of the file that a
+person saves from a page: its params are the settings of the batch, also
+those at the columns, which each row with an empty cell takes. Blanks are not
+read: the parameter columns of the rows are the blanks of the template that
+the rows fill (:meth:`~.reduction.Batch.template`).
 The rows are :func:`~.table.data_of` of the table. Each table is checked when
 read: data of another shape raises ``ValueError`` naming the entry, and
 :class:`FolderDefinitions` adds the file.
@@ -255,13 +258,16 @@ class Header:
 @dataclass(frozen=True)
 class FromSource:
     """
-    What a batch made from a source keeps of it: the name of the source, and
-    the keys of its rows that the batch has considered, those put into the
-    batch from the source or left out when the batch was made.
+    What a batch made from a source keeps of it: the name of the source, the
+    keys of its rows that the batch has considered, those put into the batch
+    from the source or left out when the batch was made, and the parameters
+    that the source fills (:attr:`.reduction.Batch.fills`), as they were when
+    the batch was made.
     """
 
     source: str
     considered: frozenset[str]
+    fills: tuple[str, ...]
 
 
 class _Following(TypedDict):
@@ -276,7 +282,7 @@ _TEMPLATE = TypeAdapter(Template)
 
 
 def template_data(template: Template) -> Any:
-    """The template of the settings, as plain data that a template file holds."""
+    """``template``, as plain data that a template file holds."""
     return _TEMPLATE.dump_python(template, mode='json')
 
 
@@ -314,7 +320,11 @@ def header_of(data: Any) -> Header:
 
 def source_data(made: FromSource) -> dict[str, Any]:
     """What a batch keeps of its source, as plain data; the keys sorted."""
-    return {'source': made.source, 'considered': sorted(made.considered)}
+    return {
+        'source': made.source,
+        'considered': sorted(made.considered),
+        'fills': list(made.fills),
+    }
 
 
 def source_of(data: Any) -> FromSource:
