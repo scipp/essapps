@@ -396,7 +396,7 @@ class Pages:
         Make the batch of ``new`` with the manager
         (:meth:`~ess.apps.batch.BatchManager.create`), with the settings that
         the application gives its spec: with a source, of every row that the
-        source has filled now, then with an empty column for each other of
+        source has filled now, with an empty column for each other of
         ``new.columns``; without, of a table of ``new.columns`` without rows.
         Raises :class:`~.page.Problem` with what the manager refuses, or what
         the source raises.
@@ -412,16 +412,18 @@ class Pages:
                         description=new.description,
                     )
                 else:
+
+                    def choose(given: pd.DataFrame) -> pd.DataFrame:
+                        empty = [c for c in new.columns if c not in given.columns]
+                        return given.assign(**dict.fromkeys(empty))
+
                     label = self.manager.create(
                         new.spec,
                         title=new.title,
                         source=new.source,
+                        choose=choose,
                         description=new.description,
                     )
-                    batch = self.manager.batch(label)
-                    frame = batch.frame()
-                    if empty := [c for c in new.columns if c not in frame.columns]:
-                        batch.put(frame.assign(**dict.fromkeys(empty)))
             except Exception as error:  # a source is code of the application
                 raise Problem(f'The batch was not made: {why(error)}.') from None
             return Made(label=label)

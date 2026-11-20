@@ -58,6 +58,16 @@ Its key is considered, so no step adds it again. The table keeps no mark for it 
 
 It sets no cell and removes no row. A transmission run measured again changes no earlier row; a person sets the cell.
 
+A source whose row grows, such as the runs of a sample so far, gives it a new key, so the grown list is a new row:
+
+```
+after run 1:  si@1  runs=[1]
+after run 2:  si@2  runs=[1, 2]      # si@1 is no longer given; the table keeps it
+after run 3:  si@3  runs=[1, 2, 3]
+```
+
+What removes a bad run from the later rows is a correction of the run, which the source reads.
+
 ### A row waits until the source has filled it
 
 A source says which columns it fills (`Source.fills`, such as `sample` and `sample_transmission`). A row is added once it has a value in each of these that is a column of the batch. Until then it is *waiting*: the source gives it again at every step, and the page says how many rows wait.
@@ -69,11 +79,11 @@ A source says which columns it fills (`Source.fills`, such as `sample` and `samp
 
 ### Making a batch from a source
 
-`create` lists the source once, and chooses from the rows that are filled:
+`create` lists the source once, and a person chooses the table of the batch from the rows that are filled:
 
 ```python
 manager.create('loki-iofq', title='Afternoon', source='sample-runs',
-               choose=lambda given: given[given.run >= 60339])
+               choose=lambda given: given[given.run >= 60339].assign(thickness=pd.NA))
 
 # in create:
 given = rows_of(client, source)                  # one listing
@@ -83,7 +93,7 @@ considered = arrived.index                       # the rows taken and the rows l
 ```
 
 - A row that waits when the batch is made is neither taken nor considered. It keeps waiting, and Follow adds it once it is filled.
-- `choose` gives rows of `arrived`, with its columns or fewer; `create` refuses anything else. Without `choose`, every filled row is taken.
+- `choose` gives rows of `arrived`, with any columns, such as an empty column for the thickness; `create` refuses a key that `arrived` lacks. Without `choose`, every filled row is taken as the source gives it.
 - A batch made from a source takes no `rows`: its rows come from the one listing, so no file listed in between is considered without being seen.
 
 No scope is kept: "from run 60339 on" is the choice of rows at making, and what arrives later is what Follow adds.

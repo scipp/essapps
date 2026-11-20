@@ -239,10 +239,12 @@ def edit(batch: Batch, key: str, **cells: Any) -> None:
 def from_pairs(manager: BatchManager, spec: str, **options: Any) -> str:
     """
     A batch of ``manager`` made from the source ``pairs`` with ``options``,
-    then given an empty column ``thickness``, so that its columns are
+    with an empty column ``thickness``, so that its columns are
     :data:`COLUMNS`; its label.
     """
-    label = manager.create(spec, source='pairs', **options)
-    batch = manager.batch(label)
-    batch.put(batch.frame().assign(thickness=None))
-    return label
+    return manager.create(
+        spec,
+        source='pairs',
+        choose=lambda given: given.assign(thickness=None),
+        **options,
+    )

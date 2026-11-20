@@ -9,7 +9,7 @@ from collections.abc import Callable, Sequence
 import pandas as pd
 import pytest
 
-from ess.apps import Client
+from ess.apps import Client, Record
 from ess.apps.batch import Batch, FileInfo, Source, rows_of
 from ess.apps.batch.auto import step
 from ess.apps.testing import FakeFiles
@@ -41,25 +41,29 @@ def iofq_batch(client: Client) -> Batch:
     )
 
 
-@pytest.mark.xfail(
-    reason=(
-        'ADR 0013: a step of Follow never changes a row that the table has, '
-        'and never reduces again a row that has a result'
+def angles(files: Sequence[FileInfo]) -> pd.DataFrame:
+    """
+    A row per sample: its runs so far, in run order, keyed by the sample and
+    its newest run, so that a list that grows is a new row.
+    """
+    runs: dict[str, list[FileInfo]] = {}
+    for f in sorted(files, key=lambda f: f.metadata['run']):
+        if f.metadata.get('role') == 'sample':
+            runs.setdefault(f.metadata['sample'], []).append(f)
+    keys = [f'{sample}@{found[-1].metadata["run"]}' for sample, found in runs.items()]
+    return pd.DataFrame(
+        {
+            'sample': list(runs),
+            'runs': [[f.ref.file for f in found] for found in runs.values()],
+        },
+        index=keys,
     )
-)
+
+
 def test_e1_series_grows_reduction_follows(
     client: Client, connect: Callable[..., Client], measure: toys.Measure
 ) -> None:
     reference = measure(1, [1.0, 1.0], role='reference')
-
-    def angles(files: Sequence[FileInfo]) -> pd.DataFrame:
-        """A row per sample: all its angles so far, in run order."""
-        runs: dict[str, list[str]] = {}
-        for f in sorted(files, key=lambda f: f.metadata['run']):
-            if f.metadata.get('role') == 'sample':
-                runs.setdefault(f.metadata['sample'], []).append(f.ref.file)
-        return pd.DataFrame({'runs': list(runs.values())}, index=list(runs))
-
     source = Source(angles, fills=('runs',))
     batch = Batch(
         client,
@@ -69,20 +73,23 @@ def test_e1_series_grows_reduction_follows(
         persist=True,
         settings={'reference': reference},
     )
-    r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
-    first = step(batch, source, ())
-    client.wait(first.records)
-    r4 = measure(4, [4.0, 8.0], role='sample', sample='si')
-    r3 = measure(3, [1.0, 1.0], role='sample', sample='si')
-    measure(2, [1.0, 2.0], role='sample', sample='si')
-    step(batch, source, first.considered)
 
+    considered: frozenset[str] = frozenset()
+    reduced: dict[str, Record] = {}
+    for run, counts in [(2, [1.0, 2.0]), (3, [1.0, 1.0]), (4, [4.0, 8.0])]:
+        measure(run, counts, role='sample', sample='si')
+        done = step(batch, source, considered)
+        considered = done.considered
+        reduced |= done.records
+        assert list(done.records) == [f'si@{run}']  # the newest row only
+        client.wait(done.records)
+
+    states = batch.state()
     user = connect()  # any client of the proposal
-    latest = user.latest('reflectivity', member='si')
-    assert len(user.records(label='reflectivity')) == 2
-    # run order
-    assert latest.request.params['runs'] == [r2, r3, r4]
-    assert user.output(latest, 'stitched').curve.values.tolist() == [
+    newest = user.latest('reflectivity', member='si@4')
+    assert list(batch.frame().index) == ['si@2', 'si@3', 'si@4']
+    assert [len(r.request.params['runs']) for r in reduced.values()] == [1, 2, 3]
+    assert user.output(newest, 'stitched').curve.values.tolist() == [
         1.0,
         2.0,
         2.0,
@@ -90,6 +97,10 @@ def test_e1_series_grows_reduction_follows(
         2.0,
         4.0,
     ]
+    # The earlier rows keep their results, and none is reduced again.
+    assert {k: s.record for k, s in states.items()} == reduced
+    assert {s.text for s in states.values()} == {'done'}
+    assert len(user.records(label='reflectivity')) == 3
 
 
 def test_e2_automatic_reduction_goes_quiet(

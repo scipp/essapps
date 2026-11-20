@@ -101,14 +101,13 @@ The list and the Runs view are the same on every page.
 | Columns | the columns that the source fills, fixed; the other parameters of the spec whose cell the page edits, to tick (a group of fields, such as a Q binning, stays a setting) |
 
 **Make** sends the form to `POST api/batches`, and the page goes to the page of the new batch.
-With a source, the batch holds every row that the source has filled now, then gets an empty column for each column ticked that the source does not fill; Follow adds the rows that wait and those that arrive later.
+With a source, the batch holds every row that the source has filled now, with an empty column for each column ticked that the source does not fill; Follow adds the rows that wait and those that arrive later.
 Without a source, the batch holds no rows and the columns ticked; rows are added on its page or by **Load table**.
 In code:
 
 ```python
-label = manager.create(spec, title=title, source=source)
-batch = manager.batch(label)
-batch.put(batch.frame().assign(thickness=None))
+label = manager.create(spec, title=title, source=source,
+                       choose=lambda given: given.assign(thickness=None))
 ```
 
 The choices come from `GET api/sources`; what can be made is decided by `BatchManager.create`, and what it refuses, such as an empty title, shows at the form, with nothing made.

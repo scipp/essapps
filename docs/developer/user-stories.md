@@ -657,37 +657,45 @@ def iofq_batch(client):
 
 ### E1. Series grows, reduction follows
 
-Actor: reflectometry user during a beamtime. Goal: after each angle, the stitched curve grows by one angle; one curve per sample, not one per arrival.
+Actor: reflectometry user during a beamtime. Goal: after each angle, the newest row of a sample is its curve with all angles so far.
 
-This story is not met, and its test is marked `xfail`. A step of Follow reduces only the rows that have no result ([ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md), "What a step reduces"), so the row of `si` is reduced once, with the first angle, and never again as angles arrive. It is open whether ADR 0013 is amended for a source whose rows grow, or this story changes.
+The source gives one row per sample: its runs so far, under a key that names the sample and its newest run. A list that grows is a new row, which Follow adds and reduces as any row ([ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md), "A step never changes a row that the table has"). The earlier rows stay with their results.
 
 ```python
 reference = measure(1, [1.0, 1.0], role='reference')
 
-def angles(files):                                             # a row per sample: all its angles so far, in run order
+def angles(files):                                             # a row per sample: its runs so far, in run order
     runs = {}
     for f in sorted(files, key=lambda f: f.metadata['run']):
         if f.metadata.get('role') == 'sample':
-            runs.setdefault(f.metadata['sample'], []).append(f.ref.file)
-    return pd.DataFrame({'runs': list(runs.values())}, index=list(runs))
+            runs.setdefault(f.metadata['sample'], []).append(f)
+    keys = [f'{sample}@{found[-1].metadata["run"]}' for sample, found in runs.items()]   # si@2, si@3, ...
+    return pd.DataFrame({'sample': list(runs),
+                         'runs': [[f.ref.file for f in found] for found in runs.values()]}, index=keys)
 
 source = Source(angles, fills=('runs',))
 batch = Batch(client, STITCH, label='reflectivity', rows=rows_of(client, source),
               persist=True, settings={'reference': reference})
-r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
-first = step(batch, source, ())
-client.wait(first.records)                                     # a row still running waits for its record
-r4 = measure(4, [4.0, 8.0], role='sample', sample='si')
-r3 = measure(3, [1.0, 1.0], role='sample', sample='si')
-measure(2, [1.0, 2.0], role='sample', sample='si')             # arrives again
-step(batch, source, first.considered)
+considered, reduced = frozenset(), {}
+for run, counts in [(2, [1.0, 2.0]), (3, [1.0, 1.0]), (4, [4.0, 8.0])]:
+    measure(run, counts, role='sample', sample='si')
+    done = step(batch, source, considered)
+    considered = done.considered
+    reduced |= done.records
+    assert list(done.records) == [f'si@{run}']                # the newest row only
+    client.wait(done.records)
 
-user = connect()                                              # any client of the proposal
-latest = user.latest('reflectivity', member='si')
-assert len(user.records(label='reflectivity')) == 2           # one per step, not one per arrival
-assert latest.request.params['runs'] == [r2, r3, r4]   # run order, not arrival order
-assert user.output(latest, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
+states = batch.state()
+user = connect()                                               # any client of the proposal
+newest = user.latest('reflectivity', member='si@4')
+assert list(batch.frame().index) == ['si@2', 'si@3', 'si@4']
+assert [len(r.request.params['runs']) for r in reduced.values()] == [1, 2, 3]
+assert user.output(newest, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
+assert {k: s.record for k, s in states.items()} == reduced     # the earlier rows keep their results
+assert len(user.records(label='reflectivity')) == 3            # none is reduced again
 ```
+
+A person compares the curve with and without the last angle, or removes the earlier rows: `batch.put(frame.groupby('sample').tail(1))`, which is no part of Follow.
 
 Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether the automatic reduction pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
 

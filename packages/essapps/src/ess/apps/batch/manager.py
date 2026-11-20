@@ -107,15 +107,13 @@ def _parts(label: str) -> tuple[Key, ...]:
 
 def _check_chosen(chosen: pd.DataFrame, arrived: pd.DataFrame) -> None:
     """
-    Raise ``ValueError`` unless ``chosen`` holds rows of ``arrived``, with
-    its columns or fewer.
+    Raise ``ValueError`` unless ``chosen`` is a frame whose keys are keys of
+    ``arrived``. Its columns are the person's to choose.
     """
     if not isinstance(chosen, pd.DataFrame):
         raise ValueError(f'choose gives a {type(chosen).__name__}, not a frame')
     if rows := [k for k in chosen.index if k not in arrived.index]:
         raise ValueError(f'choose gives rows {rows} that the source does not')
-    if columns := [c for c in chosen.columns if c not in arrived.columns]:
-        raise ValueError(f'choose gives columns {columns} that the source does not')
 
 
 class BatchManager:
@@ -252,9 +250,10 @@ class BatchManager:
             The name of a registered source to take the rows from. The batch
             keeps it, so that it can follow.
         choose:
-            Picks the rows to take from those of the source that are filled,
-            such as ``lambda given: given[given.run >= 60339]``: some of its
-            rows, with its columns or fewer. All if not given.
+            Makes the table of the batch from the rows of the source that are
+            filled: some of its rows, with any columns, such as
+            ``lambda given: given[given.run >= 60339].assign(thickness=pd.NA)``.
+            All of them, as they are, if not given.
         description:
             What a person says of the batch.
         settings:
@@ -273,7 +272,7 @@ class BatchManager:
             two, or has definitions or records; if
             ``rows`` and ``source`` are both given, or ``choose`` without
             ``source``; if no source ``source`` is registered; if ``choose``
-            gives a row or a column that the source did not; if the workspace
+            gives a row that the source did not; if the workspace
             binds no spec ``spec``; or if the rows are refused, as ``put``
             refuses them.
         """

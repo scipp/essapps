@@ -314,9 +314,12 @@ def build(
         client, sources=SOURCES, definitions=definitions, staged=STAGED
     )
     if not manager.headers():
-        label = manager.create(DEMO.name, title='Samples', source='sample-runs')
-        batch = manager.batch(label)
-        batch.put(batch.frame().assign(thickness=None))
+        manager.create(
+            DEMO.name,
+            title='Samples',
+            source='sample-runs',
+            choose=lambda given: given.assign(thickness=None),
+        )
 
     def draw(shown: Sequence[Shown]) -> dict[str, object]:
         curves = [

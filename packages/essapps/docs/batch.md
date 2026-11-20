@@ -612,7 +612,7 @@ Each step is a command, and a function for a notebook that takes and returns a p
 
 | Step | Command | Function |
 |---|---|---|
-| list the files | `files package.module:read --with runs` | `cli.described(pd.DataFrame(scan_folder(folder, read)), runs)` |
+| list the files | `files package.module:read --with runs` | `frames.described(pd.DataFrame(scan_folder(folder, read)), runs)` |
 | make the table | `rows package.module:SOURCE`, or a spreadsheet | `frames.table_of(source.rows(batch.file_infos(client, source.selector)))` |
 | reduce it | `reduce template table --label ...` | `frames.reduce_table(client, template, table, label=...)` |
 | write the outputs to files | `export table folder` | `export.export_table(client, table, folder)` |
@@ -681,7 +681,7 @@ run,role,sample
 
 `read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. A file that cannot be read is left out, with a warning. Two files of one run are refused. Running `files` again after files gained a `pid` changes their identity: the rows reduced before read `outdated`, and earlier records name files the folder no longer knows.
 
-A file says its kind, its run, and perhaps its sample, but not what a run is for. A source that pairs runs reads the `role`, and a field such as the direct beam requires it. The run table gives it (`cli.described`): a row describes the file of its `run`, or the file at its `file` if it has no run. A run of the table that has no file in the folder is ignored, so the table may cover more than the folder holds. A file that no row describes keeps what it says of itself, and where both have a column, a cell of the run table that is not empty wins. Two rows for one run are refused. Without `--with`, the roles are typed into `files.csv`, so `files` then refuses to write over a table that exists.
+A file says its kind, its run, and perhaps its sample, but not what a run is for. A source that pairs runs reads the `role`, and a field such as the direct beam requires it. The run table gives it (`frames.described`): a row describes the file of its `run`, or the file at its `file` if it has no run. A run of the table that has no file in the folder is ignored, so the table may cover more than the folder holds. A file that no row describes keeps what it says of itself, and where both have a column, a cell of the run table that is not empty wins. Two rows for one run are refused. Without `--with`, the roles are typed into `files.csv`, so `files` then refuses to write over a table that exists.
 
 The workspace outlives the command, so a template references a record of an earlier command. A template without blanks is one request, and `reduce` without a table submits it:
 

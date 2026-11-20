@@ -478,6 +478,21 @@ def test_a_batch_made_from_a_source_takes_and_considers_its_filled_rows(
     assert kept.considered == {'1', '2', '3', '4'}  # not 5, which waits
 
 
+def test_choose_may_give_columns_that_the_source_does_not(
+    manager: BatchManager, sample: Measure
+) -> None:
+    sample(1, 'water')
+
+    label = manager.create(
+        PLAIN.name,
+        title='A',
+        source='pairs',
+        choose=lambda given: given.assign(thickness=2.0),
+    )
+
+    assert manager.batch(label).frame()['thickness'].tolist() == [2.0]
+
+
 def test_a_row_that_waits_when_a_batch_is_made_is_added_by_follow_once_filled(
     manager: BatchManager, fake: FakeFiles, sample: Measure
 ) -> None:
@@ -512,12 +527,8 @@ def test_a_batch_made_without_a_source_has_none(manager: BatchManager) -> None:
             {'source': 'pairs', 'choose': lambda given: given.rename({'1': '9'})},
             r"choose gives rows \['9'\] that the source does not",
         ),
-        (
-            {'source': 'pairs', 'choose': lambda given: given.assign(thickness=1.0)},
-            r"choose gives columns \['thickness'\] that the source does not",
-        ),
     ],
-    ids=['rows and source', 'choose without source', 'other row', 'other column'],
+    ids=['rows and source', 'choose without source', 'other row'],
 )
 def test_rows_of_a_source_that_cannot_be_chosen_are_refused_and_nothing_is_kept(
     manager: BatchManager,
