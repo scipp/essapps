@@ -26,7 +26,7 @@ A bug made the environment trigger fire on unchanged environments; 7.8.1 fixed i
 The maintainer kept the new default and pointed users to `--rerun-triggers mtime`, which shipped with 7.8.0, and to `--cleanup-metadata <file>`, which existed before, to silence a trigger.
 He reported as many requests for the new behaviour as complaints about it.
 Every planned job prints the reason it runs ([FAQ](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/docs/project_info/faq.rst#L526-L531)).
-For us: the automatic reduction counts a row's file as reduced once a record under the batch's label holds it, whatever settings and source made the record ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)).
+For us: the automatic reduction counts a row's file as reduced once a record under the batch's label holds it, whatever settings and source made the record ([automatic-reduction.md](../automatic-reduction.md#the-records-of-a-label-are-the-results)).
 So changing the settings or the source reduces no row again, and whether a stored result is out of date stays the user's decision.
 If a story asks for it, borrow `--list-changes params` ([cli.py](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/cli.py#L1230-L1236)): a query listing the records under a label whose request differs from what the batch would submit now, for the user to resubmit.
 
@@ -45,7 +45,7 @@ On Slurm, failures such as `OUT_OF_MEMORY`, `TIMEOUT`, and `NODE_FAIL` come from
 For us: `ess.apps.Workspace` records the message of the workflow's Python exception.
 A segfault in a C extension, or a process killed for memory, raises none.
 On the service (scipp/essapps#27), a failed record needs the workflow's console output and the batch system's reason, captured by the framework rather than by each binding.
-Because its outputs are gone, Snakemake retries a failed job at the next invocation; our automatic reduction counts a failed record as a row reduced, and running it again is the user's decision ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)).
+Because its outputs are gone, Snakemake retries a failed job at the next invocation; our automatic reduction counts a failed record as a row reduced, and running it again is the user's decision ([automatic-reduction.md](../automatic-reduction.md#the-records-of-a-label-are-the-results)).
 
 **A shared file system shows files late, and the batch system reports late.**
 After a cluster job ends, Snakemake waits up to `--latency-wait` seconds, 5 by default, for its outputs to appear ([cli.py](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/cli.py#L1389-L1397)); open issues report slow scheduling on high-latency file systems ([#2920](https://github.com/snakemake/snakemake/issues/2920), [#4240](https://github.com/snakemake/snakemake/issues/4240)).
@@ -74,7 +74,7 @@ For us: a workspace started on history that another workspace still writes is re
 **Temporary and protected outputs.**
 `temp()` deletes an output once every consumer has run, and `protected()` write-protects an expensive one ([rules.rst](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/docs/snakefiles/rules.rst#L2132-L2160)).
 The workflow author marks them, since the author knows which outputs are throwaway.
-For us: nothing is written unless persisted, and the batch of the automatic reduction says what it persists ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md), [batch.md](../../../packages/essapps/docs/batch.md#automatic-reduction)).
+For us: nothing is written unless persisted, and the batch of the automatic reduction says what it persists ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md), [batch.md, "Follow"](../../../packages/essapps/docs/batch.md#follow)).
 If a story asks, an author's mark on outputs meant only for inspection could set that default.
 
 **Between-workflow caching is opt-in and narrow.**

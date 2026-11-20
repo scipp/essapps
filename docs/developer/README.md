@@ -287,21 +287,23 @@ total = client.freeze(volume)                               # the final sum, as 
 
 ## Automatic reduction
 
-Automatic reduction is a batch of `ess.apps.batch` reduced as its files arrive ([automatic-reduction.md](automatic-reduction.md)).
-The application's source pairs runs as the technique needs, and a row runs once it is ready and has no result under the label:
+Automatic reduction is Follow on a batch of `ess.apps.batch`: a step every few seconds adds the rows of its source that are new and filled, and reduces the rows that are ready and have no result under the label ([batch.md, "Follow"](../../packages/essapps/docs/batch.md#follow), [automatic-reduction.md](automatic-reduction.md)).
+The application's source pairs runs as the technique needs:
 
 ```python
-def transmission_runs(files: Sequence[FileInfo]) -> list[Row]:
-    return [Row(str(f.metadata['run']), {'run': f.ref})
+def transmission_runs(files: Sequence[FileInfo]) -> pd.DataFrame:
+    rows = [{'key': str(f.metadata['run']), 'run': str(f.ref)}
             for f in files if f.metadata.get('role') == 'transmission']
+    return pd.DataFrame.from_records(rows, columns=['key', 'run']).set_index('key')
 
-batch = Batch(client, TRANSMISSION, columns=('run',), label='transmission',
-              source=Source(transmission_runs, fills=('run',)), persist=True,
-              settings={'empty_beam': file(run=60336)})
-run([Automatic(batch)])
+manager = BatchManager(client, definitions=FolderDefinitions(folder),
+                       sources={'transmission-runs': Source(transmission_runs, fills=('run',))})
+label = manager.create('transmission', title='Transmissions', source='transmission-runs')
+manager.follow(label)
+manager.step()        # called by a timer of the application
 ```
 
-Which rows run follows from the batch's rows and the records under its label, so a restarted loop reduces no row that has a result. A record under the label with a row's key as member, from any batch, is that row's result.
+A step never changes a row that the table has. The results are read from the records under the label, so a restarted application reduces no row that has a result. A record under the label with a row's key as member, from any batch, is that row's result.
 
 ## Provenance and publication
 
