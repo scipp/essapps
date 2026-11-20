@@ -51,7 +51,7 @@ def test_a_table_with_results_has_what_came_of_each_row(
     table = with_results(client, batch.state(), batch.frame())
 
     assert list(table.columns) == ['run', 'name', *toys.COLUMNS, *RESULT]
-    assert list(table['status']) == ['completed', 'not reduced']
+    assert list(table['status']) == ['done', 'ready']
     assert table.loc['2', 'record'] == ''
 
 
@@ -65,7 +65,7 @@ def test_reduce_batch_reduces_the_rows_of_keys_and_returns_them_in_order(
     table = reduce_batch(batch, ['3', '1'])
 
     assert list(table.index) == ['3', '1']
-    assert list(table['status']) == ['completed', 'completed']
+    assert list(table['status']) == ['done', 'done']
     assert batch.state(['2'])['2'].record is None
 
 
@@ -78,7 +78,7 @@ def test_each_row_completes_as_a_record_labelled_and_keyed_by_the_row(
     result = reduce_table(folder_client, template, table, label='scan')
 
     records = folder_client.records(label='scan')
-    assert list(result['status']) == ['completed', 'completed']
+    assert list(result['status']) == ['done', 'done']
     assert list(result['record']) == [
         {r.member: r.id for r in records}[k] for k in 'ab'
     ]
@@ -108,7 +108,7 @@ def test_a_row_that_fails_says_why_and_the_other_rows_complete(
 
     result = reduce_table(folder_client, template, table, label='scan')
 
-    assert list(result['status']) == ['completed', 'failed']
+    assert list(result['status']) == ['done', 'failed']
     assert 'refused' in result.loc['b', 'failure']
     assert result.loc['a', 'failure'] == ''
 
@@ -218,7 +218,7 @@ def test_rows_staged_run_through_a_stage(
 
     result = reduce_table(folder_client, template, table, label='scan', staged=True)
 
-    assert list(result['status']) == ['completed', 'completed']
+    assert list(result['status']) == ['done', 'done']
     assert folder_staged.staged != []
 
 
@@ -258,7 +258,7 @@ def test_rows_pending_after_a_restart_finish_and_are_not_submitted_again(
             second, template, done, label='scan', persist=True, remaining=True
         )
 
-        assert list(result['status']) == ['completed', 'completed']
+        assert list(result['status']) == ['done', 'done']
         assert list(result['record']) == list(done['record'])
         assert len(second.records(label='scan')) == 2
 

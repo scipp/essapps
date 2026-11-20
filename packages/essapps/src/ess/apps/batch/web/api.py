@@ -17,7 +17,7 @@ and again under any label, which they ignore, so that a page asks for them as
 for its own; so are the static files. A row is named by its key in the body or
 the query, never in the path, since a key may hold any character; the keys of
 many rows go in the body, since a URL has a limit. A label is one
-segment of a path (:func:`~ess.apps.batch.manager.check_label`). The page asks
+segment of a path (:meth:`~ess.apps.batch.BatchManager.create`). The page asks
 for ``api/...`` relative to its own URL, and ``/`` redirects to a page by a
 relative URL, so the app can be mounted under a path prefix. If it has no
 batch to go to, ``/`` is the page without a batch, which lists the batches
@@ -26,8 +26,9 @@ client that accepts it.
 """
 
 import itertools
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+import threading
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
@@ -42,7 +43,6 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
-from ..auto import every
 from .models import (
     BatchCounts,
     Batches,
@@ -54,7 +54,6 @@ from .models import (
     Keys,
     Made,
     NewBatch,
-    Next,
     Notice,
     On,
     Plot,
@@ -69,6 +68,31 @@ from .pages import Pages
 
 STATIC = Path(__file__).parent / 'static'
 _XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+
+@contextmanager
+def every(seconds: float, actions: Iterable[Callable[[], object]]) -> Iterator[None]:
+    """
+    Call ``actions`` in turn from a thread, one every ``seconds``, until all are
+    called or the block ends. The end of the block waits for an action that
+    runs. The app steps Follow with it, and a demo makes files arrive with it
+    while it serves a page.
+    """
+    stop = threading.Event()
+
+    def call() -> None:
+        for action in actions:
+            if stop.wait(seconds):
+                return
+            action()
+
+    thread = threading.Thread(target=call, name='every')
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
 
 
 def _download(content: bytes, name: str, media: str) -> Response:
@@ -143,25 +167,18 @@ def create_app(pages: Pages) -> FastAPI:
 
     # Each action answers with the state after it.
 
-    @batch.post('/api/scan')
-    def scan(page: PageOfLabel) -> State:
-        return page.scan()
+    @batch.post('/api/relist')
+    def relist(page: PageOfLabel) -> State:
+        """List the runs again; no row changes."""
+        return page.relist()
 
     @batch.post('/api/cells')
     def edit(page: PageOfLabel, body: CellEdit) -> State:
         return page.edit(body)
 
-    @batch.post('/api/cells/revert')
-    def revert(page: PageOfLabel, body: Cells) -> State:
-        return page.revert(body)
-
     @batch.post('/api/rows/remove')
     def remove(page: PageOfLabel, body: Keys) -> State:
         return page.remove(body.keys)
-
-    @batch.post('/api/rows/restore')
-    def restore(page: PageOfLabel) -> State:
-        return page.restore()
 
     @batch.post('/api/rows/add')
     def add(page: PageOfLabel, body: Key) -> State:
@@ -210,13 +227,13 @@ def create_app(pages: Pages) -> FastAPI:
     @batch.get('/api/table.{suffix}', response_class=Response)
     def table_file(page: PageOfLabel, suffix: Literal['csv', 'xlsx']) -> Response:
         media = 'text/csv' if suffix == 'csv' else _XLSX
-        name = f'{page.words.many}.{suffix}'
-        return _download(page.table_file(f'.{suffix}'), name, media)
+        return _download(page.table_file(f'.{suffix}'), f'rows.{suffix}', media)
 
     @batch.post('/api/table')
     def load_table(
         page: PageOfLabel, name: str, content: Annotated[bytes, Body()]
     ) -> State:
+        """Replace the table of the batch with that of a table file."""
         return page.load_table(name, content)
 
     @batch.get('/api/settings.yaml', response_class=Response)
@@ -231,13 +248,8 @@ def create_app(pages: Pages) -> FastAPI:
 
     @batch.post('/api/batch')
     def change(page: PageOfLabel, body: HeaderEdit) -> State:
-        """Change the title, description and scope of the batch."""
+        """Change the title and description of the batch."""
         return page.change(body)
-
-    @batch.post('/api/batch/next')
-    def start_next(page: PageOfLabel, body: Next) -> Made:
-        """End the batch before a row, and start the next batch there."""
-        return page.start_next(body)
 
     @batch.post('/api/batch/remove')
     def remove_batch(label: str) -> dict[str, str]:
@@ -260,7 +272,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @workspace.get('/api/batches/counts')
     def counts() -> BatchCounts:
-        """The rows of each batch by status; it scans every batch."""
+        """The rows of each batch by status; it reads the state of every batch."""
         return pages.counts()
 
     @workspace.post('/api/batches')
@@ -278,7 +290,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @workspace.post('/api/runs/cells')
     def correct(body: CellEdit) -> Notice:
-        """Correct runs; the page of each batch scans at its next poll."""
+        """Correct runs; no row of a batch changes."""
         return pages.correct(body)
 
     @workspace.post('/api/runs/cells/revert')

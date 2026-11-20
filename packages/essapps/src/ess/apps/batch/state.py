@@ -17,10 +17,15 @@ with :func:`differs` on both as a record holds them. A result is *outdated*
 
 The cells of a row are given here as its request takes them, each empty cell
 given its default, or ``None`` if its parameter takes ``None``
-(:meth:`~.reduction.Batch.state`). A column left out of them is empty, and a
+(:meth:`~.reduction.Batch.cells`). A column left out of them is empty, and a
 problem of the row. A value refused when resolved is a problem of the row, not
 a change: the row cannot run with it, and a change would offer it to
 :func:`left_to_reduce`.
+
+A change of settings applies to the rows not reduced yet. A completed result
+whose request differs from the row's only at settings is reduced with
+*earlier settings* (:attr:`RowState.earlier`): it reads ``done``, and
+:func:`left_to_reduce` leaves it until a person reduces it again.
 
 Automatic reduction reduces the rows of :func:`not_reduced`: ready, and
 without a result. A row with a result is left to a person, whether it is
@@ -33,7 +38,7 @@ from collections.abc import Collection, Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 from ess.spec import OutputRef
 from ess.spec.refs import iter_refs
@@ -53,11 +58,13 @@ class RowState:
     ``problems`` say why the row cannot be reduced now. ``changed`` names the
     parameters at which the row's request now differs from the request of its
     result, both as a record holds them, and is ``None`` if they were not
-    compared, as in what :meth:`~.reduction.Batch.results` gives.
+    compared, as in what ``Batch.state(compare=False)`` gives.
     ``spec_changed`` is true if the result is of another spec than the one
     bound. ``outdated`` is true if the result is of another spec, or if the
     request changed; ``None`` if that is not known, since the requests were not
-    compared.
+    compared. ``earlier`` is true if the row is ready and its completed result
+    differs from its request only at settings: not at a column, and of the
+    same spec.
     """
 
     key: str
@@ -67,24 +74,29 @@ class RowState:
     changed: frozenset[str] | None = frozenset()
     spec_changed: bool = False
     outdated: bool | None = False
+    earlier: bool = False
 
     @property
     def text(self) -> str:
         """
-        What a table shows. A failed or cancelled result reads as its status
-        whether or not the request changed since, since the row needs reducing
-        either way. A completed result not compared with the settings, as while
-        they are refused, reads ``outdated``: it cannot be told to match them.
+        The status of the row, as the page, a table written and the command
+        say it: ``running``, ``incomplete``, ``ready`` (no result),
+        ``failed``, ``cancelled``, ``done`` or ``outdated``. A failed or
+        cancelled result reads as its status whether or not the request
+        changed since, since the row needs reducing either way. A row of
+        earlier settings reads ``done``. A completed result not compared with
+        the settings, as while they are refused, reads ``outdated``: it cannot
+        be told to match them.
         """
         if self.status is Status.PENDING:
-            return 'pending'
+            return 'running'
         if self.problems:
             return 'incomplete'
         if self.status is None:
-            return 'not reduced'
+            return 'ready'
         if self.status in _RERUN:
             return str(self.status)
-        return str(self.status) if self.outdated is False else 'outdated'
+        return 'done' if self.earlier or self.outdated is False else 'outdated'
 
 
 def problems(
@@ -164,39 +176,23 @@ def row_states(
             outdated: bool | None = True
         else:
             outdated = None if names is None else bool(names)
+        found_problems = problems(key, row, columns, status) + refused.get(key, ())
+        row_status = None if record is None else status[record.id]
         states[key] = RowState(
             key=key,
             record=record,
-            status=None if record is None else status[record.id],
-            problems=problems(key, row, columns, status) + refused.get(key, ()),
+            status=row_status,
+            problems=found_problems,
             changed=names,
             spec_changed=key in spec_changed,
             outdated=outdated,
+            earlier=not found_problems
+            and row_status is Status.COMPLETED
+            and bool(names)
+            and names.isdisjoint(columns)
+            and key not in spec_changed,
         )
     return states
-
-
-def compared(states: Mapping[str, RowState]) -> bool:
-    """
-    Whether each row was compared with its result, as in what
-    :meth:`~.reduction.Batch.state` gives, but not
-    :meth:`~.reduction.Batch.results`.
-    """
-    return all(s.changed is not None for s in states.values())
-
-
-def _compared(states: Mapping[str, RowState]) -> dict[str, frozenset[str]]:
-    """
-    What changed in each row; raises ``ValueError`` if a row was not compared
-    with its result.
-    """
-    changed = {k: s.changed for k, s in states.items() if s.changed is not None}
-    if not_compared := sorted(states.keys() - changed.keys()):
-        raise ValueError(
-            f'rows {not_compared} were not compared with their results: '
-            'the states are those of Batch.results, not of Batch.state'
-        )
-    return changed
 
 
 def ready(states: Mapping[str, RowState]) -> list[str]:
@@ -208,85 +204,53 @@ def ready(states: Mapping[str, RowState]) -> list[str]:
     ]
 
 
-def earlier_settings(
-    states: Mapping[str, RowState], columns: Collection[str]
-) -> list[str]:
+def earlier_settings(states: Mapping[str, RowState]) -> list[str]:
     """
-    The ready rows whose completed result differs from their request only at
-    settings: not at a column of ``columns``, and of the same spec. ``changed``
-    is read, so ``states`` are those of :meth:`~.reduction.Batch.state`; raises
-    ``ValueError`` for a row that was not compared.
-
-    A page that applies a change of settings to new rows only leaves these
-    rows as they are, until a person reduces them again.
+    The rows reduced with earlier settings (:attr:`RowState.earlier`). A page
+    that applies a change of settings to new rows only leaves these rows as
+    they are, until a person reduces them again. None in states not
+    compared.
     """
-    changed = _compared(states)
-    return [
-        k
-        for k in ready(states)
-        if states[k].status is Status.COMPLETED
-        and changed[k]
-        and changed[k].isdisjoint(columns)
-        and not states[k].spec_changed
-    ]
+    return [k for k, s in states.items() if s.earlier]
 
 
-def left_to_reduce(
-    states: Mapping[str, RowState], columns: Collection[str]
-) -> list[str]:
+def left_to_reduce(states: Mapping[str, RowState]) -> list[str]:
     """
     The ready rows with no result, one that failed or was cancelled, or one
     that is outdated, but those of :func:`earlier_settings`: a change of
     settings applies to rows not reduced yet, and a change of a cell, or of the
-    spec, to its row. Raises ``ValueError`` for a row that was not compared.
+    spec, to its row. A row not compared counts as not outdated.
     """
-    _compared(states)
-    earlier = set(earlier_settings(states, columns))
     return [
         k
         for k in ready(states)
-        if k not in earlier
+        if not states[k].earlier
         and (
             states[k].status is None or states[k].status in _RERUN or states[k].outdated
         )
     ]
 
 
+type Which = Literal['remaining', 'earlier', 'all']
+"""Which rows to reduce: those left, those of earlier settings, or all ready."""
+
+
+def to_reduce(states: Mapping[str, RowState], which: Which) -> list[str]:
+    """
+    The rows of ``which``: :func:`left_to_reduce`, :func:`earlier_settings`,
+    or :func:`ready`.
+    """
+    if which == 'remaining':
+        return left_to_reduce(states)
+    if which == 'earlier':
+        return earlier_settings(states)
+    return ready(states)
+
+
 def not_reduced(states: Mapping[str, RowState]) -> list[str]:
     """
     The ready rows with no result: the rule of automatic reduction. A row with
     a result is left to a person, also one that is outdated, failed or was
-    cancelled. ``changed`` is not read, so ``states`` may be those of
-    :meth:`~.reduction.Batch.state` or of :meth:`~.reduction.Batch.results`.
+    cancelled. ``changed`` is not read, so ``states`` may be compared or not.
     """
     return [k for k in ready(states) if states[k].record is None]
-
-
-def refused_again(
-    states: Mapping[str, RowState], refused: Mapping[str, str]
-) -> dict[str, str]:
-    """
-    Of the reasons ``refused`` by row, those of the rows that the next step of
-    automatic reduction would try again: the rows of :func:`not_reduced`.
-    """
-    return {k: refused[k] for k in not_reduced(states) if k in refused}
-
-
-EARLIER = 'earlier settings'
-"""How a table marks a row of :func:`earlier_settings`."""
-
-
-def status_texts(
-    states: Mapping[str, RowState], columns: Collection[str]
-) -> dict[str, str]:
-    """
-    The status of each row as a table shows it, by key: its
-    :attr:`RowState.text`, but ``completed, earlier settings`` for a row of
-    :func:`earlier_settings`, since a change of settings applies to the rows
-    not reduced yet. States that were not compared mark no row.
-    """
-    earlier = set(earlier_settings(states, columns)) if compared(states) else set()
-    return {
-        k: f'completed, {EARLIER}' if k in earlier else s.text
-        for k, s in states.items()
-    }

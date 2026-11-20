@@ -155,15 +155,6 @@ column = pd.array([r.get(name) for r in data['data']], dtype=field['extDtype']) 
 
 `table.data_of` and `table.frame_of` are the two halves. Checked on a table with `string`, `Float64`, `Int64`, `boolean` and `object` columns, empty cells, a list and a dict in a cell, `0.1 + 0.2`, `2**53 + 1`, a table without rows, and the key `'0342'`: the frame read back equals the frame written, dtypes included, with an empty cell of an `object` column read as `None`. It holds for every table, since a note too is text, a number, a truth value, or plain data.
 
-### "Start the next batch here" splits the table
-
-```python
-at = rows.index.get_loc('60400')
-this, following = rows.iloc[:at], rows.iloc[at:]     # the next batch gets `following`, and the same template
-```
-
-Results stay under the label of this batch (ADR 0011), so a row that moves has no result in the next batch.
-
 ## Examples
 
 **The files are not reachable.** The page shows the table, the results and the plots. Each file cell is marked as not found, and "Reduce" on such a row is refused with that reason.
@@ -211,7 +202,6 @@ The batch holds its rows as a `DataFrame`, so pandas becomes a dependency of `es
 | the state | `rows.join(results)`, a left join on the key |
 | a rule, such as `left_to_reduce` | a boolean mask over the state |
 | rows of a range of runs | `frame[(frame.run >= start) & (frame.run < stop)]` |
-| the next batch | `rows.iloc[at:]` |
 
 ## Not decided here: amending a batch from the files
 

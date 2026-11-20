@@ -22,7 +22,7 @@ from ess.apps.batch import (
 )
 from ess.apps.batch.cli import main
 from ess.apps.batch.table import read_text
-from ess.apps.batch.text import load_template
+from ess.apps.batch.templates import load_template
 from ess.apps.folder import folder_files, open_folder
 
 from . import toys
@@ -167,7 +167,7 @@ def test_main_reduces_a_table_into_a_file_of_results(
     )
 
     assert code == 0
-    assert list(read_text(out)['status']) == ['completed', 'completed']
+    assert list(read_text(out)['status']) == ['done', 'done']
 
 
 def test_main_returns_3_if_a_row_failed(
@@ -181,7 +181,7 @@ def test_main_returns_3_if_a_row_failed(
     )
 
     assert code == 3
-    assert list(read_text(out)['status']) == ['completed', 'failed']
+    assert list(read_text(out)['status']) == ['done', 'failed']
 
 
 @pytest.mark.parametrize('remaining', [[], ['--remaining']])
@@ -282,7 +282,8 @@ def test_main_with_remaining_leaves_the_rows_reduced_with_earlier_settings(
     )
 
     table = read_text(settings_changed)
-    assert list(table['status']) == ['completed, earlier settings'] * 2
+    assert list(table['status']) == ['done'] * 2
+    assert list(table['earlier']) == ['True'] * 2
     assert code == 3
     assert 'left 2 rows' in capsys.readouterr().err
     with app(folder) as batch:
@@ -304,8 +305,10 @@ def test_main_with_remaining_and_earlier_settings_reduces_those_rows_too(
 
     code = main([*command, 'reduce', *args, '-o', str(settings_changed)])
 
+    table = read_text(settings_changed)
     assert code == 0
-    assert list(read_text(settings_changed)['status']) == ['completed'] * 2
+    assert list(table['status']) == ['done'] * 2
+    assert list(table['earlier']) == ['False'] * 2
     with app(folder) as batch:
         assert len(batch.client.records(label='x')) == 4
 
@@ -367,7 +370,7 @@ def test_a_batch_on_the_label_reduced_has_the_settings_and_rows_of_the_files(
             'row-0': 'run:1',
             'row-1': 'run:2',
         }
-        assert left_to_reduce(batch.state(), batch.columns) == []
+        assert left_to_reduce(batch.state()) == []
 
 
 def test_an_edit_of_an_app_is_reduced_by_the_command_given_no_files(
@@ -403,22 +406,20 @@ def test_a_table_given_to_the_command_takes_the_place_of_an_edit_of_an_app(
         assert batch.frame().loc['row-1', 'sample'] == 'run:2'
 
 
-def test_a_table_given_with_a_source_is_the_table_of_a_batch_that_keeps_the_source(
-    command: list[str], cli_template: Path, folder: Path
+def test_a_table_given_with_a_source_is_refused(
+    command: list[str],
+    cli_template: Path,
+    folder: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    runs = folder / 'runs.csv'
-    assert main([*command, 'rows', 'cli_toys_batch_files:PAIRS', '-o', str(runs)]) == 0
-    runs.write_text(runs.read_text().replace('3,path:run-3.json', '3,path:run-1.json'))
+    runs = write_rows(folder, ['1'])
     source = ['-s', 'cli_toys_batch_files:SOURCES', '--source', 'pairs']
 
-    assert (
+    with pytest.raises(SystemExit):
         main([*command, 'reduce', *source, str(cli_template), str(runs), '-l', 'x'])
-        == 0
-    )
 
-    with manager(folder) as batches:
-        assert batches.batch('x').frame().loc['3', 'sample'] == 'path:run-1.json'
-        assert batches.offered('x').empty
+    assert 'give a table or --source, not both' in capsys.readouterr().err
+    assert FolderDefinitions(folder).labels() == []
 
 
 # The command and the batches of a manager on one folder
@@ -440,8 +441,7 @@ SOURCES = ['-s', 'cli_toys_batch_files:SOURCES']
 def test_reduce_on_a_new_label_writes_a_header_so_the_manager_lists_it(
     command: list[str], cli_template: Path, folder: Path
 ) -> None:
-    runs = write_rows(folder, ['1'])
-    reduce = [str(cli_template), str(runs), '-l', 'x', '--source', 'pairs']
+    reduce = [str(cli_template), '-l', 'x', '--source', 'pairs']
 
     assert main([*command, 'reduce', *SOURCES, *reduce]) == 0
 
@@ -489,9 +489,12 @@ def test_reduce_refuses_a_label_that_has_definitions_but_no_batch(
 
 def later(batches: BatchManager, **options: object) -> str:
     """A batch of the samples 2 and 3 of the source, which it keeps."""
-    rows = batches.rows_of('pairs').loc[['2', '3']]
     return batches.create(
-        'cli-toy', title='Later', rows=rows, source='pairs', **options
+        'cli-toy',
+        title='Later',
+        source='pairs',
+        choose=lambda given: given.loc[['2', '3']],
+        **options,
     )
 
 
@@ -644,8 +647,7 @@ def test_a_template_refused_on_a_new_label_leaves_no_batch(
 def test_a_source_that_raises_is_an_error_and_leaves_no_batch(
     command: list[str], cli_template: Path, folder: Path
 ) -> None:
-    runs = write_rows(folder, ['1'])
-    reduce = [str(cli_template), str(runs), '-l', 'x', '--source', 'broken']
+    reduce = [str(cli_template), '-l', 'x', '--source', 'broken']
 
     with pytest.raises(KeyError, match='nope'):
         main([*command, 'reduce', *SOURCES, *reduce])
@@ -689,8 +691,9 @@ def test_reduce_on_a_batch_without_rows_writes_a_table_of_its_columns(
     command: list[str], folder: Path
 ) -> None:
     with manager(folder) as batches:
-        rows = batches.rows_of('pairs').iloc[:0]
-        label = batches.create('cli-toy', title='None', rows=rows, source='pairs')
+        label = batches.create(
+            'cli-toy', title='None', source='pairs', choose=lambda given: given[:0]
+        )
     out = folder / 'done.csv'
 
     code = main([*command, 'reduce', '-l', label, '-o', str(out)])
@@ -701,6 +704,7 @@ def test_reduce_on_a_batch_without_rows_writes_a_table_of_its_columns(
         'run',
         'sample',
         'status',
+        'earlier',
         'record',
         'failure',
     ]
@@ -780,7 +784,7 @@ def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(
     result = pd.read_csv(pd.io.common.StringIO(capsys.readouterr().out), dtype=str)
     assert code == 0
     assert list(result['key']) == ['detector']
-    assert list(result['status']) == ['completed']
+    assert list(result['status']) == ['done']
 
 
 @pytest.mark.parametrize(
@@ -849,7 +853,7 @@ def test_main_writes_the_results_as_the_suffix_of_the_output_says(
 
     main([*command, 'reduce', str(cli_template), str(runs), '-l', 'x', '-o', str(out)])
 
-    assert list(read_text(out)['status']) == ['completed']
+    assert list(read_text(out)['status']) == ['done']
 
 
 def test_main_exports_the_files_of_a_table_that_it_reduced(
@@ -887,7 +891,7 @@ def test_the_rows_that_main_makes_from_the_files_are_a_table_to_reduce(
     result = read_text(out)
     assert code == 0
     assert list(result['key']) == ['1', '2', '3']
-    assert list(result['status']) == ['completed'] * 3
+    assert list(result['status']) == ['done'] * 3
 
 
 def test_the_rows_that_main_makes_read_the_corrections_kept_in_the_folder(
@@ -918,7 +922,7 @@ def test_main_runs_with_the_proposal_of_the_files(
     code = main([*command, '--proposal', 'p1', *reduce])
 
     assert code == 0
-    assert list(read_text(out)['status']) == ['completed']
+    assert list(read_text(out)['status']) == ['done']
 
 
 @pytest.fixture

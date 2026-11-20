@@ -15,10 +15,9 @@ from ess.apps.batch import (
     left_to_reduce,
     not_reduced,
     ready,
-    refused_again,
-    status_texts,
+    to_reduce,
 )
-from ess.apps.batch.state import differs, results, row_states
+from ess.apps.batch.state import Which, differs, results, row_states
 from ess.apps.errors import FieldError
 from ess.spec import OutputRef
 
@@ -93,11 +92,11 @@ def test_a_cell_reading_a_pending_record_is_ready() -> None:
 def test_what_is_left_to_do_by_status(status: Status, left: bool) -> None:
     found = states({'a': row(sample='x')}, record('1', 'a'), **{'1': status})
 
-    assert left_to_reduce(found, COLUMNS) == (['a'] if left else [])
+    assert left_to_reduce(found) == (['a'] if left else [])
 
 
 def test_a_row_without_a_result_is_left_to_do() -> None:
-    assert left_to_reduce(states({'a': row(sample='x')}), COLUMNS) == ['a']
+    assert left_to_reduce(states({'a': row(sample='x')})) == ['a']
 
 
 @pytest.mark.parametrize(
@@ -114,7 +113,7 @@ def test_an_outdated_row_is_left_to_do_and_shown_as_outdated(
         **outdated,
     )
 
-    assert left_to_reduce(found, COLUMNS) == ['a']
+    assert left_to_reduce(found) == ['a']
     assert found['a'].text == 'outdated'
 
 
@@ -133,7 +132,7 @@ def test_a_failed_or_cancelled_row_reads_so_when_its_request_changed(
         **outdated,
     )
 
-    assert left_to_reduce(found, COLUMNS) == ['a']
+    assert left_to_reduce(found) == ['a']
     assert found['a'].text == str(status)
 
 
@@ -164,8 +163,9 @@ def test_a_result_that_differs_only_at_settings_is_not_left_to_reduce(
         **other,
     )
 
-    assert earlier_settings(found, COLUMNS) == (['a'] if earlier else [])
-    assert left_to_reduce(found, COLUMNS) == (['a'] if left else [])
+    assert found['a'].earlier is earlier
+    assert earlier_settings(found) == (['a'] if earlier else [])
+    assert left_to_reduce(found) == (['a'] if left else [])
 
 
 def test_a_row_that_cannot_run_is_not_one_of_earlier_settings() -> None:
@@ -178,7 +178,7 @@ def test_a_row_that_cannot_run_is_not_one_of_earlier_settings() -> None:
     )
 
     assert found['a'].problems
-    assert earlier_settings(found, COLUMNS) == []
+    assert earlier_settings(found) == []
 
 
 def earlier_and_new() -> dict[str, RowState]:
@@ -192,25 +192,48 @@ def earlier_and_new() -> dict[str, RowState]:
     )
 
 
-def test_a_table_marks_the_rows_of_earlier_settings_as_completed() -> None:
-    assert status_texts(earlier_and_new(), COLUMNS) == {
-        'a': 'completed, earlier settings',
-        'b': 'not reduced',
-    }
-    assert status_texts(not_compared(), COLUMNS) == {'a': 'outdated'}
+def test_a_row_of_earlier_settings_reads_done() -> None:
+    found = earlier_and_new()
+
+    assert {k: s.text for k, s in found.items()} == {'a': 'done', 'b': 'ready'}
+    assert [k for k, s in found.items() if s.earlier] == ['a']
 
 
-def test_refused_again_keeps_the_reasons_of_the_rows_a_step_submits_again() -> None:
-    refused = {'a': 'no', 'b': 'no either'}
+@pytest.mark.parametrize(
+    ('status', 'text'),
+    [
+        (None, 'ready'),
+        (Status.PENDING, 'running'),
+        (Status.COMPLETED, 'done'),
+        (Status.FAILED, 'failed'),
+        (Status.CANCELLED, 'cancelled'),
+    ],
+)
+def test_a_row_reads_its_status_in_the_words_of_the_page(
+    status: Status | None, text: str
+) -> None:
+    found = states(
+        {'a': row(sample='x'), 'b': row()},
+        *([] if status is None else [record('1', 'a')]),
+        **({} if status is None else {'1': status}),
+    )
 
-    assert refused_again(earlier_and_new(), refused) == {'b': 'no either'}
-    assert refused_again(not_compared(), {'a': 'no'}) == {}
+    assert found['a'].text == text
+    assert found['b'].text == 'incomplete'
+
+
+@pytest.mark.parametrize(
+    ('which', 'keys'),
+    [('remaining', ['b']), ('earlier', ['a']), ('all', ['a', 'b'])],
+)
+def test_the_rows_to_reduce_of_each_choice(which: Which, keys: list[str]) -> None:
+    assert to_reduce(earlier_and_new(), which) == keys
 
 
 def test_a_row_without_a_result_is_left_to_reduce() -> None:
     found = states({'a': row(sample='x'), 'b': row()})
 
-    assert left_to_reduce(found, COLUMNS) == ['a']
+    assert left_to_reduce(found) == ['a']
 
 
 @pytest.mark.parametrize(
@@ -261,7 +284,7 @@ def test_a_refused_value_is_a_problem_of_its_row() -> None:
     )
 
     assert found['a'].problems == (reason,)
-    assert left_to_reduce(found, COLUMNS) == []
+    assert left_to_reduce(found) == []
 
 
 def test_the_result_of_a_row_is_its_newest_record_of_any_spec() -> None:
@@ -301,13 +324,8 @@ def test_a_completed_row_not_compared_reads_outdated() -> None:
     assert not_compared()['a'].text == 'outdated'
 
 
-@pytest.mark.parametrize(
-    'rule',
-    [
-        lambda s: earlier_settings(s, COLUMNS),
-        lambda s: left_to_reduce(s, COLUMNS),
-    ],
-)
-def test_the_rules_that_read_what_changed_refuse_rows_not_compared(rule: Any) -> None:
-    with pytest.raises(ValueError, match=r"\['a'\] were not compared"):
-        rule(not_compared())
+def test_a_completed_row_not_compared_is_neither_earlier_nor_left_to_reduce() -> None:
+    found = not_compared()
+
+    assert earlier_settings(found) == []
+    assert left_to_reduce(found) == []

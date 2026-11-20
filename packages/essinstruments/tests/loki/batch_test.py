@@ -178,5 +178,5 @@ def test_a_batch_of_iofq_over_real_workflows(
 
     assert client.wait(records) == {'60250': 'completed', '60339': 'completed'}
     assert client.output(records['60250'], 'iofq').intensity.sizes == {'Q': 100}
-    assert left_to_reduce(batch.state(), batch.columns) == []
+    assert left_to_reduce(batch.state()) == []
     batch.close()

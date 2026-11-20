@@ -39,7 +39,7 @@ from ess.apps.batch.definition import (
     source_of,
 )
 from ess.apps.batch.table import KEY, frame_of
-from ess.apps.batch.text import load_template
+from ess.apps.batch.templates import load_template
 from ess.apps.folder import folder_files, open_folder
 from ess.spec import Binding
 
@@ -250,19 +250,20 @@ def test_a_label_too_long_to_name_a_file_is_refused_when_the_batch_is_made(
     assert FolderDefinitions(folder).labels() == []
 
 
-def test_a_file_left_by_a_write_cut_off_is_removed_when_read(
+def test_a_file_left_by_a_write_cut_off_is_not_read_and_not_removed(
     opened: Opened, made: str, folder: Path
 ) -> None:
     with opened() as (manager, _):
         edit(manager.batch(made), '1', thickness=2.0)
     path = FolderDefinitions(folder).path(rows_key(made))
+    # A reader cannot tell it from the file of a write of another process.
     left = path.parent / f'.{path.name}.x1y2z3'
     left.write_text('{"half')
 
     with opened() as (manager, _):
         assert manager.batch(made).frame().loc['1', 'thickness'] == 2.0
 
-    assert not left.exists()
+    assert left.exists()
 
 
 class Failing:

@@ -13,7 +13,7 @@ that differs between rows (see :mod:`.table`). Each command is one
 function, for a notebook: :func:`.frames.reduce_table`, which keeps no batch,
 and :func:`.export.export_table`. The workspace is kept in a folder (see
 :mod:`ess.apps.folder`), so a template may reference a record of an earlier
-command, by its ID or by its label (see :func:`.text.with_latest`).
+command, by its ID or by its label (see :func:`.templates.with_latest`).
 
 The command makes and reads its batch with a :class:`~.manager.BatchManager`,
 as a page does, so a label is one batch whoever works on it:
@@ -26,8 +26,8 @@ as a page does, so a label is one batch whoever works on it:
   For a label without a batch, it needs a template, and the manager makes
   the batch (:meth:`~.manager.BatchManager.create`) of the template's spec,
   with the label as title. Its table is the table given
-  (:func:`.table.read_table`); without one, the rows that the source
-  ``--source NAME`` makes now; without either, one row keyed by the label.
+  (:func:`.table.read_table`), or the rows that the source ``--source NAME``
+  has filled now, not both; without either, one row keyed by the label.
   With ``--source``, the batch keeps its source, so that it can follow on a
   page. ``create`` refuses a label that has definitions or records.
 
@@ -35,20 +35,27 @@ as a page does, so a label is one batch whoever works on it:
   replaces its table (:meth:`.reduction.Batch.put`); ``--source`` is refused.
 
   A template must be of the batch's spec and its version, as the page's
-  "Load settings" checks it (:func:`.text.checked_settings`), and is checked
-  before anything is written. It then reduces every row of the batch.
-  With ``--remaining`` it reduces the rows that the page's "Reduce" does
-  (:func:`.state.left_to_reduce`), and leaves those reduced with earlier
+  "Load settings" checks it (:func:`.templates.checked_settings`), and is
+  checked before anything is written. Its values at the columns of the table
+  are not read, as its blanks are not. It then reduces every row of the
+  batch. With ``--remaining`` it reduces the rows that the page's "Reduce"
+  does (:func:`.state.left_to_reduce`), and leaves those reduced with earlier
   settings, which it says on stderr; ``--earlier-settings`` adds them.
 - ``rows`` and ``files`` write a table from the files, as corrected in the
   definitions; ``export`` writes the outputs of a table that ``reduce`` wrote.
-  None of them reads or writes a batch.
+  None of them reads or writes a batch. ``files --with`` gives the table of
+  files what a person's run table says of each file
+  (:func:`.frames.described`).
 
 The guide is ``packages/essapps/docs/batch.md``.
 
-Exit status: 0 if done, and every row completed; 1 for an error; 2 if the
-command or a row was refused, so that nothing ran; 3 if a row did not complete,
-or ``--remaining`` left a row reduced with earlier settings.
+The table written has the columns ``status``, in the words of the page,
+such as ``done`` or ``failed``, ``earlier``, whether the row was reduced with
+earlier settings, ``record`` and ``failure`` (:func:`.frames.with_results`).
+
+Exit status: 0 if done, and every row is done; 1 for an error; 2 if the
+command or a row was refused, so that nothing ran; 3 if a row is not done, or
+``--remaining`` left a row reduced with earlier settings.
 """
 
 from __future__ import annotations
@@ -65,17 +72,14 @@ import pandas as pd
 from ..client import Client
 from ..errors import SubmitError
 from ..folder import folder_files, open_folder, scan_folder
-from ..records import Status
 from . import frames
 from .corrections import CorrectedFiles
 from .definition import FolderDefinitions, NotKept
 from .export import export_table
 from .manager import BatchManager
-from .reduction import Batch
 from .source import Source, rows_of
-from .state import EARLIER
 from .table import KEY, SUFFIXES, read_table, read_text, write_table
-from .text import checked_settings, load_template
+from .templates import checked_settings, load_template
 
 
 def _named(name: str) -> Any:
@@ -226,22 +230,24 @@ def _reduce(
         rows = read_table(args.table, spec.params)
     elif batch is not None:
         rows = batch.frame()
-    elif args.source is not None:
-        rows = manager.rows_of(args.source)
-    else:
+    elif args.source is None:
         rows = pd.DataFrame(index=pd.Index([label], name=KEY))
+    else:
+        rows = None  # create takes them from the source
     settings = None
     if template is not None:
-        # Checked on the rows to be, before anything is written.
-        to_be = Batch(client, spec, label=label, rows=rows)
+        # Checked before anything is written.
         try:
-            settings = checked_settings(to_be, template)
+            settings = checked_settings(client, spec, template)
         except ValueError as error:
             raise ValueError(f'{args.template}: {error}') from None
     if batch is not None:
         batch.put(rows)
         if settings is not None:
-            batch.settings = settings
+            # Its values at the columns are not read, as its blanks are not.
+            batch.settings = {
+                k: v for k, v in settings.items() if k not in batch.columns
+            }
     else:
         manager.create(
             spec.name,
@@ -298,6 +304,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == 'reduce' and args.earlier_settings and not args.remaining:
         parser.error('--earlier-settings needs --remaining')
+    if args.command == 'reduce' and args.table is not None and args.source:
+        parser.error('give a table or --source, not both')
     if args.bind is None:
         # a workspace goes on with pending records, which need their bindings
         parser.error('--bind is required: the bindings of the workspace')
@@ -333,15 +341,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
     _write(result, args.output)
-    if args.command == 'reduce' and args.remaining and not args.earlier_settings:
-        left = int(result['status'].str.endswith(EARLIER).sum())
-        if left:
-            sys.stderr.write(
-                f'left {left} row{"s" if left > 1 else ""} reduced with earlier '
-                'settings: add --earlier-settings to reduce them\n'
-            )
-    done = args.command != 'reduce' or all(result['status'] == Status.COMPLETED)
-    return 0 if done else 3
+    if args.command != 'reduce':
+        return 0
+    # Only --remaining without --earlier-settings leaves such rows.
+    if left := int(result['earlier'].sum()):
+        sys.stderr.write(
+            f'left {left} row{"s" if left > 1 else ""} reduced with earlier '
+            'settings: add --earlier-settings to reduce them\n'
+        )
+    return 0 if all(result['status'] == 'done') and not left else 3
 
 
 if __name__ == '__main__':

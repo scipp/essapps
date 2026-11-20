@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from ess.apps import Client
 from ess.apps.batch import (
     Batch,
+    BatchManager,
     DefinitionStore,
     FileInfo,
     NotKept,
@@ -233,3 +234,17 @@ def edit(batch: Batch, key: str, **cells: Any) -> None:
     for column, cell in cells.items():
         frame.loc[key, column] = cell
     batch.put(frame)
+
+
+def from_pairs(manager: BatchManager, spec: str, **options: Any) -> str:
+    """
+    A batch of ``manager`` made from the source ``pairs`` with ``options``,
+    with an empty column ``thickness``, so that its columns are
+    :data:`COLUMNS`; its label.
+    """
+    return manager.create(
+        spec,
+        source='pairs',
+        choose=lambda given: given.assign(thickness=None),
+        **options,
+    )

@@ -12,15 +12,14 @@ from .corrections import CorrectedFiles
 from .definition import DefinitionStore, FolderDefinitions, Header, NotKept
 from .manager import BatchManager
 from .reduction import Batch
-from .source import FileInfo, RowSource, Source, file_infos, rows_of
+from .source import FileInfo, RowSource, Source, rows_of
 from .state import (
     RowState,
     earlier_settings,
     left_to_reduce,
     not_reduced,
     ready,
-    refused_again,
-    status_texts,
+    to_reduce,
 )
 
 __all__ = [
@@ -36,11 +35,9 @@ __all__ = [
     'RowState',
     'Source',
     'earlier_settings',
-    'file_infos',
     'left_to_reduce',
     'not_reduced',
     'ready',
-    'refused_again',
     'rows_of',
-    'status_texts',
+    'to_reduce',
 ]

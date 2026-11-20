@@ -11,10 +11,10 @@ esssans' tutorial data, which ``ess.loki.data`` downloads at the first start::
 ``FOLDER`` must be new or empty; a new temporary folder if not given. The can
 and its transmission run, the masks and the direct beam are there from the
 start, and the settings of the one batch are filled in. Then a run arrives
-every ``--arrive`` seconds, in the order of :data:`EXPERIMENT`. Press "Rescan
-runs" to see it, and "Reduce" to reduce the rows it completes; or turn on
-"Follow", which does both every few seconds. ``--follow`` turns it on from the
-start, with a step every ``SECONDS`` (5).
+every ``--arrive`` seconds, in the order of :data:`EXPERIMENT`. Turn on
+"Follow" to add the rows that the runs fill and reduce them, a step every few
+seconds; "Rescan runs" lists the runs in the Runs view and changes no row.
+``--follow`` turns it on from the start, with a step every ``SECONDS`` (5).
 
 The data and the I(Q) workflow are real; the run numbers, the sample names and
 the roles are this module's. A run arrives as a hard link to a tutorial file
@@ -39,8 +39,7 @@ from typing import Any
 from ess.loki import data
 
 from ess.apps import Client, file
-from ess.apps.batch.auto import every
-from ess.apps.batch.web.api import STATIC
+from ess.apps.batch.web.api import STATIC, every
 from ess.apps.folder import write_files_table
 from ess.spec import FileRef
 
@@ -81,9 +80,10 @@ EXPERIMENT = (
     ('tutorial sample', 'transmission', 60394),  # a newer transmission run
 )
 """
-The runs that arrive. A sample run makes an incomplete row, and the
-transmission run of its sample completes it. The last transmission run changes
-both rows of ``tutorial sample``.
+The runs that arrive. A sample run waits until a transmission run of its
+sample arrives, and Follow then adds its row. The last transmission run changes
+no row: the two rows of ``tutorial sample`` keep the transmission run they were
+added with.
 """
 
 BEAM_CENTRE = {'x': -0.02914868, 'y': -0.01816138, 'z': 4.11610}

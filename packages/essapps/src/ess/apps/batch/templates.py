@@ -19,9 +19,10 @@ A file that is written before the records it reads exist names them by label
     masks: {'@latest': masks, output: masks}
 
 :func:`write_template` writes each file and reference in its JSON form, which
-reads back as the same. :func:`checked_settings` reads the settings of a batch
-from a template, which must be of the batch's spec and its version, and
-``write_template(batch.template(), path)`` writes them.
+reads back as the same, the form of ``settings.json`` of a batch
+(:mod:`.definition`). :func:`checked_settings` reads settings from a
+template, which must be of the spec and its version, and
+``write_template(batch.template(), path)`` writes the settings of a batch.
 """
 
 from __future__ import annotations
@@ -31,11 +32,12 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import TypeAdapter
+
+from ess.spec import WorkflowSpec
 
 from ..client import Client
 from ..records import SpecId, Template
-from .reduction import Batch
+from .definition import template_data, template_of
 from .table import as_request
 
 
@@ -70,23 +72,26 @@ def load_template(path: Path) -> Template:
     Raises ``ValueError`` if the file is not a template.
     """
     try:
-        return TypeAdapter(Template).validate_python(yaml.safe_load(path.read_text()))
+        return template_of(yaml.safe_load(path.read_text()))
     except yaml.YAMLError as error:
         raise ValueError(f'{path}: {error}') from None
 
 
-def checked_settings(batch: Batch, template: Template) -> dict[str, Any]:
+def checked_settings(
+    client: Client, spec: WorkflowSpec[Any, Any], template: Template
+) -> dict[str, Any]:
     """
-    The settings of ``batch`` that ``template`` holds: the value of each
-    parameter that is not a column of ``batch``, with files named as in a cell
-    (:func:`~.table.as_request`) and ``@latest`` read (:func:`with_latest`).
-    The blanks of the template are not read: the columns of the batch are the
-    blanks.
+    The settings of ``spec`` that ``template`` holds: the value of each
+    parameter, with files named as in a cell (:func:`~.table.as_request`) and
+    ``@latest`` read (:func:`with_latest`) on ``client``. Its blanks are not
+    read: the columns of a batch are its blanks, and a batch leaves out a
+    setting at a column when it is made, or refuses one when it is given
+    settings (:attr:`~.reduction.Batch.settings`).
 
     Raises ``ValueError``, saying why in a person's words, if the template is
     of another spec or of another version of it, or if a value cannot be read.
     """
-    theirs, ours = template.spec, SpecId.of(batch.spec)
+    theirs, ours = template.spec, SpecId.of(spec)
     if theirs.name != ours.name:
         raise ValueError(f'it holds the settings of {theirs.name}, not {ours.name}')
     if theirs.version != ours.version:
@@ -96,11 +101,9 @@ def checked_settings(batch: Batch, template: Template) -> dict[str, Any]:
             'mean something else in another, so check them, and set the '
             f'version in the template to {ours.version}'
         )
-    params = {k: v for k, v in template.params.items() if k not in batch.columns}
-    return with_latest(batch.client, as_request(batch.spec.params, params))
+    return with_latest(client, as_request(spec.params, template.params))
 
 
 def write_template(template: Template, path: Path) -> None:
     """Write ``template`` as :func:`load_template` reads it back."""
-    value = TypeAdapter(Template).dump_python(template, mode='json')
-    path.write_text(yaml.safe_dump(value, sort_keys=False))
+    path.write_text(yaml.safe_dump(template_data(template), sort_keys=False))

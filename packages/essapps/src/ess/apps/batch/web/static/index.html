@@ -16,7 +16,7 @@
     <h1 id="title">Batch reduction</h1>
     <nav class="views" aria-label="View">
       <button type="button" data-view="batches" aria-pressed="false">Batches <span class="n" id="n-batches"></span></button>
-      <button type="button" data-view="samples" aria-pressed="true"><span id="word-many">Rows</span> <span class="n" id="n-samples"></span></button>
+      <button type="button" data-view="samples" aria-pressed="true">Rows <span class="n" id="n-samples"></span></button>
       <button type="button" data-view="runs" aria-pressed="false">Runs <span class="n" id="n-runs"></span></button>
     </nav>
     <span class="spacer"></span>
@@ -60,13 +60,13 @@
           <button type="button" id="cancel">Cancel</button>
           <span class="spacer"></span>
           <span class="follow-status" id="follow-status"></span>
-          <label class="follow" id="follow" hidden><input type="checkbox"> Follow</label>
-          <button type="button" class="quiet" id="rescan">↻ Rescan runs</button>
+          <label class="follow" id="follow"><input type="checkbox"> Follow</label>
+          <button type="button" class="quiet" id="rescan" title="List the runs again. No row changes.">↻ Rescan runs</button>
         </div>
-        <div class="chips" id="chips" role="group" aria-label="Show samples that are"></div>
+        <div class="chips" id="chips" role="group" aria-label="Show rows that are"></div>
         <div class="grid" id="rows"></div>
         <div class="table-foot">
-          <button type="button" class="quiet" id="add-row">+ Add</button>
+          <button type="button" class="quiet" id="add-row">+ Add row</button>
           <form class="add-form" id="add-form" hidden>
             <input type="text" name="key" placeholder="Name" aria-label="Name of the new row" required>
             <button type="submit">Add</button>
@@ -75,34 +75,25 @@
           <span class="spacer"></span>
           <span id="selection"></span>
           <button type="button" class="quiet" id="remove" hidden>Remove selected</button>
-          <button type="button" class="link" id="restore" hidden></button>
         </div>
       </div>
 
       <div class="view" id="view-batches" hidden>
         <div class="toolbar">
           <button type="button" id="new-batch-open">+ New batch</button>
-          <p class="hint">Counting scans the runs of every batch. The pages wait until it ends.</p>
+          <p class="hint">Counting reads the state of every batch. The pages wait until it ends.</p>
           <span class="spacer"></span>
           <button type="button" id="count">Count again</button>
         </div>
-        <form class="new-batch scope-form" id="new-batch" hidden>
+        <form class="new-batch header-form" id="new-batch" hidden>
           <div class="field"><label for="new-title">Title</label><input type="text" id="new-title" name="title"></div>
           <div class="field"><label for="new-description">Description</label><input type="text" id="new-description" name="description"></div>
-          <div class="field"><label for="new-source">Source</label><select id="new-source" name="source"></select></div>
+          <div class="field"><label for="new-source">Source</label><select id="new-source" name="source"></select><small id="new-rows"></small></div>
           <div class="field"><label for="new-spec">Workflow</label><select id="new-spec" name="spec"></select></div>
           <div class="field">
             <span>Columns</span>
             <div class="columns" id="new-columns"></div>
-            <small id="new-settings"></small>
-          </div>
-          <div class="field" id="new-scope">
-            <label for="new-start">Scope</label>
-            <span class="scope">
-              <span id="new-from">From run</span> <input type="text" id="new-start" name="start">
-              <span id="new-to">up to, not including, run</span> <input type="text" name="stop" aria-label="Stop">
-            </span>
-            <small>Empty for no limit.</small>
+            <small>The others are settings, shared by every row.</small>
           </div>
           <p class="problem" id="new-problem"></p>
           <div class="buttons">
@@ -112,10 +103,9 @@
         </form>
         <div class="list">
           <table id="batches">
-            <thead><tr><th>Batch</th><th>Scope</th><th>Rows</th><th>Status</th><th>Follow</th></tr></thead>
+            <thead><tr><th>Batch</th><th>Rows</th><th>Status</th><th>Follow</th></tr></thead>
             <tbody></tbody>
           </table>
-          <p class="hint" id="outside"></p>
         </div>
       </div>
 
@@ -168,29 +158,16 @@
           <h3>Fixed when the batch was made</h3>
           <dl class="summary" id="batch-fixed"></dl>
         </section>
-        <form class="param scope-form" id="batch-form">
-          <h3>Title, description and scope</h3>
+        <form class="param header-form" id="batch-form">
+          <h3>Title and description</h3>
           <div class="field"><label for="batch-title">Title</label><input type="text" id="batch-title" name="title"></div>
           <div class="field"><label for="batch-description">Description</label><input type="text" id="batch-description" name="description"></div>
-          <div class="field" id="batch-scope">
-            <label for="batch-start">Scope</label>
-            <span class="scope">
-              <span id="batch-from">From run</span> <input type="text" id="batch-start" name="start">
-              <span id="batch-to">up to, not including, run</span> <input type="text" name="stop" aria-label="Stop">
-            </span>
-            <small>Empty for no limit.</small>
-          </div>
           <p class="problem" id="batch-problem"></p>
           <div class="buttons"><button type="submit" class="primary">Save</button></div>
         </form>
         <section class="param">
-          <h3>Start the next batch here</h3>
-          <p class="hint" id="next-hint"></p>
-          <button type="button" id="next-batch">Start the next batch here</button>
-        </section>
-        <section class="param">
           <h3>Remove</h3>
-          <p class="hint">Removes the title, description, scope and settings of the batch, and the values set by hand. Its results stay in the workspace.</p>
+          <p class="hint">Removes the title, description, settings and table of the batch. Its results stay in the workspace.</p>
           <button type="button" id="remove-batch">Remove this batch</button>
         </section>
       </div>

@@ -12,7 +12,7 @@ import scipp as sc
 
 from ess.apps import Client, Selector, file
 from ess.apps.batch import Batch, FileInfo, Source, rows_of
-from ess.apps.batch.auto import Automatic
+from ess.apps.batch.auto import step
 from ess.apps.batch.frames import with_results
 from ess.apps.batch.table import KEY
 from ess.apps.folder import (
@@ -184,7 +184,7 @@ def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_t
     folder: Path, bindings: list[Binding]
 ) -> None:
     with open_folder(folder, bindings) as first:
-        found = list(Automatic(_found(first), RUNS).step().values())
+        found = list(step(_found(first), RUNS, ()).records.values())
         first.wait(found)
         table = _table(first)
     files = [r.request.params['sample'] for r in found]
@@ -197,7 +197,7 @@ def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_t
     with open_folder(folder.rename(folder.with_name('moved')), bindings) as second:
         assert second.files.list(Selector()) == files
         assert [second.output(r, 'offset').value for r in found] == [1, 2, 3]
-        assert Automatic(_found(second), RUNS).step() == {}
+        assert step(_found(second), RUNS, ()).records == {}
         assert _table(second).equals(table)
         again = second.submit(found[0].request)
         second.wait([again])

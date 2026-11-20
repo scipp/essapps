@@ -142,19 +142,13 @@ def manager(client: Client, refusing: toys.Refusing) -> BatchManager:
 
 
 @pytest.fixture
-def label(manager: BatchManager, client: Client) -> str:
+def label(manager: BatchManager) -> str:
     """
     A batch of ``manager`` with the spec, columns and label of ``batch``, made
     from the source ``pairs`` before a file is measured: it has no rows, and
     Follow or ``manager.take`` adds those measured since.
     """
-    return manager.create(
-        toys.STAGED.name,
-        title='Scan',
-        rows=toys.rows(client),
-        source='pairs',
-        label='scan',
-    )
+    return toys.from_pairs(manager, toys.STAGED.name, title='Scan', label='scan')
 
 
 # A workspace kept in a folder of toy files, for batches from tables

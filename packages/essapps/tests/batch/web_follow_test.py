@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Follow on the page of a batch: a step of the batch that follows scans as
-"Rescan runs" does, and reduces the rows not reduced yet. The tests call
-:meth:`Pages.tick` in place of the timer, except one, which runs the app's
-timer.
+Follow on the page of a batch: a step of the batch that follows adds the rows
+of its source that are new and filled, and reduces the rows not reduced yet.
+The tests call :meth:`Pages.tick` in place of the timer, except one, which
+runs the app's timer.
 """
 
+import functools
 import threading
 import time
 from typing import Any
@@ -19,11 +20,13 @@ from pydantic import BaseModel
 from ess.apps import Client, Status
 from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions
 from ess.apps.batch.web import Page, Pages, create_app
-from ess.apps.batch.web.models import CellEdit, Edit, Next, Reduce, State
+from ess.apps.batch.web.api import every
+from ess.apps.batch.web.models import CellEdit, Edit, Reduce, State
 from ess.apps.batch.web.page import Problem
 from ess.apps.testing import FakeFiles
 
-from .toys import COLUMNS, SOURCES, STAGED, STAGED_NAMES, Gate, Measure
+from . import toys
+from .toys import SOURCES, STAGED, STAGED_NAMES, Gate, Measure
 
 BINS = ['binning', 'bins']
 
@@ -79,11 +82,25 @@ def test_a_step_shows_new_rows_and_runs_and_reduces_them(
     assert after.version > before.version
     assert page.pages.runs().version > before.runs  # type: ignore[operator]
     assert len(page.pages.runs().rows) == 3
-    assert statuses(after) == {'water': 'running', 'oil': 'incomplete'}
-    assert after.follow is not None
-    assert after.follow.failure is None
+    # oil waits for its transmission run
+    assert statuses(after) == {'water': 'running'}
+    assert (after.follow.failure, after.follow.waiting) == (None, 1)
     gate.open()
-    assert statuses(done(page, client)) == {'water': 'done', 'oil': 'incomplete'}
+    assert statuses(done(page, client)) == {'water': 'done'}
+
+
+def test_a_row_that_waits_is_added_and_reduced_once_it_is_filled(
+    page: Page, client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    sample(1, 'oil', partner=False)
+    page.pages.tick()
+    assert page.state().rows == []
+
+    fake.measure(1001, 1.0, role='transmission', sample='oil')
+    page.pages.tick()
+
+    shown = done(page, client)
+    assert (statuses(shown), shown.follow.waiting) == ({'oil': 'done'}, 0)
 
 
 def versions(page: Page) -> tuple[int, int]:
@@ -101,7 +118,7 @@ def correct_and_poll(page: Page) -> None:
     'action',
     [
         lambda page: None,
-        lambda page: page.scan(),
+        lambda page: page.relist(),
         lambda page: correct_and_poll(page),
     ],
     ids=['nothing', 'rescan', 'correction'],
@@ -128,7 +145,7 @@ def changed_behind_the_page(page: Page, what: str, fake: FakeFiles) -> None:
     if what == 'runs':
         fake.measure(9, 1.0, role='background')
     elif what == 'rows':
-        page.batch.rows = page.batch.rows.edit('1', {'thickness': 2.0})
+        toys.edit(page.batch, '1', thickness=2.0)
     elif what == 'refusals':
         page.batch.settings = {**page.batch.settings, 'binning': {'bins': 0}}
     elif what == 'failure':
@@ -146,7 +163,7 @@ def test_a_step_that_changes_one_thing_the_page_shows_tells_the_page(
         # incomplete, but it is ready as given, and no cell is resolved while
         # the settings are refused.
         sample(2, 'oil')
-        page.scan()
+        page.batch.put(toys.rows(client))
         page.edit(CellEdit(keys=['2'], column='thickness', value=-1.0))
     page.follow(True)
     client.wait(client.records())
@@ -210,7 +227,7 @@ def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_p
         definitions=definitions,
         staged=STAGED_NAMES,
     )
-    label = manager.create(STAGED.name, title='Scan', source='pairs', columns=COLUMNS)
+    label = toys.from_pairs(manager, STAGED.name, title='Scan')
     sample(1, 'water')
     pages = Pages(manager)
     pages.manager.follow(label)
@@ -226,45 +243,35 @@ def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_p
     assert {r['status'] for r in shown.json()['rows']} == {'done'}
 
 
-@pytest.mark.parametrize(
-    ('change', 'reason'),
-    [
-        (
-            lambda page, fake: fake.measure(
-                1005, 2.0, role='transmission', sample='water'
-            ),
-            'Transmission changed.',
-        ),
-        (
-            lambda page, fake: page.edit(
-                CellEdit(keys=['1'], column='thickness', value=2.0)
-            ),
-            'Thickness changed.',
-        ),
-    ],
-    ids=['files', 'person'],
-)
-def test_a_step_leaves_a_done_row_that_changed_to_the_person(
-    page: Page,
-    client: Client,
-    sample: Measure,
-    fake: FakeFiles,
-    change: Any,
-    reason: str,
+def test_a_step_leaves_a_done_row_that_a_person_changed_to_the_person(
+    page: Page, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
     page.pages.tick()
     done(page, client)
     before = ids(client)
 
-    change(page, fake)
+    page.edit(CellEdit(keys=['1'], column='thickness', value=2.0))
     page.pages.tick()
 
     shown = done(page, client)
     (row,) = shown.rows
     assert ids(client) == before
-    assert (row.status, row.reason) == ('outdated', reason)
+    assert (row.status, row.reason) == ('outdated', 'Thickness changed.')
     assert shown.action.label == 'Reduce 1 outdated'
+
+
+def test_a_step_changes_no_row_that_the_table_has(
+    page: Page, client: Client, sample: Measure, fake: FakeFiles
+) -> None:
+    sample(1, 'water')
+    page.pages.tick()
+    before = done(page, client).rows
+
+    fake.measure(1005, 2.0, role='transmission', sample='water')
+    page.pages.tick()
+
+    assert done(page, client).rows == before
 
 
 def test_a_run_that_a_step_finds_can_be_chosen_in_a_cell_without_a_runs_view(
@@ -410,14 +417,14 @@ def test_turning_follow_on_steps_at_once_and_off_stops(
     assert statuses(off) == {'water': 'running'}
 
 
-def test_a_batch_without_a_source_offers_no_follow(
+def test_follow_is_refused_for_a_batch_not_made_from_a_source(
     pages: Pages, manager: BatchManager
 ) -> None:
-    page = pages.page(manager.create(STAGED.name, title='By hand', columns=COLUMNS))
+    page = pages.page(manager.create(STAGED.name, title='By hand'))
 
-    assert page.state().follow is None
-    with pytest.raises(Problem, match='no source'):
+    with pytest.raises(Problem, match='was not made from a source'):
         page.follow(True)
+    assert not page.state().follow.on
 
 
 def option(page: Page, column: str, run: int) -> str:
@@ -448,11 +455,11 @@ def ids(client: Client) -> set[str]:
     return {r.id for r in client.records()}
 
 
-def test_a_row_set_by_hand_without_a_result_is_reduced_by_the_next_step(
+def test_a_row_a_person_put_without_a_result_is_reduced_by_the_next_step(
     page: Page, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    page.scan()
+    page.batch.put(toys.rows(client))
     page.edit(CellEdit(keys=['1'], column='thickness', value=2.0))
 
     page.follow(True)
@@ -609,9 +616,7 @@ def test_a_parent_that_runs_the_lifespan_of_the_app_it_mounts_steps_follow(
 def test_follow_turned_on_on_one_page_shows_on_the_other_which_batch_follows(
     page: Page, pages: Pages, manager: BatchManager
 ) -> None:
-    other = pages.page(
-        manager.create(STAGED.name, title='Other', source='pairs', columns=COLUMNS)
-    )
+    other = pages.page(manager.create(STAGED.name, title='Other', source='pairs'))
     seen = page.version
 
     on = other.follow(True)
@@ -662,7 +667,7 @@ def test_a_tick_steps_the_batch_that_follows_without_a_page_open(
 def test_a_tick_after_follow_moved_steps_the_batch_that_follows_now(
     page: Page, pages: Pages, manager: BatchManager, client: Client, sample: Measure
 ) -> None:
-    other = manager.create(STAGED.name, title='Other', source='pairs')
+    other = toys.from_pairs(manager, STAGED.name, title='Other')
     pages.manager.follow(other)
     sample(1, 'water')
 
@@ -687,25 +692,6 @@ def test_the_failure_of_a_step_shows_on_the_page_of_the_batch_that_follows_only(
     assert shown.failure is None
 
 
-def test_follow_stays_on_the_batch_that_ended_and_the_rows_that_moved_wait(
-    page: Page, pages: Pages, manager: BatchManager, client: Client, sample: Measure
-) -> None:
-    sample(1, 'water')
-    sample(2, 'oil')
-    page.follow(True)
-    done(page, client)
-
-    made = page.start_next(Next(key='2', title='Afternoon')).label
-    pages.tick()
-
-    following = pages.page(made)
-    assert manager.following == page.label
-    assert statuses(following.state()) == {'oil': 'ready'}
-    assert client.records(label=made) == []
-    following.follow(True)
-    assert statuses(done(following, client)) == {'oil': 'done'}
-
-
 @pytest.mark.parametrize('turned', ['on its page', 'in code'])
 def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follows(
     page: Page,
@@ -713,14 +699,13 @@ def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follo
     manager: BatchManager,
     sample: Measure,
     fake: FakeFiles,
+    client: Client,
     turned: str,
 ) -> None:
     sample(1, 'water')
     bins(page, 0)
     refused = page.follow(True)  # Follow cannot submit water with these settings
-    other = pages.page(
-        manager.create(STAGED.name, title='Other', source='pairs', columns=COLUMNS)
-    )
+    other = pages.page(toys.from_pairs(manager, STAGED.name, title='Other'))
     # No step runs on the other batch: its first step raises, or none runs.
     fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
 
@@ -732,20 +717,6 @@ def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follo
 
     assert statuses(refused) == {'water': 'incomplete'}
     assert statuses(shown) == {'water': 'ready'}
-
-
-def test_a_step_that_cannot_make_its_batch_is_a_failure_that_its_page_says(
-    pages: Pages, label: str, fake: FakeFiles, sample: Measure
-) -> None:
-    pages.manager.follow(label)
-    sample(1, 'water')
-    fake.measure(7, 1.0, role='transmission')  # the source needs a name
-
-    pages.tick()
-
-    assert pages.failure == "Follow could not step: 'sample'"
-    with pytest.raises(Problem, match="Cannot show scan: 'sample'"):
-        pages.page(label)
 
 
 def test_a_correction_on_another_page_moves_the_version_of_the_runs_once(
@@ -779,3 +750,20 @@ def test_the_counts_of_the_batch_that_follows_are_the_chips_of_its_page(
 
     chips = {s: n for s, n in page.state().counts.items() if n and s != 'all'}
     assert counted == chips == {'outdated': 1, 'incomplete': 1}
+
+
+def test_every_calls_the_actions_in_turn_until_the_block_ends() -> None:
+    called: list[int] = []
+    all_called = threading.Event()
+
+    def call(i: int) -> None:
+        called.append(i)
+        if i == 2:
+            all_called.set()
+
+    with every(0, [functools.partial(call, i) for i in range(3)]):
+        assert all_called.wait(10)
+    with every(60, [functools.partial(call, 3)]):
+        pass
+
+    assert called == [0, 1, 2]

@@ -3,6 +3,7 @@
 """The LoKI batch page on a workspace folder."""
 
 from pathlib import Path
+from typing import Any
 
 from ess.instruments.loki.web import build, open_loki
 from fastapi.testclient import TestClient
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 from ess.apps.folder import write_files_table
 
 
-def test_a_run_registered_while_the_page_runs_shows_after_a_rescan(
+def test_a_run_registered_while_the_page_runs_is_added_by_a_step_of_follow(
     tmp_path: Path,
 ) -> None:
     def register(*runs: tuple[int, str, str]) -> None:
@@ -23,6 +24,9 @@ def test_a_run_registered_while_the_page_runs_shows_after_a_rescan(
             ],
         )
 
+    def names(state: dict[str, Any]) -> list[str]:
+        return [row['name'] for row in state['rows']]
+
     (tmp_path / 'raw').mkdir()
     for run in (1, 2, 3, 4):
         (tmp_path / 'raw' / f'{run}.nxs').touch()
@@ -32,8 +36,12 @@ def test_a_run_registered_while_the_page_runs_shows_after_a_rescan(
     with client:
         app = build(client, files, definitions)
         http = TestClient(app, base_url=str(TestClient(app).get('/').url))
-        before = [row['name'] for row in http.get('/api/state').json()['rows']]
+        before = names(http.get('/api/state').json())
         register(*first, (3, 'sample', 'b'), (4, 'transmission', 'b'))
-        after = [row['name'] for row in http.post('/api/scan').json()['rows']]
+        relisted = names(http.post('/api/relist').json())
+        pages = app.state.pages
+        pages.manager.follow(pages.home())
+        pages.tick()
+        stepped = names(http.get('/api/state').json())
 
-    assert (before, after) == (['a'], ['a', 'b'])
+    assert (before, relisted, stepped) == (['a'], ['a'], ['a', 'b'])
