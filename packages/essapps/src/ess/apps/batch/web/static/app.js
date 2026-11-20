@@ -115,8 +115,11 @@ async function request(url, {body, kind, fresh = () => true, say = showMessage, 
 // what went wrong; whether it was done, or null if the page shows another
 // batch since.
 function act(url, body = {}, say = showMessage) {
-  const [page, at] = [here, changes];
-  return queued(() => perform(url, body, say, page, at));
+  const [page, at, title] = [here, changes, view.state?.title];
+  // A refusal answered after a change of batch is no message of the batch
+  // shown: the page's message says it, with the title of its batch.
+  const said = (text) => (at === changes ? say(text) : showMessage(`${title}: ${text}`));
+  return queued(() => perform(url, body, said, page, at));
 }
 
 async function perform(url, body, say, page, at) {
@@ -174,12 +177,13 @@ async function poll(at = changes) {
     } else if (error instanceof Offline) {
       $('offline').textContent = `${error.message} The page tries again every second; what it shows may be old.`;
       $('offline').hidden = false;
-      // A batch shown in place whose first state does not come: the page
-      // shows the list and the runs, and nothing of the batch before.
-      if (document.body.inert) {
+      // A batch whose first state does not come: the page shows the Batches
+      // and Runs views, and nothing of the batch before, until it comes; the
+      // view chosen stays the view of the page.
+      if (!view.state) {
         document.body.inert = false;
         document.body.classList.add('no-batch');
-        showPage('batches');
+        showPage('batches', false);
         document.title = $('title').textContent = view.batchData?.application ?? '';
       }
     } else throw error;
@@ -220,8 +224,14 @@ function render(state) {
   if (old && state.start !== old.start) return location.reload();
   if (old && state.version < old.version) return;
   view.state = state;
-  if (!rows) build(state);
+  const built = !rows;
+  if (built) build(state);
   if (!old) {
+    // The view chosen, also after the page showed no batch while the server
+    // did not answer.
+    if (built || document.body.classList.contains('no-batch')) {
+      showPage(state.runs === null && view.page === 'runs' ? 'rows' : view.page);
+    }
     document.body.classList.remove('no-batch');
     document.body.inert = false;
   }
@@ -303,7 +313,6 @@ function build(state) {
     },
   });
   if (state.runs === null) document.querySelector('[data-view="runs"]').hidden = true;
-  showPage(state.runs === null && view.page === 'runs' ? 'rows' : view.page);
   showTab(view.tab);
 }
 
@@ -364,7 +373,7 @@ function correctRuns(url, body) {
     if (view.state) await refresh().catch(() => {});
     else await loadRuns();
     return true;
-  }, true);
+  });
 }
 
 // Show the list of batches: from each state, and on the page without a batch
@@ -378,8 +387,8 @@ function showBatches(listed) {
 // Count the rows of each batch while the Batches view is shown, the next count
 // 2 s after the answer of the one before: the server reads the state of every
 // batch for a count, and the pages and Follow wait meanwhile. The counts shown
-// stay until the next answer; a count that fails shows none. A page that polls
-// no state, such as the page without a batch, loads the list with each count.
+// stay until the next answer; a count that fails shows none. A page that shows
+// no batch, such as the page without a batch, loads the list with each count.
 // Nothing counts while the tab of the browser is hidden.
 let counting = false; // whether a count is on its way
 let nextCount; // the timer of the next count
@@ -387,7 +396,7 @@ async function countBatches() {
   clearTimeout(nextCount);
   if (counting || view.page !== 'batches' || document.hidden) return;
   counting = true;
-  const listed = !view.state && (await request('batches'));
+  const listed = document.body.classList.contains('no-batch') && (await request('batches'));
   if (listed) showBatches(listed);
   view.counts = await request('batches/counts');
   counting = false;
@@ -416,6 +425,7 @@ function drawBatches() {
             'td',
             {},
             h('a', {href: batchUrl(batch.label), text: batch.title}),
+            ' ', // so that a double click selects the label alone
             h('small', {class: 'text', text: batch.label}),
             batch.description && h('div', {class: 'hint text', text: batch.description}),
           ),
@@ -1096,9 +1106,13 @@ function openMenu(menu) {
   items.hidden = !open;
 }
 
-function showPage(page) {
-  view.page = page;
-  remember();
+// Show the view `page`; a `chosen` one is the view of the page from then on,
+// and is remembered.
+function showPage(page, chosen = true) {
+  if (chosen) {
+    view.page = page;
+    remember();
+  }
   document.querySelectorAll('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === page)));
   $('view-rows').hidden = page !== 'rows';
   $('view-runs').hidden = page !== 'runs';

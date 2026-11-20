@@ -111,8 +111,9 @@ A click on a batch in the list, **Make** of a new batch, the removal of a batch,
 The grids stay, and get the rows and the columns of the batch.
 An action goes to the batch it was made for, also a value typed that the change sends as it takes the focus, or an action that waits in the queue; a file asked for is saved.
 Nothing of the batch before stays: its rows, selection, filter and plot, the row tab, the forms, the dialogs and menus, a message or a refusal, and the state that an action of the batch before answers after the change.
+A refusal of such an action is the page's message, which names the batch by its title, such as "Samples: The batch was not changed: …", not a message at a field or a form of the batch shown.
 Until the first state is drawn the page takes no click, and it fades if that takes longer than 0.3 s.
-If the server does not answer then, the page says so, and shows the Batches and Runs views, without the batch before, until the first state comes.
+If the server does not answer then, the page says so, and shows the Batches and Runs views, without the batch before, until the first state comes; then it shows the view chosen.
 
 The page remembers in the session of the browser, so that a reload or a return to a batch shows the same:
 

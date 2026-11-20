@@ -1137,6 +1137,7 @@ def test_selecting_the_text_of_a_batch_in_the_list_does_not_show_it(
     page.click('[data-view=batches]')
 
     page.dblclick(f'#batches small:text-is("{second}")')
+    assert page.evaluate('getSelection().toString()') == second
     description = page.locator('#batches .hint:text-is("The second series")')
     description.click(position={'x': 2, 'y': 5})
     page.mouse.down()
@@ -1164,6 +1165,52 @@ def test_a_change_while_the_server_does_not_answer_says_so_and_shows_no_batch(
     page.wait_for_selector('#offline', state='hidden')
     assert page.is_visible('.right')
     assert all('ERR_FAILED' in e for e in page.errors)
+    page.errors.clear()
+    # The view chosen by the click on the title, also after a reload.
+    assert page.is_visible('#view-rows')
+    page.reload()
+    page.wait_for_selector('#rows .tabulator-row')
+    assert page.get_attribute('[data-view=rows]', 'aria-pressed') == 'true'
+
+
+def test_a_refused_header_of_the_batch_before_is_the_message_of_the_page(
+    second: str, page: Any
+) -> None:
+    hold(page, 'api/batch')  # also the list and its counts, which do not matter
+    page.click('[data-tab=batch]')
+    page.fill('#batch-title', ' ')
+    page.click('#batch-form [type=submit]')
+    held(page, 1)
+
+    page.click('[data-view=batches]')
+    page.click('#batches a:text-is("Other")')
+    shows(page, 'Other')
+    release(page, 0)
+
+    page.wait_for_selector('#message:has-text("a title that is not empty")')
+    assert page.inner_text('#message .message-text strong').startswith('Scan: ')
+    assert page.inner_text('#batch-problem') == ''
+    assert page.input_value('#batch-title') == 'Other'
+    assert all('status of 422' in e for e in page.errors)
+    page.errors.clear()
+
+
+def test_a_refused_table_of_the_batch_before_is_the_message_of_the_page(
+    second: str, page: Any, tmp_path: Path
+) -> None:
+    bad = tmp_path / 'bad.csv'
+    bad.write_text('name,thickness\nwater,1\n')
+    hold(page, 'api/table?')
+    page.set_input_files('#pick-table', bad)
+    held(page, 1)
+
+    to_batch(page, 'Other')
+    release(page, 0)
+
+    page.wait_for_selector('#message:has-text("bad.csv")')
+    assert page.inner_text('#message .message-text strong').startswith('Scan: ')
+    assert page.locator('#rows .tabulator-row').count() == 1
+    assert all('status of 422' in e for e in page.errors)
     page.errors.clear()
 
 
