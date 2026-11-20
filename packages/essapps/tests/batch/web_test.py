@@ -1494,6 +1494,15 @@ def test_a_figure_has_error_bars_axes_with_units_and_no_nan() -> None:
     assert figure['layout']['yaxis']['title']['text'] == 'I(Q) [1/cm]'
 
 
+def test_the_demo_measures_its_samples_again_under_numbered_names() -> None:
+    groups = demo.measurements(len(demo.SAMPLES) + 2)
+
+    runs = [run for group in groups for run in group]
+    samples = [sample for _, _, role, sample in runs if role == 'sample']
+    assert samples[-2:] == ['H2O buffer #2', 'D2O buffer #2']
+    assert len({run for run, *_ in runs}) == len(runs)
+
+
 def test_the_demo_makes_a_batch_of_its_samples_and_follow_adds_those_that_arrive(
     tmp_path: Path,
 ) -> None:

@@ -15,10 +15,12 @@ samples there are if no batch is listed. The file
 source reads ``files.csv`` again when it changes
 (:class:`~ess.apps.folder.ArrivingFiles`).
 
-With ``--arrive SECONDS [--count N]``, a new folder starts with the empty cell
-and the first few samples, and the runs of one more sample arrive every
-``SECONDS``, until ``N`` have arrived (all if not given). ``--interval
-SECONDS`` sets the time between two steps of Follow (5).
+``--samples N`` sets how many samples a new folder gets (24): beyond the 24 of
+:data:`SAMPLES`, the same again as ``<name> #2``, ``#3``... With ``--arrive
+SECONDS [--start M]``, a new folder starts with the empty cell and the first
+``M`` samples (3), and the runs of one more sample arrive every ``SECONDS``,
+until all have arrived. ``--interval SECONDS`` sets the time between two steps
+of Follow (5).
 
 Each sample run holds the size of its particles, so samples differ visibly, and
 the curve depends on the settings. Three samples have no transmission run, one
@@ -246,21 +248,25 @@ type Run = tuple[int, dict[str, object], str, str]
 """A run: its number, the content of its file, its role, and its sample."""
 
 
-def measurements() -> list[list[Run]]:
+def measurements(samples: int = len(SAMPLES)) -> list[list[Run]]:
     """
-    The runs, in the groups that arrive together: the empty cell, then each
-    sample run with its transmission run, if it has one.
+    The runs, in the groups that arrive together: the empty cell, then each of
+    the first ``samples`` samples with its transmission run, if it has one.
+    Beyond :data:`SAMPLES`, the samples are these again, named ``#2``, ``#3``...
     """
     run = FIRST_RUN
     groups = [[(run, {'level': 0.02}, 'background', 'empty cell')]]
-    for i, (name, radius, scale) in enumerate(SAMPLES):
+    for i in range(samples):
+        kind, radius, scale = SAMPLES[i % len(SAMPLES)]
+        repeat = i // len(SAMPLES)
+        name = f'{kind} #{repeat + 1}' if repeat else kind
         run += 1
-        events = 0 if name == _NO_EVENTS else 2_000_000
+        events = 0 if kind == _NO_EVENTS else 2_000_000
         sample = {'radius': radius, 'scale': scale, 'incoherent': 0.03}
         group: list[Run] = [
             (run, {**sample, 'events': events, 'seed': i}, 'sample', name)
         ]
-        if name not in _NO_TRANSMISSION:
+        if kind not in _NO_TRANSMISSION:
             run += 1
             content = {'transmission': 0.95 - 0.01 * (i % 9)}
             group.append((run, content, 'transmission', name))
@@ -283,14 +289,16 @@ def measure(directory: Path, runs: Sequence[Run]) -> None:
 
 
 def open_demo(
-    directory: Path,
+    directory: Path, *, samples: int = len(SAMPLES)
 ) -> tuple[Client, CorrectedFiles, FolderDefinitions]:
     """
     A client of the demo's workspace in ``directory``, its file source, and the
-    folder's definitions.
+    folder's definitions. A folder without runs gets those of ``samples``
+    samples.
     """
     if not (directory / 'files.csv').exists():
-        measure(directory, [run for group in measurements() for run in group])
+        runs = [run for group in measurements(samples) for run in group]
+        measure(directory, runs)
     definitions = FolderDefinitions(directory)
     files = CorrectedFiles(ArrivingFiles(directory), definitions=definitions)
     return open_folder(directory, BINDINGS, files=files), files, definitions
@@ -347,7 +355,19 @@ def main() -> None:
     parser.add_argument(
         '--arrive', type=float, metavar='SECONDS', help='a sample every SECONDS'
     )
-    parser.add_argument('--count', type=int, help='the samples that arrive')
+    parser.add_argument(
+        '--samples',
+        type=int,
+        default=len(SAMPLES),
+        metavar='N',
+        help=f'the samples of a new folder ({len(SAMPLES)})',
+    )
+    parser.add_argument(
+        '--start',
+        type=int,
+        metavar='M',
+        help=f'with --arrive: the samples there at the start ({AT_START})',
+    )
     parser.add_argument(
         '--interval',
         type=float,
@@ -356,8 +376,8 @@ def main() -> None:
         help='a step of Follow every SECONDS (5)',
     )
     args = parser.parse_args()
-    if args.count is not None and args.arrive is None:
-        parser.error('--count goes with --arrive')
+    if args.start is not None and args.arrive is None:
+        parser.error('--start goes with --arrive')
     if not (STATIC / 'vendor').is_dir():
         parser.exit(1, f'The page needs its libraries: sh {STATIC / "vendor.sh"}\n')
     directory = args.directory
@@ -369,25 +389,26 @@ def main() -> None:
     sys.stdout.write(f'folder {directory}\n')
     sys.stdout.flush()
     if args.arrive is None:
-        _serve(directory, args.port, interval=args.interval)
+        _serve(directory, args.port, interval=args.interval, samples=args.samples)
         return
-    groups = measurements()
-    arrived = [run for group in groups[: AT_START + 1] for run in group]
+    groups = measurements(args.samples)
+    start = 1 + (AT_START if args.start is None else args.start)  # the empty cell
+    arrived = [run for group in groups[:start] for run in group]
     measure(directory, arrived)
 
     def arrive(group: list[Run]) -> None:
         arrived.extend(group)
         measure(directory, arrived)
 
-    plan = [partial(arrive, g) for g in groups[AT_START + 1 :][: args.count]]
+    plan = [partial(arrive, g) for g in groups[start:]]
     with every(args.arrive, plan):
-        _serve(directory, args.port, interval=args.interval)
+        _serve(directory, args.port, interval=args.interval, samples=args.samples)
 
 
-def _serve(directory: Path, port: int, *, interval: float) -> None:
+def _serve(directory: Path, port: int, *, interval: float, samples: int) -> None:
     import uvicorn
 
-    client, files, definitions = open_demo(directory)
+    client, files, definitions = open_demo(directory, samples=samples)
     with client:
         folder = directory.name
         app = build(client, files, definitions, folder=folder, interval=interval)

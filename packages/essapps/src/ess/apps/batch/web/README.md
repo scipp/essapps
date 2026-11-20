@@ -10,9 +10,10 @@ The page of a batch is at `/batches/<label>/`.
 sh packages/essapps/src/ess/apps/batch/web/static/vendor.sh   # once: the page's libraries into static/vendor/ (needs npm)
 
 python -m ess.apps.batch.web.demo [FOLDER] --port 8000                  # fake runs, fake I(Q)
-python -m ess.apps.batch.web.demo --arrive 10 [--count N]               # fake runs, a sample arriving every 10 s
+python -m ess.apps.batch.web.demo --arrive 10 [--start M]               # fake runs, a sample arriving every 10 s
+python -m ess.apps.batch.web.demo --samples 150 --arrive 2 --start 100  # 150 samples: 100 at the start, one more every 2 s
 python -m ess.instruments.loki.web FOLDER --port 8000                   # LoKI's I(Q) on a workspace folder
-python -m ess.instruments.loki.arrivals [FOLDER] --arrive 15 [--count N] # LoKI's I(Q), runs arriving in a new folder
+python -m ess.instruments.loki.arrivals [FOLDER] --arrive 15 [--count N] [--start M] # LoKI's I(Q), runs arriving in a new folder
 python -m ess.instruments.loki.arrivals --follow 2                      # the same, following the files, a step every 2 s
 ```
 
@@ -22,7 +23,9 @@ At a start, the demo and the LoKI page make a batch of the rows their source giv
 The demo needs the extra `essapps[web]`, the LoKI modules `essinstruments[loki-app]`.
 The LoKI page reads the masks from a record, so reduce the detector and the masks on the folder first, with two `essapps-batch` commands that [the docstring of `ess.instruments.loki.web`](../../../../../../essinstruments/src/ess/instruments/loki/web.py) gives; the LoKI arrivals do this themselves.
 The two commands make the batches `detector` and `masks`, so the LoKI page then makes no batch of I(Q): make it with **+ New batch**.
-With `--arrive`, the runs of one sample (fake demo) or one run (LoKI) arrive every `SECONDS`, until `--count` have arrived. Turn on **Follow** to add the rows they fill and reduce them; **List runs again** lists them in the Runs view and in the choices of a cell, and changes no row.
+With `--arrive`, the runs of one sample (fake demo) or one run (LoKI) arrive every `SECONDS`, until all have arrived.
+`--samples N` (fake demo, 24) and `--count N` (LoKI, 12 runs) say how many there are in all; beyond the samples that the module names, the same are measured again as `<name> #2`, `#3`...
+`--start M` says how many of them are there at the start, in the first batch (fake demo: 3 samples; LoKI: 0 runs). Turn on **Follow** to add the rows they fill and reduce them; **List runs again** lists them in the Runs view and in the choices of a cell, and changes no row.
 Each page reads `files.csv` again when it is replaced (`ess.apps.folder.ArrivingFiles`), so a run registered by hand, with `ess.apps.folder.write_files_table`, shows too.
 The demo and the LoKI page take `--interval SECONDS`, the time between two steps of Follow (5).
 The LoKI arrivals take `--follow [SECONDS]`, which turns the switch of their one batch on from the start, with a step every `SECONDS` (5).
