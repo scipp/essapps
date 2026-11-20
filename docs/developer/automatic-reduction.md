@@ -8,26 +8,31 @@ This page holds what neither says: how the records decide what a step reduces, w
 ## The records of a label are the results
 
 A step reduces the ready rows of its batch that have no record under the label.
-A record under the label with the row's key as its member, from any submitter or any batch, is the row's result, so the step leaves the row to a person.
+A record under the label with the row's key as its member, from any submitter or any batch, is the row's result.
+A step does not reduce a row that has a result; a person does.
 Two batches on one label share their results: what one reduces, the other does not.
 
 ## What a step keeps
 
-Nothing that decides which rows run but `considered` in `source.json`.
+A step keeps only `considered`, which the manager writes to `source.json`.
 A step reads the files, the batch's table and settings, and the records under the label, and works out the rest.
 So a step that raises, in the settings, the source, or a submission, loses nothing: the next step tries again.
+If a step raises, the manager keeps the keys of the table as considered, so a row that the step added and a person removes stays away.
 A restarted application reduces no row again that has a result.
 A record that was running when the workspace ended is failed at the restart, and one that had not started is cancelled unless it persists outputs ([`Workspace._restart`](../../packages/essapps/src/ess/apps/workspace.py)); a step does not run such a row again, and a person retries it.
 This holds while the proposal's history is kept. A step keeps it, since its calls keep the proposal from being idle ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
 
-The `Batch` keeps what it reads of the records, the newest of each member under the label, from the proposal's changes, and how it resolved each cell until the next `put`.
-Both are caches that the records and the file source rebuild.
+The `Batch` keeps two caches.
+The first is what it read of the records: the newest record of each member under the label, read from the proposal's changes.
+The second is how it resolved each cell, until the next `put`.
+The records and the file source rebuild both.
 
 ## Problems and refusals
 
 A *problem* is found when the state is read, a *refusal* when a row is submitted.
-A row whose cell the workspace does not accept, such as a thickness below zero or a file named before it is measured, is `incomplete`: `Batch.state()` resolves the cells it compares, and the reason is one of the row's `problems`.
-So `not_reduced` does not give it, the page shows why, and a step reduces the row once the cell is accepted.
+A row whose cell the workspace does not accept, such as a thickness below zero or a file named before it is measured, is `incomplete`.
+`Batch.state()` resolves the cells it compares, and the reason is one of the row's `problems`.
+So `not_reduced` does not give the row, the page shows why, and a step reduces the row once the cell is accepted.
 
 `submit` checks more than `client.resolve`, which looks at values only ([`WorkspaceProtocol.resolve`](../../packages/essapps/src/ess/apps/protocol.py)).
 What only `submit` refuses, and how a batch row meets it:
@@ -47,7 +52,9 @@ What only `submit` refuses, and how a batch row meets it:
 `Batch.reduce` is all or none, as a person needs it.
 A step instead drops the rows that the `SubmitError` names (`FieldError.entry`), and submits the rest.
 A reason that names no row refuses every row of the step.
-Settings that the workspace does not accept make `Batch.state()` raise a `SubmitError`; the step submits nothing, and `refused` holds the reason for every row without a result that is ready as given, such as `{'1': 'unknown spec sans-iofq/v1'}` after an upgrade removed the spec (E2).
+Settings that the workspace does not accept make `Batch.state()` raise a `SubmitError`.
+The step then submits nothing.
+Its `refused` holds the reason for every row without a result that is ready as given, such as `{'1': 'unknown spec sans-iofq/v1'}` after an upgrade removed the spec (E2).
 
 ## Cost
 
@@ -55,13 +62,19 @@ Some instruments in full operation are expected to write 10 000 to 100 000 files
 A step lists every file, runs the source over all of them (`rows_of`), reads the results of every row, and compares only the rows without a result:
 
 ```python
-given = rows_of(batch.client, source)         # every file listed, the source run over all
-candidates = not_reduced(batch.results())     # per row: its problems as given, the status of its result
-state = batch.state(candidates)               # the settings resolved once; the cells of these rows resolved
+given = rows_of(batch.client, source)                 # every file listed, the source run over all
+candidates = not_reduced(batch.state(compare=False))  # per row: its problems as given, the status of its result
+state = batch.state(candidates)                       # the settings resolved once; the cells of these rows resolved
 ```
 
-The table below was measured with a step that made rows from the files and compared every row with its result (`batch.state()`), before the table was a `DataFrame`.
-A step compares only the rows without a result, so the lines "all reduced" overstate its cost: a toy measurement at 3000 rows gives 0.05 s per step where a step that compares every row takes 0.07 s with files by identity, and 0.06 s where it takes 1.7 s with each row's sample named by run.
+The table below was measured with a step that made the rows from the files and compared every row with its result (`batch.state()`), with the rows held in Python objects, not in a `DataFrame`.
+A step compares only the rows without a result, so the lines "all reduced" overstate its cost. A toy measurement at 3000 rows:
+
+| Files named | Step that compares only the rows without a result | Step that compares every row |
+|---|---|---|
+| by identity | 0.05 s | 0.07 s |
+| each row's sample by run | 0.06 s | 1.7 s |
+
 `put` of the whole table costs tens of milliseconds at 3000 rows (ADR 0012); it was not measured at the sizes below.
 
 | Rows (2 files each) | 10 000 | 30 000 | 100 000 |
@@ -97,6 +110,6 @@ A cut-off that a person sets on purpose, "only the runs from 60339 on", is the c
   - *A group per file*, declared by the author. A step makes the rows of the groups that got a file, from those files and the files shared by all groups. A source that pairs by time, such as "the can measured before", has no such group and stays linear.
   - *A row from one file, by queries on an index of the files.* The framework records what each row asked for. It needs no declaration by the author, and changes the signature of every source.
 
-  A class with state that the author writes, `add(file) -> changed rows`, is not offered. It would have to give the same rows for any order of arrival, a role corrected later, a file that arrives again, and a restart, which a function over the files gives without effort.
-- **A series that grows** (E1): a step never changes a row, so the row of a sample is reduced once, with its first angle. The story is not met.
+  A class with state that the author writes, `add(file) -> changed rows`, is not offered. It would have to give the same rows for any order of arrival, a role corrected later, a file that arrives again, and a restart; a function over all files gives the same rows in each case.
+- **A series that grows** (E1) gives a new row for each run, under a key that names the list ([ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md)). Each row reduces every run of its list, so a sample of n runs reduces n(n+1)/2 runs in all. A step that pushes into an accumulator (next) would reduce each run once.
 - **A step that pushes into an accumulator**, for a sum that grows with each file (D7).

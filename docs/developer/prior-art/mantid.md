@@ -33,7 +33,7 @@ The interface's documentation says so ([ISIS Reflectometry.rst L646-L650](https:
 In 2024, on ISIS's analysis machines (IDAaaS), the journal began to list runs seconds before their files reached the data cache, so autoprocessing failed those rows and never came back to them ([mantid#36860](https://github.com/mantidproject/mantid/issues/36860)).
 Retrying failed rows at each poll was considered and rejected as confusing for users.
 The fix lists only runs found in the data cache's index ([mantid#37449](https://github.com/mantidproject/mantid/pull/37449)), together with slower polling ([mantid#36895](https://github.com/mantidproject/mantid/pull/36895)).
-For us: the automatic reduction makes the same choice, a failed record counts as a row reduced ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)).
+For us: the automatic reduction makes the same choice, a failed record counts as a row reduced ([automatic-reduction.md](../automatic-reduction.md#the-records-of-a-label-are-the-results)).
 So the file source must list a run's file only once it is complete; otherwise the first reduction fails and the file is never reduced again without a person.
 This bears on the Open question of how long after the file writer finishes the catalogue lists a run ([data](../../requirements/data.md#open)).
 
@@ -89,7 +89,7 @@ For us: the record holds the request; the container image is a precedent for sof
 
 **A rule edited in place rewrote history.**
 In ISIS autoreduction, a run pointed at the database row of values that filled it ([records.py L170-L188](https://github.com/autoreduction/queue-processor/blob/4eab9dea17df1fe599a5fcf23a77ea1e2554de2e/autoreduce_qp/model/database/records.py#L170-L188)), and editing the values "from run N onward" overwrote that row ([configure_new_runs.py L49-L60](https://github.com/autoreduction/frontend/blob/917b665c06c91d9bfc3733c89fcbf74fa0937413/autoreduce_frontend/reduction_viewer/views/configure_new_runs.py#L49-L60)), so old runs then showed values they never used.
-For us: a record holds every parameter value and does not name the batch or template it came from ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)).
+For us: a record holds every parameter value and does not name the batch or template it came from ([automatic-reduction.md](../automatic-reduction.md#the-records-of-a-label-are-the-results)).
 
 **FIA keeps rules as code and their configuration as data.**
 Each instrument has a JSON *specification* in FIA's database; each key names a Python rule class, and its value configures it ([specifications.py](https://github.com/fiaisis/run-detection/blob/881dacdc3c07d5ee1cbf12d49843d5a8fe7fe397/rundetection/specifications.py), [models.py L136](https://github.com/fiaisis/FIA-API/blob/9707aa094c4e4a9c96f31142e8777f2e0c430273/fia_api/core/models.py#L136)).

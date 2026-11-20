@@ -66,7 +66,7 @@ AiiDA's split is the minimum it would need: the workflow reported a failure, the
 After 5 consecutive failures the job is paused, and `verdi process play` resumes it from the failed task ([calculations/concepts.rst L176-200][backoff]).
 Each computer also sets a minimum interval between scheduler polls ([computers.py L73-74][poll]).
 For us, a slow or missing `/ess` mount is the likely transient failure on the service.
-Today it fails the record, and since a failed record counts as a row reduced ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)), automatic reduction never reduces that run again.
+Today it fails the record, and since a failed record counts as a row reduced ([automatic-reduction.md](../automatic-reduction.md#the-records-of-a-label-are-the-results)), automatic reduction never reduces that run again.
 Whether the workspace retries before it fails a record, or marks the failure so a controller may resubmit, belongs to the service design (scipp/essapps#27).
 
 **Checkpointed workflow state does not survive upgrades.** A WorkChain resumes after a daemon restart because its state is serialised between steps.

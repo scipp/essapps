@@ -298,8 +298,7 @@ def transmission_runs(files: Sequence[FileInfo]) -> pd.DataFrame:
 
 manager = BatchManager(client, definitions=FolderDefinitions(folder),
                        sources={'transmission-runs': Source(transmission_runs, fills=('run',))})
-label = manager.create('transmission', title='Transmissions', source='transmission-runs',
-                       rows=manager.rows_of('transmission-runs'))
+label = manager.create('transmission', title='Transmissions', source='transmission-runs')
 manager.follow(label)
 manager.step()        # called by a timer of the application
 ```

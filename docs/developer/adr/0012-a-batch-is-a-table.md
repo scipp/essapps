@@ -8,7 +8,7 @@
 
 *Batch*, *label*, *header*, *scope*, *source*, *definitions* are the words of [ADR 0011](0011-a-person-makes-the-batches-of-a-workspace.md).
 *Template*, *blank* and *fill* are those of `ess.apps.Template`: a spec, some values, and blanks that each use fills.
-*Row*, *key*, *cell*, *scan*, *result* are those of [batch.md, "Terms"](../../../packages/essapps/docs/batch.md#terms).
+*Row*, *key*, *cell*, *result* are those of [batch.md, "Terms"](../../../packages/essapps/docs/batch.md#terms); *scan* is that of [ADR 0011](0011-a-person-makes-the-batches-of-a-workspace.md#the-scope-picks-rows-never-files).
 
 Today the rows of a batch are stored nowhere. They are computed at each scan, and only what a person set on top is kept:
 
