@@ -662,7 +662,8 @@ function rangeChosen() {
 }
 
 // Follow ticked: the range has no last row, since Follow adds every row that
-// arrives later; nor has a range of no row now. "to" is then open, disabled,
+// arrives later; nor has a range of no row now. The manager refuses either
+// (`Range`, `BatchManager.create`); the form says so. "to" is then open, disabled,
 // and says so. Whether "to" was set and is open now, so that the rows are to
 // be marked again.
 function chooseFollow() {

@@ -79,7 +79,7 @@ from .definition import (
     template_of,
 )
 from .reduction import Batch
-from .source import Source, filled, rows_of
+from .source import Range, Source, filled, rows_of
 from .table import frame_of, typed
 
 
@@ -239,10 +239,9 @@ class BatchManager:
         The table that the source registered as ``source`` makes now, with a
         column ``waits``, whether the row waits, and a column ``taken``,
         whether :meth:`create` takes it with ``choose``, such as
-        ``lambda arrived: between(arrived, '60339', None)``
-        (:func:`~.source.between`); every row that does not wait if not
-        given. Raises ``ValueError`` if no source is registered so, and what
-        ``choose`` raises.
+        ``Range(first='60339')`` (:class:`~.source.Range`); every row that
+        does not wait if not given. Raises ``ValueError`` if no source is
+        registered so, and what ``choose`` raises.
         """
         found = self._source(source)
         given = self._given(found, found.fills)
@@ -258,6 +257,7 @@ class BatchManager:
         rows: pd.DataFrame | None = None,
         source: str | None = None,
         choose: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
+        columns: Collection[str] = (),
         description: str = '',
         settings: Mapping[str, Any] | None = None,
         label: str | None = None,
@@ -309,8 +309,14 @@ class BatchManager:
         choose:
             Makes the table of the batch from the rows of the source that are
             filled: some of its rows, with any columns, such as
-            ``lambda given: given[given.run >= 60339].assign(thickness=pd.NA)``.
-            All of them, as they are, if not given.
+            ``lambda given: given[given.run >= 60339].assign(thickness=pd.NA)``,
+            or a range of them as a person picks it, such as
+            ``Range(first='60339')`` (:class:`~.source.Range`). All of them,
+            as they are, if not given.
+        columns:
+            Parameters that are columns of the batch, of empty cells, besides
+            those of ``rows`` or of the table from the source; a column that
+            these have keeps its cells.
         description:
             What a person says of the batch.
         settings:
@@ -325,7 +331,8 @@ class BatchManager:
             Whether the batch follows its source from the time it is made, in
             place of the batch that followed before. A batch made without
             ``follow`` never follows. Only a batch made from a source can
-            follow.
+            follow, and it has no last row: ``choose`` is no
+            :class:`~.source.Range` with a ``last``.
 
         Raises
         ------
@@ -334,7 +341,8 @@ class BatchManager:
             digits, ``_``, ``.`` and ``-``, starting with none of the last
             two, or has definitions or records; if
             ``rows`` and ``source`` are both given, or ``choose`` without
-            ``source``, or ``follow`` without ``source``; if no source
+            ``source``, or ``follow`` without ``source`` or with a ``last``
+            of a :class:`~.source.Range`; if no source
             ``source`` is registered; if ``choose``
             gives a row that the source did not; if the workspace
             binds no spec ``spec``; or if the rows are refused, as ``put``
@@ -346,6 +354,11 @@ class BatchManager:
             raise ValueError('choose picks rows of a source, and none is given')
         if follow and source is None:
             raise ValueError('a batch follows its source, and none is given')
+        if follow and isinstance(choose, Range) and choose.last is not None:
+            raise ValueError(
+                'a batch that follows takes every row that arrives later, '
+                'so it has no last row'
+            )
         if label is None:
             stamp = time.strftime('%Y%m%d-%H%M%S')
             label, n = stamp, 1
@@ -370,8 +383,10 @@ class BatchManager:
             _check_chosen(rows, arrived)
             made = FromSource(source, frozenset(arrived.index), found.fills)
             fills = found.fills
+        table = pd.DataFrame() if rows is None else rows
+        empty = [c for c in columns if c not in table.columns]
         # Refused here, before anything is written.
-        table = typed(pd.DataFrame() if rows is None else rows, bound.params)
+        table = typed(table.assign(**dict.fromkeys(empty)), bound.params)
         batch = self._kept(label, bound, {}, None, fills)
         written = list(_parts(label))  # what to delete if a write is refused
         try:

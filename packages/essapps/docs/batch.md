@@ -207,7 +207,8 @@ label = manager.create('loki-iofq', title='Evening', source='sample-runs',
 No row moves between batches.
 `afternoon` keeps its rows, also those from 60400 on that it added before, until a person removes them.
 A batch that follows has no last row: the rows filled between a last row and the making would never be added.
-For a batch of only the rows that arrive from now on, `choose` takes none: `choose=lambda given: given.iloc[:0]`.
+`create` refuses `follow=True` with a `Range` that has a `last` (see [The batches of a workspace](#the-batches-of-a-workspace)).
+For a batch of only the rows that arrive from now on, `choose` takes none: `choose=Range(later=True)`.
 Every row filled now is then considered, and none is reduced again.
 
 ## Writing a source
@@ -446,16 +447,20 @@ table = arrived if choose is None else choose(arrived)
 considered = arrived.index               # the rows taken and those left out
 ```
 
-A range of the rows that arrived, as a person picks it, is `between`, open at an end not given:
+A range of the rows that arrived, as a person picks it, is a `Range`, open at an end not given:
 
 ```python
 manager.create('loki-iofq', title='Afternoon', source='sample-runs',
-               choose=lambda given: between(given, '60339', None))
-manager.marked('sample-runs', lambda given: between(given, '60339', None))
+               choose=Range(first='60339'), columns=['thickness'])
+manager.marked('sample-runs', Range(first='60339'))
                                          # rows_of, with columns waits and taken
+manager.create(..., choose=Range(later=True), follow=True)
+                                         # no row now: Follow adds the rows that arrive later
 ```
 
-`between` refuses an end that is not a key of the rows that arrived (a row that waits is not one), and a first row after the last.
+`Range` refuses an end that is not a key of the rows that arrived (a row that waits is not one), a first row after the last, and an end with `later=True`.
+`create` refuses a `Range` with a `last` and `follow=True`.
+`columns` are parameters that are columns of empty cells, besides those of the table.
 
 - `create` refuses a label that has definitions or records, a spec that the workspace does not bind, and rows that `put` refuses.
 - With `source=`, `create` keeps `Source.fills` with the batch in `source.json` (`batch.fills`), refuses a table from `choose` without one of their columns, and leaves out the settings there (`batch.settable`). Every other setting stays, at a column too.
@@ -622,7 +627,7 @@ Each action of the page is one call of the batch layer:
 | an edit of cells, **+ Add row**, **Remove selected**, **Load table** | `batch.put(table)` |
 | **Apply** | `batch.settings = settings` |
 | **Reduce** and its ways | `batch.reduce(keys)` |
-| **+ New batch** | `manager.create(...)`, with `choose=lambda given: between(given, first, last)` for a range |
+| **+ New batch** | `manager.create(..., choose=Range(first, last, later), columns=...)` |
 | the range's marks | `manager.marked(source, choose)` |
 | **+ Add rows from the runs** | `manager.offered(label)`, then `manager.take(label, keys)` |
 | "Make this a column" | `batch.make_column(name)` |

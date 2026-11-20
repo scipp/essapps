@@ -158,11 +158,11 @@ The page remembers in the session of the browser, so that a reload or a return t
 |---|---|
 | Title, Description | the header of the batch; the title is required |
 | Rows | from a source that the application registers (`BatchManager(sources=...)`), from a table file, or "none: no rows" |
-| Range | with a source: the first and the last row to take, each open if not chosen, among the rows that the source has filled now (`source.between`); or, as the last choice of "From", no row now (`later`): the batch gets only the rows added later, by Follow if ticked, else with **+ Add rows from the runs**; the table below lists every row the source makes, marked by the server as taken, left out, or waiting (`GET api/sources/rows?name=...&first=...&last=...&later=...`) |
+| Range | with a source: the first and the last row to take, each open if not chosen, among the rows that the source has filled now (`Range`); or, as the last choice of "From", no row now (`later`): the batch gets only the rows added later, by Follow if ticked, else with **+ Add rows from the runs**; the table below lists every row the source makes, marked by the server as taken, left out, or waiting (`GET api/sources/rows?name=...&first=...&last=...&later=...`) |
 | Table file | from a table file: a `.csv`, `.tsv` or `.xlsx` file with a column `key` (`table.read_table`) |
 | Workflow | a spec that the workspace binds and that has a parameter for each column that the source fills; any spec without a source |
 | Settings | on the page of a batch: start with the settings of that batch, else with those that the application gives; a setting at a column ticked stays, and each row whose cell is empty takes it, also a row that Follow adds; a column that the source fills gets no setting |
-| Follow | with a source: add the rows that arrive later, and reduce them; off unless ticked. While ticked, the end of the range is open and cannot be chosen, since a last row would leave out the rows filled between it and the making for good; the server refuses a last row with Follow. Beside it, how many rows taken are reduced at once, and the batch that follows now, which stops following if ticked |
+| Follow | with a source: add the rows that arrive later, and reduce them; off unless ticked. While ticked, the end of the range is open and cannot be chosen, since a last row would leave out the rows filled between it and the making for good; the manager refuses a last row with Follow (`BatchManager.create`). Beside it, how many rows taken are reduced at once, and the batch that follows now, which stops following if ticked |
 | Columns | the columns that the source fills, fixed; the other parameters of the spec whose cell the page edits, to tick (a group of fields, such as a Q binning, stays a setting); none for a table file, whose columns are those of the file |
 
 **Make** sends the form to `POST api/batches`, or the file to `POST api/batches/table`, and the page shows the new batch in the Rows view.
@@ -175,8 +175,8 @@ In code:
 ```python
 settings = manager.batch(other).settings                        # thickness among them
 label = manager.create(spec, title=title, source=source,
-                       choose=lambda given: between(given, first, last)
-                           .assign(thickness=None),             # ticked: an empty column
+                       choose=Range(first, last, later),
+                       columns=['thickness'],                   # ticked: an empty column
                        settings=settings,                       # less those of source.fills
                        follow=follow)                           # Follow ticked
 ```

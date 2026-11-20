@@ -59,7 +59,6 @@ from contextlib import suppress
 from dataclasses import replace
 from typing import Any
 
-import pandas as pd
 from pydantic import BaseModel
 
 from ess.spec import File, FileRef, WorkflowSpec
@@ -71,7 +70,7 @@ from ...listing import Listing
 from ..auto import Step
 from ..corrections import CorrectedFiles
 from ..manager import BatchManager, fits
-from ..source import Source, between
+from ..source import Range, Source
 from ..state import RowState, not_reduced
 from ..table import read_table
 from . import forms
@@ -521,14 +520,14 @@ class Pages:
         """
         The table that the source registered as ``source`` makes now, each
         row marked as taken, left out, or waiting, for a new batch of the
-        rows that :func:`taken` gives
+        :class:`~ess.apps.batch.Range` of ``first``, ``last`` and ``later``
         (:meth:`~ess.apps.batch.BatchManager.marked`). Raises
         :class:`~.refusals.Problem` if no source is registered so, with what the
         source raises, or if the range is refused.
         """
         with self.lock:
             try:
-                given = self.manager.marked(source, taken(first, last, later))
+                given = self.manager.marked(source, Range(first, last, later))
             except Exception as error:  # a source is code of the application
                 said = why(error)
                 raise Problem(f'{said[:1].upper()}{said[1:]}.') from None
@@ -538,14 +537,15 @@ class Pages:
         """
         Make the batch of ``new`` with the manager, in one call
         (:meth:`~ess.apps.batch.BatchManager.create`), so that it is made as
-        asked or not at all: with a source, of the rows that :func:`taken`
-        gives of those that the source has filled now, with an empty column
-        for each other of ``new.columns``; with a table ``file``, its name
-        and content, of its table (:func:`~ess.apps.batch.table.read_table`);
-        else of a table of ``new.columns`` without rows. With ``new.follow``,
-        the batch follows from then on, in place of the batch that followed
-        before, and the timer steps it; it has no last row, since Follow adds
-        every row that arrives later.
+        asked or not at all: with a source, of the rows of the
+        :class:`~ess.apps.batch.Range` of ``new.first``, ``new.last`` and
+        ``new.later`` of those that the source has filled now, with an empty
+        column for each other of ``new.columns``; with a table ``file``, its
+        name and content, of its table
+        (:func:`~ess.apps.batch.table.read_table`); else of a table of
+        ``new.columns`` without rows. With ``new.follow``, the batch follows
+        from then on, in place of the batch that followed before, and the
+        timer steps it. The batch layer decides which ranges it takes.
 
         It starts with the settings of the batch ``new.settings_from``, else
         with those that the application gives its spec. A setting at a column
@@ -568,21 +568,7 @@ class Pages:
                     if new.settings_from is None
                     else manager.batch(new.settings_from).settings
                 )
-                if new.follow and new.last is not None:
-                    raise ValueError(
-                        'a batch that follows takes every row that arrives '
-                        'later, so it has no last row'
-                    )
-
-                def completed(table: pd.DataFrame) -> pd.DataFrame:
-                    """
-                    ``table`` with an empty column for each of ``new.columns``
-                    it lacks: a column that the source fills keeps its cells.
-                    """
-                    empty = [c for c in new.columns if c not in table.columns]
-                    return table.assign(**dict.fromkeys(empty))
-
-                rows = choose = None
+                rows = choose = source = None
                 if file is not None:
                     name, content = file
                     params = manager.client.spec_named(new.spec).params
@@ -590,21 +576,17 @@ class Pages:
                         rows = read_file(name, content, lambda p: read_table(p, params))
                     except ValueError as error:
                         raise ValueError(f'{name}: {error}') from None
-                elif new.source is None:
-                    rows = completed(pd.DataFrame())
-                else:
-                    chosen = taken(new.first, new.last, new.later)
-
-                    def choose(arrived: pd.DataFrame) -> pd.DataFrame:
-                        return completed(chosen(arrived))
-
+                elif new.source is not None:
+                    source = new.source
+                    choose = Range(new.first, new.last, new.later)
                 label = manager.create(
                     new.spec,
                     title=new.title,
                     description=new.description,
                     rows=rows,
-                    source=None if rows is not None else new.source,
+                    source=source,
                     choose=choose,
+                    columns=new.columns,
                     settings=settings,
                     follow=new.follow,
                 )
@@ -660,22 +642,6 @@ class Pages:
                 rows[label] = dict(Counter(s.text for s in states.values()))
                 files[label] = sorted(ref.file for ref in named)
             return BatchCounts(rows=rows, files=files, failed=failed)
-
-
-def taken(
-    first: str | None, last: str | None, later: bool
-) -> Callable[[pd.DataFrame], pd.DataFrame]:
-    """
-    Which rows a new batch takes of those that its source has filled now: the
-    rows from ``first`` to ``last`` (:func:`~ess.apps.batch.source.between`),
-    or, if ``later``, none, so that it gets only the rows added later, by
-    Follow or by a person. Raises ``ValueError`` for ``later`` with an end.
-    """
-    if not later:
-        return lambda arrived: between(arrived, first, last)
-    if first is not None or last is not None:
-        raise ValueError('a batch of the rows that arrive later has no first or last')
-    return lambda arrived: arrived.iloc[:0]
 
 
 def _spec_choice(

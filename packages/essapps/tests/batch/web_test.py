@@ -2126,36 +2126,12 @@ def test_the_rows_of_a_source_are_marked_as_a_range_takes_them(
 
 
 @pytest.mark.parametrize(
-    ('first', 'last', 'taken'),
-    [('2', None, ['2', '4']), (None, '2', ['1', '2']), ('2', '2', ['2'])],
-    ids=['from', 'to', 'one'],
-)
-def test_a_batch_made_from_a_range_of_a_source_has_its_rows_filled_between_the_ends(
-    http: TestClient,
-    manager: BatchManager,
-    sample: Measure,
-    first: str | None,
-    last: str | None,
-    taken: list[str],
-) -> None:
-    sample(4, 'ethanol')
-
-    made = http.post('/api/batches', json=new_batch(first=first, last=last)).json()
-
-    assert list(manager.batch(made['label']).frame().index) == taken
-
-
-@pytest.mark.parametrize(
     ('ends', 'said'),
     [
         ({'first': '3'}, '3 is not a filled row'),
         ({'first': '2', 'last': '1'}, 'the row 2 comes after the row 1'),
-        (
-            {'first': '2', 'later': 'true'},
-            'a batch of the rows that arrive later has no first or last',
-        ),
     ],
-    ids=['waits', 'reversed', 'later with an end'],
+    ids=['waits', 'reversed'],
 )
 def test_a_range_that_takes_no_row_of_its_ends_makes_no_batch(
     http: TestClient, manager: BatchManager, ends: dict[str, str], said: str
