@@ -20,10 +20,8 @@ from ess.apps.batch.table import (
     data_of,
     dtypes,
     frame_of,
-    read_cell,
     read_table,
     typed,
-    write_cell,
     write_table,
 )
 from ess.spec import FileRef, OutputRef, Referenced, RunFile
@@ -495,14 +493,23 @@ def test_a_table_file_of_an_unknown_suffix_is_refused(
     ],
 )
 def test_a_cell_of_plain_data_is_read_as_json_if_it_is_json_and_else_as_text(
-    text: str, value: Any
+    tmp_path: Path, text: str, value: Any
 ) -> None:
-    assert read_cell(text) == value
+    path = tmp_path / 'table.csv'
+    pd.DataFrame({KEY: ['a'], 'o': [text]}).to_csv(path, index=False)
+
+    assert read_table(path, Filed)['o'].tolist() == [value]
 
 
 @pytest.mark.parametrize(
     'value',
     ['1', 'null', 'water', {'x': [1, 2]}, None, 2.5, True, [1, 2], [{'x': None}]],
 )
-def test_a_cell_of_plain_data_written_is_read_back(value: Any) -> None:
-    assert read_cell(write_cell(value)) == value
+def test_a_cell_of_plain_data_written_is_read_back(tmp_path: Path, value: Any) -> None:
+    path = tmp_path / 'table.csv'
+    key = pd.Index(['a'], name=KEY, dtype='string')
+    frame = pd.DataFrame({'o': pd.Series([value], index=key, dtype=object)})
+
+    write_table(typed(frame, Filed), path)
+
+    assert read_table(path, Filed)['o'].tolist() == [value]

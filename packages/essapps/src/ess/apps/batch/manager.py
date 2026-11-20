@@ -30,10 +30,9 @@ The manager writes one more table, ``following``: the label of the batch that
 follows, or none. :meth:`BatchManager.step` is one step of Follow on it::
 
     made = source_of(label)                                  # source.json
-    loop = Automatic(batch(label), sources[made.source], considered=made.considered)
-    loop.step()                                              # put, then reduce
-    source.json = FromSource(made.source, loop.considered)   # after the table,
-                                                             # also if it raised
+    done = step(batch(label), sources[made.source], made.considered)  # put, reduce
+    source.json = FromSource(made.source, done.considered)   # after the table;
+    # if the step raised: made.considered | the keys of the table
 
 Whoever serves owns the timer that calls it, and the lock. The manager has
 neither.
@@ -52,7 +51,8 @@ import pandas as pd
 from ess.spec import WorkflowSpec
 
 from ..client import Client
-from .auto import Automatic, SourceError, added
+from . import auto
+from .auto import SourceError, Step, added
 from .definition import (
     FOLLOWING,
     DefinitionStore,
@@ -87,7 +87,7 @@ def fits(spec: WorkflowSpec[Any, Any], source: Source | None) -> bool:
     return set(fills) <= spec.params.model_fields.keys()
 
 
-def check_label(label: str) -> None:
+def _check_label(label: str) -> None:
     """
     Raise ``ValueError`` unless ``label`` is letters, digits, ``_``, ``.``
     and ``-``, and starts with none of the last two, so that it is one
@@ -268,8 +268,9 @@ class BatchManager:
         Raises
         ------
         ValueError
-            If ``title`` is empty or only spaces; if ``label`` is not one that
-            :func:`check_label` takes, or has definitions or records; if
+            If ``title`` is empty or only spaces; if ``label`` is not letters,
+            digits, ``_``, ``.`` and ``-``, starting with none of the last
+            two, or has definitions or records; if
             ``rows`` and ``source`` are both given, or ``choose`` without
             ``source``; if no source ``source`` is registered; if ``choose``
             gives a row or a column that the source did not; if the workspace
@@ -287,7 +288,7 @@ class BatchManager:
                 n += 1
                 label = f'{stamp}-{n}'
         else:
-            check_label(label)
+            _check_label(label)
             if self._taken(label):
                 raise ValueError(f'{label}: the label has definitions or records')
         header = Header(title, description)
@@ -423,9 +424,9 @@ class BatchManager:
 
     def change(
         self, label: str, *, title: str | None = None, description: str | None = None
-    ) -> Header:
+    ) -> None:
         """
-        The header of ``label`` with what is given changed, as kept. Raises
+        Change what is given of the header of ``label``, and keep it. Raises
         ``KeyError`` if no batch has the label, and ``ValueError`` for an
         empty title.
         """
@@ -436,19 +437,18 @@ class BatchManager:
         )
         self._definitions.save(header_key(label), header_data(header))
         self._headers[label] = header
-        return header
 
-    def step(self) -> Automatic | None:
+    def step(self) -> Step | None:
         """
         One step of Follow on the batch that follows, ``None`` if none does:
         add the rows of its source that are new and filled, reduce the rows
-        that are ready and have no result (:meth:`~.auto.Automatic.step`),
-        then keep the keys considered. The step is returned, to read what it
-        refused and which rows wait.
+        that are ready and have no result (:func:`~.auto.step`), then keep the
+        keys considered. The step is returned, to read what it refused and
+        which rows wait.
 
-        The keys considered are kept also if the step raises, such as when a
-        submission is cut off, after the rows were added: otherwise a row a
-        person removes would come back.
+        If the step raises, such as when a submission is cut off after the
+        rows were added, the keys of the table are kept as considered:
+        otherwise a row that it added and a person removes would come back.
 
         Raises ``ValueError`` if the source of the batch is not registered,
         if the source raises ``ValueError``, or if the batch refuses a row
@@ -459,19 +459,18 @@ class BatchManager:
         if (label := self._following) is None:
             return None
         made = self._made(label)
-        loop = Automatic(
-            self.batch(label), self._source(made.source), considered=made.considered
-        )
+        batch = self.batch(label)
         try:
-            loop.step()
-        except BaseException as error:
+            done = auto.step(batch, self._source(made.source), made.considered)
+        except SourceError as error:  # a defect of the code of the source
+            raise ValueError(f'the source {made.source}: {error}') from error
+        except BaseException:
             with suppress(NotKept):  # the exception of the step is what to say
-                self._consider(label, made, loop.considered)
-            if isinstance(error, SourceError):  # a defect of the code of the source
-                raise ValueError(f'the source {made.source}: {error}') from error
+                kept = made.considered | set(batch.frame().index)
+                self._consider(label, made, kept)
             raise
-        self._consider(label, made, loop.considered)
-        return loop
+        self._consider(label, made, done.considered)
+        return done
 
     def offered(self, label: str) -> pd.DataFrame:
         """

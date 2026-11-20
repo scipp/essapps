@@ -39,7 +39,7 @@ from ess.apps.batch.definition import (
     source_of,
 )
 from ess.apps.batch.table import KEY, frame_of
-from ess.apps.batch.text import load_template
+from ess.apps.batch.templates import load_template
 from ess.apps.folder import folder_files, open_folder
 from ess.spec import Binding
 

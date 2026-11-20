@@ -47,15 +47,15 @@ from pydantic import BaseModel
 
 from ess.spec import FileRef, WorkflowSpec
 
-from ...errors import SubmitError
 from ...fields import UNSET, Fields
 from ...files import Selector
 from ...listing import Listing
+from ..auto import Step
 from ..corrections import CorrectedFiles
 from ..definition import NotKept
 from ..manager import BatchManager, fits
 from ..source import Source
-from ..state import RowState, refused_again
+from ..state import RowState, not_reduced
 from . import forms
 from .models import (
     BatchCounts,
@@ -117,14 +117,12 @@ class Pages:
         asks for them again.
     failure:
         What the last step of Follow raised, ``None`` if it raised nothing.
-    refused:
+    last:
         The label of the batch that the last step of Follow that did not
-        raise was on, and why it refused rows, by key
-        (:attr:`~ess.apps.batch.auto.Automatic.refused`); said only while
-        that batch follows, and emptied when its page applies settings.
-    waiting:
-        How many rows of the source the same step did not add, since they are
-        not filled yet (:attr:`~ess.apps.batch.auto.Automatic.waiting`).
+        raise was on, and the step (:class:`~ess.apps.batch.auto.Step`), with
+        why it refused rows and which rows of the source wait; ``None``
+        before the first. What it refused is said only while that batch
+        follows, and emptied when its page applies settings.
     """
 
     def __init__(
@@ -153,8 +151,7 @@ class Pages:
         # listed again for each.
         self._listing: Listing | None = None
         self.failure: str | None = None
-        self.refused: tuple[str | None, dict[str, str]] = (None, {})
-        self.waiting = 0
+        self.last: tuple[str, Step] | None = None
         self._pages: dict[str, Page] = {}
 
     def page(self, label: str) -> Page:
@@ -204,10 +201,9 @@ class Pages:
             if (label := self.manager.following) is None:
                 return
             try:
-                if (loop := self.manager.step()) is None:
+                if (done := self.manager.step()) is None:
                     return
-                self.refused = (label, loop.refused)
-                self.waiting = len(loop.waiting)
+                self.last = (label, done)
                 self.failure = None
             except Exception as error:  # the next step tries again
                 self.failure = f'Follow could not step: {str(error) or repr(error)}'
@@ -335,14 +331,16 @@ class Pages:
         Why Follow could not submit each row of ``states`` that its next step
         would try again, by key; none unless the batch of ``label`` follows.
         """
-        of, refused = self.refused
-        if self.manager.following != label or of != label:
+        if self.last is None or self.manager.following != label:
             return {}
-        reasons = {
-            key: f'Follow could not reduce it: {forms.message(reason)}'
-            for key, reason in refused.items()
+        of, done = self.last
+        if of != label:
+            return {}
+        return {
+            key: f'Follow could not reduce it: {forms.message(done.refused[key])}'
+            for key in not_reduced(states)
+            if key in done.refused
         }
-        return refused_again(states, reasons)
 
     def batches(self) -> Batches:
         """The batches, as the Batches view of each page lists them."""
@@ -453,8 +451,8 @@ class Pages:
         while it counts.
 
         The state of each batch is read as its page reads it, without asking
-        its source; while the settings of a batch are refused, its rows are
-        as :meth:`~ess.apps.batch.Batch.results` gives them. A batch that
+        its source, and not compared while its settings are refused
+        (:meth:`~ess.apps.batch.Batch.shown`). A batch that
         cannot be made, such as one whose table cannot be read, has its
         reason in ``failed``.
         """
@@ -465,15 +463,12 @@ class Pages:
             for label in manager.headers():
                 try:
                     batch = manager.batch(label)
-                    try:
-                        states = batch.state()
-                    except SubmitError:
-                        states = batch.results()
+                    states, _ = batch.shown()
                 except (ValueError, OSError) as error:
                     failed[label] = why(error)
                     continue
                 refused = self.refusals(label, states)
-                statuses = page_statuses(states, batch.columns, refused)
+                statuses = page_statuses(states, refused)
                 rows[label] = dict(Counter(statuses.values()))
             return BatchCounts(rows=rows, failed=failed)
 

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""A batch run as a command: a table reduced, and the table of files."""
+"""A batch run as a command: a table reduced."""
 
 from pathlib import Path
 
@@ -12,7 +12,6 @@ from ess.apps import Client, SubmitError, Template, file
 from ess.apps.batch import Batch
 from ess.apps.batch.frames import (
     RESULT,
-    described,
     reduce_batch,
     reduce_table,
     with_results,
@@ -51,7 +50,7 @@ def test_a_table_with_results_has_what_came_of_each_row(
     table = with_results(client, batch.state(), batch.frame())
 
     assert list(table.columns) == ['run', 'name', *toys.COLUMNS, *RESULT]
-    assert list(table['status']) == ['completed', 'not reduced']
+    assert list(table['status']) == ['done', 'ready']
     assert table.loc['2', 'record'] == ''
 
 
@@ -65,7 +64,7 @@ def test_reduce_batch_reduces_the_rows_of_keys_and_returns_them_in_order(
     table = reduce_batch(batch, ['3', '1'])
 
     assert list(table.index) == ['3', '1']
-    assert list(table['status']) == ['completed', 'completed']
+    assert list(table['status']) == ['done', 'done']
     assert batch.state(['2'])['2'].record is None
 
 
@@ -78,7 +77,7 @@ def test_each_row_completes_as_a_record_labelled_and_keyed_by_the_row(
     result = reduce_table(folder_client, template, table, label='scan')
 
     records = folder_client.records(label='scan')
-    assert list(result['status']) == ['completed', 'completed']
+    assert list(result['status']) == ['done', 'done']
     assert list(result['record']) == [
         {r.member: r.id for r in records}[k] for k in 'ab'
     ]
@@ -108,7 +107,7 @@ def test_a_row_that_fails_says_why_and_the_other_rows_complete(
 
     result = reduce_table(folder_client, template, table, label='scan')
 
-    assert list(result['status']) == ['completed', 'failed']
+    assert list(result['status']) == ['done', 'failed']
     assert 'refused' in result.loc['b', 'failure']
     assert result.loc['a', 'failure'] == ''
 
@@ -218,7 +217,7 @@ def test_rows_staged_run_through_a_stage(
 
     result = reduce_table(folder_client, template, table, label='scan', staged=True)
 
-    assert list(result['status']) == ['completed', 'completed']
+    assert list(result['status']) == ['done', 'done']
     assert folder_staged.staged != []
 
 
@@ -258,81 +257,6 @@ def test_rows_pending_after_a_restart_finish_and_are_not_submitted_again(
             second, template, done, label='scan', persist=True, remaining=True
         )
 
-        assert list(result['status']) == ['completed', 'completed']
+        assert list(result['status']) == ['done', 'done']
         assert list(result['record']) == list(done['record'])
         assert len(second.records(label='scan')) == 2
-
-
-# The table of files
-
-
-@pytest.fixture
-def scanned() -> pd.DataFrame:
-    """The table of a scan: two runs with a title, and a file that is no run."""
-    return pd.DataFrame(
-        {
-            'file': ['1.nxs', '2.nxs', 'beam.h5'],
-            'run': ['1', '2', ''],
-            'title': ['one', 'two', ''],
-        }
-    )
-
-
-def test_a_file_gets_what_the_run_table_says_of_its_run(scanned: pd.DataFrame) -> None:
-    run_table = pd.DataFrame({'run': [2, 1], 'role': ['transmission', 'sample']})
-
-    files = described(scanned, run_table)
-
-    assert list(files.columns) == ['file', 'run', 'title', 'role']
-    assert list(files['role']) == ['sample', 'transmission', '']
-
-
-def test_a_run_of_the_run_table_without_a_file_is_ignored(
-    scanned: pd.DataFrame,
-) -> None:
-    run_table = pd.DataFrame({'run': ['1', '7'], 'role': ['sample', 'sample']})
-
-    files = described(scanned, run_table)
-
-    assert list(files['file']) == ['1.nxs', '2.nxs', 'beam.h5']
-    assert list(files['role']) == ['sample', '', '']
-
-
-def test_a_row_of_the_run_table_without_a_run_describes_the_file_it_names(
-    scanned: pd.DataFrame,
-) -> None:
-    run_table = pd.DataFrame(
-        {'run': ['1', ''], 'file': ['', 'beam.h5'], 'role': ['sample', 'direct_beam']}
-    )
-
-    files = described(scanned, run_table)
-
-    assert list(files['role']) == ['sample', '', 'direct_beam']
-
-
-def test_a_cell_of_the_run_table_replaces_what_the_file_says_unless_it_is_empty(
-    scanned: pd.DataFrame,
-) -> None:
-    run_table = pd.DataFrame({'run': ['1', '2'], 'title': ['water', '']})
-
-    files = described(scanned, run_table)
-
-    assert list(files['title']) == ['water', 'two', '']
-
-
-def test_two_rows_of_the_run_table_for_one_run_are_refused(
-    scanned: pd.DataFrame,
-) -> None:
-    run_table = pd.DataFrame({'run': ['1', 1], 'role': ['sample', 'background']})
-
-    with pytest.raises(
-        ValueError, match='two rows of the run table describe the run 1'
-    ):
-        described(scanned, run_table)
-
-
-def test_a_row_of_the_run_table_that_names_neither_run_nor_file_is_refused(
-    scanned: pd.DataFrame,
-) -> None:
-    with pytest.raises(ValueError, match='neither a run nor a file'):
-        described(scanned, pd.DataFrame({'run': [''], 'role': ['sample']}))

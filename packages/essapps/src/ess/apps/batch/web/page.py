@@ -57,12 +57,12 @@ to tell the person; a refusal of the batch layer (``ValueError``) is said as
 it is, so the page copies no rule. A ``Page`` serves one batch to one person,
 and takes one request at a time, under the lock of all pages.
 
-Statuses are named in a scientist's words: a row that is ``not reduced`` is
-``ready``, a ``pending`` one ``running``, and a ``completed`` one ``done``;
-``incomplete`` and ``outdated`` keep their names. A change of settings applies
-to rows not reduced yet: a done row whose result differs from its request only
-at settings (:func:`~ess.apps.batch.earlier_settings`) stays ``done``, marked
-as reduced with earlier settings, and "Reduce" leaves it
+Statuses are named in a scientist's words (:attr:`RowState.text
+<ess.apps.batch.RowState.text>`): ``ready``, ``running``, ``done``,
+``outdated``, ``failed``, ``cancelled`` and ``incomplete``. A change of
+settings applies to rows not reduced yet: a done row whose result differs from
+its request only at settings (:func:`~ess.apps.batch.earlier_settings`) stays
+``done``, marked as reduced with earlier settings, and "Reduce" leaves it
 (:func:`~ess.apps.batch.left_to_reduce`) until a person reduces it with the
 settings now. A failed or cancelled row stays so when the settings change,
 since it needs reducing either way. The rows read as with the batch's
@@ -110,7 +110,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -129,15 +129,14 @@ from ..definition import NotKept
 from ..export import export_table
 from ..reduction import Batch
 from ..state import (
-    EARLIER,
     RowState,
     earlier_settings,
     left_to_reduce,
     ready,
-    status_texts,
+    to_reduce,
 )
-from ..table import KEY, as_request, cell_of, data_of, read_table, write_table
-from ..text import checked_settings, load_template, write_template
+from ..table import KEY, cell_of, data_of, read_table, write_table
+from ..templates import checked_settings, load_template, write_template
 from . import forms, plots
 from .models import (
     Action,
@@ -177,12 +176,6 @@ type Draw = Callable[[Sequence[Shown]], dict[str, Any]]
 NAME = 'name'
 """The note that names a row on the page; a row without one is named by its key."""
 
-_STATUS = {
-    'not reduced': 'ready',
-    'pending': 'running',
-    'completed': 'done',
-    f'completed, {EARLIER}': 'done',
-}
 _ORDER = ('ready', 'running', 'done', 'outdated', 'failed', 'cancelled', 'incomplete')
 _ENDED = (Status.FAILED, Status.CANCELLED)
 _DRAWN = 12
@@ -190,19 +183,16 @@ _DRAWN = 12
 
 
 def page_statuses(
-    states: Mapping[str, RowState],
-    columns: Collection[str],
-    refused: Collection[str] = (),
+    states: Mapping[str, RowState], refused: Collection[str] = ()
 ) -> dict[str, str]:
     """
     The status of each row in the words of the page (see the module), by key:
-    that of :func:`~ess.apps.batch.status_texts`, but ``incomplete`` for a row
-    of ``refused``, which Follow could not submit, and ``done`` for a row of
-    earlier settings. The page and the counts of the batches both use it.
+    its :attr:`~ess.apps.batch.RowState.text`, but ``incomplete`` for a row
+    of ``refused``, which Follow could not submit. The page and the counts of
+    the batches both use it.
     """
     return {
-        key: 'incomplete' if key in refused else _STATUS.get(text, text)
-        for key, text in status_texts(states, columns).items()
+        key: 'incomplete' if key in refused else s.text for key, s in states.items()
     }
 
 
@@ -390,8 +380,7 @@ class Page:
             pages.runs_version,
             pages.manager.headers(),
             pages.manager.following,
-            pages.refused,
-            pages.waiting,
+            pages.last,
             pages.failure,
         )
 
@@ -440,13 +429,10 @@ class Page:
     ) -> tuple[dict[str, RowState], tuple[FieldError, ...]]:
         """
         The state of the rows of ``keys``, or of all, with the batch's settings;
-        and, if those are refused, the reasons, and the rows with their results
-        only (:meth:`~ess.apps.batch.Batch.results`).
+        and, if those are refused, the reasons, and the rows not compared
+        (:meth:`~ess.apps.batch.Batch.shown`).
         """
-        try:
-            return self.batch.state(keys), ()
-        except SubmitError as error:
-            return self.batch.results(keys), error.errors
+        return self.batch.shown(keys)
 
     @_locked
     def poll(self, after: int, start: str = '') -> State | None:
@@ -484,18 +470,20 @@ class Page:
         batch = self.batch
         columns = batch.columns
         states, unusable = self._states()
-        # With the settings refused, the rows are not compared with them.
-        earlier = set() if unusable else set(earlier_settings(states, columns))
+        # With the settings refused, the rows are not compared, so none is earlier.
+        earlier = set(earlier_settings(states))
         refused = self.pages.refusals(self.label, states)
-        statuses = page_statuses(states, columns, refused)
+        statuses = page_statuses(states, refused)
         failures = self._failures(states)
         frame = batch.frame()
+        requested = batch.cells()
         named = names(frame, columns)
         notes = [n for n in frame.columns if n not in columns and n != NAME]
         rows = [
             self._row(
                 key,
                 cells,
+                requested[key],
                 named[key],
                 notes,
                 states[key],
@@ -574,12 +562,15 @@ class Page:
     def _follow(self) -> Following:
         manager, pages = self.pages.manager, self.pages
         label, on = manager.following, self._follows()
+        last = pages.last
         return Following(
             on=on,
             other=None if on or label is None else manager.headers()[label].title,
             interval=pages.interval,
             failure=pages.failure if on else None,
-            waiting=pages.waiting if on and pages.refused[0] == self.label else 0,
+            waiting=len(last[1].waiting)
+            if on and last is not None and last[0] == self.label
+            else 0,
         )
 
     def _failures(self, states: Mapping[str, RowState]) -> dict[str, str]:
@@ -616,6 +607,7 @@ class Page:
         self,
         key: str,
         cells: Mapping[str, Any],
+        requested: Mapping[str, Any],
         name: str,
         notes: Sequence[str],
         state: RowState,
@@ -645,10 +637,8 @@ class Page:
             reason = self._outdated(state)
         elif status == 'outdated':
             reason = 'The settings cannot be used, so this result may not match them.'
-        given = as_request(
-            self.batch.spec.params,
-            {c: cells[c] for c in self.batch.columns if cells[c] is not None},
-        )
+        # An empty cell is shown empty, not as the default that a request takes.
+        given = {c: requested[c] for c in requested if cells[c] is not None}
         result = None
         if record is not None and state.status is Status.COMPLETED:
             result = 'outdated' if status == 'outdated' else 'current'
@@ -680,7 +670,7 @@ class Page:
         label: str | None = None,
     ) -> Action:
         """What the button does now, or ``label`` if blocked; how far rows run."""
-        left = [] if blocked else left_to_reduce(states, self.batch.columns)
+        left = [] if blocked else left_to_reduce(states)
         kinds = {statuses[k] for k in left}
         n = len(left)
         if blocked:
@@ -793,16 +783,10 @@ class Page:
         if unapplied := self._unapplied():
             raise Problem(f'Nothing was reduced: {unapplied.lower()}.')
         try:
-            columns = self.batch.columns
-            rules: dict[str, Callable[[Mapping[str, RowState]], list[str]]] = {
-                'remaining': lambda s: left_to_reduce(s, columns),
-                'earlier': lambda s: earlier_settings(s, columns),
-                'all': ready,
-            }
             keys = (
                 request.keys
                 if request.which == 'selected'
-                else rules[request.which](self.batch.state())
+                else to_reduce(self.batch.state(), request.which)
             )
             records = self.batch.reduce(keys)
         except SubmitError as error:
@@ -883,8 +867,8 @@ class Page:
         # A refusal of a setting was a refusal of the settings replaced, and
         # Follow tries every row again with these at its next step.
         self.refused = [e for e in self.refused if e.entry]
-        if self._follows():
-            self.pages.refused = (self.label, {})
+        if self._follows() and (last := self.pages.last) is not None:
+            self.pages.last = (last[0], replace(last[1], refused={}))
         return 'Applied the settings.'
 
     @_action
@@ -969,7 +953,7 @@ class Page:
             if keys
             else None
         )
-        statuses = page_statuses(states, self.batch.columns)
+        statuses = page_statuses(states)
         done = [
             s
             for s in states.values()
@@ -1053,7 +1037,8 @@ class Page:
                     f'{cannot} it is not a settings file saved from this page.'
                 ) from None
         try:
-            self._fill(checked_settings(self.batch, template))
+            batch = self.batch
+            self._fill(checked_settings(batch.client, batch.spec, template))
         except (ValueError, KeyError) as error:
             raise Problem(f'{cannot} {forms.message(why(error))}.') from None
         return f'The form shows the settings of {name}. Apply to use them.'

@@ -13,12 +13,13 @@ their metadata and returns a frame, the form that ``Batch.put`` takes::
     60340   60340  sample A     run:60340   <NA>
 
 The key of each row as index, as text; a column per parameter that it fills,
-each file as its name (``str(f.ref)``); and notes, such as ``run`` and
-``name``. :func:`rows_of` is what a source makes from the files now. A row
-is *filled* (:func:`filled`) once it has a value in each column that the
-source fills; until then it *waits*. A batch is made from the filled rows,
-and Follow adds the rows that are new and filled (:mod:`~.auto`). A batch
-never asks its source again: how its table was made is not part of it.
+each file as its cell (``cell_of(f.ref)``, :func:`~.table.cell_of`); and
+notes, such as ``run`` and ``name``. :func:`rows_of` is what a source makes
+from the files now. A row is *filled* (:func:`filled`) once it has a value
+in each column that the source fills; until then it *waits*. A batch is made
+from the filled rows, and Follow adds the rows that are new and filled
+(:mod:`~.auto`). A batch never asks its source again: how its table was made
+is not part of it.
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ class FileInfo:
     metadata: Mapping[str, Any]
 
 
-def file_infos(client: Client, selector: Selector | None = None) -> list[FileInfo]:
+def _file_infos(client: Client, selector: Selector | None = None) -> list[FileInfo]:
     """The files ``selector`` matches, raw files if not given, with their metadata."""
     refs = client.files.list(Selector() if selector is None else selector)
     return [
@@ -91,7 +92,7 @@ def rows_of(client: Client, source: Source) -> pd.DataFrame:
     Raises ``ValueError`` for a key that is not text, empty, or given twice,
     or a column that a table cannot hold (see :func:`~.table.typed`).
     """
-    frame = source.rows(file_infos(client, source.selector))
+    frame = source.rows(_file_infos(client, source.selector))
     empty = {
         c: pd.Series(pd.NA, index=frame.index, dtype='string')
         for c in source.fills

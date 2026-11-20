@@ -77,7 +77,7 @@ A table file, ``.csv``, ``.tsv`` or ``.xlsx``, is the frame as text
 (:func:`write_table`), with the key as its column ``key``; :func:`read_table`
 reads its parameter columns back equal. A list or a group is JSON text, as is
 a cell of an ``object`` column that would read back as something else
-(:func:`write_cell`)::
+(:func:`_write_cell`)::
 
     key,sample,thickness,binning,name
     60339,run:60339,1.5,"{""bins"": 4}",water
@@ -426,7 +426,7 @@ def frame_of(data: Any) -> pd.DataFrame:
     return pd.DataFrame(columns, index=index, columns=names)
 
 
-RESULT = ('status', 'record', 'failure')
+RESULT = ('status', 'earlier', 'record', 'failure')
 """The columns of what came of each row, which a table file may hold."""
 
 _READERS: dict[str, Callable[..., pd.DataFrame]] = {
@@ -445,7 +445,7 @@ def _reader(path: Path) -> Callable[..., pd.DataFrame]:
     return reader
 
 
-def read_cell(text: str) -> Any:
+def _read_cell(text: str) -> Any:
     """The value of a cell of an ``object`` column: its JSON value, or its text."""
     try:
         return json.loads(text)
@@ -453,9 +453,9 @@ def read_cell(text: str) -> Any:
         return text
 
 
-def write_cell(value: Any) -> str:
-    """The text that :func:`read_cell` reads as ``value``, plain data."""
-    if isinstance(value, str) and read_cell(value) == value:
+def _write_cell(value: Any) -> str:
+    """The text that :func:`_read_cell` reads as ``value``, plain data."""
+    if isinstance(value, str) and _read_cell(value) == value:
         return value
     return to_json(value).decode()
 
@@ -474,7 +474,7 @@ def read_table(path: Path, model: type[BaseModel]) -> pd.DataFrame:
     The table in a file of one of :data:`SUFFIXES`, as :func:`typed` gives it
     for the params model ``model``. The file has a column :data:`KEY`. A column
     of a parameter is read with its dtype, an ``object`` column cell by cell
-    with :func:`read_cell`; the columns of :data:`RESULT` are dropped. Only an
+    with :func:`_read_cell`; the columns of :data:`RESULT` are dropped. Only an
     empty cell is missing.
 
     The type of a note is never guessed from text. A note of a ``.csv`` or
@@ -523,7 +523,7 @@ def _read_table(
     for name, column in frame.items():
         if types.get(name) == 'object':
             frame[name] = pd.Series(
-                [None if pd.isna(v) else read_cell(v) for v in column],
+                [None if pd.isna(v) else _read_cell(v) for v in column],
                 index=frame.index,
                 dtype=object,
             )
@@ -546,7 +546,7 @@ def write_table(frame: pd.DataFrame, out: Path | TextIO) -> None:
     Write ``frame`` as :func:`read_table` reads it back: to a file of one of
     :data:`SUFFIXES`, by its suffix, or as CSV to a stream. A named index,
     such as :data:`KEY`, is the first column, and each cell of an ``object``
-    column is :func:`write_cell` of it.
+    column is :func:`_write_cell` of it.
     """
     suffix = '.csv'
     if isinstance(out, Path):
@@ -556,7 +556,7 @@ def write_table(frame: pd.DataFrame, out: Path | TextIO) -> None:
         frame = frame.reset_index()
     frame = frame.assign(
         **{
-            name: [None if _empty(v) else write_cell(v) for v in column]
+            name: [None if _empty(v) else _write_cell(v) for v in column]
             for name, column in frame.items()
             if column.dtype == object
         }

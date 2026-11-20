@@ -8,7 +8,7 @@ import pytest
 
 from ess.apps import Client, SpecId, Template, file
 from ess.apps.batch import Batch
-from ess.apps.batch.text import checked_settings, with_latest
+from ess.apps.batch.templates import checked_settings, with_latest
 from ess.spec import FileRef
 
 from . import toys
@@ -107,28 +107,32 @@ def test_the_settings_of_a_template_have_latest_read(
     }
     template = Template(toys.STAGED, params=params, blanks=toys.COLUMNS)
 
-    assert checked_settings(batch, template) == {
+    assert checked_settings(client, batch.spec, template) == {
         'binning': {'bins': 3},
         'offset': found.ref('offset'),
     }
 
 
 def test_a_file_of_a_template_is_named_as_in_a_cell(client: Client) -> None:
-    batch = Batch(client, toys.SERIES, label='series')
     template = Template(toys.SERIES, params={'runs': [60339, 'path:mask.xml']})
 
-    assert checked_settings(batch, template) == {
+    assert checked_settings(client, toys.SERIES, template) == {
         'runs': [file(run=60339), FileRef(file='path:mask.xml')]
     }
 
 
-def test_a_setting_of_a_template_at_a_column_of_the_batch_is_left_out(
+def test_a_setting_of_a_template_at_a_column_is_read_and_a_batch_leaves_it_out(
     batch: Batch,
 ) -> None:
     params = {'thickness': 2.0, 'binning': {'bins': 3}}
     template = Template(toys.STAGED, params=params, blanks=())
 
-    assert checked_settings(batch, template) == {'binning': {'bins': 3}}
+    settings = checked_settings(batch.client, batch.spec, template)
+    frame = batch.frame()
+    made = Batch(batch.client, batch.spec, label='b', settings=settings, rows=frame)
+
+    assert settings == params
+    assert made.settings == {'binning': {'bins': 3}}
 
 
 @pytest.mark.parametrize(
@@ -146,4 +150,4 @@ def test_a_template_of_another_spec_or_version_is_refused_saying_why(
     batch: Batch, spec: Any, message: str
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        checked_settings(batch, Template(spec, blanks=toys.COLUMNS))
+        checked_settings(batch.client, batch.spec, Template(spec, blanks=toys.COLUMNS))

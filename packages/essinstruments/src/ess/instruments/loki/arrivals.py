@@ -39,8 +39,7 @@ from typing import Any
 from ess.loki import data
 
 from ess.apps import Client, file
-from ess.apps.batch.auto import every
-from ess.apps.batch.web.api import STATIC
+from ess.apps.batch.web.api import STATIC, every
 from ess.apps.folder import write_files_table
 from ess.spec import FileRef
 

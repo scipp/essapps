@@ -63,7 +63,7 @@ batch.settings = settings      # one write; nothing is reduced for it
 batch.scan()
 state = batch.state()           # where each row stands
 records = batch.reduce(ready(state))
-batch.reduce(left_to_reduce(batch.state(), batch.columns))
+batch.reduce(left_to_reduce(batch.state()))
 batch.cancel()
 ```
 
@@ -143,12 +143,12 @@ Every way of reducing a batch is this cycle, with its own rule and its own trigg
 
 | Trigger | Who | Rule |
 |---|---|---|
-| **Reduce** on the page | a person | `left_to_reduce(state, batch.columns)` |
-| **Reduce them again** on the page | a person | `earlier_settings(state, batch.columns)` |
+| **Reduce** on the page | a person | `left_to_reduce(state)` |
+| **Reduce them again** on the page | a person | `earlier_settings(state)` |
 | **Reduce all**, **Reduce selected** | a person | `ready(state)`, the keys selected |
 | **Follow** on the page of a batch: a step on the batch that follows, from a timer, that scans as **Rescan runs** does | the application's process | `not_reduced(state)` |
-| `Automatic.step`, which `run` calls from a timer | a process of its own | `not_reduced(state)` |
-| `essapps-batch reduce` | a person or a script | every row of the table; with `--remaining`, `left_to_reduce(state, batch.columns)`, and with `--earlier-settings` too, `earlier_settings(state, batch.columns)` |
+| `ess.apps.batch.auto.step`, which `BatchManager.step` calls | a process of its own | `not_reduced(state)` |
+| `essapps-batch reduce` | a person or a script | every row of the table; with `--remaining`, `left_to_reduce(state)`, and with `--earlier-settings` too, `earlier_settings(state)`: `to_reduce(state, which)`, as the page chooses them |
 
 So a person and automatic reduction differ in the rule and in the trigger only. [Rules](#rules) defines each rule, and [Automatic reduction](#automatic-reduction) compares the rows they give. A person is a second loop: they read the state on the page and write the definition. In automatic reduction this loop is idle most of the time.
 
@@ -158,32 +158,32 @@ A change of settings is one write of `batch.settings`, and runs no cycle. The ro
 
 ```python
 def text(row):                                       # RowState.text
-    if row.status is PENDING: return 'pending'       # row.status: the status of the result
+    if row.status is PENDING: return 'running'       # row.status: the status of the result
     if row.problems:          return 'incomplete'    # a cell is empty, not a column, refused, or reads a failed record
-    if row.status is None:    return 'not reduced'   # no result
+    if row.status is None:    return 'ready'         # no result
     if row.status in (FAILED, CANCELLED):
         return str(row.status)                       # needs reducing, whether or not the request changed
+    if row.earlier:           return 'done'          # differs only at settings: earlier settings
     if row.outdated:          return 'outdated'      # the request or the spec differs from the result's
     if row.outdated is None:  return 'outdated'      # not compared, as while the settings are refused
-    return str(row.status)                           # 'completed'
+    return 'done'                                    # completed
 ```
 
 So the diagram has no memory of its own. Each arrow is a write to a stored table by the writer of that table:
 
 ```mermaid
 stateDiagram-v2
-    state "not reduced" as none
     state "failed or cancelled" as failed
     [*] --> incomplete
-    [*] --> none
-    incomplete --> none : its cells are filled
-    none --> pending : a record is written
-    pending --> completed : the record finishes
-    pending --> failed : the record finishes
-    completed --> outdated : the request changes
-    outdated --> completed : the change is undone
-    outdated --> pending : a record is written
-    failed --> pending : a record is written
+    [*] --> ready
+    incomplete --> ready : its cells are filled
+    ready --> running : a record is written
+    running --> done : the record finishes
+    running --> failed : the record finishes
+    done --> outdated : the request changes
+    outdated --> done : the change is undone
+    outdated --> running : a record is written
+    failed --> running : a record is written
 ```
 
 | Arrow | Writer | Stored table |
@@ -192,7 +192,7 @@ stateDiagram-v2
 | a record is written | the workspace, when the cycle submits the row | records |
 | the record finishes | the workspace | records |
 
-A failed or cancelled row reads `failed` or `cancelled` whether or not its request changed, since it needs reducing either way. A row reads `incomplete` from any state but `pending` when a cell is emptied or refused. The diagram leaves out these arrows. The batch page shows `not reduced` as `ready`, `pending` as `running`, and `completed` as `done`. A row of `earlier_settings` reads `outdated`, but the page shows it as `done`, marked "earlier settings", and a table written shows `completed, earlier settings` (`status_texts`).
+A failed or cancelled row reads `failed` or `cancelled` whether or not its request changed, since it needs reducing either way. A row reads `incomplete` from any state but `running` when a cell is emptied or refused. The diagram leaves out these arrows. The page, a table written and the command use these words. A row of `earlier_settings` (`RowState.earlier`) reads `done`; the page marks it "earlier settings", and a table written has it in the column `earlier`.
 
 **Not in this picture:**
 
@@ -254,10 +254,9 @@ The table keeps every row of the scan, so a change of scope needs no new scan. `
 |---|---|
 | `ready(states)` | every row that can run now |
 | `not_reduced(states)` | ready rows with no result ([Automatic reduction](#automatic-reduction)) |
-| `earlier_settings(states, columns)` | ready rows whose completed result differs from their request only at settings, not at a column, and of the same spec |
-| `left_to_reduce(states, columns)` | ready rows with no result, a failed or cancelled one, or an outdated one, but those of `earlier_settings` |
-| `refused_again(states, refused)` | of the reasons `refused` by row, those of the rows of `not_reduced`: why the next step of a loop will be refused again |
-| `status_texts(states, columns)` | the status of each row as a table shows it: `completed, earlier settings` for a row of `earlier_settings` |
+| `earlier_settings(states)` | ready rows whose completed result differs from their request only at settings, not at a column, and of the same spec (`RowState.earlier`) |
+| `left_to_reduce(states)` | ready rows with no result, a failed or cancelled one, or an outdated one, but those of `earlier_settings` |
+| `to_reduce(states, which)` | the rows of `left_to_reduce` (`'remaining'`), `earlier_settings` (`'earlier'`) or `ready` (`'all'`) |
 
 **A row's state is read from its result.** `state()` compares each row's request, its cells with the settings, with the request of its result, and says where they differ:
 
@@ -298,7 +297,7 @@ A result of another spec stays the row's result. Its request and its outputs are
 batch.settings = trial    # the completed rows are now of earlier_settings
 batch.reduce(['60339'])   # only this row is reduced with the trial
 # to keep the trial, reduce the others again:
-batch.reduce(earlier_settings(batch.state(), batch.columns))
+batch.reduce(earlier_settings(batch.state()))
 # or, to drop it, set the settings back: the row tried is then of earlier_settings
 batch.settings = before
 ```
@@ -379,7 +378,7 @@ definitions/labels/20261118-130204/header.json      spec, columns, source, title
 definitions/following.json                          the label of the batch that follows; written by the manager
 ```
 
-The manager refuses a label with `/` (`check_label`). A `Batch` made in code may have one; it keeps nothing, so it writes no folder.
+The manager refuses a label with `/`. A `Batch` made in code may have one; it keeps nothing, so it writes no folder.
 
 ```json
 {"added": [{"key": "mine", "values": {"sample": {"@ref": "file", "file": "run:60400"}}, "info": {"name": "mine"}}],
@@ -456,7 +455,7 @@ What the manager refuses raises `ValueError`, with a message for a person; `KeyE
 
 - `create` takes the name of a spec. It refuses an empty title, a column that is not a parameter of the spec or is named twice, and columns that lack one that the source fills; then it writes the first settings, those given to the manager for the spec or `create(..., settings=...)`, and the header. The names of the spec and the source, and the columns, are fixed from then on. What the names stand for is read from code at each start: a later `staged` applies to every batch, later `settings` only to batches made after them.
 - `change` changes the title, the description and the scope, and refuses an empty title. A scope changes the rows of the `Batch` at once.
-- A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-` (`check_label`), so that it is one segment of a URL path. A label is used once: `create` refuses a label that has definitions or records, so the label of a removed batch that had results is never a batch again. Code may still submit under the label of a batch, and such a record is the result of its row ([The records of a label are the results](#the-records-of-a-label-are-the-results)).
+- A label is letters, digits, `_`, `.` and `-`, and starts with neither `.` nor `-`, so that it is one segment of a URL path. A label is used once: `create` refuses a label that has definitions or records, so the label of a removed batch that had results is never a batch again. Code may still submit under the label of a batch, and such a record is the result of its row ([The records of a label are the results](#the-records-of-a-label-are-the-results)).
 - `start_next` ends a batch before an index and makes the next batch from there up to the old stop, with the same spec, source, columns and settings. The cells set by hand and the removals of the rows that move go with them; the rows added by hand stay, and so do the results, under the old label, so the next batch reduces those rows again. It refuses an index with no row of the scan before it, which would leave the batch none. Which batch follows does not change.
 - `follow(label)` makes a batch the one that follows, and no other; `follow(None)` lets none follow. It refuses a batch without a source, or whose source is not registered. `following` is the label, or `None`.
 - `remove` removes the header, the edits and the settings of a batch, and releases its stage; if the batch follows, none follows from then on. Its records stay, and those running keep running. A `Batch` handed out before must not be used after its removal, so ask the manager for the batch each time.
@@ -464,14 +463,13 @@ What the manager refuses raises `ValueError`, with a message for a person; `KeyE
 
 A restart keeps what a person gave: the batches, their settings and edits, the corrections, and which batch follows. It loses a draft of settings not applied on a page, and why Follow refused rows. A row that was running reads as failed, and Follow leaves a failed row to a person.
 
-Follow reduces the rows of the batch that follows as its files arrive. A step is one step of an `Automatic` on it ([Automatic reduction](#automatic-reduction)):
+Follow reduces the rows of the batch that follows as its files arrive. A step is `manager.step()`, a `step` of `ess.apps.batch.auto` on it ([Automatic reduction](#automatic-reduction)):
 
 ```python
-from ess.apps.batch.auto import Automatic
-
-if (label := manager.following) is not None:
-    loop = Automatic(manager.batch(label))
-    loop.step()        # its records by key; loop.refused says why rows were refused
+done = manager.step()  # a Step, None if no batch follows
+done.records           # the records of the rows reduced, by key
+done.refused           # why rows were refused, by key
+done.waiting           # the keys of the rows of the source not filled yet
 ```
 
 The manager has no thread, no timer and no lock: whoever serves owns the timer that steps it, and the lock. For the pages, `Pages.tick` is the step, and `create_app` owns the timer ([The UI](#the-ui)).
@@ -481,7 +479,7 @@ The manager has no thread, no timer and no lock: whoever serves owns the timer t
 A cell may read another record, also one still running, so a row can use a value computed for that row:
 
 ```python
-centres = find.reduce(left_to_reduce(find.state(), find.columns))
+centres = find.reduce(left_to_reduce(find.state()))
 for key, record in centres.items():
     iofq.rows = iofq.rows.edit(key, {'beam_centre': record.ref('centre')})
 ```
@@ -504,20 +502,18 @@ Scan `find` before a batch with this source, so that its rows see the newest cen
 
 ## Automatic reduction
 
-Automatic reduction reduces a batch as its files arrive. Its *loop*, an `Automatic`, needs a batch with a source, which should persist what it submits, since nothing releases its records:
+Automatic reduction reduces a batch as its files arrive. A step needs a batch that should persist what it submits, since nothing releases its records, and its source; the caller keeps the keys considered and gives them to the next step:
 
 ```python
-from ess.apps.batch.auto import Automatic, run
+from ess.apps.batch.auto import step
 
-batch = Batch(client, IOFQ, columns=('sample', 'sample_transmission'), label='auto/iofq',
-              source=SAMPLE_RUNS, staged=True, persist=True, settings=settings)
-loop = Automatic(batch)
-loop.step()       # scans, and reduces the ready rows without a result; their records by key
-loop.refused      # why rows of the last step were refused, by key
-run([loop])       # steps once a second, until a step raises
+done = step(batch, SAMPLE_RUNS, considered)  # adds the new filled rows, reduces the ready rows without a result
+done.records       # their records by key
+done.refused       # why rows of the step were refused, by key
+considered = done.considered
 ```
 
-A step is [the cycle](#the-model-tables-and-one-cycle) with a scan and the rule `not_reduced`: `batch.reduce(not_reduced(batch.state(not_reduced(batch.results()))))`, with the batch's settings as they are at the step. Only the rows without a result are compared, so the rows with a result cost a step no resolving.
+A step is [the cycle](#the-model-tables-and-one-cycle) with the rows added and the rule `not_reduced`: `batch.reduce(not_reduced(batch.state(not_reduced(batch.state(compare=False)))))`, with the batch's settings as they are at the step. Only the rows without a result are compared, so the rows with a result cost a step no resolving.
 
 ```python
 def not_reduced(state):
@@ -558,7 +554,7 @@ A result of another spec, such as an older version, stays the row's result ([Rul
 
 A row whose key changes from one scan to the next, such as a key made from a sample name that a correction changed, is a new row, and is reduced again under its new key; so choose a key that does not change, such as the run number ([Terms](#terms)).
 
-The page of a batch has a switch "Follow", which makes its batch the one that follows ([The UI](#the-ui)). In a chain, step the loop of the batch that is read first: `run([Automatic(find), Automatic(iofq)])`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
+The page of a batch has a switch "Follow", which makes its batch the one that follows ([The UI](#the-ui)). In a chain, step the batch that is read first: `step(find, ...)`, then `step(iofq, ...)`. [automatic-reduction.md](../../../docs/developer/automatic-reduction.md) holds the design, its cost, and what is open.
 
 ### The records of a label are the results
 
@@ -616,7 +612,7 @@ Each step is a command, and a function for a notebook that takes and returns a p
 
 | Step | Command | Function |
 |---|---|---|
-| list the files | `files package.module:read --with runs` | `frames.described(pd.DataFrame(scan_folder(folder, read)), runs)` |
+| list the files | `files package.module:read --with runs` | `cli.described(pd.DataFrame(scan_folder(folder, read)), runs)` |
 | make the table | `rows package.module:SOURCE`, or a spreadsheet | `frames.table_of(source.rows(batch.file_infos(client, source.selector)))` |
 | reduce it | `reduce template table --label ...` | `frames.reduce_table(client, template, table, label=...)` |
 | write the outputs to files | `export table folder` | `export.export_table(client, table, folder)` |
@@ -638,7 +634,7 @@ A cell that is not text is its value, and `None` or `NaN` is an empty cell, so o
 
 **A cell** is read as JSON if it is JSON, so `1.5`, `null`, and `{"x": 0, "y": 1}` are values, and anything else is text. Text that is JSON is written in quotes, such as `"12"` for a sample name at a string parameter; a `.csv` file doubles them, `"""12"""`. At a parameter that is a file field, or a list of them, a whole number names a run, text with a kind, such as `pid:...` or `path:...`, a file as the record holds it, and other text a path, relative to the working directory. A table that the batch writes holds each file as the record does, by its identity: `pid:20.500.12269/<uuid>` for a raw file the catalogue lists, and `path:masks/mask.xml`, relative to the workspace's folder, for any other file in it. A number with a leading zero, such as `0342`, is not JSON, so it is read as a path: write `342`. The same holds for the values of the template's file. A file field inside a group takes the JSON form, `{"@ref": "file", "file": "run:60339"}`. Every file is one that the workspace's file source knows.
 
-**`reduce`** returns the table with three columns, which it replaces if the table has them: `status`, the ID of the `record`, and `failure`, the reason. So its result can be its next table. With `--remaining` it reduces only the rows that `left_to_reduce` gives: those with no result, a failed or cancelled one, or one whose cells changed since, or whose result is of another spec ([Rules](#rules)). A row reduced with earlier settings is left, and reads `completed, earlier settings`: the command then says how many rows it left, and ends with status 3. `--earlier-settings`, only with `--remaining`, reduces those rows too. A row that cannot run is submitted all the same, so that the command refuses it by name. The `status` of a row is `completed`, `failed`, or `cancelled`, or `completed, earlier settings` for a row that `--remaining` left.
+**`reduce`** returns the table with four columns, which it replaces if the table has them: `status`, `earlier`, the ID of the `record`, and `failure`, the reason. So its result can be its next table. With `--remaining` it reduces only the rows that `left_to_reduce` gives: those with no result, a failed or cancelled one, or one whose cells changed since, or whose result is of another spec ([Rules](#rules)). A row reduced with earlier settings is left, reads `done`, and is `True` in `earlier`: the command then says how many rows it left, and ends with status 3. `--earlier-settings`, only with `--remaining`, reduces those rows too. A row that cannot run is submitted all the same, so that the command refuses it by name. The `status` of a row is in the words of the page ([The model](#the-model-tables-and-one-cycle)): `done`, `failed` or `cancelled` once reduced.
 
 Ctrl-C cancels every row that has not completed, those running among them, and the command ends with a `KeyboardInterrupt` once the workflows that were running return. It writes no table; reduce again with `--remaining`.
 
@@ -651,7 +647,7 @@ reduced/60339/_record.json     the record: every file and value the outputs came
 
 These files are a placeholder (`ess.apps.hdf5` states the format). A format of a technique, such as NXcanSAS, is not written. If the folder is inside the workspace, a later `files` lists what was exported.
 
-**Exit status.** 0: done, and for `reduce`, every row completed. 2: the command or a row was refused, and nothing ran. 3: a row did not complete, or `--remaining` left a row reduced with earlier settings. 1: any other error. Every command but `files` opens the workspace, and needs `--bind`.
+**Exit status.** 0: done, and for `reduce`, every row `done`. 2: the command or a row was refused, and nothing ran. 3: a row is not `done`, or `--remaining` left a row reduced with earlier settings. 1: any other error. Every command but `files` opens the workspace, and needs `--bind`.
 
 **The workspace** of the command is a folder, `--workspace`, the working directory by default (`ess.apps.folder`). It holds one input, which you write, and what the commands keep:
 
@@ -685,7 +681,7 @@ run,role,sample
 
 `read_metadata` is a function of the instrument package, from the path of a file to its metadata, or `None` for a file that is not the instrument's (`ess.apps.folder.scan_folder`). The runs come first, by their number, since the order of the rows is the order of measurement. A file that cannot be read is left out, with a warning. Two files of one run are refused. Running `files` again after files gained a `pid` changes their identity: the rows reduced before read `outdated`, and earlier records name files the folder no longer knows.
 
-A file says its kind, its run, and perhaps its sample, but not what a run is for. A source that pairs runs reads the `role`, and a field such as the direct beam requires it. The run table gives it (`frames.described`): a row describes the file of its `run`, or the file at its `file` if it has no run. A run of the table that has no file in the folder is ignored, so the table may cover more than the folder holds. A file that no row describes keeps what it says of itself, and where both have a column, a cell of the run table that is not empty wins. Two rows for one run are refused. Without `--with`, the roles are typed into `files.csv`, so `files` then refuses to write over a table that exists.
+A file says its kind, its run, and perhaps its sample, but not what a run is for. A source that pairs runs reads the `role`, and a field such as the direct beam requires it. The run table gives it (`cli.described`): a row describes the file of its `run`, or the file at its `file` if it has no run. A run of the table that has no file in the folder is ignored, so the table may cover more than the folder holds. A file that no row describes keeps what it says of itself, and where both have a column, a cell of the run table that is not empty wins. Two rows for one run are refused. Without `--with`, the roles are typed into `files.csv`, so `files` then refuses to write over a table that exists.
 
 The workspace outlives the command, so a template references a record of an earlier command. A template without blanks is one request, and `reduce` without a table submits it:
 
@@ -736,7 +732,7 @@ Each `reduce` exits 3: the demo's run 60345 holds no neutron events, so its row 
 |---|---|
 | **Load table…** | `batch.scan()`, then `batch.put(frames.rows_of(frames.read_table(path), spec.params, batch.columns))`, refused with a row that the source makes and the scope leaves out |
 | **Download as CSV**, **as XLSX** | `frames.batch_table(batch, states)`, written with `frames.write_table` |
-| **Load settings…**, then **Apply** | `batch.settings = text.checked_settings(batch, text.load_template(path))`, refused if of another spec, another version of it, or with other blanks than the columns; the file fills the settings form, and Apply writes it |
+| **Load settings…**, then **Apply** | `templates.checked_settings(client, spec, templates.load_template(path))`, refused if of another spec or another version of it; the file fills the settings form, which ignores a value at a column, and Apply writes it |
 | **Download settings** | `text.write_template(batch.template(), path)`, refused while the settings form holds a change |
 | **Download selected**, **Download all** | `export.export_table(client, frames.batch_table(batch, states, keys), folder)`, with the keys of the completed rows, zipped with their table |
 | **Save** in the tab **Batch** | `manager.change(label, title=..., description=..., scope=Scope(start=start, stop=stop))`, with the ends as typed |
@@ -753,7 +749,7 @@ Each `reduce` exits 3: the demo's run 60345 holds no neutron events, so its row 
 | your pairing and the batch | a function over plain data | there is no behaviour to abstract |
 | `Batch` and the framework | `Client`, the class | one implementation; a fake would have to redo the validation that a table shows |
 | `Form` and the framework | `Listing`, a pydantic model of the params, and `Form.held()` | `Form` needs neither `Client` nor `WorkflowSpec` |
-| the logic and the page | the methods of `BatchManager`, `Automatic`, `Batch` and `RowTable` | `Pages` and `Page` hold what the pages show and do, so a rule is written once |
+| the logic and the page | the methods of `BatchManager`, `Batch` and `RowTable`, and `auto.step` | `Pages` and `Page` hold what the pages show and do, so a rule is written once |
 | `Page` and the browser | `State` and the actions of `Page` | the browser renders `State` and sends actions; `Page` has no HTTP in it |
 
 `ess.apps` and `ess.apps.panel` import nothing from `ess.apps.batch`, and `ess.apps.batch` imports no widget library and nothing of `ess.apps.batch.web`. `ess.apps.batch.web.page`, `ess.apps.batch.web.pages` and `ess.apps.batch.web.models` import neither `fastapi` nor `starlette`; only `ess.apps.batch.web.api` does. A test enforces this.

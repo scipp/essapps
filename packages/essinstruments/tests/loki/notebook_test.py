@@ -26,5 +26,5 @@ def run_notebook(name: str) -> dict[str, Any]:
 def test_the_batch_notebook_reduces_and_exports_every_row() -> None:
     exported = run_notebook('loki-batch.ipynb')['exported']
 
-    assert list(exported['status']) == ['completed'] * 4
+    assert list(exported['status']) == ['done'] * 4
     assert all(Path(path).is_file() for path in exported['iofq'])

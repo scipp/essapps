@@ -114,9 +114,10 @@ The stories use these calls:
 ```python
 source = Source(rows_of_files, fills=(...))   # rows_of_files: the files -> a DataFrame of rows
 batch = Batch(client, SPEC, label=..., rows=rows_of(client, source), persist=True)
-auto = Automatic(batch, source)   # reads batch.settings at each step
-auto.step()       # adds the new rows of the source, and reduces the ready rows without a result; their records by key
-auto.refused      # why rows of the last step were refused by submit, by key
+done = step(batch, source, considered)   # reads batch.settings at each step
+done.records      # the step added the new rows of the source, and reduced the ready rows without a result; their records by key
+done.refused      # why rows of the step were refused by submit, by key
+done.considered   # what the next step is given
 ```
 
 ## S. Small stories
@@ -673,14 +674,13 @@ def angles(files):                                             # a row per sampl
 source = Source(angles, fills=('runs',))
 batch = Batch(client, STITCH, label='reflectivity', rows=rows_of(client, source),
               persist=True, settings={'reference': reference})
-auto = Automatic(batch, source)
-
 r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
-client.wait(auto.step())                                       # a row still running waits for its record
+first = step(batch, source, ())
+client.wait(first.records)                                     # a row still running waits for its record
 r4 = measure(4, [4.0, 8.0], role='sample', sample='si')
 r3 = measure(3, [1.0, 1.0], role='sample', sample='si')
 measure(2, [1.0, 2.0], role='sample', sample='si')             # arrives again
-auto.step()
+step(batch, source, first.considered)
 
 user = connect()                                              # any client of the proposal
 latest = user.latest('reflectivity', member='si')
@@ -699,11 +699,12 @@ Actor: instrument scientist. Goal: after an upgrade removed the spec version of 
 
 ```python
 upgraded = upgrade(specs=[IOFQ_V2])                            # version 1 is gone
-auto = Automatic(iofq_batch(upgraded), PER_RUN)
+batch = iofq_batch(upgraded)
 measure(1, [1.0, 1.0], role='sample')
 
-assert auto.step() == {}
-assert auto.refused == {'1': 'unknown spec sans-iofq/v1'}
+done = step(batch, PER_RUN, ())
+assert done.records == {}
+assert done.refused == {'1': 'unknown spec sans-iofq/v1'}
 ```
 
 ### E3. Reduction of our own output
@@ -711,13 +712,14 @@ assert auto.refused == {'1': 'unknown spec sans-iofq/v1'}
 Actor: none; a failure mode. Goal: a published result that SciCat lists as a dataset does not make a row.
 
 ```python
-auto = Automatic(iofq_batch(client), PER_RUN)
+batch = iofq_batch(client)
 measure(1, [1.0, 2.0, 3.0, 4.0])
-(reduced,) = auto.step().values()
+first = step(batch, PER_RUN, ())
+(reduced,) = first.records.values()
 pid = client.publish(reduced.ref('iofq'), 'scicat')
 files.add_published(scicat.entries[pid])
 
-assert auto.step() == {}
+assert step(batch, PER_RUN, first.considered).records == {}
 ```
 
 A published entry is a file of kind `'derived'`, and a batch's source is given only raw files unless its selector names another kind.
@@ -727,14 +729,15 @@ A published entry is a file of kind `'derived'`, and a batch's source is given o
 Actor: instrument scientist. Goal: new runs use the improved settings; earlier results stay; the results made before the improvement can be found.
 
 ```python
-auto = Automatic(iofq_batch(client), PER_RUN)
+following = iofq_batch(client)
 first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
-(before,) = auto.step().values()
+done = step(following, PER_RUN, ())
+(before,) = done.records.values()
 
 settings = {'reduction': Reduction(threshold=1.5), 'normalization': None}
-auto.batch.settings = settings                                  # read at the next step
+following.settings = settings                                   # read at the next step
 second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
-(after,) = auto.step().values()
+(after,) = step(following, PER_RUN, done.considered).records.values()
 
 user = connect()                                                # any client of the proposal
 assert after.request.files() == [second]                        # run 1 is not reduced again

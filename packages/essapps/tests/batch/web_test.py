@@ -495,11 +495,8 @@ def test_a_changed_setting_leaves_the_rows_done_marked_with_earlier_settings(
     plot = http.post('/api/plot', json={'keys': ['1']}).json()
     assert plot['figure']['outdated'] == [False]
     table = pd.read_csv(io.BytesIO(http.get('/api/table.csv').content), dtype=str)
-    assert list(table['status']) == [
-        'completed, earlier settings',
-        'completed, earlier settings',
-        'incomplete',
-    ]
+    assert list(table['status']) == ['done', 'done', 'incomplete']
+    assert list(table['earlier']) == ['True', 'True', 'False']
 
 
 def test_reduce_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_them(

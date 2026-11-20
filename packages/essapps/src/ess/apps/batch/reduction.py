@@ -32,8 +32,9 @@ state of chosen rows does not read every record under the label.
 
 The settings are the batch's own (:attr:`Batch.settings`), so each state is
 read with them, and each reduction submits them. A state that resolves
-nothing (:meth:`Batch.results`) is for showing the rows while the settings are
-refused, and for the checks before a submission.
+nothing (``Batch.state(compare=False)``) is for showing the rows while the
+settings are refused (:meth:`Batch.shown`), and for the checks before a
+submission.
 
 Where a row's request differs from its result's (``RowState.changed``) is
 worked out on both as a record holds them, resolving as little as it can::
@@ -185,6 +186,9 @@ class Batch:
         self._found: dict[str, Record] = {}
         self._unbound: set[str] = set()
         # A cell's value as a record holds it, by its column and value as given.
+        # A state of 1000 toy rows without results takes 21 ms with it, and
+        # 198 ms without; with every row reduced, 23 ms either way, since a
+        # row with a result resolves only the cells that differ.
         self._resolved: dict[tuple[str, Any], Any] = {}
 
     def _set(self, rows: pd.DataFrame) -> None:
@@ -294,12 +298,12 @@ class Batch:
         """
         return copy.deepcopy(self._template)
 
-    def _cells(self, keys: Sequence[str] | None) -> dict[str, dict[str, Any]]:
+    def cells(self, keys: Sequence[str] | None = None) -> dict[str, dict[str, Any]]:
         """
         The cells of the rows of ``keys``, or of all, by key, as a request
-        takes them: each empty cell its parameter's default, or ``None`` if it
-        takes ``None``, and left out otherwise. Raises ``KeyError`` for a key
-        that the table lacks.
+        takes them (:func:`~.table.as_request`): each empty cell its
+        parameter's default, or ``None`` if it takes ``None``, and left out
+        otherwise. Raises ``KeyError`` for a key that the table lacks.
         """
         rows = self._rows[list(self.columns)]
         if keys is not None:
@@ -321,40 +325,49 @@ class Batch:
             for key, row in rows.to_dict('index').items()
         }
 
-    def state(self, keys: Sequence[str] | None = None) -> dict[str, RowState]:
+    def state(
+        self, keys: Sequence[str] | None = None, *, compare: bool = True
+    ) -> dict[str, RowState]:
         """
         Where each row stands now, read from the client, or the rows of
         ``keys`` if given: its result, and where its request with the settings
         differs from its result's (:attr:`RowState.changed`), with the reasons
         a cell is refused, as problems of its row.
 
+        With ``compare=False``, nothing is resolved: each row has the problems
+        of its cells as given, its status, and whether its result is of
+        another spec. :attr:`RowState.changed` is then ``None``, and so is
+        :attr:`RowState.outdated` unless the result is of another spec. It is
+        what :meth:`reduce` checks before it submits.
+
         Raises ``SubmitError`` if the settings are refused, with reasons that
-        name no row: no row can run with them.
+        name no row: no row can run with them. Only if compared.
         """
         cells, found = self._cells_and_results(keys)
+        if not compare:
+            return self._states(cells, found, None, {})
         changed, refused = self._compare(cells, found)
         return self._states(cells, found, changed, refused)
 
-    def results(self, keys: Sequence[str] | None = None) -> dict[str, RowState]:
+    def shown(
+        self, keys: Sequence[str] | None = None
+    ) -> tuple[dict[str, RowState], tuple[FieldError, ...]]:
         """
-        Each row, or each of ``keys``, with its result, without its request:
-        the problems of its cells as given, its status, and whether its result
-        is of another spec. Nothing is resolved, so :attr:`RowState.changed`
-        is ``None``, and so is :attr:`RowState.outdated` unless the result is
-        of another spec: :func:`~.state.left_to_reduce` refuses these states.
-
-        It is what a page shows while the settings are refused, and what
-        :meth:`reduce` checks before it submits. Which rows to reduce is
-        chosen from :meth:`state`.
+        The state of the rows of ``keys``, or of all, as a table shows it, and
+        why the settings are refused: compared, or not compared while the
+        settings are refused, with the reasons.
         """
-        return self._states(*self._cells_and_results(keys), None, {})
+        try:
+            return self.state(keys), ()
+        except SubmitError as error:
+            return self.state(keys, compare=False), error.errors
 
     def _cells_and_results(
         self, keys: Sequence[str] | None
     ) -> tuple[dict[str, dict[str, Any]], dict[str, Record]]:
         """The cells of ``keys``, or of all, and the result of each that has one."""
         self._poll()
-        cells = self._cells(keys)
+        cells = self.cells(keys)
         return cells, {k: self._found[k] for k in cells if k in self._found}
 
     def _states(

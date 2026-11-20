@@ -17,7 +17,7 @@ and again under any label, which they ignore, so that a page asks for them as
 for its own; so are the static files. A row is named by its key in the body or
 the query, never in the path, since a key may hold any character; the keys of
 many rows go in the body, since a URL has a limit. A label is one
-segment of a path (:func:`~ess.apps.batch.manager.check_label`). The page asks
+segment of a path (:meth:`~ess.apps.batch.BatchManager.create`). The page asks
 for ``api/...`` relative to its own URL, and ``/`` redirects to a page by a
 relative URL, so the app can be mounted under a path prefix. If it has no
 batch to go to, ``/`` is the page without a batch, which lists the batches
@@ -26,8 +26,9 @@ client that accepts it.
 """
 
 import itertools
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+import threading
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
@@ -42,7 +43,6 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
-from ..auto import every
 from .models import (
     BatchCounts,
     Batches,
@@ -68,6 +68,31 @@ from .pages import Pages
 
 STATIC = Path(__file__).parent / 'static'
 _XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+
+@contextmanager
+def every(seconds: float, actions: Iterable[Callable[[], object]]) -> Iterator[None]:
+    """
+    Call ``actions`` in turn from a thread, one every ``seconds``, until all are
+    called or the block ends. The end of the block waits for an action that
+    runs. The app steps Follow with it, and a demo makes files arrive with it
+    while it serves a page.
+    """
+    stop = threading.Event()
+
+    def call() -> None:
+        for action in actions:
+            if stop.wait(seconds):
+                return
+            action()
+
+    thread = threading.Thread(target=call, name='every')
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
 
 
 def _download(content: bytes, name: str, media: str) -> Response:

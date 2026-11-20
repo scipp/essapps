@@ -11,7 +11,7 @@ import pytest
 
 from ess.apps import Client
 from ess.apps.batch import Batch, FileInfo, Source, rows_of
-from ess.apps.batch.auto import Automatic
+from ess.apps.batch.auto import step
 from ess.apps.testing import FakeFiles
 
 from . import toys
@@ -69,14 +69,13 @@ def test_e1_series_grows_reduction_follows(
         persist=True,
         settings={'reference': reference},
     )
-    loop = Automatic(batch, source)
-
     r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
-    client.wait(loop.step())
+    first = step(batch, source, ())
+    client.wait(first.records)
     r4 = measure(4, [4.0, 8.0], role='sample', sample='si')
     r3 = measure(3, [1.0, 1.0], role='sample', sample='si')
     measure(2, [1.0, 2.0], role='sample', sample='si')
-    loop.step()
+    step(batch, source, first.considered)
 
     user = connect()  # any client of the proposal
     latest = user.latest('reflectivity', member='si')
@@ -97,37 +96,40 @@ def test_e2_automatic_reduction_goes_quiet(
     upgrade: Callable[..., Client], measure: toys.Measure
 ) -> None:
     upgraded = upgrade(specs=[toys.IOFQ_V2])  # a workspace without version 1
-    loop = Automatic(iofq_batch(upgraded), PER_RUN)
+    batch = iofq_batch(upgraded)
     measure(1, [1.0, 1.0], role='sample')
 
-    assert loop.step() == {}
-    assert loop.refused == {'1': 'unknown spec sans-iofq/v1'}
+    done = step(batch, PER_RUN, ())
+    assert done.records == {}
+    assert done.refused == {'1': 'unknown spec sans-iofq/v1'}
 
 
 @pytest.mark.xfail(reason=NO_PUBLISH)
 def test_e3_reduction_of_our_own_output(
     client: Client, measure: toys.Measure, files: FakeFiles
 ) -> None:
-    loop = Automatic(iofq_batch(client), PER_RUN)
+    batch = iofq_batch(client)
     measure(1, [1.0, 2.0, 3.0, 4.0])
-    (reduced,) = loop.step().values()
+    first = step(batch, PER_RUN, ())
+    (reduced,) = first.records.values()
     pid = client.publish(reduced.ref('iofq'), 'scicat')
     files.add_published(scicat.entries[pid])
 
-    assert loop.step() == {}
+    assert step(batch, PER_RUN, first.considered).records == {}
 
 
 def test_e4_template_improved_during_a_beamtime(
     client: Client, connect: Callable[..., Client], measure: toys.Measure
 ) -> None:
-    loop = Automatic(iofq_batch(client), PER_RUN)
+    following = iofq_batch(client)
     first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
-    (before,) = loop.step().values()
+    done = step(following, PER_RUN, ())
+    (before,) = done.records.values()
 
     settings = {'reduction': toys.Reduction(threshold=1.5), 'normalization': None}
-    loop.batch.settings = settings
+    following.settings = settings
     second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
-    (after,) = loop.step().values()
+    (after,) = step(following, PER_RUN, done.considered).records.values()
 
     user = connect()  # any client of the proposal
     assert after.request.files() == [second]

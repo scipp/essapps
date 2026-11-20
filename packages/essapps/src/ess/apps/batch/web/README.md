@@ -60,9 +60,9 @@ While a batch follows, a timer in the server runs a step every `interval` second
 A step is `BatchManager.step`:
 
 ```python
-loop = manager.step()  # None if no batch follows
-loop.refused           # why a row could not be submitted, by key
-loop.waiting           # the keys of the rows of the source not filled yet
+done = manager.step()  # a Step, None if no batch follows
+done.refused           # why a row could not be submitted, by key
+done.waiting           # the keys of the rows of the source not filled yet
 ```
 
 It adds the rows of the source that the batch has not considered and that are filled, and reduces the rows that are ready and have no result (`ess.apps.batch.not_reduced`).
@@ -153,7 +153,7 @@ page.py           Page: what the page of one batch does, without HTTP: the
                   rows (each change a frame put to the batch), the settings
                   form (a draft until Apply), the refusals, its header
    ▼
-ess.apps.batch    the logic: BatchManager, Automatic, Batch, table, states,
+ess.apps.batch    the logic: BatchManager, step, Batch, table, states,
                   CorrectedFiles; shared with the command essapps-batch
 ```
 

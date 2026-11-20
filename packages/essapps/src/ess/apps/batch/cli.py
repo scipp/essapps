@@ -13,7 +13,7 @@ that differs between rows (see :mod:`.table`). Each command is one
 function, for a notebook: :func:`.frames.reduce_table`, which keeps no batch,
 and :func:`.export.export_table`. The workspace is kept in a folder (see
 :mod:`ess.apps.folder`), so a template may reference a record of an earlier
-command, by its ID or by its label (see :func:`.text.with_latest`).
+command, by its ID or by its label (see :func:`.templates.with_latest`).
 
 The command makes and reads its batch with a :class:`~.manager.BatchManager`,
 as a page does, so a label is one batch whoever works on it:
@@ -35,20 +35,26 @@ as a page does, so a label is one batch whoever works on it:
   replaces its table (:meth:`.reduction.Batch.put`); ``--source`` is refused.
 
   A template must be of the batch's spec and its version, as the page's
-  "Load settings" checks it (:func:`.text.checked_settings`), and is checked
-  before anything is written. It then reduces every row of the batch.
-  With ``--remaining`` it reduces the rows that the page's "Reduce" does
-  (:func:`.state.left_to_reduce`), and leaves those reduced with earlier
+  "Load settings" checks it (:func:`.templates.checked_settings`), and is
+  checked before anything is written. Its values at the columns of the table
+  are not read, as its blanks are not. It then reduces every row of the
+  batch. With ``--remaining`` it reduces the rows that the page's "Reduce"
+  does (:func:`.state.left_to_reduce`), and leaves those reduced with earlier
   settings, which it says on stderr; ``--earlier-settings`` adds them.
 - ``rows`` and ``files`` write a table from the files, as corrected in the
   definitions; ``export`` writes the outputs of a table that ``reduce`` wrote.
-  None of them reads or writes a batch.
+  None of them reads or writes a batch. ``files --with`` gives the table of
+  files what a person's run table says of each file (:func:`described`).
 
 The guide is ``packages/essapps/docs/batch.md``.
 
-Exit status: 0 if done, and every row completed; 1 for an error; 2 if the
-command or a row was refused, so that nothing ran; 3 if a row did not complete,
-or ``--remaining`` left a row reduced with earlier settings.
+The table written has the columns ``status``, in the words of the page,
+such as ``done`` or ``failed``, ``earlier``, whether the row was reduced with
+earlier settings, ``record`` and ``failure`` (:func:`.frames.with_results`).
+
+Exit status: 0 if done, and every row is done; 1 for an error; 2 if the
+command or a row was refused, so that nothing ran; 3 if a row is not done, or
+``--remaining`` left a row reduced with earlier settings.
 """
 
 from __future__ import annotations
@@ -60,22 +66,74 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from ..client import Client
 from ..errors import SubmitError
 from ..folder import folder_files, open_folder, scan_folder
-from ..records import Status
 from . import frames
 from .corrections import CorrectedFiles
 from .definition import FolderDefinitions, NotKept
 from .export import export_table
 from .manager import BatchManager
-from .reduction import Batch
 from .source import Source, rows_of
-from .state import EARLIER
 from .table import KEY, SUFFIXES, read_table, read_text, write_table
-from .text import checked_settings, load_template
+from .templates import checked_settings, load_template
+
+
+def _empty(cell: Any) -> bool:
+    """Whether a cell holds nothing: no text, or what pandas reads a gap as."""
+    if cell is None or cell is pd.NA:
+        return True
+    return isinstance(cell, str | float) and (cell == '' or cell != cell)
+
+
+def _text(cell: Any) -> str:
+    """A cell that names a run or a file as text; ``1.0`` as ``'1'``."""
+    cell = cell.item() if isinstance(cell, np.generic) else cell
+    # pandas holds whole numbers next to a gap as floats
+    return str(int(cell) if isinstance(cell, float) and cell.is_integer() else cell)
+
+
+def described(files: pd.DataFrame, run_table: pd.DataFrame) -> pd.DataFrame:
+    """
+    The table of files (see :func:`..folder.scan_folder`) with what a person's
+    table says of each: its role, its sample, or any other column.
+
+    A row of ``run_table`` describes the file of its ``run``, or, if that cell
+    is empty or there is no such column, the file at its ``file``. The result
+    has the rows of ``files``: a row of ``run_table`` that describes no file is
+    ignored, and a file that no row describes keeps what it has. In a column of
+    both tables, a cell of ``run_table`` that is not empty replaces what the
+    file says of itself.
+
+    Raises ``ValueError`` if a row names neither a run nor a file, or two rows
+    describe one.
+    """
+    by: dict[str, dict[str, dict[str, Any]]] = {'run': {}, 'file': {}}
+    for record in run_table.to_dict('records'):
+        column = 'file' if _empty(record.get('run')) else 'run'
+        if _empty(record.get(column)):
+            raise ValueError('a row of the run table names neither a run nor a file')
+        key = _text(record[column])
+        if key in by[column]:
+            raise ValueError(f'two rows of the run table describe the {column} {key}')
+        by[column][key] = {
+            name: cell
+            for name, cell in record.items()
+            if name not in by and not _empty(cell)
+        }
+    rows = [
+        record
+        | by['file'].get(_text(record['file']), {})
+        | ({} if _empty(run := record.get('run')) else by['run'].get(_text(run), {}))
+        for record in files.to_dict('records')
+    ]
+    columns = dict.fromkeys(
+        [*files.columns, *run_table.columns.drop(list(by), 'ignore')]
+    )
+    return pd.DataFrame(rows, columns=list(columns)).fillna('')
 
 
 def _named(name: str) -> Any:
@@ -232,16 +290,18 @@ def _reduce(
         rows = None  # create takes them from the source
     settings = None
     if template is not None:
-        # Checked on the rows to be, before anything is written.
-        to_be = Batch(client, spec, label=label, rows=rows)
+        # Checked before anything is written.
         try:
-            settings = checked_settings(to_be, template)
+            settings = checked_settings(client, spec, template)
         except ValueError as error:
             raise ValueError(f'{args.template}: {error}') from None
     if batch is not None:
         batch.put(rows)
         if settings is not None:
-            batch.settings = settings
+            # Its values at the columns are not read, as its blanks are not.
+            batch.settings = {
+                k: v for k, v in settings.items() if k not in batch.columns
+            }
     else:
         manager.create(
             spec.name,
@@ -290,7 +350,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             rows = scan_folder(args.workspace, _named(args.read))
             files = pd.DataFrame(rows, dtype=str).fillna('')
             if not by_hand:
-                files = frames.described(files, read_text(args.run_table))
+                files = described(files, read_text(args.run_table))
         except ValueError as error:
             sys.stderr.write(f'{error}\n')
             return 2
@@ -335,15 +395,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
     _write(result, args.output)
-    if args.command == 'reduce' and args.remaining and not args.earlier_settings:
-        left = int(result['status'].str.endswith(EARLIER).sum())
-        if left:
-            sys.stderr.write(
-                f'left {left} row{"s" if left > 1 else ""} reduced with earlier '
-                'settings: add --earlier-settings to reduce them\n'
-            )
-    done = args.command != 'reduce' or all(result['status'] == Status.COMPLETED)
-    return 0 if done else 3
+    if args.command != 'reduce':
+        return 0
+    # Only --remaining without --earlier-settings leaves such rows.
+    if left := int(result['earlier'].sum()):
+        sys.stderr.write(
+            f'left {left} row{"s" if left > 1 else ""} reduced with earlier '
+            'settings: add --earlier-settings to reduce them\n'
+        )
+    return 0 if all(result['status'] == 'done') and not left else 3
 
 
 if __name__ == '__main__':

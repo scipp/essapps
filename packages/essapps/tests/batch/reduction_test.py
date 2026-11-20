@@ -243,7 +243,7 @@ def test_a_reduction_compares_no_row_and_a_state_resolves_the_settings_once(
     batch.settings = OTHER_SETTINGS
 
     client.wait(batch.reduce(['1']))
-    batch.results()
+    batch.state(compare=False)
     reduced = counting.reads['resolve']
     batch.state()
 
@@ -279,7 +279,7 @@ def test_an_empty_cell_of_a_parameter_that_takes_none_gives_none(
         table = pd.DataFrame({'sample': ['run:1'], 'transmission': [None]}, index=['1'])
         batch = Batch(client, OPTIONAL, label='s', rows=table)
 
-        assert batch.state()['1'].text == 'not reduced'
+        assert batch.state()['1'].text == 'ready'
         records = batch.reduce(['1'])
 
     assert records['1'].request.params['transmission'] is None
@@ -437,7 +437,7 @@ def test_an_edited_row_is_outdated_and_left_to_do(
     client.wait(measured.reduce(['1', '2']))
     edit(measured, '1', thickness=2.0)
 
-    assert left_to_reduce(measured.state(), COLUMNS) == ['1']
+    assert left_to_reduce(measured.state()) == ['1']
 
 
 def test_changed_settings_make_every_result_outdated(
@@ -449,8 +449,8 @@ def test_changed_settings_make_every_result_outdated(
 
     states = measured.state()
     assert [states[k].outdated for k in ('1', '2')] == [True, True]
-    assert earlier_settings(states, COLUMNS) == ['1', '2']
-    assert left_to_reduce(states, COLUMNS) == []
+    assert earlier_settings(states) == ['1', '2']
+    assert left_to_reduce(states) == []
 
 
 def test_changed_names_the_cell_and_the_setting_that_differ(
@@ -506,7 +506,7 @@ def test_a_default_written_out_and_a_file_by_name_do_not_change_a_row(
     states = measured.state()
 
     assert {k: s.changed for k, s in states.items()} == {'1': set(), '2': set()}
-    assert left_to_reduce(states, COLUMNS) == []
+    assert left_to_reduce(states) == []
 
 
 def test_a_cell_emptied_is_one_problem(measured: Batch, client: Client) -> None:
@@ -529,8 +529,8 @@ def test_a_file_named_before_it_is_measured_is_a_problem_until_it_is(
 
     assert [e.loc for e in before['9'].problems] == [('sample',)]
     assert ready(before) == ['1', '2']
-    assert measured.results()['9'].problems == ()
-    assert (after['9'].problems, after['9'].text) == ((), 'not reduced')
+    assert measured.state(compare=False)['9'].problems == ()
+    assert (after['9'].problems, after['9'].text) == ((), 'ready')
 
 
 def _request_of(batch: Batch, key: str) -> Any:
@@ -643,7 +643,7 @@ def test_settings_refused_are_raised_naming_no_row(
         batch.state()
 
     assert [(e.entry, e.loc[0]) for e in error.value.errors] == [(None, 'binning')]
-    assert batch.results()['3'].problems == ()
+    assert batch.state(compare=False)['3'].problems == ()
 
 
 def test_a_changed_setting_is_found_when_no_result_s_files_are_known(
@@ -758,7 +758,7 @@ def test_a_result_of_another_spec_version_is_the_rows_result_and_outdated(
     assert [r.member for r in client.records(label='s')] == ['1', '2', '2']
     assert states['1'].record == client.records(label='s')[0]
     assert (states['1'].spec_changed, states['2'].spec_changed) == (True, False)
-    assert left_to_reduce(states, COLUMNS) == ['1']
+    assert left_to_reduce(states) == ['1']
 
 
 class Redefined(BaseModel):
@@ -837,7 +837,7 @@ def test_cancel_reaches_what_was_just_submitted(
     gate.open()
 
     assert client.wait(records) == {'1': 'cancelled', '2': 'cancelled'}
-    assert left_to_reduce(measured.state(), COLUMNS) == ['1', '2']
+    assert left_to_reduce(measured.state()) == ['1', '2']
 
 
 def test_cancel_leaves_other_rows_when_given_keys(

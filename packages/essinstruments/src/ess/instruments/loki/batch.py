@@ -27,7 +27,7 @@ from collections.abc import Sequence
 import pandas as pd
 
 from ess.apps.batch import FileInfo, Source
-from ess.apps.batch.table import KEY
+from ess.apps.batch.table import KEY, cell_of
 
 from .specs import IOFQ
 
@@ -49,7 +49,7 @@ def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
     transmissions: dict[object, str] = {}
     for f in files:
         if f.metadata.get('role') == 'transmission' and 'sample' in f.metadata:
-            transmissions[f.metadata['sample']] = f.ref.file
+            transmissions[f.metadata['sample']] = cell_of(f.ref)
     rows = []
     for f in files:
         if f.metadata.get('role') != 'sample':
@@ -60,7 +60,7 @@ def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
                 KEY: str(f.metadata.get('run', f.ref.file)),
                 'run': _run_number(f),
                 'name': None if name is None else str(name),
-                'sample': f.ref.file,
+                'sample': cell_of(f.ref),
                 'sample_transmission': transmissions.get(name),
             }
         )

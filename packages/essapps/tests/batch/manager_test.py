@@ -284,10 +284,11 @@ def test_a_title_and_description_changed_are_kept(
 ) -> None:
     label = manager.create('plain', title='Morning', description='a')
 
-    header = manager.change(label, title='Afternoon')
-    header = manager.change(label, description='b')
+    manager.change(label, title='Afternoon')
+    manager.change(label, description='b')
 
-    assert header == Header('Afternoon', 'b')
+    header = Header('Afternoon', 'b')
+    assert manager.headers() == {label: header}
     assert _again(client, definitions).headers() == {label: header}
 
 
@@ -401,7 +402,7 @@ def test_rows_reduced_are_not_outdated_in_a_manager_made_again(
 
     state = _again(client, definitions).batch(label).state()['1']
 
-    assert (state.text, state.outdated) == ('completed', False)
+    assert (state.text, state.outdated) == ('done', False)
 
 
 @pytest.mark.parametrize('title', ['', '   '])

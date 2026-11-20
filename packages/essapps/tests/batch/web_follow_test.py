@@ -7,6 +7,7 @@ The tests call :meth:`Pages.tick` in place of the timer, except one, which
 runs the app's timer.
 """
 
+import functools
 import threading
 import time
 from typing import Any
@@ -19,6 +20,7 @@ from pydantic import BaseModel
 from ess.apps import Client, Status
 from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions
 from ess.apps.batch.web import Page, Pages, create_app
+from ess.apps.batch.web.api import every
 from ess.apps.batch.web.models import CellEdit, Edit, Reduce, State
 from ess.apps.batch.web.page import Problem
 from ess.apps.testing import FakeFiles
@@ -748,3 +750,20 @@ def test_the_counts_of_the_batch_that_follows_are_the_chips_of_its_page(
 
     chips = {s: n for s, n in page.state().counts.items() if n and s != 'all'}
     assert counted == chips == {'outdated': 1, 'incomplete': 1}
+
+
+def test_every_calls_the_actions_in_turn_until_the_block_ends() -> None:
+    called: list[int] = []
+    all_called = threading.Event()
+
+    def call(i: int) -> None:
+        called.append(i)
+        if i == 2:
+            all_called.set()
+
+    with every(0, [functools.partial(call, i) for i in range(3)]):
+        assert all_called.wait(10)
+    with every(60, [functools.partial(call, 3)]):
+        pass
+
+    assert called == [0, 1, 2]

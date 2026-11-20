@@ -54,10 +54,9 @@ from ess.spec import (
 )
 
 from .. import BatchManager, CorrectedFiles, FileInfo, FolderDefinitions, Source
-from ..auto import every
-from ..table import KEY
+from ..table import KEY, cell_of
 from . import Pages, create_app, plots
-from .api import STATIC
+from .api import STATIC, every
 from .page import Shown
 
 
@@ -185,7 +184,7 @@ def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
     same sample; the run and the name of the sample as notes.
     """
     transmission = {
-        f.metadata.get('sample'): str(f.ref)
+        f.metadata.get('sample'): cell_of(f.ref)
         for f in files
         if f.metadata.get('role') == 'transmission'
     }
@@ -194,7 +193,7 @@ def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
             KEY: str(f.metadata['run']),
             'run': f.metadata['run'],
             'name': str(f.metadata.get('sample')),
-            'sample': str(f.ref),
+            'sample': cell_of(f.ref),
             'transmission': transmission.get(f.metadata.get('sample')),
         }
         for f in files
