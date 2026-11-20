@@ -212,6 +212,28 @@ What the manager refuses, such as an empty title, shows at the form, and nothing
 If the batch follows, none follows from then on.
 The page then shows `/` in place of the batch in the history of the browser: the batch that `/` redirects to, the one that follows or the only one left, else the page without a batch.
 
+## The rules of the design
+
+The web layer follows eight rules. Each says where a reader finds a kind of thing, so a change that breaks one needs a reason.
+
+1. **The batch layer decides.** Every rule of rows, settings, sources, reduction and Follow is in `ess.apps.batch`. The web layer says what the batch layer refuses in words for a person and copies no rule. The form in the browser may know a rule to be helpful, such as that a batch that follows has no last row, but the server does not decide it here.
+2. **One lock.** `Pages.lock` is around every request, every step of Follow and every count. Each public method of `Pages` takes it, and a caller may hold it already.
+3. **Each piece of state has one owner, which alone writes it.**
+
+   | Owner | State |
+   |---|---|
+   | the batch layer | the batches: table, settings, header, which batch follows |
+   | `Pages` | the listing of the files and its version, the corrections of runs, what the last step of Follow said |
+   | `Page` | the draft of the settings form, the refusals of the last reduction, its version |
+   | the browser | what is shown: selection, filter, view, tab, sort, axes |
+
+   A `Page` changes its batch through the batch layer, and asks `Pages` for the listing and for what to show of Follow.
+4. **An action answers the state after it.** Each action of a batch answers the `State`, or 422 with a message, or 404 for a label that is no batch. An action of the workspace, such as correcting a run or removing a batch, answers a `Notice`, since the page without a batch has no state.
+5. **A change is noticed by counters.** At each poll the server compares versions and answers 204 until one moved ([How the page learns of changes](#how-the-page-learns-of-changes)). No signal says that a file arrived, so nothing read from the files is kept by the version of a batch; the listing has a version of its own.
+6. **A refusal is a `Problem` or a `Missing`, said in `refusals.py`.** How an exception of the batch layer or of a source reads as a message is decided there, and anything it does not name is a defect and answers 500.
+7. **The browser draws from the state and sends its actions in one queue** ([How the page asks](#how-the-page-asks)).
+8. **The settings form is a draft.** Only **Apply** and **Make this a setting** write settings. While the form holds a change, the page refuses to reduce, to change which parameters are columns, and to give the settings as a file.
+
 ## Layers
 
 The objects of the server; an arrow points from a caller to what it calls, and `Page.poll` compares the numbers named `version` and `files_version` (see [How the page learns of changes](#how-the-page-learns-of-changes)):
