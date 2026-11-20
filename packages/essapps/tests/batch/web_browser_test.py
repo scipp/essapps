@@ -1531,13 +1531,15 @@ def test_a_batch_of_the_rows_that_arrive_later_is_made_without_rows_and_follows(
     page.click('[data-view=batches]')
     page.click('#new-batch-open')
     first = '#new-batch select[name=first]'
-    later = 'no row now, only the rows that arrive later'
+    later = 'no row now'
     page.wait_for_selector(f'{first} option:text-is("{later}")', state='attached')
 
     page.select_option(first, label=later)
     page.wait_for_selector('#new-rows:text-is("The batch gets 0 rows.")')
     page.check('#new-follow input')
-    assert page.inner_text('#new-follow-other') == ''
+    assert page.inner_text('#new-follow-other') == (
+        'The batch gets only the rows that arrive later.'
+    )
     fill_new_batch(page, 'Later')
     page.click('#new-batch [type=submit]')
 
@@ -1546,6 +1548,8 @@ def test_a_batch_of_the_rows_that_arrive_later_is_made_without_rows_and_follows(
     (label,) = (k for k, h in manager.headers().items() if h.title == 'Later')
     assert manager.following == label
     assert manager.batch(label).frame().empty
+    said = 'No rows yet. Follow adds the rows of the runs that arrive.'
+    page.wait_for_selector(f'#rows .empty:text-is("{said}")')
 
 
 def test_a_description_of_two_lines_shows_in_two_lines(

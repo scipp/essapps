@@ -446,7 +446,8 @@ class Pages:
         It starts with the settings of the batch ``new.settings_from``, else
         with those that the application gives its spec. A setting of that
         batch at a column of ``new.columns`` is a column with the setting's
-        value in each row (:func:`~ess.apps.batch.table.with_column`). Raises
+        value in each row (:func:`~ess.apps.batch.table.with_column`), unless
+        the source fills the column: its cells are those of the source. Raises
         :class:`~.page.Problem` with what the file, the manager or the source
         refuses.
         """
@@ -468,11 +469,15 @@ class Pages:
                 columns = [c for c in new.columns if c not in moved]
 
                 def completed(table: pd.DataFrame) -> pd.DataFrame:
-                    """``table`` with the columns of ``new.columns`` it lacks."""
+                    """
+                    ``table`` with the columns of ``new.columns`` it lacks: a
+                    column that the source fills keeps its cells.
+                    """
                     empty = [c for c in columns if c not in table.columns]
                     table = table.assign(**dict.fromkeys(empty))
                     for name in moved:
-                        table = with_column(table, name, given[name])
+                        if name not in table.columns:
+                            table = with_column(table, name, given[name])
                     return table
 
                 rows = choose = None

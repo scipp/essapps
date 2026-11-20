@@ -2197,6 +2197,26 @@ def test_a_setting_of_the_batch_that_is_a_column_of_the_new_one_fills_its_cells(
     assert batch.frame()['thickness'].tolist() == [2.5, 2.5]
 
 
+@pytest.mark.parametrize('way', ['source', 'table file'])
+def test_a_column_that_the_rows_fill_keeps_its_cells_over_a_setting_of_its_name(
+    http: TestClient, manager: BatchManager, way: str
+) -> None:
+    manager.create(STAGED.name, title='X', settings={'sample': 'run:1'}, label='x')
+
+    if way == 'source':
+        sent = new_batch(settings_from='x', columns=['sample', 'transmission'])
+        made = http.post('/api/batches', json=sent).json()
+        given = ['uuid:run-1', 'uuid:run-2']
+    else:
+        text = 'key,sample,transmission\na,run:5,run:1001\nb,run:6,run:1002\n'
+        made = from_table(http, text, settings_from='x').json()
+        given = ['run:5', 'run:6']
+
+    batch = manager.batch(made['label'])
+    assert batch.frame()['sample'].tolist() == given
+    assert 'sample' not in batch.settings
+
+
 def from_table(http: TestClient, text: str, **given: Any) -> Any:
     """Make a batch from a table file ``rows.csv`` that holds ``text``."""
     query = {'spec': STAGED.name, 'title': 'From a file', 'name': 'rows.csv'} | given

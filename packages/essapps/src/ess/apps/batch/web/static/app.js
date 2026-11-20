@@ -297,10 +297,12 @@ function showColumns(state) {
   rows.setColumns(columns, edits);
 }
 
+const NO_ROWS = 'No rows. Add a row, or load a table from the Files menu.';
+
 function build(state) {
   rows = new Grid($('rows'), {
     ...gridColumns(state),
-    placeholder: 'No rows. Add a row, or load a table from the Files menu.',
+    placeholder: NO_ROWS,
     edit: (keys, column, value) => act('cells', {keys, column, value}),
     select: (keys) => {
       view.selected = keys;
@@ -632,15 +634,17 @@ function chooseSource() {
   if (kind === 'source') loadSourceRows(source.name);
 }
 
-// Which batch stops following if the batch made follows.
-// Beside Follow: how many rows taken are reduced at once if ticked, and which
-// batch stops following.
+// Beside Follow: if ticked, how many rows taken are reduced at once, or that
+// the batch gets only the rows that arrive later; and which batch stops
+// following.
 function drawFollowChoice() {
   const other = view.batchData?.rows.find((batch) => batch.follows);
   const ticked = $('new-batch').elements.follow.checked;
   const n = ticked && sourceRows ? sourceRows.rows.filter((row) => row.mark === 'taken').length : 0;
+  const none = ticked && rangeChosen().later;
   $('new-follow-other').textContent = [
     n ? `${count(n)} taken ${n === 1 ? 'is' : 'are'} reduced at once.` : '',
+    none ? 'The batch gets only the rows that arrive later.' : '',
     other ? `${other.title} ${ticked ? 'stops following' : 'follows'}.` : '',
   ].join(' ').trim();
 }
@@ -701,7 +705,7 @@ async function loadSourceRows(name) {
   elements.first.replaceChildren(
     h('option', {value: '', text: 'the first'}),
     ...filled.map(option),
-    h('option', {value: '', 'data-later': true, text: 'no row now, only the rows that arrive later'}),
+    h('option', {value: '', 'data-later': true, text: 'no row now'}),
   );
   elements.last.replaceChildren(h('option', {value: '', text: 'the last'}), ...filled.map(option));
   chooseFollow();
@@ -943,6 +947,7 @@ function renderFollow(follow) {
   const waiting = follow.waiting ? `; ${count(follow.waiting)} of the source wait to be filled` : '';
   status.textContent = follow.failure ?? `Following, every ${follow.interval} s${waiting}`;
   status.title = status.textContent;
+  rows.empty.textContent = follow.on ? 'No rows yet. Follow adds the rows of the runs that arrive.' : NO_ROWS;
 }
 
 // Stop Follow, once the person agrees that it cannot be turned on again.

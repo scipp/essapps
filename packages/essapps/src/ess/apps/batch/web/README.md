@@ -151,7 +151,7 @@ The page remembers in the session of the browser, so that a reload or a return t
 |---|---|
 | Title, Description | the header of the batch; the title is required |
 | Rows | from a source that the application registers (`BatchManager(sources=...)`), from a table file, or "none: no rows" |
-| Range | with a source: the first and the last row to take, each open if not chosen, among the rows that the source has filled now (`source.between`); or, as the last choice of "From", no row now, only the rows that arrive later (`later`); the table below lists every row the source makes, marked by the server as taken, left out, or waiting (`GET api/sources/rows?name=...&first=...&last=...&later=...`) |
+| Range | with a source: the first and the last row to take, each open if not chosen, among the rows that the source has filled now (`source.between`); or, as the last choice of "From", no row now (`later`): the batch gets only the rows added later, by Follow if ticked, else with **+ Add rows from the runs**; the table below lists every row the source makes, marked by the server as taken, left out, or waiting (`GET api/sources/rows?name=...&first=...&last=...&later=...`) |
 | Table file | from a table file: a `.csv`, `.tsv` or `.xlsx` file with a column `key` (`table.read_table`) |
 | Workflow | a spec that the workspace binds and that has a parameter for each column that the source fills; any spec without a source |
 | Settings | on the page of a batch: start with the settings of that batch, else with those that the application gives; a setting of that batch at a column ticked fills the cells of that column |
@@ -177,7 +177,8 @@ label = manager.create(spec, title=title, source=source,
 The batch is made in one call, so it is made as asked or not at all; a batch that follows replaces the one before only if it is made.
 
 Opened on the page of a batch, the form starts at that batch's source, workflow, columns and settings, so the next batch is this form with a range that starts later, and Follow ticked by the person.
-"From" starts at the first row, so a batch with Follow reduces every row taken again; "no row now" makes a batch of only the rows that arrive from now on.
+"From" starts at the first row, so a batch with Follow reduces every row taken again; "no row now" with Follow makes a batch of only the rows that arrive from now on.
+A batch that follows and has no row yet says so where its rows would be.
 Follow is off unless ticked, since it stops the batch that follows, for good, and reduces the rows taken within seconds, with the settings chosen.
 
 The choices come from `GET api/sources`; what can be made is decided by `BatchManager.create`, and what it refuses, such as an empty title, shows at the form, with nothing made.
