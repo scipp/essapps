@@ -693,6 +693,53 @@ def test_the_failure_of_a_step_shows_on_the_page_of_the_batch_that_follows_only(
     assert shown.failure is None
 
 
+@pytest.fixture
+def unmarked(manager: BatchManager, label: str) -> tuple[Pages, Page]:
+    """
+    Pages without a Runs view, and the page of a batch that does not follow,
+    once a step on ``label`` has run.
+    """
+    pages = Pages(manager)
+    other = pages.page(manager.create(STAGED.name, title='Other', source='pairs'))
+    pages.tick()
+    return pages, other
+
+
+def test_a_run_that_a_step_finds_reaches_the_pickers_of_another_page(
+    unmarked: tuple[Pages, Page], sample: Measure
+) -> None:
+    pages, other = unmarked
+    seen = other.version
+    sample(1, 'water', partner=False)  # a row that waits, so no record is made
+
+    pages.tick()
+
+    shown = other.poll(seen, other.start)
+    assert shown is not None
+    (column,) = (c for c in shown.columns if c.name == 'sample')
+    assert column.editor is not None
+    assert 'run 1 (sample)' in column.editor.options
+
+
+def test_files_that_a_step_cannot_list_are_said_on_another_page_until_listed(
+    unmarked: tuple[Pages, Page], fake: FakeFiles
+) -> None:
+    pages, other = unmarked
+    listed = fake.list
+    fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
+
+    pages.tick()
+    failed = other.poll(other.version, other.start)
+    fake.list = listed
+    pages.tick()
+    listed_again = other.poll(other.version, other.start)
+
+    assert failed is not None
+    assert failed.files_problem == 'The files cannot be listed: half written'
+    assert listed_again is not None
+    assert listed_again.files_problem is None
+
+
 def test_the_failure_of_the_batch_that_followed_is_not_said_on_the_next_that_follows(
     page: Page, pages: Pages, fake: FakeFiles
 ) -> None:
