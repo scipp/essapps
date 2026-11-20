@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """A batch on a real in-process workspace with fake workflows."""
 
+import csv
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from ess.apps.batch import (
     CorrectedFiles,
     FolderDefinitions,
     NotKept,
+    RowState,
     earlier_settings,
     left_to_reduce,
     ready,
@@ -23,9 +25,11 @@ from ess.apps.batch import (
 )
 from ess.apps.batch.definition import settings_key, template_of
 from ess.apps.batch.table import as_request, cell_of, data_of
+from ess.apps.folder import ArrivingFiles, open_folder, write_files_table
 from ess.apps.log import Log
 from ess.apps.testing import CountingClient, FakeFiles, FakeStore, StagedFunction
 from ess.spec import (
+    Binding,
     FileRef,
     Referenced,
     RunFile,
@@ -47,6 +51,7 @@ from .toys import (
     Refusing,
     edit,
     rows,
+    unreachable,
 )
 
 PLAIN_V2 = PLAIN.model_copy(update={'version': 2})
@@ -704,6 +709,57 @@ def test_a_file_named_before_it_is_measured_is_a_problem_until_it_is(
     assert ready(before) == ['1', '2']
     assert measured.state(compare=False)['9'].problems == ()
     assert (after['9'].problems, after['9'].text) == ((), 'ready')
+
+
+def texts(states: dict[str, RowState]) -> dict[str, str]:
+    return {key: s.text for key, s in states.items()}
+
+
+def test_a_file_the_source_cannot_read_is_a_problem_of_its_rows_until_it_can(
+    measured: Batch, fake: FakeFiles
+) -> None:
+    with unreachable(fake, 'metadata', [FileRef(file='uuid:run-1')]):
+        before = measured.state()
+    after = measured.state()
+
+    assert [(e.loc, e.msg) for e in before['1'].problems] == [
+        (('sample',), 'file uuid:run-1 cannot be read: the mount is gone')
+    ]
+    assert texts(before) == {'1': 'incomplete', '2': 'ready'}
+    assert texts(after) == {'1': 'ready', '2': 'ready'}
+
+
+def test_while_no_file_resolves_a_result_stays_unless_its_cell_names_the_file_anew(
+    measured: Batch, client: Client, fake: FakeFiles
+) -> None:
+    client.wait(measured.reduce(['1', '2']))
+    edit(measured, '2', sample='run:2')  # as the record holds it, once resolved
+    edit(measured, '3', sample='uuid:run-1', transmission='uuid:run-1001')
+
+    with unreachable(fake, 'resolve'):
+        states = measured.state()
+
+    assert texts(states) == {'1': 'done', '2': 'incomplete', '3': 'incomplete'}
+
+
+def test_while_the_table_of_files_is_broken_each_row_that_names_a_file_waits(
+    folder: Path, folder_bindings: list[Binding], table: pd.DataFrame
+) -> None:
+    with (folder / 'files.csv').open() as f:
+        listed = list(csv.DictReader(f))
+    with open_folder(folder, folder_bindings, files=ArrivingFiles(folder)) as client:
+        batch = Batch(client, PLAIN, label='s', rows=table)
+        write_files_table(folder, [*listed, {'file': 'gone.json', 'run': 9}])
+        broken = batch.state()
+        write_files_table(folder, listed)
+        mended = batch.state()
+
+    assert texts(broken) == {'a': 'incomplete', 'b': 'incomplete'}
+    ((at, reason),) = [(e.loc, e.msg) for e in broken['a'].problems]
+    assert at == ('sample',)
+    assert reason.startswith('file run:1 cannot be read: ')
+    assert reason.endswith('gone.json')
+    assert texts(mended) == {'a': 'ready', 'b': 'ready'}
 
 
 def _request_of(batch: Batch, key: str) -> Any:

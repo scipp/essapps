@@ -398,6 +398,10 @@ stateDiagram-v2
 ```
 
 A problem is any of `RowState.problems`: a value missing, such as an empty cell of a column that the source fills, a cell that the workspace refuses, or a referenced record that failed.
+The workspace refuses a cell that names a file that the file source does not know, or cannot read now: it raised `OSError`, as when a mount is gone or a catalogue timed out.
+Only the rows that name that file have the problem, and the reason names the file.
+A refusal is not kept, so the next state resolves the cell again, and the problem goes once the file is known and can be read.
+A row with a result whose cell names the file as its record holds it resolves nothing, so it keeps reading `done`.
 A problem goes when a cell is filled or changed, or a setting is applied.
 A row with a problem reads `incomplete` whatever its word but `running`, also when it has a result, as a `done` row whose source-filled cell is emptied; the arrow from the box stands for these.
 A cell emptied counts as a setting: the row reads `earlier` if the setting or default that it then takes differs from what the cell held.
