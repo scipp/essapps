@@ -94,7 +94,8 @@ The view **Batches**, next to the rows and **Runs**, lists every batch of the wo
 Each title is a link to the page of its batch.
 Opening the view, and **Count again**, counts the rows of each batch by status (`Pages.counts`).
 The statuses are those of the chips of each batch's page (`RowState.text`).
-A count reads the state of every batch under the lock of all pages, so the pages and Follow wait until it ends.
+A count reads the state of each batch whose version (`Batch.version`), or that of the runs, moved since the last count, under the lock of all pages, so the pages and Follow wait until it ends.
+A batch that nothing changed keeps its counts: as on its page, a file that a row names and that arrives shows once something else moves, such as the runs listed again.
 A batch that cannot be counted, such as one whose table cannot be read, shows why in its row.
 No poll counts, so the counts shown are those of the last count; a count that fails shows none.
 The list and the Runs view are the same on every page.
@@ -182,6 +183,7 @@ ess.apps.batch    the logic: BatchManager, step, Batch, table, states,
 The page asks for `GET api/state?after=<version>&start=<start>`, relative to its own URL `batches/<label>/`, every second.
 The server answers 204 if nothing changed since `version`, and else the whole `State`.
 `version` counts each action, each step of Follow that changes what the page shows (the rows, the runs, the records, the refusals, or its failure), each change of the batch that follows, and each change of the workspace's records, such as a reduction that finished.
+The server learns of these by numbers that count them, `Batch.version`, `BatchManager.version` and `Pages.runs_version`, and compares only these at each poll.
 `start` is new at each start of the server; a page that sees another one loads again.
 `State.runs` counts the changes of the runs, which all pages share; the Runs view asks for `api/runs` when it moves.
 `State.batches` lists the batches, so the version moves when the headers of the batches or the batch that follows change, whoever changed them; only the page without a batch asks for `api/batches`.

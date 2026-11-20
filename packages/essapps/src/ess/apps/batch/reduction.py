@@ -152,6 +152,16 @@ class Batch:
         template.
     settings_fields:
         The other parameters of the spec: the settings.
+    version:
+        A number that moves whenever :meth:`frame`, :meth:`template` or
+        :meth:`shown` may give something else: while it is the same, they
+        give the same, but for the files. A :meth:`put` that writes, an
+        assignment of :attr:`settings`, :meth:`make_column`,
+        :meth:`make_setting`, and any change of the proposal's records, which
+        reading it brings in (``client.changes``), move it; a :meth:`put` of
+        an equal table does not. A file that arrives, or that gains a
+        catalogue identifier, can change the state of a row and does not
+        move it.
 
     Raises
     ------
@@ -175,6 +185,7 @@ class Batch:
         self.spec = spec
         self.label = label
         self._definitions = definitions
+        self._version = 0
         self._template = Template(spec, params=copy.deepcopy(dict(settings or {})))
         self._set(typed(pd.DataFrame() if rows is None else rows, spec.params))
         self._staged = staged
@@ -202,6 +213,12 @@ class Batch:
         self._template = Template(
             self.spec, params=self._template.params, blanks=blanks
         )
+        self._version += 1
+
+    @property
+    def version(self) -> int:
+        self._poll()
+        return self._version
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -283,6 +300,7 @@ class Batch:
         )
         self._save(template)
         self._template = template
+        self._version += 1
 
     def make_column(self, name: str) -> None:
         """
@@ -468,6 +486,8 @@ class Batch:
         else:
             changes = self.client.changes(after=self._cursor)
             self._cursor = changes.cursor
+            # Any record, since a cell may reference a record under another label.
+            self._version += bool(changes.records)
             # A record is in the changes when submitted and when it finishes,
             # so one seen before is not newer than the result held.
             new = [i for i in changes.records if i not in self._seen]

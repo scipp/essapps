@@ -10,7 +10,8 @@ The pages share one lock. Every request of every page and each step of Follow
 take it, so that what the pages share, such as the corrections of runs and
 the batches of the manager, changes in one request at a time. One person
 works with the application, so a request waits for at most one step, or for
-the counts (:meth:`Pages.counts`), which read the state of every batch.
+the counts (:meth:`Pages.counts`), which read the state of each batch that
+changed since the last count.
 
 The runs are the same on every page (:meth:`Pages.runs`), and a person
 corrects them on any page, with or without a batch (:meth:`Pages.correct`).
@@ -159,6 +160,8 @@ class Pages:
         self.failure: str | None = None
         self.last: tuple[str, Step] | None = None
         self._pages: dict[str, Page] = {}
+        # The counts of each batch, by label, with what they were counted at.
+        self._counted: dict[str, tuple[tuple[object, ...], dict[str, int]]] = {}
 
     def page(self, label: str) -> Page:
         """
@@ -508,22 +511,29 @@ class Pages:
 
         The state of each batch is read as its page reads it, without asking
         its source, and not compared while its settings are refused
-        (:meth:`~ess.apps.batch.Batch.shown`). A batch that
-        cannot be made, such as one whose table cannot be read, has its
-        reason in ``failed``.
+        (:meth:`~ess.apps.batch.Batch.shown`), only if its version or that of
+        the runs moved since the last count; the version of a batch does not
+        count the files. A batch that cannot be made, such as one whose table
+        cannot be read, has its reason in ``failed``.
         """
         with self.lock:
             manager = self.manager
-            rows: dict[str, dict[str, int]] = {}
+            counted: dict[str, tuple[tuple[object, ...], dict[str, int]]] = {}
             failed: dict[str, str] = {}
             for label in manager.headers():
                 try:
                     batch = manager.batch(label)
-                    states, _ = batch.shown()
+                    # The batch itself too: one made again has its own versions.
+                    at = (batch, batch.version, self.runs_version)
+                    if (kept := self._counted.get(label)) is None or kept[0] != at:
+                        states, _ = batch.shown()
+                        kept = at, dict(Counter(s.text for s in states.values()))
                 except (ValueError, OSError) as error:
                     failed[label] = why(error)
                     continue
-                rows[label] = dict(Counter(s.text for s in states.values()))
+                counted[label] = kept
+            self._counted = counted
+            rows = {label: counts for label, (_, counts) in counted.items()}
             return BatchCounts(rows=rows, failed=failed)
 
 
