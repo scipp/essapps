@@ -91,7 +91,8 @@ Whatever a step raises, from the files, the workflow or the workspace, is the st
 ## The list of batches
 
 The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, and which batch follows; the batch shown is marked.
-A click on a row of the list shows its batch, and the view stays Batches, as a click on a row of the grid shows that row in the row tab; a click on the title shows its batch in the Rows view.
+A click on a row of the list shows its batch, and the view stays Batches: the right pane then shows that batch. A click on the title shows its batch in the Rows view.
+The page shows one batch, so the list has no checkboxes.
 The title is a link to the page of its batch, so a click with a modifier key, or with the middle button, opens it in another tab.
 The label and the description are text to select and copy: a click on them, or one that selects text, shows no batch.
 While the view is shown, the page counts the rows of each batch by status (`Pages.counts`), the next count 2 s after the answer of the one before; nothing counts while another view is shown, or while the tab of the browser is hidden.
