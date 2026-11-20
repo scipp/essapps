@@ -243,10 +243,12 @@ def test_an_action_of_one_page_reaches_another_at_its_next_poll(
 def test_a_rescan_offers_the_runs_it_found_and_changes_no_row(
     http: TestClient, sample: Measure
 ) -> None:
+    before = state(http)['runs']
     sample(4, 'salt')
 
     listed = http.post('/api/relist').json()
 
+    assert listed['runs'] > before  # the Runs view asks for the runs again
     assert [row['key'] for row in listed['rows']] == ['1', '2', '3']
     (transmission,) = [c for c in listed['columns'] if c['name'] == 'transmission']
     assert any(o.startswith('run 1004') for o in transmission['editor']['options'])
