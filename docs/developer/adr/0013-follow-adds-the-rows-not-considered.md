@@ -61,10 +61,12 @@ It sets no cell and removes no row. A transmission run measured again changes no
 A source whose row grows, such as the runs of a sample so far, gives it a new key, so the grown list is a new row:
 
 ```
-after run 1:  si@1  runs=[1]
-after run 2:  si@2  runs=[1, 2]      # si@1 is no longer given; the table keeps it
-after run 3:  si@3  runs=[1, 2, 3]
+after run 2:  si@2      runs=[2]
+after run 4:  si@2,4    runs=[2, 4]      # si@2 is no longer given; the table keeps it
+after run 3:  si@2,3,4  runs=[2, 3, 4]   # listed after run 4, still a new key
 ```
+
+The key of a row that grows must name its list, since a step adds a row only under a key that the batch has not considered; for a long series an application would use a digest of the list.
 
 What removes a bad run from the later rows is a correction of the run, which the source reads.
 

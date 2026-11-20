@@ -659,7 +659,7 @@ def iofq_batch(client):
 
 Actor: reflectometry user during a beamtime. Goal: after each angle, the newest row of a sample is its curve with all angles so far.
 
-The source gives one row per sample: its runs so far, under a key that names the sample and its newest run. A list that grows is a new row, which Follow adds and reduces as any row ([ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md), "A step never changes a row that the table has"). The earlier rows stay with their results.
+The source gives one row per sample: its runs so far, under a key that names the sample and its runs. A list that grows is a new row, which Follow adds and reduces as any row ([ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md), "A step never changes a row that the table has"). The earlier rows stay with their results. The key names the whole list, so runs listed out of order give a new row too.
 
 ```python
 reference = measure(1, [1.0, 1.0], role='reference')
@@ -669,26 +669,28 @@ def angles(files):                                             # a row per sampl
     for f in sorted(files, key=lambda f: f.metadata['run']):
         if f.metadata.get('role') == 'sample':
             runs.setdefault(f.metadata['sample'], []).append(f)
-    keys = [f'{sample}@{found[-1].metadata["run"]}' for sample, found in runs.items()]   # si@2, si@3, ...
+    keys = [f'{sample}@{",".join(str(f.metadata["run"]) for f in found)}'   # si@2, si@2,4, ...
+            for sample, found in runs.items()]
     return pd.DataFrame({'sample': list(runs),
                          'runs': [[f.ref.file for f in found] for found in runs.values()]}, index=keys)
 
 source = Source(angles, fills=('runs',))
 batch = Batch(client, STITCH, label='reflectivity', rows=rows_of(client, source),
               persist=True, settings={'reference': reference})
+counts = {2: [1.0, 2.0], 3: [1.0, 1.0], 4: [4.0, 8.0]}
 considered, reduced = frozenset(), {}
-for run, counts in [(2, [1.0, 2.0]), (3, [1.0, 1.0]), (4, [4.0, 8.0])]:
-    measure(run, counts, role='sample', sample='si')
+for run, key in [(2, 'si@2'), (4, 'si@2,4'), (3, 'si@2,3,4'), (2, None)]:   # 4 before 3; 2 listed again
+    measure(run, counts[run], role='sample', sample='si')
     done = step(batch, source, considered)
     considered = done.considered
     reduced |= done.records
-    assert list(done.records) == [f'si@{run}']                # the newest row only
+    assert list(done.records) == ([] if key is None else [key])  # the same list again is the same key: no row
     client.wait(done.records)
 
 states = batch.state()
 user = connect()                                               # any client of the proposal
-newest = user.latest('reflectivity', member='si@4')
-assert list(batch.frame().index) == ['si@2', 'si@3', 'si@4']
+newest = user.latest('reflectivity', member='si@2,3,4')
+assert list(batch.frame().index) == ['si@2', 'si@2,4', 'si@2,3,4']
 assert [len(r.request.params['runs']) for r in reduced.values()] == [1, 2, 3]
 assert user.output(newest, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
 assert {k: s.record for k, s in states.items()} == reduced     # the earlier rows keep their results

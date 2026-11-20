@@ -44,13 +44,17 @@ def iofq_batch(client: Client) -> Batch:
 def angles(files: Sequence[FileInfo]) -> pd.DataFrame:
     """
     A row per sample: its runs so far, in run order, keyed by the sample and
-    its newest run, so that a list that grows is a new row.
+    the runs, so that a list that grows is a new row, whatever the order the
+    runs are listed in.
     """
     runs: dict[str, list[FileInfo]] = {}
     for f in sorted(files, key=lambda f: f.metadata['run']):
         if f.metadata.get('role') == 'sample':
             runs.setdefault(f.metadata['sample'], []).append(f)
-    keys = [f'{sample}@{found[-1].metadata["run"]}' for sample, found in runs.items()]
+    keys = [
+        f'{sample}@{",".join(str(f.metadata["run"]) for f in found)}'
+        for sample, found in runs.items()
+    ]
     return pd.DataFrame(
         {
             'sample': list(runs),
@@ -73,21 +77,24 @@ def test_e1_series_grows_reduction_follows(
         persist=True,
         settings={'reference': reference},
     )
+    counts = {2: [1.0, 2.0], 3: [1.0, 1.0], 4: [4.0, 8.0]}
 
     considered: frozenset[str] = frozenset()
     reduced: dict[str, Record] = {}
-    for run, counts in [(2, [1.0, 2.0]), (3, [1.0, 1.0]), (4, [4.0, 8.0])]:
-        measure(run, counts, role='sample', sample='si')
+    # Run 4 is listed before run 3, and run 2 is listed again at the end.
+    for run, key in [(2, 'si@2'), (4, 'si@2,4'), (3, 'si@2,3,4'), (2, None)]:
+        measure(run, counts[run], role='sample', sample='si')
         done = step(batch, source, considered)
         considered = done.considered
         reduced |= done.records
-        assert list(done.records) == [f'si@{run}']  # the newest row only
+        # The newest row only; the same list again is the same key: no row.
+        assert list(done.records) == ([] if key is None else [key])
         client.wait(done.records)
 
     states = batch.state()
     user = connect()  # any client of the proposal
-    newest = user.latest('reflectivity', member='si@4')
-    assert list(batch.frame().index) == ['si@2', 'si@3', 'si@4']
+    newest = user.latest('reflectivity', member='si@2,3,4')
+    assert list(batch.frame().index) == ['si@2', 'si@2,4', 'si@2,3,4']
     assert [len(r.request.params['runs']) for r in reduced.values()] == [1, 2, 3]
     assert user.output(newest, 'stitched').curve.values.tolist() == [
         1.0,
