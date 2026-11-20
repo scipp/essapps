@@ -426,15 +426,15 @@ export class Grid {
   }
 }
 
-const STATUS_ORDER = ['failed', 'incomplete', 'outdated', 'cancelled', 'ready', 'running', 'done'];
+const STATUS_ORDER = ['failed', 'incomplete', 'outdated', 'cancelled', 'ready', 'running', 'earlier', 'done'];
 
-// The status of a row as a pill, with a mark if its result was reduced with
-// earlier settings; the tooltip says why.
+// The status of a row as a pill, with the settings that changed beside it if
+// its result was reduced with earlier settings; the tooltip says why.
 export const statusColumn = {
   title: 'Status',
   field: 'status',
-  width: 200,
-  minWidth: 200,
+  width: 260,
+  minWidth: 260,
   resizable: false,
   sorter: (a, b) => STATUS_ORDER.indexOf(a) - STATUS_ORDER.indexOf(b),
   formatter: (cell) => {
@@ -443,7 +443,7 @@ export const statusColumn = {
       'span',
       {class: 'status'},
       h('span', {class: `pill st-${row.status}`}, row.status),
-      row.earlier && h('span', {class: 'earlier', text: 'earlier settings'}),
+      row.changed && h('span', {class: 'changed', text: row.changed}),
     );
   },
   tooltip: (event, cell) => cell.getData().reason,

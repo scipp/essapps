@@ -53,6 +53,7 @@
             <button type="button" class="primary more" id="reduce-more" aria-haspopup="true" aria-label="Other ways to reduce">▾</button>
             <div class="menu-items" role="menu" hidden>
               <button type="button" data-reduce="remaining">Reduce remaining <small id="n-remaining"></small></button>
+              <button type="button" data-reduce="earlier">Reduce rows of earlier settings <small id="n-earlier"></small></button>
               <button type="button" data-reduce="all">Reduce all again <small id="n-again"></small></button>
               <button type="button" data-reduce="selected">Reduce selected <small id="n-selected"></small></button>
             </div>
@@ -86,7 +87,7 @@
         </div>
         <form class="new-batch header-form" id="new-batch" hidden>
           <div class="field"><label for="new-title">Title</label><input type="text" id="new-title" name="title"></div>
-          <div class="field"><label for="new-description">Description</label><input type="text" id="new-description" name="description"></div>
+          <div class="field"><label for="new-description">Description</label><textarea id="new-description" name="description" rows="3"></textarea></div>
           <div class="field"><label for="new-source">Rows</label><select id="new-source" name="source"></select><small id="new-rows"></small></div>
           <div class="field" id="new-range">
             <span>Range</span>
@@ -129,7 +130,7 @@
     <aside class="right">
       <div class="tabs" role="tablist">
         <button type="button" role="tab" data-tab="result" aria-selected="true">Result</button>
-        <button type="button" role="tab" data-tab="settings" aria-selected="false">Settings <span class="badge" id="settings-badge" hidden>!</span></button>
+        <button type="button" role="tab" data-tab="settings" aria-selected="false">Settings <span class="badge" id="settings-badge" hidden>!</span><span class="badge earlier" id="earlier-badge" hidden></span></button>
         <button type="button" role="tab" data-tab="row" aria-selected="false" id="tab-row-label">Row</button>
         <button type="button" role="tab" data-tab="batch" aria-selected="false">Batch</button>
       </div>
@@ -150,12 +151,12 @@
       </div>
       <div class="tab" id="tab-settings" hidden>
         <p class="hint" id="settings-hint">Shared by every row. A change is in force after Apply, for the rows not reduced yet.</p>
-        <div class="earlier" id="earlier" hidden>
-          <span class="hint" id="earlier-hint"></span>
+        <div class="settings-bar earlier" id="earlier" hidden>
+          <span class="settings-bar-state" id="earlier-state"></span>
           <button type="button" id="reduce-earlier">Reduce them again</button>
         </div>
-        <div class="draft" id="draft">
-          <span class="draft-state" id="draft-state"></span>
+        <div class="settings-bar draft" id="draft">
+          <span class="settings-bar-state" id="draft-state"></span>
           <button type="button" class="primary" id="settings-apply">Apply</button>
           <button type="button" id="settings-discard">Discard</button>
         </div>
@@ -170,7 +171,7 @@
         <form class="param header-form" id="batch-form">
           <h3>Title and description</h3>
           <div class="field"><label for="batch-title">Title</label><input type="text" id="batch-title" name="title"></div>
-          <div class="field"><label for="batch-description">Description</label><input type="text" id="batch-description" name="description"></div>
+          <div class="field"><label for="batch-description">Description</label><textarea id="batch-description" name="description" rows="3"></textarea></div>
           <p class="problem" id="batch-problem"></p>
           <div class="buttons"><button type="submit" class="primary">Save</button></div>
         </form>

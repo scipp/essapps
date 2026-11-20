@@ -192,11 +192,10 @@ def earlier_and_new() -> dict[str, RowState]:
     )
 
 
-def test_a_row_of_earlier_settings_reads_done() -> None:
+def test_a_row_of_earlier_settings_reads_earlier() -> None:
     found = earlier_and_new()
 
-    assert {k: s.text for k, s in found.items()} == {'a': 'done', 'b': 'ready'}
-    assert [k for k, s in found.items() if s.earlier] == ['a']
+    assert {k: s.text for k, s in found.items()} == {'a': 'earlier', 'b': 'ready'}
 
 
 @pytest.mark.parametrize(

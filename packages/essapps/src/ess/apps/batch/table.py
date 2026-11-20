@@ -426,7 +426,7 @@ def frame_of(data: Any) -> pd.DataFrame:
     return pd.DataFrame(columns, index=index, columns=names)
 
 
-RESULT = ('status', 'earlier', 'record', 'failure')
+RESULT = ('status', 'record', 'failure')
 """The columns of what came of each row, which a table file may hold."""
 
 _READERS: dict[str, Callable[..., pd.DataFrame]] = {

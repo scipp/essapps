@@ -50,12 +50,12 @@ as a page does, so a label is one batch whoever works on it:
 The guide is ``packages/essapps/docs/batch.md``.
 
 The table written has the columns ``status``, in the words of the page,
-such as ``done`` or ``failed``, ``earlier``, whether the row was reduced with
-earlier settings, ``record`` and ``failure`` (:func:`.frames.with_results`).
+such as ``done``, ``earlier`` (reduced with earlier settings) or ``failed``,
+``record`` and ``failure`` (:func:`.frames.with_results`).
 
 Exit status: 0 if done, and every row is done; 1 for an error; 2 if the
-command or a row was refused, so that nothing ran; 3 if a row is not done, or
-``--remaining`` left a row reduced with earlier settings.
+command or a row was refused, so that nothing ran; 3 if a row is not done,
+such as one that ``--remaining`` left as ``earlier``.
 """
 
 from __future__ import annotations
@@ -344,12 +344,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command != 'reduce':
         return 0
     # Only --remaining without --earlier-settings leaves such rows.
-    if left := int(result['earlier'].sum()):
+    if left := int((result['status'] == 'earlier').sum()):
         sys.stderr.write(
             f'left {left} row{"s" if left > 1 else ""} reduced with earlier '
             'settings: add --earlier-settings to reduce them\n'
         )
-    return 0 if all(result['status'] == 'done') and not left else 3
+    return 0 if all(result['status'] == 'done') else 3
 
 
 if __name__ == '__main__':

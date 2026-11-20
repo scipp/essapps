@@ -10,9 +10,9 @@ with a template, keeping nothing; :func:`reduce_batch` reduces the rows of a
 batch, such as one of a manager. Both return the table with the columns of
 :data:`RESULT`, so the table that comes back is the table that went in::
 
-    key    sample     name    status  earlier  record    failure
-    60339  run:60339  water   done    False    3f2a...
-    60340  run:60340  sds     failed  False    81c0...   refused: ...
+    key    sample     name    status  record    failure
+    60339  run:60339  water   done    3f2a...
+    60340  run:60340  sds     failed  81c0...   refused: ...
 
 :func:`described` gives the table of files of a folder what a person's run
 table says of each file.
@@ -222,10 +222,9 @@ def with_results(
     ``frame``, the table of a batch or some of its rows, with the columns of
     :data:`RESULT`, replaced if it has them: what ``states`` say of the row of
     each key. ``status`` is the row's status in the words of the page
-    (:attr:`~.state.RowState.text`), ``earlier`` whether it was reduced with
-    earlier settings (:attr:`~.state.RowState.earlier`), ``record`` the ID of
-    its result, and ``failure`` why that failed; each text is empty where
-    there is nothing to say.
+    (:attr:`~.state.RowState.text`), ``record`` the ID of its result, and
+    ``failure`` why that failed; each text is empty where there is nothing to
+    say.
     """
     keys = list(frame.index)
     records = [states[key].record for key in keys]
@@ -233,7 +232,6 @@ def with_results(
     failure = dict(zip((r.id for r in found), client.failure(found), strict=True))
     return frame.drop(columns=list(RESULT), errors='ignore').assign(
         status=[states[key].text for key in keys],
-        earlier=[states[key].earlier for key in keys],
         record=['' if r is None else r.id for r in records],
         failure=['' if r is None else failure[r.id] or '' for r in records],
     )
