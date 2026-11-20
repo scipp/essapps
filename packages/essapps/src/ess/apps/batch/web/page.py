@@ -15,10 +15,11 @@ corrections keep their part in their definitions, if given them
 and answers a :class:`Problem`.
 
 The page shows the table of the batch as it is kept, without its source and
-without the files: a cell that names a file that is not found is a problem of
-its row. Each action that changes rows builds a frame with one change and
-gives it to :meth:`~ess.apps.batch.Batch.put`: an edit of cells, a row added
-or removed, a table file loaded, which replaces the table. A cell is plain
+without the files: a cell that names a file that is not found, or that the
+file source cannot read, is a problem of its row. Each action that changes
+rows builds a frame with one change and gives it to
+:meth:`~ess.apps.batch.Batch.put`: an edit of cells, a row added or removed,
+a table file loaded, which replaces the table. A cell is plain
 data (:mod:`..table`): a value that a picker gives is kept as
 :func:`~..table.cell_of` makes it, and shown as the listing names it. A row is
 named by its note ``name`` if the table has one, else by its key, and "Add

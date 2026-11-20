@@ -49,6 +49,7 @@ A column that the source of the batch fills has no field in the Settings tab and
 Both are refused while the settings form holds a change, since the page then builds the form and the cell editors again.
 **Download as CSV** and **Download as XLSX** give the table with the results of its rows (`frames.with_results`).
 If the file source raises, the page shows the table, the results and the plots all the same; the pickers offer no file, the Runs view is empty, and both say why.
+A row whose cell names a file that the source cannot read reads `incomplete`, with the reason at the cell, until the source reads the file again ([the state of a row](../../../../../docs/batch.md#the-state-of-a-row-and-the-rules-over-it)).
 
 ## Settings and Follow
 

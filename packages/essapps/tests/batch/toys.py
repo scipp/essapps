@@ -5,7 +5,8 @@ A toy reduction: a row is a sample run and its transmission run.
 """
 
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
+from contextlib import contextmanager
 from typing import Annotated, Any
 
 import pandas as pd
@@ -23,6 +24,7 @@ from ess.apps.batch import (
 )
 from ess.apps.batch.definition import Key
 from ess.apps.batch.table import KEY
+from ess.apps.testing import FakeFiles
 from ess.spec import FileRef, Referenced, RunFile, WorkflowSpec
 
 
@@ -141,6 +143,29 @@ class Flaky:
             self.fail -= 1
             raise ConnectionError('lost')
         return self._client.submit(*args, **kwargs)
+
+
+@contextmanager
+def unreachable(
+    fake: FakeFiles, method: str, refs: Collection[FileRef] = ()
+) -> Iterator[None]:
+    """
+    While open, ``method`` of ``fake``, ``'resolve'`` or ``'metadata'``, raises
+    ``OSError`` for the files named in ``refs``, or, if none are given, at every
+    call, also of ``'list'``: as a file source does whose mount is gone.
+    """
+    given = getattr(fake, method)
+
+    def raising(arg: Any) -> Any:
+        if not refs or arg in refs:
+            raise OSError('the mount is gone')
+        return given(arg)
+
+    setattr(fake, method, raising)
+    try:
+        yield
+    finally:
+        delattr(fake, method)
 
 
 class Refusing:

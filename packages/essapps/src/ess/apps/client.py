@@ -460,6 +460,7 @@ class Client:
         ------
         SubmitError
             If a request cannot run: an invalid value, an unknown spec or file, a
+            file that the file source cannot read (it raised ``OSError``), a
             reference at a field that the spec does not mark ``Referenced[...]``, a
             reference that may not be read, one to an output of a record of another
             spec than the one bound, or one whose data do not fit its field. No

@@ -154,6 +154,7 @@ class WorkspaceProtocol(Protocol):
         ------
         SubmitError
             If a request cannot run: an invalid value, an unknown spec or file, a
+            file that the file source cannot read (it raised ``OSError``), a
             reference at a field that the spec does not mark ``Referenced[...]``, a
             reference that may not be read, to an accumulator, to an output of a
             record of another spec than the one bound, whose type cannot be checked,
@@ -512,6 +513,11 @@ class FileSource(Protocol):
     source that corrects the metadata of a file, such as the role of a run tagged
     wrongly, corrects them in both, so that each sees the file as corrected.
     A role is optional, and what the workspace does not check (:meth:`Selector.of`).
+
+    A source that cannot answer, such as when a mount is gone or a catalogue timed
+    out, raises ``OSError``. If :meth:`resolve` or :meth:`metadata` raises it for a
+    file that a request names, the workspace refuses the file as it refuses an
+    unknown one: only the requests that name the file are refused.
     """
 
     def resolve(self, name: FileRef) -> FileRef:
