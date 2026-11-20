@@ -14,10 +14,13 @@ the counts (:meth:`Pages.counts`), which read the state of every batch.
 
 The runs are the same on every page (:meth:`Pages.runs`), and a person
 corrects them on any page, with or without a batch (:meth:`Pages.correct`).
-A correction changes no row of a batch: a table names files, and the page
-shows each with its metadata now. The Runs view names the batches of each
-run from the files that each batch names, which come with the counts
-(:meth:`Pages.counts`), since Follow adds rows without a change of the runs.
+:class:`Pages` lists them again at a correction, and as it lists the files
+for a page (:meth:`Pages.relist`), and counts their changes
+(:attr:`Pages.runs_version`). A correction changes no row of a batch: a
+table names files, and the page shows each with its metadata now. The Runs
+view names the batches of each run from the files that each batch names,
+which come with the counts (:meth:`Pages.counts`), since Follow adds rows
+without a change of the runs.
 
 A person makes a batch from the list of batches, of the sources and specs
 that :meth:`Pages.sources` offers, in one of three ways
@@ -91,6 +94,7 @@ from .page import (
     Missing,
     Page,
     Problem,
+    SafeListing,
     listed,
     read,
     read_file,
@@ -127,9 +131,6 @@ class Pages:
     ----------
     lock:
         The lock of every request of every page and of each step of Follow.
-    runs_version:
-        Counts the changes of the runs, so that the Runs view of each page
-        asks for them again.
     failure:
         What the last step of Follow raised, ``None`` if it raised nothing.
     last:
@@ -161,11 +162,11 @@ class Pages:
         self._marking = None if marks is None or files is None else (marks, files)
         self.folder = folder
         self.lock = threading.RLock()
-        self.runs_version = 1
+        self._runs_version = 1
         # The runs, with their metadata, as listed at the last version.
         self._runs: Mapping[FileRef, Mapping[str, Any]] = {}
         # What the runs, their corrections and a new batch are read with,
-        # listed again for each.
+        # listed again for each, and what a page lists in :meth:`relist`.
         self._listing: Listing | None = None
         self.failure: str | None = None
         self.last: tuple[str, Step] | None = None
@@ -227,17 +228,37 @@ class Pages:
                 self.failure = f'Follow could not step: {str(error) or repr(error)}'
             self.page(label).stepped()
 
-    def runs_listed(
+    @property
+    def runs_version(self) -> int | None:
+        """
+        Counts the changes of the runs, so that the Runs view of each page
+        asks for them again; ``None`` if the application corrects no runs,
+        so that the pages have no Runs view.
+        """
+        return self._runs_version if self.corrects_runs else None
+
+    def relist(self) -> SafeListing:
+        """
+        What the client lists now, for the pickers and the forms of a page
+        whose files may have changed: as it is made, at a step of Follow, and
+        at "List runs again". The runs are listed from it, and have a new
+        version if they differ from those of the last version.
+        """
+        self._listing = SafeListing(self.manager.client, previous=self._listing)
+        if self.corrects_runs:
+            self._listed(self._listing.listed(Selector()))
+        return self._listing
+
+    def _listed(
         self, runs: Mapping[FileRef, Mapping[str, Any]], *, changed: bool = False
     ) -> None:
         """
-        A new version of the runs, which the Runs view of each page asks for,
-        if ``runs``, as a page lists them now, differ from those of the last
-        version, or if ``changed``, as after a correction.
+        A new version of the runs, if ``runs``, as listed now, differ from
+        those of the last version, or if ``changed``, as after a correction.
         """
         if changed or runs != self._runs:
             self._runs = runs
-            self.runs_version += 1
+            self._runs_version += 1
 
     @property
     def corrects_runs(self) -> bool:
@@ -279,7 +300,10 @@ class Pages:
             except Exception as error:  # the file source is code of the application
                 problem = f'The files cannot be listed: {error}'
                 return Runs(
-                    version=self.runs_version, columns=columns, rows=[], problem=problem
+                    version=self._runs_version,
+                    columns=columns,
+                    rows=[],
+                    problem=problem,
                 )
 
             def text(value: Any) -> str:
@@ -301,7 +325,7 @@ class Pages:
                 }
                 label = listing.file_label(ref)
                 rows.append(RunRow(key=ref.file, file=label, cells=cells))
-            return Runs(version=self.runs_version, columns=columns, rows=rows)
+            return Runs(version=self._runs_version, columns=columns, rows=rows)
 
     def correct(self, edit: CellEdit) -> Notice:
         """Correct a field of the runs ``edit.keys``, as its field reads the value."""
@@ -347,7 +371,7 @@ class Pages:
             raise Problem(
                 f'Corrected, but the runs cannot be listed: {error}'
             ) from None
-        self.runs_listed(runs, changed=True)
+        self._listed(runs, changed=True)
 
     def said(self, label: str) -> tuple[str | None, Step | None] | None:
         """
@@ -407,7 +431,7 @@ class Pages:
             ]
             return Batches(
                 application=self.title,
-                runs=self.runs_version if self.corrects_runs else None,
+                runs=self.runs_version,
                 rows=rows,
             )
 

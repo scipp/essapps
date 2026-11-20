@@ -208,7 +208,7 @@ _DRAWN = 12
 """How many results the plot shows when no row is selected."""
 
 
-class _Listing(Listing):
+class SafeListing(Listing):
     """
     What the client lists now, as :class:`Listing` gives it, but without files
     if the file source raises: a picker then offers none, the Runs view lists
@@ -408,12 +408,11 @@ class Page:
     def __init__(self, pages: Pages, label: str) -> None:
         self.pages = pages
         self.label = label
-        self._listing = _Listing(self.batch.client)
+        self._listing = pages.relist()
         self._columns: tuple[str, ...] | None = None
         self._fit()
         self.refused: list[FieldError] = []
         self.version = 1
-        pages.runs_listed(self._runs_seen())
         self.start = uuid.uuid4().hex[:8]
         # What :meth:`_live` gave at the last change of the version.
         self._seen = self._live()
@@ -484,14 +483,18 @@ class Page:
         self.version += 1
         self._seen = self._live()
 
-    def _relist(self) -> None:
-        self._listing = _Listing(self.batch.client, previous=self._listing)
+    def _relist(self, *, files: bool = False) -> None:
+        """
+        List again, for the pickers and the forms; with ``files``, by
+        :meth:`Pages.relist <.pages.Pages.relist>`, which lists the runs too.
+        """
+        self._listing = (
+            self.pages.relist()
+            if files
+            else SafeListing(self.batch.client, previous=self._listing)
+        )
         for fields in (self.settings, self._cells):
             fields.refresh(self._listing)
-
-    def _runs_seen(self) -> dict[FileRef, dict[str, Any]]:
-        """The runs that the Runs view lists, with their metadata."""
-        return self._listing.listed(Selector()) if self.pages.corrects_runs else {}
 
     def _form(self) -> Fields:
         """A form of the settings, at the fields' defaults."""
@@ -606,7 +609,7 @@ class Page:
         return State(
             version=self.version,
             start=self.start,
-            runs=self.pages.runs_version if self.pages.corrects_runs else None,
+            runs=self.pages.runs_version,
             batches=self.pages.batches().rows,
             label=self.label,
             title=header.title,
@@ -803,8 +806,7 @@ class Page:
     @_action
     def relist(self) -> str:
         """List the files again, for the pickers and the Runs view; no row changes."""
-        self._relist()
-        self.pages.runs_listed(self._runs_seen())
+        self._relist(files=True)
         return 'Listed the runs again.'
 
     @_action
@@ -992,8 +994,7 @@ class Page:
         """
         with self.lock:
             try:
-                self._relist()
-                self.pages.runs_listed(self._runs_seen())
+                self._relist(files=True)
             finally:
                 if self._live() != self._seen:
                     self._new_version()

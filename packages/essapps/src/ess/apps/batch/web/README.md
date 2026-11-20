@@ -216,13 +216,15 @@ api.py            HTTP: create_app(pages); each action is a POST that
                   answers with the new State (models.py), 422 {message}, or
                   404 for a label that is no batch
    ▼
-pages.py          Pages: what the pages share, without HTTP: the manager,
-                  the step of Follow (tick), the corrections of runs, the list of
-                  batches and its counts, the runs, making and removing a
-                  batch, one lock around every request and step
+pages.py          Pages: what the pages share, without HTTP, and only it writes:
+                  the manager, the step of Follow (tick) and what it said, the
+                  runs, their version and their corrections, the list of
+                  batches and its counts, making and removing a batch, one
+                  lock around every request and step
 page.py           Page: what the page of one batch does, without HTTP: the
                   rows (each change a frame put to the batch), the settings
-                  form (a draft until Apply), the refusals, its header
+                  form (a draft until Apply), the refusals, its version, its
+                  header; it asks Pages what to show of Follow and the runs
    ▼
 ess.apps.batch    the logic: BatchManager, step, Batch, table, states,
                   CorrectedFiles; shared with the command essapps-batch
