@@ -131,18 +131,17 @@ class Row(BaseModel):
 class Action(BaseModel):
     """
     What the primary button does, ``label``, or why it cannot, ``blocked``;
-    how many rows each way of reducing takes: ``remaining``, ``again`` (all),
-    and ``earlier``, those reduced with earlier settings, which "Reduce rows
-    of earlier settings" and "Reduce them again" in the Settings tab reduce;
-    and while rows run, how many of the
-    rows submitted with them are finished, as ``[finished, all]``.
+    how many rows each way of reducing takes: ``remaining`` and ``again``
+    (all), and while rows run, how many of the rows submitted with them are
+    finished, as ``[finished, all]``. The rows reduced with earlier settings,
+    which "Reduce rows of earlier settings" reduces, are the count
+    ``earlier`` of :attr:`State.counts`.
     """
 
     label: str
     blocked: str | None
     remaining: int
     again: int
-    earlier: int
     running: int
     progress: tuple[int, int] | None
 

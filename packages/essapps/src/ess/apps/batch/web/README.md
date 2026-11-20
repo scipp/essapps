@@ -60,7 +60,7 @@ Its pill is teal, neither the green of `done` nor the amber of `outdated`, and t
 Its result counts as one of a `done` row: the plot, **Download all** and the count of results take it.
 The label of the Settings tab shows how many rows read `earlier`, and the tab a bar above the form, "N rows reduced with earlier settings", with **Reduce them again**.
 That button, and **Reduce rows of earlier settings** in the menu ▾ next to **Reduce**, reduce those rows (`earlier_settings`), after a confirmation that names how many.
-**Reduce** itself then reads "Nothing left to reduce", since it never reduces them.
+**Reduce** never reduces them: with only such rows left, it reads "Nothing left to reduce".
 To try settings on one row, change them, **Apply**, select the row, and choose **Reduce selected** in the menu ▾ next to **Reduce**.
 The row tab then shows what the row was reduced with.
 To keep the settings, press **Reduce them again**; to drop them, change them back and **Apply**, and the row tried reads `earlier`.

@@ -530,6 +530,16 @@ def test_the_reduce_menu_reduces_the_rows_of_earlier_settings(
     }
 
 
+def test_the_progress_strip_of_an_idle_reduce_button_has_no_width(
+    earlier: Any,
+) -> None:
+    width = earlier.evaluate(
+        "document.querySelector('#reduce .bar').getBoundingClientRect().width"
+    )
+
+    assert width == 0
+
+
 def test_typing_in_the_settings_form_while_a_poll_arrives_sends_what_was_typed(
     page: Any, url: str
 ) -> None:

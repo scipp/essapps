@@ -241,7 +241,7 @@ function render(state) {
   $('title').textContent = named.reverse().join(' · ');
   $('folder').textContent = state.folder;
   $('n-rows').textContent = state.counts.all;
-  renderAction(state.action);
+  renderAction(state.action, state.counts.earlier);
   renderChips(state.counts);
   if (old?.action.running && !state.action.running) {
     const ended = ['done', 'earlier', 'failed', 'cancelled'].filter((s) => state.counts[s]).map((s) => `${state.counts[s]} ${s}`);
@@ -800,7 +800,9 @@ async function makeSetting(column) {
   dialog.showModal();
 }
 
-function renderAction(action) {
+// The reduce button and its menu, and the marks of the Settings tab; `earlier`
+// counts the rows reduced with earlier settings.
+function renderAction(action, earlier) {
   const button = $('reduce');
   const running = action.progress !== null;
   const [finished, started] = action.progress ?? [0, 0];
@@ -815,8 +817,8 @@ function renderAction(action) {
   $('cancel').classList.toggle('danger', action.running > 0);
   $('n-remaining').textContent = action.remaining;
   $('n-again').textContent = action.again;
-  $('n-earlier').textContent = action.earlier;
-  const counted = {remaining: action.remaining, earlier: action.earlier, all: action.again};
+  $('n-earlier').textContent = earlier;
+  const counted = {remaining: action.remaining, earlier, all: action.again};
   for (const [which, n] of Object.entries(counted)) {
     document.querySelector(`[data-reduce="${which}"]`).disabled = Boolean(action.blocked) || n === 0;
   }
@@ -824,9 +826,9 @@ function renderAction(action) {
   for (const id of ['reduce-more', 'reduce-earlier']) $(id).title = action.blocked ?? '';
   $('settings-badge').hidden = !action.blocked;
   $('settings-badge').title = action.blocked ?? '';
-  $('earlier-badge').hidden = action.earlier === 0;
-  $('earlier-badge').textContent = action.earlier;
-  $('earlier-badge').title = `${count(action.earlier)} reduced with earlier settings`;
+  $('earlier-badge').hidden = earlier === 0;
+  $('earlier-badge').textContent = earlier;
+  $('earlier-badge').title = `${count(earlier)} reduced with earlier settings`;
 }
 
 const CHIPS = ['all', 'ready', 'running', 'done', 'earlier', 'outdated', 'failed', 'incomplete', 'cancelled'];
@@ -904,9 +906,9 @@ function renderFollow(follow) {
 // with earlier settings, which a person may reduce again. Apply and Discard
 // are never disabled: a click on them may send the value typed first.
 function renderSettings(state) {
-  const {action, settings_changed: changed, settings_problem: problem} = state;
-  $('earlier').hidden = action.earlier === 0;
-  $('earlier-state').textContent = `${count(action.earlier)} reduced with earlier settings.`;
+  const {action, counts, settings_changed: changed, settings_problem: problem} = state;
+  $('earlier').hidden = counts.earlier === 0;
+  $('earlier-state').textContent = `${count(counts.earlier)} reduced with earlier settings.`;
   $('reduce-earlier').disabled = Boolean(action.blocked);
   $('draft').classList.toggle('changed', changed);
   const said = problem ? ` ${problem}.` : '';
@@ -1055,13 +1057,15 @@ async function renderPlot() {
 
 // The legend of the plot, which also says why rows have no curve or an
 // outdated one: a line per row, with the colour of its curve, dashed if
-// outdated, and its status where not done; above it, a count per status.
+// outdated, and its status where not done; above it, a count per status, with
+// the reason if all its rows share it: for rows of earlier settings, the
+// settings that changed, since the tooltip that is their reason is long.
 function renderLegend() {
   const shown = view.selected.length ? selectedRows() : view.state.rows.filter((row) => row.key in view.colors);
   const groups = Map.groupBy(shown.filter((row) => row.status !== 'done'), (row) => row.status);
   $('legend-summary').replaceChildren(
     ...[...groups].map(([status, group]) => {
-      const reasons = new Set(group.map((row) => row.reason));
+      const reasons = new Set(group.map((row) => (status === 'earlier' ? row.changed : row.reason)));
       const [reason] = reasons;
       const text = reasons.size === 1 && reason ? `${group.length} ${status}: ${reason}` : `${group.length} ${status}`;
       return h('span', {text});
@@ -1189,7 +1193,7 @@ function showTab(tab) {
 // Reduce the rows of earlier settings, from the reduce menu or the Settings
 // tab, once the person confirms.
 function reduceEarlier() {
-  const n = view.state.action.earlier;
+  const n = view.state.counts.earlier;
   const question = `Reduce the ${count(n)} reduced with earlier settings again, with the settings now?`;
   if (confirm(question)) act('reduce', {which: 'earlier'});
 }

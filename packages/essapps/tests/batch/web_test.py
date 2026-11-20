@@ -494,7 +494,6 @@ def test_a_changed_setting_leaves_the_rows_reduced_reading_earlier(
     )
     assert (shown['counts']['earlier'], shown['counts']['done']) == (2, 0)
     assert shown['action']['label'] == 'Nothing left to reduce'
-    assert shown['action']['earlier'] == 2
     detail = http.get('/api/row', params={'key': '1'}).json()
     assert detail['differs'] == ['binning']
     table = pd.read_csv(io.BytesIO(http.get('/api/table.csv').content), dtype=str)
@@ -531,7 +530,7 @@ def test_reduce_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_the
 
     reduced(http, client, which='earlier')
     assert statuses(http)['1'] == 'done'
-    assert state(http)['action']['earlier'] == 0
+    assert state(http)['counts']['earlier'] == 0
 
 
 def test_a_page_started_again_marks_the_rows_reduced_with_other_settings(

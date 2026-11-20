@@ -143,7 +143,6 @@ from ..export import export_table
 from ..reduction import Batch
 from ..state import (
     RowState,
-    earlier_settings,
     left_to_reduce,
     ready,
     to_reduce,
@@ -724,8 +723,8 @@ class Page:
                 changed = f'{named} changed'
             since = f': {changed} since' if changed else ''
             reason = (
-                f'Reduced with earlier settings{since}. Reduce leaves this row;'
-                ' "Reduce rows of earlier settings" reduces it with the settings now.'
+                f'Reduced with earlier settings{since}. "Reduce" leaves such rows;'
+                ' "Reduce rows of earlier settings" reduces them with the settings now.'
             )
         elif status == 'outdated' and state.outdated:
             reason = self._outdated(state)
@@ -784,8 +783,6 @@ class Page:
             blocked=blocked,
             remaining=n,
             again=len(ready(states)),
-            # With the settings refused, the rows are not compared, so none is earlier.
-            earlier=len(earlier_settings(states)),
             running=sum(s.status is Status.PENDING for s in states.values()),
             progress=_progress(states),
         )
