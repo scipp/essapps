@@ -65,7 +65,7 @@ Nothing below the line imports anything above it.
 | source | code of the application that makes a table from the files (a `Source`) |
 | filled, waits | a row of the source is filled once it has a value in each of `Source.fills`; until then it waits |
 | considered | the keys of the source that a batch made from it has taken or left out |
-| Follow | a step every few seconds on one batch: add the rows of its source that are filled and not considered, then reduce the rows that are ready and have no result |
+| Follow | a step every few seconds on one batch: add the rows of its source that are filled and not considered, then reduce the rows that are ready and have no result; chosen when the batch is made, until it is stopped |
 
 ### Rules that always hold
 
@@ -78,6 +78,7 @@ Nothing below the line imports anything above it.
 7. **Each kept file has one writer** (table below).
 8. **A batch is shown without its source and without the files.** A file that is not found is a problem of its row.
 9. **The rules are in the batch layer.** A refusal is a `ValueError`. The page and the command show it and copy no rule. The batch layer has no lock and no timer.
+10. **Follow is chosen when a batch is made.** A batch follows from `create(..., follow=True)` until `stop()`, its removal, or the making of another batch that follows. A batch that does not follow cannot be made to follow.
 
 ### What is kept on disk
 
@@ -92,7 +93,7 @@ Nothing below the line imports anything above it.
 | `store/`, the log | the records | the workspace |
 
 A label is a batch if and only if `header.json` exists.
-`create` writes settings, rows and source, then the header.
+`create` writes settings, rows and source, then the header, then `following.json` if the batch follows.
 `remove` writes `following.json` first if the batch follows, then deletes the header, then the rest.
 The blanks in `settings.json` are not read: the columns of `rows.json` are the blanks.
 
@@ -112,8 +113,8 @@ manager.rows_of('sample-runs')        # what the source makes now
 # ...
 # 60340  60340  sample A  run:60340  run:60306
 label = manager.create('loki-iofq', title='Afternoon', source='sample-runs',
-                       choose=lambda given: given[given.run >= 60339], label='afternoon')
-manager.follow(label)
+                       choose=lambda given: given[given.run >= 60339], label='afternoon',
+                       follow=True)
 ```
 
 `create` lists the source once and gives `choose` the rows that are filled; `choose` picks some and may add columns.
@@ -178,17 +179,20 @@ The manager reads the headers and `following.json`.
 The results are read from the records, so no row is reduced twice.
 
 **6. The next batch.** In the evening a person wants the runs from 60400 on in a batch of their own.
-They make it from the source, with the settings of the afternoon, and turn Follow on for it:
+They make it from the source, with the settings of the afternoon, and with Follow:
 
 ```python
 label = manager.create('loki-iofq', title='Evening', source='sample-runs',
                        choose=lambda given: given[given.run >= 60400],
-                       settings=manager.batch('afternoon').settings, label='evening')
-manager.follow(label)        # 'afternoon' does not follow any more
+                       settings=manager.batch('afternoon').settings, label='evening',
+                       follow=True)  # 'afternoon' stops following, and cannot follow again
 ```
 
 No row moves between batches.
 `afternoon` keeps its rows, also those from 60400 on that it added before, until a person removes them.
+A batch that follows has no last row: the rows filled between a last row and the making would never be added.
+For a batch of only the rows that arrive from now on, `choose` takes none: `choose=lambda given: given.iloc[:0]`.
+Every row filled now is then considered, and none is reduced again.
 
 ## Writing a source
 
@@ -359,24 +363,26 @@ A range of the rows that arrived, as a person picks it, is `between`, open at an
 ```python
 manager.create('loki-iofq', title='Afternoon', source='sample-runs',
                choose=lambda given: between(given, '60339', None))
-manager.marked('sample-runs', '60339')   # rows_of, with columns waits and taken
+manager.marked('sample-runs', lambda given: between(given, '60339', None))
+                                         # rows_of, with columns waits and taken
 ```
 
 `between` refuses an end that is not a key of the rows that arrived (a row that waits is not one), and a first row after the last.
 
 - `create` refuses a label that has definitions or records, a spec that the workspace does not bind, and rows that `put` refuses.
-- It refuses `rows=` with `source=`, `choose=` without `source=`, and a key from `choose` that is not in `arrived`.
+- It refuses `rows=` with `source=`, `choose=` or `follow=True` without `source=`, and a key from `choose` that is not in `arrived`.
 - `manager.batch(label)` reads `settings.json` and `rows.json`, binds the spec by name, and passes the definitions, so the `Batch` writes each change.
 - Ask for the batch each time: one handed out before `remove` must not be used after.
 - A `Batch` made in code, `Batch(client, spec, label=..., settings=..., rows=...)`, is the same class without definitions: it keeps nothing.
 
 ## Follow
 
-At most one batch follows.
+At most one batch follows: the last one made with `follow=True`, until it is stopped.
 
 ```python
-manager.follow(label)       # ValueError if the batch has no source.json, or its source is not registered
-manager.follow(None)        # none follows
+manager.create(..., source='sample-runs', follow=True)   # follows; the batch that followed stops
+manager.following           # its label, or None
+manager.stop()              # none follows; the batch that followed cannot follow again
 done = manager.step()       # a Step, or None if none follows
 manager.offered(label)      # the rows of the source that the table lacks, with a boolean column `waits`
 manager.take(label, keys)   # put these rows as the source gives them now, then consider them
@@ -415,7 +421,7 @@ after run 3:  si@2,3,4  runs=[2, 3, 4]   # listed after run 4: a new key too
 Each list is a new row, which a step adds and reduces; the earlier rows keep their results.
 The key names the whole list, since a step adds a row only under a key that is not considered.
 
-`follow`, `step`, `offered` and `take` raise `ValueError` "<label> was not made from a source of rows" for a batch without `source.json`.
+`step`, `offered` and `take` raise `ValueError` "<label> was not made from a source of rows" for a batch without `source.json`.
 `auto.step(batch, source, considered)` runs the same step on a `Batch` made in code, with `considered` in memory: give the next step `done.considered`.
 Whoever serves calls `manager.step()` on a timer, such as `every` of `ess.apps.batch.web.api`.
 
@@ -490,11 +496,12 @@ Each action of the page is one call of the batch layer:
 | **Apply** | `batch.settings = settings` |
 | **Reduce** and its ways | `batch.reduce(keys)` |
 | **+ New batch** | `manager.create(...)`, with `choose=lambda given: between(given, first, last)` for a range |
-| the range's marks | `manager.marked(source, first, last)` |
+| the range's marks | `manager.marked(source, choose)` |
 | **+ Add rows from the runs** | `manager.offered(label)`, then `manager.take(label, keys)` |
 | "Make this a column" | `batch.make_column(name)` |
 | "Make this a setting" | `batch.values(name)`, then `batch.make_setting(name, key)` |
-| **Follow** | `manager.follow(label)`; the timer calls `manager.step()` |
+| **Follow** in **+ New batch** | `manager.create(..., follow=True)`; the timer calls `manager.step()` |
+| **Stop following** | `manager.stop()` |
 | the column **Batches** of the Runs view | `batch.files()` of each batch, joined to the runs by identity |
 
 ## Testing an application
@@ -510,5 +517,5 @@ Each action of the page is one call of the batch layer:
 - A correction of a run changes no batch.
 - No range of runs is kept: "from run 60339 on" is the choice of rows when the batch is made.
 - No row moves between batches: the next batch is made from the source.
-- One batch follows at a time. The command does no step.
+- One batch follows at a time, and a batch that stopped following never follows again. The command does no step.
 - The batch layer has no lock and no timer: whoever serves owns both.

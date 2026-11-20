@@ -560,7 +560,6 @@ main.wide .right { display: none; }
 .status { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
 .status .pill { flex-shrink: 0; }
 .status .changed { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.follow { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; cursor: pointer; white-space: nowrap; }
 .status-line { margin-right: 12px; color: var(--muted); font-size: 12px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-line.bad { color: var(--bad); }
 /* A line across the Settings tab that says how the settings stand. */

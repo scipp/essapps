@@ -164,8 +164,7 @@ class Following(BaseModel):
     ``interval`` seconds adds the rows of the source that are new and filled,
     and reduces the rows not reduced yet: ready and without a result.
     ``source`` names the source that the batch was made from, ``None`` if it
-    was made without one and cannot follow.
-    ``other`` is the title of the batch that follows, if another one does.
+    was made without one, so that it offers no rows of a source.
     While this batch follows, ``failure`` says why the last step raised, and
     ``waiting`` counts the rows of the source that the last step did not add
     since they are not filled yet.
@@ -173,7 +172,6 @@ class Following(BaseModel):
 
     on: bool
     source: str | None
-    other: str | None
     interval: float
     failure: str | None
     waiting: int = 0
@@ -399,20 +397,18 @@ class Reduce(BaseModel):
     keys: list[str] = []
 
 
-class On(BaseModel):
-    on: bool
-
-
 class NewBatch(BaseModel):
     """
     Make a batch of ``spec``: with a ``source``, of the rows that the source
     has filled now from the row of key ``first`` to that of ``last``
-    (:func:`~ess.apps.batch.source.between`); without, of no rows, or of
-    those of a table file. ``columns`` are the parameter columns, those that
+    (:func:`~ess.apps.batch.source.between`), or of none of them if
+    ``later``, so that it gets only the rows added later; without, of no
+    rows, or of those of a table file. ``columns`` are the parameter columns, those that
     the source fills among them. The batch starts with the settings of the
     batch of label ``settings_from`` if given, else with those that the
     application gives ``spec``; a setting of the batch at a column fills its
-    cells.
+    cells. With ``follow``, the batch follows its source from then on, in
+    place of the batch that followed before, and has no ``last``.
     """
 
     title: str
@@ -423,6 +419,8 @@ class NewBatch(BaseModel):
     spec: str
     columns: list[str] = []
     settings_from: str | None = None
+    later: bool = False
+    follow: bool = False
 
 
 class Value(BaseModel):

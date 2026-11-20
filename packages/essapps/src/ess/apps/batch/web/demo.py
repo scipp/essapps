@@ -11,7 +11,8 @@ writes the fake runs and ``files.csv`` there. A later start reuses them, with
 the results of earlier starts, and the batches with their tables and
 settings, the corrections, and the batch that follows kept in
 ``definitions/`` (:mod:`..definition`). Each start makes a batch of the
-samples there are if no batch is listed. The file
+samples there are if no batch is listed; it does not follow, and a person
+makes a batch that follows with "New batch", Follow ticked. The file
 source reads ``files.csv`` again when it changes
 (:class:`~ess.apps.folder.ArrivingFiles`).
 

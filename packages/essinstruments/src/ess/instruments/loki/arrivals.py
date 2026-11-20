@@ -14,11 +14,11 @@ start, and the settings of the one batch are filled in. Then a run arrives
 every ``--arrive`` seconds, in the order of :data:`EXPERIMENT`: ``--count``
 runs in all (12), the experiment again with the samples named ``#2``, ``#3``...
 beyond that, and the first ``--start`` of them (0) there from the start, in the
-first batch. Turn on
-"Follow" to add the rows that the runs fill and reduce them, a step every few
-seconds; "List runs again" lists the runs in the Runs view and changes no
-row.
-``--follow`` turns it on from the start, with a step every ``SECONDS`` (5).
+first batch, "Sample runs". With ``--follow``, that batch is made to follow:
+a step every ``SECONDS`` (5) adds the rows that the runs fill and reduces
+them. Without it, the batch does not follow, and a person makes a batch that
+follows with "New batch", Follow ticked. "List runs again" lists the runs in
+the Runs view and changes no row.
 
 The data and the I(Q) workflow are real; the run numbers, the sample names and
 the roles are this module's. A run arrives as a hard link to a tutorial file
@@ -220,7 +220,7 @@ def main() -> None:
         nargs='?',
         const=5.0,
         metavar='SECONDS',
-        help='follow the files from the start, a step every SECONDS (5)',
+        help='make the first batch follow the files, a step every SECONDS (5)',
     )
     args = parser.parse_args()
     if not (STATIC / 'vendor').is_dir():

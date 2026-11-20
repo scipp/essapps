@@ -87,12 +87,14 @@ description with the manager (:meth:`Page.change`). Removing a batch is
 :meth:`Pages.remove <.pages.Pages.remove>`; a request to a page of a batch
 removed answers :class:`Missing`.
 
-The switch "Follow" makes the batch the one that follows
-(:meth:`~ess.apps.batch.BatchManager.follow`), so no other batch follows; a
-batch made without a source has no switch, and the manager refuses it. While
-it follows, :meth:`Pages.tick <.pages.Pages.tick>` steps it every
-``interval`` seconds (:meth:`~ess.apps.batch.BatchManager.step`), which adds
-the rows of its source that are new and filled, and reduces the rows that
+A batch follows from the time it is made, if a person chooses Follow in
+"New batch" (:meth:`Pages.create <.pages.Pages.create>`). Its page then has
+the action "Stop following" (:meth:`Page.stop_following`), after which the
+batch never follows again; the page of a batch that does not follow has no
+action of Follow. While a batch follows, :meth:`Pages.tick
+<.pages.Pages.tick>` steps it every ``interval`` seconds
+(:meth:`~ess.apps.batch.BatchManager.step`), which adds the rows of its
+source that are new and filled, and reduces the rows that
 :func:`~ess.apps.batch.not_reduced` gives, the rows that are ready and have
 no result, under the lock of all pages, with the batch's settings, whatever
 the form holds; then :meth:`Page.stepped` shows what the step changed. The
@@ -649,12 +651,10 @@ class Page:
 
     def _follow(self) -> Following:
         manager, pages = self.pages.manager, self.pages
-        label, on = manager.following, self._follows()
-        last = pages.last
+        on, last = self._follows(), pages.last
         return Following(
             on=on,
             source=manager.source(self.label),
-            other=None if on or label is None else manager.headers()[label].title,
             interval=pages.interval,
             failure=pages.failure if on else None,
             waiting=len(last[1].waiting)
@@ -986,23 +986,15 @@ class Page:
     # Follow
 
     @_action
-    def follow(self, on: bool) -> str:
+    def stop_following(self) -> str:
         """
-        Make this batch the one that follows, with a first step at once; or,
-        if it follows, let none follow. What the manager refuses is a
-        :class:`Problem`.
+        Let none follow, if this batch follows
+        (:meth:`~ess.apps.batch.BatchManager.stop`); it cannot follow again.
         """
-        if not on:
-            if not self._follows():
-                return ''  # another batch follows, or none
-            self.pages.manager.follow(None)
-            return 'Stopped following.'
-        try:
-            self.pages.manager.follow(self.label)
-        except ValueError as error:
-            raise Problem(f'{why(error)}.') from None
-        self.pages.tick()
-        return 'Following.'
+        if not self._follows():
+            return ''  # another batch follows, or none
+        self.pages.manager.stop()
+        return 'Stopped following.'
 
     def stepped(self) -> None:
         """

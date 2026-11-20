@@ -57,7 +57,6 @@ from .models import (
     MakeSetting,
     NewBatch,
     Notice,
-    On,
     Plot,
     Reduce,
     RowDetail,
@@ -221,10 +220,10 @@ def create_app(pages: Pages) -> FastAPI:
     def cancel(page: PageOfLabel) -> State:
         return page.cancel()
 
-    @batch.post('/api/follow')
-    def follow_files(page: PageOfLabel, body: On) -> State:
-        """Make this batch the one that follows, with a step at once, or stop."""
-        return page.follow(body.on)
+    @batch.post('/api/follow/stop')
+    def stop_following(page: PageOfLabel) -> State:
+        """Stop Follow, if this batch follows; it cannot follow again."""
+        return page.stop_following()
 
     @batch.post('/api/settings')
     def edit_settings(page: PageOfLabel, body: Edit) -> State:
@@ -330,14 +329,17 @@ def create_app(pages: Pages) -> FastAPI:
 
     @workspace.get('/api/sources/rows')
     def rows_of(
-        name: str, first: str | None = None, last: str | None = None
+        name: str,
+        first: str | None = None,
+        last: str | None = None,
+        later: bool = False,
     ) -> SourceRows:
         """
         The rows that the source ``name`` makes now, each marked as taken,
         left out or waiting for a new batch of the rows from ``first`` to
-        ``last``.
+        ``last``, or of none if ``later``.
         """
-        return pages.rows_of(name, first, last)
+        return pages.rows_of(name, first, last, later)
 
     @workspace.get('/api/runs')
     def runs() -> Runs:

@@ -28,8 +28,9 @@ as a page does, so a label is one batch whoever works on it:
   with the label as title. Its table is the table given
   (:func:`.table.read_table`), or the rows that the source ``--source NAME``
   has filled now, not both; without either, one row keyed by the label.
-  With ``--source``, the batch keeps its source, so that it can follow on a
-  page. ``create`` refuses a label that has definitions or records.
+  With ``--source``, the batch keeps its source, so that its page offers the
+  rows of the source that its table lacks; it does not follow. ``create``
+  refuses a label that has definitions or records.
 
   For a label with a batch, the template becomes its settings and the table
   replaces its table (:meth:`.reduction.Batch.put`); ``--source`` is refused.

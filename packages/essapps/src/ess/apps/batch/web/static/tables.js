@@ -242,13 +242,14 @@ export class Grid {
     this.json = new Map(); // each row as last shown
     this.pending = null;
     this.quiet = false;
+    this.empty = h('div', {class: 'empty', text: placeholder}); // what a grid without rows says
     this.table = new Tabulator(element, {
       index: 'key',
       height: '100%',
       layout: 'fitColumns',
       selectableRows: 'highlight',
       editTriggerEvent: 'click',
-      placeholder: h('div', {class: 'empty', text: placeholder}),
+      placeholder: this.empty,
       rowHeader: {
         formatter: 'rowSelection',
         titleFormatter: 'rowSelection',
