@@ -16,8 +16,8 @@ with :func:`differs` on both as a record holds them. A result is *outdated*
 (:func:`row_states`).
 
 The cells of a row are given here as its request takes them, each empty cell
-given its default, or ``None`` if its parameter takes ``None``
-(:meth:`~.reduction.Batch.cells`). A column left out of them is empty, and a
+given the setting, else its default, or ``None`` if its parameter takes
+``None`` (:meth:`~.reduction.Batch.cells`). A column left out of them is empty, and a
 problem of the row. A value refused when resolved is a problem of the row, not
 a change: the row cannot run with it, and a change would offer it to
 :func:`left_to_reduce`.
@@ -164,7 +164,8 @@ def row_states(
     changed: Mapping[str, frozenset[str]] | None = MappingProxyType({}),
     refused: Mapping[str, tuple[FieldError, ...]] | None = None,
     spec_changed: AbstractSet[str] = frozenset(),
-    own: Mapping[str, AbstractSet[str]] | None = None,
+    *,
+    own: Mapping[str, AbstractSet[str]],
 ) -> dict[str, RowState]:
     """
     The state of each row of ``cells``, which hold its cells by key.
@@ -174,10 +175,9 @@ def row_states(
     compared with their results, ``refused`` the reasons a row's cells were
     refused when resolved, ``spec_changed`` the keys whose result is of
     another spec, and ``own`` the columns at which each row's cell holds a
-    value, by key; every column if not given.
+    value, by key.
     """
     refused = refused or {}
-    own = own or {}
     states = {}
     for key, row in cells.items():
         record = found.get(key)
@@ -199,7 +199,7 @@ def row_states(
             earlier=not found_problems
             and row_status is Status.COMPLETED
             and bool(names)
-            and names.isdisjoint(own.get(key, columns))
+            and names.isdisjoint(own[key])
             and key not in spec_changed,
         )
     return states

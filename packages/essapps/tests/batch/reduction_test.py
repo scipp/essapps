@@ -581,6 +581,46 @@ def test_make_setting_of_a_batch_without_rows_keeps_the_setting(
     assert batch.settings == {'thickness': 2.0}
 
 
+@pytest.fixture
+def from_source(client: Client, sample: Measure) -> Batch:
+    """A batch of the rows of sample 1 whose source fills sample and transmission."""
+    sample(1, 'water')
+    return Batch(
+        client, PLAIN, label='s', rows=rows(client), fills=('sample', 'transmission')
+    )
+
+
+def test_a_column_that_the_source_fills_takes_no_setting(from_source: Batch) -> None:
+    given = {'transmission': 'run:1001', 'thickness': 2.0}
+
+    with pytest.raises(ValueError, match='the source fills transmission'):
+        from_source.settings = given
+    from_source.settings = from_source.settable(given)
+    from_source.put(from_source.frame().assign(transmission=None))
+
+    assert from_source.filled == ('sample', 'transmission')
+    assert from_source.settings == {'thickness': 2.0}
+    assert 'transmission' not in from_source.cells()['1']
+    assert from_source.values('transmission') == {'1': None}
+    with pytest.raises(ValueError, match='the source fills transmission'):
+        from_source.make_setting('transmission')
+
+
+def test_a_parameter_that_the_source_fills_loses_its_setting_as_a_column(
+    from_source: Batch,
+) -> None:
+    from_source.put(from_source.frame().drop(columns='transmission'))
+    from_source.settings = {'transmission': 'run:1001'}  # no column: every row's
+    with_setting = from_source.frame().assign(transmission=None)
+
+    with pytest.raises(ValueError, match='the source fills transmission'):
+        from_source.put(with_setting)
+    from_source.make_column('transmission')
+
+    assert from_source.settings == {}
+    assert from_source.state()['1'].text == 'incomplete'
+
+
 def test_a_changed_setting_at_a_column_is_earlier_for_rows_that_take_it(
     measured: Batch, client: Client
 ) -> None:

@@ -427,6 +427,24 @@ def test_a_value_of_the_template_at_a_column_is_that_of_each_empty_cell(
     assert totals == {'row-0': 2.0, 'row-1': 3.0}
 
 
+def test_a_template_leaves_out_a_value_at_a_column_that_the_source_fills(
+    command: list[str], folder: Path
+) -> None:
+    with manager(folder) as batches:
+        label = later(batches)
+    template = folder / 'one.yaml'
+    template.write_text(
+        'spec: {name: cli-toy, version: 1}\n'
+        'params: {sample: run:1, offset: {value: 0.5}}\n'
+    )
+
+    code = main([*command, 'reduce', *SOURCES, str(template), '-l', label])
+
+    assert code == 0
+    with manager(folder) as batches:
+        assert batches.batch(label).settings == {'offset': {'value': 0.5}}
+
+
 def test_a_table_given_with_a_source_is_refused(
     command: list[str],
     cli_template: Path,

@@ -43,6 +43,8 @@ The rows a person picks are added as the source makes them now (`BatchManager.ta
 "Make this a column", at a setting in the Settings tab, makes the parameter a column with an empty cell in each row (`Batch.make_column`); it is offered only for a parameter that is no column and whose cell the page edits.
 The setting stays: a row whose cell is empty takes it, also a row added later, by Follow or by a person, until its cell is set.
 The grid shows such a cell in grey as the value it takes: the setting, or the default of the parameter if the batch has none.
+The field of a column in the Settings tab has **Clear**, which leaves the column without a setting once applied, for every kind of field.
+A column that the source of the batch fills has no field in the Settings tab and no "Make this a setting": its empty cell waits for a run (`Batch.filled`).
 "Make this a setting", in the menu of the header of a column, drops the column (`Batch.make_setting`): the setting becomes the value that every row takes, or, where the rows differ, the value a person chooses in a dialog, which lists the values that the rows take (`GET api/columns/values?name=...`).
 Both are refused while the settings form holds a change, since the page then builds the form and the cell editors again.
 **Download as CSV** and **Download as XLSX** give the table with the results of its rows (`frames.with_results`).
@@ -56,7 +58,7 @@ The settings form holds a change until **Apply** writes it to the batch; **Disca
 While a person has changed the form and not applied the change, the bar above it reads "Changed, not applied yet", and the rows still read as with the batch's settings.
 Apply is refused while the form misses something, and the bar says what; it also names the settings kept that the form cannot show, which Apply replaces.
 While the form holds a change, **Reduce**, the ways of its menu, **Reduce them again** and **Download settings** are refused, so that nothing is reduced or saved with settings other than those shown.
-**Load settings** and "Put these settings in the form" in the row tab fill the form, after a confirmation if it holds a change; a file that cannot be read whole leaves the form as it was.
+**Load settings** and "Put these settings in the form" in the row tab fill the form, after a confirmation if it holds a change; a file that cannot be read whole leaves the form as it was. A value at a column that the source fills is left out (`Batch.settable`).
 "Put these settings in the form" leaves the field of each column at the batch's setting, since the row's value there was its own or that setting.
 **Download settings** writes every setting, those at the columns too, as a template without blanks.
 A change of the settings applies to the rows not reduced yet.
@@ -67,7 +69,7 @@ The label of the Settings tab shows how many rows read `earlier`, and the tab a 
 That button, and **Reduce rows of earlier settings** in the menu ▾ next to **Reduce**, reduce those rows (`earlier_settings`), after a confirmation that names how many.
 **Reduce** never reduces them: with only such rows left, it reads "Nothing left to reduce".
 To try settings on one row, change them, **Apply**, select the row, and choose **Reduce selected** in the menu ▾ next to **Reduce**.
-The row tab then shows what the row was reduced with.
+The row tab then shows what the row was reduced with: the value of each parameter that the row took, from its cells and the settings, and marks those that differ from what the row takes now.
 To keep the settings, press **Reduce them again**; to drop them, change them back and **Apply**, and the row tried reads `earlier`.
 In a batch that follows, the settings applied for the trial are also those of the rows that Follow reduces meanwhile, such as the rows of runs that arrive. To try settings on a few rows first, make a batch without Follow, then the batch that follows with "Start with the settings of" the first.
 The page sends its actions in the order a person did them, so a value typed and Apply clicked at once are applied with one click.

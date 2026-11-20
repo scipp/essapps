@@ -492,6 +492,55 @@ def test_a_changed_setting_of_a_column_turns_the_rows_that_take_it_earlier(
 
     assert statuses(http) == {'1': 'done', '2': 'earlier', '3': 'incomplete'}
     assert rows(http)['2']['changed'] == 'Thickness changed'
+    # The row tab shows the value that the row took, and that it changed.
+    detail = http.get('/api/row', params={'key': '2'}).json()
+    assert detail['differs'] == ['thickness']
+    (took,) = [n for n in detail['reduced_with'] if n['path'] == ['thickness']]
+    assert took['value'] == 1.0
+
+
+def test_a_column_that_the_source_fills_has_no_setting_on_the_page(
+    http: TestClient, batch: Batch
+) -> None:
+    template = yaml.safe_load(http.get('/api/settings.yaml').content)
+    template['params'] = {'transmission': 'run:1001', 'thickness': 2.0}
+    loaded = http.post(
+        '/api/settings.yaml',
+        params={'name': 'f'},
+        content=yaml.safe_dump(template).encode(),
+    ).json()
+    http.post('/api/settings/apply')
+    made = http.post('/api/columns/setting', json={'name': 'transmission'})
+
+    form = [n['path'][0] for n in loaded['settings']]
+    assert form == ['binning', 'thickness', 'offset']
+    assert [c['filled'] for c in loaded['columns']] == [True, True, False]
+    assert batch.settings['thickness'] == 2.0
+    assert 'transmission' not in batch.settings
+    assert made.status_code == 422
+    assert 'the source fills transmission' in made.json()['message']
+
+
+def test_the_setting_of_a_column_can_be_cleared(
+    manager: BatchManager, pages: Pages
+) -> None:
+    table = pd.DataFrame(
+        {'sample': [None], 'transmission': ['run:1001']}, index=pd.Index(['a'])
+    )
+    settings = {'sample': FileRef(file='run:1')}
+    label = manager.create(STAGED.name, title='T', rows=table, settings=settings)
+    page = opened(pages, label)
+    shown = state(page)
+
+    refused = page.post('/api/settings', json={'path': ['binning'], 'op': 'clear'})
+    page.post('/api/settings', json={'path': ['sample'], 'op': 'clear'})
+    applied = page.post('/api/settings/apply').json()
+
+    (sample,) = [n for n in shown['settings'] if n['path'] == ['sample']]
+    assert sample['value'] is not None
+    assert refused.status_code == 422
+    assert 'sample' not in manager.batch(label).settings
+    assert [r['status'] for r in applied['rows']] == ['incomplete']
 
 
 def test_a_changed_setting_leaves_the_rows_reduced_reading_earlier(

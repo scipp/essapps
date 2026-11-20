@@ -639,6 +639,28 @@ def test_a_row_added_after_make_column_takes_the_setting(
     assert batch.state()['1'].text == 'done'
 
 
+def test_a_waiting_row_taken_or_stepped_takes_no_setting_of_a_column_filled(
+    manager: BatchManager,
+    client: Client,
+    sample: Measure,
+    definitions: FolderDefinitions,
+) -> None:
+    sample(1, 'water')
+    from_pairs(manager, 'plain', title='A', label='a', follow=True)
+    sample(2, 'oil', partner=False)
+    batch = _again(client, definitions).batch('a')  # as after a restart
+
+    with pytest.raises(ValueError, match='the source fills transmission'):
+        batch.settings = {'transmission': 'run:1001'}
+    manager.take('a', ['2'])
+    done = manager.step()
+    state = manager.batch('a').state()['2']
+
+    assert batch.filled == ('sample', 'transmission')
+    assert '2' not in done.records
+    assert [(e.loc, e.msg) for e in state.problems] == [(('transmission',), 'empty')]
+
+
 def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(
     client: Client, sample: Measure, definitions: FolderDefinitions
 ) -> None:

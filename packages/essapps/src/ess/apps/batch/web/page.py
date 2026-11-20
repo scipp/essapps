@@ -498,8 +498,14 @@ class Page:
         return self._listing.listed(Selector()) if self.pages.corrects_runs else {}
 
     def _form(self) -> Fields:
-        """A form of the settings, a field per parameter, at their defaults."""
-        return Fields(self.batch.spec.params, self._listing)
+        """
+        A form of the settings, at the fields' defaults: a field per
+        parameter, but the columns that the source fills, which take no
+        setting (:attr:`~ess.apps.batch.Batch.filled`).
+        """
+        batch = self.batch
+        fields = [n for n in batch.spec.params.model_fields if n not in batch.filled]
+        return Fields(batch.spec.params, self._listing, fields=fields)
 
     def _form_held(self) -> tuple[dict[str, Any], list[FieldError]]:
         """
@@ -633,6 +639,7 @@ class Page:
                     name=c,
                     title=self._cells.titles[c],
                     editor=forms.editor(self._cells.fields[c]),
+                    filled=c in batch.filled,
                     default=self._text(batch.settings[c])
                     if c in batch.settings
                     else ''
@@ -1028,7 +1035,13 @@ class Page:
 
     @_action
     def edit_settings(self, edit: Edit) -> None:
-        """Change the form of the settings; the batch's stay until Apply."""
+        """
+        Change the form of the settings; the batch's stay until Apply. Only
+        the field of a column may be cleared, since a column needs no setting.
+        """
+        columns = [[c] for c in self.batch.columns]
+        if edit.op == 'clear' and edit.path[:1] not in columns:
+            raise Problem('Only the setting of a column can be cleared.')
         try:
             forms.apply(self.settings, edit)
         except (KeyError, ValueError) as error:
@@ -1055,9 +1068,13 @@ class Page:
         self._show_settings()
 
     def _fill(self, params: Mapping[str, Any]) -> None:
-        """Show ``params`` in the form, all or none; raises as :meth:`Fields.set`."""
+        """
+        Show ``params`` in the form, all or none, but those that the batch
+        refuses (:meth:`~ess.apps.batch.Batch.settable`); raises as
+        :meth:`Fields.set`.
+        """
         form = self._form()
-        form.set(params, self._listing)
+        form.set(self.batch.settable(params), self._listing)
         self.settings = form
 
     @_action
@@ -1109,15 +1126,18 @@ class Page:
 
     @_locked
     def row(self, key: str) -> RowDetail:
-        """What the result of row ``key`` was reduced with."""
+        """
+        What the result of row ``key`` was reduced with: the value of each
+        parameter that the row took, its own cells and the settings, and
+        where its request differs from the row's now.
+        """
         self._frame([key])
         state = self._states([key])[0][key]
         record = state.record
         if record is None or state.spec_changed:
             # another spec's params are not this one's
             return RowDetail(key=key, reduced_with=None, created=None, differs=[])
-        batch = self.batch
-        given = Fields(batch.spec.params, self._listing, fields=batch.settings_fields)
+        given = Fields(self.batch.spec.params, self._listing)
         given.set(record.request.params, self._listing)
         return RowDetail(
             key=key,

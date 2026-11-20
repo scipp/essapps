@@ -191,10 +191,11 @@ def _at(fields: Fields, path: list[str | int], *, choice: bool = False) -> Field
 
 def apply(fields: Fields, edit: Edit) -> None:
     """
-    Give ``fields`` what a person did. Raises ``KeyError`` for a path or a
+    Give ``fields`` what a person did. ``clear`` sets a whole parameter as it
+    starts: at its default, or unset. Raises ``KeyError`` for a path or a
     label that the form lacks, and ``ValueError`` for a value an input refuses.
     """
-    field = _at(fields, edit.path, choice=edit.op == 'choose')
+    field = _at(fields, edit.path, choice=edit.op in ('choose', 'clear'))
     if edit.op == 'set' and isinstance(field, Input):
         field.value = _value(field, edit.value)
     elif edit.op == 'choose' and isinstance(field, ChoiceField):
@@ -203,6 +204,8 @@ def apply(fields: Fields, edit: Edit) -> None:
         field.chosen = edit.value
     elif edit.op in ('add', 'remove') and isinstance(field, ScalarsField):
         getattr(field, edit.op)()
+    elif edit.op == 'clear' and len(edit.path) == 1:
+        fields.fields[str(edit.path[0])].set(UNSET)
     else:
         raise KeyError(f'cannot {edit.op} the setting at {edit.path}')
 

@@ -33,7 +33,7 @@ A person thinks of a batch as a table: they edit its cells, remove its rows, red
 
 ## Decision
 
-**A batch is a template and a table. The settings are one value per parameter, for the batch. The template holds the settings of the parameters that are no column, and its blanks are the columns; each row of the table fills it once. The value of a parameter for a row is its cell; if the cell is empty or the parameter is no column, the setting; if the batch has none, the default of the parameter. The table has one value per cell, and only a person changes it. How the table was made is not part of the batch.**
+**A batch is a template and a table. The settings are one value per parameter, for the batch. The template holds the settings of the parameters that are no column, and its blanks are the columns; each row of the table fills it once. The value of a parameter for a row is its cell; if the cell is empty or the parameter is no column, the setting; if the batch has none, the default of the parameter. A column that the source of the batch fills takes no setting. The table has one value per cell, and only a person changes it. How the table was made is not part of the batch.**
 
 ```
 batch '20261118-130204'
@@ -102,7 +102,7 @@ def request(key):
 | `direct_beam: DirectBeamFile \| None` | `None`: no direct beam |
 | `sample: SampleFile` | nothing: the row is incomplete |
 
-- **A column that a source fills keeps no setting when the batch is made.** An empty cell there means that a file has not arrived, not "take the value of the batch". `manager.create` with a source leaves out the settings of the columns of `Source.fills`.
+- **A column that the source of the batch fills takes no setting; its empty cell is empty.** An empty cell there means that a file has not arrived, not "take the value of the batch". The manager gives a batch the parameters that its source fills (`Source.fills`) when it makes or reads it. The batch refuses a setting at such a column and "Make this a setting" of it, and `batch.settable(settings)` leaves such values out of settings taken from elsewhere: those of another batch at `create`, a settings file loaded, and the template of the command.
 
 ### A person changes the table
 
@@ -252,8 +252,9 @@ The code of this ADR and of ADR 0013 is written together, since Follow is in use
 
 - **Keep the rows derived, and cache the last scan for when the files are away.** Two models: what a person sees depends on whether the cache or the scan answered, and removing files still removes rows.
 - **Two values per cell, one that the source gave and one that a person set, and a scan that merges.** It stores the inputs of a merge in place of the table. Each row then carries what only a scan needs (`source`, `hand`, `cleared`, `added`, `removed`), and the table is not one that pandas holds or stores. It also decides the three uses of a scan above with "yes" without asking.
-- **A parameter is a setting or a column, never both**, as in a template: every value that the table contributes is in the table, and no cell depends on a setting. Making a parameter a column copied the setting into the cell of every row and dropped the setting. A row added later, by Follow, by "Add rows from the runs" or by hand, had an empty cell, so it was reduced with the default, not with the value that the batch had, and nothing told the person.
+- **A parameter is a setting or a column, never both**, as in a template: every value that the table contributes would be in the table, and no cell would depend on a setting. Making a parameter a column would copy the setting into the cell of every row and drop the setting. A row added later, by Follow, by "Add rows from the runs" or by hand, would have an empty cell, so it would be reduced with the default, not with the value that the batch had, and nothing would tell the person.
 - **Fill the cell of a row added with the setting.** Each code that adds a row (a step, `take`, the page, a table file) would need the settings, and a setting changed would not reach the rows added before.
+- **A setting at a column that the source fills, as at any other column.** A row taken before its file arrives would take the setting, a file of another sample, and be reduced with it without a word.
 - **The columns fixed when the batch is made** (today). Nothing needs it: a row is outdated by the comparison of its request with its record, whatever the columns were.
 - **A list of the parameter columns in the header.** The template has it: its blanks.
 - **A word for `None` in a cell**, such as the text `none`, so that an empty cell of `direct_beam` can mean "not said yet". A text column would hold a word that is not text of its parameter, and pandas reads empty as missing in every operation.
@@ -268,6 +269,7 @@ The code of this ADR and of ADR 0013 is written together, since Follow is in use
 - A wrong value in a cell is refused when it is set or read from a table file, not when the row is reduced.
 - A spec cannot make a person choose between a value and `None` for each row: an empty cell of such a column is the setting, or `None` if there is none. It still can for a setting.
 - An empty cell depends on the settings, outside the table. The page shows it in grey as the value that the row takes.
+- A table file shows an empty cell where a row takes the setting, so it needs the settings file to say what a row was reduced with.
 - A cell emptied after its row was reduced counts its value as a setting: the row reads `earlier`, not `outdated`.
 - `settings.json` holds every setting, those at the columns too, as a template without blanks. A file whose template has blanks, as one written before, reads the same: its blanks are not read, and it has no settings at the columns.
 - A row that only wrong metadata made stays until a person removes it, and a correction of a run changes no batch (the example above).

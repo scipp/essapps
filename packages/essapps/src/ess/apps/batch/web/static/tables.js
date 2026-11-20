@@ -226,7 +226,7 @@ export function cellColumns(columns, {current, revert, say, menu}) {
     cssClass: column.editor ? `editable ${column.editor.type}` : '',
     formatter: cellFormatter(column, revert),
     tooltip: cellTooltip(column),
-    ...(menu && {headerMenu: menu(column)}),
+    ...(menu?.(column).length > 0 && {headerMenu: menu(column)}),
     ...editorOf(column, options(column), say),
   }));
 }

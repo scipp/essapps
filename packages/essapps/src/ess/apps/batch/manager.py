@@ -285,11 +285,12 @@ class BatchManager:
         A row that waits is neither taken nor considered: Follow adds it once
         it is filled, if the batch follows.
 
-        A column that the source fills keeps no setting: an empty cell there
+        A column that the source fills takes no setting: an empty cell there
         means that a file has not arrived, not "take the value of the batch".
-        So the settings of the columns of ``source.fills`` are left out. Any
-        other column keeps its setting, which each row with an empty cell
-        takes.
+        The batch is given ``source.fills`` (:attr:`.reduction.Batch.fills`),
+        and the settings at its columns are left out
+        (:meth:`.reduction.Batch.settable`). Any other column keeps its
+        setting, which each row with an empty cell takes.
 
         Parameters
         ----------
@@ -361,6 +362,7 @@ class BatchManager:
         if settings is None:
             settings = self._settings.get(spec, {})
         made = None
+        fills: tuple[str, ...] = ()
         if source is not None:
             found = self._source(source)
             given = self._given(found, found.fills)
@@ -368,16 +370,14 @@ class BatchManager:
             rows = arrived if choose is None else choose(arrived)
             _check_chosen(rows, arrived)
             made = FromSource(source, frozenset(arrived.index))
+            fills = found.fills
         # Refused here, before anything is written.
         table = typed(pd.DataFrame() if rows is None else rows, bound.params)
-        if source is not None:
-            filled = set(found.fills) & set(table.columns)
-            settings = {k: v for k, v in settings.items() if k not in filled}
-        batch = self._kept(label, bound, {}, None)
+        batch = self._kept(label, bound, {}, None, fills)
         written = list(_parts(label))  # what to delete if a write is refused
         try:
-            batch.settings = settings
             batch.put(table)
+            batch.settings = batch.settable(settings)
             if made is not None:
                 self._definitions.save(source_key(label), source_data(made))
             self._definitions.save(header_key(label), header_data(header))
@@ -462,6 +462,12 @@ class BatchManager:
         another kind of value at a column of the table, or that has a
         parameter of the name of a note, refuses the cells of the table, and
         the batch cannot be shown either.
+
+        The batch is given the parameters that its source fills
+        (:attr:`.reduction.Batch.fills`), if the source is registered; a
+        batch whose source is not registered has none. If the source now
+        fills a column at which the settings kept hold a value, ``Batch``
+        refuses them, and the batch cannot be shown either.
         """
         if (batch := self._batches.get(label)) is not None:
             return batch
@@ -474,7 +480,10 @@ class BatchManager:
         rows = self._definitions.load(
             rows_key(label), lambda data: typed(frame_of(data), spec.params)
         )
-        batch = self._kept(label, spec, template.params, rows)
+        made = self._from(label)
+        found = None if made is None else self.sources.get(made.source)
+        fills = () if found is None else found.fills
+        batch = self._kept(label, spec, template.params, rows, fills)
         self._batches[label] = batch
         return batch
 
@@ -484,6 +493,7 @@ class BatchManager:
         spec: WorkflowSpec[Any, Any],
         settings: Mapping[str, Any],
         rows: pd.DataFrame | None,
+        fills: Collection[str],
     ) -> Batch:
         """The ``Batch`` of ``label``, which writes to the definitions."""
         return Batch(
@@ -495,6 +505,7 @@ class BatchManager:
             staged=spec.name in self._staged,
             persist=True,
             definitions=self._definitions,
+            fills=fills,
         )
 
     def change(

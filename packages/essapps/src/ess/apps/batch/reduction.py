@@ -13,7 +13,9 @@ The table is one frame (:mod:`~.table`), and only :meth:`Batch.put` changes
 it. The settings are a value per parameter for the batch, also for one that is
 a column. The value of a parameter for a row is its cell; if the cell is empty
 or the parameter is no column, the setting; if the batch has none, the default
-of the parameter. A template cannot fix a value and leave it blank, so the
+of the parameter. A column that the batch's source fills takes no setting: an
+empty cell there waits for its file, and stays empty (:attr:`Batch.fills`).
+A template cannot fix a value and leave it blank, so the
 template of the requests and of the stage holds the settings without the
 columns, its blanks are the columns, and each row fills every column::
 
@@ -70,7 +72,7 @@ alone.
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import replace
 from types import MappingProxyType
 from typing import Any
@@ -120,6 +122,15 @@ def _files_in(params: Mapping[str, Any]) -> list[FileRef]:
     return [ref for _, ref in iter_refs(params) if isinstance(ref, FileRef)]
 
 
+def _refuse_filled(settings: Mapping[str, Any], filled: Collection[str]) -> None:
+    """Raise ``ValueError`` for a value of ``settings`` at a column of ``filled``."""
+    if at := sorted(settings.keys() & set(filled)):
+        raise ValueError(
+            f'the source fills {", ".join(at)}: an empty cell there waits for '
+            'its file, so the column takes no setting'
+        )
+
+
 def _running(row: RowState) -> list[FieldError]:
     if row.status is Status.PENDING:
         return [FieldError(row.key, (), 'still running')]
@@ -157,6 +168,11 @@ class Batch:
         reads them and gives them as ``settings`` and ``rows``
         (:meth:`.manager.BatchManager.batch`). A ``Batch`` made in code
         without them keeps nothing.
+    fills:
+        The parameters that the source of the batch fills, if it has one
+        (:attr:`~.source.Source.fills`): a column of these takes no setting,
+        since an empty cell there means that a file has not arrived. The
+        manager gives them.
 
     Attributes
     ----------
@@ -165,6 +181,8 @@ class Batch:
         template.
     settings_fields:
         The other parameters of the spec, which no row gives itself.
+    filled:
+        The columns of :attr:`fills`, which take no setting.
     version:
         A number that moves whenever :meth:`frame`, :meth:`template` or
         :meth:`shown` may give something else: while it is the same, they
@@ -179,7 +197,8 @@ class Batch:
     Raises
     ------
     ValueError
-        If ``rows`` are refused, as :meth:`put` refuses them.
+        If ``rows`` are refused, as :meth:`put` refuses them, or ``settings``
+        as an assignment of :attr:`settings` refuses them.
     """
 
     def __init__(
@@ -193,15 +212,19 @@ class Batch:
         staged: bool = False,
         persist: bool | Sequence[str] = False,
         definitions: DefinitionStore | None = None,
+        fills: Collection[str] = (),
     ) -> None:
         self.client = client
         self.spec = spec
         self.label = label
+        self.fills = frozenset(fills)
         self._definitions = definitions
         self._version = 0
         self._settings: dict[str, Any] = copy.deepcopy(dict(settings or {}))
         self._template = Template(spec, params=self._settings)
-        self._set(typed(pd.DataFrame() if rows is None else rows, spec.params))
+        rows = typed(pd.DataFrame() if rows is None else rows, spec.params)
+        _refuse_filled(self._settings, self.fills & set(rows.columns))
+        self._set(rows)
         self._staged = staged
         self._persist = persist
         self._stage: tuple[Template, Stage] | None = None
@@ -242,6 +265,18 @@ class Batch:
         fields = self.spec.params.model_fields
         return tuple(n for n in fields if n not in self.columns)
 
+    @property
+    def filled(self) -> tuple[str, ...]:
+        return tuple(c for c in self.columns if c in self.fills)
+
+    def settable(self, settings: Mapping[str, Any]) -> dict[str, Any]:
+        """
+        ``settings`` without the values at :attr:`filled`, which the batch
+        refuses: for settings taken from elsewhere, such as those of another
+        batch or of a template file.
+        """
+        return {k: v for k, v in settings.items() if k not in self.filled}
+
     def frame(self) -> pd.DataFrame:
         """
         A copy of the table: the key as index, a column per blank, and notes.
@@ -268,12 +303,14 @@ class Batch:
 
         Raises ``ValueError``, and changes nothing, for a table that
         :func:`~.table.typed` refuses: a key that is not text, empty, or
-        given twice, or a cell that is not of the kind of its column.
+        given twice, or a cell that is not of the kind of its column; and for
+        a column of :attr:`fills` that has a setting.
 
         Raises :class:`~.definition.NotKept` if the definitions refuse the
         table, and then nothing changes.
         """
         rows = typed(frame, self.spec.params)
+        _refuse_filled(self._settings, self.fills & set(rows.columns))
         self._resolved.clear()
         data = data_of(rows)
         if to_json(data) == to_json(data_of(self._rows)):
@@ -298,12 +335,15 @@ class Batch:
         :attr:`RowState.changed`. The workspace checks the settings when
         :meth:`state` resolves them, and refuses a name that is not a
         parameter; a setting at a column is checked as a cell of each row
-        that takes it.
+        that takes it. Raises ``ValueError``, and changes nothing, for a
+        value at a column of :attr:`filled`: use :meth:`settable` for
+        settings taken from elsewhere.
         """
         return MappingProxyType(copy.deepcopy(self._settings))
 
     @settings.setter
     def settings(self, settings: Mapping[str, Any]) -> None:
+        _refuse_filled(settings, self.filled)
         settings = copy.deepcopy(dict(settings))
         self._save(settings)
         self._settings = settings
@@ -314,11 +354,15 @@ class Batch:
         """
         Make the parameter ``name`` a column with an empty cell in every row:
         one :meth:`put`. The setting stays, so every row takes it until its
-        cell is set, also a row added later. Raises ``ValueError`` if
-        ``name`` is a column or no parameter, and as :meth:`put`.
+        cell is set, also a row added later; but the setting of a parameter
+        of :attr:`fills` goes, and its empty cells wait for their files.
+        Raises ``ValueError`` if ``name`` is a column or no parameter, and as
+        :meth:`put`.
         """
         if name not in self.settings_fields:
             raise ValueError(f'{name} is not a setting of {self.spec.name}')
+        if name in self.fills and name in self._settings:
+            self.settings = {k: v for k, v in self._settings.items() if k != name}
         self.put(self.frame().assign(**{name: None}))
 
     def make_setting(self, name: str, key: str | None = None) -> None:
@@ -336,11 +380,17 @@ class Batch:
         column with the setting changed, as a batch read again does: its rows
         with an empty cell take the value chosen.
 
-        Raises ``ValueError`` if ``name`` is not a column, if the table has
+        Raises ``ValueError`` if ``name`` is not a column, if it is a column
+        of :attr:`fills`, whose rows wait for their files, if the table has
         no row of ``key``, or if ``key`` is not given and the rows take
         different values; :class:`~.definition.NotKept` if the definitions
         refuse a write.
         """
+        if name in self.filled:
+            raise ValueError(
+                f'the source fills {name}, and a row waits until its file '
+                'arrives: to give every row one value, set the cells'
+            )
         if key is None:
             values = self.values(name)
             if len(values) > 1:
@@ -525,7 +575,7 @@ class Batch:
             changed,
             refused,
             self._spec_changed(found),
-            own,
+            own=own,
         )
 
     def _poll(self) -> None:

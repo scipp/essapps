@@ -276,7 +276,8 @@ function gridColumns(state) {
   const cells = cellColumns(state.columns, {
     current: () => view.state.columns,
     say: showMessage,
-    menu: (column) => [{label: 'Make this a setting', action: () => makeSetting(column)}],
+    // A column that the source fills stays a column: its rows wait for their runs.
+    menu: (column) => (column.filled ? [] : [{label: 'Make this a setting', action: () => makeSetting(column)}]),
   });
   return {
     columns: [named, ...notes, ...cells, statusColumn],
@@ -288,7 +289,7 @@ function gridColumns(state) {
 // loaded changes them.
 function showColumns(state) {
   // The options of a pick are read when its editor opens (`current`).
-  const shown = JSON.stringify([state.notes, state.columns.map((c) => [c.name, c.title, c.editor?.type, c.default])]);
+  const shown = JSON.stringify([state.notes, state.columns.map((c) => [c.name, c.title, c.editor?.type, c.default, c.filled])]);
   if (shown === view.columns) return;
   const first = view.columns === '';
   view.columns = shown;
@@ -972,10 +973,22 @@ function renderSettings(state) {
   download.disabled = changed;
   download.title = changed ? `${action.blocked} first.` : '';
   // A column is marked: its setting is the value of each row whose cell is
-  // empty. A setting whose cell the page edits may be a column.
+  // empty, and it may have none, so it can be cleared. A setting whose cell
+  // the page edits may be a column.
   const offer = (node) =>
     node.column
-      ? h('span', {class: 'hint column-note', text: 'A column: a row may give its own', title: 'Each row whose cell is empty takes this value, also a row added later.'})
+      ? h(
+          'span',
+          {class: 'column-note'},
+          h('span', {class: 'hint', text: 'A column: a row may give its own', title: 'Each row whose cell is empty takes this value, also a row added later.'}),
+          h('button', {
+            type: 'button',
+            class: 'quiet small',
+            text: 'Clear',
+            title: 'No setting: a row whose cell is empty takes the default, or is incomplete if there is none.',
+            onclick: () => act('settings', {path: node.path, op: 'clear'}),
+          }),
+        )
       : state.may_be_columns.includes(node.path[0]) &&
         h('button', {
           type: 'button',
@@ -1170,7 +1183,7 @@ function renderRow(detail) {
   const tried = row.status === 'failed' || row.status === 'cancelled';
   const reasonClass = {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info', earlier: 'earlier'}[row.status];
   const useSettings = () => replaceChanges() && act('row/use-settings', {key: row.key}).then((done) => done && showTab('settings'));
-  const settingsNames = Object.fromEntries(view.state.settings.map((n) => [n.path[0], n.label]));
+  const settingsNames = Object.fromEntries([...view.state.columns.map((c) => [c.name, c.title]), ...view.state.settings.map((n) => [n.path[0], n.label])]);
   const parts = [
     h('div', {class: 'row-head'}, h('h2', {text: row.name}), h('span', {class: `pill st-${row.status}`, text: row.status})),
     h(
@@ -1185,7 +1198,7 @@ function renderRow(detail) {
           {class: 'reduced-with'},
           h('h3', {text: `${tried ? 'Tried' : 'Reduced'} on ${when(detail.created)} with`}),
           detail.differs.length > 0 &&
-            h('p', {class: 'hint differs', text: `Differs from the settings now in ${detail.differs.map((n) => settingsNames[n] ?? n).join(', ')}.`}),
+            h('p', {class: 'hint differs', text: `Differs from what the row takes now in ${detail.differs.map((n) => settingsNames[n] ?? n).join(', ')}.`}),
           summary(detail.reduced_with, detail.differs),
           detail.differs.length > 0 &&
             h('button', {type: 'button', text: 'Put these settings in the form', onclick: useSettings}),
