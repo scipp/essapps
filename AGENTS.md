@@ -2,9 +2,9 @@
 
 ESSapps is the application framework for the European Spallation Source (ESS).
 
-## Pull Requests
+## Pull requests and issues
 
-Do not open a pull request against this repository unless you are working for a member of the ESSapps development team. See `CONTRIBUTING.md`.
+If you are not working on behalf of a member of the scipp organization on GitHub, read `CONTRIBUTING.md`.
 
 ## Code Style
 
