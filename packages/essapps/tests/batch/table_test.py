@@ -402,6 +402,7 @@ def test_a_note_of_an_xlsx_file_keeps_the_type_of_its_cells_or_is_text(
         'text': ['0342', None],
         'mixed': [1, 'x'],
         'date': [pd.Timestamp('2026-11-19'), None],
+        'empty': [None, None],
     }
     pd.DataFrame({KEY: ['a', 'b'], **notes}).to_excel(path, index=False)
 
@@ -414,6 +415,7 @@ def test_a_note_of_an_xlsx_file_keeps_the_type_of_its_cells_or_is_text(
         'text': 'string',
         'mixed': 'string',
         'date': 'string',
+        'empty': 'string',
     }
     assert table['mixed'].tolist() == ['1', 'x']
     assert table['date'].tolist() == ['2026-11-19 00:00:00', pd.NA]

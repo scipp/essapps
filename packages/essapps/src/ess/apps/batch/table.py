@@ -533,9 +533,12 @@ def _read_table(
 
 
 def _note(column: pd.Series) -> pd.Series:
-    """A note of a ``.xlsx`` file: of the dtype of its cells, or text."""
+    """
+    A note of a ``.xlsx`` file: of the dtype of its cells, or text. A note
+    without a value in any row is text, as in a ``.csv`` file.
+    """
     typed_column = column.convert_dtypes()
-    if str(typed_column.dtype) in _WORDS.keys() - {'object'}:
+    if column.notna().any() and str(typed_column.dtype) in _WORDS.keys() - {'object'}:
         return typed_column
     cells = [None if _empty(v) else str(v) for v in column]
     return pd.Series(cells, index=column.index, dtype='string')
