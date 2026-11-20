@@ -35,6 +35,7 @@ from ess.spec import function_binding
 from .toys import (
     COLUMNS,
     PLAIN,
+    SAMPLES,
     SOURCES,
     STAGED,
     STAGED_NAMES,
@@ -664,6 +665,20 @@ def test_a_waiting_row_taken_or_stepped_waits_whatever_the_settings_kept(
     assert done is not None
     assert '2' not in done.records
     assert [(e.loc, e.msg) for e in state.problems] == [(('transmission',), 'empty')]
+
+
+def test_a_source_that_no_longer_gives_a_column_of_the_fills_kept_is_named(
+    manager: BatchManager, client: Client, definitions: FolderDefinitions
+) -> None:
+    from_pairs(manager, 'plain', title='A', label='a', follow=True)
+    sources = {'pairs': SAMPLES}  # its code now fills sample only
+    again = BatchManager(client, sources=sources, definitions=definitions)
+    said = 'the source pairs: it no longer gives the column transmission'
+
+    with pytest.raises(ValueError, match=said):
+        again.offered('a')
+    with pytest.raises(ValueError, match=said):
+        again.step()
 
 
 def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(

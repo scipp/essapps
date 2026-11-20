@@ -379,22 +379,28 @@ What moves a row from one word of `text` to another:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> incomplete: a row put, a value missing
-    [*] --> ready: a row put, complete
-    incomplete --> ready: a cell filled, or a setting applied
+    [*] --> incomplete: a row put with a problem
+    [*] --> ready: a row put without one
+    incomplete --> ready: its problems gone
     ready --> running: reduce
     running --> done: the record completed
     running --> failed: the record failed
     running --> cancelled: cancel
     state "with a result" as result {
-        done --> earlier: a setting that it takes applied, or its cell emptied
+        done --> earlier: a setting that it takes changed
         done --> outdated: a cell given another value
         earlier --> outdated: a cell given another value
         failed
         cancelled
     }
     result --> running: reduce again
+    result --> incomplete: a problem
 ```
+
+A problem is any of `RowState.problems`: a value missing, such as an empty cell of a column that the source fills, a cell that the workspace refuses, or a referenced record that failed.
+A problem goes when a cell is filled or changed, or a setting is applied.
+A row with a problem reads `incomplete` whatever its word but `running`, also when it has a result, as a `done` row whose source-filled cell is emptied; the arrow from the box stands for these.
+A cell emptied counts as a setting: the row reads `earlier` if the setting or default that it then takes differs from what the cell held.
 
 The rules, in `ess.apps.batch`:
 

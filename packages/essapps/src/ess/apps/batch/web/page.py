@@ -858,7 +858,7 @@ class Page:
             raise Problem(
                 f'The rows of the source cannot be listed: {why(error)}.'
             ) from None
-        return listed(given, manager.sources[manager.source(self.label)].fills)
+        return listed(given, self.batch.fills)
 
     @_action
     def take(self, keys: Sequence[str]) -> str:

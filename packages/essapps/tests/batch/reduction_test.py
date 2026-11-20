@@ -627,6 +627,16 @@ def test_a_batch_from_a_source_refuses_a_setting_at_and_a_table_without_a_column
     assert set(FILLS) <= set(from_source.columns)
 
 
+def test_a_batch_is_not_made_on_a_table_without_a_column_of_its_fills(
+    from_source: Batch,
+) -> None:
+    # As rows.json without offset, whose parameter has a default, would be.
+    table = from_source.frame().drop(columns='offset')
+
+    with pytest.raises(ValueError, match='fills offset: a row waits'):
+        Batch(from_source.client, PLAIN, label='s', rows=table, fills=FILLS)
+
+
 def test_a_changed_setting_at_a_column_is_earlier_for_rows_that_take_it(
     measured: Batch, client: Client
 ) -> None:

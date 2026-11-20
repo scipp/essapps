@@ -149,8 +149,8 @@ class Batch:
         its default; none if not given. A value at a column is the value of
         each row whose cell is empty; one at :attr:`fills` is left out.
     rows:
-        The table, as :meth:`put` takes it; a table without rows or columns
-        if not given.
+        The table, as :meth:`put` takes it; if not given, a table without
+        rows, with a column for each of :attr:`fills`.
     staged:
         Run the rows through a stage, so that what they share is computed
         once. The spec's binding must make stages.
@@ -190,8 +190,9 @@ class Batch:
     Raises
     ------
     ValueError
-        If ``rows`` are refused, as :meth:`put` refuses them, or ``settings``
-        as an assignment of :attr:`settings` refuses them.
+        If ``rows`` are refused, as :meth:`put` refuses them, also for a
+        table without a column of :attr:`fills`, so that each of them is a
+        column of every batch.
     """
 
     def __init__(
@@ -216,7 +217,11 @@ class Batch:
         # A setting at fills, as definitions may hold, is never read: dropped.
         self._settings = copy.deepcopy(self.settable(settings or {}))
         self._template = Template(spec, params=self._settings)
-        self._set(typed(pd.DataFrame() if rows is None else rows, spec.params))
+        if rows is None:
+            rows = pd.DataFrame(columns=sorted(self.fills))
+        rows = typed(rows, spec.params)
+        self._keeps_fills(rows.columns)
+        self._set(rows)
         self._staged = staged
         self._persist = persist
         self._stage: tuple[Template, Stage] | None = None

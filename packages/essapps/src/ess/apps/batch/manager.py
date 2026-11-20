@@ -570,12 +570,17 @@ class BatchManager:
         named ``waits`` is replaced by it.
 
         Raises ``KeyError`` if no batch has the label, and ``ValueError`` if
-        it was not made from a source, or its source is not registered.
+        it was not made from a source, if its source is not registered, or
+        raises ``ValueError``, or no longer gives a column of the batch's
+        fills (:func:`~.source.filled`).
         """
         made = self._made(label)
         source = self._source(made.source)
         batch = self.batch(label)
-        given = self._given(source, batch.fills)
+        try:
+            given = self._given(source, batch.fills)
+        except ValueError as error:  # as step says it
+            raise ValueError(f'the source {made.source}: {error}') from error
         return given[~given.index.isin(batch.frame().index)]
 
     def take(self, label: str, keys: Iterable[str]) -> None:
