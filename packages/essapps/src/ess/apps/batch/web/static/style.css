@@ -421,6 +421,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .list td small { margin-left: 8px; }
 .list td .pill { margin: 0 4px 2px 0; }
 .list tr.batch { cursor: pointer; }
+.list tr.batch:not([aria-current]):hover { background: #f5f8fc; }
+.list tr.batch .text { cursor: text; }
 .list tr[aria-current="page"] { background: var(--accent-soft); }
 .list tr[aria-current="page"] a { font-weight: 600; }
 .list .follows { color: var(--done); font-weight: 600; }

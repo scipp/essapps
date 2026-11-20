@@ -73,58 +73,54 @@ const count = (n) => `${n} ${n === 1 ? 'row' : 'rows'}`;
 
 // Talking to the server
 
-// The number of changes of the batch shown (see `show`). The requests are
-// relative to the URL of the page, so one sent for a batch must not be sent,
-// nor its answer taken, once another batch is shown.
+// The page shown, whose API the requests ask, and the number of its changes
+// (see `show`): a state of the batch before, which an action or a poll
+// answers after a change, is not drawn.
+let here = location.href;
 let changes = 0;
 
 // Run `task` after the actions sent before it, so that the server gets them
 // in the order a person did them, such as an edit at the blur of an input and
-// the click of Apply that moved the focus. A task for a batch that is queued
-// before a change of batch is not run, and answers null; one of the
-// `workspace` is run.
+// the click of Apply that moved the focus.
 let queue = Promise.resolve();
-function queued(task, workspace = false) {
-  const at = changes;
-  const done = queue.then(() => (workspace || at === changes ? task() : null));
+function queued(task) {
+  const done = queue.then(task);
   queue = done.catch(() => {});
   return done;
 }
 
-// Ask the server, with a body for a POST. The answer is the parsed body, or
-// null after `say` showed the message of what went wrong. The answer of a
-// request is also dropped, without a message, if a newer request of its `kind`
-// was sent meanwhile, if `fresh()` says that what it was for has changed, or
-// if the page shows another batch since, unless the request is of the
-// `workspace`, whose answer is the same for every batch.
+// Ask the server of the page at `page`, with a body for a POST. The answer is
+// the parsed body, or null after `say` showed the message of what went wrong.
+// The answer of a request is also dropped, without a message, if a newer
+// request of its `kind` was sent meanwhile, or a change of batch (see
+// `show`), or if `fresh()` says that what it was for has changed.
 const sent = {};
-async function request(url, {body, kind, fresh = () => true, say = showMessage, workspace = false} = {}) {
+async function request(url, {body, kind, fresh = () => true, say = showMessage, page = here} = {}) {
   const asked = kind && (sent[kind] = (sent[kind] ?? 0) + 1);
-  const at = changes;
-  const other = () => !workspace && at !== changes;
   let response;
   try {
-    response = body === undefined ? await get(url) : await post(url, body);
+    response = body === undefined ? await get(url, page) : await post(url, body, page);
   } catch {
-    if (!other()) say('The server does not answer, so this was not done. Try again when it is back.');
+    say('The server does not answer, so this was not done. Try again when it is back.');
     return null;
   }
-  if ((kind && sent[kind] !== asked) || !fresh() || other()) return null;
+  if ((kind && sent[kind] !== asked) || !fresh()) return null;
   if (response.ok) return response.body;
   say(response.body?.message ?? `The server answered ${response.status}.`);
   return null;
 }
 
-// Send an action and show the state it answers with, or have `say` show what
-// went wrong; whether it was done, or null if the page shows another batch
-// since.
+// Send an action to the batch shown now, also if the page shows another one
+// when its turn comes, and show the state it answers with, or have `say` show
+// what went wrong; whether it was done, or null if the page shows another
+// batch since.
 function act(url, body = {}, say = showMessage) {
-  return queued(() => perform(url, body, say));
+  const [page, at] = [here, changes];
+  return queued(() => perform(url, body, say, page, at));
 }
 
-async function perform(url, body, say) {
-  const at = changes;
-  const state = await request(url, {body, say});
+async function perform(url, body, say, page, at) {
+  const state = await request(url, {body, say, page});
   if (at !== changes) return null;
   if (!state) {
     await refresh().catch(() => {});
@@ -149,7 +145,7 @@ class Unshown extends Error {}
 async function refresh() {
   const at = changes;
   const after = view.state ? {after: view.state.version, start: view.state.start} : {};
-  const response = await get(`state?${query(after)}`).catch(() => null);
+  const response = await get(`state?${query(after)}`, here).catch(() => null);
   if (at !== changes) return;
   if (!response) throw new Offline('The server does not answer.');
   if (response.status === 204) return;
@@ -178,6 +174,14 @@ async function poll(at = changes) {
     } else if (error instanceof Offline) {
       $('offline').textContent = `${error.message} The page tries again every second; what it shows may be old.`;
       $('offline').hidden = false;
+      // A batch shown in place whose first state does not come: the page
+      // shows the list and the runs, and nothing of the batch before.
+      if (document.body.inert) {
+        document.body.inert = false;
+        document.body.classList.add('no-batch');
+        showPage('batches');
+        document.title = $('title').textContent = view.batchData?.application ?? '';
+      }
     } else throw error;
   } finally {
     if (again) setTimeout(() => poll(at), 1000);
@@ -313,7 +317,7 @@ function downloadResults(rows, name) {
 }
 
 async function loadRuns() {
-  const shown = await request('runs', {kind: 'runs', workspace: true});
+  const shown = await request('runs', {kind: 'runs'});
   if (!shown) return;
   view.runs = shown.version;
   view.runData = shown;
@@ -354,7 +358,7 @@ function drawRuns() {
 // moved, so that it loads the runs; a page without a batch asks for the runs.
 function correctRuns(url, body) {
   return queued(async () => {
-    const done = await request(url, {body, workspace: true});
+    const done = await request(url, {body});
     if (!done) return false;
     toast(done.notice);
     if (view.state) await refresh().catch(() => {});
@@ -376,63 +380,82 @@ function showBatches(listed) {
 // batch for a count, and the pages and Follow wait meanwhile. The counts shown
 // stay until the next answer; a count that fails shows none. A page that polls
 // no state, such as the page without a batch, loads the list with each count.
+// Nothing counts while the tab of the browser is hidden.
 let counting = false; // whether a count is on its way
 let nextCount; // the timer of the next count
 async function countBatches() {
   clearTimeout(nextCount);
-  if (counting || view.page !== 'batches') return;
+  if (counting || view.page !== 'batches' || document.hidden) return;
   counting = true;
-  const listed = !view.state && (await request('batches', {workspace: true}));
+  const listed = !view.state && (await request('batches'));
   if (listed) showBatches(listed);
-  view.counts = await request('batches/counts', {workspace: true});
+  view.counts = await request('batches/counts');
   counting = false;
   drawBatches();
   nextCount = setTimeout(countBatches, 2000);
 }
 
 // The list of batches, each a link to its page, with its counts once counted,
-// or why it could not be counted; the batch shown is marked. A click on a
-// batch shows it (see `choose`).
+// or why it could not be counted; the batch shown is marked. The rows are made
+// again only when the list changes; a count updates the cells of its rows, so
+// that the keyboard focus, a text selected and a click stay.
 function drawBatches() {
   if (!view.batchData) return;
-  const counted = view.counts?.rows ?? {};
-  const none = h('tr', {}, h('td', {class: 'hint', colspan: 4, text: 'No batch yet.'}));
-  $('batches').tBodies[0].replaceChildren(
-    ...(view.batchData.rows.length ? [] : [none]),
-    ...view.batchData.rows.map((batch) => {
-      const n = counted[batch.label];
-      const failed = view.counts?.failed[batch.label];
-      const all = n && Object.values(n).reduce((a, b) => a + b, 0);
-      return h(
-        'tr',
-        {'aria-current': batch.label === shownLabel() && 'page', class: 'batch', onclick: (event) => choose(event, batch.label)},
+  const body = $('batches').tBodies[0];
+  const listed = JSON.stringify(view.batchData.rows);
+  if (listed !== body.listed) {
+    body.listed = listed;
+    const none = h('tr', {}, h('td', {class: 'hint', colspan: 4, text: 'No batch yet.'}));
+    body.replaceChildren(
+      ...(view.batchData.rows.length ? [] : [none]),
+      ...view.batchData.rows.map((batch) =>
         h(
-          'td',
-          {},
-          h('a', {href: batchUrl(batch.label), text: batch.title}),
-          h('small', {text: batch.label}),
-          batch.description && h('div', {class: 'hint', text: batch.description}),
+          'tr',
+          {class: 'batch', 'data-label': batch.label, onclick: (event) => choose(event, batch.label)},
+          h(
+            'td',
+            {},
+            h('a', {href: batchUrl(batch.label), text: batch.title}),
+            h('small', {class: 'text', text: batch.label}),
+            batch.description && h('div', {class: 'hint text', text: batch.description}),
+          ),
+          h('td', {class: 'n'}),
+          h('td'),
+          h('td', {class: 'follows', text: batch.follows ? 'follows' : ''}),
         ),
-        h('td', {class: 'n', text: n ? count(all) : ''}),
-        h(
-          'td',
-          {class: failed ? 'bad' : null, text: failed ?? ''},
-          n && CHIPS.filter((s) => s !== 'all' && n[s]).map((s) => h('span', {class: `pill st-${s}`, text: `${n[s]} ${s}`})),
-        ),
-        h('td', {class: 'follows', text: batch.follows ? 'follows' : ''}),
-      );
-    }),
-  );
+      ),
+    );
+  }
+  for (const row of body.querySelectorAll('tr.batch')) {
+    const {label} = row.dataset;
+    if (label === shownLabel()) row.setAttribute('aria-current', 'page');
+    else row.removeAttribute('aria-current');
+    const n = view.counts?.rows[label];
+    const failed = view.counts?.failed[label];
+    const counted = JSON.stringify([n, failed]);
+    if (counted === row.counted) continue;
+    row.counted = counted;
+    const [, number, status] = row.cells;
+    number.textContent = n ? count(Object.values(n).reduce((a, b) => a + b, 0)) : '';
+    status.className = failed ? 'bad' : '';
+    status.replaceChildren(
+      failed ?? '',
+      ...(n ? CHIPS.filter((s) => s !== 'all' && n[s]).map((s) => h('span', {class: `pill st-${s}`, text: `${n[s]} ${s}`})) : []),
+    );
+  }
 }
 
 // A click on a batch of the list shows that batch: a click on its title in the
 // Rows view, elsewhere in its row in the view shown, as a click on a row of
 // the grid shows that row in the row tab. A click on the title with a modifier
 // key is left to the browser, which opens the page in a tab or window of its
-// own; so is a click of the middle button, which is no `click`.
+// own; so is a click of the middle button, which is no `click`. The label and
+// the description are text to select, so a click on them, or one that ends a
+// selection, shows nothing.
 function choose(event, label) {
   const title = event.target.closest('a');
   if (title && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) return;
+  if (event.target.closest('.text') || getSelection().toString()) return;
   event.preventDefault();
   const page = title ? 'rows' : view.page;
   if (label === shownLabel()) showPage(page);
@@ -444,15 +467,17 @@ function choose(event, label) {
 // `history` that records it, none for Back and Forward. The root shows the
 // page of the batch that the server redirects it to, else the page without a
 // batch. The grids stay and get the rows of the batch, as `render` draws a
-// first state. Nothing of the batch before stays: the selection, the filter
-// and the sort are those remembered for the batch, a value typed and not sent
-// is dropped (the blur queues its action for the batch before), forms, menus,
-// dialogs and messages close, and a request for the batch before is not sent
-// or its answer dropped (`changes`). The page takes no click until the first
-// state is drawn.
+// first state. An action goes to the batch it was made for, also a value
+// typed that the blur sends, and a file asked for is saved. Nothing of the
+// batch before stays: the selection, the filter and the sort are those
+// remembered for the batch; forms, menus, dialogs and messages close; and an
+// answer that would draw something of the batch before is dropped, a state
+// (`changes`) or the answer of a request of a `kind`. The page takes no click
+// until the first state is drawn.
 async function show(url, page, how) {
   document.activeElement?.blur();
   const at = ++changes;
+  for (const kind in sent) sent[kind] += 1;
   document.body.inert = true;
   if (how) history[how](null, '', url);
   if (!shownLabel()) {
@@ -460,6 +485,7 @@ async function show(url, page, how) {
     if (at !== changes) return;
     if (home?.redirected) history.replaceState(null, '', home.url);
   }
+  here = location.href;
   Object.assign(view, batchView(), {state: null, plotted: null, zoom: view.zoom + 1, colors: {}, detail: '', dismissed: ''});
   document.querySelectorAll('.menu-items').forEach((m) => (m.hidden = true));
   document.querySelectorAll('dialog[open]').forEach((d) => d.close());
@@ -488,7 +514,7 @@ const FILE = 'file'; // the value of the choice "from a table file"
 
 async function openNewBatch() {
   const form = $('new-batch');
-  const loaded = await request('sources');
+  const loaded = await request('sources', {kind: 'sources'});
   if (!loaded) return;
   choices = loaded;
   none = choices.findIndex((c) => c.name === null);
@@ -671,7 +697,7 @@ async function makeBatch(event) {
 // lacks, those that wait marked. The rows picked are added as the source makes
 // them now.
 async function openTake() {
-  const listed = await request('rows/offered');
+  const listed = await request('rows/offered', {kind: 'offered'});
   if (!listed) return;
   const dialog = $('take');
   const add = dialog.querySelector('[value=take]');
@@ -696,7 +722,7 @@ async function openTake() {
 // row has, or, where the rows differ, of the value a person chooses, sent as
 // the key of a row that has it. The server says which values there are.
 async function makeSetting(column) {
-  const values = await request(`columns/values?${query({name: column.name})}`);
+  const values = await request(`columns/values?${query({name: column.name})}`, {kind: 'values'});
   if (!values) return;
   if (values.length < 2) return act('columns/setting', {name: column.name});
   const dialog = $('make-setting');
@@ -873,8 +899,9 @@ function saveBatch(event) {
 async function removeBatch() {
   const question = `Remove the batch "${view.state.title}"? Its title, description, settings and table are removed. Its results stay in the workspace.`;
   if (!confirm(question)) return;
-  const done = await queued(() => request('batch/remove', {body: {}}));
-  if (done) show(root(), null, 'replaceState');
+  const [page, at] = [here, changes];
+  const done = await queued(() => request('batch/remove', {body: {}, page}));
+  if (done && at === changes) show(root(), null, 'replaceState');
 }
 
 // Whether to replace the changes of the settings form that are not applied.
@@ -1202,6 +1229,7 @@ function wire() {
     if (event.key === 'Escape') document.querySelectorAll('.menu-items').forEach((m) => (m.hidden = true));
   });
   window.addEventListener('popstate', () => show(location.href));
+  document.addEventListener('visibilitychange', countBatches);
 }
 
 // The page at the root, when it goes to no batch, or of a batch that cannot
@@ -1214,7 +1242,7 @@ async function showWorkspace(why = '') {
   document.body.inert = false;
   showPage('batches');
   if (why) showMessage(why);
-  const listed = await request('batches');
+  const listed = await request('batches', {kind: 'batches'});
   if (!listed) return;
   showBatches(listed);
   if (!view.batchData.rows.length) openNewBatch();

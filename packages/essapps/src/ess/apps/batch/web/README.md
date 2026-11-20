@@ -93,7 +93,9 @@ Whatever a step raises, from the files, the workflow or the workspace, is the st
 The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, and which batch follows; the batch shown is marked.
 A click on a row of the list shows its batch, and the view stays Batches, as a click on a row of the grid shows that row in the row tab; a click on the title shows its batch in the Rows view.
 The title is a link to the page of its batch, so a click with a modifier key, or with the middle button, opens it in another tab.
-While the view is shown, the page counts the rows of each batch by status (`Pages.counts`), the next count 2 s after the answer of the one before; nothing counts while another view is shown.
+The label and the description are text to select and copy: a click on them, or one that selects text, shows no batch.
+While the view is shown, the page counts the rows of each batch by status (`Pages.counts`), the next count 2 s after the answer of the one before; nothing counts while another view is shown, or while the tab of the browser is hidden.
+A count updates the cells of the rows; the rows are made again only when the list changes, so the keyboard focus on a title and a text selected stay.
 The statuses are those of the chips of each batch's page (`RowState.text`).
 A count reads the state of every batch under the lock of all pages, so the pages and Follow wait until it ends; one count of a batch of 875 rows takes 50 to 85 ms.
 A batch that cannot be counted, such as one whose table cannot be read, shows why in its row.
@@ -106,8 +108,10 @@ The page without a batch, which polls no state, loads the list again with each c
 The document is loaded once.
 A click on a batch in the list, **Make** of a new batch, the removal of a batch, and Back and Forward of the browser show another batch in place (`show` in `app.js`): the URL changes to the page of the batch (`history.pushState`), the page drops the state, and the next poll, sent at once, draws the state of the batch.
 The grids stay, and get the rows and the columns of the batch.
-Nothing of the batch before stays: its rows, selection, filter and plot, the row tab, the forms, a value typed and not sent, the dialogs and menus, a message or a refusal.
+An action goes to the batch it was made for, also a value typed that the change sends as it takes the focus, or an action that waits in the queue; a file asked for is saved.
+Nothing of the batch before stays: its rows, selection, filter and plot, the row tab, the forms, the dialogs and menus, a message or a refusal, and the state that an action of the batch before answers after the change.
 Until the first state is drawn the page takes no click, and it fades if that takes longer than 0.3 s.
+If the server does not answer then, the page says so, and shows the Batches and Runs views, without the batch before, until the first state comes.
 
 The page remembers in the session of the browser, so that a reload or a return to a batch shows the same:
 
@@ -210,7 +214,7 @@ One function of `app.js` makes every request of the page, other than the poll.
 It answers the body, or shows the message of the failure (the server's `message` for a 422, "The server answered 500.", or that the server does not answer) and answers nothing.
 It also drops an answer when a newer request of the same kind was sent (`/api/row`, `/api/runs`, `/api/plot`), or when what it was for changed, such as a row that is no longer the only one selected.
 An older answer of the poll is dropped by its `version`.
-Since the requests are relative to the URL of the page, the page counts its changes of batch: an action for the batch before that waits in the queue is not sent, and the answer of a request for the batch before, also of the poll, is dropped; the requests of the workspace, such as `api/runs`, are kept.
+An action is sent to the API of the batch shown when it was made, also if another batch is shown when its turn in the queue comes; the state it answers is then dropped, as is a state of the poll of the batch before. A change of batch also drops the answers on their way of each kind, such as `api/plot`, so that nothing of the batch before is drawn.
 Actions wait for each other in a queue, so that the server gets them in the order a person did them.
 The keys of many rows (a plot, the results as a zip) go in the body of a POST, since a URL has a limit.
 The page asks for `api/...`, relative to its own URL, and `/` redirects by a relative URL, so a parent app can mount it under a prefix, and the answers are gzipped for a client that accepts it.

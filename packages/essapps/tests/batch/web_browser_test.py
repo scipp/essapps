@@ -1030,7 +1030,9 @@ def test_nothing_of_the_batch_before_stays_after_a_change(
     assert page.is_hidden('#draft.changed')
     page.click('[data-tab=row]')
     assert 'Select a row' in page.inner_text('#tab-row')
-    assert [u for u in sent if '/api/settings' in u] == []
+    # The value typed goes to the draft of the batch it was typed for.
+    other = url.replace('/scan/', f'/{second}/')
+    assert [u for u in sent if '/api/settings' in u] == [f'{other}api/settings']
     assert manager.batch(second).settings == {}
 
 
@@ -1075,6 +1077,94 @@ def test_an_answer_for_the_batch_before_is_dropped(
     assert 'Other' in page.inner_text('#title')
     assert batch.frame().at['1', 'thickness'] == 2.5
     assert list(manager.batch(second).frame()['thickness']) == [5.0]
+
+
+def test_a_value_typed_goes_to_its_batch_after_an_action_on_its_way(
+    second: str, page: Any
+) -> None:
+    hold(page, 'api/relist')
+    page.click('#relist')
+    held(page, 1)
+    page.click('[data-tab=settings]')
+    page.click(BINS)
+    page.keyboard.press('Control+a')
+    page.keyboard.type('9')
+
+    to_batch(page, 'Other')
+    release(page, 0)
+    page.wait_for_timeout(300)
+    assert 'Other' in page.inner_text('#title')
+    page.go_back()
+
+    shows(page, 'Scan')
+    page.wait_for_selector('#draft.changed')
+    assert page.input_value(BINS) == '9'
+
+
+def test_a_file_asked_for_before_a_change_is_saved(second: str, page: Any) -> None:
+    hold(page, 'api/table.csv')
+    page.click('#files .menu-button')
+    page.click('[data-file="table.csv"]')
+    held(page, 1)
+    to_batch(page, 'Other')
+
+    with page.expect_download() as saved:
+        release(page, 0)
+
+    assert saved.value.suggested_filename == 'rows.csv'
+    assert 'water' in Path(saved.value.path()).read_text()
+
+
+def test_the_focus_on_a_title_in_the_list_stays_while_it_counts(
+    second: str, page: Any
+) -> None:
+    page.click('[data-view=batches]')
+    page.wait_for_selector('#batches .pill')
+    page.focus('#batches a:text-is("Other")')
+
+    with page.expect_response('**/api/batches/counts'):
+        pass
+    page.wait_for_timeout(100)
+    assert page.evaluate('document.activeElement.textContent') == 'Other'
+    page.keyboard.press('Enter')
+
+    shows(page, 'Other')
+
+
+def test_selecting_the_text_of_a_batch_in_the_list_does_not_show_it(
+    second: str, page: Any
+) -> None:
+    page.click('[data-view=batches]')
+
+    page.dblclick(f'#batches small:text-is("{second}")')
+    description = page.locator('#batches .hint:text-is("The second series")')
+    description.click(position={'x': 2, 'y': 5})
+    page.mouse.down()
+    page.mouse.move(400, description.bounding_box()['y'] + 5)
+    page.mouse.up()
+    page.wait_for_timeout(300)
+
+    assert page.url.endswith('/batches/scan/')
+    assert page.evaluate('getSelection().toString()') != ''
+
+
+def test_a_change_while_the_server_does_not_answer_says_so_and_shows_no_batch(
+    second: str, page: Any
+) -> None:
+    page.route(f'**/{second}/api/state*', lambda route: route.abort())
+    page.click('[data-view=batches]')
+    page.click('#batches a:text-is("Other")')
+
+    page.wait_for_selector('#offline:has-text("The server does not answer.")')
+    page.wait_for_selector('body.no-batch:not([inert])')
+    assert page.is_hidden('#view-rows')
+    assert 'Scan' not in page.inner_text('#title')
+    page.unroute(f'**/{second}/api/state*')
+    shows(page, 'Other')
+    page.wait_for_selector('#offline', state='hidden')
+    assert page.is_visible('.right')
+    assert all('ERR_FAILED' in e for e in page.errors)
+    page.errors.clear()
 
 
 @pytest.mark.parametrize('start', ['', 'batches/gone/'])
