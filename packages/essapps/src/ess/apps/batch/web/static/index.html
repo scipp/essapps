@@ -16,7 +16,7 @@
     <h1 id="title">Batch reduction</h1>
     <nav class="views" aria-label="View">
       <button type="button" data-view="batches" aria-pressed="false">Batches <span class="n" id="n-batches"></span></button>
-      <button type="button" data-view="samples" aria-pressed="true">Rows <span class="n" id="n-samples"></span></button>
+      <button type="button" data-view="rows" aria-pressed="true">Rows <span class="n" id="n-rows"></span></button>
       <button type="button" data-view="runs" aria-pressed="false">Runs <span class="n" id="n-runs"></span></button>
     </nav>
     <span class="spacer"></span>
@@ -46,7 +46,7 @@
         <div class="message-text"></div>
         <button type="button" class="quiet close" aria-label="Dismiss">×</button>
       </div>
-      <div class="view" id="view-samples">
+      <div class="view" id="view-rows">
         <div class="toolbar">
           <div class="split" id="reduce-split">
             <button type="button" class="primary" id="reduce"><span class="label">Reduce</span><span class="bar"></span></button>
@@ -59,16 +59,17 @@
           </div>
           <button type="button" id="cancel">Cancel</button>
           <span class="spacer"></span>
-          <span class="follow-status" id="follow-status"></span>
+          <span class="status-line bad" id="files-problem" hidden></span>
+          <span class="status-line" id="follow-status"></span>
           <label class="follow" id="follow"><input type="checkbox"> Follow</label>
-          <button type="button" class="quiet" id="rescan" title="List the runs again. No row changes.">↻ Rescan runs</button>
+          <button type="button" class="quiet" id="relist" title="List the runs again. No row changes.">↻ List runs again</button>
         </div>
         <div class="chips" id="chips" role="group" aria-label="Show rows that are"></div>
         <div class="grid" id="rows"></div>
         <div class="table-foot">
           <button type="button" class="quiet" id="add-row">+ Add row</button>
           <form class="add-form" id="add-form" hidden>
-            <input type="text" name="key" placeholder="Name" aria-label="Name of the new row" required>
+            <input type="text" name="key" placeholder="Key" aria-label="Key of the new row" required>
             <button type="submit">Add</button>
             <button type="button" class="quiet" data-cancel>Cancel</button>
           </form>
@@ -111,7 +112,7 @@
 
       <div class="view" id="view-runs" hidden>
         <div class="toolbar">
-          <p class="hint" id="runs-hint">Correct the role or sample name of a run. The sample table follows at once.</p>
+          <p class="hint" id="runs-hint"></p>
         </div>
         <div class="grid" id="runs"></div>
       </div>

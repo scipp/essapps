@@ -57,6 +57,10 @@ def statuses(state: State) -> dict[str, str]:
     return {row.name: row.status for row in state.rows}
 
 
+def reasons(state: State) -> dict[str, str]:
+    return {row.name: row.reason for row in state.rows}
+
+
 def bins(page: Page, value: int) -> None:
     """Set the number of bins in the form, and apply it."""
     page.edit_settings(Edit(path=BINS, op='set', value=value))
@@ -315,11 +319,12 @@ def test_a_row_the_step_could_not_submit_shows_why(
     page.follow(True)
 
     (row,) = page.state().rows
-    assert row.status == 'incomplete'
+    assert row.status == 'ready'
     assert row.reason.startswith('Follow could not reduce it: ')
     assert 'greater than or equal to 1' in row.reason
     assert client.records() == []
-    assert statuses(page.follow(False)) == {'water': 'ready'}
+    (stopped,) = page.follow(False).rows
+    assert (stopped.status, stopped.reason) == ('ready', '')
 
 
 def test_apply_while_following_reduces_nothing_and_the_next_step_uses_it(
@@ -357,7 +362,7 @@ def test_a_done_row_reads_outdated_while_follow_is_refused_the_settings(
     page.pages.tick()
 
     shown = {row.name: row for row in page.state().rows}
-    assert (shown['water'].status, shown['oil'].status) == ('outdated', 'incomplete')
+    assert (shown['water'].status, shown['oil'].status) == ('outdated', 'ready')
     assert shown['oil'].reason.startswith('Follow could not reduce it: ')
 
 
@@ -417,14 +422,16 @@ def test_turning_follow_on_steps_at_once_and_off_stops(
     assert statuses(off) == {'water': 'running'}
 
 
-def test_follow_is_refused_for_a_batch_not_made_from_a_source(
-    pages: Pages, manager: BatchManager
+def test_a_batch_not_made_from_a_source_has_no_source_and_cannot_follow(
+    pages: Pages, manager: BatchManager, label: str
 ) -> None:
     page = pages.page(manager.create(STAGED.name, title='By hand'))
 
     with pytest.raises(Problem, match='was not made from a source'):
         page.follow(True)
-    assert not page.state().follow.on
+    shown = page.state().follow
+    assert (shown.on, shown.source) == (False, None)
+    assert pages.page(label).state().follow.source == 'pairs'
 
 
 def option(page: Page, column: str, run: int) -> str:
@@ -715,8 +722,8 @@ def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follo
         manager.follow(other.label)
         shown = other.state()
 
-    assert statuses(refused) == {'water': 'incomplete'}
-    assert statuses(shown) == {'water': 'ready'}
+    assert reasons(refused)['water'].startswith('Follow could not reduce it: ')
+    assert reasons(shown) == {'water': ''}
 
 
 def test_a_correction_on_another_page_moves_the_version_of_the_runs_once(
@@ -749,7 +756,7 @@ def test_the_counts_of_the_batch_that_follows_are_the_chips_of_its_page(
     counted = pages.counts().rows[page.label]
 
     chips = {s: n for s, n in page.state().counts.items() if n and s != 'all'}
-    assert counted == chips == {'outdated': 1, 'incomplete': 1}
+    assert counted == chips == {'outdated': 1, 'ready': 1}
 
 
 def test_every_calls_the_actions_in_turn_until_the_block_ends() -> None:

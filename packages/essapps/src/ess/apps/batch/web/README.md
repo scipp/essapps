@@ -22,7 +22,7 @@ At a start, the demo and the LoKI page make a batch of the rows their source giv
 The demo needs the extra `essapps[web]`, the LoKI modules `essinstruments[loki-app]`.
 The LoKI page reads the masks from a record, so reduce the detector and the masks on the folder first, with two `essapps-batch` commands that [the docstring of `ess.instruments.loki.web`](../../../../../../essinstruments/src/ess/instruments/loki/web.py) gives; the LoKI arrivals do this themselves.
 The two commands make the batches `detector` and `masks`, so the LoKI page then makes no batch of I(Q): make it with **+ New batch**.
-With `--arrive`, the runs of one sample (fake demo) or one run (LoKI) arrive every `SECONDS`, until `--count` have arrived. Turn on **Follow** to add the rows they fill and reduce them; **Rescan runs** lists them in the Runs view and in the choices of a cell, and changes no row.
+With `--arrive`, the runs of one sample (fake demo) or one run (LoKI) arrive every `SECONDS`, until `--count` have arrived. Turn on **Follow** to add the rows they fill and reduce them; **List runs again** lists them in the Runs view and in the choices of a cell, and changes no row.
 Each page reads `files.csv` again when it is replaced (`ess.apps.folder.ArrivingFiles`), so a run registered by hand, with `ess.apps.folder.write_files_table`, shows too.
 The demo and the LoKI page take `--interval SECONDS`, the time between two steps of Follow (5).
 The LoKI arrivals take `--follow [SECONDS]`, which turns the switch of their one batch on from the start, with a step every `SECONDS` (5).
@@ -30,11 +30,12 @@ The LoKI arrivals take `--follow [SECONDS]`, which turns the switch of their one
 ## The table
 
 The rows of the page are the table of the batch (`Batch.frame()`): one row per key, a column per parameter that each row sets, and the other columns as notes, shown as text.
-A row is shown by its note `name`, else by its key.
+A row is shown by its note `name`, else by its key; **+ Add row** takes its key.
 Each change of rows on the page, an edit of cells, **+ Add row**, **Remove selected** and **Load table**, makes the new table and puts it to the batch (`Batch.put`); what the batch refuses is said, and nothing changes.
 A run chosen in a cell is kept as the text of its file (`table.cell_of`).
 **Load table** replaces the whole table, its columns too; the page then shows the cells and the settings form of the columns loaded.
 **Download as CSV** and **Download as XLSX** give the table with the results of its rows (`frames.with_results`).
+If the file source raises, the page shows the table, the results and the plots all the same; the pickers offer no file, the Runs view is empty, and both say why.
 
 ## Settings and Follow
 
@@ -53,9 +54,8 @@ With Follow on, the settings applied for the trial are also those of the rows th
 The page sends its actions in the order a person did them, so a value typed and Apply clicked at once are applied with one click.
 Each state replaces the form, but not while the focused input holds a value typed and not sent; Escape puts back the value sent last.
 
-**Follow** is a switch next to **Rescan runs**.
+**Follow** is a switch next to **List runs again**, on the page of a batch made from a source (`BatchManager.source`).
 Turning the switch on makes this batch the one that follows, and no other (`BatchManager.follow`); the page of another batch then says which batch follows.
-The manager refuses a batch that was not made from a source, and the page says why.
 While a batch follows, a timer in the server runs a step every `interval` seconds (5 by default; `Pages(manager, interval=...)`, or `--interval SECONDS`), under the lock of every request, with or without a page open.
 A step is `BatchManager.step`:
 
@@ -75,7 +75,7 @@ A row that a person adds, or edits before it has a result, is reduced by the nex
 A correction is an action of the workspace, made in the Runs view of any page, also of the page without a batch (`POST api/runs/cells`).
 An action submits only what a person asks to reduce; the next step reduces what the rule gives after it. Apply submits nothing, and the next step reduces the rows without a result with the settings applied.
 Apply forgets why Follow could not reduce a row, since the next step tries again.
-The page of the batch that follows shows "Following, every N s", how many rows wait, why the last step failed if it did, and, as an `incomplete` row, why a row could not be submitted.
+The page of the batch that follows shows "Following, every N s", how many rows wait, why the last step failed if it did, and, at the row, why a row could not be submitted; the row keeps its status, such as `ready`.
 Whatever a step raises, from the files, the workflow or the workspace, is the step's failure, said on the page of the batch that follows; the next step tries again.
 
 ## The list of batches
@@ -83,7 +83,7 @@ Whatever a step raises, from the files, the workflow or the workspace, is the st
 The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, and which batch follows; the batch of the page is marked.
 Each title is a link to the page of its batch.
 Opening the view, and **Count again**, counts the rows of each batch by status (`Pages.counts`).
-The statuses are those of the chips of each batch's page, the rows that Follow could not submit `incomplete` too.
+The statuses are those of the chips of each batch's page (`RowState.text`).
 A count reads the state of every batch under the lock of all pages, so the pages and Follow wait until it ends.
 A batch that cannot be counted, such as one whose table cannot be read, shows why in its row.
 No poll counts, so the counts shown are those of the last count; a count that fails shows none.

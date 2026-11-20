@@ -42,8 +42,8 @@ the folder, as ``files.csv`` lists it. The page lists the detector and the
 masks as batches without a source, of one row each, and so makes no batch of
 I(Q) in such a folder: a person makes it with "New batch".
 
-"Rescan runs" lists the files again, for the Runs view and the choices of a
-cell, and changes no row. The switch "Follow" of the page of a batch made from
+"List runs again" lists the files again, for the Runs view and the choices of
+a cell, and changes no row. The switch "Follow" of the page of a batch made from
 the source makes it the batch that follows: a step every ``SECONDS`` (5) adds
 each sample run that arrived since, once both its runs are listed, and reduces
 it. A step never changes a row that the table has: a newer transmission run of
@@ -85,7 +85,7 @@ def open_loki(directory: Path) -> tuple[Client, CorrectedFiles, FolderDefinition
     corrections kept in the folder, and the folder's definitions. The file
     source reads ``files.csv`` again when it is replaced
     (:class:`~ess.apps.folder.ArrivingFiles`), so a run registered while the
-    page runs is listed at the next "Rescan runs", and its row is added by a
+    page runs is listed at the next "List runs again", and its row is added by a
     step of Follow.
     """
     definitions = FolderDefinitions(directory)

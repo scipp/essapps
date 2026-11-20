@@ -13,7 +13,8 @@ and its transmission run, the masks and the direct beam are there from the
 start, and the settings of the one batch are filled in. Then a run arrives
 every ``--arrive`` seconds, in the order of :data:`EXPERIMENT`. Turn on
 "Follow" to add the rows that the runs fill and reduce them, a step every few
-seconds; "Rescan runs" lists the runs in the Runs view and changes no row.
+seconds; "List runs again" lists the runs in the Runs view and changes no
+row.
 ``--follow`` turns it on from the start, with a step every ``SECONDS`` (5).
 
 The data and the I(Q) workflow are real; the run numbers, the sample names and

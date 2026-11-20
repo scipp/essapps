@@ -88,6 +88,7 @@ input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--ba
 
 .spacer { flex: 1; }
 .hint { margin: 0; color: var(--muted); }
+.hint.bad { color: var(--bad); }
 small, .n { color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* Header */
@@ -443,7 +444,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 /* The page without a batch: the Batches and Runs views only */
 
-.no-batch [data-view="samples"], .no-batch #files, .no-batch main .right { display: none; }
+.no-batch [data-view="rows"], .no-batch #files, .no-batch main .right { display: none; }
 .no-batch main { grid-template-columns: minmax(0, 1fr); }
 
 /* The right region */
@@ -503,8 +504,8 @@ main.wide .right { display: none; }
 .status { display: inline-flex; align-items: center; gap: 6px; }
 .status .earlier { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .follow { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; cursor: pointer; white-space: nowrap; }
-.follow-status { margin-right: 12px; color: var(--muted); font-size: 12px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.follow-status.bad { color: var(--bad); }
+.status-line { margin-right: 12px; color: var(--muted); font-size: 12px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-line.bad { color: var(--bad); }
 .earlier { display: flex; align-items: center; gap: 8px; }
 .draft {
   position: sticky;

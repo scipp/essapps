@@ -329,9 +329,12 @@ def test_a_request_that_cannot_be_done_answers_422_with_a_message(
 
 
 def test_a_refused_reduction_answers_422_and_the_state_names_the_cell(
-    http: TestClient,
+    http: TestClient, batch: Batch
 ) -> None:
-    thickness(http, ['1'], -1)
+    # The state of a batch does not read the records that a cell references,
+    # so only the refusal of the submission, kept by the page, marks the cell.
+    batch.put(batch.frame().assign(offset='nope.x'))
+    assert rows(http)['1']['cells']['offset']['problem'] is None
 
     response = http.post('/api/reduce', json={'which': 'selected', 'keys': ['1']})
 
@@ -339,9 +342,9 @@ def test_a_refused_reduction_answers_422_and_the_state_names_the_cell(
     assert response.json() == {'message': 'Nothing was reduced: one value is refused.'}
     shown = state(http)
     (refused,) = shown['refused']
-    assert refused['text'] == 'water: Thickness must be greater than or equal to 0'
-    problem = shown['rows'][0]['cells']['thickness']['problem']
-    assert problem == 'Thickness must be greater than or equal to 0'
+    assert refused['text'] == 'water: Offset: unknown record or accumulator nope'
+    problem = shown['rows'][0]['cells']['offset']['problem']
+    assert problem == 'Offset: unknown record or accumulator nope'
 
 
 def test_a_refused_value_stays_marked_until_it_is_edited(http: TestClient) -> None:
@@ -1165,8 +1168,12 @@ def test_a_row_added_on_the_page_is_empty_and_rows_removed_are_gone(
         'extra',
         'incomplete',
     )
+    # A key may be the name of another row; the batch refuses a key it has.
+    named = http.post('/api/rows/add', json={'key': 'water'}).json()
+    assert [r['key'] for r in named['rows']] == ['1', '2', '3', 'extra', 'water']
     same = http.post('/api/rows/add', json={'key': 'water'})
-    assert same.json() == {'message': 'There is a row named water already.'}
+    assert same.status_code == 422
+    http.post('/api/rows/remove', json={'keys': ['water']})
 
     after = http.post('/api/rows/remove', json={'keys': ['extra', '2']}).json()
 
@@ -1191,7 +1198,7 @@ def test_a_correction_of_a_run_changes_no_row_and_can_be_taken_back(
         for r in http.get('/api/runs').json()['rows']
         if r['key'] == key
     ]
-    assert (cell['text'], cell['edited'], cell['scanned']) == (
+    assert (cell['text'], cell['edited'], cell['original']) == (
         'transmission',
         True,
         'sample',
@@ -1765,6 +1772,26 @@ def test_a_batch_whose_rows_cannot_be_read_answers_422_and_the_list_stays(
     assert shown.json()['message'].startswith(f'Cannot show {label}: ')
     listed = opened(pages, label).get('/api/batches').json()['rows']
     assert [b['title'] for b in listed] == ['Odd']
+
+
+def test_a_batch_shows_while_the_files_cannot_be_listed(
+    http: TestClient, batch: Batch, client: Client, fake: FakeFiles
+) -> None:
+    client.wait(batch.reduce(['1']))
+    listed = fake.list
+    fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
+
+    shown = state(http)
+
+    assert statuses(http) == {'1': 'done', '2': 'ready', '3': 'incomplete'}
+    assert shown['files_problem'] == 'The files cannot be listed: half written'
+    column = next(c for c in shown['columns'] if c['name'] == 'sample')
+    assert column['editor']['options'] == []
+    assert http.post('/api/plot', json={'keys': []}).json()['figure'] is not None
+    runs = http.get('/api/runs').json()
+    assert (runs['rows'], runs['problem']) == ([], shown['files_problem'])
+    fake.list = listed
+    assert http.post('/api/relist').json()['files_problem'] is None
 
 
 # The tab "Batch"

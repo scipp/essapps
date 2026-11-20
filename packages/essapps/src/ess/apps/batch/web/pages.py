@@ -21,7 +21,7 @@ A person makes a batch from the list of batches, of the sources and specs
 that :meth:`Pages.sources` offers (:meth:`Pages.create`); the manager decides
 what can be made. With no batch at all, the page is served without one: it
 shows the list of batches and the runs. So is the page of a batch that cannot
-be shown (:meth:`Pages.page`), with the reason, and that of a batch removed
+be made (:meth:`Pages.page`), with the reason, and that of a batch removed
 (:meth:`Pages.remove`): a :class:`~.page.Page` handed out before answers
 :class:`~.page.Missing` from then on.
 
@@ -61,7 +61,6 @@ from .models import (
     BatchCounts,
     Batches,
     BatchRow,
-    Cell,
     CellEdit,
     Cells,
     Column,
@@ -69,6 +68,7 @@ from .models import (
     NewBatch,
     Notice,
     Param,
+    RunCell,
     RunRow,
     Runs,
     SourceChoice,
@@ -79,7 +79,6 @@ from .page import (
     Missing,
     Page,
     Problem,
-    page_statuses,
     read,
     why,
 )
@@ -158,8 +157,9 @@ class Pages:
         """
         The page of ``label``, made at the first call. Raises
         :class:`Missing` if no batch has the label, and
-        :class:`~.page.Problem` if its page cannot be made, such as when its
-        table cannot be read, or the files cannot be listed.
+        :class:`~.page.Problem` if its batch cannot be made, such as when the
+        workspace binds no spec of its name, or its table cannot be read
+        (:meth:`~ess.apps.batch.BatchManager.batch`).
         """
         with self.lock:
             if label not in self.manager.headers():
@@ -168,7 +168,7 @@ class Pages:
             if (page := self._pages.get(label)) is None:
                 try:
                     page = Page(self, label)
-                except Exception as error:  # the file source is code of the application
+                except (ValueError, OSError) as error:
                     raise Problem(f'Cannot show {label}: {error}') from None
                 self._pages[label] = page
             return page
@@ -246,39 +246,44 @@ class Pages:
     def runs(self) -> Runs:
         """
         The runs, with what a person corrected of each, as the Runs view of
-        every page shows them, and that of the page without a batch. Raises
-        :class:`~.page.Problem` if the application corrects no runs.
+        every page shows them, and that of the page without a batch; none,
+        with why, if the file source raises. Raises :class:`~.page.Problem`
+        if the application corrects no runs.
         """
         with self.lock:
             marks, files, listing = self._marked()
+            columns = [
+                Column(name=n, title=marks.titles[n], editor=forms.editor(f))
+                for n, f in marks.fields.items()
+            ]
+            try:
+                refs = files.list(Selector())
+            except Exception as error:  # the file source is code of the application
+                problem = f'The files cannot be listed: {error}'
+                return Runs(
+                    version=self.runs_version, columns=columns, rows=[], problem=problem
+                )
 
             def text(value: Any) -> str:
                 return '' if value is UNSET else listing.text(value)
 
             rows = []
-            for ref in files.list(Selector()):
+            for ref in refs:
                 metadata = files.metadata(ref)
                 original = files.source.metadata(ref)
                 corrected = files.corrections(ref)
                 cells = {
-                    name: Cell(
+                    name: RunCell(
                         value=forms.cell(field, metadata.get(name, UNSET)),
                         text=text(metadata.get(name, UNSET)),
                         edited=name in corrected,
-                        scanned=text(original.get(name, UNSET)),
+                        original=text(original.get(name, UNSET)),
                     )
                     for name, field in marks.fields.items()
                 }
                 label = listing.file_label(ref)
                 rows.append(RunRow(key=ref.file, file=label, cells=cells))
-            return Runs(
-                version=self.runs_version,
-                columns=[
-                    Column(name=n, title=marks.titles[n], editor=forms.editor(f))
-                    for n, f in marks.fields.items()
-                ],
-                rows=rows,
-            )
+            return Runs(version=self.runs_version, columns=columns, rows=rows)
 
     def correct(self, edit: CellEdit) -> Notice:
         """Correct a field of the runs ``edit.keys``, as its field reads the value."""
@@ -326,7 +331,7 @@ class Pages:
             ) from None
         self.runs_listed(runs, changed=True)
 
-    def refusals(self, label: str, states: Mapping[str, RowState]) -> dict[str, str]:
+    def unsubmitted(self, label: str, states: Mapping[str, RowState]) -> dict[str, str]:
         """
         Why Follow could not submit each row of ``states`` that its next step
         would try again, by key; none unless the batch of ``label`` follows.
@@ -449,8 +454,8 @@ class Pages:
     def counts(self) -> BatchCounts:
         """
         The rows of each batch by status, in the words of the page of each
-        batch (:func:`~.page.page_statuses`). Every page and Follow wait
-        while it counts.
+        batch (:attr:`~ess.apps.batch.RowState.text`). Every page and Follow
+        wait while it counts.
 
         The state of each batch is read as its page reads it, without asking
         its source, and not compared while its settings are refused
@@ -469,9 +474,7 @@ class Pages:
                 except (ValueError, OSError) as error:
                     failed[label] = why(error)
                     continue
-                refused = self.refusals(label, states)
-                statuses = page_statuses(states, refused)
-                rows[label] = dict(Counter(statuses.values()))
+                rows[label] = dict(Counter(s.text for s in states.values()))
             return BatchCounts(rows=rows, failed=failed)
 
 
