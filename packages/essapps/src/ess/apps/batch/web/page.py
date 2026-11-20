@@ -125,7 +125,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -158,7 +158,6 @@ from .models import (
     CellEdit,
     Column,
     Edit,
-    Following,
     HeaderEdit,
     HeaderShown,
     MakeSetting,
@@ -393,14 +392,15 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
 
 class Page:
     """
-    What the API does for the page of one batch, without HTTP. See the module
-    for the rules.
+    What the API does for the page of one batch for one person, without HTTP.
+    It owns, and only it writes, the draft of the settings, the refusals of
+    the last reduction, and the version. See the module for the rules.
 
     Parameters
     ----------
     pages:
-        What the pages share: the manager of the batch, how the last step of
-        Follow went, the lock, and what the application gives every page.
+        What the pages share: the manager of the batch, the lock, the runs,
+        Follow, and what the application gives every page.
     label:
         The label of the batch.
     """
@@ -467,8 +467,8 @@ class Page:
         What the page shows that changes without an action, each by what
         counts its changes: the batch (its table, its template and the
         records), the records listed, the runs and why they cannot be
-        listed, the headers of the batches and which batch follows, and how
-        the last step of Follow went.
+        listed, the headers of the batches and which batch follows, and what
+        Follow said of this batch (:meth:`Pages.said <.pages.Pages.said>`).
         """
         pages = self.pages
         return (
@@ -477,8 +477,7 @@ class Page:
             self._listing.failure,
             pages.runs_version,
             pages.manager.version,
-            pages.last,
-            pages.failure,
+            pages.said(self.label),
         )
 
     def _new_version(self) -> None:
@@ -565,7 +564,7 @@ class Page:
         batch = self.batch
         columns = batch.columns
         states, unusable = self._states()
-        unsubmitted = self.pages.unsubmitted(self.label, states)
+        follow, unsubmitted = self.pages.following(self.label, states)
         failures = self._failures(states)
         frame = batch.frame()
         requested = batch.cells()
@@ -638,7 +637,7 @@ class Page:
             settings_changed=unapplied is not None,
             may_be_columns=forms.edited(self.settings),
             refused=[self._refused(e, named) for e in self.refused],
-            follow=self._follow(),
+            follow=follow,
             files_problem=self._listing.failure,
             notice=notice,
         )
@@ -647,19 +646,6 @@ class Page:
         """Errors of the settings in words, each with its setting's title."""
         return '; '.join(
             _say(self._setting_title(e), e.msg) if e.loc else e.msg for e in errors
-        )
-
-    def _follow(self) -> Following:
-        manager, pages = self.pages.manager, self.pages
-        on, last = self._follows(), pages.last
-        return Following(
-            on=on,
-            source=manager.source(self.label),
-            interval=pages.interval,
-            failure=pages.failure if on else None,
-            waiting=len(last[1].waiting)
-            if on and last is not None and last[0] == self.label
-            else 0,
         )
 
     def _failures(self, states: Mapping[str, RowState]) -> dict[str, str]:
@@ -1033,8 +1019,7 @@ class Page:
         # A refusal of a setting was a refusal of the settings replaced, and
         # Follow tries every row again with these at its next step.
         self.refused = [e for e in self.refused if e.entry]
-        if self._follows() and (last := self.pages.last) is not None:
-            self.pages.last = (last[0], replace(last[1], refused={}))
+        self.pages.applied(self.label)
         return 'Applied the settings.'
 
     @_action

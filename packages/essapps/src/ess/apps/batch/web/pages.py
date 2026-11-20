@@ -35,10 +35,11 @@ before answers :class:`~.page.Missing` from then on.
 The manager keeps which batch follows
 (:attr:`~ess.apps.batch.BatchManager.following`). :meth:`Pages.tick` is one
 step of it (:meth:`~ess.apps.batch.BatchManager.step`), with or without a
-page open, plus what the page shows of the step: why rows were refused, how
-many rows wait, and what the step raised; then the page of the batch that
-follows shows what the step changed. :func:`~.api.create_app` owns the timer
-that calls it, every :attr:`Pages.interval` seconds.
+page open, plus what the page shows of the step (:meth:`Pages.following`):
+why rows were refused, how many rows wait, and what the step raised; then
+the page of the batch that follows shows what the step changed.
+:func:`~.api.create_app` owns the timer that calls it, every
+:attr:`Pages.interval` seconds.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ import threading
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
+from dataclasses import replace
 from typing import Any
 
 import pandas as pd
@@ -72,6 +74,7 @@ from .models import (
     CellEdit,
     Cells,
     Column,
+    Following,
     Made,
     NewBatch,
     Notice,
@@ -97,7 +100,9 @@ from .page import (
 
 class Pages:
     """
-    What the pages of the batches of ``manager`` share. See the module.
+    What the pages of the batches of ``manager`` share, which only it
+    writes: the lock, the runs and their corrections, and the step of Follow
+    and what it said. See the module.
 
     Parameters
     ----------
@@ -132,7 +137,9 @@ class Pages:
         raise was on, and the step (:class:`~ess.apps.batch.auto.Step`), with
         why it refused rows and which rows of the source wait; ``None``
         before the first. What it refused is said only while that batch
-        follows, and emptied when its page applies settings.
+        follows, and emptied when its page applies settings
+        (:meth:`applied`). A page reads both through :meth:`said` and
+        :meth:`following`.
     """
 
     def __init__(
@@ -342,21 +349,49 @@ class Pages:
             ) from None
         self.runs_listed(runs, changed=True)
 
-    def unsubmitted(self, label: str, states: Mapping[str, RowState]) -> dict[str, str]:
+    def said(self, label: str) -> tuple[str | None, Step | None] | None:
         """
-        Why Follow could not submit each row of ``states`` that its next step
-        would try again, by key; none unless the batch of ``label`` follows.
+        What Follow said of the batch of ``label``: what its last step raised,
+        and its last step that did not raise; ``None`` unless the batch
+        follows. A page compares it to see a step that changed what it shows.
         """
-        if self.last is None or self.manager.following != label:
-            return {}
-        of, done = self.last
-        if of != label:
-            return {}
-        return {
-            key: f'Follow could not reduce it: {forms.message(done.refused[key])}'
+        if self.manager.following != label:
+            return None
+        step = None if self.last is None or self.last[0] != label else self.last[1]
+        return self.failure, step
+
+    def following(
+        self, label: str, states: Mapping[str, RowState]
+    ) -> tuple[Following, dict[str, str]]:
+        """
+        What the page of the batch of ``label`` shows of Follow: whether it
+        follows, with what the last step raised and how many rows wait; and
+        why Follow could not submit each row of ``states`` that its next step
+        would try again, by key.
+        """
+        failure, step = self.said(label) or (None, None)
+        shown = Following(
+            on=self.manager.following == label,
+            source=self.manager.source(label),
+            interval=self.interval,
+            failure=failure,
+            waiting=0 if step is None else len(step.waiting),
+        )
+        if step is None:
+            return shown, {}
+        return shown, {
+            key: f'Follow could not reduce it: {forms.message(step.refused[key])}'
             for key in not_reduced(states)
-            if key in done.refused
+            if key in step.refused
         }
+
+    def applied(self, label: str) -> None:
+        """
+        Forget why Follow could not submit rows of the batch of ``label``,
+        whose page applied settings: its next step tries them with these.
+        """
+        if (said := self.said(label)) is not None and (step := said[1]) is not None:
+            self.last = (label, replace(step, refused={}))
 
     def batches(self) -> Batches:
         """The batches, as the Batches view of each page lists them."""
