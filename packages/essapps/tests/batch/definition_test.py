@@ -8,115 +8,120 @@ from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 
-from ess.apps import Client, Selector, SubmitError, file
+from ess.apps import Client, Selector, SubmitError
 from ess.apps.batch import (
-    EMPTY,
     Batch,
+    BatchManager,
     CorrectedFiles,
     FileInfo,
     FolderDefinitions,
-    Row,
-    Scope,
+    Header,
+    NotKept,
     Source,
 )
 from ess.apps.batch.definition import (
     CORRECTIONS,
     FOLLOWING,
-    Header,
+    FromSource,
     Key,
-    NotKept,
-    edits_key,
     following_data,
     following_of,
     header_data,
     header_key,
     header_of,
+    rows_key,
     settings_key,
+    source_data,
+    source_key,
+    source_of,
 )
-from ess.apps.batch.text import load_template
+from ess.apps.batch.table import KEY, frame_of
+from ess.apps.batch.templates import load_template
 from ess.apps.folder import folder_files, open_folder
 from ess.spec import Binding
 
-from .toys import COLUMNS, PAIRS, PLAIN, Measure
+from .toys import PLAIN, Measure, edit, rows
 
 
-def first_transmission(files: Sequence[FileInfo]) -> list[Row]:
+def first_transmission(files: Sequence[FileInfo]) -> pd.DataFrame:
     """A row per sample run, each with the first transmission run listed."""
-    transmissions = [f.ref for f in files if f.metadata['role'] == 'transmission']
-    return [
-        Row(str(f.metadata['run']), {'sample': f.ref, 'transmission': transmissions[0]})
-        for f in files
-        if f.metadata['role'] == 'sample'
-    ]
+    transmissions = [str(f.ref) for f in files if f.metadata['role'] == 'transmission']
+    return pd.DataFrame.from_records(
+        [
+            {
+                KEY: str(f.metadata['run']),
+                'run': f.metadata['run'],
+                'sample': str(f.ref),
+                'transmission': transmissions[0],
+            }
+            for f in files
+            if f.metadata['role'] == 'sample'
+        ]
+    ).set_index(KEY)
 
 
 FIRST_TRANSMISSION = Source(first_transmission, fills=('sample', 'transmission'))
 
-type Opened = Callable[..., AbstractContextManager[tuple[Batch, CorrectedFiles]]]
+type Opened = Callable[[], AbstractContextManager[tuple[BatchManager, CorrectedFiles]]]
 
 
 @pytest.fixture
 def opened(folder: Path, folder_bindings: list[Binding]) -> Opened:
-    """Opens the folder, with a scanned batch, and the file source, on its store."""
+    """Opens the folder: a manager of its batches, and the file source."""
 
     @contextmanager
-    def opened(
-        columns: Sequence[str] = COLUMNS,
-        settings: dict[str, Any] | None = None,
-        label: str = 'auto/plain',
-        scan: bool = True,
-    ) -> Iterator[tuple[Batch, CorrectedFiles]]:
+    def opened() -> Iterator[tuple[BatchManager, CorrectedFiles]]:
         store = FolderDefinitions(folder)
         files = CorrectedFiles(folder_files(folder), definitions=store)
         with open_folder(folder, folder_bindings, files=files) as client:
-            batch = Batch(
-                client,
-                PLAIN,
-                columns=columns,
-                label=label,
-                source=FIRST_TRANSMISSION,
-                settings=settings,
-                definitions=store,
-            )
-            if scan:
-                batch.scan()
-            yield batch, files
+            sources = {'first': FIRST_TRANSMISSION}
+            yield BatchManager(client, sources=sources, definitions=store), files
 
     return opened
 
 
-def shown(batch: Batch) -> list[tuple[str, dict[str, Any], dict[str, str]]]:
-    return [(r.key, dict(r.values), dict(r.info)) for r in batch.rows]
-
-
-def test_a_batch_opened_again_has_the_edits_it_had(opened: Opened) -> None:
-    with opened() as (batch, _):
-        batch.rows = (
-            batch.rows.edit('1', {'thickness': 2.0})
-            .edit('2', {'transmission': EMPTY})
-            .remove('3')
-            .add(Row('mine', {'sample': file(run=2)}, {'name': 'mine'}))
+@pytest.fixture
+def made(opened: Opened) -> str:
+    """A batch ``b`` of PLAIN of the rows of samples 1, 2 and 3, kept in the folder."""
+    with opened() as (manager, _):
+        return manager.create(
+            PLAIN.name, title='B', rows=manager.rows_of('first'), label='b'
         )
-        before = shown(batch)
-
-    with opened() as (batch, _):
-        assert shown(batch) == before
 
 
-def test_a_cell_from_the_scan_follows_the_scan_after_a_restart(
-    opened: Opened, folder: Path
+def test_a_batch_opened_again_has_the_table_and_the_settings_it_had(
+    opened: Opened, made: str
 ) -> None:
-    with opened() as (batch, _):
-        batch.rows = batch.rows.edit('1', {'thickness': 2.0})
+    with opened() as (manager, _):
+        batch = manager.batch(made)
+        batch.settings = {'binning': {'bins': 3}}
+        frame = batch.frame().drop('3').assign(thickness=[0.1 + 0.2, None])
+        frame.loc['mine', 'sample'] = 'run:2'
+        frame['note'] = pd.Series([['a', 1], {'b': None}, 2**53 + 1], index=frame.index)
+        batch.put(frame)
+        before = batch.frame()
+
+    with opened() as (manager, _):
+        batch = manager.batch(made)
+
+        pd.testing.assert_frame_equal(batch.frame(), before)
+        assert batch.settings == {'binning': {'bins': 3}}
+
+
+def test_a_table_kept_stays_when_its_files_go(
+    opened: Opened, made: str, folder: Path
+) -> None:
+    with opened() as (manager, _):
+        before = manager.batch(made).frame()
     files = folder / 'files.csv'
     files.write_text(files.read_text().replace('run-1001.json,1001,transmission', ''))
 
-    with opened() as (batch, _):
-        row = batch.rows['1'].values
-
-    assert (row['transmission'].file, row['thickness']) == ('path:run-1002.json', 2.0)
+    with opened() as (manager, _):
+        pd.testing.assert_frame_equal(manager.batch(made).frame(), before)
+        assert manager.batch(made).state()['1'].problems != ()
 
 
 def test_the_corrections_of_the_files_are_there_after_a_restart(
@@ -126,67 +131,46 @@ def test_the_corrections_of_the_files_are_there_after_a_restart(
         (bad,) = files.list(Selector(role='bad'))
         files.correct(bad, role='sample')
 
-    with opened() as (batch, files):
+    with opened() as (manager, files):
         assert files.corrections(bad) == {'role': 'sample'}
-        assert '4' in batch.rows
-
-
-def test_the_settings_are_there_after_a_restart_in_place_of_those_given(
-    opened: Opened,
-) -> None:
-    with opened(settings={'binning': {'bins': 5}}) as (batch, _):
-        batch.settings = {'binning': {'bins': 3}}
-
-    with opened(settings={'binning': {'bins': 5}}) as (batch, _):
-        assert batch.settings == {'binning': {'bins': 3}}
+        assert '4' in manager.rows_of('first').index
 
 
 def test_the_settings_kept_are_a_template_that_the_command_reads(
-    opened: Opened, folder: Path
+    opened: Opened, made: str, folder: Path
 ) -> None:
-    with opened() as (batch, _):
+    with opened() as (manager, _):
+        batch = manager.batch(made)
         batch.settings = {'binning': {'bins': 3}}
         template = batch.template()
 
-    path = FolderDefinitions(folder).path(settings_key('auto/plain'))
+    path = FolderDefinitions(folder).path(settings_key(made))
 
     assert load_template(path) == template
 
 
-def test_an_edit_at_a_column_that_is_gone_makes_its_row_incomplete(
-    opened: Opened,
-) -> None:
-    with opened() as (batch, _):
-        batch.rows = batch.rows.edit('1', {'thickness': 2.0})
-
-    with opened(columns=('sample', 'transmission')) as (batch, _):
-        problems = batch.state()['1'].problems
-
-    assert [(e.loc, e.msg) for e in problems] == [(('thickness',), 'not a column')]
-
-
 @pytest.mark.parametrize(
-    ('edits', 'entry'),
+    ('data', 'entry'),
     [
-        ({'edited': {'2': {'sample': {'@ref': 'nothing'}}}}, 'row 2: '),
-        ({'removed': '3'}, 'removed: Input should be a valid list'),
-        ({'cleared': {'1': 'thickness'}}, 'cleared.1: Input should be a valid list'),
-        ({'added': [{'key': 'x', 'values': {}}]}, 'added.0.info: Field required'),
-        (['not', 'a', 'table'], 'the whole: '),
+        ({'data': []}, 'not a table'),
+        ({'schema': {'fields': [{'name': 'x'}]}, 'data': []}, "schema: no field 'key'"),
+        (
+            {
+                'schema': {'fields': [{'name': 'key'}, {'name': 'thickness'}]},
+                'data': [{'key': '1', 'thickness': 'thick'}],
+            },
+            "row '1', column 'thickness': 'thick' is not a number",
+        ),
     ],
 )
-def test_edits_that_cannot_be_read_are_refused_naming_the_file_and_the_entry(
-    opened: Opened, folder: Path, edits: Any, entry: str
+def test_rows_that_cannot_be_read_are_refused_naming_the_file_and_the_entry(
+    opened: Opened, made: str, folder: Path, data: Any, entry: str
 ) -> None:
-    FolderDefinitions(folder).save(edits_key('auto/plain'), edits)
+    FolderDefinitions(folder).save(rows_key(made), data)
 
-    with (
-        pytest.raises(
-            ValueError, match=rf'auto%2Fplain/edits\.json: {re.escape(entry)}'
-        ),
-        opened(),
-    ):
-        pass
+    with opened() as (manager, _):
+        with pytest.raises(ValueError, match=rf'b/rows\.json: {re.escape(entry)}'):
+            manager.batch(made)
 
 
 def test_a_file_that_is_not_json_is_refused_naming_it(
@@ -210,29 +194,14 @@ def test_corrections_that_cannot_be_read_are_refused_naming_the_entry(
         CorrectedFiles(folder_files(folder), definitions=definitions)
 
 
-def test_settings_of_a_spec_of_another_name_are_refused_naming_both(
-    opened: Opened, folder: Path
-) -> None:
-    kept = {'spec': {'name': 'other', 'version': 9}, 'params': {}}
-    FolderDefinitions(folder).save(settings_key('auto/plain'), kept)
-
-    with (
-        pytest.raises(
-            ValueError,
-            match=r'settings\.json: settings of the spec other version 9, not of plain',
-        ),
-        opened(),
-    ):
-        pass
-
-
 def test_settings_of_another_version_are_taken_as_they_are(
-    opened: Opened, folder: Path
+    opened: Opened, made: str, folder: Path
 ) -> None:
     kept = {'spec': {'name': 'plain', 'version': 9}, 'params': {'gone': 1}}
-    FolderDefinitions(folder).save(settings_key('auto/plain'), kept)
+    FolderDefinitions(folder).save(settings_key(made), kept)
 
-    with opened() as (batch, _):
+    with opened() as (manager, _):
+        batch = manager.batch(made)
         assert batch.settings == {'gone': 1}
         with pytest.raises(SubmitError, match='gone'):
             batch.state()
@@ -250,78 +219,51 @@ def test_a_folder_that_cannot_be_written_raises_that_the_table_was_not_kept(
 def test_a_label_is_kept_in_a_folder_of_its_own(tmp_path: Path) -> None:
     store = FolderDefinitions(tmp_path)
     labels = ['auto/iofq', 'auto%2Fiofq', '..', '.', 'labels']
-    paths = [store.path(edits_key(label)) for label in labels]
+    paths = [store.path(rows_key(label)) for label in labels]
 
     assert len(set(paths)) == len(labels)
     assert all(p.parent.parent == tmp_path / 'definitions' / 'labels' for p in paths)
 
 
 @pytest.mark.parametrize('label', ['../..', 'a/../b', '%2E%2E', 'x.json'])
-def test_a_label_that_looks_like_a_path_keeps_its_edits_inside_the_definitions(
-    opened: Opened, folder: Path, label: str
+def test_a_label_that_looks_like_a_path_keeps_its_rows_inside_the_definitions(
+    client: Client, sample: Measure, folder: Path, label: str
 ) -> None:
-    with opened(label=label) as (batch, _):
-        batch.rows = batch.rows.edit('1', {'thickness': 2.0})
+    sample(1, 'water')
+    store = FolderDefinitions(folder)
+    batch = Batch(client, PLAIN, label=label, rows=rows(client), definitions=store)
 
-    with opened(label=label) as (batch, _):
-        assert batch.rows['1'].values['thickness'] == 2.0
-    written = [p for p in folder.rglob('*.json') if p.name == 'edits.json']
+    edit(batch, '1', thickness=2.0)
+
+    assert store.load(rows_key(label), frame_of).loc['1', 'thickness'] == 2.0
+    written = [p for p in folder.rglob('*.json') if p.name == 'rows.json']
     assert [p.parent.parent for p in written] == [folder / 'definitions' / 'labels']
 
 
 def test_a_label_too_long_to_name_a_file_is_refused_when_the_batch_is_made(
-    opened: Opened,
-) -> None:
-    with (
-        pytest.raises(ValueError, match='too long to name a file'),
-        opened(label='Å' * 120),
-    ):
-        pass
-
-
-def test_a_file_left_by_a_write_cut_off_is_removed_when_read(
     opened: Opened, folder: Path
 ) -> None:
-    with opened() as (batch, _):
-        batch.rows = batch.rows.edit('1', {'thickness': 2.0})
-    path = FolderDefinitions(folder).path(edits_key('auto/plain'))
+    with opened() as (manager, _):
+        with pytest.raises(ValueError, match='too long to name a file'):
+            manager.create(PLAIN.name, title='B', label='Å' * 120)
+
+    assert FolderDefinitions(folder).labels() == []
+
+
+def test_a_file_left_by_a_write_cut_off_is_not_read_and_not_removed(
+    opened: Opened, made: str, folder: Path
+) -> None:
+    with opened() as (manager, _):
+        edit(manager.batch(made), '1', thickness=2.0)
+    path = FolderDefinitions(folder).path(rows_key(made))
+    # A reader cannot tell it from the file of a write of another process.
     left = path.parent / f'.{path.name}.x1y2z3'
     left.write_text('{"half')
 
-    with opened() as (batch, _):
-        assert batch.rows['1'].values['thickness'] == 2.0
+    with opened() as (manager, _):
+        assert manager.batch(made).frame().loc['1', 'thickness'] == 2.0
 
-    assert not left.exists()
-
-
-def test_a_cell_cleared_stays_empty_after_a_restart_whatever_the_scan_gives(
-    opened: Opened, folder: Path
-) -> None:
-    with opened() as (batch, _):
-        batch.rows = batch.rows.edit('1', {'transmission': EMPTY})
-    files = folder / 'files.csv'
-    files.write_text(files.read_text().replace('run-1001.json,1001,transmission', ''))
-
-    with opened() as (batch, _):
-        assert 'transmission' not in batch.rows['1'].values
-        assert batch.rows['2'].values['transmission'].file == 'path:run-1002.json'
-
-
-def test_a_table_put_brings_back_a_row_removed_and_is_kept(opened: Opened) -> None:
-    with opened() as (batch, _):
-        row = batch.rows['3']
-        batch.rows = batch.rows.remove('3')
-        batch.put([Row('3', {**row.values, 'thickness': 4.0})])
-
-    with opened() as (batch, _):
-        assert batch.rows['3'].values == {**row.values, 'thickness': 4.0}
-        assert '3' not in batch.rows.added
-
-
-def test_a_table_put_before_a_scan_is_refused(opened: Opened) -> None:
-    with opened(scan=False) as (batch, _):
-        with pytest.raises(ValueError, match='scan the files first'):
-            batch.put([Row('1', {'thickness': 4.0})])
+    assert left.exists()
 
 
 class Failing:
@@ -344,21 +286,18 @@ def test_a_change_that_cannot_be_kept_raises_and_changes_nothing(
     client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    batch = Batch(
-        client, PLAIN, columns=COLUMNS, label='f', source=PAIRS, definitions=Failing()
-    )
+    batch = Batch(client, PLAIN, label='f', rows=rows(client), definitions=Failing())
     files = CorrectedFiles(client.files, definitions=Failing())
-    batch.scan()  # writes nothing
-    before = batch.rows
+    before = batch.frame()
 
     with pytest.raises(NotKept, match='disk full'):
-        batch.rows = batch.rows.edit('1', {'thickness': 2.0})
+        edit(batch, '1', thickness=2.0)
     with pytest.raises(NotKept, match='disk full'):
         batch.settings = {'binning': {'bins': 3}}
     with pytest.raises(NotKept, match='disk full'):
         files.correct_each(list(client.files.list(Selector())), role='bad')
 
-    assert batch.rows is before
+    pd.testing.assert_frame_equal(batch.frame(), before)
     assert batch.settings == {}
     assert [files.corrections(r) for r in client.files.list(Selector())] == [{}, {}]
 
@@ -368,10 +307,10 @@ def test_the_labels_are_those_with_a_part_kept_written_back_as_given(
 ) -> None:
     store = FolderDefinitions(folder)
     for label in ('b', 'a.x', 'auto/iofq'):
-        store.save(edits_key(label), {})
-    cut_off = store.path(edits_key('c')).parent
+        store.save(rows_key(label), {})
+    cut_off = store.path(rows_key('c')).parent
     cut_off.mkdir(parents=True)
-    (cut_off / '.edits.json.k3j2h1g0').write_text('{')
+    (cut_off / '.rows.json.k3j2h1g0').write_text('{')
 
     assert store.labels() == ['a.x', 'auto/iofq', 'b']
 
@@ -384,11 +323,11 @@ def test_a_part_deleted_is_gone_and_its_label_with_its_last_part(
     folder: Path,
 ) -> None:
     store = FolderDefinitions(folder)
-    store.save(edits_key('a'), {})
+    store.save(rows_key('a'), {})
     store.save(settings_key('a'), {'x': 1})
 
-    store.delete(edits_key('a'))
-    assert store.load(edits_key('a'), lambda data: data) is None
+    store.delete(rows_key('a'))
+    assert store.load(rows_key('a'), lambda data: data) is None
     assert store.labels() == ['a']
 
     store.delete(settings_key('a'))
@@ -397,9 +336,9 @@ def test_a_part_deleted_is_gone_and_its_label_with_its_last_part(
 
 def test_deleting_a_part_never_kept_does_nothing(folder: Path) -> None:
     store = FolderDefinitions(folder)
-    store.save(edits_key('a'), {})
+    store.save(rows_key('a'), {})
 
-    store.delete(edits_key('b'))
+    store.delete(rows_key('b'))
     store.delete(FOLLOWING)
 
     assert store.labels() == ['a']
@@ -407,13 +346,7 @@ def test_deleting_a_part_never_kept_does_nothing(folder: Path) -> None:
 
 def test_a_header_is_kept_and_read_back(folder: Path) -> None:
     store = FolderDefinitions(folder)
-    header = Header(
-        spec='plain',
-        columns=COLUMNS,
-        source='sample-runs',
-        title='Sample runs',
-        description='those of May',
-    )
+    header = Header('Sample runs', 'those of May')
 
     store.save(header_key('a'), header_data(header))
 
@@ -421,53 +354,28 @@ def test_a_header_is_kept_and_read_back(folder: Path) -> None:
     assert store.load(header_key('b'), header_of) is None
 
 
-def test_a_header_without_a_scope_reads_as_every_row() -> None:
-    data = {'spec': 'plain', 'columns': ['sample'], 'title': 'Old'}
-
-    assert header_of(data) == Header(
-        spec='plain', columns=('sample',), title='Old', scope=Scope()
-    )
-
-
-def test_a_header_without_its_spec_and_columns_is_refused(folder: Path) -> None:
-    store = FolderDefinitions(folder)
-    store.save(header_key('a'), {'title': 'Old'})
-
-    with pytest.raises(ValueError, match=r'spec: Field required; columns: '):
-        store.load(header_key('a'), header_of)
-
-
-@pytest.mark.parametrize(
-    ('scope', 'written'),
-    [
-        (Scope(start=60339), {'start': 60339, 'stop': None}),
-        (
-            Scope(start='2026-11-18T13:00', stop='2026-11-19T13:00'),
-            {'start': '2026-11-18T13:00', 'stop': '2026-11-19T13:00'},
-        ),
-    ],
-)
-def test_a_scope_is_written_as_its_ends(
-    folder: Path, scope: Scope, written: dict[str, object]
-) -> None:
-    store = FolderDefinitions(folder)
-    header = Header(spec='plain', columns=COLUMNS, title='Morning', scope=scope)
-    data = header_data(header)
-
-    store.save(header_key('a'), data)
-
-    assert data['scope'] == written
-    assert store.load(header_key('a'), header_of) == header
-
-
 def test_a_header_that_cannot_be_read_is_refused_naming_the_file_and_the_entry(
     folder: Path,
 ) -> None:
     store = FolderDefinitions(folder)
-    store.save(header_key('a'), {'spec': 'plain', 'columns': [], 'title': 3})
+    store.save(header_key('a'), {'title': 3})
 
     with pytest.raises(ValueError, match=r'header\.json: title: '):
         store.load(header_key('a'), header_of)
+
+
+def test_the_source_of_a_batch_is_kept_with_its_keys_sorted(folder: Path) -> None:
+    store = FolderDefinitions(folder)
+    made = FromSource('pairs', frozenset({'60340', '0342', '60339'}))
+    key = source_key('a')
+
+    store.save(key, source_data(made))
+
+    assert source_data(made)['considered'] == ['0342', '60339', '60340']
+    assert store.load(key, source_of) == made
+    store.save(key, {'source': 'pairs', 'considered': '60339'})
+    with pytest.raises(ValueError, match=r'source\.json: considered: '):
+        store.load(key, source_of)
 
 
 @pytest.mark.parametrize('label', ['20261118-130204', None])

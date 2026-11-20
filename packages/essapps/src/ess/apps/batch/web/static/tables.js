@@ -165,24 +165,25 @@ const editorOf = (column, options, say) =>
     : {editable: false};
 
 // What a cell shows: its text, or what empty stands for in grey; marked where
-// it was set by hand, with a button back to what it was, or where it is why
-// the row cannot be reduced.
+// it is why the row cannot be reduced, or, given `revert`, where it was set by
+// hand, with a button back to what it was.
 function cellFormatter(column, revert) {
   return (cell) => {
     const data = cell.getData();
     const c = data.cells[column.name];
     const element = cell.getElement();
     element.classList.toggle('bad', Boolean(c.problem));
-    element.classList.toggle('edited', c.edited);
+    element.classList.toggle('edited', Boolean(c.edited));
     const shown = c.text
       ? h('span', {class: 'text', text: c.text})
       : h('span', {class: 'text muted', text: c.problem ? 'missing' : column.default || '—'});
-    const back = c.scanned || empty(column);
+    const back = c.original || empty(column);
     return h(
       'span',
       {class: 'cell'},
       shown,
-      c.edited &&
+      revert &&
+        c.edited &&
         h('button', {
           type: 'button',
           class: 'revert',
@@ -202,14 +203,15 @@ function cellTooltip(column) {
   return (event, cell) => {
     const c = cell.getData().cells[column.name];
     if (c.problem) return c.problem;
-    if (c.edited) return `${c.text || empty(column)}, set by hand; it was ${c.scanned || empty(column)}`;
+    if (c.edited) return `${c.text || empty(column)}, set by hand; it was ${c.original || empty(column)}`;
     return c.text;
   };
 }
 
 // A column for each cell, given {name, title, editor, default} as the server
 // sends them. `current()` gives the columns of the state shown, whose options
-// an editor offers.
+// an editor offers. `revert(key, name)`, if given, takes a cell set by hand
+// back.
 export function cellColumns(columns, {current, revert, say}) {
   const options = (column) => () => current().find((c) => c.name === column.name).editor.options;
   return columns.map((column) => ({
@@ -231,6 +233,7 @@ export class Grid {
   // or a promise of false, the cell shows its value before again.
   constructor(element, {columns, edits, edit, select, sorted, placeholder, sort = []}) {
     this.element = element;
+    this.edits = edits;
     this.onSelect = select;
     this.shown = [];
     this.json = new Map(); // each row as last shown
@@ -265,7 +268,7 @@ export class Grid {
       sorted?.(sorters.map((s) => ({column: s.field, dir: s.dir}))),
     );
     this.table.on('cellEdited', (cell) => {
-      const column = edits[cell.getField()];
+      const column = this.edits[cell.getField()];
       const key = cell.getRow().getData().key;
       const selected = this.selected();
       const keys = selected.length > 1 && selected.includes(key) ? selected : [key];
@@ -273,6 +276,13 @@ export class Grid {
       this.closed();
     });
     this.table.on('cellEditCancelled', () => this.closed());
+  }
+
+  // Show other columns, as the constructor takes them.
+  async setColumns(columns, edits) {
+    await this.built;
+    this.edits = edits;
+    this.table.setColumns(columns);
   }
 
   // Space below the last row, so that the rows scroll by whole rows to

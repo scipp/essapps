@@ -27,19 +27,16 @@ from ess.apps.batch import (
     DefinitionStore,
     FolderDefinitions,
     Header,
-    Row,
-    Scope,
     Source,
 )
-from ess.apps.batch.definition import Key, NotKept, settings_key
+from ess.apps.batch.definition import Key, NotKept, rows_key, settings_key
 from ess.apps.batch.web import Pages, Shown, create_app, demo, plots
 from ess.apps.batch.web.page import Missing
 from ess.apps.testing import CountingClient, FakeFiles
 from ess.spec import FileRef, SampleRunFile, WorkflowSpec, function_binding
 
+from . import toys
 from .toys import (
-    COLUMNS,
-    PAIRS,
     PLAIN,
     SOURCES,
     STAGED,
@@ -104,11 +101,13 @@ def started(client: Client, definitions: DefinitionStore) -> Pages:
 
 
 @pytest.fixture
-def http(pages: Pages, label: str, batch: Batch, sample: Measure) -> TestClient:
+def http(
+    pages: Pages, label: str, batch: Batch, sample: Measure, client: Client
+) -> TestClient:
     sample(1, 'water')
     sample(2, 'sds')
     sample(3, 'oil', partner=False)
-    batch.scan()
+    batch.put(toys.rows(client))
     return opened(pages, label)
 
 
@@ -154,7 +153,7 @@ def reduced(http: TestClient, client: Client, which: str = 'remaining') -> None:
     client.wait(client.records())
 
 
-def test_a_scan_lists_the_rows_with_their_names_and_why_one_is_incomplete(
+def test_the_page_lists_the_rows_with_their_names_notes_and_why_one_is_incomplete(
     http: TestClient,
 ) -> None:
     shown = rows(http)
@@ -164,6 +163,8 @@ def test_a_scan_lists_the_rows_with_their_names_and_why_one_is_incomplete(
         '2': 'sds',
         '3': 'oil',
     }
+    assert [c['name'] for c in state(http)['notes']] == ['run']
+    assert shown['1']['notes'] == {'run': '1'}
     assert shown['1']['cells']['sample']['text'] == 'run 1'
     assert statuses(http) == {'1': 'ready', '2': 'ready', '3': 'incomplete'}
     assert shown['3']['cells']['transmission']['problem'] == 'Transmission is missing'
@@ -196,16 +197,16 @@ def test_a_poll_sees_a_reduction_finish(
     assert [r['status'] for r in finished['rows']][:2] == ['done', 'done']
 
 
-def test_a_poll_sees_a_row_that_another_caller_scanned_without_a_record(
-    http: TestClient, batch: Batch, sample: Measure
+def test_a_poll_sees_a_row_that_another_caller_put_without_a_record(
+    http: TestClient, batch: Batch, sample: Measure, client: Client
 ) -> None:
     now = state(http)
     after = {'after': now['version'], 'start': now['start']}
-    batch.scan()
+    batch.put(batch.frame())
     assert http.get('/api/state', params=after).status_code == 204
 
     sample(4, 'salt', partner=False)
-    batch.scan()
+    batch.put(toys.rows(client))
     polled = http.get('/api/state', params=after).json()
 
     salt = {row['key']: row for row in polled['rows']}['4']
@@ -236,16 +237,16 @@ def test_an_action_of_one_page_reaches_another_at_its_next_poll(
     assert polled.json()['version'] > now['version']
 
 
-def test_a_rescan_offers_the_files_it_found_at_the_new_rows(
+def test_a_rescan_offers_the_runs_it_found_and_changes_no_row(
     http: TestClient, sample: Measure
 ) -> None:
     sample(4, 'salt')
 
-    scanned = http.post('/api/scan').json()
+    listed = http.post('/api/relist').json()
 
-    salt = {row['key']: row for row in scanned['rows']}['4']
-    assert salt['cells']['sample']['value'].startswith('run 4')
-    assert salt['cells']['transmission']['value'].startswith('run 1004')
+    assert [row['key'] for row in listed['rows']] == ['1', '2', '3']
+    (transmission,) = [c for c in listed['columns'] if c['name'] == 'transmission']
+    assert any(o.startswith('run 1004') for o in transmission['editor']['options'])
 
 
 def test_an_action_answers_with_the_state_after_it(http: TestClient) -> None:
@@ -253,7 +254,7 @@ def test_an_action_answers_with_the_state_after_it(http: TestClient) -> None:
 
     cell = rows(http)['1']['cells']['thickness']
     assert after['rows'][0]['cells']['thickness'] == cell
-    assert (cell['text'], cell['edited'], cell['scanned']) == ('3.0', True, '')
+    assert (cell['value'], cell['text']) == (3.0, '3.0')
 
 
 def test_an_edit_of_several_rows_writes_each_and_says_so(
@@ -261,39 +262,26 @@ def test_an_edit_of_several_rows_writes_each_and_says_so(
 ) -> None:
     notice = thickness(http, ['1', '2'], 5.0)['notice']
 
-    assert [batch.rows[k].values['thickness'] for k in ('1', '2')] == [5.0, 5.0]
+    assert list(batch.frame().loc[['1', '2'], 'thickness']) == [5.0, 5.0]
     assert notice == 'Thickness set on 2 rows.'
 
 
 def test_an_edit_of_several_rows_with_one_unknown_edits_none(
     http: TestClient, batch: Batch
 ) -> None:
-    before = batch.rows
+    before = batch.frame()
 
     refused = http.post(
         '/api/cells', json={'keys': ['1', '9'], 'column': 'thickness', 'value': 5}
     )
 
     assert 'no row 9' in refused.json()['message']
-    assert batch.rows is before
+    pd.testing.assert_frame_equal(batch.frame(), before)
 
 
-def test_cells_of_several_rows_are_set_back_together(
+def test_a_file_cell_is_set_by_the_label_of_its_option_and_kept_as_its_name(
     http: TestClient, batch: Batch
 ) -> None:
-    scanned = batch.rows['1'].values.get('thickness')
-    thickness(http, ['1', '2', '3'], 5.0)
-
-    http.post('/api/cells/revert', json={'keys': ['1', '2'], 'column': 'thickness'})
-
-    assert [batch.rows[k].values.get('thickness') for k in '123'] == [
-        scanned,
-        scanned,
-        5.0,
-    ]
-
-
-def test_a_file_cell_is_set_by_the_label_of_its_option(http: TestClient) -> None:
     column = next(c for c in state(http)['columns'] if c['name'] == 'transmission')
     label = next(o for o in column['editor']['options'] if o.startswith('run 1001'))
 
@@ -302,20 +290,15 @@ def test_a_file_cell_is_set_by_the_label_of_its_option(http: TestClient) -> None
 
     assert statuses(http)['3'] == 'ready'
     assert rows(http)['3']['cells']['transmission']['text'] == 'run 1001'
+    table = batch.frame()
+    assert table.at['3', 'transmission'] == table.at['1', 'transmission']
 
 
-def test_a_cell_set_back_takes_what_the_scan_gave_and_the_others_stay(
-    http: TestClient, batch: Batch
-) -> None:
-    scanned = batch.rows['1'].values['transmission']
-    thickness(http, ['1'], 2)
+def test_a_cell_emptied_is_empty_in_the_table(http: TestClient, batch: Batch) -> None:
     http.post('/api/cells', json={'keys': ['1'], 'column': 'transmission'})
+
     assert statuses(http)['1'] == 'incomplete'
-
-    http.post('/api/cells/revert', json={'keys': ['1'], 'column': 'transmission'})
-
-    assert batch.rows['1'].values['transmission'] == scanned
-    assert batch.rows['1'].values['thickness'] == 2.0
+    assert pd.isna(batch.frame().at['1', 'transmission'])
 
 
 @pytest.mark.parametrize(
@@ -346,9 +329,12 @@ def test_a_request_that_cannot_be_done_answers_422_with_a_message(
 
 
 def test_a_refused_reduction_answers_422_and_the_state_names_the_cell(
-    http: TestClient,
+    http: TestClient, batch: Batch
 ) -> None:
-    thickness(http, ['1'], -1)
+    # The state of a batch does not read the records that a cell references,
+    # so only the refusal of the submission, kept by the page, marks the cell.
+    batch.put(batch.frame().assign(offset='nope.x'))
+    assert rows(http)['1']['cells']['offset']['problem'] is None
 
     response = http.post('/api/reduce', json={'which': 'selected', 'keys': ['1']})
 
@@ -356,9 +342,9 @@ def test_a_refused_reduction_answers_422_and_the_state_names_the_cell(
     assert response.json() == {'message': 'Nothing was reduced: one value is refused.'}
     shown = state(http)
     (refused,) = shown['refused']
-    assert refused['text'] == 'water: Thickness must be greater than or equal to 0'
-    problem = shown['rows'][0]['cells']['thickness']['problem']
-    assert problem == 'Thickness must be greater than or equal to 0'
+    assert refused['text'] == 'water: Offset: unknown record or accumulator nope'
+    problem = shown['rows'][0]['cells']['offset']['problem']
+    assert problem == 'Offset: unknown record or accumulator nope'
 
 
 def test_a_refused_value_stays_marked_until_it_is_edited(http: TestClient) -> None:
@@ -512,11 +498,8 @@ def test_a_changed_setting_leaves_the_rows_done_marked_with_earlier_settings(
     plot = http.post('/api/plot', json={'keys': ['1']}).json()
     assert plot['figure']['outdated'] == [False]
     table = pd.read_csv(io.BytesIO(http.get('/api/table.csv').content), dtype=str)
-    assert list(table['status']) == [
-        'completed, earlier settings',
-        'completed, earlier settings',
-        'incomplete',
-    ]
+    assert list(table['status']) == ['done', 'done', 'incomplete']
+    assert list(table['earlier']) == ['True', 'True', 'False']
 
 
 def test_reduce_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_them(
@@ -569,11 +552,8 @@ def test_a_row_reduced_by_another_spec_version_is_outdated(
     sample(1, 'water')
     with local(proposal='p1', files=files, bind=bind) as client:
         pages = started(client, definitions)
-        label = pages.manager.create(
-            PLAIN.name, title='New', source='pairs', columns=COLUMNS
-        )
-        old = Batch(client, PLAIN, columns=COLUMNS, label=label, source=PAIRS)
-        old.scan()
+        label = toys.from_pairs(pages.manager, PLAIN.name, title='New')
+        old = Batch(client, PLAIN, label=label, rows=toys.rows(client))
         client.wait(old.reduce(['1']))
         page = opened(pages, label)
 
@@ -711,67 +691,52 @@ def test_a_refused_setting_is_marked_only_while_the_form_shows_it(
 
 
 @pytest.mark.parametrize('suffix', ['csv', 'xlsx'])
-def test_the_table_downloaded_and_uploaded_gives_the_same_rows(
+def test_the_table_downloaded_and_uploaded_gives_the_same_table(
     http: TestClient, batch: Batch, manager: BatchManager, pages: Pages, suffix: str
 ) -> None:
     thickness(http, ['2'], 4)
     content = http.get(f'/api/table.{suffix}').content
-    other = manager.create(STAGED.name, title='Other', columns=COLUMNS)
+    other = manager.create(STAGED.name, title='Other')
 
-    opened(pages, other).post(
+    loaded = opened(pages, other).post(
         '/api/table', params={'name': f'rows.{suffix}'}, content=content
     )
 
-    assert [(r.key, r.values) for r in manager.batch(other).rows] == [
-        (r.key, r.values) for r in batch.rows
-    ]
+    assert loaded.json()['notice'] == f'Loaded 3 rows from rows.{suffix}.'
+    # A cell of .xlsx has a type; a note of .csv is text.
+    expected = batch.frame()
+    if suffix == 'csv':
+        expected = expected.astype({'run': 'string'})
+    pd.testing.assert_frame_equal(manager.batch(other).frame(), expected)
 
 
-def test_load_table_refuses_a_row_the_source_makes_outside_the_scope(
-    http: TestClient, manager: BatchManager
+def test_a_table_loaded_replaces_the_rows_the_columns_and_so_the_forms(
+    http: TestClient, batch: Batch
 ) -> None:
-    content = http.get('/api/table.csv').content
-    manager.change('scan', scope=Scope(start=2))
+    content = b'key,sample,name\na,run:1,first\n'
 
     loaded = http.post('/api/table', params={'name': 'rows.csv'}, content=content)
 
-    assert loaded.status_code == 422
-    assert loaded.json()['message'] == (
-        '1: the source makes this row outside the scope'
-    )
-    assert list(rows(http)) == ['2', '3']
+    assert loaded.status_code == 200, loaded.json()
+    shown = loaded.json()
+    assert [(r['key'], r['name']) for r in shown['rows']] == [('a', 'first')]
+    assert [c['name'] for c in shown['columns']] == ['sample']
+    assert batch.columns == ('sample',)
+    settings = [n['path'][0] for n in shown['settings']]
+    assert {'transmission', 'thickness'} <= set(settings)
+    assert thickness(http, ['a'], 3) == {'message': 'There is no column thickness.'}
 
 
-def test_a_table_that_lacks_a_column_is_refused_and_the_rows_stay(
+def test_a_table_the_batch_refuses_is_not_loaded_and_the_rows_stay(
     http: TestClient,
 ) -> None:
-    content = b'key,sample\na,1\n'
+    content = b'key,sample,thickness\na,run:1,thick\n'
 
     loaded = http.post('/api/table', params={'name': 'rows.csv'}, content=content)
 
     assert loaded.status_code == 422
-    assert 'transmission' in loaded.json()['message']
+    assert loaded.json()['message'].startswith('Cannot load rows.csv: ')
     assert list(rows(http)) == ['1', '2', '3']
-
-
-def test_a_table_loaded_is_set_by_hand_and_stays_after_a_rescan(
-    http: TestClient,
-) -> None:
-    content = http.get('/api/table.csv').content
-    thickness(http, ['1'], 4)
-
-    loaded = http.post('/api/table', params={'name': 'rows.csv'}, content=content)
-    http.post('/api/scan')
-
-    assert loaded.json()['notice'] == 'Loaded 3 rows from rows.csv.'
-    assert rows(http)['1']['cells']['thickness'] == {
-        'value': None,
-        'text': '',
-        'edited': True,
-        'scanned': '',
-        'problem': None,
-    }
-    assert not rows(http)['2']['cells']['thickness']['edited']
 
 
 def kept_settings(store: DefinitionStore, params: dict[str, Any]) -> None:
@@ -858,9 +823,7 @@ def kept(client: Client, fake: FakeFiles, sample: Measure, flaky: Flaky) -> Test
     sample(1, 'water')
     sample(2, 'sds')
     manager = BatchManager(client, sources=SOURCES, definitions=flaky)
-    label = manager.create(
-        STAGED.name, title='Kept', source='pairs', columns=COLUMNS, label='kept'
-    )
+    label = toys.from_pairs(manager, STAGED.name, title='Kept', label='kept')
     files = CorrectedFiles(fake, definitions=flaky)
     return opened(Pages(manager, files=files, marks=Marks), label)
 
@@ -884,7 +847,7 @@ def test_a_change_the_definitions_cannot_keep_answers_422_and_nothing_changes(
     assert cell == {'message': 'The change was not kept: disk full'}
     assert table.json() == {'message': 'The change was not kept: disk full'}
     assert flaky.kept == before
-    assert not rows(kept)['1']['cells']['thickness']['edited']
+    assert rows(kept)['1']['cells']['thickness']['text'] == ''
 
 
 def test_settings_not_kept_stay_in_the_form_to_apply_again(
@@ -922,32 +885,6 @@ def test_a_correction_of_several_runs_is_one_write_and_all_or_none(
     assert flaky.saves == saves + 1
 
 
-def test_an_edit_at_a_name_that_is_not_a_column_can_be_removed(
-    http: TestClient, batch: Batch
-) -> None:
-    batch.rows = batch.rows.edit('1', {'gone': 1})
-    shown = rows(http)['1']
-
-    http.post('/api/cells/revert', json={'keys': ['1'], 'column': 'gone'})
-
-    assert (shown['status'], shown['strays']) == ('incomplete', ['gone'])
-    assert (rows(http)['1']['status'], rows(http)['1']['strays']) == ('ready', [])
-
-
-def test_a_table_loaded_is_set_on_the_rows_of_a_new_scan(
-    pages: Pages, label: str, batch: Batch, sample: Measure
-) -> None:
-    sample(1, 'water')  # after the scan of the batch made
-    page = opened(pages, label)
-    content = b'key,sample,transmission,thickness\n1,1,1001,3\n'
-
-    loaded = page.post('/api/table', params={'name': 'rows.csv'}, content=content)
-
-    assert loaded.status_code == 200
-    assert batch.rows.added == ()
-    assert batch.rows['1'].values['thickness'] == 3.0
-
-
 def test_what_a_person_set_on_the_page_is_there_when_it_is_served_again(
     tmp_path: Path,
 ) -> None:
@@ -982,7 +919,8 @@ def test_what_a_person_set_on_the_page_is_there_when_it_is_served_again(
     assert runs['rows'][1]['cells']['sample']['edited']
     assert after['rows'] == before['rows']
     assert after['settings'] == before['settings']
-    assert {r['key']: r for r in after['rows']}['60302']['cells']['thickness']['edited']
+    shown = {r['key']: r for r in after['rows']}['60302']['cells']['thickness']
+    assert shown['text'] == '2.5'
 
 
 def test_a_settings_file_loaded_fills_the_form_until_apply(
@@ -1123,9 +1061,9 @@ def test_a_drawing_that_raises_says_so_in_place_of_the_figure(
         raise RuntimeError('released')
 
     sample(1, 'water')
+    manager.batch(label).put(toys.rows(client))
     pages = Pages(manager, draw={STAGED.name: broken})
     page = opened(pages, label)
-    page.post('/api/scan')
     reduced(page, client)
 
     plot = page.post('/api/plot', json={}).json()
@@ -1147,9 +1085,9 @@ def test_plotting_and_saving_chosen_rows_reads_their_records_only(
 ) -> None:
     counting = CountingClient(client)
     manager = BatchManager(counting, sources=SOURCES, definitions=definitions)  # type: ignore[arg-type]
-    label = manager.create(STAGED.name, title='Scan', source='pairs', columns=COLUMNS)
     for run in (1, 2, 3):
         sample(run, f's{run}')
+    label = manager.create(STAGED.name, title='Scan', rows=toys.rows(client))
     pages = Pages(manager, draw={STAGED.name: draw})
     page = opened(pages, label)
     reduced(page, client, 'all')
@@ -1222,39 +1160,45 @@ def test_settings_tried_on_one_row_reach_the_others_only_when_a_person_says_so(
         assert (earlier(), binning()) == (['1'], [4, 2])
 
 
-def test_a_row_added_by_hand_is_gone_for_good_when_removed(
-    http: TestClient,
+def test_a_row_added_on_the_page_is_empty_and_rows_removed_are_gone(
+    http: TestClient, batch: Batch
 ) -> None:
-    http.post('/api/rows/add', json={'key': 'extra'})
-    assert rows(http)['extra']['added']
+    added = http.post('/api/rows/add', json={'key': 'extra'}).json()
+    assert (added['rows'][-1]['name'], added['rows'][-1]['status']) == (
+        'extra',
+        'incomplete',
+    )
+    # A key may be the name of another row; the batch refuses a key it has.
+    named = http.post('/api/rows/add', json={'key': 'water'}).json()
+    assert [r['key'] for r in named['rows']] == ['1', '2', '3', 'extra', 'water']
     same = http.post('/api/rows/add', json={'key': 'water'})
-    assert same.json() == {'message': 'There is a row named water already.'}
+    assert same.status_code == 422
+    http.post('/api/rows/remove', json={'keys': ['water']})
 
     after = http.post('/api/rows/remove', json={'keys': ['extra', '2']}).json()
 
-    assert after['notice'] == 'Removed 2 rows. 1 added by hand cannot be brought back.'
-    assert after['removed'] == 1
-    restored = http.post('/api/rows/restore').json()
-    assert [r['key'] for r in restored['rows']] == ['1', '2', '3']
+    assert after['notice'] == 'Removed 2 rows.'
+    assert list(batch.frame().index) == ['1', '3']
 
 
-def test_a_correction_of_a_run_reaches_the_rows_and_can_be_taken_back(
+def test_a_correction_of_a_run_changes_no_row_and_can_be_taken_back(
     http: TestClient, fake: FakeFiles
 ) -> None:
     key = fake.measure(4, 1.0, role='sample', sample='oil').file
-    http.post('/api/scan')
+    http.post('/api/relist')
     runs = state(http)['runs']
+    before = state(http)['rows']
 
     edit = {'keys': [key], 'column': 'role', 'value': 'transmission'}
     http.post('/api/runs/cells', json=edit)
 
-    assert statuses(http)['3'] == 'ready'
+    assert state(http)['rows'] == before
     (cell,) = [
         r['cells']['role']
         for r in http.get('/api/runs').json()['rows']
         if r['key'] == key
     ]
-    assert (cell['text'], cell['edited'], cell['scanned']) == (
+    assert (cell['text'], cell['edited'], cell['original']) == (
         'transmission',
         True,
         'sample',
@@ -1263,8 +1207,6 @@ def test_a_correction_of_a_run_reaches_the_rows_and_can_be_taken_back(
     reverted = http.post(
         '/api/runs/cells/revert', json={'keys': [key], 'column': 'role'}
     ).json()
-    assert statuses(http)['3'] == 'incomplete'
-    # Run 4 is a sample again: of a row of its own, also named oil.
     assert reverted == {'notice': 'Role set back on 1 run.'}
 
 
@@ -1297,11 +1239,12 @@ def form(files: CorrectedFiles, definitions: DefinitionStore) -> Iterator[TestCl
     bind = [function_binding(FORMS, lambda _: BaseModel())]
     with local(proposal='p1', files=files, bind=bind) as client:
         pages = started(client, definitions)
-        label = pages.manager.create(FORMS.name, title='Forms', columns=('sample',))
+        rows = pd.DataFrame(columns=['sample'])
+        label = pages.manager.create(FORMS.name, title='Forms', rows=rows)
         yield opened(pages, label)
 
 
-def test_a_correction_whose_scan_fails_says_that_it_was_kept(
+def test_a_correction_whose_runs_cannot_be_listed_says_that_it_was_kept(
     http: TestClient, files: CorrectedFiles, fake: FakeFiles
 ) -> None:
     state(http)  # the page is made while the files can be listed
@@ -1315,9 +1258,6 @@ def test_a_correction_whose_scan_fails_says_that_it_was_kept(
     assert answer.status_code == 422
     assert answer.json()['message'] == (
         'Corrected, but the runs cannot be listed: half written'
-    )
-    assert state(http)['notice'] == (
-        'Runs were corrected, but the scan failed: half written'
     )
 
 
@@ -1382,7 +1322,7 @@ def test_a_figure_has_error_bars_axes_with_units_and_no_nan() -> None:
     assert figure['layout']['yaxis']['title']['text'] == 'I(Q) [1/cm]'
 
 
-def test_the_runs_of_a_sample_that_arrive_in_the_demo_show_after_a_rescan(
+def test_the_demo_makes_a_batch_of_its_samples_and_follow_adds_those_that_arrive(
     tmp_path: Path,
 ) -> None:
     groups = demo.measurements()
@@ -1393,10 +1333,17 @@ def test_the_runs_of_a_sample_that_arrive_in_the_demo_show_after_a_rescan(
         page = home(demo.build(client, files, definitions))
         before = rows(page)
         demo.measure(tmp_path, groups[0] + groups[1] + groups[2])
-        after = page.post('/api/scan').json()
+        after = page.post('/api/follow', json={'on': True}).json()
+        page.post('/api/follow', json={'on': False})
+        client.wait(client.records())
 
     assert [row['name'] for row in before.values()] == ['H2O buffer']
     assert [row['name'] for row in after['rows']] == ['H2O buffer', 'D2O buffer']
+    assert [c['name'] for c in after['columns']] == [
+        'sample',
+        'transmission',
+        'thickness',
+    ]
 
 
 def test_the_page_and_the_files_it_names_are_served_under_a_path_prefix(
@@ -1419,11 +1366,11 @@ def test_the_page_and_the_files_it_names_are_served_under_a_path_prefix(
 
 
 def test_a_large_answer_is_compressed_for_a_client_that_accepts_gzip(
-    http: TestClient, sample: Measure, batch: Batch
+    http: TestClient, sample: Measure, batch: Batch, client: Client
 ) -> None:
     for run in range(10, 200):
         sample(run, f'sample {run}')
-    batch.scan()
+    batch.put(toys.rows(client))
 
     plain = http.get('/api/state', headers={'Accept-Encoding': 'identity'})
     packed = http.get('/api/state', headers={'Accept-Encoding': 'gzip'})
@@ -1438,9 +1385,9 @@ def test_a_large_answer_is_compressed_for_a_client_that_accepts_gzip(
 
 
 def test_each_batch_has_its_page_at_its_label(
-    http: TestClient, manager: BatchManager, pages: Pages
+    http: TestClient, manager: BatchManager, pages: Pages, client: Client
 ) -> None:
-    other = manager.create(STAGED.name, title='Other', source='pairs', columns=COLUMNS)
+    other = manager.create(STAGED.name, title='Other', rows=toys.rows(client))
     page = opened(pages, other)
 
     bins(page, 5)
@@ -1450,8 +1397,8 @@ def test_each_batch_has_its_page_at_its_label(
     assert (mine['label'], mine['title']) == ('scan', 'Scan')
     assert (theirs['label'], theirs['title']) == (other, 'Other')
     assert (form_bins(mine), form_bins(theirs)) == (2, 5)
-    assert not rows(http)['1']['cells']['thickness']['edited']
-    assert rows(page)['1']['cells']['thickness']['edited']
+    assert rows(http)['1']['cells']['thickness']['text'] == ''
+    assert rows(page)['1']['cells']['thickness']['text'] == '3.0'
 
 
 def test_the_root_redirects_to_the_batch_that_follows(
@@ -1499,7 +1446,7 @@ def test_a_label_that_is_no_batch_answers_404_and_its_page_says_so(
     state(page)
 
     unknown = http.get('/batches/none/api/state')
-    action = http.post('/batches/none/api/scan')
+    action = http.post('/batches/none/api/relist')
     manager.remove(label)
 
     # The page is served, and shows the batches with the message of its state.
@@ -1526,59 +1473,15 @@ def test_the_batches_view_lists_every_batch_and_the_one_that_follows(
 
     listed = http.get('/api/batches').json()
 
-    words = {'one': 'row', 'many': 'rows'}
     assert listed['rows'] == [
         {
             'label': 'other',
             'title': 'Other',
             'description': 'The second series',
-            'words': words,
-            'scope': '',
             'follows': True,
         },
-        {
-            'label': 'scan',
-            'title': 'Scan',
-            'description': '',
-            'words': words,
-            'scope': '',
-            'follows': False,
-        },
+        {'label': 'scan', 'title': 'Scan', 'description': '', 'follows': False},
     ]
-
-
-@pytest.mark.parametrize(
-    ('scope', 'text'),
-    [
-        (Scope(), ''),
-        (Scope(start=60339), 'Run 60339 \N{EN DASH}'),
-        (Scope(stop=60339), 'Run \N{EN DASH} 60339'),
-        (Scope(start=60301, stop=60339), 'Run 60301 \N{EN DASH} 60339'),
-    ],
-)
-def test_the_batches_view_shows_the_scope_of_each_batch_in_the_words_of_its_source(
-    http: TestClient, manager: BatchManager, scope: Scope, text: str
-) -> None:
-    manager.change('scan', scope=scope)
-
-    (listed,) = http.get('/api/batches').json()['rows']
-
-    assert listed['scope'] == text
-
-
-def test_a_page_learns_from_its_poll_that_a_scope_changed(
-    http: TestClient, manager: BatchManager
-) -> None:
-    now = state(http)
-
-    manager.change('scan', scope=Scope(start=2))
-
-    polled = http.get(
-        '/api/state', params={'after': now['version'], 'start': now['start']}
-    )
-    assert polled.status_code == 200
-    assert polled.json()['batches'][0]['scope'] == 'Run 2 \N{EN DASH}'
-    assert [row['key'] for row in polled.json()['rows']] == ['2', '3']
 
 
 def test_the_list_of_batches_is_the_same_from_every_page(
@@ -1612,53 +1515,21 @@ def test_a_page_learns_from_its_poll_that_another_batch_follows(
     assert http.get('/api/batches').json()['rows'] == listed
 
 
-def test_a_correction_on_one_page_shows_in_the_runs_view_and_the_rows_of_another(
+def test_a_correction_on_one_page_shows_in_the_runs_view_of_another(
     http: TestClient, pages: Pages, manager: BatchManager, fake: FakeFiles
 ) -> None:
     key = fake.measure(4, 1.0, role='sample', sample='oil').file
     other = opened(pages, manager.create(STAGED.name, title='Other', source='pairs'))
-    assert statuses(other)['3'] == 'incomplete'
+    runs = state(other)['runs']
 
     edit = {'keys': [key], 'column': 'role', 'value': 'transmission'}
     http.post('/api/runs/cells', json=edit)
 
-    runs = {r['key']: r['cells']['role'] for r in other.get('/api/runs').json()['rows']}
-    assert runs[key]['text'] == 'transmission'
-    assert statuses(other)['3'] == 'ready'
-
-
-def test_a_correction_taken_back_on_one_page_reaches_the_rows_of_another(
-    http: TestClient, pages: Pages, manager: BatchManager, fake: FakeFiles
-) -> None:
-    key = fake.measure(4, 1.0, role='sample', sample='oil').file
-    other = opened(pages, manager.create(STAGED.name, title='Other', source='pairs'))
-    edit = {'keys': [key], 'column': 'role', 'value': 'transmission'}
-    http.post('/api/runs/cells', json=edit)
-    assert statuses(other)['3'] == 'ready'
-
-    http.post('/api/runs/cells/revert', json={'keys': [key], 'column': 'role'})
-
-    assert statuses(other)['3'] == 'incomplete'
-
-
-def test_a_scan_after_a_correction_that_fails_is_said_once_by_the_next_poll(
-    http: TestClient, pages: Pages, manager: BatchManager, fake: FakeFiles
-) -> None:
-    key = fake.measure(7, 1.0, role='background').file  # no sample name
-    other = opened(pages, manager.create(STAGED.name, title='Other', source='pairs'))
-    now = state(other)
-
-    # As a transmission without a sample name, the run makes the source raise.
-    edit = {'keys': [key], 'column': 'role', 'value': 'transmission'}
-    assert http.post('/api/runs/cells', json=edit).json() == {
-        'notice': 'Role corrected on 1 run.'
+    assert state(other)['runs'] > runs
+    shown = {
+        r['key']: r['cells']['role'] for r in other.get('/api/runs').json()['rows']
     }
-
-    at = {'after': now['version'], 'start': now['start']}
-    polled = other.get('/api/state', params=at).json()
-    assert polled['notice'] == "Runs were corrected, but the scan failed: 'sample'"
-    at['after'] = polled['version']
-    assert other.get('/api/state', params=at).status_code == 204
+    assert shown[key]['text'] == 'transmission'
 
 
 def test_counts_are_given_in_the_words_of_the_page(
@@ -1672,148 +1543,41 @@ def test_counts_are_given_in_the_words_of_the_page(
     assert counted == {
         'rows': {'scan': {'done': 1, 'ready': 1, 'incomplete': 1}},
         'failed': {},
-        'outside': {'pairs': '0 rows'},
     }
 
 
-def test_the_counts_give_the_rows_of_each_batch_by_status_after_a_scan(
+def test_the_counts_give_the_rows_of_each_batch_by_status(
     pages: Pages, manager: BatchManager, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
     sample(2, 'oil', partner=False)
-    manager.create('plain', title='Morning', source='pairs', label='a')
-    manager.create('plain', title='Afternoon', source='pairs', label='b')
+    manager.create('plain', title='Morning', rows=toys.rows(client), label='a')
+    manager.create('plain', title='Afternoon', rows=toys.rows(client), label='b')
     client.wait(manager.batch('a').reduce(['1']))
-    sample(3, 'sds')
 
     counted = pages.counts()
 
     assert counted.rows == {
-        'a': {'done': 1, 'incomplete': 1, 'ready': 1},
-        'b': {'ready': 2, 'incomplete': 1},
+        'a': {'done': 1, 'incomplete': 1},
+        'b': {'ready': 1, 'incomplete': 1},
     }
     assert counted.failed == {}
 
 
-def test_a_row_counts_as_shown_if_any_batch_of_its_source_shows_it(
-    pages: Pages, manager: BatchManager, sample: Measure
-) -> None:
-    for run, name in enumerate(['water', 'oil', 'sds', 'salt'], start=1):
-        sample(run, name)
-    for label, removed in [('a', ['2', '3']), ('b', ['3'])]:
-        manager.create('plain', title=label, source='pairs', label=label)
-        batch = manager.batch(label)
-        batch.rows = batch.rows.remove_each(removed).add(Row(f'mine-{label}', {}))
-
-    assert pages.counts().outside == {'pairs': '1 row'}  # row 3, removed in both
-
-
-def test_a_row_outside_the_scope_of_every_batch_of_its_source_counts_in_no_batch(
-    pages: Pages, manager: BatchManager, sample: Measure
-) -> None:
-    for run, name in enumerate(['water', 'oil', 'sds', 'salt'], start=1):
-        sample(run, name)
-    manager.create('plain', title='Morning', source='pairs', scope=Scope(stop=2))
-    manager.create('plain', title='Evening', source='pairs', scope=Scope(start=4))
-
-    assert pages.counts().outside == {'pairs': '2 rows'}  # rows 2 and 3
-
-
-@pytest.mark.parametrize('broken', ['not registered', 'raises'])
-def test_a_batch_that_cannot_be_counted_has_its_reason_and_its_source_no_outside(
-    client: Client, definitions: FolderDefinitions, sample: Measure, broken: str
+def test_a_batch_that_cannot_be_counted_has_its_reason(
+    client: Client, definitions: FolderDefinitions, sample: Measure
 ) -> None:
     sample(1, 'water')
-    sources = {**SOURCES, 'other': SOURCES['pairs']}
-    first = BatchManager(client, sources=sources, definitions=definitions)
-    first.create('plain', title='Fine', source='pairs', label='a')
-    first.create('plain', title='Broken', source='other', label='b')
-
-    def raising(files: Any) -> list[Row]:
-        raise OSError('half written')
-
-    if broken == 'not registered':
-        sources = SOURCES
-    else:
-        sources = {
-            **SOURCES,
-            'other': Source(raising, fills=('sample', 'transmission')),
-        }
-    manager = BatchManager(client, sources=sources, definitions=definitions)
+    first = BatchManager(client, sources=SOURCES, definitions=definitions)
+    first.create('plain', title='Fine', rows=toys.rows(client), label='a')
+    first.create('plain', title='Broken', rows=toys.rows(client), label='b')
+    definitions.save(rows_key('b'), {'nonsense': 1})
+    manager = BatchManager(client, sources=SOURCES, definitions=definitions)
 
     counted = Pages(manager).counts()
 
-    reason = {
-        'not registered': 'the source other is not registered',
-        'raises': 'half written',
-    }[broken]
     assert list(counted.rows) == ['a']
-    assert counted.failed == {'b': reason}
-    assert counted.outside == {'pairs': '0 rows'}
-
-
-@pytest.mark.parametrize(('made', 'scans'), [(True, 1), (False, 2)])
-def test_a_count_scans_each_batch_and_one_not_made_yet_once_more(
-    client: Client,
-    definitions: FolderDefinitions,
-    sample: Measure,
-    made: bool,
-    scans: int,
-) -> None:
-    sample(1, 'water')
-    calls = []
-
-    def counted(files: Any) -> list[Row]:
-        calls.append(1)
-        return pair(files)
-
-    sources = {'pairs': Source(counted, fills=('sample', 'transmission'))}
-    manager = BatchManager(client, sources=sources, definitions=definitions)
-    for label in ('a', 'b'):
-        manager.create('plain', title=label, source='pairs', label=label)
-        if made:
-            manager.batch(label)
-    pages = Pages(manager)
-    before = len(calls)
-
-    pages.counts()
-
-    # The rows outside come from these scans; making a batch scans it too.
-    assert len(calls) - before == 2 * scans
-
-
-# The scope
-
-
-def test_a_page_shows_the_rows_of_its_scope_only(
-    http: TestClient, manager: BatchManager
-) -> None:
-    manager.change('scan', scope=Scope(start=2))
-
-    assert list(rows(http)) == ['2', '3']
-
-
-def test_bring_back_restores_only_the_rows_removed_that_the_scope_holds(
-    http: TestClient, manager: BatchManager
-) -> None:
-    http.post('/api/rows/remove', json={'keys': ['1', '2']})
-    manager.change('scan', scope=Scope(start=2))
-
-    http.post('/api/rows/restore')
-    manager.change('scan', scope=Scope())
-
-    assert list(rows(http)) == ['2', '3']
-    assert state(http)['removed'] == 1
-
-
-def test_the_rows_removed_that_a_page_counts_are_those_of_its_scope(
-    http: TestClient, manager: BatchManager
-) -> None:
-    http.post('/api/rows/remove', json={'keys': ['1', '2']})
-
-    manager.change('scan', scope=Scope(start=2))
-
-    assert state(http)['removed'] == 1
+    assert 'rows.json: not a table' in counted.failed['b']
 
 
 # Making a batch
@@ -1844,14 +1608,12 @@ def test_the_sources_offer_the_specs_that_fit_and_the_parameters_a_cell_edits(
     assert pairs == {
         'name': 'pairs',
         'fills': ['sample', 'transmission'],
-        'words': {'one': 'row', 'many': 'rows'},
-        'index_title': 'Run',
         'specs': [
             {'name': 'staged', 'title': 'Staged', 'params': STAGED_PARAMS},
             {'name': 'plain', 'title': 'Plain', 'params': STAGED_PARAMS},
         ],
     }
-    assert (none['name'], none['fills'], none['index_title']) == (None, [], '')
+    assert (none['name'], none['fills']) == (None, [])
     assert [s['name'] for s in none['specs']] == [
         'staged',
         'plain',
@@ -1878,27 +1640,23 @@ def test_a_source_that_no_spec_fits_is_not_offered_and_no_source_always_is(
     assert [s['name'] for s in offered] == [None]
 
 
-def test_a_batch_made_from_the_page_is_listed_with_what_the_form_sent(
+def test_a_batch_made_from_a_source_has_every_row_it_filled_and_the_columns_sent(
     http: TestClient, pages: Pages, manager: BatchManager
 ) -> None:
     sent = new_batch(
-        description='Thicker cells',
-        columns=['sample', 'transmission', 'thickness'],
-        start='2',
-        stop='10',
+        description='Thicker cells', columns=['sample', 'transmission', 'thickness']
     )
 
     made = http.post('/api/batches', json=sent).json()
 
-    assert manager.headers()[made['label']] == Header(
-        spec=STAGED.name,
-        columns=('sample', 'transmission', 'thickness'),
-        source='pairs',
-        title='Afternoon',
-        description='Thicker cells',
-        scope=Scope(start=2, stop=10),
-    )
-    assert list(rows(opened(pages, made['label']))) == ['2', '3']
+    assert manager.headers()[made['label']] == Header('Afternoon', 'Thicker cells')
+    page = state(opened(pages, made['label']))
+    assert [r['key'] for r in page['rows']] == ['1', '2']  # 3 has no transmission
+    assert [c['name'] for c in page['columns']] == [
+        'sample',
+        'transmission',
+        'thickness',
+    ]
     listed = {b['label']: b['title'] for b in state(http)['batches']}
     assert listed == {'scan': 'Scan', made['label']: 'Afternoon'}
 
@@ -1917,15 +1675,20 @@ def test_a_batch_made_from_the_page_starts_with_the_settings_of_its_spec(
     assert form_bins(state(opened(pages, made.json()['label']))) == 5
 
 
-def test_a_batch_without_a_source_is_made_with_the_columns_sent(
-    pages: Pages, manager: BatchManager
+def test_a_batch_without_a_source_is_made_with_the_columns_sent_and_no_rows(
+    pages: Pages, manager: BatchManager, sample: Measure
 ) -> None:
+    sample(1, 'water')
     sent = new_batch(source=None, spec='find', columns=['sample'])
 
     made = TestClient(create_app(pages)).post('/api/batches', json=sent).json()
 
-    header = manager.headers()[made['label']]
-    assert (header.source, header.spec, header.columns) == (None, 'find', ('sample',))
+    batch = manager.batch(made['label'])
+    assert (batch.spec.name, batch.columns, len(batch.frame())) == (
+        'find',
+        ('sample',),
+        0,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1933,25 +1696,10 @@ def test_a_batch_without_a_source_is_made_with_the_columns_sent(
     [
         ({'title': ''}, 'a batch has a title that is not empty'),
         ({'title': '  '}, 'a batch has a title that is not empty'),
-        ({'start': '5', 'stop': '2'}, 'the stop of a scope, 2, is below its start, 5'),
-        ({'start': '5', 'stop': 'b'}, "Run 'b' is not a whole number"),
-        ({'source': None, 'start': '2'}, 'no start or stop'),
-        ({'columns': ['sample']}, 'the source fills'),
-        ({'columns': ['sample', 'transmission', 'mass']}, 'no parameters'),
-        ({'spec': 'find', 'columns': ['sample', 'transmission']}, 'no parameters'),
+        ({'source': 'other'}, 'the source other is not registered'),
         ({'spec': 'other'}, 'the workspace binds no spec other'),
     ],
-    ids=[
-        'title',
-        'blank',
-        'stop',
-        'index',
-        'unindexed',
-        'fills',
-        'column',
-        'fit',
-        'spec',
-    ],
+    ids=['title', 'blank', 'source', 'spec'],
 )
 def test_what_the_manager_refuses_answers_422_and_makes_no_batch(
     pages: Pages, manager: BatchManager, given: dict[str, Any], said: str
@@ -2010,15 +1758,12 @@ def test_runs_are_corrected_without_a_batch(pages: Pages, sample: Measure) -> No
 
 
 def test_a_batch_whose_rows_cannot_be_read_answers_422_and_the_list_stays(
-    client: Client, definitions: DefinitionStore, sample: Measure
+    client: Client, definitions: DefinitionStore
 ) -> None:
-    sample(1, 'water')
-    # The index of the rows is a number, the source says text.
-    texts = Source(pair, fills=('sample', 'transmission'), index_type=str)
-    manager = BatchManager(client, sources={'texts': texts}, definitions=definitions)
-    label = manager.create(
-        STAGED.name, title='Odd', source='texts', scope=Scope(start='a')
-    )
+    first = BatchManager(client, sources=SOURCES, definitions=definitions)
+    label = first.create(STAGED.name, title='Odd')
+    definitions.save(rows_key(label), {'nonsense': 1})
+    manager = BatchManager(client, sources=SOURCES, definitions=definitions)
     pages = Pages(manager)
 
     shown = opened(pages, label).get('/api/state')
@@ -2029,24 +1774,39 @@ def test_a_batch_whose_rows_cannot_be_read_answers_422_and_the_list_stays(
     assert [b['title'] for b in listed] == ['Odd']
 
 
+def test_a_batch_shows_while_the_files_cannot_be_listed(
+    http: TestClient, batch: Batch, client: Client, fake: FakeFiles
+) -> None:
+    client.wait(batch.reduce(['1']))
+    listed = fake.list
+    fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
+
+    shown = state(http)
+
+    assert statuses(http) == {'1': 'done', '2': 'ready', '3': 'incomplete'}
+    assert shown['files_problem'] == 'The files cannot be listed: half written'
+    column = next(c for c in shown['columns'] if c['name'] == 'sample')
+    assert column['editor']['options'] == []
+    assert http.post('/api/plot', json={'keys': []}).json()['figure'] is not None
+    runs = http.get('/api/runs').json()
+    assert (runs['rows'], runs['problem']) == ([], shown['files_problem'])
+    fake.list = listed
+    assert http.post('/api/relist').json()['files_problem'] is None
+
+
 # The tab "Batch"
 
 
 def save_header(http: TestClient, **given: Any) -> Any:
     """Save the header of the page's batch, as the tab "Batch" sends it."""
-    sent = {'title': 'Scan', 'description': '', 'start': None, 'stop': None}
+    sent = {'title': 'Scan', 'description': ''}
     return http.post('/api/batch', json=sent | given)
 
 
-def test_the_state_shows_what_the_batch_was_made_with(http: TestClient) -> None:
-    assert state(http)['header'] == {
-        'workflow': 'Staged',
-        'source': 'pairs',
-        'index_title': 'Run',
-        'description': '',
-        'start': None,
-        'stop': None,
-    }
+def test_the_state_shows_the_workflow_and_description_of_the_batch(
+    http: TestClient,
+) -> None:
+    assert state(http)['header'] == {'workflow': 'Staged', 'description': ''}
 
 
 def test_a_header_change_the_definitions_refuse_answers_422_and_changes_nothing(
@@ -2055,7 +1815,7 @@ def test_a_header_change_the_definitions_refuse_answers_422_and_changes_nothing(
     before = state(http)
     refusing.part = 'header'
 
-    answer = save_header(http, title='Morning', start='2')
+    answer = save_header(http, title='Morning')
 
     assert (answer.status_code, answer.json()) == (
         422,
@@ -2085,101 +1845,29 @@ def test_follow_the_definitions_refuse_answers_422_and_follow_stays_off(
     assert state(http)['follow']['on'] is False
 
 
-def test_a_title_description_and_scope_saved_on_the_page_are_kept(
+def test_a_title_and_description_saved_on_the_page_are_kept(
     http: TestClient, manager: BatchManager
 ) -> None:
-    saved = save_header(http, title='Morning', description='1 mm cells', start='2')
+    saved = save_header(http, title='Morning', description='1 mm cells')
 
-    assert manager.headers()['scan'] == Header(
-        spec=STAGED.name,
-        columns=COLUMNS,
-        source='pairs',
-        title='Morning',
-        description='1 mm cells',
-        scope=Scope(start=2),
-    )
+    assert manager.headers()['scan'] == Header('Morning', '1 mm cells')
     shown = saved.json()
     assert (shown['title'], shown['notice']) == ('Morning', 'Saved.')
-    assert (shown['header']['description'], shown['header']['start']) == (
-        '1 mm cells',
-        2,
-    )
-    assert [row['key'] for row in shown['rows']] == ['2', '3']
+    assert shown['header']['description'] == '1 mm cells'
 
 
-@pytest.mark.parametrize(
-    ('given', 'said'),
-    [
-        ({'title': ' '}, 'a batch has a title that is not empty'),
-        ({'start': '5', 'stop': '2'}, 'the stop of a scope, 2, is below its start, 5'),
-        ({'start': 'b'}, "Run 'b' is not a whole number"),
-    ],
-    ids=['title', 'stop', 'index'],
-)
 def test_a_header_the_manager_refuses_answers_422_and_changes_nothing(
-    http: TestClient, manager: BatchManager, given: dict[str, Any], said: str
+    http: TestClient, manager: BatchManager
 ) -> None:
     before = manager.headers()
 
-    answer = save_header(http, **given)
-
-    assert answer.status_code == 422
-    assert answer.json()['message'] == f'The batch was not changed: {said}.'
-    assert manager.headers() == before
-
-
-def next_batch(http: TestClient, key: str, title: str = 'Afternoon') -> Any:
-    return http.post('/api/batch/next', json={'key': key, 'title': title})
-
-
-def test_the_next_batch_starts_at_the_row_with_the_settings_applied(
-    http: TestClient, pages: Pages
-) -> None:
-    bins(http, 5)
-    draft(http, 9)  # not applied
-
-    made = next_batch(http, '2').json()
-
-    assert list(rows(http)) == ['1']
-    following = opened(pages, made['label'])
-    assert list(rows(following)) == ['2', '3']
-    assert form_bins(state(following)) == 5
-
-
-@pytest.mark.parametrize(
-    ('key', 'said'),
-    [
-        ('added', 'added has no run, so no batch can start at it.'),
-        ('9', 'There is no row 9.'),
-        (
-            '1',
-            'The next batch was not made: the batch holds no row before 1, so it '
-            'would then hold none.',
-        ),
-    ],
-    ids=['unindexed', 'unknown', 'refused'],
-)
-def test_the_next_batch_is_refused_at_such_a_row_and_nothing_changes(
-    http: TestClient, manager: BatchManager, key: str, said: str
-) -> None:
-    http.post('/api/rows/add', json={'key': 'added'})
-    before = manager.headers()
-
-    answer = next_batch(http, key)
-
-    assert (answer.status_code, answer.json()) == (422, {'message': said})
-    assert manager.headers() == before
-
-
-def test_a_next_batch_without_a_title_says_it_was_not_made(
-    http: TestClient,
-) -> None:
-    answer = next_batch(http, '2', ' ')
+    answer = save_header(http, title=' ')
 
     assert answer.status_code == 422
     assert answer.json()['message'] == (
-        'The next batch was not made: a batch has a title that is not empty.'
+        'The batch was not changed: a batch has a title that is not empty.'
     )
+    assert manager.headers() == before
 
 
 def test_a_batch_removed_from_its_page_is_gone_and_its_results_stay(
@@ -2221,8 +1909,9 @@ def test_a_removal_the_definitions_refuse_answers_422_and_the_batch_stays(
     assert answer.json()['message'] == (
         "The change was not kept: ('labels', 'scan', 'header'): refused"
     )
+    # It follows no longer, so that no label without a header follows.
     assert list(manager.headers()) == ['scan']
-    assert manager.following == 'scan'
+    assert manager.following is None
 
 
 def test_another_page_of_a_removed_batch_answers_404_at_its_next_poll(
@@ -2253,7 +1942,7 @@ def test_a_page_handed_out_before_its_batch_is_removed_answers_missing(
     with pytest.raises(Missing, match=r'There is no batch scan\.'):
         page.poll(0)
     with pytest.raises(Missing):
-        page.scan()
+        page.relist()
 
 
 def test_a_batch_made_again_under_a_removed_label_gets_a_new_page(

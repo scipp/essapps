@@ -155,15 +155,6 @@ column = pd.array([r.get(name) for r in data['data']], dtype=field['extDtype']) 
 
 `table.data_of` and `table.frame_of` are the two halves. Checked on a table with `string`, `Float64`, `Int64`, `boolean` and `object` columns, empty cells, a list and a dict in a cell, `0.1 + 0.2`, `2**53 + 1`, a table without rows, and the key `'0342'`: the frame read back equals the frame written, dtypes included, with an empty cell of an `object` column read as `None`. It holds for every table, since a note too is text, a number, a truth value, or plain data.
 
-### "Start the next batch here" splits the table
-
-```python
-at = rows.index.get_loc('60400')
-this, following = rows.iloc[:at], rows.iloc[at:]     # the next batch gets `following`, and the same template
-```
-
-Results stay under the label of this batch (ADR 0011), so a row that moves has no result in the next batch.
-
 ## Examples
 
 **The files are not reachable.** The page shows the table, the results and the plots. Each file cell is marked as not found, and "Reduce" on such a row is refused with that reason.
@@ -211,7 +202,6 @@ The batch holds its rows as a `DataFrame`, so pandas becomes a dependency of `es
 | the state | `rows.join(results)`, a left join on the key |
 | a rule, such as `left_to_reduce` | a boolean mask over the state |
 | rows of a range of runs | `frame[(frame.run >= start) & (frame.run < stop)]` |
-| the next batch | `rows.iloc[at:]` |
 
 ## Not decided here: amending a batch from the files
 
@@ -245,7 +235,7 @@ The code of this ADR and of ADR 0013 is written together, since Follow is in use
 
 - `rows.json` replaces `edits.json`. No code reads `edits.json`: a batch made before keeps its settings, and what was set by hand on it is lost.
 - `RowTable`, the layers of `Row` (`values`, `info`, `index`), the marker `EMPTY`, "set by hand", and the four converters of cells go. `Header.spec` and `Header.columns` go: the template names the spec, and its blanks are the columns.
-- A batch is shown without a scan and without its source. A batch cannot be shown in one case: the workspace binds no spec of its name.
+- A batch is shown without a scan and without its source. A batch cannot be shown in two cases: the workspace binds no spec of its name, or it binds a version of the spec that refuses the cells of the table, since it takes another kind of value at a column, or has a parameter of the name of a note.
 - A wrong value in a cell is refused when it is set or read from a table file, not when the row is reduced.
 - A spec cannot make a person choose between a value and `None` for each row: an empty cell of such a column is `None`. It still can for a setting.
 - A row that only wrong metadata made stays until a person removes it, and a correction of a run changes no batch (the example above).

@@ -15,18 +15,12 @@ from ess.apps.batch import (
     CorrectedFiles,
     FolderDefinitions,
 )
+from ess.apps.batch.table import KEY
 from ess.apps.folder import open_folder
 from ess.apps.testing import FakeFiles, FakeStore, StagedFunction, read_file
 from ess.spec import Binding, FileRef, function_binding
 
 from . import toys
-
-
-def _find(params: toys.FindParams) -> toys.FindOutputs:
-    value = read_file(params.sample)
-    if value < 0:
-        raise ValueError('nothing to find')
-    return toys.FindOutputs(offset=toys.Offset(value=value))
 
 
 def _series(gate: toys.Gate) -> Callable[[toys.SeriesParams], toys.Outputs]:
@@ -117,13 +111,13 @@ def sample(fake: FakeFiles) -> toys.Measure:
 
 @pytest.fixture
 def batch(client: Client) -> Iterator[Batch]:
+    """
+    A staged batch of :data:`toys.COLUMNS` with the rows that ``toys.PAIRS``
+    makes before a file is measured: none. ``batch.put(toys.rows(client))``
+    takes those measured since.
+    """
     batch = Batch(
-        client,
-        toys.STAGED,
-        columns=toys.COLUMNS,
-        label='scan',
-        source=toys.PAIRS,
-        staged=True,
+        client, toys.STAGED, label='scan', rows=toys.rows(client), staged=True
     )
     yield batch
     batch.close()
@@ -149,14 +143,12 @@ def manager(client: Client, refusing: toys.Refusing) -> BatchManager:
 
 @pytest.fixture
 def label(manager: BatchManager) -> str:
-    """A batch of ``manager`` with the spec, columns and label of ``batch``."""
-    return manager.create(
-        toys.STAGED.name,
-        title='Scan',
-        source='pairs',
-        columns=toys.COLUMNS,
-        label='scan',
-    )
+    """
+    A batch of ``manager`` with the spec, columns and label of ``batch``, made
+    from the source ``pairs`` before a file is measured: it has no rows, and
+    Follow or ``manager.take`` adds those measured since.
+    """
+    return toys.from_pairs(manager, toys.STAGED.name, title='Scan', label='scan')
 
 
 # A workspace kept in a folder of toy files, for batches from tables
@@ -221,7 +213,12 @@ def template() -> Template:
 
 @pytest.fixture
 def table() -> pd.DataFrame:
+    """Two rows for the template: samples 1 and 2, each with a transmission."""
     return pd.DataFrame(
-        {'name': ['a', 'b'], 'sample': ['1', '2'], 'transmission': ['1001', '1002']},
-        dtype=str,
+        {
+            'name': ['water', 'sds'],
+            'sample': ['run:1', 'run:2'],
+            'transmission': ['run:1001', 'run:1002'],
+        },
+        index=pd.Index(['a', 'b'], name=KEY),
     )

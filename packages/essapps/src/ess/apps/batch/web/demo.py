@@ -8,9 +8,10 @@ working on the page.
 ``http://localhost:N``, with the workspace kept in ``DIRECTORY`` (see
 :mod:`ess.apps.folder`), a new temporary folder if not given. The first start
 writes the fake runs and ``files.csv`` there. A later start reuses them, with
-the results of earlier starts, and the batches, edits, settings, corrections,
-and the batch that follows kept in ``definitions/`` (:mod:`..definition`).
-Each start makes a batch of the samples if no batch is listed. The file
+the results of earlier starts, and the batches with their tables and
+settings, the corrections, and the batch that follows kept in
+``definitions/`` (:mod:`..definition`). Each start makes a batch of the
+samples there are if no batch is listed. The file
 source reads ``files.csv`` again when it changes
 (:class:`~ess.apps.folder.ArrivingFiles`).
 
@@ -37,6 +38,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import numpy as np
+import pandas as pd
 import scipp as sc
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field
@@ -51,18 +53,10 @@ from ess.spec import (
     WorkflowSpec,
 )
 
-from .. import (
-    BatchManager,
-    CorrectedFiles,
-    FileInfo,
-    FolderDefinitions,
-    Row,
-    Source,
-    Words,
-)
-from ..auto import every
+from .. import BatchManager, CorrectedFiles, FileInfo, FolderDefinitions, Source
+from ..table import KEY, cell_of
 from . import Pages, create_app, plots
-from .api import STATIC
+from .api import STATIC, every
 from .page import Shown
 
 
@@ -184,35 +178,32 @@ BINDINGS = [StagedFunction(DEMO, _reduce)]
 """The bindings of the demo's workspace, for the command."""
 
 
-def pair_by_sample(files: Sequence[FileInfo]) -> list[Row]:
-    """A row per sample run, with the transmission run of the same sample."""
+def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
+    """
+    A row per sample run, keyed by its run, with the transmission run of the
+    same sample; the run and the name of the sample as notes.
+    """
     transmission = {
-        f.metadata.get('sample'): f.ref
+        f.metadata.get('sample'): cell_of(f.ref)
         for f in files
         if f.metadata.get('role') == 'transmission'
     }
-    rows = []
-    for f in files:
-        if f.metadata.get('role') != 'sample':
-            continue
-        name = f.metadata.get('sample')
-        values = {'sample': f.ref}
-        if name in transmission:
-            values['transmission'] = transmission[name]
-        run = f.metadata['run']
-        rows.append(Row(str(run), values, info={'name': str(name)}, index=int(run)))
-    return rows
+    rows = [
+        {
+            KEY: str(f.metadata['run']),
+            'run': f.metadata['run'],
+            'name': str(f.metadata.get('sample')),
+            'sample': cell_of(f.ref),
+            'transmission': transmission.get(f.metadata.get('sample')),
+        }
+        for f in files
+        if f.metadata.get('role') == 'sample'
+    ]
+    columns = [KEY, 'run', 'name', 'sample', 'transmission']
+    return pd.DataFrame.from_records(rows, columns=columns).set_index(KEY)
 
 
-SOURCES = {
-    'sample-runs': Source(
-        pair_by_sample,
-        fills=('sample', 'transmission'),
-        words=Words(one='sample', many='samples'),
-        row_name='name',
-        index_title='Run',
-    )
-}
+SOURCES = {'sample-runs': Source(pair_by_sample, fills=('sample', 'transmission'))}
 """The sources of the demo's batches, by name."""
 STAGED = frozenset({DEMO.name})
 """The specs whose batches run through a stage: the demo's."""
@@ -316,8 +307,8 @@ def build(
     """
     The application on what :func:`open_demo` returns, with a step of Follow
     every ``interval`` seconds while a batch follows. If no batch is listed,
-    a batch of all samples is made, so also at a start after a person removed
-    the last one.
+    a batch of the samples there are is made, with a column of thickness, so
+    also at a start after a person removed the last one.
     """
     manager = BatchManager(
         client, sources=SOURCES, definitions=definitions, staged=STAGED
@@ -327,7 +318,7 @@ def build(
             DEMO.name,
             title='Samples',
             source='sample-runs',
-            columns=('sample', 'transmission', 'thickness'),
+            choose=lambda given: given.assign(thickness=None),
         )
 
     def draw(shown: Sequence[Shown]) -> dict[str, object]:

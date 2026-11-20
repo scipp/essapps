@@ -11,20 +11,18 @@ for application developers is ``packages/essapps/docs/batch.md``.
 from .corrections import CorrectedFiles
 from .definition import DefinitionStore, FolderDefinitions, Header, NotKept
 from .manager import BatchManager
-from .reduction import Batch, FileInfo, RowSource, Source, Words, file_infos
+from .reduction import Batch
+from .source import FileInfo, RowSource, Source, rows_of
 from .state import (
     RowState,
     earlier_settings,
     left_to_reduce,
     not_reduced,
     ready,
-    refused_again,
-    status_texts,
+    to_reduce,
 )
-from .table import EMPTY, Row, RowTable, Scope
 
 __all__ = [
-    'EMPTY',
     'Batch',
     'BatchManager',
     'CorrectedFiles',
@@ -33,18 +31,13 @@ __all__ = [
     'FolderDefinitions',
     'Header',
     'NotKept',
-    'Row',
     'RowSource',
     'RowState',
-    'RowTable',
-    'Scope',
     'Source',
-    'Words',
     'earlier_settings',
-    'file_infos',
     'left_to_reduce',
     'not_reduced',
     'ready',
-    'refused_again',
-    'status_texts',
+    'rows_of',
+    'to_reduce',
 ]

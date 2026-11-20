@@ -77,7 +77,7 @@ The first-release application ([requirements, Goal](../../requirements/README.md
 Git hooks live in `$GIT_DIR/hooks`, outside the tracked tree ([gitrepository-layout L170-L178][hooks]), so a clone does not carry them.
 CI services read their configuration from a tracked file, show the status of each run to anyone with access, and leave re-running failed jobs to a person, with the same commit as the first run ([GitHub docs][rerun]).
 The automatic reduction matches the last point: a failed record counts as a row reduced, and running it again is the user's decision ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)).
-It differs on the second: why a row did not run lives in the `Automatic` object, which an operator in another process cannot read ([#24][i24]).
+It differs on the second: why a row did not run lives in the `Step` that the caller of a step keeps, which an operator in another process cannot read ([#24][i24]).
 A source of rows is an application's function ([#33][i33]), so such a server lists the batches and the states of their rows, not how the rows are made.
 
 **Where git's model does not apply.**

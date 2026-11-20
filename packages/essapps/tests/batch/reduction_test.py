@@ -2,32 +2,31 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """A batch on a real in-process workspace with fake workflows."""
 
-from collections.abc import Iterator, Sequence
-from dataclasses import replace
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 from pydantic import BaseModel, Field, StrictInt
 
 from ess.apps import Client, Status, SubmitError, Workspace, file, local
 from ess.apps.batch import (
-    EMPTY,
     Batch,
     CorrectedFiles,
-    FileInfo,
-    Row,
-    RowTable,
-    Scope,
+    FolderDefinitions,
+    NotKept,
     earlier_settings,
     left_to_reduce,
     ready,
+    rows_of,
 )
+from ess.apps.batch.definition import settings_key, template_of
+from ess.apps.batch.table import as_request, cell_of
 from ess.apps.log import Log
-from ess.apps.testing import CountingClient, FakeFiles, FakeStore, StagedFunction
+from ess.apps.testing import CountingClient, FakeStore, StagedFunction
 from ess.spec import (
     FileRef,
-    OutputRef,
     RunFile,
     SampleRunFile,
     WorkflowSpec,
@@ -37,14 +36,15 @@ from ess.spec import (
 from .toys import (
     COLUMNS,
     FIND,
-    PAIRS,
     PLAIN,
     SAMPLES,
     STAGED,
     Gate,
     Measure,
     Outputs,
-    pair,
+    Refusing,
+    edit,
+    rows,
 )
 
 PLAIN_V2 = PLAIN.model_copy(update={'version': 2})
@@ -52,17 +52,46 @@ PLAIN_V2 = PLAIN.model_copy(update={'version': 2})
 
 class StrictParams(BaseModel):
     sample: RunFile
-    count: StrictInt = 1
-    number: int = 1
     counts: list[StrictInt] = Field(default_factory=lambda: [1])
+    numbers: list[int] = Field(default_factory=lambda: [1])
 
 
 STRICT = WorkflowSpec(
     name='strict',
     version=1,
     title='Strict',
-    description='A toy whose parameters tell 1, 1.0 and True apart.',
+    description='A toy whose parameters tell 1 and True apart.',
     params=StrictParams,
+    outputs=Outputs,
+)
+
+
+class OptionalParams(BaseModel):
+    sample: RunFile
+    transmission: RunFile | None
+
+
+OPTIONAL = WorkflowSpec(
+    name='optional',
+    version=1,
+    title='Optional',
+    description='A toy whose transmission run may be none, with no default.',
+    params=OptionalParams,
+    outputs=Outputs,
+)
+
+
+class NumberParams(BaseModel):
+    bins: StrictInt
+    scale: float
+
+
+NUMBERS = WorkflowSpec(
+    name='numbers',
+    version=1,
+    title='Numbers',
+    description='A toy whose parameters are all numbers, one a strict int.',
+    params=NumberParams,
     outputs=Outputs,
 )
 
@@ -71,28 +100,92 @@ OTHER_SETTINGS: dict[str, Any] = {'binning': {'bins': 3}}
 
 
 @pytest.fixture
-def scanned(batch: Batch, sample: Measure) -> Batch:
+def measured(batch: Batch, client: Client, sample: Measure) -> Batch:
+    """``batch`` with the rows of samples 1 and 2, and settings."""
     sample(1, 'water')
     sample(2, 'sds')
-    batch.scan()
+    batch.put(rows(client))
     batch.settings = SETTINGS
     return batch
 
 
-def test_a_scan_makes_rows_from_the_files(scanned: Batch) -> None:
-    assert [row.key for row in scanned.rows] == ['1', '2']
-    assert scanned.rows['1'].info == {'name': 'water'}
+def test_the_table_put_is_the_table_and_its_parameter_columns_the_blanks(
+    batch: Batch, client: Client, sample: Measure
+) -> None:
+    sample(1, 'water')
+    table = rows(client).assign(note='a')
+
+    batch.put(table)
+
+    frame = batch.frame()
+    assert list(frame.index) == ['1']
+    assert list(frame.columns) == ['run', 'name', *COLUMNS, 'note']
+    assert (frame.loc['1', 'name'], frame.loc['1', 'sample']) == ('water', 'uuid:run-1')
+    assert batch.columns == batch.template().blanks == COLUMNS
+    assert batch.settings_fields == ('binning', 'offset')
+
+
+def test_a_table_that_is_refused_changes_nothing(measured: Batch) -> None:
+    before = measured.frame()
+    twice = pd.concat([before, before.loc[['1']]])
+    thick = before.assign(thickness='thick')
+
+    for frame in (twice, thick):
+        with pytest.raises(ValueError, match="'1'"):
+            measured.put(frame)
+
+    pd.testing.assert_frame_equal(measured.frame(), before)
+
+
+def test_a_table_put_again_writes_nothing(
+    client: Client, sample: Measure, refusing: Refusing
+) -> None:
+    sample(1, 'water')
+    batch = Batch(client, PLAIN, label='s', rows=rows(client), definitions=refusing)
+    batch.put(batch.frame().assign(thickness=2.0))
+    refusing.part = 'rows'
+
+    batch.put(batch.frame())
+
+    with pytest.raises(NotKept):
+        batch.put(batch.frame().assign(thickness=3.0))
+    assert batch.frame().loc['1', 'thickness'] == 2.0
+
+
+def test_a_setting_made_a_column_loses_its_value_and_a_column_dropped_has_none(
+    client: Client, sample: Measure, definitions: FolderDefinitions
+) -> None:
+    sample(1, 'water')
+    settings = {**SETTINGS, 'offset': {'value': 1.0}}
+    batch = Batch(
+        client,
+        PLAIN,
+        label='s',
+        rows=rows(client),
+        settings=settings,
+        definitions=definitions,
+    )
+
+    batch.put(batch.frame().assign(offset=None))
+    as_column = (batch.settings, batch.columns)
+    batch.put(batch.frame().drop(columns=['offset', 'thickness']))
+
+    assert as_column == (SETTINGS, (*COLUMNS, 'offset'))
+    assert (batch.settings, batch.columns) == (SETTINGS, ('sample', 'transmission'))
+    kept = definitions.load(settings_key('s'), template_of)
+    assert kept == batch.template()
+    assert kept.blanks == ('sample', 'transmission')
 
 
 def test_rows_are_reduced_and_found_by_their_key(
-    scanned: Batch, client: Client
+    measured: Batch, client: Client
 ) -> None:
-    records = scanned.reduce(['1', '2'])
+    records = measured.reduce(['1', '2'])
     client.wait(records)
 
     assert client.output(records['2'], 'total') == 2.0
     assert {r.member for r in client.records(label='scan')} == {'1', '2'}
-    state = scanned.state()
+    state = measured.state()
     assert state['1'].record == records['1']
     assert state['1'].status is Status.COMPLETED
 
@@ -101,16 +194,9 @@ def test_the_state_of_chosen_rows_asks_the_status_of_their_records_only(
     client: Client, sample: Measure
 ) -> None:
     counting = CountingClient(client)
-    batch = Batch(
-        counting,  # type: ignore[arg-type]
-        STAGED,
-        columns=COLUMNS,
-        label='scan',
-        source=PAIRS,
-    )
     sample(1, 'water')
     sample(2, 'sds')
-    batch.scan()
+    batch = Batch(counting, STAGED, label='scan', rows=rows(client))  # type: ignore[arg-type]
     client.wait(batch.reduce(['1']))
     counting.reads.clear()
 
@@ -118,106 +204,12 @@ def test_the_state_of_chosen_rows_asks_the_status_of_their_records_only(
     assert counting.reads['status'] == 0
 
 
-def test_a_scan_returns_the_files_its_source_got(
-    client: Client, sample: Measure
-) -> None:
-    got: list[FileInfo] = []
-
-    def source(files: Sequence[FileInfo]) -> list[Row]:
-        got.extend(files)
-        return pair(files)
-
-    batch = Batch(
-        client, PLAIN, columns=COLUMNS, label='scan', source=replace(PAIRS, rows=source)
-    )
-    run = sample(1, 'water')
-
-    assert batch.scan() == got
-    assert run in [f.ref for f in got]
-
-
-def test_a_batch_whose_source_fills_a_column_it_lacks_is_refused(
-    client: Client,
-) -> None:
-    with pytest.raises(ValueError, match=r"scan: the source fills \['transmission'\]"):
-        Batch(client, PLAIN, columns=('sample',), label='scan', source=PAIRS)
-
-
-def test_a_scope_set_on_a_batch_changes_its_rows_without_a_scan(
-    scanned: Batch, sample: Measure
-) -> None:
-    sample(3, 'oil')
-
-    scanned.scope = Scope(start=2)
-    assert [row.key for row in scanned.rows] == ['2']
-    scanned.scope = Scope()
-    assert [row.key for row in scanned.rows] == ['1', '2']
-
-
-def test_a_table_assigned_keeps_the_scope_of_the_batch(scanned: Batch) -> None:
-    scanned.scope = Scope(start=2)
-
-    scanned.rows = RowTable(scan=scanned.rows.scan)
-
-    assert scanned.scope == Scope(start=2)
-    assert [row.key for row in scanned.rows] == ['2']
-
-
-def test_a_file_listed_late_lands_in_the_batch_by_its_index(
-    client: Client, sample: Measure
-) -> None:
-    batch = Batch(
-        client,
-        PLAIN,
-        columns=COLUMNS,
-        label='scan',
-        source=PAIRS,
-        scope=Scope(start=2, stop=10),
-    )
-    sample(5, 'water')
-    batch.scan()
-
-    sample(3, 'oil')
-    sample(12, 'sds')
-    batch.scan()
-
-    assert sorted(row.key for row in batch.rows) == ['3', '5']
-
-
-def test_a_row_in_the_scope_takes_a_partner_measured_before_it(
-    client: Client, fake: FakeFiles, sample: Measure
-) -> None:
-    before = fake.measure(1, 1.0, role='transmission', sample='water')
-    sample(5, 'water', partner=False)
-    batch = Batch(
-        client, PLAIN, columns=COLUMNS, label='scan', source=PAIRS, scope=Scope(start=5)
-    )
-
-    batch.scan()
-
-    assert [row.key for row in batch.rows] == ['5']
-    assert batch.rows['5'].values['transmission'] == before
-
-
-def test_columns_must_be_parameters(client: Client) -> None:
-    with pytest.raises(KeyError, match='nope'):
-        Batch(client, STAGED, columns=('nope',), label='scan')
-
-
-def test_a_batch_without_a_source_cannot_scan(client: Client) -> None:
-    with pytest.raises(ValueError, match='no source'):
-        Batch(client, STAGED, columns=COLUMNS, label='scan').scan()
-
-
 def test_a_batch_starts_with_a_copy_of_the_settings_given(
     client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
     given = {'binning': {'bins': 3}}
-    batch = Batch(
-        client, PLAIN, columns=COLUMNS, label='s', source=PAIRS, settings=given
-    )
-    batch.scan()
+    batch = Batch(client, PLAIN, label='s', rows=rows(client), settings=given)
     given['binning']['bins'] = 4
 
     records = batch.reduce(['1'])
@@ -225,39 +217,33 @@ def test_a_batch_starts_with_a_copy_of_the_settings_given(
     assert records['1'].request.params['binning'] == {'bins': 3}
 
 
-def test_settings_that_name_a_column_are_refused(scanned: Batch) -> None:
+def test_settings_at_a_column_are_refused_and_given_at_making_left_out(
+    measured: Batch,
+) -> None:
     with pytest.raises(ValueError, match='thickness'):
-        scanned.settings = {**SETTINGS, 'thickness': 4.0}
-    with pytest.raises(ValueError, match='thickness'):
-        Batch(
-            scanned.client,
-            PLAIN,
-            columns=COLUMNS,
-            label='s',
-            settings={'thickness': 4.0},
-        )
+        measured.settings = {**SETTINGS, 'thickness': 4.0}
+    made = Batch(
+        measured.client,
+        PLAIN,
+        label='s',
+        rows=measured.frame(),
+        settings={**SETTINGS, 'thickness': 4.0},
+    )
 
-    assert scanned.settings == SETTINGS
+    assert measured.settings == made.settings == SETTINGS
 
 
 def test_a_reduction_compares_no_row_and_a_state_resolves_the_settings_once(
     client: Client, sample: Measure
 ) -> None:
     counting = CountingClient(client)
-    batch = Batch(
-        counting,  # type: ignore[arg-type]
-        PLAIN,
-        columns=COLUMNS,
-        label='scan',
-        source=PAIRS,
-    )
     sample(1, 'water')
-    batch.scan()
+    batch = Batch(counting, PLAIN, label='scan', rows=rows(client))  # type: ignore[arg-type]
     client.wait(batch.reduce(['1']))
     batch.settings = OTHER_SETTINGS
 
     client.wait(batch.reduce(['1']))
-    batch.results()
+    batch.state(compare=False)
     reduced = counting.reads['resolve']
     batch.state()
 
@@ -265,46 +251,82 @@ def test_a_reduction_compares_no_row_and_a_state_resolves_the_settings_once(
 
 
 def test_the_settings_change_only_by_an_assignment_of_all_of_them(
-    scanned: Batch,
+    measured: Batch,
 ) -> None:
     given = {'binning': {'bins': 3}}
-    scanned.settings = given
+    measured.settings = given
     given['binning']['bins'] = 4
-    scanned.settings['binning']['bins'] = 5
+    measured.settings['binning']['bins'] = 5
+    measured.template().params['binning']['bins'] = 7
 
     with pytest.raises(TypeError):
-        scanned.settings['binning'] = {'bins': 6}  # type: ignore[index]
-    assert scanned.settings == {'binning': {'bins': 3}}
+        measured.settings['binning'] = {'bins': 6}  # type: ignore[index]
+    assert measured.settings == {'binning': {'bins': 3}}
 
 
-def test_an_empty_cell_of_a_column_with_a_default_gets_it(
-    scanned: Batch, client: Client
-) -> None:
-    records = scanned.reduce(['1'])
+def test_an_empty_cell_of_a_column_with_a_default_gets_it(measured: Batch) -> None:
+    records = measured.reduce(['1'])
 
     assert records['1'].request.params['thickness'] == 1.0
 
 
+def test_an_empty_cell_of_a_parameter_that_takes_none_gives_none(
+    files: CorrectedFiles, sample: Measure
+) -> None:
+    sample(1, 'water')
+    bind = [function_binding(OPTIONAL, lambda _: Outputs(total=1.0))]
+    with local(proposal='p1', files=files, bind=bind) as client:
+        table = pd.DataFrame({'sample': ['run:1'], 'transmission': [None]}, index=['1'])
+        batch = Batch(client, OPTIONAL, label='s', rows=table)
+
+        assert batch.state()['1'].text == 'ready'
+        records = batch.reduce(['1'])
+
+    assert records['1'].request.params['transmission'] is None
+
+
+def test_a_whole_number_is_an_int_in_the_request_where_all_columns_are_numbers(
+    files: CorrectedFiles,
+) -> None:
+    bind = [function_binding(NUMBERS, lambda _: Outputs(total=1.0))]
+    with local(proposal='p1', files=files, bind=bind) as client:
+        table = pd.DataFrame({'bins': [3], 'scale': [0.5]}, index=['1'])
+        records = Batch(client, NUMBERS, label='s', rows=table).reduce(['1'])
+
+    assert type(records['1'].request.params['bins']) is int
+
+
+def test_a_list_in_a_cell_changes_only_by_put(strict: Client) -> None:
+    table = pd.DataFrame({'sample': ['run:1'], 'counts': [[1]]}, index=['a'])
+    batch = Batch(strict, STRICT, label='s', rows=table)
+    table.loc['a', 'counts'].append(2)
+    frame = batch.frame()
+    frame.loc['a', 'counts'].append(3)
+
+    assert batch.frame().loc['a', 'counts'] == [1]
+    batch.put(frame)
+    frame.loc['a', 'counts'].append(4)
+    assert batch.frame().loc['a', 'counts'] == [1, 3]
+
+
 def test_a_person_can_add_a_row_by_run_number(
-    batch: Batch, client: Client, sample: Measure
+    measured: Batch, client: Client, sample: Measure
 ) -> None:
     sample(7, 'water')
-    batch.rows = batch.rows.add(
-        Row('mine', {'sample': file(run=7), 'transmission': file(run=1007)})
-    )
+    edit(measured, 'mine', sample='run:7', transmission='run:1007')
 
-    records = batch.reduce(['mine'])
+    records = measured.reduce(['mine'])
     client.wait(records)
 
     assert client.output(records['mine'], 'total') == 7.0
 
 
 def test_a_row_without_a_partner_is_skipped_by_ready_and_refused_when_picked(
-    batch: Batch, sample: Measure
+    batch: Batch, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
     sample(2, 'sds', partner=False)
-    batch.scan()
+    batch.put(rows(client))
 
     assert ready(batch.state()) == ['1']
     with pytest.raises(SubmitError) as error:
@@ -313,14 +335,12 @@ def test_a_row_without_a_partner_is_skipped_by_ready_and_refused_when_picked(
 
 
 def test_every_refused_row_is_named_and_none_is_submitted(
-    scanned: Batch, client: Client
+    measured: Batch, client: Client
 ) -> None:
-    scanned.rows = scanned.rows.edit('1', {'thickness': -1.0}).edit(
-        '2', {'thickness': -2.0}
-    )
+    measured.put(measured.frame().assign(thickness=[-1.0, -2.0]))
 
     with pytest.raises(SubmitError) as error:
-        scanned.reduce(['1', '2'])
+        measured.reduce(['1', '2'])
 
     assert [(e.entry, e.loc) for e in error.value.errors] == [
         ('1', ('thickness',)),
@@ -335,10 +355,7 @@ def test_a_reason_about_the_settings_is_named_once_without_a_key(
 ) -> None:
     sample(1, 'water')
     sample(2, 'sds')
-    batch = Batch(
-        client, spec, columns=COLUMNS, label='s', source=PAIRS, staged=spec is STAGED
-    )
-    batch.scan()
+    batch = Batch(client, spec, label='s', rows=rows(client), staged=spec is STAGED)
 
     batch.settings = {'binning': {'bins': 0}}
 
@@ -353,8 +370,7 @@ def test_a_binding_without_stages_works_with_staged_off(
     client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    batch = Batch(client, PLAIN, columns=COLUMNS, label='plain', source=PAIRS)
-    batch.scan()
+    batch = Batch(client, PLAIN, label='plain', rows=rows(client))
 
     records = batch.reduce(['1'])
 
@@ -362,186 +378,201 @@ def test_a_binding_without_stages_works_with_staged_off(
 
 
 def test_the_stage_is_reused_while_the_settings_stay(
-    scanned: Batch, client: Client, staged_binding: StagedFunction
+    measured: Batch, client: Client, staged_binding: StagedFunction
 ) -> None:
-    client.wait(scanned.reduce(['1']))
-    client.wait(scanned.reduce(['2']))
+    client.wait(measured.reduce(['1']))
+    client.wait(measured.reduce(['2']))
 
     assert len(staged_binding.staged) == 1
 
 
 def test_changed_settings_open_a_new_stage(
-    scanned: Batch, client: Client, staged_binding: StagedFunction
+    measured: Batch, client: Client, staged_binding: StagedFunction
 ) -> None:
-    client.wait(scanned.reduce(['1']))
-    scanned.settings = OTHER_SETTINGS
-    client.wait(scanned.reduce(['1']))
+    client.wait(measured.reduce(['1']))
+    measured.settings = OTHER_SETTINGS
+    client.wait(measured.reduce(['1']))
 
     assert len(staged_binding.staged) == 2
 
 
 def test_a_row_refused_leaves_the_stage_alone(
-    scanned: Batch, client: Client, staged_binding: StagedFunction
+    measured: Batch, client: Client, staged_binding: StagedFunction
 ) -> None:
-    client.wait(scanned.reduce(['1']))
-    scanned.rows = scanned.rows.edit('2', {'thickness': -1.0})
+    client.wait(measured.reduce(['1']))
+    edit(measured, '2', thickness=-1.0)
     with pytest.raises(SubmitError):
-        scanned.reduce(['2'])
-    scanned.rows = scanned.rows.reset('2')
+        measured.reduce(['2'])
+    edit(measured, '2', thickness=pd.NA)
 
-    client.wait(scanned.reduce(['2']))
+    client.wait(measured.reduce(['2']))
 
     assert len(staged_binding.staged) == 1
 
 
 def test_a_stage_that_failed_is_replaced_within_one_reduce(
-    scanned: Batch, client: Client, staged_binding: StagedFunction
+    measured: Batch, client: Client, staged_binding: StagedFunction
 ) -> None:
     staged_binding.fail_next = True
-    assert client.wait(scanned.reduce(['1'])) == {'1': 'failed'}
+    assert client.wait(measured.reduce(['1'])) == {'1': 'failed'}
 
-    records = scanned.reduce(['1', '2'])
+    records = measured.reduce(['1', '2'])
 
     assert client.wait(records) == {'1': 'completed', '2': 'completed'}
 
 
-def test_a_rerun_becomes_the_result(scanned: Batch, client: Client) -> None:
-    scanned.settings = OTHER_SETTINGS
-    client.wait(scanned.reduce(['1']))
-    scanned.settings = SETTINGS
-    again = scanned.reduce(['1'])
+def test_a_rerun_becomes_the_result(measured: Batch, client: Client) -> None:
+    measured.settings = OTHER_SETTINGS
+    client.wait(measured.reduce(['1']))
+    measured.settings = SETTINGS
+    again = measured.reduce(['1'])
     client.wait(again)
 
-    assert scanned.state()['1'].record == again['1']
+    assert measured.state()['1'].record == again['1']
 
 
 def test_an_edited_row_is_outdated_and_left_to_do(
-    scanned: Batch, client: Client
+    measured: Batch, client: Client
 ) -> None:
-    client.wait(scanned.reduce(['1', '2']))
-    scanned.rows = scanned.rows.edit('1', {'thickness': 2.0})
+    client.wait(measured.reduce(['1', '2']))
+    edit(measured, '1', thickness=2.0)
 
-    assert left_to_reduce(scanned.state(), COLUMNS) == ['1']
+    assert left_to_reduce(measured.state()) == ['1']
 
 
 def test_changed_settings_make_every_result_outdated(
-    scanned: Batch, client: Client
+    measured: Batch, client: Client
 ) -> None:
-    client.wait(scanned.reduce(['1', '2']))
+    client.wait(measured.reduce(['1', '2']))
 
-    scanned.settings = OTHER_SETTINGS
+    measured.settings = OTHER_SETTINGS
 
-    states = scanned.state()
+    states = measured.state()
     assert [states[k].outdated for k in ('1', '2')] == [True, True]
-    assert earlier_settings(states, COLUMNS) == ['1', '2']
-    assert left_to_reduce(states, COLUMNS) == []
+    assert earlier_settings(states) == ['1', '2']
+    assert left_to_reduce(states) == []
 
 
 def test_changed_names_the_cell_and_the_setting_that_differ(
-    scanned: Batch, client: Client
+    measured: Batch, client: Client
 ) -> None:
-    client.wait(scanned.reduce(['1', '2']))
-    scanned.rows = scanned.rows.edit('1', {'thickness': 2.0})
+    client.wait(measured.reduce(['1', '2']))
+    edit(measured, '1', thickness=2.0)
 
-    scanned.settings = OTHER_SETTINGS
+    measured.settings = OTHER_SETTINGS
 
-    changed = {k: s.changed for k, s in scanned.state().items()}
+    changed = {k: s.changed for k, s in measured.state().items()}
 
     assert changed == {'1': {'binning', 'thickness'}, '2': {'binning'}}
 
 
-def test_a_second_batch_on_the_label_reads_the_same_changed(
-    scanned: Batch, client: Client
+def test_a_column_made_with_the_value_of_its_setting_changes_no_row(
+    measured: Batch, client: Client
 ) -> None:
-    client.wait(scanned.reduce(['1', '2']))
-    second = Batch(client, STAGED, columns=COLUMNS, label='scan', source=PAIRS)
-    second.scan()
-    for batch in (scanned, second):
-        batch.rows = batch.rows.edit('1', {'thickness': 2.0})
+    measured.settings = {**SETTINGS, 'offset': {'value': 0.5}}
+    client.wait(measured.reduce(['1', '2']))
+    offset = pd.Series([{'value': 0.5}] * 2, index=measured.frame().index, dtype=object)
+
+    measured.put(measured.frame().assign(offset=offset))
+
+    assert {k: s.changed for k, s in measured.state().items()} == {
+        '1': set(),
+        '2': set(),
+    }
+
+
+def test_a_second_batch_on_the_label_reads_the_same_changed(
+    measured: Batch, client: Client
+) -> None:
+    client.wait(measured.reduce(['1', '2']))
+    second = Batch(client, STAGED, label='scan', rows=measured.frame())
+    for batch in (measured, second):
+        edit(batch, '1', thickness=2.0)
 
     def changed(batch: Batch) -> dict[str, frozenset[str]]:
         return {k: s.changed for k, s in batch.state().items()}
 
-    assert changed(second) == changed(scanned) == {'1': {'thickness'}, '2': set()}
+    assert changed(second) == changed(measured) == {'1': {'thickness'}, '2': set()}
 
 
 def test_a_default_written_out_and_a_file_by_name_do_not_change_a_row(
-    scanned: Batch, client: Client
+    measured: Batch, client: Client
 ) -> None:
-    scanned.settings = {}
-    client.wait(scanned.reduce(['1', '2']))
-    by_name = {'sample': file(run=1), 'transmission': file(run=1001), 'thickness': 1.0}
-    scanned.rows = scanned.rows.edit('1', by_name)
-    scanned.settings = {'binning': {'bins': 2}, 'offset': None}
+    measured.settings = {}
+    client.wait(measured.reduce(['1', '2']))
+    edit(measured, '1', sample='run:1', transmission='run:1001', thickness=1.0)
+    measured.settings = {'binning': {'bins': 2}, 'offset': None}
 
-    states = scanned.state()
+    states = measured.state()
 
     assert {k: s.changed for k, s in states.items()} == {'1': set(), '2': set()}
-    assert left_to_reduce(states, COLUMNS) == []
+    assert left_to_reduce(states) == []
 
 
-def test_a_cleared_cell_is_one_problem(scanned: Batch, client: Client) -> None:
-    client.wait(scanned.reduce(['1']))
-    scanned.rows = scanned.rows.edit('1', {'sample': EMPTY})
+def test_a_cell_emptied_is_one_problem(measured: Batch, client: Client) -> None:
+    client.wait(measured.reduce(['1']))
+    edit(measured, '1', sample=pd.NA)
 
-    state = scanned.state()['1']
+    state = measured.state()['1']
 
     assert [(e.loc, e.msg) for e in state.problems] == [(('sample',), 'empty')]
 
 
 def test_a_file_named_before_it_is_measured_is_a_problem_until_it_is(
-    scanned: Batch, sample: Measure
+    measured: Batch, sample: Measure
 ) -> None:
-    row = Row('9', {'sample': file(run=9), 'transmission': file(run=1001)})
-    scanned.rows = scanned.rows.add(row)
+    edit(measured, '9', sample='run:9', transmission='run:1001')
 
-    before = scanned.state()
+    before = measured.state()
     sample(9, 'oil')
-    after = scanned.state()
+    after = measured.state()
 
     assert [e.loc for e in before['9'].problems] == [('sample',)]
     assert ready(before) == ['1', '2']
-    assert scanned.results()['9'].problems == ()
-    assert (after['9'].problems, after['9'].text) == ((), 'not reduced')
+    assert measured.state(compare=False)['9'].problems == ()
+    assert (after['9'].problems, after['9'].text) == ((), 'ready')
+
+
+def _request_of(batch: Batch, key: str) -> Any:
+    """The request of the row of ``key``, its empty thickness given."""
+    cells = batch.frame()[['sample', 'transmission']].to_dict('index')[key]
+    params = {**as_request(batch.spec.params, cells), 'thickness': 1.0}
+    return batch.template().fill(params=params)
 
 
 def test_an_older_record_that_ends_later_is_not_the_result(
-    scanned: Batch, client: Client, gate: Gate
+    measured: Batch, client: Client, gate: Gate
 ) -> None:
     gate.close()
-    older = scanned.reduce(['1'])['1']
-    scanned.state()
-    cells = {**scanned.rows['1'].values, 'thickness': 1.0}
-    request = scanned.template().fill(params=cells)
-    newer = client.submit(request, label='scan', member='1')
+    older = measured.reduce(['1'])['1']
+    measured.state()
+    newer = client.submit(_request_of(measured, '1'), label='scan', member='1')
     client.cancel([older])
 
-    assert scanned.state()['1'].record == newer
+    assert measured.state()['1'].record == newer
     gate.open()
     client.wait(newer)
 
 
 def test_a_record_under_another_label_is_not_a_rows_result(
-    scanned: Batch, client: Client
+    measured: Batch, client: Client
 ) -> None:
-    mine = scanned.reduce(['1'])['1']
+    mine = measured.reduce(['1'])['1']
     client.wait(mine)
-    scanned.state()
-    cells = {**scanned.rows['1'].values, 'thickness': 1.0}
-    request = scanned.template().fill(params=cells)
+    measured.state()
 
-    client.compute(request, label='other', member='1')
+    client.compute(_request_of(measured, '1'), label='other', member='1')
 
-    assert scanned.state()['1'].record == mine
+    assert measured.state()['1'].record == mine
 
 
 def test_a_cell_refused_is_a_problem_of_its_row_and_not_changed(
-    scanned: Batch, client: Client
+    measured: Batch, client: Client
 ) -> None:
-    client.wait(scanned.reduce(['1', '2']))
-    scanned.rows = scanned.rows.edit('1', {'sample': file(run=99)})
+    client.wait(measured.reduce(['1', '2']))
+    edit(measured, '1', sample='run:99')
 
-    state = scanned.state()['1']
+    state = measured.state()['1']
 
     assert [e.loc for e in state.problems] == [('sample',)]
     assert state.changed == frozenset()
@@ -593,8 +624,7 @@ def bound_twice(
     sample(1, 'water')
     sample(2, 'sds')
     with local(proposal='p1', files=changing, bind=bind) as client:  # type: ignore[arg-type]
-        old = Batch(client, PLAIN, columns=COLUMNS, label='s', source=PAIRS)
-        old.scan()
+        old = Batch(client, PLAIN, label='s', rows=rows(client))
         client.wait(old.reduce(['1', '2']))
         yield client, changing
 
@@ -605,8 +635,7 @@ def test_settings_refused_are_raised_naming_no_row(
 ) -> None:
     client, _ = bound_twice
     sample(3, 'oil')
-    batch = Batch(client, spec, columns=COLUMNS, label='s', source=PAIRS)
-    batch.scan()
+    batch = Batch(client, spec, label='s', rows=rows(client))
 
     batch.settings = {'binning': {'bins': 0}}
 
@@ -614,16 +643,15 @@ def test_settings_refused_are_raised_naming_no_row(
         batch.state()
 
     assert [(e.entry, e.loc[0]) for e in error.value.errors] == [(None, 'binning')]
-    assert batch.results()['3'].problems == ()
+    assert batch.state(compare=False)['3'].problems == ()
 
 
 def test_a_changed_setting_is_found_when_no_result_s_files_are_known(
     bound_twice: tuple[Client, Changing],
 ) -> None:
     client, changing = bound_twice
-    batch = Batch(client, PLAIN, columns=COLUMNS, label='s', source=PAIRS)
-    batch.scan()
-    changing.names |= dict.fromkeys(r.values['sample'] for r in batch.rows)
+    batch = Batch(client, PLAIN, label='s', rows=rows(client))
+    changing.names |= dict.fromkeys(FileRef(file=f) for f in batch.frame()['sample'])
     batch.settings = OTHER_SETTINGS
 
     changed = {k: s.changed for k, s in batch.state().items()}
@@ -644,57 +672,52 @@ def problems(batch: Batch) -> dict[str, list[tuple[str | int, ...]]]:
     return {k: [e.loc for e in s.problems] for k, s in batch.state().items()}
 
 
-def strict_batch(client: Client, rows: dict[str, dict[str, Any]]) -> Batch:
-    batch = Batch(
-        client, STRICT, columns=('sample', 'count', 'number', 'counts'), label='s'
+def strict_batch(client: Client, cells: dict[str, dict[str, Any]]) -> Batch:
+    table = pd.DataFrame.from_dict(
+        {
+            k: {'sample': 'run:1', 'counts': None, 'numbers': None, **c}
+            for k, c in cells.items()
+        },
+        orient='index',
     )
-    batch.rows = batch.rows.rescan(
-        [Row(k, {'sample': file(run=1), **cells}) for k, cells in rows.items()]
-    )
-    return batch
+    return Batch(client, STRICT, label='s', rows=table)
 
 
-@pytest.mark.parametrize(
-    ('column', 'kept', 'given'),
-    [
-        ('count', 1, True),
-        ('count', 1, 1.0),
-        ('counts', [1], [True]),
-        ('counts', (1,), (True,)),
-    ],
-)
 def test_a_value_kept_is_not_taken_for_an_equal_one_of_another_type(
-    strict: Client, column: str, kept: Any, given: Any
+    strict: Client,
 ) -> None:
-    cached = strict_batch(strict, {'a': {column: kept}})
+    cached = strict_batch(strict, {'a': {'counts': [1]}})
     problems(cached)
 
-    cached.rows = cached.rows.edit('a', {column: given})
+    frame = cached.frame()
+    frame.at['a', 'counts'] = [True]
+    cached.put(frame)
 
     assert problems(cached)['a'] != []
-    assert problems(cached) == problems(strict_batch(strict, {'a': {column: given}}))
+    assert problems(cached) == problems(strict_batch(strict, {'a': {'counts': [True]}}))
 
 
 def test_a_value_kept_at_one_column_is_not_taken_at_another(strict: Client) -> None:
-    rows = {'a': {'number': True}, 'b': {'count': True}}
-    cached = strict_batch(strict, {'a': rows['a']})
+    cells = {'a': {'numbers': [True]}, 'b': {'counts': [True]}}
+    cached = strict_batch(strict, {'a': cells['a']})
     problems(cached)
 
-    cached.rows = cached.rows.add(Row('b', {'sample': file(run=1), **rows['b']}))
+    frame = cached.frame()
+    frame.loc['b'] = pd.Series({'sample': 'run:1', 'counts': [True]}, dtype=object)
+    cached.put(frame)
 
-    assert problems(cached) == problems(strict_batch(strict, rows))
-    assert problems(cached) == {'a': [], 'b': [('count',)]}
+    assert problems(cached) == problems(strict_batch(strict, cells))
+    assert problems(cached) == {'a': [], 'b': [('counts', 0)]}
 
 
-def test_a_batch_reads_a_file_by_run_as_a_new_one_does_after_a_scan(
+def test_a_batch_reads_a_file_by_run_as_a_new_one_does_after_a_put(
     bound_twice: tuple[Client, Changing],
 ) -> None:
     client, changing = bound_twice
 
     def by_run() -> Batch:
-        batch = Batch(client, PLAIN, columns=COLUMNS, label='s', source=PAIRS)
-        batch.scan()
-        batch.rows = batch.rows.edit('1', {'sample': file(run=1)})
+        batch = Batch(client, PLAIN, label='s', rows=rows(client))
+        edit(batch, '1', sample='run:1')
         return batch
 
     def changed(batch: Batch) -> frozenset[str]:
@@ -704,31 +727,30 @@ def test_a_batch_reads_a_file_by_run_as_a_new_one_does_after_a_scan(
     before = changed(batch)
     changing.names[file(run=1)] = FileRef(file='pid:20.500.12269/water')
     kept = changed(batch)
-    batch.scan()
+    batch.put(batch.frame())
 
     assert (before, kept) == (set(), set())
     assert changed(batch) == changed(by_run()) == {'sample'}
 
 
 def test_a_row_naming_its_file_by_run_is_changed_only_once_its_cell_is(
-    scanned: Batch, client: Client
+    measured: Batch, client: Client
 ) -> None:
-    scanned.rows = scanned.rows.edit('1', {'sample': file(run=1)})
-    client.wait(scanned.reduce(['1']))
+    edit(measured, '1', sample='run:1')
+    client.wait(measured.reduce(['1']))
 
-    first, again = (scanned.state()['1'].changed for _ in range(2))
-    scanned.rows = scanned.rows.edit('1', {'sample': file(run=2)})
+    first, again = (measured.state()['1'].changed for _ in range(2))
+    edit(measured, '1', sample='run:2')
 
     assert (first, again) == (set(), set())
-    assert scanned.state()['1'].changed == {'sample'}
+    assert measured.state()['1'].changed == {'sample'}
 
 
 def test_a_result_of_another_spec_version_is_the_rows_result_and_outdated(
     bound_twice: tuple[Client, Changing],
 ) -> None:
     client, _ = bound_twice
-    new = Batch(client, PLAIN_V2, columns=COLUMNS, label='s', source=PAIRS)
-    new.scan()
+    new = Batch(client, PLAIN_V2, label='s', rows=rows(client))
     client.wait(new.reduce(['2']))
 
     states = new.state()
@@ -736,7 +758,7 @@ def test_a_result_of_another_spec_version_is_the_rows_result_and_outdated(
     assert [r.member for r in client.records(label='s')] == ['1', '2', '2']
     assert states['1'].record == client.records(label='s')[0]
     assert (states['1'].spec_changed, states['2'].spec_changed) == (True, False)
-    assert left_to_reduce(states, COLUMNS) == ['1']
+    assert left_to_reduce(states) == ['1']
 
 
 class Redefined(BaseModel):
@@ -761,8 +783,7 @@ def test_a_result_of_a_spec_of_the_same_version_but_another_definition_is_outdat
         log=Log(kept),
     )
     with Client(reduced, submitter='anna', on_close=reduced.close) as client:
-        old = Batch(client, PLAIN, columns=COLUMNS, label='s', source=PAIRS)
-        old.scan()
+        old = Batch(client, PLAIN, label='s', rows=rows(client))
         client.wait(old.reduce(['1']))
     again = Workspace(
         proposal='p1',
@@ -771,8 +792,7 @@ def test_a_result_of_a_spec_of_the_same_version_but_another_definition_is_outdat
         log=Log(kept),
     )
     with Client(again, submitter='anna', on_close=again.close) as client:
-        new = Batch(client, redefined, columns=COLUMNS, label='s', source=PAIRS)
-        new.scan()
+        new = Batch(client, redefined, label='s', rows=rows(client))
 
         state = new.state()['1']
 
@@ -784,16 +804,9 @@ def test_the_state_of_chosen_rows_reads_only_the_records_that_changed(
     client: Client, sample: Measure
 ) -> None:
     counting = CountingClient(client)
-    batch = Batch(
-        counting,  # type: ignore[arg-type]
-        STAGED,
-        columns=COLUMNS,
-        label='scan',
-        source=PAIRS,
-    )
     sample(1, 'water')
     sample(2, 'sds')
-    batch.scan()
+    batch = Batch(counting, STAGED, label='scan', rows=rows(client))  # type: ignore[arg-type]
     client.wait(batch.reduce(['1', '2']))
     batch.state()
     counting.reads.clear()
@@ -804,36 +817,36 @@ def test_the_state_of_chosen_rows_reads_only_the_records_that_changed(
 
 
 def test_a_row_running_is_not_submitted_twice(
-    scanned: Batch, client: Client, gate: Gate
+    measured: Batch, client: Client, gate: Gate
 ) -> None:
     gate.close()
-    first = scanned.reduce(ready(scanned.state()))
+    first = measured.reduce(ready(measured.state()))
 
-    assert ready(scanned.state()) == []
+    assert ready(measured.state()) == []
     gate.open()
     client.wait(first)
 
 
 def test_cancel_reaches_what_was_just_submitted(
-    scanned: Batch, client: Client, gate: Gate
+    measured: Batch, client: Client, gate: Gate
 ) -> None:
     gate.close()
-    records = scanned.reduce(['1', '2'])
+    records = measured.reduce(['1', '2'])
 
-    scanned.cancel()
+    measured.cancel()
     gate.open()
 
     assert client.wait(records) == {'1': 'cancelled', '2': 'cancelled'}
-    assert left_to_reduce(scanned.state(), COLUMNS) == ['1', '2']
+    assert left_to_reduce(measured.state()) == ['1', '2']
 
 
 def test_cancel_leaves_other_rows_when_given_keys(
-    scanned: Batch, client: Client, gate: Gate
+    measured: Batch, client: Client, gate: Gate
 ) -> None:
     gate.close()
-    records = scanned.reduce(['1', '2'])
+    records = measured.reduce(['1', '2'])
 
-    scanned.cancel(['1'])
+    measured.cancel(['1'])
 
     assert client.status(records['1']) is Status.CANCELLED
     assert client.status(records['2']) is Status.PENDING
@@ -845,12 +858,8 @@ def chain(client: Client, sample: Measure) -> tuple[Batch, Batch]:
     """A batch that finds an offset per sample, and one that reads it per row."""
     sample(1, 'water')
     sample(2, 'sds')
-    find = Batch(client, FIND, columns=('sample',), label='find', source=SAMPLES)
-    reduce = Batch(
-        client, PLAIN, columns=(*COLUMNS, 'offset'), label='reduce', source=PAIRS
-    )
-    find.scan()
-    reduce.scan()
+    find = Batch(client, FIND, label='find', rows=rows_of(client, SAMPLES))
+    reduce = Batch(client, PLAIN, label='reduce', rows=rows(client).assign(offset=None))
     return find, reduce
 
 
@@ -860,14 +869,13 @@ def test_a_row_can_read_the_record_of_its_row_in_another_batch(
     find, reduce = chain
     found = find.reduce(['1', '2'])  # the second batch need not wait
     for key, record in found.items():
-        reduce.rows = reduce.rows.edit(key, {'offset': record.ref('offset')})
+        edit(reduce, key, offset=cell_of(record.ref('offset')))
 
     records = reduce.reduce(['1', '2'])
     client.wait(records)
 
     assert client.output(records['2'], 'total') == 4.0
-    reduce.scan()
-    assert reduce.rows['2'].values['offset'] == found['2'].ref('offset')
+    assert records['2'].request.params['offset'] == found['2'].ref('offset')
 
 
 def test_a_cell_reading_a_failed_record_stops_only_its_row(
@@ -877,7 +885,7 @@ def test_a_cell_reading_a_failed_record_stops_only_its_row(
     reduce.settings = {'binning': {'bins': 1}}
     failed = reduce.reduce(['1'])
     client.wait(failed)
-    reduce.rows = reduce.rows.edit('2', {'offset': failed['1'].ref('total')})
+    edit(reduce, '2', offset=cell_of(failed['1'].ref('total')))
 
     assert ready(reduce.state()) == ['1']
 
@@ -891,7 +899,7 @@ def test_a_cell_reading_a_cancelled_record_stops_only_its_row(
     reduce.cancel(['1'])
     gate.open()
     client.wait(cancelled)
-    reduce.rows = reduce.rows.edit('2', {'offset': cancelled['1'].ref('total')})
+    edit(reduce, '2', offset=cell_of(cancelled['1'].ref('total')))
 
     states = reduce.state()
 
@@ -906,10 +914,8 @@ def test_an_unknown_record_in_a_cell_touches_only_its_row(
     reduce.settings = {'binning': {'bins': 1}}
     failed = reduce.reduce(['1'])
     client.wait(failed)
-    reduce.rows = reduce.rows.edit(
-        '1', {'offset': OutputRef(record='nope', output='x')}
-    )
-    reduce.rows = reduce.rows.edit('2', {'offset': failed['1'].ref('total')})
+    edit(reduce, '1', offset='nope.x')
+    edit(reduce, '2', offset=cell_of(failed['1'].ref('total')))
 
     whole, chosen = reduce.state()['2'], reduce.state(['2'])['2']
 
@@ -918,14 +924,13 @@ def test_an_unknown_record_in_a_cell_touches_only_its_row(
 
 
 def test_a_record_of_another_submitter_is_a_rows_result(
-    scanned: Batch, client: Client, other: Client
+    measured: Batch, client: Client, other: Client
 ) -> None:
-    client.wait(scanned.reduce(['1']))
-    row = {k: scanned.rows['1'].values[k] for k in ('sample', 'transmission')}
+    client.wait(measured.reduce(['1']))
 
-    theirs = other.compute(STAGED, params={**row, **SETTINGS}, label='scan', member='1')
+    theirs = other.compute(_request_of(measured, '1'), label='scan', member='1')
 
-    assert scanned.state()['1'].record == theirs
+    assert measured.state()['1'].record == theirs
 
 
 def test_persisting_goes_with_the_batch(files: CorrectedFiles, sample: Measure) -> None:
@@ -933,10 +938,7 @@ def test_persisting_goes_with_the_batch(files: CorrectedFiles, sample: Measure) 
     binding = function_binding(PLAIN, lambda _: Outputs(total=1.0))
     sample(1, 'water')
     with local(proposal='p1', files=files, bind=[binding], store=store) as client:
-        batch = Batch(
-            client, PLAIN, columns=COLUMNS, label='s', source=PAIRS, persist=True
-        )
-        batch.scan()
+        batch = Batch(client, PLAIN, label='s', rows=rows(client), persist=True)
         records = batch.reduce(['1'])
         client.wait(records)
 
@@ -944,26 +946,26 @@ def test_persisting_goes_with_the_batch(files: CorrectedFiles, sample: Measure) 
 
 
 def test_a_row_running_is_refused_when_picked(
-    scanned: Batch, client: Client, gate: Gate
+    measured: Batch, client: Client, gate: Gate
 ) -> None:
     gate.close()
-    first = scanned.reduce(['1'])
+    first = measured.reduce(['1'])
 
     with pytest.raises(SubmitError, match='1: still running'):
-        scanned.reduce(['1'])
+        measured.reduce(['1'])
     gate.open()
     client.wait(first)
     assert len(client.records(label='scan')) == 1
 
 
 def test_cancel_reaches_a_row_removed_since(
-    scanned: Batch, client: Client, gate: Gate
+    measured: Batch, client: Client, gate: Gate
 ) -> None:
     gate.close()
-    records = scanned.reduce(['1'])
-    scanned.rows = scanned.rows.remove('1')
+    records = measured.reduce(['1'])
+    measured.put(measured.frame().drop('1'))
 
-    scanned.cancel()
+    measured.cancel()
     gate.open()
 
     assert client.wait(records) == {'1': 'cancelled'}

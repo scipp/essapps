@@ -1,26 +1,23 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""The rows of a batch as a table of text, and a table reduced."""
+"""A batch run as a command: a table reduced, and the table of files."""
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pydantic
 import pytest
 
 from ess.apps import Client, SubmitError, Template, file
-from ess.apps.batch import Batch, Row
+from ess.apps.batch import Batch
 from ess.apps.batch.frames import (
     RESULT,
-    batch_table,
     described,
-    read_table,
+    reduce_batch,
     reduce_table,
-    rows_of,
-    table_of,
-    write_table,
+    with_results,
 )
+from ess.apps.batch.table import KEY
 from ess.apps.folder import open_folder
 from ess.apps.log import Finished, Log, Started
 from ess.apps.testing import CountingClient, StagedFunction
@@ -30,8 +27,9 @@ from . import toys
 from .conftest import BAD
 
 
-def frame(**columns: list[str]) -> pd.DataFrame:
-    return pd.DataFrame(columns, dtype=str)
+def rows(**columns: list[object]) -> pd.DataFrame:
+    """A table of the rows ``a`` and ``b``."""
+    return pd.DataFrame(columns, index=pd.Index(['a', 'b'], name=KEY))
 
 
 def totals(client: Client, label: str) -> dict[str, float]:
@@ -42,127 +40,33 @@ def totals(client: Client, label: str) -> dict[str, float]:
     }
 
 
-def test_the_key_of_a_row_is_its_first_column_as_text() -> None:
-    table = frame(name=['water'], sample=['60339'])
-
-    (row,) = rows_of(table, toys.Params, ['sample'])
-
-    assert row.key == 'water'
-
-
-def test_a_column_of_the_batch_is_read_as_a_cell_and_named_files_are_files() -> None:
-    table = frame(name=['a'], sample=['60339'], thickness=['2'])
-
-    (row,) = rows_of(table, toys.Params, ['sample', 'thickness'])
-
-    assert row.values == {'sample': file(run=60339), 'thickness': 2}
-
-
-def test_an_empty_cell_is_left_out_of_the_values() -> None:
-    table = frame(name=['a'], sample=['60339'], thickness=[''])
-
-    (row,) = rows_of(table, toys.Params, ['sample', 'thickness'])
-
-    assert row.values == {'sample': file(run=60339)}
-
-
-def test_a_column_that_is_not_of_the_batch_is_info() -> None:
-    table = frame(name=['a'], sample=['60339'], note=['dry'], gap=[''])
-
-    (row,) = rows_of(table, toys.Params, ['sample'])
-
-    assert row.info == {'name': 'a', 'note': 'dry'}
-
-
-def test_the_key_column_can_be_a_column_of_the_batch() -> None:
-    table = frame(sample=['60339'])
-
-    (row,) = rows_of(table, toys.Params, ['sample'])
-
-    assert (row.key, row.values) == ('60339', {'sample': file(run=60339)})
-
-
-def test_a_column_of_the_batch_that_the_table_lacks_is_refused_by_name() -> None:
-    table = frame(name=['a'], sample=['60339'])
-
-    with pytest.raises(ValueError, match='transmission'):
-        rows_of(table, toys.Params, ['sample', 'transmission'])
-
-
-def test_rows_written_as_a_table_are_read_back() -> None:
-    rows = [
-        Row('a', {'sample': file(run=1), 'thickness': 2.5}, {'name': 'water'}),
-        Row('b', {'sample': file(run=2)}, {'name': 'sds'}),
-    ]
-
-    read = rows_of(table_of(rows), toys.Params, ['sample', 'thickness'])
-
-    assert [(r.key, r.values) for r in read] == [(r.key, r.values) for r in rows]
-    assert [
-        {n: r.info[n] for n in w.info} for r, w in zip(read, rows, strict=True)
-    ] == [r.info for r in rows]
-
-
-def test_a_column_named_as_a_parameter_that_is_not_a_blank_is_refused() -> None:
-    table = frame(name=['a'], sample=['1'], thickness=['3'])
-
-    with pytest.raises(ValueError, match='thickness'):
-        rows_of(table, toys.Params, ['sample'])
-
-
-def test_info_named_as_a_value_column_is_refused() -> None:
-    row = Row('a', {'thickness': 2}, {'thickness': 'thick'})
-
-    with pytest.raises(ValueError, match='thickness'):
-        table_of([row])
-
-
-def test_info_named_as_a_value_of_another_row_is_refused() -> None:
-    rows = [Row('a', {'thickness': 2}), Row('b', {}, {'thickness': 'thick'})]
-
-    with pytest.raises(ValueError, match='thickness'):
-        table_of(rows)
-
-
-def test_a_table_of_rows_names_its_key_column_key() -> None:
-    table = table_of([Row('a', {'thickness': 2}, {'name': 'x'})])
-
-    assert list(table.columns) == ['key', 'thickness', 'name']
-
-
-@pytest.mark.parametrize('suffix', ['.csv', '.tsv', '.xlsx'])
-def test_a_table_written_is_read_back_with_every_cell_as_text(
-    tmp_path: Path, suffix: str
-) -> None:
-    table = frame(name=['a', 'b'], sample=['60339', ''], thickness=['1.0', '2'])
-    path = tmp_path / f'table{suffix}'
-
-    write_table(table, path)
-
-    pd.testing.assert_frame_equal(read_table(path), table)
-
-
-@pytest.mark.parametrize('function', [read_table, lambda p: write_table(frame(), p)])
-def test_a_table_of_an_unknown_suffix_is_refused(
-    tmp_path: Path, function: object
-) -> None:
-    with pytest.raises(ValueError, match='table'):
-        function(tmp_path / 'table.json')  # type: ignore[operator]
-
-
-def test_a_batch_table_has_the_rows_of_keys_in_order_with_their_results(
+def test_a_table_with_results_has_what_came_of_each_row(
     batch: Batch, client: Client, sample: toys.Measure
 ) -> None:
     sample(1, 'water')
     sample(2, 'sds')
-    batch.scan()
+    batch.put(toys.rows(client))
     client.wait(batch.reduce(['1']))
 
-    table = batch_table(batch, batch.state(), ['2', '1'])
+    table = with_results(client, batch.state(), batch.frame())
 
-    assert list(table.columns) == ['key', *toys.COLUMNS, 'name', *RESULT]
-    assert list(table['key']) == ['2', '1']
-    assert list(table['status']) == ['not reduced', 'completed']
+    assert list(table.columns) == ['run', 'name', *toys.COLUMNS, *RESULT]
+    assert list(table['status']) == ['done', 'ready']
+    assert table.loc['2', 'record'] == ''
+
+
+def test_reduce_batch_reduces_the_rows_of_keys_and_returns_them_in_order(
+    batch: Batch, client: Client, sample: toys.Measure
+) -> None:
+    for run in (1, 2, 3):
+        sample(run, f's{run}')
+    batch.put(toys.rows(client))
+
+    table = reduce_batch(batch, ['3', '1'])
+
+    assert list(table.index) == ['3', '1']
+    assert list(table['status']) == ['done', 'done']
+    assert batch.state(['2'])['2'].record is None
 
 
 # Reducing a table
@@ -174,21 +78,25 @@ def test_each_row_completes_as_a_record_labelled_and_keyed_by_the_row(
     result = reduce_table(folder_client, template, table, label='scan')
 
     records = folder_client.records(label='scan')
-    assert list(result['status']) == ['completed', 'completed']
+    assert list(result['status']) == ['done', 'done']
     assert list(result['record']) == [
         {r.member: r.id for r in records}[k] for k in 'ab'
     ]
+    pd.testing.assert_frame_equal(
+        result.drop(columns=list(RESULT)),
+        table,
+        check_dtype=False,
+        check_index_type=False,
+    )
     assert totals(folder_client, 'scan') == {'a': 0.5, 'b': 1.0}
 
 
 def test_an_empty_cell_of_a_column_with_a_default_takes_the_default(
     folder_client: Client, table: pd.DataFrame
 ) -> None:
-    template = Template(
-        toys.PLAIN, params={}, blanks=['sample', 'transmission', 'thickness']
-    )
+    template = Template(toys.PLAIN)
 
-    reduce_table(folder_client, template, table.assign(thickness=['', '4']), label='s')
+    reduce_table(folder_client, template, table.assign(thickness=[None, 4]), label='s')
 
     assert totals(folder_client, 's') == {'a': 1.0, 'b': 0.5}
 
@@ -196,19 +104,19 @@ def test_an_empty_cell_of_a_column_with_a_default_takes_the_default(
 def test_a_row_that_fails_says_why_and_the_other_rows_complete(
     folder_client: Client, template: Template
 ) -> None:
-    table = frame(name=['a', 'b'], sample=['1', str(BAD)], transmission=['1001'] * 2)
+    table = rows(sample=['run:1', f'run:{BAD}'], transmission=['run:1001'] * 2)
 
     result = reduce_table(folder_client, template, table, label='scan')
 
-    assert list(result['status']) == ['completed', 'failed']
-    assert 'refused' in result.loc[1, 'failure']
-    assert result.loc[0, 'failure'] == ''
+    assert list(result['status']) == ['done', 'failed']
+    assert 'refused' in result.loc['b', 'failure']
+    assert result.loc['a', 'failure'] == ''
 
 
 def test_a_row_that_cannot_run_is_refused_by_key_and_nothing_is_submitted(
     folder_client: Client, template: Template
 ) -> None:
-    table = frame(name=['a', 'b'], sample=['1', '2'], transmission=['1001', ''])
+    table = rows(sample=['run:1', 'run:2'], transmission=['run:1001', None])
 
     with pytest.raises(SubmitError, match='b'):
         reduce_table(folder_client, template, table, label='scan')
@@ -216,15 +124,12 @@ def test_a_row_that_cannot_run_is_refused_by_key_and_nothing_is_submitted(
     assert folder_client.records(label='scan') == []
 
 
-def test_a_column_of_a_fixed_parameter_is_refused_and_nothing_is_submitted(
+def test_a_column_named_as_a_setting_of_the_template_is_a_blank(
     folder_client: Client, template: Template, table: pd.DataFrame
 ) -> None:
-    with pytest.raises(ValueError, match='thickness'):
-        reduce_table(
-            folder_client, template, table.assign(thickness=['3', '4']), label='scan'
-        )
+    reduce_table(folder_client, template, table.assign(thickness=[4, 4]), label='s')
 
-    assert folder_client.records(label='scan') == []
+    assert totals(folder_client, 's') == {'a': 0.25, 'b': 0.5}
 
 
 def test_a_blank_named_as_a_result_column_is_refused(
@@ -244,13 +149,13 @@ def test_a_blank_named_as_a_result_column_is_refused(
     bind = [function_binding(spec, lambda p: Outputs(total=p.status))]
 
     with open_folder(folder, bind) as client, pytest.raises(ValueError, match='status'):
-        reduce_table(client, template, frame(key=['a'], status=['1']), label='scan')
+        reduce_table(client, template, rows(status=[1.0, 2.0]), label='scan')
 
 
 def test_remaining_leaves_out_the_rows_completed(
     folder_client: Client, template: Template
 ) -> None:
-    table = frame(name=['a', 'b'], sample=['1', str(BAD)], transmission=['1001'] * 2)
+    table = rows(sample=['run:1', f'run:{BAD}'], transmission=['run:1001'] * 2)
     reduce_table(folder_client, template, table, label='scan')
 
     reduce_table(folder_client, template, table, label='scan', remaining=True)
@@ -313,7 +218,7 @@ def test_rows_staged_run_through_a_stage(
 
     result = reduce_table(folder_client, template, table, label='scan', staged=True)
 
-    assert list(result['status']) == ['completed', 'completed']
+    assert list(result['status']) == ['done', 'done']
     assert folder_staged.staged != []
 
 
@@ -353,65 +258,12 @@ def test_rows_pending_after_a_restart_finish_and_are_not_submitted_again(
             second, template, done, label='scan', persist=True, remaining=True
         )
 
-        assert list(result['status']) == ['completed', 'completed']
+        assert list(result['status']) == ['done', 'done']
         assert list(result['record']) == list(done['record'])
         assert len(second.records(label='scan')) == 2
 
 
-# A table made in a notebook
-
-
-def test_a_table_of_numbers_and_gaps_is_read_as_one_of_text() -> None:
-    typed = pd.DataFrame(
-        {
-            'name': ['a', 'b', 'c'],
-            'sample': [1.0, 2.0, None],  # pandas holds numbers next to a gap as floats
-            'thickness': [0.5, float('nan'), 2],
-        }
-    )
-    text = frame(
-        name=['a', 'b', 'c'], sample=['1', '2', ''], thickness=['0.5', '', '2']
-    )
-    columns = ['sample', 'thickness']
-
-    assert rows_of(typed, toys.Params, columns) == rows_of(text, toys.Params, columns)
-
-
-def test_a_key_column_of_whole_floats_gives_keys_of_whole_numbers() -> None:
-    table = pd.DataFrame({'run': [1.0, 2.0], 'note': ['a', None]})
-
-    rows = rows_of(table, toys.Params, [])
-
-    assert [row.key for row in rows] == ['1', '2']
-
-
-def test_a_cell_of_info_that_holds_an_array_or_a_list_becomes_text() -> None:
-    table = pd.DataFrame(
-        {'name': ['a', 'b'], 'extent': [np.arange(2), [1, 2]]},
-    )
-
-    rows = rows_of(table, toys.Params, [])
-
-    assert [row.info['extent'] for row in rows] == ['[0 1]', '[1, 2]']
-
-
-def test_a_cell_may_hold_a_value_that_is_not_text() -> None:
-    table = pd.DataFrame({'name': ['a'], 'binning': [{'bins': 3}], 'offset': [None]})
-
-    (row,) = rows_of(table, toys.Params, ['binning', 'offset'])
-
-    assert row.values == {'binning': {'bins': 3}}
-
-
-def test_a_table_of_numbers_made_in_a_notebook_is_reduced(
-    folder_client: Client, template: Template
-) -> None:
-    table = pd.DataFrame({'sample': [1, 2], 'transmission': [1001, 1002]})
-
-    result = reduce_table(folder_client, template, table, label='typed')
-
-    assert list(result['status']) == ['completed', 'completed']
-    assert [r.member for r in folder_client.records(label='typed')] == ['1', '2']
+# The table of files
 
 
 @pytest.fixture

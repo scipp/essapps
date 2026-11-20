@@ -10,9 +10,11 @@ The batch page of LoKI's I(Q) on a workspace folder, as a web page
 says the run, role and sample of each file, as ``essapps-batch files`` writes
 it. A row is a sample run, paired with the transmission run of its sample
 (:func:`~.batch.pair_by_sample`). A start at which no batch is listed makes
-a batch of all sample runs. The batches with their edits and settings,
-the batch that follows, and the corrections of runs are kept in
-``FOLDER/definitions/``, the results in ``FOLDER/store/``.
+a batch from the source of sample runs, with the rows that have both runs
+then; Follow adds the others once their transmission run is listed. The
+batches with their tables and settings, the batch that follows, and the
+corrections of runs are kept in ``FOLDER/definitions/``, the results in
+``FOLDER/store/``.
 
 The settings name the masks by a record, so reduce the detector and the masks
 first, on the same folder, while no page runs on it. With the run of the can
@@ -40,11 +42,13 @@ the folder, as ``files.csv`` lists it. The page lists the detector and the
 masks as batches without a source, of one row each, and so makes no batch of
 I(Q) in such a folder: a person makes it with "New batch".
 
-The switch "Follow" of the page of a batch makes it the batch that follows:
-a step every ``SECONDS`` (5) reduces each row once both its runs are listed.
-A row with a result waits for the person's "Reduce", also when one of its runs
-changes, such as a newer transmission run of its sample. The batch that
-follows is kept, so a restart resumes.
+"List runs again" lists the files again, for the Runs view and the choices of
+a cell, and changes no row. The switch "Follow" of the page of a batch made from
+the source makes it the batch that follows: a step every ``SECONDS`` (5) adds
+each sample run that arrived since, once both its runs are listed, and reduces
+it. A step never changes a row that the table has: a newer transmission run of
+its sample does not replace the one in its cell. A row with a result waits for
+the person's "Reduce". The batch that follows is kept, so a restart resumes.
 """
 
 from __future__ import annotations
@@ -81,7 +85,8 @@ def open_loki(directory: Path) -> tuple[Client, CorrectedFiles, FolderDefinition
     corrections kept in the folder, and the folder's definitions. The file
     source reads ``files.csv`` again when it is replaced
     (:class:`~ess.apps.folder.ArrivingFiles`), so a run registered while the
-    page runs shows at the next "Rescan runs".
+    page runs is listed at the next "List runs again", and its row is added by a
+    step of Follow.
     """
     definitions = FolderDefinitions(directory)
     files = CorrectedFiles(ArrivingFiles(directory), definitions=definitions)
@@ -114,9 +119,10 @@ def build(
     """
     The pages of the batches of ``client``, kept in ``definitions``, with a
     step of Follow every ``interval`` seconds while a batch follows. A new
-    batch of I(Q) starts with ``settings``. If no batch is listed, a batch of
-    all sample runs is made, so also at a start after a person removed the
-    last one; it follows from the start if ``follow``. A folder with only the
+    batch of I(Q) starts with ``settings``. If no batch is listed, a batch is
+    made from the source of sample runs, with the rows it has filled now, so also
+    at a start after a person removed the last one; it follows from the start
+    if ``follow``. A folder with only the
     detector and the masks that the command reduced has batches, so a person
     makes the batch of I(Q) with "New batch".
     """

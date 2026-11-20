@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""The rules of a table of rows, on plain values; the table as a frame."""
+"""The table of a batch as a frame: dtypes, cells, and rows.json."""
 
-import re
 from collections.abc import Callable
-from dataclasses import replace
 from datetime import UTC, date, datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
@@ -14,8 +13,6 @@ import pytest
 from pydantic import BaseModel
 from pydantic_core import from_json, to_json
 
-from ess.apps import SubmitError
-from ess.apps.batch import EMPTY, Row, RowTable, Scope
 from ess.apps.batch.table import (
     KEY,
     as_request,
@@ -23,383 +20,14 @@ from ess.apps.batch.table import (
     data_of,
     dtypes,
     frame_of,
+    read_table,
     typed,
+    write_table,
 )
 from ess.spec import FileRef, OutputRef, Referenced, RunFile
 from ess.spec.request_types import request_model
 
 from . import toys
-
-
-def cells(table: RowTable) -> dict[str, dict[str, object]]:
-    return {row.key: dict(row.values) for row in table}
-
-
-@pytest.fixture
-def table() -> RowTable:
-    return RowTable().rescan([Row('a', {'x': 1, 'y': 2}), Row('b', {'x': 3})])
-
-
-def test_a_rescan_replaces_what_the_last_scan_gave(table: RowTable) -> None:
-    rescanned = table.rescan([Row('a', {'x': 9}), Row('c', {'x': 5})])
-
-    assert cells(rescanned) == {'a': {'x': 9}, 'c': {'x': 5}}
-
-
-def test_a_rescan_keeps_an_edit_and_takes_the_other_cells(table: RowTable) -> None:
-    edited = table.edit('a', {'x': 10})
-
-    assert cells(edited.rescan([Row('a', {'x': 99, 'y': 98})])) == {
-        'a': {'x': 10, 'y': 98}
-    }
-
-
-def test_a_rescan_keeps_a_cell_that_was_cleared(table: RowTable) -> None:
-    cleared = table.edit('a', {'y': EMPTY})
-
-    assert cells(cleared) == {'a': {'x': 1}, 'b': {'x': 3}}
-    assert cells(cleared.rescan([Row('a', {'y': 7})])) == {'a': {}}
-
-
-def test_a_rescan_keeps_a_row_removed_out(table: RowTable) -> None:
-    removed = table.remove('b')
-
-    assert 'b' not in removed.rescan([Row('a'), Row('b', {'x': 3})])
-
-
-def test_a_rescan_keeps_a_row_added_and_it_wins_over_the_scan(table: RowTable) -> None:
-    added = table.add(Row('c', {'x': 7}))
-
-    rescanned = added.rescan([Row('c', {'x': 0})])
-
-    assert cells(rescanned) == {'c': {'x': 7}}
-
-
-def test_an_edited_row_the_scan_no_longer_gives_goes_and_comes_back(
-    table: RowTable,
-) -> None:
-    edited = table.edit('b', {'x': 30})
-
-    gone = edited.rescan([Row('a')])
-    back = gone.rescan([Row('a'), Row('b', {'x': 3})])
-
-    assert 'b' not in gone
-    assert back['b'].values == {'x': 30}
-
-
-def test_rows_keep_the_order_of_the_scan_then_those_added(table: RowTable) -> None:
-    added = table.add(Row('z')).rescan([Row('c'), Row('a')])
-
-    assert [row.key for row in added] == ['c', 'a', 'z']
-
-
-def test_reset_forgets_the_edits_and_the_removal(table: RowTable) -> None:
-    edited = table.edit('a', {'x': 10}).remove('b')
-
-    reset = edited.reset('a').reset('b')
-
-    assert cells(reset) == cells(table)
-
-
-def test_reset_of_a_cell_forgets_its_edit_alone(table: RowTable) -> None:
-    edited = table.edit('a', {'x': 10, 'y': 20})
-
-    reset = edited.reset('a', 'x')
-
-    assert reset['a'].values == {'x': 1, 'y': 20}
-    assert reset.reset('a', 'y').edits == {}
-
-
-def test_an_edit_of_several_rows_gives_the_table_of_one_edit_after_another(
-    table: RowTable,
-) -> None:
-    table = table.add(Row('c', {'x': 7})).edit('a', {'y': 5})
-
-    many = table.edit_each(['a', 'b', 'c'], {'x': EMPTY, 'z': 1})
-
-    one_by_one = table
-    for key in 'abc':
-        one_by_one = one_by_one.edit(key, {'x': EMPTY, 'z': 1})
-    assert many == one_by_one
-    assert cells(many) == {
-        'a': {'y': 5, 'z': 1},
-        'b': {'z': 1},
-        'c': {'z': 1},
-    }
-
-
-def test_an_edit_of_several_rows_with_one_missing_edits_none(
-    table: RowTable,
-) -> None:
-    with pytest.raises(KeyError, match='nope'):
-        table.edit_each(['a', 'nope'], {'x': 1})
-
-    assert table.edits == {}
-
-
-def test_a_removal_of_several_rows_gives_the_table_of_one_after_another(
-    table: RowTable,
-) -> None:
-    table = table.add(Row('c', {'x': 7})).edit('a', {'x': 10}).edit('c', {'x': 8})
-
-    many = table.remove_each(['a', 'c'])
-
-    assert many == table.remove('a').remove('c')
-    assert cells(many) == {'b': {'x': 3}}
-    assert (many.removed, many.edits) == ({'a'}, {})
-    assert cells(many.reset_each(['a'])) == {'a': {'x': 1, 'y': 2}, 'b': {'x': 3}}
-
-
-def test_a_removal_of_several_rows_with_one_missing_removes_none(
-    table: RowTable,
-) -> None:
-    with pytest.raises(KeyError, match='nope'):
-        table.remove_each(['a', 'nope'])
-
-    assert table.removed == frozenset()
-
-
-def test_a_reset_of_several_rows_forgets_what_one_after_another_does(
-    table: RowTable,
-) -> None:
-    edited = table.edit('a', {'x': 10, 'y': 20}).edit('b', {'x': 30}).remove('b')
-
-    assert edited.reset_each(['a', 'b']) == edited.reset('a').reset('b')
-    assert cells(edited.reset_each(['a', 'b'])) == cells(table)
-    assert edited.reset_each(['a', 'b'], 'x') == edited.reset('a', 'x').reset('b', 'x')
-    assert edited.reset_each(['a', 'b'], 'x').edits == {'a': {'y': 20}}
-    assert edited.reset_each(['a', 'b'], 'x').removed == {'b'}
-    assert edited.reset_each([]) == edited
-
-
-def test_removing_a_row_added_forgets_it(table: RowTable) -> None:
-    added = table.add(Row('c', {'x': 7})).edit('c', {'x': 8})
-
-    removed = added.remove('c').add(Row('c', {'x': 1}))
-
-    assert removed['c'].values == {'x': 1}
-
-
-def test_a_key_given_twice_by_a_scan_is_refused_by_key() -> None:
-    with pytest.raises(SubmitError) as error:
-        RowTable().rescan([Row('a'), Row('a')])
-
-    assert [e.entry for e in error.value.errors] == ['a']
-
-
-def test_adding_a_key_that_is_there_is_refused(table: RowTable) -> None:
-    with pytest.raises(SubmitError, match='a: a row has this key'):
-        table.add(Row('a'))
-
-
-def test_editing_a_row_that_is_not_there_raises(table: RowTable) -> None:
-    with pytest.raises(KeyError):
-        table.edit('nope', {'x': 1})
-
-
-def test_a_key_must_be_a_string() -> None:
-    with pytest.raises(TypeError, match='60395'):
-        Row(60395)  # type: ignore[arg-type]
-
-
-def test_a_table_is_not_changed_by_an_operation(table: RowTable) -> None:
-    table.edit('a', {'x': 10}).remove('b').add(Row('c'))
-
-    assert cells(table) == {'a': {'x': 1, 'y': 2}, 'b': {'x': 3}}
-
-
-def test_removing_a_row_added_over_a_scanned_one_removes_both(table: RowTable) -> None:
-    added = table.rescan([Row('c', {'x': 2})]).add(Row('d')).remove('c')
-    over = RowTable().add(Row('a', {'x': 1})).rescan([Row('a', {'x': 2})])
-
-    assert 'c' not in added
-    assert 'a' not in over.remove('a')
-
-
-def test_a_row_added_takes_no_edit_left_from_a_row_gone() -> None:
-    orphan = RowTable().rescan([Row('a', {'x': 1})]).edit('a', {'x': 9}).rescan([])
-
-    assert orphan.add(Row('a', {'x': 5, 'y': 7}))['a'].values == {'x': 5, 'y': 7}
-
-
-def test_a_row_put_takes_no_edit_left_from_a_row_gone() -> None:
-    orphan = RowTable().rescan([Row('a', {'x': 1})]).edit('a', {'x': 9}).rescan([])
-
-    put = orphan.put([Row('a', {'x': 5, 'y': 7})], columns=('x', 'y'))
-
-    assert put['a'].values == {'x': 5, 'y': 7}
-    assert put.edits == {}
-
-
-def test_a_row_added_stands_where_the_added_rows_do_when_the_scan_gives_its_key(
-    table: RowTable,
-) -> None:
-    added = table.add(Row('c', {'x': 7}, {'name': 'by hand'}))
-
-    rescanned = added.rescan([Row('c', {'x': 0}, {'name': 'scan'}), Row('a', {'x': 1})])
-
-    assert [row.key for row in rescanned] == ['a', 'c']
-    assert rescanned['c'].info == {'name': 'by hand'}
-    assert len(rescanned) == 2
-
-
-def test_a_row_given_with_empty_has_that_cell_empty() -> None:
-    t = RowTable().rescan([Row('a', {'x': EMPTY, 'y': 1})]).add(Row('b', {'x': EMPTY}))
-
-    assert t['a'].values == {'y': 1}
-    assert t['b'].values == {}
-
-
-def test_rows_put_show_their_cells_and_a_cell_that_was_the_same_follows_the_scan(
-    table: RowTable,
-) -> None:
-    put = table.edit('a', {'y': 5}).put(
-        [Row('a', {'x': 1}), Row('c', {'x': 4}, {'name': 'new'})], columns=('x', 'y')
-    )
-
-    assert cells(put) == {'a': {'x': 1}, 'b': {'x': 3}, 'c': {'x': 4}}
-    assert put['c'].info == {'name': 'new'}
-    assert cells(put.rescan([Row('a', {'x': 8, 'y': 9})])) == {
-        'a': {'x': 8},
-        'c': {'x': 4},
-    }
-
-
-def test_rows_put_with_a_key_twice_are_refused(table: RowTable) -> None:
-    with pytest.raises(SubmitError, match='c'):
-        table.put([Row('c'), Row('c')], columns=('x',))
-
-
-def test_a_row_put_that_was_removed_is_brought_back_with_its_cells(
-    table: RowTable,
-) -> None:
-    put = table.remove('a').put([Row('a', {'x': 1, 'y': 5})], columns=('x', 'y'))
-
-    assert cells(put) == {'a': {'x': 1, 'y': 5}, 'b': {'x': 3}}
-    assert (put.removed, put.added, dict(put.edits)) == (
-        frozenset(),
-        (),
-        {'a': {'y': 5}},
-    )
-
-
-# The scope
-
-
-def indexed(*indices: int) -> list[Row]:
-    """A row per index, keyed by it."""
-    return [Row(str(i), {'x': i}, index=i) for i in indices]
-
-
-def held(scope: Scope, rows: list[Row]) -> list[str]:
-    return [row.key for row in RowTable(scope=scope).rescan(rows)]
-
-
-def test_a_slice_holds_the_rows_from_start_up_to_stop_excluded() -> None:
-    assert held(Scope(start=2, stop=4), indexed(1, 2, 3, 4, 5)) == ['2', '3']
-
-
-def test_an_open_end_holds_every_row_beyond_the_other() -> None:
-    rows = indexed(1, 2, 3)
-
-    assert held(Scope(start=2), rows) == ['2', '3']
-    assert held(Scope(stop=2), rows) == ['1']
-
-
-def test_a_slice_needs_no_row_at_its_ends() -> None:
-    assert held(Scope(start=2, stop=6), indexed(1, 3, 5, 7)) == ['3', '5']
-
-
-def test_two_slices_that_meet_share_no_row_and_leave_none_out() -> None:
-    rows = indexed(1, 2, 3, 4)
-
-    assert held(Scope(stop=3), rows) + held(Scope(start=3), rows) == [
-        '1',
-        '2',
-        '3',
-        '4',
-    ]
-
-
-def test_a_row_without_an_index_is_held_only_by_a_scope_without_ends() -> None:
-    rows = [*indexed(1), Row('none')]
-
-    assert held(Scope(), rows) == ['1', 'none']
-    assert held(Scope(start=0), rows) == ['1']
-
-
-@pytest.mark.parametrize('end', [datetime(2026, 11, 18, tzinfo=UTC), True])
-def test_an_end_that_is_not_an_int_a_float_or_a_str_is_refused(end: object) -> None:
-    with pytest.raises(TypeError, match=re.escape(repr(end))):
-        Scope(start=end)  # type: ignore[arg-type]
-
-
-def test_a_stop_equal_to_the_start_holds_no_row() -> None:
-    assert held(Scope(start=2, stop=2), indexed(1, 2, 3)) == []
-
-
-@pytest.fixture
-def scoped() -> RowTable:
-    """Rows 1 to 4, of which the scope holds 2 and 3."""
-    return RowTable(scope=Scope(start=2, stop=4)).rescan(indexed(1, 2, 3, 4))
-
-
-def test_a_row_added_by_hand_is_shown_whatever_the_scope(scoped: RowTable) -> None:
-    added = scoped.add(Row('mine', {'x': 0}))
-
-    assert [row.key for row in added] == ['2', '3', 'mine']
-
-
-def test_an_edit_of_a_row_outside_the_scope_is_kept_and_used_when_it_widens(
-    scoped: RowTable,
-) -> None:
-    edited = scoped.edit('3', {'x': 30})
-
-    narrowed = replace(edited, scope=Scope(start=2, stop=3))
-    widened = replace(narrowed, scope=Scope())
-
-    assert '3' not in narrowed
-    assert narrowed.edits == {'3': {'x': 30}}
-    assert widened['3'].values == {'x': 30}
-
-
-def test_a_table_put_with_a_row_the_scan_has_outside_the_scope_is_refused(
-    scoped: RowTable,
-) -> None:
-    with pytest.raises(SubmitError) as refused:
-        scoped.put([Row('2', {'x': 20}), Row('4', {'x': 40})], columns=('x',))
-
-    assert [(e.entry, e.msg) for e in refused.value.errors] == [
-        ('4', 'the source makes this row outside the scope')
-    ]
-
-
-def test_a_table_put_sets_a_row_added_by_hand_whose_key_the_scan_gives_outside(
-    scoped: RowTable,
-) -> None:
-    added = RowTable(scope=scoped.scope).add(Row('1', {'x': 0})).rescan(scoped.scan)
-
-    put = added.put([Row('1', {'x': 10})], columns=('x',))
-
-    assert put['1'].values == {'x': 10}
-
-
-def test_the_rows_removed_in_scope_are_those_a_person_sees_removed(
-    scoped: RowTable,
-) -> None:
-    removed = replace(scoped, scope=Scope()).remove_each(['1', '2'])
-
-    assert replace(removed, scope=scoped.scope).removed_in_scope == {'2'}
-
-
-def test_a_row_added_by_hand_with_the_key_of_a_row_outside_the_scope_is_refused(
-    scoped: RowTable,
-) -> None:
-    with pytest.raises(SubmitError, match='outside the scope'):
-        scoped.add(Row('1'))
-
-
-# The table as a frame
 
 
 class Colour(Enum):
@@ -531,6 +159,32 @@ def test_typed_refuses_a_note_of_another_dtype_by_name() -> None:
 
     with pytest.raises(ValueError, match=r"the note 'start' is datetime64.*text"):
         typed(frame, Kinds)
+
+
+def test_a_note_with_no_value_keeps_its_dtype_and_is_text_if_pandas_lost_it() -> None:
+    none = pd.Index([], dtype=str)
+    table = typed(pd.DataFrame({'comment': [], 'scale': []}, index=none), Kinds)
+    table = table.astype({'comment': 'string', 'scale': 'Float64'})
+    # A row whose source lacks the note: concat makes the column float NaN.
+    new = pd.DataFrame(index=['1']).reindex(columns=table.columns)
+
+    both = typed(pd.concat([table, new]), Kinds)
+    both.loc['1', 'comment'] = 'text'
+
+    assert both.dtypes.astype(str).to_dict() == {
+        'comment': 'string',
+        'scale': 'Float64',
+    }
+    assert typed(both, Kinds).loc['1', 'comment'] == 'text'
+
+
+def test_a_list_in_a_cell_is_the_tables_own() -> None:
+    frame = pd.DataFrame({'runs': [['run:1']]}, index=['a'])
+
+    table = typed(frame, Kinds)
+    frame.loc['a', 'runs'].append('run:2')
+
+    assert table.loc['a', 'runs'] == ['run:1']
 
 
 def test_a_whole_float_in_a_column_of_whole_numbers_is_kept_as_an_int() -> None:
@@ -679,3 +333,185 @@ def test_the_cell_of_a_group_or_a_time_is_its_json_form_which_a_request_takes() 
         'when': '2026-11-19T12:00:00Z',
     }
     request_model(Grouped).model_validate(as_request(Grouped, cells))
+
+
+# A table file
+
+
+class Filed(BaseModel):
+    x: float | None = None
+    n: int | None = None
+    f: bool | None = None
+    s: RunFile | None = None
+    o: list[Any] | None = None
+
+
+@pytest.fixture
+def filed() -> pd.DataFrame:
+    """A table of each dtype, with notes, a key that a number would lose, and gaps."""
+    key = pd.Index(['a', '0342', 'b'], name=KEY, dtype='string')
+    return typed(
+        pd.DataFrame(
+            {
+                'x': [0.1 + 0.2, None, 6.02214076e23],
+                'n': [2**40 + 1, None, 1],
+                'f': [True, None, False],
+                's': ['run:1', None, 'path:a b, "c".nxs'],
+                'o': [['run:1', 2], None, {'v': 1.5}],
+                'name': ['NA', None, 'water'],
+                'run': [60339, 60340, None],
+            },
+            index=key,
+        ).astype({'o': object}),
+        Filed,
+    )
+
+
+@pytest.mark.parametrize('suffix', ['.csv', '.tsv', '.xlsx'])
+def test_a_table_written_to_a_file_is_read_back_equal_but_notes_of_text(
+    tmp_path: Path, filed: pd.DataFrame, suffix: str
+) -> None:
+    path = tmp_path / f'table{suffix}'
+
+    write_table(filed, path)
+
+    # A cell of .xlsx has a type; a cell of .csv is text.
+    expected = filed if suffix == '.xlsx' else filed.astype({'run': 'string'})
+    pd.testing.assert_frame_equal(read_table(path, Filed), expected)
+
+
+def test_a_note_of_a_text_file_is_text(tmp_path: Path) -> None:
+    path = tmp_path / 'table.csv'
+    path.write_text('key,run,flag,x\na,0342,True,1\nb,,False,2\n')
+
+    table = read_table(path, Filed)
+
+    assert table['run'].tolist() == ['0342', pd.NA]
+    assert table['flag'].tolist() == ['True', 'False']
+    assert str(table['run'].dtype) == str(table['flag'].dtype) == 'string'
+
+
+def test_a_note_of_an_xlsx_file_keeps_the_type_of_its_cells_or_is_text(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'table.xlsx'
+    notes = {
+        'whole': [1, None],
+        'number': [0.5, None],
+        'truth': [True, None],
+        'text': ['0342', None],
+        'mixed': [1, 'x'],
+        'date': [pd.Timestamp('2026-11-19'), None],
+        'empty': [None, None],
+    }
+    pd.DataFrame({KEY: ['a', 'b'], **notes}).to_excel(path, index=False)
+
+    table = read_table(path, Filed)
+
+    assert {c: str(t) for c, t in table.dtypes.items()} == {
+        'whole': 'Int64',
+        'number': 'Float64',
+        'truth': 'boolean',
+        'text': 'string',
+        'mixed': 'string',
+        'date': 'string',
+        'empty': 'string',
+    }
+    assert table['mixed'].tolist() == ['1', 'x']
+    assert table['date'].tolist() == ['2026-11-19 00:00:00', pd.NA]
+
+
+def test_a_list_or_a_group_is_json_text_in_a_table_file(
+    tmp_path: Path, filed: pd.DataFrame
+) -> None:
+    path = tmp_path / 'table.csv'
+
+    write_table(filed, path)
+
+    assert path.read_text().splitlines()[1] == (
+        'a,0.30000000000000004,1099511627777,True,run:1,"[""run:1"",2]",NA,60339'
+    )
+
+
+def test_the_columns_of_what_came_of_each_row_are_dropped_when_read(
+    tmp_path: Path, filed: pd.DataFrame
+) -> None:
+    path = tmp_path / 'done.xlsx'
+    write_table(filed.assign(status='completed', record='r1', failure=''), path)
+
+    pd.testing.assert_frame_equal(read_table(path, Filed), filed)
+
+
+@pytest.mark.parametrize(
+    ('text', 'message'),
+    [
+        ('sample,x\nrun:1,1\n', "a table has a column 'key'"),
+        ('key,x\na,thick\n', 'thick'),
+        ('key,n\na,2.5\n', 'cast'),
+        ('key,n\na,abc\n', 'abc'),
+        ('key,f\na,yes\n', 'yes'),
+        ('key,x\na,1\na,2\n', "the key 'a' is given twice"),
+    ],
+    ids=[
+        'no-key',
+        'not-a-number',
+        'not-whole',
+        'not-whole-text',
+        'not-true-or-false',
+        'key-twice',
+    ],
+)
+def test_a_table_file_that_is_not_a_table_is_refused_naming_the_file_and_why(
+    tmp_path: Path, text: str, message: str
+) -> None:
+    path = tmp_path / 'table.csv'
+    path.write_text(text)
+
+    with pytest.raises(ValueError, match=message) as error:
+        read_table(path, Filed)
+    assert str(error.value).startswith(f'{path}: ')
+
+
+@pytest.mark.parametrize(
+    'function',
+    [lambda p: read_table(p, Filed), lambda p: write_table(pd.DataFrame(), p)],
+    ids=['read', 'write'],
+)
+def test_a_table_file_of_an_unknown_suffix_is_refused(
+    tmp_path: Path, function: Callable[[Path], object]
+) -> None:
+    with pytest.raises(ValueError, match='a table is one of'):
+        function(tmp_path / 'table.json')
+
+
+@pytest.mark.parametrize(
+    ('text', 'value'),
+    [
+        ('1.5', 1.5),
+        ('null', None),
+        ('{"x": 0}', {'x': 0}),
+        ('[1, 2]', [1, 2]),
+        ('water', 'water'),
+    ],
+)
+def test_a_cell_of_plain_data_is_read_as_json_if_it_is_json_and_else_as_text(
+    tmp_path: Path, text: str, value: Any
+) -> None:
+    path = tmp_path / 'table.csv'
+    pd.DataFrame({KEY: ['a'], 'o': [text]}).to_csv(path, index=False)
+
+    assert read_table(path, Filed)['o'].tolist() == [value]
+
+
+@pytest.mark.parametrize(
+    'value',
+    ['1', 'null', 'water', {'x': [1, 2]}, None, 2.5, True, [1, 2], [{'x': None}]],
+)
+def test_a_cell_of_plain_data_written_is_read_back(tmp_path: Path, value: Any) -> None:
+    path = tmp_path / 'table.csv'
+    key = pd.Index(['a'], name=KEY, dtype='string')
+    frame = pd.DataFrame({'o': pd.Series([value], index=key, dtype=object)})
+
+    write_table(typed(frame, Filed), path)
+
+    assert read_table(path, Filed)['o'].tolist() == [value]

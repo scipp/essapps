@@ -21,7 +21,7 @@ const view = {
   state: null,
   filter: 'all',
   tab: 'result',
-  page: 'samples',
+  page: 'rows',
   selected: [],
   sort: [],
   log: {x: true, y: true},
@@ -35,6 +35,7 @@ const view = {
   runData: null, // the runs last loaded, with their columns
   batchData: null, // the list of batches last shown
   counts: null, // the counts of the rows of each batch, once counted
+  columns: '', // the notes and the columns that the grid of the rows shows
 };
 let rows; // the Grid of the rows
 let runs; // the Grid of the runs
@@ -56,9 +57,7 @@ function remember() {
   }
 }
 
-const words = () => view.state?.words ?? {one: 'row', many: 'rows'};
-const title = (word) => word[0].toUpperCase() + word.slice(1);
-const count = (n) => `${n} ${n === 1 ? words().one : words().many}`;
+const count = (n) => `${n} ${n === 1 ? 'row' : 'rows'}`;
 
 // Talking to the server
 
@@ -133,9 +132,6 @@ async function refresh() {
     throw view.state && response.status !== 404 ? new Offline(message) : new Unshown(message);
   }
   render(response.body);
-  // A poll says only what failed without an action, such as a scan after a
-  // correction made on another page.
-  if (response.body.notice) showMessage(response.body.notice);
 }
 
 // Ask for the state every second; say so while the server does not give it.
@@ -196,35 +192,31 @@ function render(state) {
   document.title = named.join(' · ');
   $('title').textContent = named.reverse().join(' · ');
   $('folder').textContent = state.folder;
-  $('n-samples').textContent = state.counts.all;
+  $('n-rows').textContent = state.counts.all;
   renderAction(state.action);
   renderChips(state.counts);
   if (old?.action.running && !state.action.running) {
     const ended = ['done', 'failed', 'cancelled'].filter((s) => state.counts[s]).map((s) => `${state.counts[s]} ${s}`);
     toast(`Reducing ended: ${ended.join(', ')}.`);
   }
+  showColumns(state);
   const updated = rows.update(state.rows);
   if (!old) updated.then(() => rows.select(view.selected));
   if (state.runs !== null && state.runs !== view.runs) loadRuns();
   showBatches({application: state.application, runs: state.runs, rows: state.batches});
-  const many = state.words.many;
-  $('rescan').title = `Make the ${many} from the runs again. Values set by hand stay.`;
-  $('restore').hidden = state.removed === 0;
-  $('restore').textContent = `${state.removed} removed: bring back`;
   renderRefused(state.refused);
   renderFollow(state.follow);
+  $('files-problem').hidden = !state.files_problem;
+  $('files-problem').textContent = $('files-problem').title = state.files_problem ?? '';
   renderSettings(state);
   renderBatch(state);
   renderSelection();
   if (view.tab === 'row') loadRow();
 }
 
-function build(state) {
-  const {one, many} = state.words;
-  $('word-many').textContent = title(many);
-  $('tab-row-label').textContent = title(one);
-  $('add-row').textContent = `+ Add ${one}`;
-  $('settings-hint').textContent = `Shared by every ${one}. A change is in force after Apply, for the ${many} not reduced yet.`;
+// The columns of the grid of the rows: the name, each note, each parameter
+// column, and the status; and the columns that can be edited, by field.
+function gridColumns(state) {
   const named = {
     title: 'Name',
     field: 'name',
@@ -232,12 +224,31 @@ function build(state) {
     widthGrow: 2,
     tooltip: (event, cell) => cell.getValue(),
   };
-  const info = state.info.map((c) => ({title: c.title, field: `info.${c.name}`, minWidth: 96, headerSort: false}));
-  const cells = state.columns;
+  const notes = state.notes.map((c) => ({title: c.title, field: `notes.${c.name}`, minWidth: 96, headerSort: false}));
+  const cells = cellColumns(state.columns, {current: () => view.state.columns, say: showMessage});
+  return {
+    columns: [named, ...notes, ...cells, statusColumn],
+    edits: Object.fromEntries(state.columns.map((c) => [`cells.${c.name}.value`, c])),
+  };
+}
+
+// Show the columns of the table of `state` if they changed, as a table
+// loaded changes them.
+function showColumns(state) {
+  // The options of a pick are read when its editor opens (`current`).
+  const shown = JSON.stringify([state.notes, state.columns.map((c) => [c.name, c.title, c.editor?.type, c.default])]);
+  if (shown === view.columns) return;
+  const first = view.columns === '';
+  view.columns = shown;
+  if (first) return;
+  const {columns, edits} = gridColumns(state);
+  rows.setColumns(columns, edits);
+}
+
+function build(state) {
   rows = new Grid($('rows'), {
-    columns: [named, ...info, ...cellColumns(cells, {current: () => view.state.columns, revert: (key, column) => act('cells/revert', {keys: [key], column}), say: showMessage}), statusColumn],
-    edits: Object.fromEntries(cells.map((c) => [`cells.${c.name}.value`, c])),
-    placeholder: `No ${many}. Rescan the runs, or load a table from the Files menu.`,
+    ...gridColumns(state),
+    placeholder: 'No rows. Add a row, or load a table from the Files menu.',
     edit: (keys, column, value) => act('cells', {keys, column, value}),
     select: (keys) => {
       view.selected = keys;
@@ -253,7 +264,7 @@ function build(state) {
   });
   rows.filter(view.filter);
   if (state.runs === null) document.querySelector('[data-view="runs"]').hidden = true;
-  showPage(state.runs === null && view.page === 'runs' ? 'samples' : view.page);
+  showPage(state.runs === null && view.page === 'runs' ? 'rows' : view.page);
   showTab(view.tab);
 }
 
@@ -276,13 +287,15 @@ async function loadRuns() {
 }
 
 // Show the runs last loaded. The grid is built and filled when the Runs view
-// is shown, and again after each change while it is.
+// is shown, and again after each change while it is. If the files cannot be
+// listed, the hint says why.
 function drawRuns() {
-  const {columns, rows: shown} = view.runData ?? {};
+  const {columns, rows: shown, problem} = view.runData ?? {};
   if (!shown) return;
+  const fields = columns.map((c) => c.title.toLowerCase()).join(' or ');
+  $('runs-hint').textContent = problem ?? `Correct the ${fields} of a run. It changes no row of a batch; Follow adds the rows it fills.`;
+  $('runs-hint').classList.toggle('bad', Boolean(problem));
   if (!runs) {
-    const fields = columns.map((c) => c.title.toLowerCase()).join(' or ');
-    $('runs-hint').textContent = `Correct the ${fields} of a run. The rows of each batch follow.`;
     runs = new Grid($('runs'), {
       columns: [
         {title: 'Run', field: 'file', minWidth: 160, widthGrow: 2},
@@ -302,8 +315,8 @@ function drawRuns() {
 }
 
 // Correct runs, an action of the workspace; whether it was done. The page of
-// a batch then asks for its state at once, which scans the batch and brings
-// the runs; a page without a batch asks for the runs.
+// a batch then asks for its state at once, whose version of the runs has
+// moved, so that it loads the runs; a page without a batch asks for the runs.
 function correctRuns(url, body) {
   return queued(async () => {
     const done = await request(url, {body});
@@ -323,8 +336,9 @@ function showBatches(listed) {
   drawBatches();
 }
 
-// Count the rows of each batch. The server scans every batch for it, so the
-// page asks only when the Batches view is opened and at "Count again".
+// Count the rows of each batch. The server reads the state of every batch for
+// it, so the page asks only when the Batches view is opened and at "Count
+// again".
 async function countBatches() {
   const button = $('count');
   if (button.disabled) return;
@@ -336,12 +350,12 @@ async function countBatches() {
   drawBatches();
 }
 
-// The list of batches, each a link to its page, with its scope, and its counts
-// once counted, or why it could not be counted; the batch of this page is marked.
+// The list of batches, each a link to its page, with its counts once counted,
+// or why it could not be counted; the batch of this page is marked.
 function drawBatches() {
   if (!view.batchData) return;
   const counted = view.counts?.rows ?? {};
-  const none = h('tr', {}, h('td', {class: 'hint', colspan: 5, text: 'No batch yet.'}));
+  const none = h('tr', {}, h('td', {class: 'hint', colspan: 4, text: 'No batch yet.'}));
   $('batches').tBodies[0].replaceChildren(
     ...(view.batchData.rows.length ? [] : [none]),
     ...view.batchData.rows.map((batch) => {
@@ -358,8 +372,7 @@ function drawBatches() {
           h('small', {text: batch.label}),
           batch.description && h('div', {class: 'hint', text: batch.description}),
         ),
-        h('td', {text: batch.scope}),
-        h('td', {class: 'n', text: n ? `${all} ${all === 1 ? batch.words.one : batch.words.many}` : ''}),
+        h('td', {class: 'n', text: n ? count(all) : ''}),
         h(
           'td',
           {class: failed ? 'bad' : null, text: failed ?? ''},
@@ -369,8 +382,6 @@ function drawBatches() {
       );
     }),
   );
-  const outside = Object.entries(view.counts?.outside ?? {});
-  $('outside').textContent = outside.map(([source, text]) => `${text} of ${source} in no batch.`).join(' ');
 }
 
 // The form "New batch". The server says what a batch can be made with
@@ -384,7 +395,7 @@ async function openNewBatch() {
   choices = loaded;
   form.reset();
   form.elements.source.replaceChildren(
-    ...choices.map((c, i) => h('option', {value: i, text: c.name ?? 'none: rows added by hand'})),
+    ...choices.map((c, i) => h('option', {value: i, text: c.name ?? 'none: no rows'})),
   );
   chooseSource();
   $('new-problem').textContent = '';
@@ -401,16 +412,14 @@ function closeNewBatch() {
 const chosenSource = () => choices[$('new-batch').elements.source.value];
 const chosenSpec = () => chosenSource().specs[$('new-batch').elements.spec.value];
 
-// The workflows that fit the source chosen, and the scope in its words. A batch
-// without a source has only rows added by hand, which no scope leaves out.
+// The workflows that fit the source chosen. A batch made from a source gets
+// the rows that it has filled now; one without a source starts without rows.
 function chooseSource() {
   const source = chosenSource();
   $('new-batch').elements.spec.replaceChildren(...source.specs.map((s, i) => h('option', {value: i, text: s.title})));
-  const index = source.index_title.toLowerCase();
-  $('new-from').textContent = `From ${index}`;
-  $('new-to').textContent = `up to, not including, ${index}`;
-  $('new-scope').hidden = source.name === null;
-  $('new-settings').textContent = `The others are settings, shared by every ${source.words.one}.`;
+  $('new-rows').textContent = source.name === null
+    ? 'The batch starts without rows: add them, or load a table.'
+    : `The batch gets the rows that ${source.name} has filled now; Follow adds the others once filled.`;
   chooseSpec();
 }
 
@@ -427,24 +436,19 @@ function chooseSpec() {
   );
 }
 
-// Make the batch of the form, once at a time: the server converts the ends of
-// the scope to the type of the index of the source.
+// Make the batch of the form, once at a time.
 async function makeBatch(event) {
   event.preventDefault();
   const form = $('new-batch');
   const button = form.querySelector('[type=submit]');
   if (button.disabled) return;
   const {elements} = form;
-  const source = chosenSource();
-  const end = (input) => (source.name === null ? null : input.value.trim() || null);
   const body = {
     title: elements.title.value.trim(),
     description: elements.description.value.trim(),
-    source: source.name,
+    source: chosenSource().name,
     spec: chosenSpec()?.name ?? '',
     columns: [...form.querySelectorAll('[name=column]:checked')].map((box) => box.value),
-    start: end(elements.start),
-    stop: end(elements.stop),
   };
   button.disabled = true;
   const made = await request('batches', {body, say: (text) => ($('new-problem').textContent = text)});
@@ -531,19 +535,18 @@ function renderRefused(refused) {
   showMessage('Nothing was reduced.', refused.map((e) => e.text), key);
 }
 
-// The switch of Follow, and why its last step failed, if it did, or which
-// other batch follows.
+// The switch of Follow, unless the batch has no source, and why its last step
+// failed, if it did, how many rows wait, or which other batch follows.
 function renderFollow(follow) {
-  $('follow').hidden = !follow;
-  $('follow-status').hidden = !follow?.on && !follow?.other;
-  if (!follow) return;
-  const {many} = words();
+  $('follow').hidden = follow.source === null;
+  $('follow-status').hidden = !follow.on && !follow.other;
   $('follow').querySelector('input').checked = follow.on;
-  $('follow').title = `Every ${follow.interval} s, rescan the runs and reduce the ${many} not reduced yet.`;
+  $('follow').title = `Every ${follow.interval} s, add the new rows of the source that are filled, and reduce the rows not reduced yet.`;
   const status = $('follow-status');
   status.classList.toggle('bad', Boolean(follow.failure));
+  const waiting = follow.waiting ? `; ${count(follow.waiting)} of the source wait to be filled` : '';
   status.textContent = follow.failure
-    ?? (follow.on ? `Following, every ${follow.interval} s` : `${follow.other} follows`);
+    ?? (follow.on ? `Following, every ${follow.interval} s${waiting}` : `${follow.other} follows`);
   status.title = status.textContent;
 }
 
@@ -565,32 +568,23 @@ function renderSettings(state) {
   renderForm($('settings'), state.settings, (edit) => act('settings', edit));
 }
 
-// The tab "Batch": what the batch was made with, and a form of its title,
-// description and scope. The inputs are filled again only when the header
-// changes, so that a value typed stays while the page polls.
+// The tab "Batch": its workflow, columns and label, and a form of its title
+// and description. The inputs are filled again only when the header changes,
+// so that a value typed stays while the page polls.
 function renderBatch(state) {
   const {header, label} = state;
-  const index = header.index_title.toLowerCase();
   const fixed = {
     Workflow: header.workflow,
-    Source: header.source ?? 'none: rows added by hand',
     Columns: state.columns.map((c) => c.title).join(', '),
     Label: label,
   };
   $('batch-fixed').replaceChildren(...Object.entries(fixed).flatMap(([name, text]) => [h('dt', {text: name}), h('dd', {text})]));
-  $('batch-from').textContent = `From ${index}`;
-  $('batch-to').textContent = `up to, not including, ${index}`;
-  $('batch-scope').hidden = header.source === null;
-  const follows = state.follow?.on ? ' Follow stays on this batch: turn it on for the next batch when its settings are right.' : '';
-  $('next-hint').textContent = `Ends this batch before the ${words().one} selected. The next batch takes its ${words().many} from there on, with the same workflow, columns and settings. The results of the ${words().many} that move stay in this batch.${follows}`;
   const form = $('batch-form');
   const shown = JSON.stringify([state.title, header]);
   if (shown === form.shown) return;
   form.shown = shown;
   form.elements.title.value = state.title;
   form.elements.description.value = header.description;
-  form.elements.start.value = header.start ?? '';
-  form.elements.stop.value = header.stop ?? '';
 }
 
 // Save the form of the tab "Batch"; a refusal shows at the form.
@@ -598,32 +592,14 @@ function saveBatch(event) {
   event.preventDefault();
   const {elements} = $('batch-form');
   const say = (text) => ($('batch-problem').textContent = text);
-  const end = (input) => input.value.trim() || null;
   say('');
-  act('batch', {
-    start: end(elements.start),
-    stop: end(elements.stop),
-    title: elements.title.value.trim(),
-    description: elements.description.value.trim(),
-  }, say);
-}
-
-// End this batch at the row selected, and go to the next batch, which starts
-// there; a refusal shows as a message, and Cancel of the title changes nothing.
-async function startNext() {
-  const chosen = selectedRows();
-  if (chosen.length !== 1) return showMessage(`Select one ${words().one}: the next batch starts at it.`);
-  const [row] = chosen;
-  const title = prompt(`The next batch starts at ${row.name}.\n\nTitle of the next batch:`);
-  if (title === null) return;
-  const made = await queued(() => request('batch/next', {body: {key: row.key, title: title.trim()}}));
-  if (made) location.href = batchUrl(made.label);
+  act('batch', {title: elements.title.value.trim(), description: elements.description.value.trim()}, say);
 }
 
 // Remove this batch, then go to the root: it goes to the batch that follows or
 // the only one left, or shows the workspace without a batch.
 async function removeBatch() {
-  const question = `Remove the batch "${view.state.title}"? Its title, description, scope, settings and the values set by hand are removed. Its results stay in the workspace.`;
+  const question = `Remove the batch "${view.state.title}"? Its title, description, settings and table are removed. Its results stay in the workspace.`;
   if (!confirm(question)) return;
   const done = await queued(() => request('batch/remove', {body: {}}));
   if (done) location.href = '../../';
@@ -694,7 +670,7 @@ async function renderPlot() {
   renderLegend();
   const quantity = figure?.layout?.meta?.quantity ?? 'Result';
   const n = view.selected.length;
-  $('plot-title').textContent = n ? `${quantity} of the ${count(n)} selected` : `${quantity} of the ${words().many} done`;
+  $('plot-title').textContent = n ? `${quantity} of the ${count(n)} selected` : `${quantity} of the rows done`;
   if (!figure) $('plot-title').textContent = 'Results';
   document.querySelector('.axes').hidden = !figure;
   $('plot-note').textContent = figure ? note : '';
@@ -752,8 +728,8 @@ async function loadRow() {
   if (!row) {
     view.detail = '';
     const text = view.selected.length > 1
-      ? `Select only one ${words().one} to see its details.`
-      : `Select a ${words().one} to see what it was reduced with, or why it failed.`;
+      ? 'Select only one row to see its details.'
+      : 'Select a row to see what it was reduced with, or why it failed.';
     pane.replaceChildren(h('div', {class: 'empty', text}));
     return;
   }
@@ -780,10 +756,6 @@ function renderRow(detail) {
       view.state.columns.map((c) => [h('dt', {text: c.title}), h('dd', {text: row.cells[c.name].text || c.default || '—'})]),
     ),
     row.reason && h('div', {class: `reason ${reasonClass ?? ''}`, text: row.reason}),
-    // An edit at a name that is not a column is not in the table, so it is taken back here.
-    ...row.strays.map((name) =>
-      h('button', {type: 'button', class: 'stray', text: `Remove the edit of ${name}`, onclick: () => act('cells/revert', {keys: [row.key], column: name})}),
-    ),
     detail.reduced_with
       ? h(
           'section',
@@ -824,13 +796,13 @@ function showPage(page) {
   view.page = page;
   remember();
   document.querySelectorAll('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === page)));
-  $('view-samples').hidden = page !== 'samples';
+  $('view-rows').hidden = page !== 'rows';
   $('view-runs').hidden = page !== 'runs';
   $('view-batches').hidden = page !== 'batches';
   document.querySelector('main').classList.toggle('wide', page === 'runs');
   if (page === 'runs') drawRuns();
   if (page === 'batches') countBatches();
-  const grid = {samples: rows, runs}[page];
+  const grid = {rows, runs}[page];
   grid?.built.then(() => grid.table.redraw());
 }
 
@@ -865,7 +837,7 @@ function wire() {
     const question = `Reduce the ${count(n)} reduced with earlier settings again, with the settings now?`;
     if (confirm(question)) act('reduce', {which: 'earlier'});
   };
-  $('rescan').onclick = () => act('scan');
+  $('relist').onclick = () => act('relist');
   $('count').onclick = countBatches;
   const newBatch = $('new-batch');
   $('new-batch-open').onclick = openNewBatch;
@@ -875,14 +847,8 @@ function wire() {
   newBatch.querySelector('[data-cancel]').onclick = closeNewBatch;
   newBatch.addEventListener('keydown', (event) => event.key === 'Escape' && closeNewBatch());
   $('batch-form').onsubmit = saveBatch;
-  $('next-batch').onclick = startNext;
   $('remove-batch').onclick = removeBatch;
-  $('remove').onclick = () => {
-    const added = selectedRows().filter((row) => row.added).length;
-    const question = `${added} of the ${count(view.selected.length)} selected ${added === 1 ? 'was' : 'were'} added by hand and cannot be brought back. Remove?`;
-    if (!added || confirm(question)) act('rows/remove', {keys: view.selected});
-  };
-  $('restore').onclick = () => act('rows/restore');
+  $('remove').onclick = () => act('rows/remove', {keys: view.selected});
   document.querySelector('#message .close').onclick = () => {
     view.dismissed = shownMessage;
     hideMessage();
@@ -924,15 +890,14 @@ function wire() {
   const files = $('files');
   files.querySelector('.menu-button').onclick = () => openMenu(files);
   const loadTable = () => {
-    const {many} = words();
-    const question = `Load a table file? Its cells are set by hand on the ${many} of the same name, and its other ${many} are added. ${title(many)} that it does not have stay.`;
+    const question = 'Load a table file? It replaces the table of this batch: its rows and its columns.';
     if (confirm(question)) $('pick-table').click();
   };
   const actions = {
     'load-table': loadTable,
     'load-settings': () => replaceChanges() && $('pick-settings').click(),
-    'table.csv': () => download('table.csv', `${words().many}.csv`),
-    'table.xlsx': () => download('table.xlsx', `${words().many}.xlsx`),
+    'table.csv': () => download('table.csv', 'rows.csv'),
+    'table.xlsx': () => download('table.xlsx', 'rows.xlsx'),
     'settings.yaml': () => download('settings.yaml', 'settings.yaml'),
     'results-selected': () => downloadResults(selectedRows(), 'results-selected.zip'),
     'results-all': () => downloadResults(view.state.rows, 'results-all.zip'),

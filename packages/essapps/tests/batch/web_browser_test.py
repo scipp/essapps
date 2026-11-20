@@ -21,17 +21,20 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NoReturn
 
+import pandas as pd
 import pytest
 import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel
 
 from ess.apps import Client
-from ess.apps.batch import Batch, BatchManager, CorrectedFiles, Scope, Source
+from ess.apps.batch import Batch, BatchManager, CorrectedFiles, Header
+from ess.apps.batch.definition import rows_key
 from ess.apps.batch.web import Pages, Shown, create_app
 from ess.apps.batch.web.api import STATIC
 
-from .toys import PAIRS, STAGED, Gate, Measure, Refusing
+from . import toys
+from .toys import SOURCES, STAGED, Gate, Measure, Refusing
 
 
 def unavailable(reason: str) -> NoReturn:
@@ -88,7 +91,12 @@ def pages(manager: BatchManager, files: CorrectedFiles) -> Pages:
 
 @pytest.fixture
 def url(
-    pages: Pages, label: str, batch: Batch, sample: Measure, gate: Gate
+    pages: Pages,
+    label: str,
+    batch: Batch,
+    sample: Measure,
+    gate: Gate,
+    client: Client,
 ) -> Iterator[str]:
     """
     The URL of the page of ``label``. The gate opens at the end, so that a
@@ -97,7 +105,7 @@ def url(
     """
     for run, name in enumerate(['water', 'sds', 'oil'], start=1):
         sample(run, name)
-    batch.scan()
+    batch.put(toys.rows(client))
     with serve(create_app(pages)) as root:
         try:
             yield f'{root}batches/{label}/'
@@ -182,23 +190,24 @@ def test_a_click_on_a_cell_edits_it(page: Any, batch: Batch) -> None:
     editor(page).fill('2.5')
     editor(page).press('Enter')
 
-    page.wait_for_selector('#rows .tabulator-cell.edited')
-    assert batch.rows['2'].values['thickness'] == 2.5
+    cell(page, 'sds', 'thickness').filter(has_text='2.5').wait_for()
+    assert batch.frame().at['2', 'thickness'] == 2.5
 
 
 def test_an_editor_left_unchanged_writes_nothing_and_the_table_updates_after(
     page: Any, batch: Batch
 ) -> None:
+    before = batch.frame()
     cell(page, 'water', 'transmission').click()
     page.click('#title')
     cell(page, 'water', 'thickness').click()
     editor(page).press('Escape')
+    unchanged = batch.frame()
 
-    batch.rows = batch.rows.edit('3', {'thickness': 7.0})
-    page.click('#rescan')
+    toys.edit(batch, '3', thickness=7.0)
 
     page.wait_for_selector('#rows .tabulator-cell:has-text("7.0")')
-    assert batch.rows.edits == {'3': {'thickness': 7.0}}
+    pd.testing.assert_frame_equal(unchanged, before)
 
 
 def test_an_edit_in_a_row_checked_with_others_writes_each(
@@ -213,10 +222,8 @@ def test_an_edit_in_a_row_checked_with_others_writes_each(
     editor(page).press('Enter')
 
     page.wait_for_selector('#toast:has-text("set on 2 rows")')
-    assert {k: dict(v) for k, v in batch.rows.edits.items()} == {
-        '1': {'thickness': 4.0},
-        '3': {'thickness': 4.0},
-    }
+    thickness = batch.frame()['thickness']
+    assert (list(thickness[['1', '3']]), pd.isna(thickness['2'])) == ([4.0, 4.0], True)
 
 
 def test_the_selection_and_the_plot_stay_put_while_rows_run(
@@ -246,7 +253,7 @@ def test_a_row_is_added_by_typing_its_name(page: Any, batch: Batch) -> None:
     page.keyboard.press('Enter')
 
     page.wait_for_selector('#rows .tabulator-row:has-text("blank")')
-    assert 'blank' in batch.rows
+    assert 'blank' in batch.frame().index
 
 
 def test_typing_in_a_run_cell_replaces_what_it_shows(page: Any, batch: Batch) -> None:
@@ -254,11 +261,9 @@ def test_typing_in_a_run_cell_replaces_what_it_shows(page: Any, batch: Batch) ->
     page.keyboard.type('1002')
     page.keyboard.press('Enter')
 
-    page.wait_for_selector('#rows .tabulator-cell.edited')
-    assert (
-        batch.rows['1'].values['transmission']
-        == (batch.rows['2'].values['transmission'])
-    )
+    cell(page, 'water', 'transmission').filter(has_text='run 1002').wait_for()
+    table = batch.frame()
+    assert table.at['1', 'transmission'] == table.at['2', 'transmission']
 
 
 def test_an_empty_run_cell_left_writes_nothing_and_tab_goes_on(
@@ -279,8 +284,7 @@ def test_an_empty_run_cell_left_writes_nothing_and_tab_goes_on(
         'cells.thickness.value'
     )
     editor(page).press('Escape')
-    assert 'transmission' not in batch.rows['blank'].values
-    assert batch.rows.edits.get('blank', {}) == {}
+    assert batch.frame().loc['blank'].isna().all()
 
 
 def test_the_zoom_stays_when_the_selection_changes(page: Any, client: Client) -> None:
@@ -308,7 +312,7 @@ def test_an_edit_the_server_does_not_get_is_taken_back_and_said(
 
     page.wait_for_selector('#message:has-text("The server does not answer")')
     assert cell(page, 'sds', 'thickness').inner_text() == '1.0'
-    assert batch.rows.edits == {}
+    assert pd.isna(batch.frame().at['2', 'thickness'])
     assert page.errors == ['Failed to load resource: net::ERR_FAILED']
     page.errors.clear()
 
@@ -418,10 +422,10 @@ def test_a_poll_the_server_refuses_says_the_message_of_the_server(
 
 
 def test_the_page_loads_its_rows_under_a_path_prefix(
-    browser: Any, pages: Pages, batch: Batch, sample: Measure
+    browser: Any, pages: Pages, batch: Batch, sample: Measure, client: Client
 ) -> None:
     sample(1, 'water')
-    batch.scan()
+    batch.put(toys.rows(client))
     parent = FastAPI()
     parent.mount('/batch', create_app(pages))
     with serve(parent) as url:
@@ -538,8 +542,8 @@ def test_escape_after_a_value_sent_puts_that_value_back_and_sends_nothing(
     page.keyboard.type('6')
     page.keyboard.press('Escape')
     # Actions are sent in order, so an edit at the blur would come before this.
-    with page.expect_response('**/api/scan'):
-        page.click('#rescan')
+    with page.expect_response('**/api/relist'):
+        page.click('#relist')
 
     assert sent == ['{"path":["binning","bins"],"op":"set","value":7}']
     assert page.input_value(BINS) == '7'
@@ -563,24 +567,24 @@ def test_a_form_that_arrives_while_the_focus_rests_in_an_input_is_drawn(
 
 
 @pytest.fixture
-def holder(page: Any, batch: Batch, sample: Measure) -> Any:
+def holder(page: Any, batch: Batch, sample: Measure, client: Client) -> Any:
     """The holder of the rows of the page, with more rows than it shows."""
     for run in range(4, 60):
         sample(run, f'r{run}')
-    batch.scan()
-    page.wait_for_selector('#n-samples:text-is("59")')
+    batch.put(toys.rows(client))
+    page.wait_for_selector('#n-rows:text-is("59")')
     return page.locator('#rows .tabulator-tableholder')
 
 
 def test_the_scroll_position_stays_when_a_row_arrives(
-    holder: Any, page: Any, batch: Batch, sample: Measure
+    holder: Any, page: Any, batch: Batch, sample: Measure, client: Client
 ) -> None:
     holder.evaluate('h => { h.scrollTop = h.scrollHeight / 2; }')
     top = holder.evaluate(TOP_ROW)
     height = holder.evaluate('h => h.scrollHeight')
 
     sample(60, 'r60')
-    batch.scan()
+    batch.put(toys.rows(client))
 
     page.wait_for_function(
         f'h => h.scrollHeight > {height}', arg=holder.element_handle()
@@ -677,12 +681,10 @@ def test_html_in_a_cell_shows_as_text_in_its_tooltip(page: Any) -> None:
     assert page.locator('.tabulator-tooltip img').count() == 0
 
 
-def test_a_run_that_arrives_can_be_chosen_in_a_cell(
-    page: Any, batch: Batch, sample: Measure
-) -> None:
+def test_a_run_that_arrives_can_be_chosen_in_a_cell(page: Any, sample: Measure) -> None:
     sample(4, 'ice')
-    batch.scan()
-    page.wait_for_selector('#rows .tabulator-row:has-text("ice")')
+    page.click('#relist')
+    page.wait_for_selector('#toast:has-text("Listed the runs again.")')
 
     cell(page, 'water', 'transmission').click()
 
@@ -764,14 +766,12 @@ def correct_first_sample(page: Any, role: str) -> None:
     page.keyboard.press('Enter')
 
 
-def test_the_rows_of_the_batch_follow_a_run_corrected_on_its_page(page: Any) -> None:
+def test_a_run_corrected_on_its_page_changes_no_row(page: Any) -> None:
     correct_first_sample(page, 'background')
 
     page.wait_for_selector('#toast:has-text("Role corrected on 1 run.")')
-    page.click('[data-view=samples]')
-    page.wait_for_function(
-        "document.querySelectorAll('#rows .tabulator-row').length === 2"
-    )
+    page.click('[data-view=rows]')
+    assert page.locator('#rows .tabulator-row').count() == 3
 
 
 def active(page: Any) -> str:
@@ -789,23 +789,6 @@ def test_a_chip_of_the_filter_keeps_the_focus_when_the_state_changes(
     reduce_rows(page, url, client, '2')
 
     assert active(page) == 'BUTTON.chip st-ready'
-
-
-def test_the_button_that_reverts_a_cell_can_be_focused_and_keeps_the_focus(
-    page: Any, url: str
-) -> None:
-    edit = {'keys': ['2'], 'column': 'thickness', 'value': 2.0}
-    assert page.request.post(f'{url}api/cells', data=edit).ok
-    revert = page.locator('#rows .tabulator-row', has_text='sds').locator('.revert')
-    revert.focus()
-    assert active(page) == 'BUTTON.revert'
-
-    assert page.request.post(f'{url}api/cells', data=edit | {'value': 3.0}).ok
-
-    page.wait_for_function(
-        "document.querySelector('.tabulator-cell.edited').innerText.includes('3.0')"
-        " && document.activeElement.classList.contains('revert')"
-    )
 
 
 def test_a_button_of_the_row_tab_keeps_the_focus_when_the_row_changes(
@@ -837,11 +820,7 @@ def test_the_batches_view_links_to_the_page_of_another_batch(
     page: Any, pages: Pages, manager: BatchManager
 ) -> None:
     other = manager.create(
-        STAGED.name,
-        title='Other',
-        source='pairs',
-        description='The second series',
-        scope=Scope(start=2),
+        STAGED.name, title='Other', source='pairs', description='The second series'
     )
     pages.manager.follow(other)
     page.reload()
@@ -852,7 +831,6 @@ def test_the_batches_view_links_to_the_page_of_another_batch(
     assert page.inner_text('#batches tr[aria-current=page] a') == 'Scan'
     listed = page.locator('#batches tbody tr', has_text='Other').inner_text()
     assert 'The second series' in listed
-    assert 'Run 2 \N{EN DASH}' in listed
     assert 'follows' in listed
     page.click('#batches a:text-is("Other")')
     page.wait_for_selector('#title:has-text("Other")')
@@ -862,12 +840,11 @@ def test_the_batches_view_links_to_the_page_of_another_batch(
 def test_the_batches_view_counts_the_rows_when_opened_and_again_on_request(
     page: Any, batch: Batch, client: Client
 ) -> None:
-    batch.rows = batch.rows.remove_each(['3'])
+    batch.put(batch.frame().drop(index=['3']))
 
     page.click('[data-view=batches]')
 
     page.wait_for_selector('#batches .pill.st-ready:text-is("2 ready")')
-    assert page.inner_text('#outside') == '1 row of pairs in no batch.'
     client.wait(batch.reduce(['1']))
     page.click('#count')
     page.wait_for_selector('#batches .pill.st-done:text-is("1 done")')
@@ -891,7 +868,7 @@ def test_a_count_that_fails_says_why_in_the_batches_view_and_shows_no_counts(
 
 
 def test_a_batch_that_could_not_be_counted_shows_why_in_its_row(page: Any) -> None:
-    counted = {'rows': {}, 'failed': {'scan': 'half written'}, 'outside': {}}
+    counted = {'rows': {}, 'failed': {'scan': 'half written'}}
     page.route('**/api/batches/counts', lambda r: r.fulfill(json=counted))
 
     page.click('[data-view=batches]')
@@ -902,12 +879,10 @@ def test_a_batch_that_could_not_be_counted_shows_why_in_its_row(page: Any) -> No
 # Making a batch
 
 
-def fill_new_batch(page: Any, title: str, start: str = '', stop: str = '') -> None:
+def fill_new_batch(page: Any, title: str) -> None:
     """Fill the form "New batch", open, for a batch with the column Thickness."""
     page.fill('#new-title', title)
     page.check('#new-columns input[value=thickness]')
-    page.fill('#new-start', start)
-    page.fill('#new-batch [name=stop]', stop)
 
 
 def test_a_person_makes_a_batch_and_lands_on_its_page(
@@ -918,15 +893,14 @@ def test_a_person_makes_a_batch_and_lands_on_its_page(
     assert page.is_checked('#new-columns input[value=sample]')
     assert page.is_disabled('#new-columns input[value=sample]')
 
-    fill_new_batch(page, 'Afternoon', start='2')
+    fill_new_batch(page, 'Afternoon')
     page.click('#new-batch [type=submit]')
 
     page.wait_for_selector('#title:has-text("Afternoon")')
     (label,) = (k for k, h in manager.headers().items() if h.title == 'Afternoon')
     assert page.url.endswith(f'/batches/{label}/')
-    header = manager.headers()[label]
-    assert header.columns == ('sample', 'transmission', 'thickness')
-    assert header.scope == Scope(start=2)
+    page.wait_for_selector('.chip.st-all .n:text-is("3")')
+    assert manager.batch(label).columns == ('sample', 'transmission', 'thickness')
 
 
 def test_a_refusal_of_the_manager_shows_at_the_form_and_makes_nothing(
@@ -935,10 +909,10 @@ def test_a_refusal_of_the_manager_shows_at_the_form_and_makes_nothing(
     page.click('[data-view=batches]')
     page.click('#new-batch-open')
 
-    fill_new_batch(page, 'Backwards', start='3', stop='2')
+    fill_new_batch(page, ' ')
     page.click('#new-batch [type=submit]')
 
-    page.wait_for_selector('#new-problem:has-text("below its start")')
+    page.wait_for_selector('#new-problem:has-text("a title that is not empty")')
     assert page.is_hidden('#message')
     assert page.is_enabled('#new-batch [type=submit]')
     assert [h.title for h in manager.headers().values()] == ['Scan']
@@ -979,7 +953,7 @@ def no_batch(browser: Any, pages: Pages, sample: Measure) -> Iterator[Any]:
 def test_the_root_without_a_batch_shows_the_batches_and_runs_and_makes_one(
     no_batch: Any, manager: BatchManager
 ) -> None:
-    assert no_batch.is_hidden('[data-view=samples]')
+    assert no_batch.is_hidden('[data-view=rows]')
     assert no_batch.is_hidden('.right')
     no_batch.wait_for_selector('[data-view=runs] .n:text-is("2")')
 
@@ -1005,20 +979,18 @@ def test_a_batch_that_cannot_be_shown_says_why_and_shows_the_list(
     files: CorrectedFiles,
     sample: Measure,
 ) -> None:
-    def raising(files: Sequence[Any]) -> NoReturn:
-        raise RuntimeError('the table is half written')
-
     sample(1, 'water')
-    sources = {'pairs': PAIRS, 'broken': Source(raising, fills=('sample',))}
-    manager = BatchManager(client, sources=sources, definitions=refusing)
-    manager.create(STAGED.name, title='Good', source='pairs', label='good')
-    manager.create(STAGED.name, title='Broken', source='broken', label='broken')
+    first = BatchManager(client, sources=SOURCES, definitions=refusing)
+    first.create(STAGED.name, title='Good', rows=toys.rows(client), label='good')
+    first.create(STAGED.name, title='Broken', label='broken')
+    refusing.save(rows_key('broken'), {'nonsense': 1})
+    manager = BatchManager(client, sources=SOURCES, definitions=refusing)
     pages = Pages(manager, files=files, marks=Marks)
     with serve(create_app(pages)) as url:
         page = watched(browser)
         page.goto(f'{url}batches/broken/')
 
-        page.wait_for_selector('#message:has-text("Cannot show broken: the table")')
+        page.wait_for_selector('#message:has-text("Cannot show broken: ")')
         page.wait_for_selector('#batches tbody tr:has-text("Good")')
         page.wait_for_selector('[data-view=runs] .n:text-is("2")')
         assert len(page.errors) == 1
@@ -1033,18 +1005,18 @@ def test_a_batch_that_cannot_be_shown_says_why_and_shows_the_list(
 # The tab "Batch"
 
 
-def test_a_person_saves_a_title_and_a_scope(page: Any, manager: BatchManager) -> None:
+def test_a_person_saves_a_title_and_a_description(
+    page: Any, manager: BatchManager
+) -> None:
     page.click('[data-tab=batch]')
     assert 'Staged' in page.inner_text('#batch-fixed')
 
     page.fill('#batch-title', 'Morning')
-    page.fill('#batch-start', '2')
+    page.fill('#batch-description', '1 mm cells')
     page.click('#batch-form [type=submit]')
 
     page.wait_for_selector('#title:has-text("Morning")')
-    page.wait_for_selector('.chip.st-all .n:text-is("2")')
-    header = manager.headers()['scan']
-    assert (header.title, header.scope) == ('Morning', Scope(start=2))
+    assert manager.headers()['scan'] == Header('Morning', '1 mm cells')
 
 
 def test_a_refused_header_shows_at_the_form_and_changes_nothing(
@@ -1052,51 +1024,15 @@ def test_a_refused_header_shows_at_the_form_and_changes_nothing(
 ) -> None:
     page.click('[data-tab=batch]')
 
-    page.fill('#batch-start', '3')
-    page.fill('#tab-batch [name=stop]', '2')
+    page.fill('#batch-title', ' ')
     page.click('#batch-form [type=submit]')
 
-    page.wait_for_selector('#batch-problem:has-text("below its start")')
+    page.wait_for_selector('#batch-problem:has-text("a title that is not empty")')
     assert page.is_hidden('#message')
-    assert manager.headers()['scan'].scope == Scope()
+    assert manager.headers()['scan'].title == 'Scan'
     assert len(page.errors) == 1
     assert 'status of 422' in page.errors[0]
     page.errors.clear()
-
-
-def test_a_person_ends_a_series_and_starts_the_next_at_a_row(
-    page: Any, manager: BatchManager
-) -> None:
-    page.click('[data-tab=batch]')
-    select(page, 'sds')
-    asked: list[str] = []
-
-    def answer(dialog: Any) -> None:
-        asked.append(dialog.message)
-        dialog.accept('Afternoon')
-
-    page.once('dialog', answer)
-    page.click('#next-batch')
-
-    page.wait_for_selector('#title:has-text("Afternoon")')
-    assert asked[0].startswith('The next batch starts at sds.')
-    (label,) = set(manager.headers()) - {'scan'}
-    assert page.url.endswith(f'/batches/{label}/')
-    assert manager.headers()['scan'].scope == Scope(stop=2)
-    assert manager.headers()[label].scope == Scope(start=2)
-
-
-def test_the_next_batch_asks_for_one_row_selected(
-    page: Any, manager: BatchManager
-) -> None:
-    page.click('[data-tab=batch]')
-
-    page.click('#next-batch')
-
-    page.wait_for_selector(
-        '#message:has-text("Select one row: the next batch starts at it.")'
-    )
-    assert list(manager.headers()) == ['scan']
 
 
 def test_remove_goes_to_another_batch_then_to_the_root_without_one(

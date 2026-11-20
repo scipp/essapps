@@ -1,19 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The rows of a batch: as an immutable value of two layers (:class:`RowTable`),
-and as a frame (:data:`KEY` and the functions after it).
-
-A :class:`RowTable` holds two layers: what the last scan gave, and what was set
-by hand since, a person's edit or a program's. A row's cells are the scan's
-with the edits on top, worked out when asked for. So a new scan replaces only
-its own layer, and no merge is needed: each rule below follows from which layer
-an operation writes. The table keeps every row of the scan and shows those in
-its scope, so a change of scope needs no new scan. The cells of a
-:class:`RowTable` are opaque; it knows nothing of specs, files, or widgets.
-
-The frame form
---------------
+The table of a batch as a frame: its dtypes, its cells, and ``rows.json``.
 
 A table is one ``DataFrame``: the key of each row as index, named
 :data:`KEY`, a column per parameter of the spec that the rows give, and notes,
@@ -44,7 +32,12 @@ A cell must be of the kind of its column, with no conversion by pandas:
 ``int`` or a whole ``float`` (``1.0`` is kept as ``1``: pandas gives whole
 numbers with a gap as floats), ``boolean`` a ``bool``, and ``object`` plain
 data, the values of JSON as Python gives them. A note takes the dtype of
-``convert_dtypes()``, which must be one of these five. An empty cell is
+``convert_dtypes()``, which must be one of these five. A note with no value
+keeps its dtype if it is ``string``, ``Float64``, ``Int64`` or ``boolean``,
+and is ``string`` otherwise: pandas makes a column ``float64`` or ``object``
+when it fills it with empty cells, as ``concat`` does. The table owns the
+lists and groups in its ``object`` cells: :func:`typed` copies them. An empty
+cell is
 ``None``, ``NaN`` or ``pd.NA`` as given; in the table it is ``pd.NA``, or
 ``None`` in an ``object`` column, and in a row read with ``to_dict('index')``
 and in ``rows.json`` it is ``None``.
@@ -79,299 +72,45 @@ Python values keeps each float and integer exact, and :func:`frame_of` builds
 each column with ``pd.array(values, dtype=extDtype)``.
 A row is read as ``frame.to_dict('index')``, which gives Python values of each
 column's type, never a NumPy scalar or a ``Float64`` in place of an ``Int64``.
+
+A table file, ``.csv``, ``.tsv`` or ``.xlsx``, is the frame as text
+(:func:`write_table`), with the key as its column ``key``; :func:`read_table`
+reads its parameter columns back equal. A list or a group is JSON text, as is
+a cell of an ``object`` column that would read back as something else
+(:func:`_write_cell`)::
+
+    key,sample,thickness,binning,name
+    60339,run:60339,1.5,"{""bins"": 4}",water
+    60340,run:60340,,,NA
+
+Empty is the only missing marker, so a note ``NA`` is text. A note has no
+type in a file of text, so it reads back as text; only ``rows.json`` keeps the
+dtype of every column.
 """
 
 from __future__ import annotations
 
+import copy
+import json
 import re
-from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass, field, replace
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import date
 from enum import Enum
-from functools import cached_property
-from typing import Any, Literal, get_args, get_origin
+from functools import partial
+from pathlib import Path
+from typing import Any, Literal, TextIO, get_args, get_origin
 
 import pandas as pd
 from pandas.io.json import build_table_schema
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
-from pydantic_core import to_jsonable_python
+from pydantic_core import to_json, to_jsonable_python
 
 from ess.spec import FileRef, OutputRef, field_types
 
-from ..errors import FieldError, SubmitError
 from ..files import file
-
-
-class _Empty:
-    def __repr__(self) -> str:
-        return 'EMPTY'
-
-
-EMPTY: Any = _Empty()
-"""Written to a cell by :meth:`RowTable.edit` to clear it, whatever the scan gave."""
-
-type Index = int | float | str
-"""A value that orders rows, such as the run number. One source gives one type."""
-
-
-@dataclass(frozen=True)
-class Row:
-    """
-    One row: ``values`` by column, and ``info``, read-only text to show with it.
-
-    A column left out of ``values`` is an empty cell; ``None`` is a value.
-    ``key`` must stay the same from one scan to the next, so it is best derived
-    from something that does not change, such as the run number, with the name
-    of the sample in ``info``. ``index`` orders the rows for a :class:`Scope`;
-    the source gives it, and a row added by hand has none.
-
-    Raises ``TypeError`` if ``key`` is not a string.
-    """
-
-    key: str
-    values: Mapping[str, Any] = field(default_factory=dict)
-    info: Mapping[str, str] = field(default_factory=dict)
-    index: Index | None = None
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.key, str):
-            raise TypeError(f'the key of a row is a string, not {self.key!r}')
-
-
-@dataclass(frozen=True)
-class Scope:
-    """
-    Which rows of the scan a table shows: a slice of index values. ``start``
-    is included and ``stop`` excluded, as in a Python slice; ``None`` is an
-    open end. ``Scope()`` holds every row, also one without an index; a
-    slice with an end holds no row without one, and a ``stop`` equal to the
-    ``start`` holds no row. The manager converts the ends to the type of the
-    index of a source, and refuses a ``stop`` below the ``start``.
-
-    Raises ``TypeError`` for an end that is not an ``int``, ``float`` or
-    ``str``, since only these are kept as they are in the definitions.
-    """
-
-    start: Index | None = None
-    stop: Index | None = None
-
-    def __post_init__(self) -> None:
-        for end in (self.start, self.stop):
-            if end is not None and (
-                isinstance(end, bool) or not isinstance(end, int | float | str)
-            ):
-                raise TypeError(
-                    f'an end of a scope is an int, a float or a str, not {end!r}'
-                )
-
-    def holds(self, row: Row) -> bool:
-        """Whether ``row`` is in the scope."""
-        if self.start is None and self.stop is None:
-            return True
-        if row.index is None:
-            return False
-        return (self.start is None or self.start <= row.index) and (
-            self.stop is None or row.index < self.stop
-        )
-
-
-def _unique(rows: Iterable[Row]) -> tuple[Row, ...]:
-    """``rows``; raises ``SubmitError`` for a key given twice."""
-    rows = tuple(rows)
-    count = Counter(row.key for row in rows)
-    if twice := sorted(key for key, n in count.items() if n > 1):
-        raise SubmitError(FieldError(k, (), 'two rows have this key') for k in twice)
-    return rows
-
-
-@dataclass(frozen=True)
-class RowTable:
-    """
-    Rows by key: those of the scan in ``scope``, then those added by hand.
-    Each method returns a new table. See ``packages/essapps/docs/batch.md``
-    for the rules.
-    """
-
-    scan: tuple[Row, ...] = ()
-    added: tuple[Row, ...] = ()
-    edits: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
-    removed: frozenset[str] = frozenset()
-    scope: Scope = field(default_factory=Scope)
-
-    @cached_property
-    def _rows(self) -> dict[str, Row]:
-        hidden = self.removed | {row.key for row in self.added}
-        shown = [r for r in self.scan if r.key not in hidden and self.scope.holds(r)]
-        return {row.key: self._with_edits(row) for row in (*shown, *self.added)}
-
-    @property
-    def removed_in_scope(self) -> frozenset[str]:
-        """
-        The keys of the rows removed by hand that the scan gives in the scope:
-        those a person sees as removed, and can bring back.
-        """
-        return frozenset(
-            r.key for r in self.scan if r.key in self.removed and self.scope.holds(r)
-        )
-
-    def _refuse_outside(self, keys: Iterable[str]) -> None:
-        """
-        Raise ``SubmitError`` for each of ``keys`` that the table does not
-        show, since the scan gives it outside the scope: added by hand, it
-        would no longer take its cells from the scan.
-        """
-        outside = {r.key for r in self.scan if not self.scope.holds(r)}
-        if refused := [k for k in keys if k in outside and k not in self]:
-            raise SubmitError(
-                FieldError(k, (), 'the source makes this row outside the scope')
-                for k in refused
-            )
-
-    def _with_edits(self, row: Row) -> Row:
-        edits = self.edits.get(row.key)
-        if edits is None and not any(v is EMPTY for v in row.values.values()):
-            return row
-        cells = {**row.values, **(edits or {})}
-        return replace(
-            row, values={column: v for column, v in cells.items() if v is not EMPTY}
-        )
-
-    def __iter__(self) -> Iterator[Row]:
-        return iter(self._rows.values())
-
-    def __len__(self) -> int:
-        return len(self._rows)
-
-    def __contains__(self, key: str) -> bool:
-        return key in self._rows
-
-    def __getitem__(self, key: str) -> Row:
-        return self._rows[key]
-
-    def rescan(self, rows: Iterable[Row]) -> RowTable:
-        """
-        Replace the scan's layer. What was set by hand stays: an edit, a row
-        added, and a row removed. Raises ``SubmitError`` for a key given twice.
-        """
-        return replace(self, scan=_unique(rows))
-
-    def put(self, rows: Iterable[Row], columns: Iterable[str]) -> RowTable:
-        """
-        Set ``rows`` by hand, as a table of them gives them: a row of a key
-        that the table does not show is added, but one of the scan that was
-        removed is brought back; and of a row shown, or brought back, each of
-        ``columns`` whose cell differs is set, or cleared if the row given
-        leaves it empty. A cell that does not differ is left as it is, so one
-        from the scan keeps following the scan. Raises ``SubmitError``, and
-        sets none, for a key given twice, and for a key of a row that the scan
-        gives outside the scope.
-        """
-        columns = tuple(columns)
-        rows = _unique(rows)
-        self._refuse_outside(row.key for row in rows)
-        added = list(self.added)
-        edits = dict(self.edits)
-        removed = set(self.removed)
-        scan = {row.key: row for row in self.scan if row.key in removed}
-        for row in rows:
-            if row.key in scan:
-                removed.discard(row.key)
-                shown = self._with_edits(scan[row.key]).values
-            elif row.key in self:
-                shown = self[row.key].values
-            else:
-                added.append(row)
-                edits.pop(row.key, None)  # as :meth:`add`
-                continue
-            changed = {
-                c: row.values.get(c, EMPTY)
-                for c in columns
-                if (c in row.values, row.values.get(c)) != (c in shown, shown.get(c))
-            }
-            if changed:
-                edits[row.key] = {**edits.get(row.key, {}), **changed}
-        return replace(
-            self, added=tuple(added), edits=edits, removed=frozenset(removed)
-        )
-
-    def add(self, row: Row) -> RowTable:
-        """
-        Add a row by hand; it stays whatever a scan gives or the scope holds.
-        Raises ``SubmitError`` if the table has a row of that key, or the scan
-        gives one outside the scope.
-        """
-        if row.key in self:
-            raise SubmitError([FieldError(row.key, (), 'a row has this key already')])
-        self._refuse_outside([row.key])
-        edits = {k: v for k, v in self.edits.items() if k != row.key}
-        return replace(self, added=(*self.added, row), edits=edits)
-
-    def edit(self, key: str, values: Mapping[str, Any]) -> RowTable:
-        """
-        Set cells of a row by hand, :data:`EMPTY` to clear one. They stay
-        until set again or :meth:`reset`. Raises ``KeyError`` if there is no such
-        row.
-        """
-        return self.edit_each([key], values)
-
-    def edit_each(self, keys: Iterable[str], values: Mapping[str, Any]) -> RowTable:
-        """
-        :meth:`edit` of each of ``keys`` in one pass. Raises ``KeyError``, and
-        edits none, if the table has no row for one of them.
-        """
-        keys = tuple(keys)
-        for key in keys:
-            self[key]
-        edits = dict(self.edits)
-        for key in keys:
-            edits[key] = {**edits.get(key, {}), **values}
-        return replace(self, edits=edits)
-
-    def remove(self, key: str) -> RowTable:
-        """
-        Remove a row. One from the scan stays removed after the next scan,
-        until :meth:`reset`. Raises ``KeyError`` if there is no such row.
-        """
-        return self.remove_each([key])
-
-    def remove_each(self, keys: Iterable[str]) -> RowTable:
-        """
-        :meth:`remove` of each of ``keys`` in one pass. Raises ``KeyError``, and
-        removes none, if the table has no row for one of them.
-        """
-        keys = frozenset(keys)
-        for key in keys:
-            self[key]
-        return replace(
-            self,
-            added=tuple(row for row in self.added if row.key not in keys),
-            edits={k: v for k, v in self.edits.items() if k not in keys},
-            removed=self.removed | keys.intersection(row.key for row in self.scan),
-        )
-
-    def reset(self, key: str, *columns: str) -> RowTable:
-        """
-        Forget the edits of a row, and that it was removed, if it was. Given
-        ``columns``, forget only the edits of those cells.
-        """
-        return self.reset_each([key], *columns)
-
-    def reset_each(self, keys: Iterable[str], *columns: str) -> RowTable:
-        """:meth:`reset` of each of ``keys`` in one pass."""
-        keys = frozenset(keys)
-        edits = {}
-        for key, cells in self.edits.items():
-            if key not in keys:
-                edits[key] = cells
-            elif columns and (
-                kept := {c: v for c, v in cells.items() if c not in columns}
-            ):
-                edits[key] = kept
-        removed = self.removed if columns else self.removed - keys
-        return replace(self, edits=edits, removed=removed)
-
 
 KEY = 'key'
 """The name of the index of a table: the key of each row."""
@@ -529,8 +268,10 @@ def _cast(column: pd.Series, dtype: str) -> tuple[pd.Series, list[str]]:
         for k, v in zip(column.index, values, strict=True)
         if v is not None and not _fits(v, dtype)
     ]
-    if dtype == 'object':
-        return pd.Series(values, index=column.index, dtype=object), refused
+    if dtype == 'object':  # the table owns its lists and groups
+        return pd.Series(
+            copy.deepcopy(values), index=column.index, dtype=object
+        ), refused
     if refused:
         return column, refused
     if dtype == 'Int64':  # a whole float, as pandas gives a column with a gap
@@ -542,7 +283,9 @@ def typed(frame: pd.DataFrame, model: type[BaseModel]) -> pd.DataFrame:
     """
     ``frame`` as a batch holds it: the index of text named :data:`KEY`, each
     column of a parameter of ``model`` of its dtype (see :func:`dtypes`), and
-    each note of the dtype of ``convert_dtypes()``.
+    each note of the dtype of ``convert_dtypes()``; a note with no value keeps
+    its dtype, or is ``string`` if that is ``float64`` or ``object``. A list
+    or a group in a cell is copied.
 
     Raises ``ValueError``, naming each key, column or cell refused: a key that
     is not text, empty, or given twice; a column named :data:`KEY`, not named
@@ -557,6 +300,9 @@ def typed(frame: pd.DataFrame, model: type[BaseModel]) -> pd.DataFrame:
     for name, column in frame.set_axis(index).items():
         if name in types:
             dtype = types[name]
+        elif column.isna().all():  # pandas makes it float or object when it lost it
+            kept = str(column.dtype) in _WORDS.keys() - {'object'}
+            dtype = str(column.dtype) if kept else 'string'
         else:
             column = column.convert_dtypes()
             dtype = str(column.dtype)
@@ -678,3 +424,147 @@ def frame_of(data: Any) -> pd.DataFrame:
     if problems:
         raise ValueError('; '.join(problems))
     return pd.DataFrame(columns, index=index, columns=names)
+
+
+RESULT = ('status', 'earlier', 'record', 'failure')
+"""The columns of what came of each row, which a table file may hold."""
+
+_READERS: dict[str, Callable[..., pd.DataFrame]] = {
+    '.csv': pd.read_csv,
+    '.tsv': partial(pd.read_csv, sep='\t'),
+    '.xlsx': pd.read_excel,
+}
+
+SUFFIXES = tuple(_READERS)
+"""The suffixes of the files that hold a table."""
+
+
+def _reader(path: Path) -> Callable[..., pd.DataFrame]:
+    if (reader := _READERS.get(path.suffix)) is None:
+        raise ValueError(f'{path}: a table is one of {", ".join(SUFFIXES)}')
+    return reader
+
+
+def _read_cell(text: str) -> Any:
+    """The value of a cell of an ``object`` column: its JSON value, or its text."""
+    try:
+        return json.loads(text)
+    except ValueError:
+        return text
+
+
+def _write_cell(value: Any) -> str:
+    """The text that :func:`_read_cell` reads as ``value``, plain data."""
+    if isinstance(value, str) and _read_cell(value) == value:
+        return value
+    return to_json(value).decode()
+
+
+def read_text(path: Path) -> pd.DataFrame:
+    """
+    The table in a file of one of :data:`SUFFIXES`, each cell as text, an
+    empty one as ``''``: a table that is not of a batch, such as a run table,
+    or one with the columns of :data:`RESULT`.
+    """
+    return _reader(path)(path, dtype=str, keep_default_na=False)
+
+
+def read_table(path: Path, model: type[BaseModel]) -> pd.DataFrame:
+    """
+    The table in a file of one of :data:`SUFFIXES`, as :func:`typed` gives it
+    for the params model ``model``. The file has a column :data:`KEY`. A column
+    of a parameter is read with its dtype, an ``object`` column cell by cell
+    with :func:`_read_cell`; the columns of :data:`RESULT` are dropped. Only an
+    empty cell is missing.
+
+    The type of a note is never guessed from text. A note of a ``.csv`` or
+    ``.tsv`` file is text, so ``0342`` stays ``'0342'``. A cell of a ``.xlsx``
+    file has a type, so a note of one keeps the dtype of its cells if that is
+    one of the five of a table, and is text otherwise, such as for dates or
+    for cells of several types. Only ``rows.json`` keeps the dtype of every
+    column (:func:`frame_of`). A ``.xlsx`` file keeps 15 significant digits
+    of a number, as Excel does: ``0.1 + 0.2`` reads back as ``0.3``.
+
+    Raises ``ValueError``, naming the file, if the file has no column
+    :data:`KEY`, a cell is not of the kind of its column, or :func:`typed`
+    refuses the table.
+    """
+    reader = _reader(path)
+    try:
+        return _read_table(reader, path, model)
+    except (TypeError, ValueError) as error:
+        # TypeError: what pandas raises for 2.5 in an Int64 column
+        raise ValueError(f'{path}: {error}') from None
+
+
+def _read_table(
+    reader: Callable[..., pd.DataFrame], path: Path, model: type[BaseModel]
+) -> pd.DataFrame:
+    types = dtypes(model)
+    xlsx = path.suffix == '.xlsx'
+    read_as: dict[str, Any] = {
+        n: 'string' if t == 'object' else t for n, t in types.items()
+    }
+    if xlsx:
+        # pandas reads an empty cell of .xlsx as the text 'nan' for a boolean
+        # dtype; a cell of .xlsx is a bool already, which typed() checks.
+        read_as = {n: object if t == 'boolean' else t for n, t in read_as.items()}
+    # A note: each cell as the file holds it, text if the file is text.
+    notes = object if xlsx else 'string'
+    frame = reader(
+        path,
+        dtype=defaultdict(lambda: notes, {**read_as, KEY: 'string'}),
+        keep_default_na=False,
+        na_values=[''],
+    )
+    if KEY not in frame.columns:
+        raise ValueError(f'a table has a column {KEY!r}, the key of each row')
+    frame = frame.drop(columns=list(RESULT), errors='ignore').set_index(KEY)
+    for name, column in frame.items():
+        if types.get(name) == 'object':
+            frame[name] = pd.Series(
+                [None if pd.isna(v) else _read_cell(v) for v in column],
+                index=frame.index,
+                dtype=object,
+            )
+        elif name not in types and xlsx:
+            frame[name] = _note(column)
+    return typed(frame, model)
+
+
+def _note(column: pd.Series) -> pd.Series:
+    """
+    A note of a ``.xlsx`` file: of the dtype of its cells, or text. A note
+    without a value in any row is text, as in a ``.csv`` file.
+    """
+    typed_column = column.convert_dtypes()
+    if column.notna().any() and str(typed_column.dtype) in _WORDS.keys() - {'object'}:
+        return typed_column
+    cells = [None if _empty(v) else str(v) for v in column]
+    return pd.Series(cells, index=column.index, dtype='string')
+
+
+def write_table(frame: pd.DataFrame, out: Path | TextIO) -> None:
+    """
+    Write ``frame`` as :func:`read_table` reads it back: to a file of one of
+    :data:`SUFFIXES`, by its suffix, or as CSV to a stream. A named index,
+    such as :data:`KEY`, is the first column, and each cell of an ``object``
+    column is :func:`_write_cell` of it.
+    """
+    suffix = '.csv'
+    if isinstance(out, Path):
+        _reader(out)  # refuses another suffix before anything is written
+        suffix = out.suffix
+    if frame.index.name is not None:
+        frame = frame.reset_index()
+    frame = frame.assign(
+        **{
+            name: [None if _empty(v) else _write_cell(v) for v in column]
+            for name, column in frame.items()
+            if column.dtype == object
+        }
+    )
+    if suffix == '.xlsx':
+        frame.to_excel(out, index=False)
+    else:
+        frame.to_csv(out, index=False, sep='\t' if suffix == '.tsv' else ',')

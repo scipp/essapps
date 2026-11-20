@@ -8,16 +8,21 @@ import threading
 from collections.abc import Callable, Sequence
 from typing import Annotated, Any
 
+import pandas as pd
 from pydantic import BaseModel, Field
 
+from ess.apps import Client
 from ess.apps.batch import (
+    Batch,
+    BatchManager,
     DefinitionStore,
     FileInfo,
     NotKept,
-    Row,
     Source,
+    rows_of,
 )
 from ess.apps.batch.definition import Key
+from ess.apps.batch.table import KEY
 from ess.spec import FileRef, Referenced, RunFile, WorkflowSpec
 
 
@@ -121,16 +126,34 @@ class Gate:
         assert self._event.wait(30)
 
 
+class Flaky:
+    """A client whose next ``fail`` submissions raise, as a lost connection does."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+        self.fail = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    def submit(self, *args: Any, **kwargs: Any) -> Any:
+        if self.fail:
+            self.fail -= 1
+            raise ConnectionError('lost')
+        return self._client.submit(*args, **kwargs)
+
+
 class Refusing:
     """
     Definitions that refuse to save or delete the tables named ``part``, such
     as ``'header'``, or the table of the key ``part``, such as
     ``('labels', 'scan', 'header')``, and keep the others in the definitions
-    they wrap.
+    they wrap; ``saved`` lists the keys saved, in order.
     """
 
     def __init__(self, definitions: DefinitionStore) -> None:
         self.part: str | Key | None = None
+        self.saved: list[Key] = []
         self._definitions = definitions
 
     def load[T](self, key: Key, read: Callable[[Any], T]) -> T | None:
@@ -139,6 +162,7 @@ class Refusing:
     def save(self, key: Key, data: Any) -> None:
         self._check(key)
         self._definitions.save(key, data)
+        self.saved.append(key)
 
     def delete(self, key: Key) -> None:
         self._check(key)
@@ -152,45 +176,75 @@ class Refusing:
             raise NotKept(f'{key}: refused')
 
 
-def pair(files: Sequence[FileInfo]) -> list[Row]:
-    """A row per sample run, keyed by run, with the sample's transmission run."""
+def pair(files: Sequence[FileInfo]) -> pd.DataFrame:
+    """
+    A row per sample run, keyed by run, with the sample's transmission run;
+    the run and the name of the sample as notes.
+    """
     partner = {
-        f.metadata['sample']: f.ref
+        f.metadata['sample']: str(f.ref)
         for f in files
         if f.metadata.get('role') == 'transmission'
     }
-    rows = []
-    for f in files:
-        if f.metadata.get('role') == 'sample' and not f.metadata.get('exclude'):
-            values = {'sample': f.ref}
-            if f.metadata['sample'] in partner:
-                values['transmission'] = partner[f.metadata['sample']]
-            rows.append(
-                Row(
-                    str(f.metadata['run']),
-                    values,
-                    info={'name': f.metadata['sample']},
-                    index=int(f.metadata['run']),
-                )
-            )
-    return rows
+    rows = [
+        {
+            KEY: str(f.metadata['run']),
+            'run': f.metadata['run'],
+            'name': f.metadata['sample'],
+            'sample': str(f.ref),
+            'transmission': partner.get(f.metadata['sample']),
+        }
+        for f in files
+        if f.metadata.get('role') == 'sample' and not f.metadata.get('exclude')
+    ]
+    columns = [KEY, 'run', 'name', 'sample', 'transmission']
+    return pd.DataFrame.from_records(rows, columns=columns).set_index(KEY)
 
 
-def samples(files: Sequence[FileInfo]) -> list[Row]:
+def samples(files: Sequence[FileInfo]) -> pd.DataFrame:
     """A row per sample run, keyed by run."""
-    return [
-        Row(str(f.metadata['run']), {'sample': f.ref})
+    rows = [
+        {KEY: str(f.metadata['run']), 'sample': str(f.ref)}
         for f in files
         if f.metadata.get('role') == 'sample'
     ]
+    return pd.DataFrame.from_records(rows, columns=[KEY, 'sample']).set_index(KEY)
 
 
-PAIRS = Source(
-    pair, fills=('sample', 'transmission'), row_name='name', index_title='Run'
-)
+PAIRS = Source(pair, fills=('sample', 'transmission'))
 SAMPLES = Source(samples, fills=('sample',))
 SOURCES = {'pairs': PAIRS}
 STAGED_NAMES = frozenset({STAGED.name})
 """The specs whose batches run through a stage."""
 
 Measure = Callable[..., FileRef]
+
+
+def rows(client: Client) -> pd.DataFrame:
+    """
+    The rows that :data:`PAIRS` makes from the files now, with an empty column
+    ``thickness``: the rows of a batch whose columns are :data:`COLUMNS`.
+    """
+    return rows_of(client, PAIRS).assign(thickness=None)
+
+
+def edit(batch: Batch, key: str, **cells: Any) -> None:
+    """Set cells of the row of ``key``, ``pd.NA`` to empty one; a new key adds a row."""
+    frame = batch.frame()
+    for column, cell in cells.items():
+        frame.loc[key, column] = cell
+    batch.put(frame)
+
+
+def from_pairs(manager: BatchManager, spec: str, **options: Any) -> str:
+    """
+    A batch of ``manager`` made from the source ``pairs`` with ``options``,
+    with an empty column ``thickness``, so that its columns are
+    :data:`COLUMNS`; its label.
+    """
+    return manager.create(
+        spec,
+        source='pairs',
+        choose=lambda given: given.assign(thickness=None),
+        **options,
+    )

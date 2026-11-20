@@ -112,11 +112,12 @@ Automatic reduction belongs to its sub-design ([automatic-reduction.md](automati
 The stories use these calls:
 
 ```python
-batch = Batch(client, SPEC, columns=(...), label=..., source=Source(rows_of_files, fills=(...)),
-              persist=True)
-auto = Automatic(batch)   # reads batch.settings at each step
-auto.step()       # scans, and reduces the ready rows without a result; their records by key
-auto.refused      # why rows of the last step were refused by submit, by key
+source = Source(rows_of_files, fills=(...))   # rows_of_files: the files -> a DataFrame of rows
+batch = Batch(client, SPEC, label=..., rows=rows_of(client, source), persist=True)
+done = step(batch, source, considered)   # reads batch.settings at each step
+done.records      # the step added the new rows of the source, and reduced the ready rows without a result; their records by key
+done.refused      # why rows of the step were refused by submit, by key
+done.considered   # what the next step is given
 ```
 
 ## S. Small stories
@@ -644,48 +645,59 @@ The stories E2 to E4 reduce a row per run:
 
 ```python
 def per_run(files):                                            # every raw file
-    return [Row(str(f.metadata['run']), {'sample': f.ref}) for f in files]
+    return pd.DataFrame({'sample': [f.ref.file for f in files]},
+                        index=[str(f.metadata['run']) for f in files])
+
+PER_RUN = Source(per_run, fills=('sample',))
 
 def iofq_batch(client):
-    return Batch(client, IOFQ, columns=('sample',), label='iofq',
-                 source=Source(per_run, fills=('sample',)), persist=True,
-                 settings={'normalization': None})
+    return Batch(client, IOFQ, label='iofq', rows=rows_of(client, PER_RUN),
+                 persist=True, settings={'normalization': None})
 ```
 
 ### E1. Series grows, reduction follows
 
-Actor: reflectometry user during a beamtime. Goal: after each angle, the stitched curve grows by one angle; one curve per sample, not one per arrival.
+Actor: reflectometry user during a beamtime. Goal: after each angle, the newest row of a sample is its curve with all angles so far.
 
-This story is not met, and its test is marked `xfail`. A step of Follow reduces only the rows that have no result ([ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md), "What a step reduces"), so the row of `si` is reduced once, with the first angle, and never again as angles arrive. It is open whether ADR 0013 is amended for a source whose rows grow, or this story changes.
+The source gives one row per sample: its runs so far, under a key that names the sample and its runs. A list that grows is a new row, which Follow adds and reduces as any row ([ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md), "A step never changes a row that the table has"). The earlier rows stay with their results. The key names the whole list, so runs listed out of order give a new row too.
 
 ```python
 reference = measure(1, [1.0, 1.0], role='reference')
 
-def angles(files):                                             # a row per sample: all its angles so far, in run order
+def angles(files):                                             # a row per sample: its runs so far, in run order
     runs = {}
     for f in sorted(files, key=lambda f: f.metadata['run']):
         if f.metadata.get('role') == 'sample':
-            runs.setdefault(f.metadata['sample'], []).append(f.ref)
-    return [Row(sample, {'runs': refs}) for sample, refs in runs.items()]
+            runs.setdefault(f.metadata['sample'], []).append(f)
+    keys = [f'{sample}@{",".join(str(f.metadata["run"]) for f in found)}'   # si@2, si@2,4, ...
+            for sample, found in runs.items()]
+    return pd.DataFrame({'sample': list(runs),
+                         'runs': [[f.ref.file for f in found] for found in runs.values()]}, index=keys)
 
-batch = Batch(client, STITCH, columns=('runs',), label='reflectivity',
-              source=Source(angles, fills=('runs',)), persist=True,
-              settings={'reference': reference})
-auto = Automatic(batch)
+source = Source(angles, fills=('runs',))
+batch = Batch(client, STITCH, label='reflectivity', rows=rows_of(client, source),
+              persist=True, settings={'reference': reference})
+counts = {2: [1.0, 2.0], 3: [1.0, 1.0], 4: [4.0, 8.0]}
+considered, reduced = frozenset(), {}
+for run, key in [(2, 'si@2'), (4, 'si@2,4'), (3, 'si@2,3,4'), (2, None)]:   # 4 before 3; 2 listed again
+    measure(run, counts[run], role='sample', sample='si')
+    done = step(batch, source, considered)
+    considered = done.considered
+    reduced |= done.records
+    assert list(done.records) == ([] if key is None else [key])  # the same list again is the same key: no row
+    client.wait(done.records)
 
-r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
-client.wait(auto.step())                                       # a row still running waits for its record
-r4 = measure(4, [4.0, 8.0], role='sample', sample='si')
-r3 = measure(3, [1.0, 1.0], role='sample', sample='si')
-measure(2, [1.0, 2.0], role='sample', sample='si')             # arrives again
-auto.step()
-
-user = connect()                                              # any client of the proposal
-latest = user.latest('reflectivity', member='si')
-assert len(user.records(label='reflectivity')) == 2           # one per step, not one per arrival
-assert latest.request.params['runs'] == [r2, r3, r4]   # run order, not arrival order
-assert user.output(latest, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
+states = batch.state()
+user = connect()                                               # any client of the proposal
+newest = user.latest('reflectivity', member='si@2,3,4')
+assert list(batch.frame().index) == ['si@2', 'si@2,4', 'si@2,3,4']
+assert [len(r.request.params['runs']) for r in reduced.values()] == [1, 2, 3]
+assert user.output(newest, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
+assert {k: s.record for k, s in states.items()} == reduced     # the earlier rows keep their results
+assert len(user.records(label='reflectivity')) == 3            # none is reduced again
 ```
+
+A person compares the curve with and without the last angle, or removes the earlier rows: `batch.put(frame.groupby('sample').tail(1))`, which is no part of Follow.
 
 Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether the automatic reduction pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
 
@@ -697,11 +709,12 @@ Actor: instrument scientist. Goal: after an upgrade removed the spec version of 
 
 ```python
 upgraded = upgrade(specs=[IOFQ_V2])                            # version 1 is gone
-auto = Automatic(iofq_batch(upgraded))
+batch = iofq_batch(upgraded)
 measure(1, [1.0, 1.0], role='sample')
 
-assert auto.step() == {}
-assert auto.refused == {'1': 'unknown spec sans-iofq/v1'}
+done = step(batch, PER_RUN, ())
+assert done.records == {}
+assert done.refused == {'1': 'unknown spec sans-iofq/v1'}
 ```
 
 ### E3. Reduction of our own output
@@ -709,13 +722,14 @@ assert auto.refused == {'1': 'unknown spec sans-iofq/v1'}
 Actor: none; a failure mode. Goal: a published result that SciCat lists as a dataset does not make a row.
 
 ```python
-auto = Automatic(iofq_batch(client))
+batch = iofq_batch(client)
 measure(1, [1.0, 2.0, 3.0, 4.0])
-(reduced,) = auto.step().values()
+first = step(batch, PER_RUN, ())
+(reduced,) = first.records.values()
 pid = client.publish(reduced.ref('iofq'), 'scicat')
 files.add_published(scicat.entries[pid])
 
-assert auto.step() == {}
+assert step(batch, PER_RUN, first.considered).records == {}
 ```
 
 A published entry is a file of kind `'derived'`, and a batch's source is given only raw files unless its selector names another kind.
@@ -725,22 +739,22 @@ A published entry is a file of kind `'derived'`, and a batch's source is given o
 Actor: instrument scientist. Goal: new runs use the improved settings; earlier results stay; the results made before the improvement can be found.
 
 ```python
-auto = Automatic(iofq_batch(client))
+following = iofq_batch(client)
 first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
-(before,) = auto.step().values()
+done = step(following, PER_RUN, ())
+(before,) = done.records.values()
 
 settings = {'reduction': Reduction(threshold=1.5), 'normalization': None}
-auto.batch.settings = settings                                  # read at the next step
+following.settings = settings                                   # read at the next step
 second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
-(after,) = auto.step().values()
+(after,) = step(following, PER_RUN, done.considered).records.values()
 
 user = connect()                                                # any client of the proposal
 assert after.request.files() == [second]                        # run 1 is not reduced again
 assert [user.output(r, 'iofq').values.tolist() for r in (before, after)] == [
     [3.0, 7.0], [2.0, 7.0]]
-batch = iofq_batch(user)                                        # a batch of its own on the label
+batch = iofq_batch(user)                                        # a batch of its own on the label, of the runs now
 batch.settings = settings
-batch.scan()
 states = batch.state()
 outdated = [k for k, s in states.items() if s.outdated]
 assert [states[k].record.request.files() for k in outdated] == [[first]]   # to reprocess, if the user wants

@@ -1,16 +1,29 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A batch on a client: scanning for rows, reducing them, and reading their results.
+A batch on a client: its template and its table, the request of each row,
+reducing rows, and reading their results.
 
 :class:`Batch` is the only part of the toolbox's logic that calls the client.
 It needs no interface of its own over the client: tests and UI work run it on
 ``local()`` with fake workflows, which start in milliseconds and refuse and fail
 as real ones do.
 
+The table is one frame (:mod:`~.table`), and only :meth:`Batch.put` changes
+it. Its parameter columns are the blanks of the template, and every other
+parameter is a setting. The request of a row is the template filled with the
+row's cells::
+
+    row = rows[columns].loc[[key]].to_dict('index')[key]   # each cell of its type
+    cells = as_request(model, {c: v for c, v in row.items() if v is not None})
+    for c in columns - cells.keys():                       # the empty cells
+        if has_default(c): cells[c] = default(c)
+        elif takes_none(c): cells[c] = None
+    template.fill(params=cells)                            # a blank left: incomplete
+
 A row's state is read from the records, not from what this object submitted,
 so every ``Batch`` on the label, and this one after a restart, sees the same,
-but for how it resolved a file name, which it keeps until its next scan.
+but for how it resolved a file name, which it keeps until its next ``put``.
 What a ``Batch`` keeps of them can be rebuilt from the records at any time:
 the newest record of each member under the label, the IDs of the records under
 the label it has read, and which of them are not of the bound spec
@@ -19,8 +32,9 @@ state of chosen rows does not read every record under the label.
 
 The settings are the batch's own (:attr:`Batch.settings`), so each state is
 read with them, and each reduction submits them. A state that resolves
-nothing (:meth:`Batch.results`) is for showing the rows while the settings are
-refused, and for the checks before a submission.
+nothing (``Batch.state(compare=False)``) is for showing the rows while the
+settings are refused (:meth:`Batch.shown`), and for the checks before a
+submission.
 
 Where a row's request differs from its result's (``RowState.changed``) is
 worked out on both as a record holds them, resolving as little as it can::
@@ -36,7 +50,7 @@ worked out on both as a record holds them, resolving as little as it can::
 
 A parameter resolves the same whatever the other parameters are, so a cell is
 resolved on its own, and a value resolved once is kept by its column and value
-until the next scan (:meth:`Batch._resolve_cells`).
+until the next ``put`` (:meth:`Batch._resolve_cells`).
 
 A stage is opened lazily and kept with the template it was opened from, as
 given, since the stage's own holds resolved values. A refusal with no position
@@ -49,40 +63,23 @@ alone.
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from types import MappingProxyType
 from typing import Any
 
-from pydantic import BaseModel
+import pandas as pd
+from pydantic_core import to_json
 
-from ess.spec import FileRef, WorkflowSpec
+from ess.spec import WorkflowSpec, field_types
 
 from ..client import Client, Stage
 from ..errors import FieldError, SubmitError
-from ..files import Selector
 from ..records import Record, SpecId, Status, Template
 from . import definition, state
 from .definition import DefinitionStore
 from .state import RowState
-from .table import Row, RowTable, Scope
-
-
-@dataclass(frozen=True)
-class FileInfo:
-    """A file and its metadata, as a :data:`RowSource` is given it."""
-
-    ref: FileRef
-    metadata: Mapping[str, Any]
-
-
-def file_infos(client: Client, selector: Selector | None = None) -> list[FileInfo]:
-    """The files ``selector`` matches, raw files if not given, with their metadata."""
-    refs = client.files.list(Selector() if selector is None else selector)
-    return [
-        FileInfo(*pair) for pair in zip(refs, client.files.metadata(refs), strict=True)
-    ]
-
+from .table import as_request, data_of, typed
 
 _NONE = object()
 
@@ -116,79 +113,10 @@ def _running(row: RowState) -> list[FieldError]:
     return []
 
 
-type RowSource = Callable[[Sequence[FileInfo]], Sequence[Row]]
-"""
-What an application knows of its technique: which files make which rows. It
-takes plain data and returns plain data, so it is tested on its own.
-"""
-
-
-class Words(BaseModel):
-    """What a row is called, as ``1 sample``, ``2 samples``."""
-
-    one: str = 'row'
-    many: str = 'rows'
-
-    def count(self, n: int) -> str:
-        return f'{n} {self.one if n == 1 else self.many}'
-
-
-@dataclass(frozen=True)
-class Source:
-    """
-    A source of rows: a :data:`RowSource`, the files it is given, and what it
-    fills. A :class:`Batch` takes it, and an application registers it by name
-    with a :class:`~.manager.BatchManager`.
-
-    Parameters
-    ----------
-    rows:
-        Makes rows from files.
-    fills:
-        The parameters that its rows fill. They are columns of each batch of
-        it.
-    selector:
-        The files that ``rows`` is given; raw files if not given.
-    words:
-        What a row is called on the page of a batch.
-    row_name:
-        The entry of :attr:`~.table.Row.info` that names a row on the page;
-        its key if ``None``.
-    row_info:
-        Other entries of :attr:`~.table.Row.info` that the page shows as
-        columns.
-    index_title:
-        What the page calls the :attr:`~.table.Row.index` that ``rows``
-        gives, such as ``'Run'``.
-    index_type:
-        The type of that index: ``int``, ``float`` or ``str``. The manager
-        converts the ends of a scope of a batch of the source to this type.
-    """
-
-    rows: RowSource
-    fills: tuple[str, ...]
-    selector: Selector | None = None
-    words: Words = field(default_factory=Words)
-    row_name: str | None = None
-    row_info: tuple[str, ...] = ()
-    index_title: str = 'Index'
-    index_type: type[int | float | str] = int
-
-
-def check_fills(label: str, source: Source | None, columns: Iterable[str]) -> None:
-    """
-    Raise ``ValueError`` if ``source`` fills a parameter that is not one of
-    ``columns``, those of the batch of ``label``.
-    """
-    if source is not None and (missing := sorted(set(source.fills) - set(columns))):
-        raise ValueError(
-            f'{label}: the source fills {missing}, which are not columns of the batch'
-        )
-
-
 class Batch:
     """
-    One spec reduced for many rows. See ``packages/essapps/docs/batch.md``.
+    A template and a table: one spec reduced for many rows. See
+    ``packages/essapps/docs/batch.md``.
 
     Parameters
     ----------
@@ -196,45 +124,39 @@ class Batch:
         The client that submits.
     spec:
         The spec of every row.
-    columns:
-        The parameters that each row gives, the blanks of the template. The
-        other parameters are the settings, shared by all rows.
     label:
         The label of the records. A row's key is its member.
-    source:
-        Makes rows from files, for :meth:`scan`. Each parameter that it fills
-        is a column.
+    settings:
+        The value of each parameter that is not a column, where it is not
+        left to its default; none if not given. A value at a column is left
+        out, as a template leaves out a value at a blank.
+    rows:
+        The table, as :meth:`put` takes it; a table without rows or columns
+        if not given.
     staged:
         Run the rows through a stage, so that what they share is computed
         once. The spec's binding must make stages.
     persist:
         As :meth:`~ess.apps.Client.submit` takes it.
-    settings:
-        The settings that the batch starts with if ``definitions`` hold none,
-        such as the technique's defaults; none if not given, so each parameter
-        takes its default.
     definitions:
-        Keep the edits and the settings of the label (:mod:`~.definition`):
-        read here, and written at each change. The manager gives them to the
-        ``Batch`` of a label it holds (:meth:`.manager.BatchManager.batch`);
-        a ``Batch`` made in code keeps nothing, and its edits and settings are
-        in memory only.
-    scope:
-        The rows of the scan that the batch holds (:attr:`scope`); every row
-        if not given.
+        Where the settings and the rows of the label are written at each
+        change (:mod:`~.definition`). Nothing is read from them: the manager
+        reads them and gives them as ``settings`` and ``rows``
+        (:meth:`.manager.BatchManager.batch`). A ``Batch`` made in code
+        without them keeps nothing.
+
+    Attributes
+    ----------
+    columns:
+        The parameter columns of the table, in its order: the blanks of the
+        template.
+    settings_fields:
+        The other parameters of the spec: the settings.
 
     Raises
     ------
-    KeyError
-        If a column is not a parameter of the spec.
     ValueError
-        If ``settings`` name a column, or the source fills a parameter that
-        is not a column.
-    ValueError
-        If ``definitions`` hold edits or settings that cannot be read,
-        settings of a spec of another name, or settings at a column, naming
-        the file and the entry; or if the label is too long to name their
-        file.
+        If ``rows`` are refused, as :meth:`put` refuses them.
     """
 
     def __init__(
@@ -242,32 +164,19 @@ class Batch:
         client: Client,
         spec: WorkflowSpec[Any, Any],
         *,
-        columns: Sequence[str],
         label: str,
-        source: Source | None = None,
+        settings: Mapping[str, Any] | None = None,
+        rows: pd.DataFrame | None = None,
         staged: bool = False,
         persist: bool | Sequence[str] = False,
-        settings: Mapping[str, Any] | None = None,
         definitions: DefinitionStore | None = None,
-        scope: Scope | None = None,
     ) -> None:
-        fields = spec.params.model_fields
-        if unknown := sorted(set(columns) - fields.keys()):
-            raise KeyError(f'{spec.title} has no parameters {unknown}')
-        check_fills(label, source, columns)
         self.client = client
         self.spec = spec
-        self.columns = tuple(columns)
-        self.settings_fields = tuple(n for n in fields if n not in columns)
         self.label = label
-        self.source = source
         self._definitions = definitions
-        self._rows = RowTable()
-        self._scanned = False
-        self._settings = self._own(settings or {})
-        if definitions is not None:
-            self._load(definitions)
-        self.scope = Scope() if scope is None else scope
+        self._template = Template(spec, params=copy.deepcopy(dict(settings or {})))
+        self._set(typed(pd.DataFrame() if rows is None else rows, spec.params))
         self._staged = staged
         self._persist = persist
         self._stage: tuple[Template, Stage] | None = None
@@ -277,78 +186,76 @@ class Batch:
         self._found: dict[str, Record] = {}
         self._unbound: set[str] = set()
         # A cell's value as a record holds it, by its column and value as given.
+        # A state of 1000 toy rows without results takes 21 ms with it, and
+        # 198 ms without; with every row reduced, 23 ms either way, since a
+        # row with a result resolves only the cells that differ.
         self._resolved: dict[tuple[str, Any], Any] = {}
 
-    def _load(self, definitions: DefinitionStore) -> None:
-        """Take the edits and the settings that ``definitions`` hold, if any."""
-        edits = definitions.load(definition.edits_key(self.label), definition.edits_of)
-        if edits is not None:
-            self._rows = edits
-        settings = definitions.load(
-            definition.settings_key(self.label),
-            lambda data: self._own(definition.settings_of(data, self.spec)),
-        )
-        if settings is not None:
-            self._settings = settings
-
-    @property
-    def rows(self) -> RowTable:
+    def _set(self, rows: pd.DataFrame) -> None:
         """
-        The rows: those of the last scan in the scope, with what was set by
-        hand on top. An assignment is written to the definitions, if the batch
-        has them, and is not made if they cannot keep it. It keeps the scope
-        of the batch, whatever the scope of the table assigned.
+        Hold ``rows``, a typed table, with its parameter columns as the blanks
+        of the template, which drops the settings at these.
         """
-        return self._rows
-
-    @rows.setter
-    def rows(self, rows: RowTable) -> None:
-        if rows.scope != self.scope:
-            rows = replace(rows, scope=self.scope)
-        if self._definitions is not None:
-            key = definition.edits_key(self.label)
-            self._definitions.save(key, definition.edits_data(rows))
+        fields = self.spec.params.model_fields
         self._rows = rows
+        blanks = [c for c in rows.columns if c in fields]
+        self._template = Template(
+            self.spec, params=self._template.params, blanks=blanks
+        )
 
     @property
-    def scope(self) -> Scope:
-        """
-        Which rows of the scan the batch holds. An assignment changes the rows
-        at once, without a scan, and writes nothing: the scope is kept by
-        whoever made the batch, such as the manager in the header.
-        """
-        return self._rows.scope
+    def columns(self) -> tuple[str, ...]:
+        return self._template.blanks
 
-    @scope.setter
-    def scope(self, scope: Scope) -> None:
-        self._rows = replace(self._rows, scope=scope)
+    @property
+    def settings_fields(self) -> tuple[str, ...]:
+        fields = self.spec.params.model_fields
+        return tuple(n for n in fields if n not in self.columns)
 
-    def put(self, rows: Iterable[Row]) -> None:
+    def frame(self) -> pd.DataFrame:
         """
-        Set ``rows`` by hand, as a table of them gives them
-        (:meth:`RowTable.put`). Raises ``ValueError`` if the batch has a source
-        and has not scanned, since every row would then be added, and none
-        would follow the files.
+        A copy of the table: the key as index, a column per blank, and notes.
+        A list or a group in a cell is copied too, so that changing it in place
+        changes the batch only by :meth:`put`.
         """
-        if self.source is not None and not self._scanned:
-            raise ValueError('scan the files first: the rows are set on top of them')
-        self.rows = self.rows.put(rows, self.columns)
+        frame = self._rows.copy()
+        for c in frame.select_dtypes(object).columns:
+            cells = copy.deepcopy(frame[c].tolist())
+            frame[c] = pd.Series(cells, index=frame.index, dtype=object)
+        return frame
 
-    def scan(self) -> list[FileInfo]:
+    def put(self, frame: pd.DataFrame) -> None:
         """
-        Make rows from the files now; what was set by hand stays. Returns the
-        files, as the source got them.
+        Make ``frame`` the table. Its parameter columns become the blanks of
+        the template: a setting that becomes a column loses its value, and a
+        column dropped is a setting with no value. A table equal to the one
+        held, dtypes and order included, writes nothing.
+
+        A value that a cell resolved to is forgotten, so that a file that
+        gained a catalogue identifier is resolved to it from now on.
+
+        Raises ``ValueError``, and changes nothing, for a table that
+        :func:`~.table.typed` refuses: a key that is not text, empty, or
+        given twice, or a cell that is not of the kind of its column.
+
+        Raises :class:`~.definition.NotKept` if the definitions refuse the
+        table, and then nothing changes. The table is written before the
+        settings: if the definitions refuse the settings after the table, the
+        table is changed and kept, and the settings kept are stale only in
+        their blanks, which are not read, and at the values that the columns
+        drop, which a batch made again from them drops too.
         """
-        if self.source is None:
-            raise ValueError('this batch has no source of rows')
-        infos = file_infos(self.client, self.source.selector)
-        # What was set by hand stays, so there is nothing to write.
-        self._rows = self._rows.rescan(self.source.rows(infos))
-        self._scanned = True
-        # A file that gained a catalogue identifier is resolved to it from now
-        # on, by any of its names, its old identity among them.
+        rows = typed(frame, self.spec.params)
         self._resolved.clear()
-        return infos
+        data = data_of(rows)
+        if to_json(data) == to_json(data_of(self._rows)):
+            return
+        before = self._template
+        if self._definitions is not None:
+            self._definitions.save(definition.rows_key(self.label), data)
+        self._set(rows)
+        if self._template != before:
+            self._save(self._template)
 
     @property
     def settings(self) -> Mapping[str, Any]:
@@ -365,86 +272,115 @@ class Batch:
         refuses a name that is not a parameter. Raises ``ValueError`` for a
         name that is a column: a column's value is a cell of each row.
         """
-        return MappingProxyType(copy.deepcopy(self._settings))
+        return MappingProxyType(copy.deepcopy(self._template.params))
 
     @settings.setter
     def settings(self, settings: Mapping[str, Any]) -> None:
-        settings = self._own(settings)
-        if self._definitions is not None:
-            template = Template(self.spec, params=settings, blanks=self.columns)
-            key = definition.settings_key(self.label)
-            self._definitions.save(key, definition.template_data(template))
-        self._settings = settings
-
-    def _own(self, settings: Mapping[str, Any]) -> dict[str, Any]:
-        """A copy of ``settings``; raises ``ValueError`` for a column in them."""
         if at := sorted(settings.keys() & set(self.columns)):
             raise ValueError(f'{at}: columns of the batch, not settings')
-        return copy.deepcopy(dict(settings))
+        template = Template(
+            self.spec, params=copy.deepcopy(dict(settings)), blanks=self.columns
+        )
+        self._save(template)
+        self._template = template
+
+    def _save(self, template: Template) -> None:
+        """Write ``template`` as the settings of the label, if kept."""
+        if self._definitions is not None:
+            key = definition.settings_key(self.label)
+            self._definitions.save(key, definition.template_data(template))
 
     def template(self) -> Template:
-        """The template of the settings, with the columns as its blanks."""
-        return Template(self.spec, params=self._settings, blanks=self.columns)
+        """
+        A copy of the template of the settings, with the columns as its
+        blanks, so that changing it changes the batch only by
+        :attr:`settings`.
+        """
+        return copy.deepcopy(self._template)
 
-    def _cells(self, row: Row) -> dict[str, Any]:
-        """The value of each column of a row, the default of an empty one."""
+    def cells(self, keys: Sequence[str] | None = None) -> dict[str, dict[str, Any]]:
+        """
+        The cells of the rows of ``keys``, or of all, by key, as a request
+        takes them (:func:`~.table.as_request`): each empty cell its
+        parameter's default, or ``None`` if it takes ``None``, and left out
+        otherwise. Raises ``KeyError`` for a key that the table lacks.
+        """
+        rows = self._rows[list(self.columns)]
+        if keys is not None:
+            rows = rows.loc[list(keys)]
         fields = self.spec.params.model_fields
+        empty = {}
+        for c in self.columns:
+            if not fields[c].is_required():
+                empty[c] = fields[c].get_default(call_default_factory=True)
+            elif field_types.optional(fields[c].annotation)[1]:
+                empty[c] = None
         return {
-            c: row.values[c]
-            if c in row.values
-            else fields[c].get_default(call_default_factory=True)
-            for c in self.columns
+            key: {
+                **empty,
+                **as_request(
+                    self.spec.params, {c: v for c, v in row.items() if v is not None}
+                ),
+            }
+            for key, row in rows.to_dict('index').items()
         }
 
-    def state(self, keys: Sequence[str] | None = None) -> dict[str, RowState]:
+    def state(
+        self, keys: Sequence[str] | None = None, *, compare: bool = True
+    ) -> dict[str, RowState]:
         """
         Where each row stands now, read from the client, or the rows of
         ``keys`` if given: its result, and where its request with the settings
         differs from its result's (:attr:`RowState.changed`), with the reasons
         a cell is refused, as problems of its row.
 
+        With ``compare=False``, nothing is resolved: each row has the problems
+        of its cells as given, its status, and whether its result is of
+        another spec. :attr:`RowState.changed` is then ``None``, and so is
+        :attr:`RowState.outdated` unless the result is of another spec. It is
+        what :meth:`reduce` checks before it submits.
+
         Raises ``SubmitError`` if the settings are refused, with reasons that
-        name no row: no row can run with them.
+        name no row: no row can run with them. Only if compared.
         """
-        rows, found = self._rows_and_results(keys)
-        changed, refused = self._compare(rows, found)
-        return self._states(rows, found, changed, refused)
+        cells, found = self._cells_and_results(keys)
+        if not compare:
+            return self._states(cells, found, None, {})
+        changed, refused = self._compare(cells, found)
+        return self._states(cells, found, changed, refused)
 
-    def results(self, keys: Sequence[str] | None = None) -> dict[str, RowState]:
+    def shown(
+        self, keys: Sequence[str] | None = None
+    ) -> tuple[dict[str, RowState], tuple[FieldError, ...]]:
         """
-        Each row, or each of ``keys``, with its result, without its request:
-        the problems of its cells as given, its status, and whether its result
-        is of another spec. Nothing is resolved, so :attr:`RowState.changed`
-        is ``None``, and so is :attr:`RowState.outdated` unless the result is
-        of another spec: :func:`~.state.left_to_reduce` refuses these states.
-
-        It is what a page shows while the settings are refused, and what
-        :meth:`reduce` checks before it submits. Which rows to reduce is
-        chosen from :meth:`state`.
+        The state of the rows of ``keys``, or of all, as a table shows it, and
+        why the settings are refused: compared, or not compared while the
+        settings are refused, with the reasons.
         """
-        rows, found = self._rows_and_results(keys)
-        return self._states(rows, found, None, {})
+        try:
+            return self.state(keys), ()
+        except SubmitError as error:
+            return self.state(keys, compare=False), error.errors
 
-    def _rows_and_results(
+    def _cells_and_results(
         self, keys: Sequence[str] | None
-    ) -> tuple[list[Row], dict[str, Record]]:
-        """The rows of ``keys``, or all, and the result of each that has one."""
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, Record]]:
+        """The cells of ``keys``, or of all, and the result of each that has one."""
         self._poll()
-        rows = list(self.rows) if keys is None else [self.rows[k] for k in keys]
-        return rows, {r.key: self._found[r.key] for r in rows if r.key in self._found}
+        cells = self.cells(keys)
+        return cells, {k: self._found[k] for k in cells if k in self._found}
 
     def _states(
         self,
-        rows: list[Row],
+        cells: Mapping[str, Mapping[str, Any]],
         found: Mapping[str, Record],
         changed: Mapping[str, frozenset[str]] | None,
         refused: Mapping[str, tuple[FieldError, ...]],
     ) -> dict[str, RowState]:
-        upstream = self._known(sorted(state.references(rows)))
+        upstream = self._known(sorted(state.references(cells.values())))
         status = self._status([*found.values(), *upstream])
         return state.row_states(
-            rows,
-            self.spec.params,
+            cells,
             self.columns,
             found,
             status,
@@ -498,31 +434,26 @@ class Batch:
         }
 
     def _compare(
-        self, rows: list[Row], found: Mapping[str, Record]
+        self, cells: Mapping[str, Mapping[str, Any]], found: Mapping[str, Record]
     ) -> tuple[dict[str, frozenset[str]], dict[str, tuple[FieldError, ...]]]:
         """
         For each row with a result, the names at which its request with the
         settings differs from its result's; and the reasons of the rows whose
         cells are refused. Raises ``SubmitError`` if the settings are.
         """
-        resolved = self.client.resolve(self.template())
+        resolved = self.client.resolve(self._template)
         if isinstance(resolved, SubmitError):
             raise resolved
-        fields = self.spec.params.model_fields
-        required = {c for c in self.columns if fields[c].is_required()}
         asked = {}
-        for row in rows:
-            if not required <= row.values.keys():
+        for key, given in cells.items():
+            if len(given) < len(self.columns):
                 continue  # an empty cell is a problem, and nothing to resolve
-            if (record := found.get(row.key)) is None:
-                asked[row.key] = {
-                    c: row.values[c] for c in self.columns if c in row.values
-                }
+            if (record := found.get(key)) is None:
+                asked[key] = dict(given)
             else:
-                cells = self._cells(row)
                 was = record.request.params
-                asked[row.key] = {
-                    c: cells[c] for c in state.differs(cells, was, self.columns)
+                asked[key] = {
+                    c: given[c] for c in state.differs(given, was, self.columns)
                 }
         cells_now, refused = self._resolve_cells(asked)
         changed = {}
@@ -544,11 +475,11 @@ class Batch:
         resolved before in a template of their own, every other parameter
         blank, all rows in one call of :meth:`~ess.apps.Client.resolve`.
 
-        A value resolved is kept by its column and value until the next scan,
-        since a parameter resolves the same whatever the others are. A kept
-        value differs from one resolved now only for a file that gained a
-        catalogue identifier since, which keeps its old identity until the
-        scan, as ``resolve`` allows. A list is kept by its elements; a value
+        A value resolved is kept by its column and value until the next
+        :meth:`put`, since a parameter resolves the same whatever the others
+        are. A kept value differs from one resolved now only for a file that
+        gained a catalogue identifier since, which keeps its old identity until
+        the ``put``, as ``resolve`` allows. A list is kept by its elements; a value
         that cannot be a key, such as a dict, is resolved each time. A refusal
         is not kept, so that a file that arrives later is found.
         """
@@ -590,17 +521,15 @@ class Batch:
         it by key and the cell by column. A reason about the settings is named
         once, without a key.
         """
-        states = self.results(keys)
-        rows = [self.rows[key] for key in keys]
+        cells, found = self._cells_and_results(keys)
+        states = self._states(cells, found, None, {})
         refused = [e for k in keys for e in (*states[k].problems, *_running(states[k]))]
         if refused:
             raise SubmitError(refused)
-        if not rows:
+        if not cells:
             return {}
-        template = self.template()
-        each = {row.key: self._cells(row) for row in rows}
         try:
-            records = self._submit(template, each)
+            records = self._submit(self._template, cells)
         except SubmitError as error:
             raise SubmitError(self._once(error.errors)) from None
         return records

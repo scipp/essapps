@@ -5,18 +5,20 @@
 from collections.abc import Iterator
 from pathlib import Path
 
+import pandas as pd
 import pytest
-from ess.instruments.loki.batch import iofq_batch, pair_by_sample
+from ess.instruments.loki.batch import SAMPLE_RUNS, pair_by_sample
 from ess.instruments.loki.bindings import BINDINGS
 from ess.instruments.loki.specs import (
     CALIBRATED_DETECTOR,
+    IOFQ,
     MASKS,
     BeamCentre,
     IofQParams,
 )
 
 from ess.apps import Client, FolderFiles, file, local
-from ess.apps.batch import FileInfo, left_to_reduce, ready
+from ess.apps.batch import Batch, FileInfo, left_to_reduce, ready, rows_of
 from ess.apps.batch.table import dtypes
 from ess.spec import FileRef
 
@@ -51,10 +53,14 @@ def test_a_sample_run_pairs_with_the_last_transmission_run_of_its_sample() -> No
         ]
     )
 
-    assert [(r.key, r.values['sample_transmission'].file) for r in rows] == [
-        ('1', 'uuid:3')
-    ]
-    assert rows[0].info == {'name': 'water'}
+    assert rows.to_dict('index') == {
+        '1': {
+            'run': 1,
+            'name': 'water',
+            'sample': 'uuid:1',
+            'sample_transmission': 'uuid:3',
+        }
+    }
 
 
 def test_the_rows_do_not_depend_on_the_order_the_files_are_listed_in() -> None:
@@ -67,12 +73,11 @@ def test_the_rows_do_not_depend_on_the_order_the_files_are_listed_in() -> None:
 
     rows = pair_by_sample(files)
 
-    assert rows == pair_by_sample(files[::-1])
-    pairs = [(r.key, r.values['sample_transmission'].file) for r in rows]
-    assert pairs == [('2', 'uuid:11'), ('10', 'uuid:11')]
+    pd.testing.assert_frame_equal(rows, pair_by_sample(files[::-1]))
+    assert rows['sample_transmission'].to_dict() == {'2': 'uuid:11', '10': 'uuid:11'}
 
 
-def test_a_row_is_indexed_by_its_run_number_and_one_without_has_none() -> None:
+def test_the_run_of_a_row_is_its_run_number_and_empty_without_one() -> None:
     rows = pair_by_sample(
         [
             info(60339, role='sample', sample='water'),
@@ -81,11 +86,7 @@ def test_a_row_is_indexed_by_its_run_number_and_one_without_has_none() -> None:
         ]
     )
 
-    assert [(r.key, r.index) for r in rows] == [
-        ('60339', 60339),
-        ('uuid:x', None),
-        ('tmp', None),
-    ]
+    assert rows['run'].to_dict() == {'60339': 60339, 'uuid:x': None, 'tmp': None}
 
 
 def test_a_sample_measured_twice_has_two_rows() -> None:
@@ -93,7 +94,7 @@ def test_a_sample_measured_twice_has_two_rows() -> None:
         [info(1, role='sample', sample='w'), info(2, role='sample', sample='w')]
     )
 
-    assert [r.key for r in rows] == ['1', '2']
+    assert list(rows.index) == ['1', '2']
 
 
 @pytest.mark.parametrize(
@@ -106,11 +107,18 @@ def test_a_sample_measured_twice_has_two_rows() -> None:
 def test_a_sample_run_without_a_partner_has_an_empty_cell(
     files: list[FileInfo],
 ) -> None:
-    assert 'sample_transmission' not in pair_by_sample(files)[0].values
+    assert pd.isna(pair_by_sample(files).at['1', 'sample_transmission'])
 
 
 def test_other_runs_make_no_row() -> None:
-    assert pair_by_sample([info(1, role='background'), info(2)]) == []
+    assert pair_by_sample([info(1, role='background'), info(2)]).empty
+
+
+def test_the_source_gives_its_columns_without_files(tmp_path: Path) -> None:
+    with local(proposal='p1', files=FolderFiles(tmp_path, []), bind=BINDINGS) as client:
+        batch = Batch(client, IOFQ, label='iofq', rows=rows_of(client, SAMPLE_RUNS))
+
+    assert batch.columns == ('sample', 'sample_transmission')
 
 
 @pytest.fixture
@@ -156,14 +164,19 @@ def test_a_batch_of_iofq_over_real_workflows(
         'masks': masks.ref('masks'),
         'beam_centre': tutorial_centre.model_dump(),
     }
-    batch = iofq_batch(client)
-    batch.settings = settings
-    batch.scan()
+    batch = Batch(
+        client,
+        IOFQ,
+        label='iofq',
+        rows=rows_of(client, SAMPLE_RUNS),
+        settings=settings,
+        staged=True,
+    )
     assert ready(batch.state()) == ['60250', '60339']
 
     records = batch.reduce(ready(batch.state()))
 
     assert client.wait(records) == {'60250': 'completed', '60339': 'completed'}
     assert client.output(records['60250'], 'iofq').intensity.sizes == {'Q': 100}
-    assert left_to_reduce(batch.state(), batch.columns) == []
+    assert left_to_reduce(batch.state()) == []
     batch.close()
