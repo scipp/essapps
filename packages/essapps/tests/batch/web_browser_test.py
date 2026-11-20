@@ -937,6 +937,66 @@ def test_a_double_click_on_make_makes_one_batch(
     assert sorted(h.title for h in manager.headers().values()) == ['Once', 'Scan']
 
 
+def test_a_batch_is_made_of_the_range_of_rows_chosen_of_the_source(
+    page: Any, manager: BatchManager
+) -> None:
+    page.click('[data-view=batches]')
+    page.click('#new-batch-open')
+    page.wait_for_selector(
+        '#new-batch select[name=first] option[value="2"]', state='attached'
+    )
+
+    page.select_option('#new-batch select[name=first]', '2')
+    page.wait_for_selector('#new-rows:text-is("The batch gets 2 rows.")')
+    page.fill('#new-title', 'Later')
+    page.click('#new-batch [type=submit]')
+
+    page.wait_for_selector('#title:has-text("Later")')
+    (label,) = (k for k, h in manager.headers().items() if h.title == 'Later')
+    assert list(manager.batch(label).frame().index) == ['2', '3']
+
+
+def test_rows_picked_in_the_dialog_are_added_from_the_runs(
+    page: Any, batch: Batch, sample: Measure
+) -> None:
+    sample(4, 'ethanol')
+    sample(5, 'acetone', partner=False)
+
+    page.click('#take-open')
+    page.wait_for_selector('#take-rows tr:has-text("acetone") .pill:text-is("waits")')
+    page.check('#take-rows input[aria-label=ethanol]')
+    page.click('#take [value=take]')
+
+    page.wait_for_selector('#rows .tabulator-row:has-text("ethanol")')
+    assert list(batch.frame().index) == ['1', '2', '3', '4']
+
+
+def test_a_column_made_a_setting_and_a_column_again_keeps_its_cell_editors(
+    page: Any, batch: Batch
+) -> None:
+    cell(page, 'sds', 'thickness').click()
+    editor(page).fill('2.5')
+    editor(page).press('Enter')
+    cell(page, 'sds', 'thickness').filter(has_text='2.5').wait_for()
+
+    header = page.locator('.tabulator-col[tabulator-field="cells.thickness.value"]')
+    header.locator('.tabulator-header-popup-button').click()
+    page.click('.tabulator-menu-item:has-text("Make this a setting")')
+    page.check('#setting-values label:has-text("2.5") input')
+    page.click('#make-setting [value=make]')
+    page.click('[data-tab=settings]')
+    page.click(
+        '#settings h3:has-text("Thickness") button:text-is("Make this a column")'
+    )
+
+    cell(page, 'water', 'thickness').filter(has_text='2.5').wait_for()
+    cell(page, 'water', 'thickness').click()
+    editor(page).fill('3')
+    editor(page).press('Enter')
+    cell(page, 'water', 'thickness').filter(has_text='3').wait_for()
+    assert batch.frame()['thickness'].tolist() == [3.0, 2.5, 2.5]
+
+
 @pytest.fixture
 def no_batch(browser: Any, pages: Pages, sample: Measure) -> Iterator[Any]:
     """The page at the root of a workspace without a batch."""

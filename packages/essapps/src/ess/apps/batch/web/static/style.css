@@ -441,6 +441,38 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .header-form .buttons { display: flex; gap: 8px; margin-left: 162px; }
 .columns { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .columns label { display: inline-flex; align-items: center; gap: 4px; }
+.range { display: flex; gap: 16px; }
+.range select { max-width: 200px; }
+#new-range .source-rows { grid-column: 2; }
+
+/* The rows of a source, in "New batch" and "Add rows from the runs" */
+
+.source-rows { max-height: 240px; overflow: auto; border: 1px solid var(--line); background: var(--panel); }
+.source-rows table { width: 100%; border-collapse: collapse; }
+.source-rows th {
+  position: sticky;
+  top: 0;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  background: #f7f8fa;
+  color: var(--muted);
+  text-align: left;
+  font-weight: normal;
+}
+.source-rows td { padding: 3px 8px; border-bottom: 1px solid #eef0f3; }
+.source-rows tr.out td { color: var(--muted); }
+.source-rows .empty { padding: 8px; color: var(--muted); }
+
+/* The dialogs */
+
+.dialog { width: min(720px, 90vw); padding: 16px; border: 1px solid var(--line-strong); border-radius: var(--radius); }
+.dialog::backdrop { background: rgba(0, 0, 0, 0.2); }
+.dialog form { display: flex; flex-direction: column; gap: 12px; }
+.dialog h3 { margin: 0; font-size: 14px; }
+.dialog .buttons { display: flex; gap: 8px; }
+.values { display: flex; flex-direction: column; gap: 4px; }
+.values label { display: inline-flex; align-items: center; gap: 6px; }
+.param h3 { display: flex; align-items: center; justify-content: space-between; }
 
 /* The page without a batch: the Batches and Runs views only */
 

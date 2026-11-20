@@ -4,6 +4,7 @@
 
 import io
 import re
+import tempfile
 import zipfile
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
@@ -1181,6 +1182,177 @@ def test_a_row_added_on_the_page_is_empty_and_rows_removed_are_gone(
     assert list(batch.frame().index) == ['1', '3']
 
 
+def offered(http: TestClient) -> dict[str, str]:
+    """The rows that "Add rows from the runs" lists, by key: the mark of each."""
+    return {r['key']: r['mark'] for r in http.get('/api/rows/offered').json()['rows']}
+
+
+def test_the_rows_offered_are_those_of_the_source_the_table_lacks(
+    http: TestClient, sample: Measure
+) -> None:
+    sample(4, 'ethanol')
+    sample(5, 'acetone', partner=False)
+
+    listed = http.get('/api/rows/offered').json()
+
+    assert [(r['key'], r['name'], r['mark']) for r in listed['rows']] == [
+        ('4', 'ethanol', ''),
+        ('5', 'acetone', 'waits'),
+    ]
+
+
+def test_rows_taken_are_added_as_the_source_makes_them(
+    http: TestClient, sample: Measure
+) -> None:
+    sample(4, 'ethanol')
+
+    taken = http.post('/api/rows/take', json={'keys': ['4']}).json()
+
+    assert taken['notice'] == 'Added 1 row.'
+    assert [r['key'] for r in taken['rows']] == ['1', '2', '3', '4']
+    assert taken['rows'][-1]['cells']['sample']['text'] == 'run 4'
+    assert offered(http) == {}
+
+
+def test_a_row_taken_then_removed_is_offered_again_and_follow_does_not_add_it(
+    http: TestClient, sample: Measure
+) -> None:
+    sample(4, 'ethanol')
+    http.post('/api/rows/take', json={'keys': ['4']})
+    http.post('/api/rows/remove', json={'keys': ['4']})
+    sample(5, 'acetone')
+
+    following = http.post('/api/follow', json={'on': True}).json()
+
+    assert [r['key'] for r in following['rows']] == ['1', '2', '3', '5']
+    assert offered(http) == {'4': ''}
+
+
+def test_rows_the_manager_does_not_take_answer_422_and_none_is_added(
+    http: TestClient, batch: Batch
+) -> None:
+    answer = http.post('/api/rows/take', json={'keys': ['1']})
+
+    assert answer.status_code == 422
+    assert (
+        answer.json()['message']
+        == 'No row was added: rows [\'1\'] are in the batch already.'
+    )
+    assert list(batch.frame().index) == ['1', '2', '3']
+
+
+# Columns and settings
+
+
+def make_setting(http: TestClient, key: str | None = None) -> Any:
+    """Make the column thickness a setting, of the value of row ``key``."""
+    return http.post('/api/columns/setting', json={'name': 'thickness', 'key': key})
+
+
+def test_a_column_whose_rows_agree_is_made_a_setting_of_their_value(
+    http: TestClient, batch: Batch
+) -> None:
+    thickness(http, ['1', '2', '3'], 2.0)
+
+    made = make_setting(http).json()
+
+    assert made['notice'] == 'Thickness is a setting: one value for every row.'
+    assert batch.columns == ('sample', 'transmission')
+    assert batch.settings['thickness'] == 2.0
+    assert [c['name'] for c in made['columns']] == ['sample', 'transmission']
+    (shown,) = [n for n in made['settings'] if n['path'] == ['thickness']]
+    assert shown['value'] == 2.0
+    assert made['may_be_columns'] == ['thickness']
+
+
+def test_the_values_of_a_column_are_listed_each_with_a_row_that_has_it(
+    http: TestClient,
+) -> None:
+    thickness(http, ['2'], 3.0)
+
+    listed = http.get('/api/columns/values', params={'name': 'thickness'}).json()
+
+    assert listed == [{'key': '1', 'text': ''}, {'key': '2', 'text': '3.0'}]
+
+
+def test_a_column_made_a_setting_whose_table_is_refused_keeps_its_cells(
+    http: TestClient, client: Client, refusing: Refusing, definitions: DefinitionStore
+) -> None:
+    thickness(http, ['1', '2', '3'], 2.5)
+    refusing.part = 'rows'
+
+    answer = make_setting(http)
+
+    assert answer.status_code == 422
+    batch = started(client, definitions).manager.batch('scan')
+    assert batch.columns == ('sample', 'transmission', 'thickness')
+    assert batch.frame()['thickness'].tolist() == [2.5, 2.5, 2.5]
+
+
+def test_a_column_whose_rows_differ_is_made_a_setting_of_the_row_chosen(
+    http: TestClient, batch: Batch
+) -> None:
+    thickness(http, ['1'], 2.0)
+    thickness(http, ['2'], 3.0)
+
+    refused = make_setting(http)
+    make_setting(http, '2')
+
+    assert refused.status_code == 422
+    assert refused.json()['message'] == (
+        'Nothing was changed: the rows differ at thickness: choose the value to keep.'
+    )
+    assert batch.settings['thickness'] == 3.0
+
+
+def test_a_setting_made_a_column_has_its_value_in_every_row(
+    http: TestClient, batch: Batch
+) -> None:
+    make_setting(http)
+    http.post('/api/settings', json={'path': ['thickness'], 'op': 'set', 'value': 2.5})
+    http.post('/api/settings/apply')
+
+    made = http.post('/api/settings/column', json={'name': 'thickness'}).json()
+
+    assert (
+        made['notice'] == 'Thickness is a column: each row has the value in its cell.'
+    )
+    assert batch.columns == ('sample', 'transmission', 'thickness')
+    assert batch.frame()['thickness'].tolist() == [2.5, 2.5, 2.5]
+    assert 'thickness' not in batch.settings
+    assert [r['cells']['thickness']['text'] for r in made['rows']] == ['2.5'] * 3
+    assert made['may_be_columns'] == []
+
+
+def test_a_group_setting_made_a_column_and_a_setting_again_keeps_its_value(
+    http: TestClient, batch: Batch
+) -> None:
+    bins(http, 5)
+
+    column = http.post('/api/settings/column', json={'name': 'binning'}).json()
+    cells = batch.frame()['binning'].tolist()
+    setting = http.post('/api/columns/setting', json={'name': 'binning'}).json()
+
+    assert [c['name'] for c in column['columns']][-1] == 'binning'
+    assert cells == [{'bins': 5}] * 3
+    assert 'binning' not in batch.columns
+    assert form_bins(setting) == 5
+
+
+def test_columns_do_not_change_while_the_form_holds_a_change(
+    http: TestClient, batch: Batch
+) -> None:
+    draft(http, 9)
+
+    answer = http.post('/api/settings/column', json={'name': 'binning'})
+
+    assert answer.status_code == 422
+    assert answer.json()['message'] == (
+        'Nothing was changed: apply or discard the settings first.'
+    )
+    assert batch.columns == ('sample', 'transmission', 'thickness')
+
+
 def test_a_correction_of_a_run_changes_no_row_and_can_be_taken_back(
     http: TestClient, fake: FakeFiles
 ) -> None:
@@ -1691,6 +1863,165 @@ def test_a_batch_without_a_source_is_made_with_the_columns_sent_and_no_rows(
     )
 
 
+def source_rows(http: TestClient, **ends: str) -> Any:
+    """The rows of the source ``pairs``, marked for a range of ``ends``."""
+    return http.get('/api/sources/rows', params={'name': 'pairs', **ends})
+
+
+def test_the_rows_of_a_source_are_marked_as_a_range_takes_them(
+    http: TestClient, sample: Measure
+) -> None:
+    sample(4, 'ethanol')
+
+    listed = source_rows(http, first='2').json()
+
+    assert [(r['key'], r['name'], r['mark']) for r in listed['rows']] == [
+        ('1', 'water', 'left out'),
+        ('2', 'sds', 'taken'),
+        ('3', 'oil', 'waits'),
+        ('4', 'ethanol', 'taken'),
+    ]
+    assert [c['name'] for c in listed['columns']] == ['run']
+    assert listed['rows'][0]['cells'] == {'run': '1'}
+
+
+@pytest.mark.parametrize(
+    ('first', 'last', 'taken'),
+    [('2', None, ['2', '4']), (None, '2', ['1', '2']), ('2', '2', ['2'])],
+    ids=['from', 'to', 'one'],
+)
+def test_a_batch_made_from_a_range_of_a_source_has_its_rows_filled_between_the_ends(
+    http: TestClient,
+    manager: BatchManager,
+    sample: Measure,
+    first: str | None,
+    last: str | None,
+    taken: list[str],
+) -> None:
+    sample(4, 'ethanol')
+
+    made = http.post('/api/batches', json=new_batch(first=first, last=last)).json()
+
+    assert list(manager.batch(made['label']).frame().index) == taken
+
+
+@pytest.mark.parametrize(
+    ('ends', 'said'),
+    [
+        ({'first': '3'}, '3 is not a filled row'),
+        ({'first': '2', 'last': '1'}, 'the row 2 comes after the row 1'),
+    ],
+    ids=['waits', 'reversed'],
+)
+def test_a_range_that_takes_no_row_of_its_ends_makes_no_batch(
+    http: TestClient, manager: BatchManager, ends: dict[str, str], said: str
+) -> None:
+    answer = http.post('/api/batches', json=new_batch(**ends))
+    listing = source_rows(http, **ends)
+
+    assert answer.status_code == 422
+    assert answer.json()['message'] == f'The batch was not made: {said}.'
+    assert (listing.status_code, listing.json()['message']) == (
+        422,
+        f'{said[:1].upper()}{said[1:]}.',
+    )
+    assert list(manager.headers()) == ['scan']
+
+
+def test_a_batch_made_from_the_page_of_a_batch_starts_with_its_settings(
+    http: TestClient, pages: Pages
+) -> None:
+    bins(http, 7)
+
+    made = http.post('/api/batches', json=new_batch(settings_from='scan')).json()
+
+    assert form_bins(state(opened(pages, made['label']))) == 7
+
+
+def test_a_setting_of_the_batch_that_is_a_column_of_the_new_one_fills_its_cells(
+    http: TestClient, manager: BatchManager
+) -> None:
+    make_setting(http)
+    http.post('/api/settings', json={'path': ['thickness'], 'op': 'set', 'value': 2.5})
+    http.post('/api/settings/apply')
+    columns = ['sample', 'transmission', 'thickness']
+
+    made = http.post(
+        '/api/batches', json=new_batch(settings_from='scan', columns=columns)
+    ).json()
+
+    batch = manager.batch(made['label'])
+    assert batch.columns == tuple(columns)
+    assert batch.frame()['thickness'].tolist() == [2.5, 2.5]
+
+
+def from_table(http: TestClient, text: str, **given: Any) -> Any:
+    """Make a batch from a table file ``rows.csv`` that holds ``text``."""
+    query = {'spec': STAGED.name, 'title': 'From a file', 'name': 'rows.csv'} | given
+    return http.post('/api/batches/table', params=query, content=text.encode())
+
+
+def test_a_batch_made_from_a_table_file_has_its_rows_and_columns_and_no_source(
+    http: TestClient, manager: BatchManager
+) -> None:
+    text = 'key,run,sample,transmission\na,1,run:1,run:1001\nb,2,run:2,run:1002\n'
+
+    made = from_table(http, text, settings_from='scan').json()
+
+    batch = manager.batch(made['label'])
+    assert batch.columns == ('sample', 'transmission')
+    assert list(batch.frame().index) == ['a', 'b']
+    assert manager.source(made['label']) is None
+    assert manager.headers()[made['label']].title == 'From a file'
+
+
+@pytest.mark.parametrize(
+    ('text', 'said'),
+    [('', 'the file is empty'), ('run,sample\n1,run:1\n', "a column 'key'")],
+    ids=['empty', 'no-key'],
+)
+def test_a_table_file_refused_names_the_file_chosen(
+    http: TestClient, manager: BatchManager, text: str, said: str
+) -> None:
+    made = from_table(http, text)
+    loaded = http.post('/api/table', params={'name': 'rows.csv'}, content=text.encode())
+
+    assert made.status_code == loaded.status_code == 422
+    assert made.json()['message'].startswith('The batch was not made: rows.csv: ')
+    assert loaded.json()['message'].startswith('Cannot load rows.csv: ')
+    for message in (made.json()['message'], loaded.json()['message']):
+        assert said in message
+        assert tempfile.gettempdir() not in message
+    assert list(manager.headers()) == ['scan']
+
+
+def test_an_empty_settings_file_says_so_in_a_sentence(http: TestClient) -> None:
+    answer = http.post('/api/settings.yaml', params={'name': 's.yaml'}, content=b'')
+
+    assert (answer.status_code, answer.json()['message']) == (
+        422,
+        'Cannot load s.yaml: it is not a settings file saved from this page.',
+    )
+
+
+def test_a_misspelt_column_of_a_table_file_is_a_note_and_its_setting_is_asked_for(
+    http: TestClient, pages: Pages
+) -> None:
+    made = from_table(http, 'key,samples,transmission\na,run:1,run:1001\n').json()
+
+    shown = state(opened(pages, made['label']))
+
+    assert [c['name'] for c in shown['notes']] == ['samples']
+    assert [c['name'] for c in shown['columns']] == ['transmission']
+    # The form asks for the setting; the row reads ready, and nothing is
+    # reduced until the setting is given.
+    assert shown['settings_problem'] == (
+        'Sample: choose a run; Sample: a required parameter, not given'
+    )
+    assert shown['action']['label'] == 'Check the settings'
+    assert [r['status'] for r in shown['rows']] == ['ready']
+
+
 @pytest.mark.parametrize(
     ('given', 'said'),
     [
@@ -1806,7 +2137,11 @@ def save_header(http: TestClient, **given: Any) -> Any:
 def test_the_state_shows_the_workflow_and_description_of_the_batch(
     http: TestClient,
 ) -> None:
-    assert state(http)['header'] == {'workflow': 'Staged', 'description': ''}
+    assert state(http)['header'] == {
+        'workflow': 'Staged',
+        'spec': 'staged',
+        'description': '',
+    }
 
 
 def test_a_header_change_the_definitions_refuse_answers_422_and_changes_nothing(

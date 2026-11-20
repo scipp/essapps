@@ -181,11 +181,12 @@ class Following(BaseModel):
 class HeaderShown(BaseModel):
     """
     The batch of a page, as the tab "Batch" shows it, but its title and
-    columns, which :class:`State` has: the title of its ``workflow``, and its
-    description.
+    columns, which :class:`State` has: the title of its ``workflow``, the
+    name of its ``spec``, and its description.
     """
 
     workflow: str
+    spec: str
     description: str
 
 
@@ -204,7 +205,9 @@ class State(BaseModel):
     has not applied the change; the rows read as with the batch's settings.
     ``settings_problem`` names the batch's settings that the form cannot show,
     what the form misses, and why the batch's settings are refused where the
-    form shows them. ``files_problem`` says why the files cannot be listed,
+    form shows them. ``may_be_columns`` names the settings that "Make this a
+    column" offers: those whose cell the page edits.
+    ``files_problem`` says why the files cannot be listed,
     if the file source raises: the pickers then offer none. ``notice`` says
     what the action that answers with this state did.
     """
@@ -226,6 +229,7 @@ class State(BaseModel):
     settings: list[Node]
     settings_problem: str | None
     settings_changed: bool
+    may_be_columns: list[str]
     refused: list[Refused]
     follow: Following
     files_problem: str | None
@@ -316,6 +320,27 @@ class SourceChoice(BaseModel):
     specs: list[SpecChoice]
 
 
+class SourceRow(BaseModel):
+    """
+    A row of the table that a source makes: its key, its ``name`` (as
+    :class:`Row` has it), the text of each note, and its ``mark``:
+    ``waits`` if a cell that the source fills is empty; for a range of a new
+    batch, ``taken`` or ``left out``; else empty.
+    """
+
+    key: str
+    name: str
+    cells: dict[str, str]
+    mark: Literal['waits', 'taken', 'left out', '']
+
+
+class SourceRows(BaseModel):
+    """The rows of a source, with the columns of ``cells``."""
+
+    columns: list[Column]
+    rows: list[SourceRow]
+
+
 class BatchCounts(BaseModel):
     """
     The rows of each batch by status, in the words of the page, by label; and
@@ -378,15 +403,46 @@ class On(BaseModel):
 class NewBatch(BaseModel):
     """
     Make a batch of ``spec``: with a ``source``, of the rows that the source
-    has filled now; without, of no rows. ``columns`` are the parameter columns,
-    those that the source fills among them.
+    has filled now from the row of key ``first`` to that of ``last``
+    (:func:`~ess.apps.batch.source.between`); without, of no rows, or of
+    those of a table file. ``columns`` are the parameter columns, those that
+    the source fills among them. The batch starts with the settings of the
+    batch of label ``settings_from`` if given, else with those that the
+    application gives ``spec``; a setting of the batch at a column fills its
+    cells.
     """
 
     title: str
     description: str = ''
     source: str | None = None
+    first: str | None = None
+    last: str | None = None
     spec: str
-    columns: list[str]
+    columns: list[str] = []
+    settings_from: str | None = None
+
+
+class Value(BaseModel):
+    """A value of a column, as ``text``, and the ``key`` of a row that has it."""
+
+    key: str
+    text: str
+
+
+class MakeColumn(BaseModel):
+    """Make the setting ``name`` a column."""
+
+    name: str
+
+
+class MakeSetting(BaseModel):
+    """
+    Make the column ``name`` a setting, of the value of the row of ``key``,
+    or of the value of every row if not given.
+    """
+
+    name: str
+    key: str | None = None
 
 
 class HeaderEdit(BaseModel):

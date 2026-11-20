@@ -277,6 +277,18 @@ template.fill(params=cells)                                # a blank left: incom
 
 A table has no word for `None`: empty is `None`.
 
+A parameter is a column or a setting, and either can become the other:
+
+```python
+batch.make_column('thickness')         # the setting's value in the cell of each row; one put
+batch.make_setting('thickness')        # the value that every row has; else ValueError
+batch.values('thickness')              # {key of the first row with it: cell}, one per value
+batch.make_setting('thickness', key)   # the cell of the row of key
+```
+
+A row added after `make_column` has an empty cell: the default of the parameter, or an incomplete row if it has none.
+`make_setting` writes `settings.json` with the value before `rows.json` without the column, so a stop between the two leaves the column as it was.
+
 ## The state of a row and the rules over it
 
 `batch.state(keys=None, *, compare=True)` gives a `RowState` per row:
@@ -340,6 +352,16 @@ arrived = given[filled]                  # a value in each of source.fills
 table = arrived if choose is None else choose(arrived)
 considered = arrived.index               # the rows taken and those left out
 ```
+
+A range of the rows that arrived, as a person picks it, is `between`, open at an end not given:
+
+```python
+manager.create('loki-iofq', title='Afternoon', source='sample-runs',
+               choose=lambda given: between(given, '60339', None))
+manager.marked('sample-runs', '60339')   # rows_of, with columns waits and taken
+```
+
+`between` refuses an end that is not a key of the rows that arrived (a row that waits is not one), and a first row after the last.
 
 - `create` refuses a label that has definitions or records, a spec that the workspace does not bind, and rows that `put` refuses.
 - It refuses `rows=` with `source=`, `choose=` without `source=`, and a key from `choose` that is not in `arrived`.
@@ -458,6 +480,19 @@ A refused write raises `NotKept`.
 `Pages` holds one lock over the manager; the app calls `Pages.tick`, and so `manager.step()`, on a timer.
 `Page` is the presenter of one batch: each action that changes rows builds a table and calls `put`.
 The actions are described in [`batch/web/README.md`](../src/ess/apps/batch/web/README.md).
+Each action of the page is one call of the batch layer:
+
+| On the page | In code |
+|---|---|
+| an edit of cells, **+ Add row**, **Remove selected**, **Load table** | `batch.put(table)` |
+| **Apply** | `batch.settings = settings` |
+| **Reduce** and its ways | `batch.reduce(keys)` |
+| **+ New batch** | `manager.create(...)`, with `choose=lambda given: between(given, first, last)` for a range |
+| the range's marks | `manager.marked(source, first, last)` |
+| **+ Add rows from the runs** | `manager.offered(label)`, then `manager.take(label, keys)` |
+| "Make this a column" | `batch.make_column(name)` |
+| "Make this a setting" | `batch.values(name)`, then `batch.make_setting(name, key)` |
+| **Follow** | `manager.follow(label)`; the timer calls `manager.step()` |
 
 ## Testing an application
 

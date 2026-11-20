@@ -53,6 +53,8 @@ from .models import (
     Key,
     Keys,
     Made,
+    MakeColumn,
+    MakeSetting,
     NewBatch,
     Notice,
     On,
@@ -61,7 +63,9 @@ from .models import (
     RowDetail,
     Runs,
     SourceChoice,
+    SourceRows,
     State,
+    Value,
 )
 from .page import Missing, Page, Problem
 from .pages import Pages
@@ -184,6 +188,31 @@ def create_app(pages: Pages) -> FastAPI:
     def add(page: PageOfLabel, body: Key) -> State:
         return page.add(body.key)
 
+    @batch.get('/api/rows/offered')
+    def offered(page: PageOfLabel) -> SourceRows:
+        """The rows of the source of the batch that its table lacks."""
+        return page.offered()
+
+    @batch.post('/api/rows/take')
+    def take(page: PageOfLabel, body: Keys) -> State:
+        """Add rows of the source, as it makes them now."""
+        return page.take(body.keys)
+
+    @batch.post('/api/settings/column')
+    def make_column(page: PageOfLabel, body: MakeColumn) -> State:
+        """Make a setting a column, of its value in every row."""
+        return page.make_column(body.name)
+
+    @batch.get('/api/columns/values')
+    def values(page: PageOfLabel, name: str) -> list[Value]:
+        """The different values of a column, each with a row that has it."""
+        return page.values(name)
+
+    @batch.post('/api/columns/setting')
+    def make_setting(page: PageOfLabel, body: MakeSetting) -> State:
+        """Make a column a setting, of the value of a row or of every row."""
+        return page.make_setting(body)
+
     @batch.post('/api/reduce')
     def reduce(page: PageOfLabel, body: Reduce) -> State:
         return page.reduce(body)
@@ -231,7 +260,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @batch.post('/api/table')
     def load_table(
-        page: PageOfLabel, name: str, content: Annotated[bytes, Body()]
+        page: PageOfLabel, name: str, content: Annotated[bytes, Body()] = b''
     ) -> State:
         """Replace the table of the batch with that of a table file."""
         return page.load_table(name, content)
@@ -242,7 +271,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @batch.post('/api/settings.yaml')
     def load_settings(
-        page: PageOfLabel, name: str, content: Annotated[bytes, Body()]
+        page: PageOfLabel, name: str, content: Annotated[bytes, Body()] = b''
     ) -> State:
         return page.load_settings(name, content)
 
@@ -279,10 +308,36 @@ def create_app(pages: Pages) -> FastAPI:
     def create(body: NewBatch) -> Made:
         return pages.create(body)
 
+    @workspace.post('/api/batches/table')
+    def create_from_table(
+        spec: str,
+        title: str,
+        name: str,
+        content: Annotated[bytes, Body()] = b'',
+        description: str = '',
+        settings_from: str | None = None,
+    ) -> Made:
+        """Make a batch without a source, of the table of a table file."""
+        new = NewBatch(
+            spec=spec, title=title, description=description, settings_from=settings_from
+        )
+        return pages.create(new, (name, content))
+
     @workspace.get('/api/sources')
     def sources() -> list[SourceChoice]:
         """What a new batch can be made with."""
         return pages.sources()
+
+    @workspace.get('/api/sources/rows')
+    def rows_of(
+        name: str, first: str | None = None, last: str | None = None
+    ) -> SourceRows:
+        """
+        The rows that the source ``name`` makes now, each marked as taken,
+        left out or waiting for a new batch of the rows from ``first`` to
+        ``last``.
+        """
+        return pages.rows_of(name, first, last)
 
     @workspace.get('/api/runs')
     def runs() -> Runs:

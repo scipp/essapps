@@ -17,9 +17,9 @@ each file as its cell (``cell_of(f.ref)``, :func:`~.table.cell_of`); and
 notes, such as ``run`` and ``name``. :func:`rows_of` is what a source makes
 from the files now. A row is *filled* (:func:`filled`) once it has a value
 in each column that the source fills; until then it *waits*. A batch is made
-from the filled rows, and Follow adds the rows that are new and filled
-(:mod:`~.auto`). A batch never asks its source again: how its table was made
-is not part of it.
+from the filled rows, or from a range of them (:func:`between`), and Follow
+adds the rows that are new and filled (:mod:`~.auto`). A batch never asks
+its source again: how its table was made is not part of it.
 """
 
 from __future__ import annotations
@@ -108,3 +108,20 @@ def filled(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
     the columns that a source fills: a row that has not waits.
     """
     return given[list(columns)].notna().all(axis=1)
+
+
+def between(arrived: pd.DataFrame, first: str | None, last: str | None) -> pd.DataFrame:
+    """
+    The rows of ``arrived``, such as the filled rows of a source, from the row
+    of key ``first`` to the row of key ``last``, both included, in the order
+    of ``arrived``; an end not given is open. Raises ``ValueError`` for an end
+    that is not a key of ``arrived``, and for a ``first`` after the ``last``.
+    """
+    for end in (first, last):
+        if end is not None and end not in arrived.index:
+            raise ValueError(f'{end} is not a filled row')
+    start = 0 if first is None else arrived.index.get_loc(first)
+    stop = len(arrived) if last is None else arrived.index.get_loc(last) + 1
+    if first is not None and last is not None and stop <= start:
+        raise ValueError(f'the row {first} comes after the row {last}')
+    return arrived.iloc[start:stop]

@@ -9,7 +9,8 @@ import {h} from './dom.js';
 // caret stays and no half-typed value is sent, and while an edit is on its
 // way, since its answer is newer. A form that waits is drawn once neither
 // holds, never dropped. `edit` returns a promise of the answer drawn.
-export function renderForm(container, nodes, edit) {
+// `action(node)` gives what the heading of a parameter offers, if anything.
+export function renderForm(container, nodes, edit, action = () => null) {
   container.onfocusout ??= (event) => drawWaiting(container, event.relatedTarget);
   const json = JSON.stringify(nodes);
   if (json !== container.given) {
@@ -26,7 +27,7 @@ export function renderForm(container, nodes, edit) {
     container.waiting = () =>
       container.replaceChildren(
         ...nodes.map((node) =>
-          h('section', {class: 'param'}, h('h3', {text: node.label}), ...body(node, send)),
+          h('section', {class: 'param'}, h('h3', {}, h('span', {text: node.label}), action(node)), ...body(node, send)),
         ),
       );
   }
