@@ -148,7 +148,7 @@ def test_a_step_adds_the_rows_new_and_filled_with_the_columns_of_the_table() -> 
         d={'sample': 's', 'transmission': 't', 'note': 4},
     )
 
-    new, waiting = added(held, given, ('sample', 'transmission', 'offset'), {'d'})
+    new, waiting = added(held, given, ('sample', 'transmission'), {'d'})
 
     assert new.to_dict('index') == {'b': {'sample': 's', 'transmission': 't'}}
     assert list(waiting) == ['c']
@@ -182,7 +182,8 @@ def _per_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
 
 def _repeated(client: Client) -> Stepping:
     source = Source(_per_sample, fills=('sample_runs', 'trans_runs'))
-    batch = Batch(client, REPEATED, label='repeated', rows=rows_of(client, source))
+    table = rows_of(client, source)
+    batch = Batch(client, REPEATED, label='repeated', rows=table, fills=source.fills)
     return Stepping(batch, source)
 
 
@@ -485,7 +486,8 @@ def test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before(
         return _changed(pair, **offsets)(files)
 
     source = Source(with_offset, fills=(*PAIRS.fills, 'offset'))
-    reduce = Batch(client, PLAIN, label='reduce', rows=rows_of(client, source))
+    table = rows_of(client, source)
+    reduce = Batch(client, PLAIN, label='reduce', rows=table, fills=source.fills)
     loops = [Stepping(find, SAMPLES), Stepping(reduce, source)]
     sample(1, 'water')
 

@@ -71,7 +71,7 @@ Nothing in the batch layer imports the page or the command.
 | column | a column of the table named as a parameter of the spec, a parameter that a row may give itself; the columns are the blanks of the template |
 | note | any other column of the table, such as `run` or `name`; shown, never part of a request |
 | cell | one value of a row in a column or a note, or empty; plain data such as `'run:60339'`, `2.0`, `['run:1', 'run:2']` |
-| value of a parameter for a row | its cell; if the cell is empty or the parameter is no column, the setting; if the batch has none, the default of the parameter; a column that the source of the batch fills takes no setting |
+| value of a parameter for a row | its cell; if the cell is empty or the parameter is no column, the setting; if the batch has none, the default of the parameter; but at a column that the source of the batch fills, the cell only |
 | request of a row | the template filled with the value of each column for the row |
 | result of a row | the newest record under the label with the row's key as member |
 | state of a row | its result, the status of the result, its problems, and where its request differs from that of its result |
@@ -86,7 +86,7 @@ Nothing in the batch layer imports the page or the command.
 
 1. **Only `put` changes a table.** A person on the page, the command, `take` and a step each build a table and call `batch.put(table)`. A `put` of an equal table writes nothing.
 2. **The columns are the blanks.** `put` makes the columns of the table the blanks of the template. Nothing else says which parameters are columns.
-3. **A cell overrides the setting for its row.** The value of a parameter for a row is its cell; if the cell is empty or the parameter is no column, the setting; if the batch has none, the default (diagram in [The request of a row](#the-request-of-a-row)). A setting at a column stays in `batch.settings` and in `settings.json`, and is left out of `batch.template()`, since a template cannot fix a value that each row fills. A column that the source of the batch fills takes no setting: its empty cell waits for a file.
+3. **A cell overrides the setting for its row.** The value of a parameter for a row is its cell; if the cell is empty or the parameter is no column, the setting; if the batch has none, the default (diagram in [The request of a row](#the-request-of-a-row)). A setting at a column stays in `batch.settings` and in `settings.json`, and is left out of `batch.template()`, since a template cannot fix a value that each row fills. In a batch made from a source, a column that the source fills takes its value from the cell only: an empty cell there means that the row waits for its file, and the row is incomplete, whatever the settings hold and whatever the default of the parameter is.
 4. **A cell is plain data, converted in one place.** `table.as_request` turns cells into request values; `table.cell_of` turns a request value into a cell.
 5. **A column has the dtype of its parameter.** A cell of another kind is refused where it enters the table, with a `ValueError` that names the key and the column.
 6. **The state is computed, never kept.** It is read from the records each time. Each rule (`ready`, `not_reduced`, `left_to_reduce`, `earlier_settings`, `to_reduce`) is a function from the states to keys.
@@ -282,41 +282,44 @@ The value of a parameter for a row:
 
 ```mermaid
 flowchart TD
-    column{"a column?"}
-    cell{"the cell holds a value?"}
-    filled{"the source fills the column?"}
+    source{"the source fills it?"}
+    waiting{"the cell holds a value?"}
+    column{"a column whose cell holds a value?"}
     setting{"the batch has a setting?"}
+    source -- yes --> waiting
+    source -- no --> column
+    waiting -- yes --> cell["the cell"]
+    waiting -- no --> waits["none: the row waits for its file"]
     column -- yes --> cell
     column -- no --> setting
-    cell -- yes --> own["the cell"]
-    cell -- no --> filled
-    filled -- yes --> waits["empty: the row waits for its file"]
-    filled -- no --> setting
     setting -- yes --> given["the setting"]
-    setting -- no --> default["the default, or None if it takes None; else empty"]
+    setting -- no --> default["the default, or None if it takes None; else none"]
 ```
 
-An empty value is the problem `empty` of the row: it is incomplete.
-In code, with no setting at a column that the source fills (`batch.filled`, below):
+A parameter without a value is the problem `empty` of the row: it is incomplete.
+"The source fills it" is asked of `batch.fills`, kept with the batch (below); each of them is a column.
+In code:
 
 ```python
 template = Template(spec, params=settings, blanks=columns)  # batch.template(): drops the settings at columns
 row = rows[columns].loc[[key]].to_dict('index')[key]       # each cell of its type
 cells = as_request(model, {c: v for c, v in row.items() if v is not None})
 for c in columns - cells.keys():                           # the empty cells
-    if c in settings: cells[c] = settings[c]
+    if c in fills: continue                                # the row waits for its file
+    elif c in settings: cells[c] = settings[c]
     elif has_default(c): cells[c] = default(c)
     elif takes_none(c): cells[c] = None
 template.fill(params=cells)                                # a blank left: incomplete
 ```
 
-`batch.cells(keys=None)` gives these cells by key, `batch.settings` all settings, and `batch.template()` a copy of the template, which a stage is opened from.
+`batch.empty()` gives what an empty cell gives, by column, `batch.cells(keys=None)` these cells by key, `batch.settings` all settings, and `batch.template()` a copy of the template, which a stage is opened from.
 
 | A column of | An empty cell gives, with no setting |
 |---|---|
 | `thickness: float = 1.0` | `1.0` |
 | `direct_beam: DirectBeamFile \| None` | `None`: no direct beam |
 | `sample: SampleFile` | nothing: the row is incomplete (problem `empty`) |
+| `sample_transmission`, which the source fills | nothing, whatever the settings and the default: the row waits (problem `empty`) |
 
 A table has no word for `None`: empty is `None`.
 
@@ -335,16 +338,19 @@ If that row's cell holds a value, the setting becomes it; if the cell is empty, 
 Without `key`, every row must take the same value; a batch whose cells are all empty, or that has no rows, keeps its setting.
 It writes `settings.json`, if the setting changes, before `rows.json` without the column; a stop between the two leaves the column, whose empty cells take the value chosen.
 
-A batch made from a source knows the parameters that its source fills (`batch.fills`, given by the manager), and `batch.filled` are those that are columns.
-Such a column takes no setting: an empty cell there means that a file has not arrived.
+A batch made from a source keeps the parameters that its source fills, `batch.fills`, in `source.json` with the name of the source.
+The manager gives them to the batch when it makes or reads it; it does not look up the source, so the command without `-s` reads them too.
+The table keeps a column for each, since a row waits until its cell there is filled.
+By the rule above, a setting there is never read; one that the definitions hold is left out when the batch is read, and gone at the next write of the settings.
 
 ```python
-batch.settings = {'sample_transmission': 'run:60305'}  # ValueError: the source fills sample_transmission
-batch.settable(settings)                                # settings without the values at batch.filled
-batch.make_setting('sample_transmission')              # ValueError: its rows wait for their runs
+batch.put(frame.drop(columns='sample_transmission'))   # ValueError: the table keeps the column
+batch.make_setting('sample_transmission')              # ValueError, as put
+batch.settings = {'sample_transmission': 'run:60305'}  # ValueError: the source of the batch fills sample_transmission
+batch.settable(settings)                                # settings without the values at batch.fills
 ```
 
-Settings taken from elsewhere go through `settable`: those of another batch at `create`, a settings file loaded on the page, and the template of the command.
+Settings taken from elsewhere go through `settable`: those of another batch at `create`, a settings file loaded on the page, those of a row put in the form, and the template of the command.
 The settings form of the page has no field for such a column.
 
 ## The state of a row and the rules over it
@@ -373,9 +379,9 @@ What moves a row from one word of `text` to another:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> incomplete: a row put, a cell empty
+    [*] --> incomplete: a row put, a value missing
     [*] --> ready: a row put, complete
-    incomplete --> ready: a cell filled
+    incomplete --> ready: a cell filled, or a setting applied
     ready --> running: reduce
     running --> done: the record completed
     running --> failed: the record failed
@@ -446,9 +452,9 @@ manager.marked('sample-runs', lambda given: between(given, '60339', None))
 `between` refuses an end that is not a key of the rows that arrived (a row that waits is not one), and a first row after the last.
 
 - `create` refuses a label that has definitions or records, a spec that the workspace does not bind, and rows that `put` refuses.
-- With `source=`, `create` gives the batch `Source.fills` and leaves out the settings at those columns (`batch.settable`): an empty cell there means that a run has not arrived, not "take the value of the batch". Every other setting stays, at a column too. `manager.batch(label)` gives a batch the fills of its source, if the source is registered.
+- With `source=`, `create` keeps `Source.fills` with the batch in `source.json` (`batch.fills`), refuses a table from `choose` without one of their columns, and leaves out the settings there (`batch.settable`). Every other setting stays, at a column too.
 - It refuses `rows=` with `source=`, `choose=` or `follow=True` without `source=`, and a key from `choose` that is not in `arrived`.
-- `manager.batch(label)` reads `settings.json` and `rows.json`, binds the spec by name, and passes the definitions, so the `Batch` writes each change.
+- `manager.batch(label)` reads `settings.json`, `rows.json` and the fills in `source.json`, binds the spec by name, and passes the definitions, so the `Batch` writes each change.
 - Ask for the batch each time: one handed out before `remove` must not be used after.
 - A `Batch` made in code, `Batch(client, spec, label=..., settings=..., rows=...)`, is the same class without definitions: it keeps nothing.
 
@@ -482,7 +488,7 @@ A step (`auto.step(batch, source, considered)`), as code:
 ```python
 table = batch.frame()
 given = rows_of(batch.client, source)                  # every row the source makes now
-new, waiting = added(table, given, source.fills, considered)
+new, waiting = added(table, given, batch.fills, considered)
 batch.put(pd.concat([table, new]))                     # only the columns and notes of the table
 considered |= set(new.index) | (set(given.index) & set(table.index))
 candidates = not_reduced(batch.state(compare=False))   # ready as given, no result
@@ -518,7 +524,7 @@ sequenceDiagram
 ```
 
 - A row is new if its key is neither considered nor in the table. A key of the source that the table has is considered, so a row added by hand, or by a step cut off before `source.json` is written, stays away once removed.
-- A new row is added once each of `fills` that is a column of the table has a value. Until then it waits.
+- A new row is added once each of the batch's `fills` has a value. Until then it waits. The step asks the batch, not the source, which parameters a row waits for, as the state of a row does.
 - A row that a person removes stays away: its key is considered. `take` brings it back.
 - A row with a result is never reduced by a step, also when it is outdated, failed or cancelled.
 - A row whose request is refused does not hold back the others; `done.refused` says why, and the next step tries again.

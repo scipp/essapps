@@ -25,6 +25,7 @@ from ess.apps.batch.definition import (
     FOLLOWING,
     Key,
     header_key,
+    settings_key,
     source_key,
     source_of,
 )
@@ -639,7 +640,7 @@ def test_a_row_added_after_make_column_takes_the_setting(
     assert batch.state()['1'].text == 'done'
 
 
-def test_a_waiting_row_taken_or_stepped_takes_no_setting_of_a_column_filled(
+def test_a_waiting_row_taken_or_stepped_waits_whatever_the_settings_kept(
     manager: BatchManager,
     client: Client,
     sample: Measure,
@@ -648,15 +649,19 @@ def test_a_waiting_row_taken_or_stepped_takes_no_setting_of_a_column_filled(
     sample(1, 'water')
     from_pairs(manager, 'plain', title='A', label='a', follow=True)
     sample(2, 'oil', partner=False)
-    batch = _again(client, definitions).batch('a')  # as after a restart
+    kept = definitions.load(settings_key('a'), dict)
+    stale = {**kept['params'], 'transmission': 'run:1001'}
+    definitions.save(settings_key('a'), {**kept, 'params': stale})
+    unregistered = BatchManager(client, sources={}, definitions=definitions)
+    again = _again(client, definitions)  # as after a restart
 
-    with pytest.raises(ValueError, match='the source fills transmission'):
-        batch.settings = {'transmission': 'run:1001'}
-    manager.take('a', ['2'])
-    done = manager.step()
-    state = manager.batch('a').state()['2']
+    again.take('a', ['2'])
+    done = again.step()
+    state = again.batch('a').state()['2']
 
-    assert batch.filled == ('sample', 'transmission')
+    assert unregistered.batch('a').fills == {'sample', 'transmission'}
+    assert again.batch('a').state()['1'].text != 'incomplete'
+    assert done is not None
     assert '2' not in done.records
     assert [(e.loc, e.msg) for e in state.problems] == [(('transmission',), 'empty')]
 

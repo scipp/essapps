@@ -15,7 +15,7 @@ A step adds the rows of the source that are new and filled, as a person does
 with ``put``, then reduces the rows that are ready and have no result::
 
     given = rows_of(batch.client, source)        # every row the source makes now
-    new, waiting = added(table, given, source.fills, considered)
+    new, waiting = added(table, given, batch.fills, considered)
     batch.put(pd.concat([table, new]))
     considered |= set(new.index) | (set(given.index) & set(table.index))
     candidates = not_reduced(batch.state(compare=False))   # ready as given, no result
@@ -79,12 +79,13 @@ def added(
     The rows of ``given`` to add to ``table``, and the keys of those that wait.
 
     A row of ``given`` is new if its key is neither considered nor in
-    ``table``. A new row is added once it has a value in each of ``fills``
-    that is a column of ``table``, and waits until then. The rows added have
-    the columns of ``table``, those of ``given`` that it lacks left out.
+    ``table``. A new row is added once it has a value in each of ``fills``,
+    the parameters that the batch waits for (:attr:`.reduction.Batch.fills`),
+    and waits until then. The rows added have the columns of ``table``, those
+    of ``given`` that it lacks left out.
     """
     is_new = ~given.index.isin(list(considered)) & ~given.index.isin(table.index)
-    is_ready = filled(given, [c for c in fills if c in table.columns])
+    is_ready = filled(given, fills)
     new = given[is_new & is_ready].reindex(columns=table.columns)
     return new, given.index[is_new & ~is_ready]
 
@@ -145,7 +146,7 @@ def step(batch: Batch, source: Source, considered: Collection[str]) -> Step:
     table = batch.frame()
     try:
         given = rows_of(batch.client, source)
-        new, waiting = added(table, given, source.fills, considered)
+        new, waiting = added(table, given, batch.fills, considered)
         if len(new):
             batch.put(pd.concat([table, new]))
     except ValueError as error:

@@ -1672,7 +1672,7 @@ def test_a_column_made_a_setting_and_a_column_again_keeps_its_cell_editors(
     )
 
 
-def test_a_column_that_the_source_fills_has_no_setting_and_another_is_cleared(
+def test_a_column_that_the_source_fills_has_no_setting_and_another_goes_to_default(
     page: Any, batch: Batch
 ) -> None:
     field = '#settings input[data-path=\'["thickness"]\']'
@@ -1683,7 +1683,7 @@ def test_a_column_that_the_source_fills_has_no_setting_and_another_is_cleared(
     page.wait_for_selector('#draft:not(.changed)')
     cell(page, 'water', 'thickness').locator('.muted', has_text='2.5').wait_for()
 
-    page.click('#settings h3:has-text("Thickness") button:text-is("Clear")')
+    page.click('#settings h3:has-text("Thickness") button:text-is("Default")')
     page.wait_for_selector('#draft.changed')
     page.click('#settings-apply')
     page.wait_for_selector('#draft:not(.changed)')

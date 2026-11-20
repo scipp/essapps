@@ -66,12 +66,12 @@ class Edit(BaseModel):
     """
     What a person did to a form at ``path``: ``set`` an input to ``value`` (the
     label of an option for a picker), ``choose`` the way ``value`` of a choice,
-    ``add`` or ``remove`` the last element of a list, or ``clear`` a whole
-    parameter: its default, or unset.
+    ``add`` or ``remove`` the last element of a list, or ``reset`` a whole
+    parameter to its default, or unset if it has none.
     """
 
     path: list[str | int]
-    op: Literal['set', 'choose', 'add', 'remove', 'clear']
+    op: Literal['set', 'choose', 'add', 'remove', 'reset']
     value: Any = None
 
 
@@ -86,15 +86,16 @@ class Column(BaseModel):
     """
     A column of a table; ``default`` is the text of the value that an empty
     cell takes: the setting of the batch, else the default of the parameter.
-    ``filled`` says that the source of the batch fills it: it takes no
-    setting, and "Make this a setting" is not offered.
+    ``waits`` says that the source of the batch fills it: an empty cell
+    there means that the row waits for its file, and "Make this a setting"
+    is not offered.
     """
 
     name: str
     title: str
     editor: Editor | None = None
     default: str = ''
-    filled: bool = False
+    waits: bool = False
 
 
 class Cell(BaseModel):

@@ -473,10 +473,10 @@ class Page:
         """
         A form of the settings, at the fields' defaults: a field per
         parameter, but the columns that the source fills, which take no
-        setting (:attr:`~ess.apps.batch.Batch.filled`).
+        setting (:attr:`~ess.apps.batch.Batch.fills`).
         """
         batch = self.batch
-        fields = [n for n in batch.spec.params.model_fields if n not in batch.filled]
+        fields = [n for n in batch.spec.params.model_fields if n not in batch.fills]
         return Fields(batch.spec.params, self.pages.listing, fields=fields)
 
     def _form_held(self) -> tuple[dict[str, Any], list[FieldError]]:
@@ -589,7 +589,7 @@ class Page:
         problem = '; '.join(said) or None
         unapplied = self._unapplied()
         marks = [e for e in (*unusable, *self.refused) if not e.entry and shown(e)]
-        fields = batch.spec.params.model_fields
+        empty = batch.empty()
         header = self.pages.manager.headers()[self.label]
         return State(
             version=self.version,
@@ -611,12 +611,9 @@ class Page:
                     name=c,
                     title=self._cells.titles[c],
                     editor=forms.editor(self._cells.fields[c]),
-                    filled=c in batch.filled,
-                    default=self._text(batch.settings[c])
-                    if c in batch.settings
-                    else ''
-                    if fields[c].is_required()
-                    else self._text(fields[c].get_default(call_default_factory=True)),
+                    waits=c in batch.fills,
+                    # as a cell that holds it shows it
+                    default=self._cell_text(c, cell_of(empty[c])) if c in empty else '',
                 )
                 for c in columns
             ],
@@ -657,6 +654,12 @@ class Page:
         it is unset.
         """
         return '' if value is UNSET else self.pages.listing.text(value)
+
+    def _cell_text(self, name: str, cell: Any) -> str:
+        """What a cell of the column ``name`` that holds ``cell`` shows."""
+        if cell is None:
+            return ''
+        return self._text(as_request(self.batch.spec.params, {name: cell})[name])
 
     def _outdated(self, state: RowState) -> str:
         """Why the result of a row is outdated: what changed since."""
@@ -886,14 +889,8 @@ class Page:
             values = self.batch.values(name)
         except ValueError as error:
             raise Problem(f'{why(error)}.') from None
-        model = self.batch.spec.params
         return [
-            Value(
-                key=key,
-                text=''
-                if cell is None
-                else self._text(as_request(model, {name: cell})[name]),
-            )
+            Value(key=key, text=self._cell_text(name, cell))
             for key, cell in values.items()
         ]
 
@@ -919,7 +916,8 @@ class Page:
         """
         title = self.settings.titles.get(name, name)
         self._reshape(name, lambda: self.batch.make_column(name))
-        return f'{title} is a column: a row takes the setting until its cell is set.'
+        taken = 'the setting' if name in self.batch.settings else 'the default'
+        return f'{title} is a column: a row takes {taken} until its cell is set.'
 
     @_action
     def make_setting(self, made: MakeSetting) -> str:
@@ -995,13 +993,7 @@ class Page:
 
     @_action
     def edit_settings(self, edit: Edit) -> None:
-        """
-        Change the form of the settings; the batch's stay until Apply. Only
-        the field of a column may be cleared, since a column needs no setting.
-        """
-        columns = [[c] for c in self.batch.columns]
-        if edit.op == 'clear' and edit.path[:1] not in columns:
-            raise Problem('Only the setting of a column can be cleared.')
+        """Change the form of the settings; the batch's stay until Apply."""
         try:
             forms.apply(self.settings, edit)
         except (KeyError, ValueError) as error:
@@ -1039,11 +1031,12 @@ class Page:
     @_action
     def use_settings(self, key: str) -> str:
         """
-        Show the settings that the result of row ``key`` was reduced with; at
-        a column, the batch's setting, since the row's value there is its own
-        or the setting.
+        Show the settings that the result of row ``key`` was reduced with: at
+        a column where the row gives its own value, the batch's setting, and
+        where its cell is empty, the value that the row took.
         """
-        name = names(self._frame([key]), self.batch.columns)[key]
+        frame = self._frame([key])
+        name = names(frame, self.batch.columns)[key]
         row = self._states([key])[0][key]
         if row.record is None:
             raise Problem(f'{name} has no result.')
@@ -1053,13 +1046,11 @@ class Page:
                 'whose settings this one does not take.'
             )
         batch = self.batch
-        params = row.record.request.params
-        self._fill(
-            {
-                **{n: v for n, v in params.items() if n not in batch.columns},
-                **{n: v for n, v in batch.settings.items() if n in batch.columns},
-            }
-        )
+        given = frame.loc[[key], list(batch.columns)].notna().to_dict('index')[key]
+        own = {c for c, filled in given.items() if filled}
+        kept = {n: v for n, v in batch.settings.items() if n in own}
+        took = {n: v for n, v in row.record.request.params.items() if n not in own}
+        self._fill({**took, **kept})
         return (
             f'The form shows the settings {name} was reduced with. Apply to use them.'
         )

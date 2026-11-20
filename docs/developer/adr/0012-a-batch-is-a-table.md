@@ -33,7 +33,7 @@ A person thinks of a batch as a table: they edit its cells, remove its rows, red
 
 ## Decision
 
-**A batch is a template and a table. The settings are one value per parameter, for the batch. The template holds the settings of the parameters that are no column, and its blanks are the columns; each row of the table fills it once. The value of a parameter for a row is its cell; if the cell is empty or the parameter is no column, the setting; if the batch has none, the default of the parameter. A column that the source of the batch fills takes no setting. The table has one value per cell, and only a person changes it. How the table was made is not part of the batch.**
+**A batch is a template and a table. The settings are one value per parameter, for the batch. The template holds the settings of the parameters that are no column, and its blanks are the columns; each row of the table fills it once. The value of a parameter for a row is its cell; if the cell is empty or the parameter is no column, the setting; if the batch has none, the default of the parameter. In a batch made from a source, a column that the source fills takes its value from the cell only. The table has one value per cell, and only a person changes it. How the table was made is not part of the batch.**
 
 ```
 batch '20261118-130204'
@@ -102,7 +102,7 @@ def request(key):
 | `direct_beam: DirectBeamFile \| None` | `None`: no direct beam |
 | `sample: SampleFile` | nothing: the row is incomplete |
 
-- **A column that the source of the batch fills takes no setting; its empty cell is empty.** An empty cell there means that a file has not arrived, not "take the value of the batch". The manager gives a batch the parameters that its source fills (`Source.fills`) when it makes or reads it. The batch refuses a setting at such a column and "Make this a setting" of it, and `batch.settable(settings)` leaves such values out of settings taken from elsewhere: those of another batch at `create`, a settings file loaded, and the template of the command.
+- **In a batch made from a source, a column that the source fills takes its value from the cell only.** An empty cell there means that the row waits for its file, not "take the value of the batch": the row is incomplete, whatever the settings hold and whatever the default of the parameter is. The rule lives where the values of a row are resolved (`batch.empty()`, which `batch.cells()` and so the state read), so a setting there is never read, and none has to be kept out at each way into the settings. An assignment of settings refuses one only to say so to a caller that tries, and `batch.settable(settings)` tidies settings taken from elsewhere.
 
 ### A person changes the table
 
@@ -271,6 +271,8 @@ The code of this ADR and of ADR 0013 is written together, since Follow is in use
 - An empty cell depends on the settings, outside the table. The page shows it in grey as the value that the row takes.
 - A table file shows an empty cell where a row takes the setting, so it needs the settings file to say what a row was reduced with.
 - A cell emptied after its row was reduced counts its value as a setting: the row reads `earlier`, not `outdated`.
+- A batch made from a source keeps the names that its source fills with it, in `source.json`, as they were when it was made; the batch, the command without the sources, and Follow read them there. A step asks the batch which names a row waits for.
+- The table of a batch made from a source keeps a column for each name that its source fills: `put`, a table file loaded, and "Make this a setting" refuse to drop one.
 - `settings.json` holds every setting, those at the columns too, as a template without blanks. A file whose template has blanks, as one written before, reads the same: its blanks are not read, and it has no settings at the columns.
 - A row that only wrong metadata made stays until a person removes it, and a correction of a run changes no batch (the example above).
 - The command and the page need no translation of a table: a table file is the table.

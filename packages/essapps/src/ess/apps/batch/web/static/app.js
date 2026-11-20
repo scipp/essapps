@@ -277,7 +277,7 @@ function gridColumns(state) {
     current: () => view.state.columns,
     say: showMessage,
     // A column that the source fills stays a column: its rows wait for their runs.
-    menu: (column) => (column.filled ? [] : [{label: 'Make this a setting', action: () => makeSetting(column)}]),
+    menu: (column) => (column.waits ? [] : [{label: 'Make this a setting', action: () => makeSetting(column)}]),
   });
   return {
     columns: [named, ...notes, ...cells, statusColumn],
@@ -289,7 +289,7 @@ function gridColumns(state) {
 // loaded changes them.
 function showColumns(state) {
   // The options of a pick are read when its editor opens (`current`).
-  const shown = JSON.stringify([state.notes, state.columns.map((c) => [c.name, c.title, c.editor?.type, c.default, c.filled])]);
+  const shown = JSON.stringify([state.notes, state.columns.map((c) => [c.name, c.title, c.editor?.type, c.default, c.waits])]);
   if (shown === view.columns) return;
   const first = view.columns === '';
   view.columns = shown;
@@ -973,8 +973,9 @@ function renderSettings(state) {
   download.disabled = changed;
   download.title = changed ? `${action.blocked} first.` : '';
   // A column is marked: its setting is the value of each row whose cell is
-  // empty, and it may have none, so it can be cleared. A setting whose cell
-  // the page edits may be a column.
+  // empty, and it may have none, so it can go back to the default, or to no
+  // setting if there is none. A setting whose cell the page edits may be a
+  // column.
   const offer = (node) =>
     node.column
       ? h(
@@ -984,9 +985,9 @@ function renderSettings(state) {
           h('button', {
             type: 'button',
             class: 'quiet small',
-            text: 'Clear',
-            title: 'No setting: a row whose cell is empty takes the default, or is incomplete if there is none.',
-            onclick: () => act('settings', {path: node.path, op: 'clear'}),
+            text: 'Default',
+            title: 'Back to the default of the parameter, or to no setting if it has none: then a row whose cell is empty is incomplete.',
+            onclick: () => act('settings', {path: node.path, op: 'reset'}),
           }),
         )
       : state.may_be_columns.includes(node.path[0]) &&

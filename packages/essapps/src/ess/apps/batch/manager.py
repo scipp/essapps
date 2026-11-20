@@ -36,7 +36,7 @@ before deleting it, so it never names a label without a header.
 
     made = source_of(label)                                  # source.json
     done = step(batch(label), sources[made.source], made.considered)  # put, reduce
-    source.json = FromSource(made.source, done.considered)   # after the table;
+    source.json = replace(made, considered=done.considered)  # after the table;
     # if the step raised: made.considered | the keys of the table
 
 Whoever serves owns the timer that calls it, and the lock. The manager has
@@ -49,6 +49,7 @@ import re
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping
 from contextlib import suppress
+from dataclasses import replace
 from typing import Any
 
 import pandas as pd
@@ -285,12 +286,10 @@ class BatchManager:
         A row that waits is neither taken nor considered: Follow adds it once
         it is filled, if the batch follows.
 
-        A column that the source fills takes no setting: an empty cell there
-        means that a file has not arrived, not "take the value of the batch".
-        The batch is given ``source.fills`` (:attr:`.reduction.Batch.fills`),
-        and the settings at its columns are left out
-        (:meth:`.reduction.Batch.settable`). Any other column keeps its
-        setting, which each row with an empty cell takes.
+        The batch keeps ``source.fills`` in ``source.json``
+        (:attr:`.reduction.Batch.fills`): its table keeps a column for each,
+        an empty cell there means that the row waits for its file, and the
+        settings given are left out there (:meth:`.reduction.Batch.settable`).
 
         Parameters
         ----------
@@ -369,7 +368,7 @@ class BatchManager:
             arrived = given[~given['waits']].drop(columns='waits')
             rows = arrived if choose is None else choose(arrived)
             _check_chosen(rows, arrived)
-            made = FromSource(source, frozenset(arrived.index))
+            made = FromSource(source, frozenset(arrived.index), found.fills)
             fills = found.fills
         # Refused here, before anything is written.
         table = typed(pd.DataFrame() if rows is None else rows, bound.params)
@@ -463,11 +462,9 @@ class BatchManager:
         parameter of the name of a note, refuses the cells of the table, and
         the batch cannot be shown either.
 
-        The batch is given the parameters that its source fills
-        (:attr:`.reduction.Batch.fills`), if the source is registered; a
-        batch whose source is not registered has none. If the source now
-        fills a column at which the settings kept hold a value, ``Batch``
-        refuses them, and the batch cannot be shown either.
+        A batch made from a source is given the parameters that its source
+        filled when it was made (:attr:`.reduction.Batch.fills`), as kept in
+        ``source.json``.
         """
         if (batch := self._batches.get(label)) is not None:
             return batch
@@ -481,8 +478,7 @@ class BatchManager:
             rows_key(label), lambda data: typed(frame_of(data), spec.params)
         )
         made = self._from(label)
-        found = None if made is None else self.sources.get(made.source)
-        fills = () if found is None else found.fills
+        fills = () if made is None else made.fills
         batch = self._kept(label, spec, template.params, rows, fills)
         self._batches[label] = batch
         return batch
@@ -564,8 +560,9 @@ class BatchManager:
         """
         The rows that the source of the batch of ``label`` makes now and its
         table lacks, with the columns of the source and a column ``waits``:
-        whether a cell that the source fills and the table has is empty, so
-        that Follow adds the row once it is filled, unless it is considered.
+        whether a cell of the batch's :attr:`~.reduction.Batch.fills` is
+        empty, so that Follow adds the row once it is filled, unless it is
+        considered.
         A row that does not wait was left out when the batch was made, or
         removed from it, and is considered, so Follow does not add it; or it
         was filled after the batch was made and is not considered, so Follow
@@ -577,10 +574,9 @@ class BatchManager:
         """
         made = self._made(label)
         source = self._source(made.source)
-        table = self.batch(label).frame()
-        fills = [c for c in source.fills if c in table.columns]
-        given = self._given(source, fills)
-        return given[~given.index.isin(table.index)]
+        batch = self.batch(label)
+        given = self._given(source, batch.fills)
+        return given[~given.index.isin(batch.frame().index)]
 
     def take(self, label: str, keys: Iterable[str]) -> None:
         """
@@ -609,7 +605,7 @@ class BatchManager:
     ) -> None:
         """Keep ``considered`` as the keys of the source of ``label``, if changed."""
         if considered != made.considered:
-            kept = FromSource(made.source, considered)
+            kept = replace(made, considered=considered)
             self._definitions.save(source_key(label), source_data(kept))
 
     def remove(self, label: str) -> None:

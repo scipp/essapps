@@ -501,6 +501,23 @@ def test_a_changed_setting_of_a_column_turns_the_rows_that_take_it_earlier(
     assert took['value'] == 1.0
 
 
+@pytest.mark.parametrize(('key', 'shown'), [('1', 2.5), ('2', 1.0)])
+def test_the_settings_of_a_row_put_in_the_form_are_those_it_took_at_a_column(
+    http: TestClient, client: Client, key: str, shown: float
+) -> None:
+    thickness(http, ['1'], 3.0)
+    reduced(http, client)
+    http.post('/api/settings', json={'path': ['thickness'], 'op': 'set', 'value': 2.5})
+    http.post('/api/settings/apply')
+
+    put = http.post('/api/row/use-settings', json={'key': key}).json()
+
+    # Row 1 gave its own value, so the setting stays; row 2 took the setting.
+    (field,) = [n for n in put['settings'] if n['path'] == ['thickness']]
+    assert field['value'] == shown
+    assert put['settings_changed'] is (key == '2')
+
+
 def test_a_column_that_the_source_fills_has_no_setting_on_the_page(
     http: TestClient, batch: Batch
 ) -> None:
@@ -513,17 +530,21 @@ def test_a_column_that_the_source_fills_has_no_setting_on_the_page(
     ).json()
     http.post('/api/settings/apply')
     made = http.post('/api/columns/setting', json={'name': 'transmission'})
+    without = b'key,sample,name\na,run:1,first\n'
+    table = http.post('/api/table', params={'name': 'rows.csv'}, content=without)
 
     form = [n['path'][0] for n in loaded['settings']]
     assert form == ['binning', 'thickness', 'offset']
-    assert [c['filled'] for c in loaded['columns']] == [True, True, False]
+    assert [c['waits'] for c in loaded['columns']] == [True, True, False]
     assert batch.settings['thickness'] == 2.0
     assert 'transmission' not in batch.settings
     assert made.status_code == 422
-    assert 'the source fills transmission' in made.json()['message']
+    assert 'the source of the batch fills transmission' in made.json()['message']
+    assert table.status_code == 422
+    assert 'fills transmission' in table.json()['message']
 
 
-def test_the_setting_of_a_column_can_be_cleared(
+def test_the_setting_of_a_column_without_a_default_can_be_reset_to_none(
     manager: BatchManager, pages: Pages
 ) -> None:
     table = pd.DataFrame(
@@ -534,13 +555,11 @@ def test_the_setting_of_a_column_can_be_cleared(
     page = opened(pages, label)
     shown = state(page)
 
-    refused = page.post('/api/settings', json={'path': ['binning'], 'op': 'clear'})
-    page.post('/api/settings', json={'path': ['sample'], 'op': 'clear'})
+    page.post('/api/settings', json={'path': ['sample'], 'op': 'reset'})
     applied = page.post('/api/settings/apply').json()
 
     (sample,) = [n for n in shown['settings'] if n['path'] == ['sample']]
     assert sample['value'] is not None
-    assert refused.status_code == 422
     assert 'sample' not in manager.batch(label).settings
     assert [r['status'] for r in applied['rows']] == ['incomplete']
 
@@ -791,17 +810,16 @@ def test_the_table_downloaded_and_uploaded_gives_the_same_table(
 def test_a_table_loaded_replaces_the_rows_the_columns_and_so_the_forms(
     http: TestClient, batch: Batch
 ) -> None:
-    content = b'key,sample,name\na,run:1,first\n'
+    content = b'key,sample,transmission,name\na,run:1,run:1001,first\n'
 
     loaded = http.post('/api/table', params={'name': 'rows.csv'}, content=content)
 
     assert loaded.status_code == 200, loaded.json()
     shown = loaded.json()
     assert [(r['key'], r['name']) for r in shown['rows']] == [('a', 'first')]
-    assert [c['name'] for c in shown['columns']] == ['sample']
-    assert batch.columns == ('sample',)
-    settings = [n['path'][0] for n in shown['settings']]
-    assert {'transmission', 'thickness'} <= set(settings)
+    assert [c['name'] for c in shown['columns']] == ['sample', 'transmission']
+    assert batch.columns == ('sample', 'transmission')
+    assert 'thickness' in [n['path'][0] for n in shown['settings']]
     assert thickness(http, ['a'], 3) == {'message': 'There is no column thickness.'}
 
 
@@ -1356,7 +1374,8 @@ def test_the_values_of_a_column_are_listed_each_with_a_row_that_has_it(
 
     listed = http.get('/api/columns/values', params={'name': 'thickness'}).json()
 
-    assert listed == [{'key': '1', 'text': ''}, {'key': '2', 'text': '3.0'}]
+    # An empty cell takes the default.
+    assert listed == [{'key': '1', 'text': '1.0'}, {'key': '2', 'text': '3.0'}]
 
 
 def test_a_column_made_a_setting_whose_table_is_refused_keeps_its_cells(

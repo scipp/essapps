@@ -258,13 +258,16 @@ class Header:
 @dataclass(frozen=True)
 class FromSource:
     """
-    What a batch made from a source keeps of it: the name of the source, and
-    the keys of its rows that the batch has considered, those put into the
-    batch from the source or left out when the batch was made.
+    What a batch made from a source keeps of it: the name of the source, the
+    keys of its rows that the batch has considered, those put into the batch
+    from the source or left out when the batch was made, and the parameters
+    that the source fills (:attr:`.reduction.Batch.fills`), as they were when
+    the batch was made.
     """
 
     source: str
     considered: frozenset[str]
+    fills: tuple[str, ...]
 
 
 class _Following(TypedDict):
@@ -317,7 +320,11 @@ def header_of(data: Any) -> Header:
 
 def source_data(made: FromSource) -> dict[str, Any]:
     """What a batch keeps of its source, as plain data; the keys sorted."""
-    return {'source': made.source, 'considered': sorted(made.considered)}
+    return {
+        'source': made.source,
+        'considered': sorted(made.considered),
+        'fills': list(made.fills),
+    }
 
 
 def source_of(data: Any) -> FromSource:
