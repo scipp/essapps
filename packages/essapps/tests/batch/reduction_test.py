@@ -1151,3 +1151,12 @@ def test_a_value_refused_names_no_file_and_hides_no_other(naming: Client) -> Non
     )
 
     assert batch.files() == identities(1)
+
+
+def test_an_element_of_a_list_not_listed_hides_no_other_element(
+    naming: Client,
+) -> None:
+    runs = ['run:2', 'run:99', 'uuid:run-3']
+    batch = naming_batch(naming, {'a': {'sample': 'run:1', 'runs': runs}})
+
+    assert batch.files() == identities(1, 2, 3)

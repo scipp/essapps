@@ -429,21 +429,31 @@ class Batch:
         identity under which the file source lists the file. Each value
         that names a file is resolved on its own, so that a value refused,
         such as one that names a file not listed, names no file and hides
-        no other. A value resolved is kept as :meth:`state` keeps it, until
+        no other; the elements of a list refused are resolved each on its
+        own, so that one not listed hides no other. In a group, such as a
+        setting of several fields, a file refused hides the group's other
+        files. A value resolved is kept as :meth:`state` keeps it, until
         the next :meth:`put`.
         """
         given = [
             *self._template.params.items(),
             *(item for cells in self.cells().values() for item in cells.items()),
         ]
-        asked: dict[str, dict[str, Any]] = {}
-        seen: dict[object, str] = {}
-        for name, value in given:
-            if _files_in({name: value}):
-                at = _kept(name, value) or object()
-                asked[seen.setdefault(at, str(len(seen)))] = {name: value}
-        resolved, _ = self._resolve_cells(asked)
-        return {ref for cells in resolved.values() for ref in _files_in(cells)}
+        unique = {
+            _kept(n, v) or object(): {n: v} for n, v in given if _files_in({n: v})
+        }
+        asked = {str(i): a for i, a in enumerate(unique.values())}
+        resolved, refused = self._resolve_cells(asked)
+        alone = [
+            {n: [x]}
+            for key in refused
+            for n, v in asked[key].items()
+            if isinstance(v, list)
+            for x in v
+        ]
+        more, _ = self._resolve_cells({str(i): a for i, a in enumerate(alone)})
+        named = [*resolved.values(), *more.values()]
+        return {ref for cells in named for ref in _files_in(cells)}
 
     def state(
         self, keys: Sequence[str] | None = None, *, compare: bool = True

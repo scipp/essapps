@@ -91,8 +91,9 @@ Whatever a step raises, from the files, the workflow or the workspace, is the st
 ## The runs
 
 The view **Runs** lists the runs of the workspace (`Pages.runs`), with the fields of a run that a person corrects, and the column **Batches**.
-The column **Batches** names each batch that uses the run, by its title, in the order of the list of batches; it is empty for a run in no batch.
+The column **Batches** names each batch that uses the run, by its title, in the order of the list of batches, and its tooltip adds the label of each, since two batches may share a title; it is empty for a run in no batch.
 A batch uses a run if a cell of its table names it, such as a sample run or an element of a list of runs, or one of its settings does, such as the run of the can (`Batch.files`).
+A reference to a file not listed is ignored alone, also in a list of runs; only in a group of fields, such as a setting of several fields, does it hide the other files of the group.
 A run is matched by its identity, as the workspace resolves a name: a cell that names `run:70003` names the run that the view lists as `path:raw/70003.nxs`.
 A name resolved is kept until the next change of the table, as the state of the rows keeps it; so a run that gains a catalogue identifier is matched by it after that change.
 A title is a link that shows its batch as a click on its title in the list of batches does: in place, in the Rows view; a click with a modifier key is left to the browser.
@@ -112,9 +113,9 @@ A count updates the cells of the rows; the rows are made again only when the lis
 The Runs view so updates only the runs whose batches changed, and not while a person types a correction in a cell.
 The statuses are those of the chips of each batch's page (`RowState.text`).
 A count reads the state of every batch under the lock of all pages, so the pages and Follow wait until it ends.
-One count of a batch of 1,000 toy rows, half of them reduced, takes 45 ms; the first count after a change of its table takes 0.2 s, since each value that names a file is resolved again.
+One count of a batch of 1,000 toy rows, half of them reduced, takes 46 ms; the first count after a change of its table takes 225 ms, since each value that names a file is resolved again.
 A batch that cannot be counted, such as one whose table cannot be read, shows why in its row.
-The counts shown stay until the next answer replaces them; a count that fails shows none.
+The counts shown stay until the next answer replaces them; a count that fails shows none, and the Runs view keeps the batches of each run of the last answer.
 The list and the Runs view are the same on every page.
 The page without a batch, which polls no state, loads the list again with each count.
 

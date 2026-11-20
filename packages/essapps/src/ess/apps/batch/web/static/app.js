@@ -44,6 +44,7 @@ const view = {
   runData: null, // the runs last loaded, with their columns
   batchData: null, // the list of batches last shown
   counts: null, // the counts of the rows of each batch, once counted
+  files: {}, // the files that each batch names, from the last count answered
   columns: '', // the notes and the columns that the grid of the rows shows
 };
 let rows; // the Grid of the rows
@@ -335,12 +336,13 @@ async function loadRuns() {
 }
 
 // The batches that name each run, by the key of the run, in the order of the
-// list of batches: the files of each batch, from the last count, joined to
-// the runs by identity. A batch that could not be counted names none.
+// list of batches: the files of each batch, from the last count answered,
+// joined to the runs by identity, so that a count that fails changes none. A
+// batch that could not be counted names none.
 function batchesOfRuns() {
   const of = new Map();
   for (const {label, title} of view.batchData?.rows ?? []) {
-    for (const file of view.counts?.files[label] ?? []) {
+    for (const file of view.files[label] ?? []) {
       if (!of.has(file)) of.set(file, []);
       of.get(file).push({label, title});
     }
@@ -360,6 +362,8 @@ const batchLinks = (cell) =>
     ]),
   );
 const batchTitles = (batches) => batches.map((b) => b.title).join(', ');
+// Two batches may share a title, so the tooltip names the label too.
+const batchNames = (batches) => batches.map((b) => `${b.title} (${b.label})`).join(', ');
 
 // Show the runs last loaded, each with the batches that name it. The grid is
 // built and filled when the Runs view is shown, and again after each change
@@ -386,7 +390,7 @@ function drawRuns() {
           minWidth: 120,
           widthGrow: 2,
           formatter: batchLinks,
-          tooltip: (event, cell) => batchTitles(cell.getValue()),
+          tooltip: (event, cell) => batchNames(cell.getValue()),
           // A run in no batch sorts first.
           sorter: (a, b) => batchTitles(a).localeCompare(batchTitles(b)),
         },
@@ -429,7 +433,7 @@ function showBatches(listed) {
 // count, and the pages and Follow wait meanwhile. The Runs view counts too,
 // and does not wait for a change of the runs, since Follow adds rows that name
 // runs without one. The counts shown stay until the next answer; a count that
-// fails shows none. A page that shows no batch, such as the page without
+// fails shows none, and the Runs view keeps the batches of the last answer. A page that shows no batch, such as the page without
 // a batch, loads the list with each count. Nothing counts while the tab of the
 // browser is hidden.
 let counting = false; // whether a count is on its way
@@ -441,6 +445,7 @@ async function countBatches() {
   const listed = document.body.classList.contains('no-batch') && (await request('batches'));
   if (listed) showBatches(listed);
   view.counts = await request('batches/counts');
+  if (view.counts) view.files = view.counts.files;
   counting = false;
   drawBatches();
   if (view.page === 'runs') drawRuns();

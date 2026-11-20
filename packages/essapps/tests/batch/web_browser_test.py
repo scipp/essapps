@@ -1012,6 +1012,33 @@ def test_a_click_on_a_title_in_the_runs_view_shows_its_batch(
     assert page.evaluate(KEPT)
 
 
+def test_a_count_that_fails_leaves_the_batches_of_the_runs_as_they_were(
+    page: Any,
+) -> None:
+    page.click('[data-view=runs]')
+    named = f'#runs {BATCHES}:has-text("Scan")'
+    page.wait_for_selector(named)
+    before = page.locator(named).count()
+    refused = {'message': 'Cannot count.'}
+
+    page.route('**/api/batches/counts', lambda r: r.fulfill(status=422, json=refused))
+
+    page.wait_for_selector('#message:has-text("Cannot count.")')
+    assert page.locator(named).count() == before == 6
+    page.click('[data-view=rows]')  # no count after this one
+    page.wait_for_timeout(300)
+    assert all('status of 422' in e for e in page.errors)
+    page.errors.clear()
+
+
+def test_a_title_s_tooltip_in_the_runs_view_names_its_label(page: Any) -> None:
+    page.click('[data-view=runs]')
+
+    page.hover(f'#runs {BATCHES} a:text-is("Scan")')
+
+    page.wait_for_selector('.tabulator-tooltip:text-is("Scan (scan)")')
+
+
 def test_a_correction_typed_in_the_runs_view_stays_while_the_batches_change(
     page: Any, batch: Batch
 ) -> None:
