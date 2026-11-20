@@ -1,31 +1,40 @@
 // The page of a batch, at batches/<label>/. The server holds the rows, the
 // settings, and the results; this file shows the state it sends and sends
 // what a person does. Each action answers with the state after it; a poll
-// every second sees results arrive. The page keeps only what it shows: the
-// selection, the filter, the tab, the sort, and the axes, which survive a
-// reload of the page of the same batch. A workspace without a batch serves
-// the page at its root without one, and the page of a batch that cannot be
-// shown is shown so too (see `showWorkspace`).
+// every second sees results arrive. The page keeps only what it shows (see
+// `remember`). The document is loaded once: a change of batch, by the list of
+// batches, Back or Forward, happens in place (see `show`). A workspace without
+// a batch serves the page at its root without one, and the page of a batch
+// that cannot be shown is shown so too (see `showWorkspace`).
 import {h, get, post, query, save} from './dom.js';
 import {Grid, cellColumns, statusColumn} from './tables.js';
 import {renderForm, summary} from './form.js';
 
 const $ = (id) => document.getElementById(id);
 
-const inBatch = /\/batches\/[^/]+\/$/.test(location.pathname);
-// The URL of the page of a batch, relative to this page.
-const batchUrl = (label) => `${inBatch ? '../' : 'batches/'}${encodeURIComponent(label)}/`;
+// The label of the batch whose page is shown; none at the root.
+function shownLabel() {
+  const found = location.pathname.match(/\/batches\/([^/]+)\/$/);
+  return found ? decodeURIComponent(found[1]) : undefined;
+}
+// The URL of the root of the workspace, and of the page of a batch.
+const root = () => new URL(shownLabel() ? '../../' : './', location.href).href;
+const batchUrl = (label) => new URL(`batches/${encodeURIComponent(label)}/`, root()).href;
 
-const KEPT = `batch-view ${location.pathname}`;
+// What the page remembers in the session, so that a reload, or a return to a
+// batch, shows the same: for the workspace, the view, the tab of the right
+// pane and the axes; for each batch, the filter, the selection and the sort.
+const WORKSPACE = ['page', 'tab', 'log'];
+const BATCH = ['filter', 'selected', 'sort'];
+const batchView = () => ({filter: 'all', selected: [], sort: [], ...remembered(location.pathname, BATCH)});
+
 const view = {
   state: null,
-  filter: 'all',
-  tab: 'result',
   page: 'rows',
-  selected: [],
-  sort: [],
+  tab: 'result',
   log: {x: true, y: true},
-  ...remembered(),
+  ...remembered(new URL(root()).pathname, WORKSPACE),
+  ...batchView(),
   plotted: null, // what the plot shows, to fetch it again only on a change
   zoom: 1, // a new value forgets the zoom of the plot; Plotly ignores 0
   colors: {}, // the colour of each curve drawn, by key
@@ -40,18 +49,21 @@ const view = {
 let rows; // the Grid of the rows
 let runs; // the Grid of the runs
 
-function remembered() {
+// What is remembered of `names` for the page at `path`.
+function remembered(path, names) {
   try {
-    return JSON.parse(sessionStorage.getItem(KEPT)) ?? {};
+    const kept = JSON.parse(sessionStorage.getItem(`batch-view ${path}`)) ?? {};
+    return Object.fromEntries(names.filter((name) => name in kept).map((name) => [name, kept[name]]));
   } catch {
     return {};
   }
 }
 
 function remember() {
-  const {filter, tab, page, selected, sort, log} = view;
+  const pick = (names) => JSON.stringify(Object.fromEntries(names.map((name) => [name, view[name]])));
   try {
-    sessionStorage.setItem(KEPT, JSON.stringify({filter, tab, page, selected, sort, log}));
+    sessionStorage.setItem(`batch-view ${new URL(root()).pathname}`, pick(WORKSPACE));
+    if (shownLabel()) sessionStorage.setItem(`batch-view ${location.pathname}`, pick(BATCH));
   } catch {
     // A page that cannot store forgets at a reload, nothing more.
   }
@@ -61,12 +73,20 @@ const count = (n) => `${n} ${n === 1 ? 'row' : 'rows'}`;
 
 // Talking to the server
 
+// The number of changes of the batch shown (see `show`). The requests are
+// relative to the URL of the page, so one sent for a batch must not be sent,
+// nor its answer taken, once another batch is shown.
+let changes = 0;
+
 // Run `task` after the actions sent before it, so that the server gets them
 // in the order a person did them, such as an edit at the blur of an input and
-// the click of Apply that moved the focus.
+// the click of Apply that moved the focus. A task for a batch that is queued
+// before a change of batch is not run, and answers null; one of the
+// `workspace` is run.
 let queue = Promise.resolve();
-function queued(task) {
-  const done = queue.then(task);
+function queued(task, workspace = false) {
+  const at = changes;
+  const done = queue.then(() => (workspace || at === changes ? task() : null));
   queue = done.catch(() => {});
   return done;
 }
@@ -74,31 +94,38 @@ function queued(task) {
 // Ask the server, with a body for a POST. The answer is the parsed body, or
 // null after `say` showed the message of what went wrong. The answer of a
 // request is also dropped, without a message, if a newer request of its `kind`
-// was sent meanwhile, or if `fresh()` says that what it was for has changed.
+// was sent meanwhile, if `fresh()` says that what it was for has changed, or
+// if the page shows another batch since, unless the request is of the
+// `workspace`, whose answer is the same for every batch.
 const sent = {};
-async function request(url, {body, kind, fresh = () => true, say = showMessage} = {}) {
+async function request(url, {body, kind, fresh = () => true, say = showMessage, workspace = false} = {}) {
   const asked = kind && (sent[kind] = (sent[kind] ?? 0) + 1);
+  const at = changes;
+  const other = () => !workspace && at !== changes;
   let response;
   try {
     response = body === undefined ? await get(url) : await post(url, body);
   } catch {
-    say('The server does not answer, so this was not done. Try again when it is back.');
+    if (!other()) say('The server does not answer, so this was not done. Try again when it is back.');
     return null;
   }
-  if ((kind && sent[kind] !== asked) || !fresh()) return null;
+  if ((kind && sent[kind] !== asked) || !fresh() || other()) return null;
   if (response.ok) return response.body;
   say(response.body?.message ?? `The server answered ${response.status}.`);
   return null;
 }
 
 // Send an action and show the state it answers with, or have `say` show what
-// went wrong; whether it was done.
+// went wrong; whether it was done, or null if the page shows another batch
+// since.
 function act(url, body = {}, say = showMessage) {
   return queued(() => perform(url, body, say));
 }
 
 async function perform(url, body, say) {
+  const at = changes;
   const state = await request(url, {body, say});
+  if (at !== changes) return null;
   if (!state) {
     await refresh().catch(() => {});
     return false;
@@ -117,14 +144,14 @@ async function download(url, name, body) {
 class Offline extends Error {}
 class Unshown extends Error {}
 
+// Ask for the state of the batch shown and show it; a state of the batch
+// shown before is dropped.
 async function refresh() {
-  const at = view.state ? {after: view.state.version, start: view.state.start} : {};
-  let response;
-  try {
-    response = await get(`state?${query(at)}`);
-  } catch {
-    throw new Offline('The server does not answer.');
-  }
+  const at = changes;
+  const after = view.state ? {after: view.state.version, start: view.state.start} : {};
+  const response = await get(`state?${query(after)}`).catch(() => null);
+  if (at !== changes) return;
+  if (!response) throw new Offline('The server does not answer.');
   if (response.status === 204) return;
   if (!response.ok) {
     const message = response.body?.message ?? `The server answered ${response.status}.`;
@@ -136,8 +163,10 @@ async function refresh() {
 
 // Ask for the state every second; say so while the server does not give it.
 // A batch whose first state the server refuses, or that is gone, cannot be
-// shown: the page says why, and shows the batches and the runs.
-async function poll() {
+// shown: the page says why, and shows the batches and the runs. A change of
+// batch starts a poll of its own, and ends this one, so one runs at a time.
+async function poll(at = changes) {
+  if (at !== changes) return;
   let again = true;
   try {
     await refresh();
@@ -151,7 +180,7 @@ async function poll() {
       $('offline').hidden = false;
     } else throw error;
   } finally {
-    if (again) setTimeout(poll, 1000);
+    if (again) setTimeout(() => poll(at), 1000);
   }
 }
 
@@ -187,7 +216,11 @@ function render(state) {
   if (old && state.start !== old.start) return location.reload();
   if (old && state.version < old.version) return;
   view.state = state;
-  if (!old) build(state);
+  if (!rows) build(state);
+  if (!old) {
+    document.body.classList.remove('no-batch');
+    document.body.inert = false;
+  }
   const named = [state.title, state.application].filter(Boolean);
   document.title = named.join(' · ');
   $('title').textContent = named.reverse().join(' · ');
@@ -200,8 +233,8 @@ function render(state) {
     toast(`Reducing ended: ${ended.join(', ')}.`);
   }
   showColumns(state);
-  const updated = rows.update(state.rows);
-  if (!old) updated.then(() => rows.select(view.selected));
+  // The first state of a batch replaces the rows of the batch before.
+  rows.update(state.rows, old ? undefined : {selected: view.selected, filter: view.filter, sort: view.sort});
   if (state.runs !== null && state.runs !== view.runs) loadRuns();
   showBatches({application: state.application, runs: state.runs, rows: state.batches});
   renderRefused(state.refused);
@@ -264,9 +297,7 @@ function build(state) {
       view.sort = sort;
       remember();
     },
-    sort: view.sort,
   });
-  rows.filter(view.filter);
   if (state.runs === null) document.querySelector('[data-view="runs"]').hidden = true;
   showPage(state.runs === null && view.page === 'runs' ? 'rows' : view.page);
   showTab(view.tab);
@@ -282,7 +313,7 @@ function downloadResults(rows, name) {
 }
 
 async function loadRuns() {
-  const shown = await request('runs', {kind: 'runs'});
+  const shown = await request('runs', {kind: 'runs', workspace: true});
   if (!shown) return;
   view.runs = shown.version;
   view.runData = shown;
@@ -323,13 +354,13 @@ function drawRuns() {
 // moved, so that it loads the runs; a page without a batch asks for the runs.
 function correctRuns(url, body) {
   return queued(async () => {
-    const done = await request(url, {body});
+    const done = await request(url, {body, workspace: true});
     if (!done) return false;
     toast(done.notice);
     if (view.state) await refresh().catch(() => {});
     else await loadRuns();
     return true;
-  });
+  }, true);
 }
 
 // Show the list of batches: from each state, and on the page without a batch
@@ -340,22 +371,28 @@ function showBatches(listed) {
   drawBatches();
 }
 
-// Count the rows of each batch. The server reads the state of every batch for
-// it, so the page asks only when the Batches view is opened and at "Count
-// again".
+// Count the rows of each batch while the Batches view is shown, the next count
+// 2 s after the answer of the one before: the server reads the state of every
+// batch for a count, and the pages and Follow wait meanwhile. The counts shown
+// stay until the next answer; a count that fails shows none. A page that polls
+// no state, such as the page without a batch, loads the list with each count.
+let counting = false; // whether a count is on its way
+let nextCount; // the timer of the next count
 async function countBatches() {
-  const button = $('count');
-  if (button.disabled) return;
-  button.disabled = true;
-  button.textContent = 'Counting…';
-  view.counts = await request('batches/counts'); // none rather than old ones
-  button.disabled = false;
-  button.textContent = 'Count again';
+  clearTimeout(nextCount);
+  if (counting || view.page !== 'batches') return;
+  counting = true;
+  const listed = !view.state && (await request('batches', {workspace: true}));
+  if (listed) showBatches(listed);
+  view.counts = await request('batches/counts', {workspace: true});
+  counting = false;
   drawBatches();
+  nextCount = setTimeout(countBatches, 2000);
 }
 
 // The list of batches, each a link to its page, with its counts once counted,
-// or why it could not be counted; the batch of this page is marked.
+// or why it could not be counted; the batch shown is marked. A click on a
+// batch shows it (see `choose`).
 function drawBatches() {
   if (!view.batchData) return;
   const counted = view.counts?.rows ?? {};
@@ -368,7 +405,7 @@ function drawBatches() {
       const all = n && Object.values(n).reduce((a, b) => a + b, 0);
       return h(
         'tr',
-        {'aria-current': batch.label === view.state?.label && 'page'},
+        {'aria-current': batch.label === shownLabel() && 'page', class: 'batch', onclick: (event) => choose(event, batch.label)},
         h(
           'td',
           {},
@@ -386,6 +423,56 @@ function drawBatches() {
       );
     }),
   );
+}
+
+// A click on a batch of the list shows that batch: a click on its title in the
+// Rows view, elsewhere in its row in the view shown, as a click on a row of
+// the grid shows that row in the row tab. A click on the title with a modifier
+// key is left to the browser, which opens the page in a tab or window of its
+// own; so is a click of the middle button, which is no `click`.
+function choose(event, label) {
+  const title = event.target.closest('a');
+  if (title && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) return;
+  event.preventDefault();
+  const page = title ? 'rows' : view.page;
+  if (label === shownLabel()) showPage(page);
+  else show(batchUrl(label), page, 'pushState');
+}
+
+// Show the page at `url`, of a batch or the root, in place of the page shown,
+// in the view `page`, or the view shown if none; `how` is the call of
+// `history` that records it, none for Back and Forward. The root shows the
+// page of the batch that the server redirects it to, else the page without a
+// batch. The grids stay and get the rows of the batch, as `render` draws a
+// first state. Nothing of the batch before stays: the selection, the filter
+// and the sort are those remembered for the batch, a value typed and not sent
+// is dropped (the blur queues its action for the batch before), forms, menus,
+// dialogs and messages close, and a request for the batch before is not sent
+// or its answer dropped (`changes`). The page takes no click until the first
+// state is drawn.
+async function show(url, page, how) {
+  document.activeElement?.blur();
+  const at = ++changes;
+  document.body.inert = true;
+  if (how) history[how](null, '', url);
+  if (!shownLabel()) {
+    const home = await fetch(location.href).catch(() => null);
+    if (at !== changes) return;
+    if (home?.redirected) history.replaceState(null, '', home.url);
+  }
+  Object.assign(view, batchView(), {state: null, plotted: null, zoom: view.zoom + 1, colors: {}, detail: '', dismissed: ''});
+  document.querySelectorAll('.menu-items').forEach((m) => (m.hidden = true));
+  document.querySelectorAll('dialog[open]').forEach((d) => d.close());
+  closeAdd();
+  closeNewBatch();
+  hideMessage();
+  $('toast').hidden = true;
+  $('batch-form').shown = null;
+  $('batch-problem').textContent = '';
+  if (page) showPage(page);
+  drawBatches();
+  if (shownLabel()) poll();
+  else showWorkspace();
 }
 
 // The form "New batch". The server says what a batch can be made with
@@ -417,6 +504,7 @@ async function openNewBatch() {
   }
   chooseSource();
   $('new-problem').textContent = '';
+  form.querySelector('[type=submit]').disabled = false;
   form.hidden = false;
   $('new-batch-open').hidden = true;
   form.elements.title.focus();
@@ -575,7 +663,7 @@ async function makeBatch(event) {
           columns: [...form.querySelectorAll('[name=column]:checked')].map((box) => box.value),
         },
       });
-  if (made) location.href = batchUrl(made.label);
+  if (made) show(batchUrl(made.label), 'rows', 'pushState');
   else button.disabled = false;
 }
 
@@ -779,13 +867,14 @@ function saveBatch(event) {
   act('batch', {title: elements.title.value.trim(), description: elements.description.value.trim()}, say);
 }
 
-// Remove this batch, then go to the root: it goes to the batch that follows or
-// the only one left, or shows the workspace without a batch.
+// Remove this batch, then show the root in its place in the history: the
+// server redirects it to the batch that follows or the only one left, else it
+// is the page without a batch.
 async function removeBatch() {
   const question = `Remove the batch "${view.state.title}"? Its title, description, settings and table are removed. Its results stay in the workspace.`;
   if (!confirm(question)) return;
   const done = await queued(() => request('batch/remove', {body: {}}));
-  if (done) location.href = '../../';
+  if (done) show(root(), null, 'replaceState');
 }
 
 // Whether to replace the changes of the settings form that are not applied.
@@ -968,6 +1057,11 @@ function when(iso) {
 
 // Wiring
 
+function closeAdd() {
+  $('add-form').hidden = true;
+  $('add-row').hidden = false;
+}
+
 function openMenu(menu) {
   const items = menu.querySelector('.menu-items');
   const open = items.hidden;
@@ -1021,7 +1115,6 @@ function wire() {
     if (confirm(question)) act('reduce', {which: 'earlier'});
   };
   $('relist').onclick = () => act('relist');
-  $('count').onclick = countBatches;
   const newBatch = $('new-batch');
   $('new-batch-open').onclick = openNewBatch;
   newBatch.onsubmit = makeBatch;
@@ -1041,10 +1134,6 @@ function wire() {
   };
 
   const addForm = $('add-form');
-  const closeAdd = () => {
-    addForm.hidden = true;
-    $('add-row').hidden = false;
-  };
   $('add-row').onclick = () => {
     addForm.hidden = false;
     $('add-row').hidden = true;
@@ -1112,14 +1201,17 @@ function wire() {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') document.querySelectorAll('.menu-items').forEach((m) => (m.hidden = true));
   });
+  window.addEventListener('popstate', () => show(location.href));
 }
 
 // The page at the root, when it goes to no batch, or of a batch that cannot
-// be shown, saying why: the Batches view, with the form "New batch"
-// open if there is no batch, and the Runs view, each loaded once. Nothing
-// polls: making a batch goes to its page.
+// be shown, saying why: the Batches view, with the form "New batch" open if
+// there is no batch, and the Runs view, loaded once. No state is polled; the
+// list of batches is loaded again with each count. Making a batch, or a click
+// on one, shows it (see `show`).
 async function showWorkspace(why = '') {
   document.body.classList.add('no-batch');
+  document.body.inert = false;
   showPage('batches');
   if (why) showMessage(why);
   const listed = await request('batches');
@@ -1133,5 +1225,5 @@ async function showWorkspace(why = '') {
 }
 
 wire();
-if (inBatch) poll();
+if (shownLabel()) poll();
 else showWorkspace();

@@ -234,7 +234,7 @@ export class Grid {
   // `columns` are Tabulator's; `edits` maps the field of each editable
   // column to its column as the server sends it. Where `edit` answers false,
   // or a promise of false, the cell shows its value before again.
-  constructor(element, {columns, edits, edit, select, sorted, placeholder, sort = []}) {
+  constructor(element, {columns, edits, edit, select, sorted, placeholder}) {
     this.element = element;
     this.edits = edits;
     this.onSelect = select;
@@ -248,7 +248,6 @@ export class Grid {
       layout: 'fitColumns',
       selectableRows: 'highlight',
       editTriggerEvent: 'click',
-      initialSort: sort,
       placeholder: h('div', {class: 'empty', text: placeholder}),
       rowHeader: {
         formatter: 'rowSelection',
@@ -317,12 +316,15 @@ export class Grid {
   }
 
   closed() {
-    setTimeout(() => this.pending && this.update(this.pending));
+    setTimeout(() => this.pending && this.update(...this.pending));
   }
 
-  // Show `rows`, keeping the selection, but not while a cell is edited.
-  update(rows) {
-    this.updated = this.draw(rows);
+  // Show `rows`, keeping the selection, but not while a cell is edited. With
+  // `start`, {selected, filter, sort}, the rows are those of another table,
+  // such as another batch: they replace those shown, from the top, with the
+  // selection, the status filter and the sort of `start`.
+  update(rows, start) {
+    this.updated = this.draw(rows, start);
     return this.updated;
   }
 
@@ -336,10 +338,11 @@ export class Grid {
   // they stand in `rows`; the others are not drawn again. Then the filter and
   // the sort are applied again, which these calls do not do. The table is
   // replaced instead if it has no rows yet, where adding takes quadratic time,
-  // or if the rows kept changed order.
-  async draw(rows) {
+  // or if the rows kept changed order. While a cell is edited, the rows wait,
+  // with the `start` of any rows that waited before them.
+  async draw(rows, start) {
     await this.built;
-    this.pending = rows;
+    this.pending = [rows, start ?? this.pending?.[1]];
     if (this.editing()) return;
     this.pending = null;
     const keys = new Set(rows.map((row) => row.key));
@@ -352,7 +355,7 @@ export class Grid {
     this.quiet = true;
     try {
       await this.keepFocus(async () => {
-        if (before.length && kept.every((row, i) => row.key === stay[i])) {
+        if (!start && before.length && kept.every((row, i) => row.key === stay[i])) {
           if (gone.length) await this.table.deleteRow(gone);
           // Each row changed is drawn again whole: a cell shows more than the
           // value Tabulator compares.
@@ -369,8 +372,14 @@ export class Grid {
           }
           if (gone.length || changed.length || kept.length < rows.length) this.table.refreshFilter();
         } else {
-          const selected = this.selected().filter((key) => keys.has(key));
-          await this.table.replaceData(rows);
+          const selected = (start?.selected ?? this.selected()).filter((key) => keys.has(key));
+          if (start) {
+            this.setFilter(start.filter);
+            const fields = this.table.getColumns().map((c) => c.getField());
+            this.table.setSort(start.sort.filter((s) => fields.includes(s.column)));
+            this.table.deselectRow();
+            await this.table.setData(rows);
+          } else await this.table.replaceData(rows);
           if (selected.length) this.table.selectRow(selected);
         }
         this.deselectHidden();
@@ -398,18 +407,16 @@ export class Grid {
     again?.querySelector(active.tagName)?.focus({preventScroll: true});
   }
 
-  async select(keys) {
-    await this.built;
-    const known = new Set(this.table.getData().map((row) => row.key));
-    this.table.selectRow(keys.filter((key) => known.has(key)));
-  }
-
   // Show only the rows of `status`, and select none that is hidden.
   async filter(status) {
     await this.built;
+    this.setFilter(status);
+    this.deselectHidden();
+  }
+
+  setFilter(status) {
     if (status === 'all') this.table.clearFilter();
     else this.table.setFilter('status', '=', status);
-    this.deselectHidden();
   }
 
   deselectHidden() {

@@ -17,7 +17,7 @@ python -m ess.instruments.loki.arrivals [FOLDER] --arrive 15 [--count N] [--star
 python -m ess.instruments.loki.arrivals --follow 2                      # the same, following the files, a step every 2 s
 ```
 
-Open `http://localhost:8000/`: it redirects to the page of the batch that follows, else to that of the only batch; otherwise it shows the list of batches, to open one or make one (see [Making a batch](#making-a-batch)).
+Open `http://localhost:8000/`: it redirects to the page of the batch that follows, else to that of the only batch; otherwise it shows the list of batches, to show one or make one (see [Making a batch](#making-a-batch)).
 Each `FOLDER` is a workspace folder (`ess.apps.folder`); the demos make a temporary one if none is given, and say which.
 At a start, the demo and the LoKI page make a batch of the rows their source gives if no batch is listed, so also at a start after a person removed the last one; the batches and the batch that follows are kept in the folder.
 The demo needs the extra `essapps[web]`, the LoKI modules `essinstruments[loki-app]`.
@@ -90,14 +90,30 @@ Whatever a step raises, from the files, the workflow or the workspace, is the st
 
 ## The list of batches
 
-The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, and which batch follows; the batch of the page is marked.
-Each title is a link to the page of its batch.
-Opening the view, and **Count again**, counts the rows of each batch by status (`Pages.counts`).
+The view **Batches**, next to the rows and **Runs**, lists every batch of the workspace: its title, label and description, and which batch follows; the batch shown is marked.
+A click on a row of the list shows its batch, and the view stays Batches, as a click on a row of the grid shows that row in the row tab; a click on the title shows its batch in the Rows view.
+The title is a link to the page of its batch, so a click with a modifier key, or with the middle button, opens it in another tab.
+While the view is shown, the page counts the rows of each batch by status (`Pages.counts`), the next count 2 s after the answer of the one before; nothing counts while another view is shown.
 The statuses are those of the chips of each batch's page (`RowState.text`).
-A count reads the state of every batch under the lock of all pages, so the pages and Follow wait until it ends.
+A count reads the state of every batch under the lock of all pages, so the pages and Follow wait until it ends; one count of a batch of 875 rows takes 50 to 85 ms.
 A batch that cannot be counted, such as one whose table cannot be read, shows why in its row.
-No poll counts, so the counts shown are those of the last count; a count that fails shows none.
+The counts shown stay until the next answer replaces them; a count that fails shows none.
 The list and the Runs view are the same on every page.
+The page without a batch, which polls no state, loads the list again with each count.
+
+## A change of batch
+
+The document is loaded once.
+A click on a batch in the list, **Make** of a new batch, the removal of a batch, and Back and Forward of the browser show another batch in place (`show` in `app.js`): the URL changes to the page of the batch (`history.pushState`), the page drops the state, and the next poll, sent at once, draws the state of the batch.
+The grids stay, and get the rows and the columns of the batch.
+Nothing of the batch before stays: its rows, selection, filter and plot, the row tab, the forms, a value typed and not sent, the dialogs and menus, a message or a refusal.
+Until the first state is drawn the page takes no click, and it fades if that takes longer than 0.3 s.
+
+The page remembers in the session of the browser, so that a reload or a return to a batch shows the same:
+
+| For the workspace | For each batch |
+|---|---|
+| the view (Batches, Rows, Runs), the tab of the right pane, the axes of the plot | the filter, the selection, the sort |
 
 ## Making a batch
 
@@ -113,7 +129,7 @@ The list and the Runs view are the same on every page.
 | Settings | on the page of a batch: start with the settings of that batch, else with those that the application gives; a setting of that batch at a column ticked fills the cells of that column |
 | Columns | the columns that the source fills, fixed; the other parameters of the spec whose cell the page edits, to tick (a group of fields, such as a Q binning, stays a setting); none for a table file, whose columns are those of the file |
 
-**Make** sends the form to `POST api/batches`, or the file to `POST api/batches/table`, and the page goes to the page of the new batch.
+**Make** sends the form to `POST api/batches`, or the file to `POST api/batches/table`, and the page shows the new batch in the Rows view.
 With a source, the batch holds the rows of the range that the source has filled now, with an empty column for each column ticked that the source does not fill; a row that waits cannot be taken, and Follow adds it once filled, as it adds those that arrive later.
 A table file refused, or empty, is named as the person chose it.
 From a table file, the batch has no source; a column of the file named as no parameter is a note, so a misspelt column is a note, and the parameter it meant is a setting that the settings form asks for.
@@ -136,8 +152,9 @@ A source that no spec fits is not offered.
 
 The form is closed until **+ New batch** is pressed.
 `/` serves the page without a batch if no batch follows and there are none or several: the Batches view, with the form open if there is no batch, and the Runs view.
-It loads both once and polls nothing; making a batch goes to its page.
-`/` answers with `Cache-Control: no-store`, so that Back and a `/` opened again ask the server, which redirects once one batch follows or there is one batch.
+It polls no state; the list of batches is loaded again with each count, and the runs once.
+`/` answers with `Cache-Control: no-store`, so that a `/` opened again asks the server, which redirects once one batch follows or there is one batch.
+The page asks `/` so too when it shows the root in place, after a batch is removed or at Back.
 The page of a batch that cannot be shown, such as one whose table cannot be read, says why, and shows the Batches and Runs views; the form is open only if there is no batch.
 So does an open page of a batch removed meanwhile, at its next poll, which the server answers 404 ("There is no batch X.").
 
@@ -150,13 +167,13 @@ What the manager refuses, such as an empty title, shows at the form, and nothing
 
 **Remove this batch**, after a confirmation, removes the header, the settings and the table of the batch (`POST api/batch/remove`, `BatchManager.remove`); its results stay in the workspace.
 If the batch follows, none follows from then on.
-The page then goes to `/`, which redirects to the batch that follows or the only batch left, or shows the page without a batch.
+The page then shows `/` in place of the batch in the history of the browser: the batch that `/` redirects to, the one that follows or the only one left, else the page without a batch.
 
 ## Layers
 
 ```
 static/           the page: index.html, app.js, tables.js, form.js
-                  holds what is shown: selection, filter, tab, sort, axes
+                  holds what is shown: selection, filter, view, tab, sort, axes
    │   GET batches/<label>/api/state?after=<version>     POST .../api/cells, .../api/reduce, ...
    ▼
 api.py            HTTP: create_app(pages); each action is a POST that
@@ -184,7 +201,7 @@ The server answers 204 if nothing changed since `version`, and else the whole `S
 `version` counts each action, each step of Follow that changes what the page shows (the rows, the runs, the records, the refusals, or its failure), each change of the batch that follows, and each change of the workspace's records, such as a reduction that finished.
 `start` is new at each start of the server; a page that sees another one loads again.
 `State.runs` counts the changes of the runs, which all pages share; the Runs view asks for `api/runs` when it moves.
-`State.batches` lists the batches, so the version moves when the headers of the batches or the batch that follows change, whoever changed them; only the page without a batch asks for `api/batches`.
+`State.batches` lists the batches, so the version moves when the headers of the batches or the batch that follows change, whoever changed them; only a page that polls no state asks for `api/batches`.
 `api/batches`, `api/batches/counts`, `api/sources`, `api/runs` and the corrections of runs (`api/runs/cells`, `api/runs/cells/revert`) belong to the workspace: they answer the same under any label, and at `/api/...`.
 
 ## How the page asks
@@ -193,6 +210,7 @@ One function of `app.js` makes every request of the page, other than the poll.
 It answers the body, or shows the message of the failure (the server's `message` for a 422, "The server answered 500.", or that the server does not answer) and answers nothing.
 It also drops an answer when a newer request of the same kind was sent (`/api/row`, `/api/runs`, `/api/plot`), or when what it was for changed, such as a row that is no longer the only one selected.
 An older answer of the poll is dropped by its `version`.
+Since the requests are relative to the URL of the page, the page counts its changes of batch: an action for the batch before that waits in the queue is not sent, and the answer of a request for the batch before, also of the poll, is dropped; the requests of the workspace, such as `api/runs`, are kept.
 Actions wait for each other in a queue, so that the server gets them in the order a person did them.
 The keys of many rows (a plot, the results as a zip) go in the body of a POST, since a URL has a limit.
 The page asks for `api/...`, relative to its own URL, and `/` redirects by a relative URL, so a parent app can mount it under a prefix, and the answers are gzipped for a client that accepts it.
