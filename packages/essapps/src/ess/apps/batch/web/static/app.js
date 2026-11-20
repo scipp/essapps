@@ -971,16 +971,19 @@ function renderSettings(state) {
   const download = document.querySelector('[data-file="settings.yaml"]');
   download.disabled = changed;
   download.title = changed ? `${action.blocked} first.` : '';
-  // A setting whose cell the page edits may be a column.
+  // A column is marked: its setting is the value of each row whose cell is
+  // empty. A setting whose cell the page edits may be a column.
   const offer = (node) =>
-    state.may_be_columns.includes(node.path[0]) &&
-    h('button', {
-      type: 'button',
-      class: 'quiet small',
-      text: 'Make this a column',
-      title: 'Each row of the table gets this value in its cell. A row added later has an empty cell: the default, or an incomplete row if there is none.',
-      onclick: () => act('settings/column', {name: node.path[0]}),
-    });
+    node.column
+      ? h('span', {class: 'hint column-note', text: 'A column: a row may give its own', title: 'Each row whose cell is empty takes this value, also a row added later.'})
+      : state.may_be_columns.includes(node.path[0]) &&
+        h('button', {
+          type: 'button',
+          class: 'quiet small',
+          text: 'Make this a column',
+          title: 'Each row may then give its own value in its cell. A row whose cell is empty, also one added later, takes this setting.',
+          onclick: () => act('settings/column', {name: node.path[0]}),
+        });
   renderForm($('settings'), state.settings, (edit) => act('settings', edit), offer);
 }
 

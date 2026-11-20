@@ -481,6 +481,19 @@ def test_a_row_says_whether_its_result_is_current_or_outdated(
     assert shown['3']['result'] is None
 
 
+def test_a_changed_setting_of_a_column_turns_the_rows_that_take_it_earlier(
+    http: TestClient, client: Client
+) -> None:
+    thickness(http, ['1'], 3.0)
+    reduced(http, client)
+
+    http.post('/api/settings', json={'path': ['thickness'], 'op': 'set', 'value': 2.5})
+    http.post('/api/settings/apply')
+
+    assert statuses(http) == {'1': 'done', '2': 'earlier', '3': 'incomplete'}
+    assert rows(http)['2']['changed'] == 'Thickness changed'
+
+
 def test_a_changed_setting_leaves_the_rows_reduced_reading_earlier(
     http: TestClient, client: Client
 ) -> None:
@@ -985,7 +998,12 @@ def test_settings_the_batch_has_show_and_an_applied_edit_of_another_keeps_them(
     page.post('/api/settings/apply')
 
     assert form_bins(shown) == 5
-    assert batch.settings == {'binning': {'bins': 5}, 'offset': {'value': 2.0}}
+    # The field of the column thickness shows its default, which Apply writes.
+    assert batch.settings == {
+        'binning': {'bins': 5},
+        'thickness': 1.0,
+        'offset': {'value': 2.0},
+    }
 
 
 @pytest.mark.parametrize('which', ['remaining', 'earlier', 'all', 'selected'])
@@ -1320,23 +1338,37 @@ def test_a_column_whose_rows_differ_is_made_a_setting_of_the_row_chosen(
     assert batch.settings['thickness'] == 3.0
 
 
-def test_a_setting_made_a_column_has_its_value_in_every_row(
+def test_a_setting_made_a_column_is_shown_in_the_form_and_in_each_empty_cell(
     http: TestClient, batch: Batch
 ) -> None:
+    before = column_of(state(http), 'thickness')
     make_setting(http)
     http.post('/api/settings', json={'path': ['thickness'], 'op': 'set', 'value': 2.5})
     http.post('/api/settings/apply')
 
     made = http.post('/api/settings/column', json={'name': 'thickness'}).json()
 
-    assert (
-        made['notice'] == 'Thickness is a column: each row has the value in its cell.'
+    assert made['notice'] == (
+        'Thickness is a column: a row takes the setting until its cell is set.'
     )
     assert batch.columns == ('sample', 'transmission', 'thickness')
-    assert batch.frame()['thickness'].tolist() == [2.5, 2.5, 2.5]
-    assert 'thickness' not in batch.settings
-    assert [r['cells']['thickness']['text'] for r in made['rows']] == ['2.5'] * 3
+    assert batch.frame()['thickness'].isna().all()
+    assert batch.settings['thickness'] == 2.5
+    assert [r['cells']['thickness']['text'] for r in made['rows']] == [''] * 3
+    # The grid shows an empty cell in grey as the value it takes.
+    assert (before['default'], column_of(made, 'thickness')['default']) == (
+        '1.0',
+        '2.5',
+    )
+    (shown,) = [n for n in made['settings'] if n['path'] == ['thickness']]
+    assert shown['value'] == 2.5
     assert made['may_be_columns'] == []
+
+
+def column_of(shown: dict[str, Any], name: str) -> dict[str, Any]:
+    """The column ``name`` of the grid of the rows in the state ``shown``."""
+    (column,) = [c for c in shown['columns'] if c['name'] == name]
+    return column
 
 
 def test_a_group_setting_made_a_column_and_a_setting_again_keeps_its_value(
@@ -1349,7 +1381,7 @@ def test_a_group_setting_made_a_column_and_a_setting_again_keeps_its_value(
     setting = http.post('/api/columns/setting', json={'name': 'binning'}).json()
 
     assert [c['name'] for c in column['columns']][-1] == 'binning'
-    assert cells == [{'bins': 5}] * 3
+    assert cells == [None] * 3
     assert 'binning' not in batch.columns
     assert form_bins(setting) == 5
 
@@ -2165,8 +2197,8 @@ def test_a_batch_made_on_the_page_is_made_as_asked_or_not_at_all(
 
     batch = pages.manager.batch(made.label)
     assert at > 4  # settings, rows, source, header, following
-    assert batch.frame()['thickness'].tolist() == [2.0]
-    assert 'thickness' not in batch.settings
+    assert batch.frame()['thickness'].isna().tolist() == [True]
+    assert batch.settings['thickness'] == 2.0
     assert pages.manager.following == made.label
 
 
@@ -2180,7 +2212,7 @@ def test_a_batch_made_from_the_page_of_a_batch_starts_with_its_settings(
     assert form_bins(state(opened(pages, made['label']))) == 7
 
 
-def test_a_setting_of_the_batch_that_is_a_column_of_the_new_one_fills_its_cells(
+def test_a_setting_of_the_batch_at_a_column_of_the_new_one_is_its_empty_cells(
     http: TestClient, manager: BatchManager
 ) -> None:
     make_setting(http)
@@ -2194,12 +2226,36 @@ def test_a_setting_of_the_batch_that_is_a_column_of_the_new_one_fills_its_cells(
 
     batch = manager.batch(made['label'])
     assert batch.columns == tuple(columns)
-    assert batch.frame()['thickness'].tolist() == [2.5, 2.5]
+    assert batch.frame()['thickness'].isna().tolist() == [True, True]
+    assert [c['thickness'] for c in batch.cells().values()] == [2.5, 2.5]
 
 
-@pytest.mark.parametrize('way', ['source', 'table file'])
+def test_a_row_that_arrives_in_a_new_batch_that_follows_takes_a_setting_ticked(
+    http: TestClient,
+    pages: Pages,
+    manager: BatchManager,
+    client: Client,
+    sample: Measure,
+) -> None:
+    make_setting(http)
+    http.post('/api/settings', json={'path': ['thickness'], 'op': 'set', 'value': 2.5})
+    http.post('/api/settings/apply')
+    columns = ['sample', 'transmission', 'thickness']
+    sent = new_batch(settings_from='scan', columns=columns, later=True, follow=True)
+
+    made = http.post('/api/batches', json=sent).json()
+    sample(4, 'ethanol')
+    pages.tick()
+    client.wait(client.records())
+
+    (record,) = client.records(label=made['label'])
+    assert record.member == '4'
+    assert record.request.params['thickness'] == 2.5
+
+
+@pytest.mark.parametrize(('way', 'kept'), [('source', False), ('table file', True)])
 def test_a_column_that_the_rows_fill_keeps_its_cells_over_a_setting_of_its_name(
-    http: TestClient, manager: BatchManager, way: str
+    http: TestClient, manager: BatchManager, way: str, kept: bool
 ) -> None:
     manager.create(STAGED.name, title='X', settings={'sample': 'run:1'}, label='x')
 
@@ -2214,7 +2270,9 @@ def test_a_column_that_the_rows_fill_keeps_its_cells_over_a_setting_of_its_name(
 
     batch = manager.batch(made['label'])
     assert batch.frame()['sample'].tolist() == given
-    assert 'sample' not in batch.settings
+    # A source fills the column, so an empty cell there waits for a run; a
+    # table file has no source, and the setting is for the rows added later.
+    assert ('sample' in batch.settings) is kept
 
 
 def from_table(http: TestClient, text: str, **given: Any) -> Any:

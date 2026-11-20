@@ -37,8 +37,10 @@ as a page does, so a label is one batch whoever works on it:
 
   A template must be of the batch's spec and its version, as the page's
   "Load settings" checks it (:func:`.templates.checked_settings`), and is
-  checked before anything is written. Its values at the columns of the table
-  are not read, as its blanks are not. It then reduces every row of the
+  checked before anything is written. Its blanks are not read. A value at a
+  column of the table is the setting that each row with an empty cell takes,
+  but at a column that ``--source`` fills
+  (:meth:`~.manager.BatchManager.create`). It then reduces every row of the
   batch. With ``--remaining`` it reduces the rows that the page's "Reduce"
   does (:func:`.state.left_to_reduce`), and leaves those reduced with earlier
   settings, which it says on stderr; ``--earlier-settings`` adds them.
@@ -245,10 +247,7 @@ def _reduce(
     if batch is not None:
         batch.put(rows)
         if settings is not None:
-            # Its values at the columns are not read, as its blanks are not.
-            batch.settings = {
-                k: v for k, v in settings.items() if k not in batch.columns
-            }
+            batch.settings = settings
     else:
         manager.create(
             spec.name,

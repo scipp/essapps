@@ -156,7 +156,7 @@ class BatchManager:
         The settings that a new batch of a spec starts with, by the name of
         the spec; none for a spec not named. They are copied when a batch is
         made, so a change of them leaves the batches made before as they are.
-        Those that are columns of the batch are left out.
+        :meth:`create` leaves out those of the columns that a source fills.
     staged:
         The names of the specs whose batches run their rows through a stage,
         as :class:`~.reduction.Batch` takes it. It is read each time the
@@ -285,6 +285,12 @@ class BatchManager:
         A row that waits is neither taken nor considered: Follow adds it once
         it is filled, if the batch follows.
 
+        A column that the source fills keeps no setting: an empty cell there
+        means that a file has not arrived, not "take the value of the batch".
+        So the settings of the columns of ``source.fills`` are left out. Any
+        other column keeps its setting, which each row with an empty cell
+        takes.
+
         Parameters
         ----------
         spec:
@@ -309,7 +315,8 @@ class BatchManager:
             What a person says of the batch.
         settings:
             The settings to start with, in place of those that the manager
-            was given for the spec. Those that are columns are left out.
+            was given for the spec; those of the columns that the source fills
+            are left out.
         label:
             The label of the batch. If not given, the time of making,
             ``YYYYMMDD-HHMMSS``, with ``-2``, ``-3``, ... added if that is
@@ -363,6 +370,9 @@ class BatchManager:
             made = FromSource(source, frozenset(arrived.index))
         # Refused here, before anything is written.
         table = typed(pd.DataFrame() if rows is None else rows, bound.params)
+        if source is not None:
+            filled = set(found.fills) & set(table.columns)
+            settings = {k: v for k, v in settings.items() if k not in filled}
         batch = self._kept(label, bound, {}, None)
         written = list(_parts(label))  # what to delete if a write is refused
         try:

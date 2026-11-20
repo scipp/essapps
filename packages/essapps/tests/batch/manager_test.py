@@ -74,7 +74,7 @@ def test_a_manager_made_again_on_the_definitions_hands_out_the_batch_as_it_was(
     sample(1, 'water')
     label = manager.create('staged', title='Morning', rows=rows(client), label='b')
     batch = manager.batch(label)
-    batch.settings = {'binning': {'bins': 3}}
+    batch.settings = {'binning': {'bins': 3}, 'thickness': 3.0}  # thickness: a column
     edit(batch, '1', thickness=2.0)
     edit(batch, 'mine', sample='run:1')
 
@@ -83,6 +83,7 @@ def test_a_manager_made_again_on_the_definitions_hands_out_the_batch_as_it_was(
     assert again.spec == STAGED
     assert again.columns == COLUMNS
     assert again.settings == batch.settings
+    assert again.cells() == batch.cells()
     pd.testing.assert_frame_equal(again.frame(), batch.frame())
 
 
@@ -145,15 +146,18 @@ def with_defaults(client: Client, definitions: FolderDefinitions) -> BatchManage
     )
 
 
-def test_a_batch_starts_with_the_settings_registered_for_its_spec_but_its_columns(
-    with_defaults: BatchManager, client: Client
+def test_a_batch_starts_with_the_settings_registered_for_its_spec(
+    with_defaults: BatchManager, client: Client, sample: Measure
 ) -> None:
+    sample(1, 'water')
     label = with_defaults.create('plain', title='Morning', rows=rows(client))
+    batch = with_defaults.batch(label)
 
-    assert with_defaults.batch(label).settings == {'binning': {'bins': 3}}
+    assert batch.settings == {'thickness': 2.0, 'binning': {'bins': 3}}
+    assert batch.cells()['1']['thickness'] == 2.0  # the column's empty cell
 
 
-def test_settings_given_to_create_replace_those_registered_but_its_columns(
+def test_settings_given_to_create_replace_those_registered(
     with_defaults: BatchManager, client: Client
 ) -> None:
     settings = {'thickness': 3.0, 'offset': {'value': 1.0}}
@@ -161,7 +165,17 @@ def test_settings_given_to_create_replace_those_registered_but_its_columns(
         'plain', title='Morning', rows=rows(client), settings=settings
     )
 
-    assert with_defaults.batch(label).settings == {'offset': {'value': 1.0}}
+    assert with_defaults.batch(label).settings == settings
+
+
+def test_a_batch_made_from_a_source_has_no_setting_at_a_column_that_it_fills(
+    with_defaults: BatchManager, sample: Measure
+) -> None:
+    sample(1, 'water')
+    settings = {'thickness': 3.0, 'transmission': 'run:1001'}
+    label = from_pairs(with_defaults, 'plain', title='Morning', settings=settings)
+
+    assert with_defaults.batch(label).settings == {'thickness': 3.0}
 
 
 def test_settings_registered_later_leave_the_settings_of_a_batch_made_before(
@@ -174,7 +188,7 @@ def test_settings_registered_later_leave_the_settings_of_a_batch_made_before(
         client, sources=SOURCES, definitions=definitions, settings=later
     )
 
-    assert again.batch(label).settings == {'binning': {'bins': 3}}
+    assert again.batch(label).settings == {'thickness': 2.0, 'binning': {'bins': 3}}
 
 
 def test_a_batch_is_of_the_highest_version_of_its_spec_that_the_workspace_binds(
@@ -600,6 +614,31 @@ def test_rows_taken_are_put_as_the_source_makes_them_and_considered(
     assert definitions.load(source_key('a'), source_of).considered == {'1', '2'}
 
 
+@pytest.mark.parametrize('added_by', ['step', 'take'])
+def test_a_row_added_after_make_column_takes_the_setting(
+    manager: BatchManager, client: Client, sample: Measure, added_by: str
+) -> None:
+    sample(1, 'water')
+    settings = {'thickness': 2.0}
+    manager.create(
+        'plain', title='A', source='pairs', label='a', settings=settings, follow=True
+    )
+    batch = manager.batch('a')
+    client.wait(batch.reduce(['1']))
+    batch.make_column('thickness')
+    sample(2, 'oil')
+
+    if added_by == 'step':
+        client.wait(list(manager.step().records.values()))
+    else:
+        manager.take('a', ['2'])
+        client.wait(batch.reduce(['2']))
+
+    assert pd.isna(batch.frame().loc['2', 'thickness'])
+    assert batch.state()['2'].record.request.params['thickness'] == 2.0
+    assert batch.state()['1'].text == 'done'
+
+
 def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(
     client: Client, sample: Measure, definitions: FolderDefinitions
 ) -> None:
@@ -876,7 +915,7 @@ def test_a_create_cut_off_at_any_write_leaves_what_remove_removes(
             _made_again(client, definitions, follow=True)
         else:
             break
-    assert at > 6  # settings, rows, settings, source, header, following
+    assert at > 5  # settings, rows, source, header, following
 
 
 def test_a_remove_cut_off_at_any_write_leaves_what_remove_removes(

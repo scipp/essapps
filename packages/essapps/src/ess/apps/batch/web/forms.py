@@ -28,7 +28,7 @@ A cell of a batch's table is edited with the field of its column
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from datetime import datetime
 from typing import Any
 
@@ -50,13 +50,34 @@ from ...fields import (
 from .models import Edit, Editor, Node, Way
 
 
-def tree(fields: Fields, refused: Iterable[FieldError] = ()) -> list[Node]:
-    """The nodes of ``fields``, each with what is missing or ``refused`` there."""
-    _, missing = fields.held()
+def held(
+    fields: Fields, columns: Collection[str] = ()
+) -> tuple[dict[str, Any], list[FieldError]]:
+    """
+    What ``fields``, a form of settings, hold, and what is missing
+    (:meth:`~ess.apps.Fields.held`), but a field of ``columns`` left unset as
+    a whole is not missing: it is left out, as the setting of a column that
+    has none.
+    """
+    given, missing = fields.held()
+    return given, [e for e in missing if not (len(e.loc) == 1 and e.loc[0] in columns)]
+
+
+def tree(
+    fields: Fields, refused: Iterable[FieldError] = (), columns: Collection[str] = ()
+) -> list[Node]:
+    """
+    The nodes of ``fields``, each with what is missing or ``refused`` there;
+    the node of a field of ``columns`` is marked as a column, and misses
+    nothing if left unset (:func:`held`).
+    """
+    _, missing = held(fields, columns)
     said = {e.loc: message(e.msg) for e in (*missing, *refused) if e.loc}
     problems = {loc: m[:1].upper() + m[1:] for loc, m in said.items()}
     return [
-        _node(field, (name,), fields.titles[name], problems)
+        _node(field, (name,), fields.titles[name], problems).model_copy(
+            update={'column': name in columns}
+        )
         for name, field in fields.fields.items()
     ]
 

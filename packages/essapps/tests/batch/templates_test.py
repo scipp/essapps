@@ -121,7 +121,7 @@ def test_a_file_of_a_template_is_named_as_in_a_cell(client: Client) -> None:
     }
 
 
-def test_a_setting_of_a_template_at_a_column_is_read_and_a_batch_leaves_it_out(
+def test_a_setting_of_a_template_at_a_column_is_read_and_kept_out_of_the_template(
     batch: Batch,
 ) -> None:
     params = {'thickness': 2.0, 'binning': {'bins': 3}}
@@ -132,7 +132,10 @@ def test_a_setting_of_a_template_at_a_column_is_read_and_a_batch_leaves_it_out(
     made = Batch(batch.client, batch.spec, label='b', settings=settings, rows=frame)
 
     assert settings == params
-    assert made.settings == {'binning': {'bins': 3}}
+    assert made.settings == params
+    assert made.template() == Template(
+        toys.STAGED, params={'binning': {'bins': 3}}, blanks=toys.COLUMNS
+    )
 
 
 @pytest.mark.parametrize(

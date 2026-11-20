@@ -33,8 +33,9 @@ Tabulator.registerModule(Tooltip);
 
 const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
 
-// What an empty cell stands for, in words.
-const empty = (column) => (column.default ? `the default, ${column.default}` : 'empty');
+// What an empty cell stands for, in words: the setting of the batch, or the
+// default of the parameter, as the server sends it.
+const empty = (column) => (column.default ? `empty: ${column.default}` : 'empty');
 
 // The options of a pick that hold `text`, ignoring case; all for no text.
 const matching = (options, text) =>

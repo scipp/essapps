@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from ess.apps import Client, Selector, SubmitError
+from ess.apps import Client, Selector, SubmitError, Template
 from ess.apps.batch import (
     Batch,
     BatchManager,
@@ -136,17 +136,20 @@ def test_the_corrections_of_the_files_are_there_after_a_restart(
         assert '4' in manager.rows_of('first').index
 
 
-def test_the_settings_kept_are_a_template_that_the_command_reads(
+def test_the_settings_kept_are_a_template_of_all_settings_that_the_command_reads(
     opened: Opened, made: str, folder: Path
 ) -> None:
+    settings = {'binning': {'bins': 3}, 'thickness': 2.0}  # thickness: a column
     with opened() as (manager, _):
         batch = manager.batch(made)
-        batch.settings = {'binning': {'bins': 3}}
-        template = batch.template()
+        batch.settings = settings
+        batch.make_column('thickness')
 
     path = FolderDefinitions(folder).path(settings_key(made))
 
-    assert load_template(path) == template
+    assert load_template(path) == Template(batch.spec, params=settings)
+    with opened() as (manager, _):
+        assert manager.batch(made).settings == settings
 
 
 @pytest.mark.parametrize(

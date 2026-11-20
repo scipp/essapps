@@ -643,6 +643,7 @@ main.wide .right { display: none; }
   border-bottom: 1px solid var(--line);
   font-size: 13px;
 }
+.param h3 .column-note { font-size: 12px; font-weight: normal; }
 .field {
   display: grid;
   grid-template-columns: 150px minmax(0, 1fr);
