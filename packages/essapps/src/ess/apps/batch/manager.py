@@ -129,6 +129,10 @@ class BatchManager:
     the definitions refuse a write. Anything else is an error of the code of
     the application, such as a source that raises.
 
+    :attr:`version` moves whenever :meth:`headers` or :attr:`following` may
+    give something else: while it is the same, they give the same. A batch
+    counts its own changes (:attr:`.reduction.Batch.version`).
+
     The headers are read when the manager is made. Each change of a header is
     written to the definitions before the manager holds it, so the manager
     lists the batches whose header the definitions keep. A write that they
@@ -176,6 +180,12 @@ class BatchManager:
         self._batches: dict[str, Batch] = {}
         following = definitions.load(FOLLOWING, following_of)
         self._following = following if following in self._headers else None
+        self._version = 0
+
+    @property
+    def version(self) -> int:
+        """Counts the changes of the headers and of which batch follows."""
+        return self._version
 
     @property
     def following(self) -> str | None:
@@ -197,6 +207,7 @@ class BatchManager:
             self._source(self._made(label).source)
         self._definitions.save(FOLLOWING, following_data(label))
         self._following = label
+        self._version += 1
 
     def rows_of(self, source: str) -> pd.DataFrame:
         """
@@ -343,6 +354,7 @@ class BatchManager:
             raise
         self._headers[label] = header
         self._batches[label] = batch
+        self._version += 1
         return label
 
     def _source(self, name: str) -> Source:
@@ -461,6 +473,7 @@ class BatchManager:
         )
         self._definitions.save(header_key(label), header_data(header))
         self._headers[label] = header
+        self._version += 1
 
     def step(self) -> Step | None:
         """
@@ -567,8 +580,10 @@ class BatchManager:
         if label == self._following:
             self._definitions.save(FOLLOWING, following_data(None))
             self._following = None
+            self._version += 1
         self._definitions.delete(header_key(label))
         self._headers.pop(label, None)
+        self._version += 1
         if (batch := self._batches.pop(label, None)) is not None:
             batch.close()
         for key in _parts(label):

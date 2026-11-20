@@ -203,6 +203,7 @@ ess.apps.batch    the logic: BatchManager, step, Batch, table, states,
 The page asks for `GET api/state?after=<version>&start=<start>`, relative to its own URL `batches/<label>/`, every second.
 The server answers 204 if nothing changed since `version`, and else the whole `State`.
 `version` counts each action, each step of Follow that changes what the page shows (the rows, the runs, the records, the refusals, or its failure), each change of the batch that follows, and each change of the workspace's records, such as a reduction that finished.
+The server learns of these by numbers that count them, `Batch.version`, `BatchManager.version` and `Pages.runs_version`, and compares only these at each poll.
 `start` is new at each start of the server; a page that sees another one loads again.
 `State.runs` counts the changes of the runs, which all pages share; the Runs view asks for `api/runs` when it moves.
 `State.batches` lists the batches, so the version moves when the headers of the batches or the batch that follows change, whoever changed them; only a page that polls no state asks for `api/batches`.

@@ -37,7 +37,7 @@ Nothing below the line imports anything above it.
 |---|---|---|
 | table | `table.py` | the form of a table: dtypes, cells, cell to request value and back, `rows.json`, table files |
 | source | `source.py`: `Source`, `rows_of` | the code of the application that makes rows from the files |
-| batch | `reduction.py`: `Batch` | the template and the table of one label: `put`, `state`, `reduce`, `cancel`; the only part that calls the client |
+| batch | `reduction.py`: `Batch` | the template and the table of one label: `put`, `state`, `reduce`, `cancel`, and `version`, which moves when the table, the template or a record changes; the only part that calls the client |
 | state | `state.py`: `RowState`, the rules | where each row stands; the rules are functions from the states of rows to keys |
 | step | `auto.py`: `step`, `Step` | one step of Follow on one batch: add rows of the source, reduce rows |
 | manager | `manager.py`: `BatchManager` | the batches of a workspace: make, list, change, remove; which batch follows; `considered` |
