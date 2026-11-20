@@ -48,6 +48,7 @@ from .toys import (
     from_pairs,
     pair,
     rows,
+    unreachable,
 )
 
 SETTINGS: dict[str, Any] = {'binning': {'bins': 2}}
@@ -510,6 +511,19 @@ def test_a_row_whose_submission_raised_runs_at_the_next_step(
 
     assert list(loop.step()) == ['1']
     assert loop.step() == {}
+
+
+def test_a_row_whose_file_cannot_be_read_waits_for_the_next_step(
+    loop: Stepping, sample: Measure, fake: FakeFiles
+) -> None:
+    sample(1, 'water')
+    sample(2, 'sds')
+
+    with unreachable(fake, 'resolve', [FileRef(file='uuid:run-2')]):
+        first = loop.step()
+
+    assert (list(first), loop.refused) == (['1'], {})
+    assert list(loop.step()) == ['2']
 
 
 def test_two_loops_on_one_label_submit_a_file_once(

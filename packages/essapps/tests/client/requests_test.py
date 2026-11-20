@@ -255,6 +255,35 @@ def test_an_unknown_file_is_refused(client: Client) -> None:
         client.submit(toys.load_request(9))
 
 
+def _raising(error: Exception) -> Callable[[Any], Any]:
+    def raising(_: Any) -> Any:
+        raise error
+
+    return raising
+
+
+def test_a_file_that_the_source_cannot_read_is_refused_as_an_unknown_one(
+    client: Client, files: FakeFiles
+) -> None:
+    files.metadata = _raising(OSError('the mount is gone'))  # type: ignore[method-assign]
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(toys.load_request(1))
+
+    assert raised.value.errors == (
+        FieldError(None, ('sample',), 'file run:1 cannot be read: the mount is gone'),
+    )
+
+
+def test_a_file_source_that_raises_another_error_is_a_defect_and_raises_it(
+    client: Client, files: FakeFiles
+) -> None:
+    files.resolve = _raising(RuntimeError('a bug'))  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match='a bug'):
+        client.submit(toys.load_request(1))
+
+
 def test_a_file_at_a_list_parameter_is_refused(
     client: Client, files: FakeFiles
 ) -> None:

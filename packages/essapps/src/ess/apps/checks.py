@@ -197,13 +197,21 @@ class Checks:
         """
         The identity of the file ``name``, which must be known, readable by
         ``proposal``, and fit ``marker``; raises ``ValueError`` otherwise.
+
+        The file source raising ``OSError``, such as a mount gone or a
+        catalogue that timed out, refuses the file, as an unknown one is: the
+        value cannot be checked, and a refusal touches only the request, or
+        the row of a batch, that names the file. Anything else it raises is a
+        defect and is raised.
         """
         ref = FileRef(file=name)
         try:
             identity = self._files.resolve(ref)
+            metadata = self._files.metadata(identity)
         except KeyError:
             raise ValueError(f'unknown file {ref}') from None
-        metadata = self._files.metadata(identity)
+        except OSError as error:
+            raise ValueError(f'file {ref} cannot be read: {error}') from None
         if not readable(metadata, proposal):
             raise ValueError(f'file {ref} belongs to proposal {metadata["proposal"]}')
         if not (selector := Selector.of(marker)).matches(metadata):

@@ -2545,6 +2545,26 @@ def test_a_batch_shows_while_the_files_cannot_be_listed(
     assert http.post('/api/relist').json()['files_problem'] is None
 
 
+def test_a_batch_shows_while_the_file_source_raises_and_each_row_says_why(
+    http: TestClient, fake: FakeFiles
+) -> None:
+    with toys.unreachable(fake, 'resolve'), toys.unreachable(fake, 'list'):
+        shown = http.get('/api/state')
+        edit = {'keys': ['2'], 'column': 'thickness', 'value': 1.5}
+        edited = http.post('/api/cells', json=edit)
+
+    assert (shown.status_code, edited.status_code) == (200, 200)
+    why = shown.json()['files_problem']
+    assert why == 'The files cannot be listed: the mount is gone'
+    assert {r['status'] for r in edited.json()['rows']} == {'incomplete'}
+    (first, *_) = edited.json()['rows']
+    assert first['cells']['sample']['problem'] == (
+        'Sample: file uuid:run-1 cannot be read: the mount is gone'
+    )
+    assert statuses(http) == {'1': 'ready', '2': 'ready', '3': 'incomplete'}
+    assert http.post('/api/relist').json()['files_problem'] is None
+
+
 # The tab "Batch"
 
 
