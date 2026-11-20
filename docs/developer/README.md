@@ -59,15 +59,19 @@ What the framework adds to the plain loop:
 
 ## Components
 
-```
-  controller: a notebook, an application, automatic reduction   decides what to run
-        │  client: submit, push, output, release, ...
-        ▼
-  workspace ─── file source: files and their metadata
-        │  └─── store: persisted outputs
-        │  binding: compute, make_stage, make_accumulator
-        ▼
-  workflow package: specs, and a pipeline, driver, or function per spec
+The components; an arrow points from a caller to what it calls, and its label names the interface:
+
+```mermaid
+flowchart TD
+    controller["controller, decides what to run: a notebook, an application, automatic reduction"]
+    workspace
+    files["file source: files and their metadata"]
+    store["store: persisted outputs"]
+    package["workflow package: specs, and a pipeline, driver, or function per spec"]
+    controller -->|"client: submit, push, output, release, ..."| workspace
+    workspace --> files
+    workspace --> store
+    workspace -->|"binding: compute, make_stage, make_accumulator"| package
 ```
 
 The framework is two packages ([ADR 0007](adr/0007-packages-split-by-dependencies.md)).
@@ -142,8 +146,9 @@ for run in client.files.watch(Selector(role='transmission')):
 An *application* is a program that holds a client: a controller, and a *screen* if a person uses it.
 In each deployment of the first release, one Python process holds the application, its client, and the workspace ([deployments.md](deployments.md)):
 
-```
- screen ──(a)──▶ application ──(b)──▶ workspace ──(c)──▶ binding
+```mermaid
+flowchart LR
+    screen -->|"(a)"| application -->|"(b)"| workspace -->|"(c)"| binding
 ```
 
 | Deployment | The process | The workspace's history |
