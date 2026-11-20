@@ -94,8 +94,7 @@ The view **Batches**, next to the rows and **Runs**, lists every batch of the wo
 Each title is a link to the page of its batch.
 Opening the view, and **Count again**, counts the rows of each batch by status (`Pages.counts`).
 The statuses are those of the chips of each batch's page (`RowState.text`).
-A count reads the state of each batch whose version (`Batch.version`), or that of the runs, moved since the last count, under the lock of all pages, so the pages and Follow wait until it ends.
-A batch that nothing changed keeps its counts: as on its page, a file that a row names and that arrives shows once something else moves, such as the runs listed again.
+A count reads the state of every batch under the lock of all pages, so the pages and Follow wait until it ends.
 A batch that cannot be counted, such as one whose table cannot be read, shows why in its row.
 No poll counts, so the counts shown are those of the last count; a count that fails shows none.
 The list and the Runs view are the same on every page.

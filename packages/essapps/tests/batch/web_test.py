@@ -1727,20 +1727,34 @@ def test_counts_are_given_in_the_words_of_the_page(
     }
 
 
+def counted(http: TestClient) -> dict[str, int]:
+    """The counts of the batch ``scan``."""
+    return http.get('/api/batches/counts').json()['rows']['scan']
+
+
 def test_a_count_after_a_row_finished_gives_its_new_status(
     http: TestClient, batch: Batch, client: Client, gate: Gate
 ) -> None:
-    def counted() -> dict[str, int]:
-        return http.get('/api/batches/counts').json()['rows']['scan']
-
     gate.close()
     records = batch.reduce(['1'])
-    running = counted()
+    running = counted(http)
     gate.open()
     client.wait(records)
 
     assert running == {'running': 1, 'ready': 1, 'incomplete': 1}
-    assert counted() == {'done': 1, 'ready': 1, 'incomplete': 1}
+    assert counted(http) == {'done': 1, 'ready': 1, 'incomplete': 1}
+
+
+def test_a_count_after_a_file_arrived_that_a_row_names_gives_its_new_status(
+    http: TestClient, batch: Batch, fake: FakeFiles
+) -> None:
+    toys.edit(batch, '3', transmission='uuid:run-1003')
+    before = counted(http)
+
+    fake.measure(1003, 1.0, role='transmission', sample='oil')
+
+    assert before == {'ready': 2, 'incomplete': 1}
+    assert counted(http) == {'ready': 3}
 
 
 def test_the_counts_give_the_rows_of_each_batch_by_status(

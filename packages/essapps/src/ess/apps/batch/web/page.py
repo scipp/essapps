@@ -518,6 +518,8 @@ class Page:
     @_locked
     def poll(self, after: int, start: str = '') -> State | None:
         """The state, or ``None`` if it is still that of version ``after``."""
+        # The feed catches a record that ended after the last relist but before
+        # ``_seen`` was read, which ``_live`` holds already and the listing lacks.
         changes = self.batch.client.changes(after=self._listing.cursor)
         # A table changed by another caller may name files that the listing lacks.
         if changes.records or self._live() != self._seen:
