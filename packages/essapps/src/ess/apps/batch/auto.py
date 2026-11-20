@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 Automatic reduction: a batch amended from the files and reduced as they
-arrive. The guide is the section "Automatic reduction" of
+arrive. The guide is the section "Follow" of
 ``packages/essapps/docs/batch.md``; the decision is
 ``docs/developer/adr/0013-follow-adds-the-rows-not-considered.md``.
 

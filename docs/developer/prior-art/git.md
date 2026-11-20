@@ -63,7 +63,7 @@ The catalogue entry survives the proposal's history for the same reason a pushed
 **Names need a namespace.**
 Git keeps branches, tags, and remote branches under separate prefixes (`refs/heads/`, `refs/tags/`, `refs/remotes/`), resolves a short name by a fixed order of rules, and warns when it is ambiguous ([revisions L27-L33][revname], `core.warnAmbiguousRefs`, true by default, [config/core L407-L409][warn]).
 Here, a label is one free string per proposal.
-The automatic reduction owns its label by convention only: a record a notebook submits under it, with a row's key as its member, stops the loop from reducing that row's file ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)).
+The automatic reduction owns its label by convention only: a record a notebook submits under it, with a row's key as its member, stops the loop from reducing that row's file ([automatic-reduction.md](../automatic-reduction.md#the-records-of-a-label-are-the-results)).
 Labels are tentative ([open question 3](../README.md#open-questions)).
 If they stay, separate the labels of the automatic reduction from the labels people choose before the first users, since renaming names that records already carry is costly.
 
@@ -76,7 +76,7 @@ The first-release application ([requirements, Goal](../../requirements/README.md
 **Automation belongs next to the versioned content, and its status on a server.**
 Git hooks live in `$GIT_DIR/hooks`, outside the tracked tree ([gitrepository-layout L170-L178][hooks]), so a clone does not carry them.
 CI services read their configuration from a tracked file, show the status of each run to anyone with access, and leave re-running failed jobs to a person, with the same commit as the first run ([GitHub docs][rerun]).
-The automatic reduction matches the last point: a failed record counts as a row reduced, and running it again is the user's decision ([automatic-reduction.md](../automatic-reduction.md#which-rows-run)).
+The automatic reduction matches the last point: a failed record counts as a row reduced, and running it again is the user's decision ([automatic-reduction.md](../automatic-reduction.md#the-records-of-a-label-are-the-results)).
 It differs on the second: why a row did not run lives in the `Step` that the caller of a step keeps, which an operator in another process cannot read ([#24][i24]).
 A source of rows is an application's function ([#33][i33]), so such a server lists the batches and the states of their rows, not how the rows are made.
 

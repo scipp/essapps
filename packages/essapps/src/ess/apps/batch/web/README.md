@@ -204,12 +204,12 @@ The headers, the tables, the settings, the batch that follows, and the correctio
 The demo and the LoKI page give the manager and the file source the folder's definitions, `FOLDER/definitions/` (`ess.apps.batch.FolderDefinitions`), so a restart shows the batches, their definitions and the batch that follows again.
 The settings form is a draft of the batch's settings: **Apply** writes it to the batch, and so to the definitions. A draft not applied is lost when the server stops.
 Results are records of the workspace, in `FOLDER/store/`.
-See [Where the definition is kept](../../../../../docs/batch.md#where-the-definition-is-kept).
+See [Where the definitions are kept](../../../../../docs/batch.md#where-the-definitions-are-kept).
 
 ## Limits
 
 - One process holds the folder. `essapps-batch` opens it only while the server is stopped; its `reduce` imports what it is given into the label's definitions, which the page shows at its next start.
-- One `Batch` per label. Another one on the page's label writes its whole table at each change, over that of the page ([Where the definition is kept](../../../../../docs/batch.md#where-the-definition-is-kept)).
+- One `Batch` per label. Another one on the page's label writes its whole table at each change, over that of the page ([Where the definitions are kept](../../../../../docs/batch.md#where-the-definitions-are-kept)).
 - One user. Two open pages of one batch show and edit the same state.
 - One lock for all pages: a request waits while a step of Follow runs on another batch.
 - A batch that cannot be shown, such as one whose table cannot be read, has no tab **Batch**, so it is removed only in code.

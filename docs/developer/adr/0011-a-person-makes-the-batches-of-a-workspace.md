@@ -7,7 +7,7 @@
 ## Context
 
 *Spec*, *record* and *binding* are the words of [README.md](../README.md).
-*Column*, *settings*, *row*, *key*, *source*, *scan*, *edit*, *result* and *outdated* are those of [batch.md, "Terms"](../../../packages/essapps/docs/batch.md#terms).
+*Column*, *settings*, *row*, *key*, *source*, *result* and *outdated* are those of [batch.md, "Terms"](../../../packages/essapps/docs/batch.md#terms); *scan* and *edit* are those of [ADR 0012, "Context"](0012-a-batch-is-a-table.md#context), which replaced them.
 Four more are used here:
 
 - The *label* of a batch names its results: a row's result is the newest record under the label with the row's key.
