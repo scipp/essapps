@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A batch on a client: its template and its table, the request of each row,
+A batch on a client: its template and its batch table, the request of each row,
 reducing rows, and reading their results.
 
 :class:`Batch` is the only part of the toolbox's logic that submits to the client.
@@ -9,7 +9,7 @@ It needs no interface of its own over the client: tests and UI work run it on
 ``local()`` with fake workflows, which start in milliseconds and refuse and fail
 as real ones do.
 
-The table is one frame (:mod:`~.table`), and only :meth:`Batch.put` changes
+The batch table is one frame (:mod:`~.table`), and only :meth:`Batch.put` changes
 it. The settings are a value per parameter for the batch, also for one that is
 a column. The value of a parameter for a row is its cell; if the cell is empty
 or the parameter is no column, the setting; if the batch has none, the default
@@ -133,7 +133,7 @@ def _running(row: RowState) -> list[FieldError]:
 
 class Batch:
     """
-    A template and a table: one spec reduced for many rows. See
+    A template and a batch table: one spec reduced for many rows. See
     ``packages/essapps/docs/batch.md``.
 
     Parameters
@@ -149,7 +149,7 @@ class Batch:
         its default; none if not given. A value at a column is the value of
         each row whose cell is empty; one at :attr:`fills` is left out.
     rows:
-        The table, as :meth:`put` takes it; if not given, a table without
+        The batch table, as :meth:`put` takes it; if not given, one without
         rows, with a column for each of :attr:`fills`.
     staged:
         Run the rows through a stage, so that what they share is computed
@@ -173,7 +173,7 @@ class Batch:
     Attributes
     ----------
     parameter_columns:
-        The parameter columns of the table, in its order: the blanks of the
+        The parameter columns of the batch table, in its order: the blanks of the
         template.
     settings_fields:
         The other parameters of the spec, which no row gives itself.
@@ -281,7 +281,7 @@ class Batch:
 
     def frame(self) -> pd.DataFrame:
         """
-        A copy of the table: the key as index, a column per blank, and notes.
+        A copy of the batch table: the key as index, a column per blank, and notes.
         A list or a group in a cell is copied too, so that changing it in place
         changes the batch only by :meth:`put`.
         """
@@ -293,7 +293,7 @@ class Batch:
 
     def put(self, frame: pd.DataFrame) -> None:
         """
-        Make ``frame`` the table. Its parameter columns become the blanks of
+        Make ``frame`` the batch table. Its parameter columns become the blanks of
         the template. The settings stay: a parameter that becomes a column
         keeps its setting for the rows whose cell is empty, and a column
         dropped takes its setting, or its default if the batch has none. A
@@ -380,10 +380,11 @@ class Batch:
         whose cells at ``name`` are all empty, or that has no rows, keeps its
         setting.
 
-        The settings, if changed, are written before the table without the
-        column. If the definitions refuse the table, the batch keeps the
-        column with the setting changed, as a batch read again does: its rows
-        with an empty cell take the value chosen.
+        The settings, if changed, are written before the batch table without
+        the column, which is one :meth:`put`. If the definitions refuse the
+        batch table, the batch keeps the column with the setting changed, as a
+        batch read again does: its rows with an empty cell take the value
+        chosen.
 
         Raises ``ValueError`` if ``name`` is not a column, or one of
         :attr:`fills`, as :meth:`put` refuses a table without it; if the
@@ -391,6 +392,7 @@ class Batch:
         take different values; :class:`~.definition.NotKept` if the
         definitions refuse a write.
         """
+        self._check_column(name)
         self._keeps_fills([c for c in self.parameter_columns if c != name])
         if key is None:
             values = self.values(name)
@@ -404,11 +406,12 @@ class Batch:
             if cell is not None:
                 value = as_request(self.spec.params, {name: cell})[name]
                 self.settings = {**self._settings, name: value}
-        rows = typed(self._rows.drop(columns=name), self.spec.params)
-        if self._definitions is not None:
-            self._definitions.save(definition.rows_key(self.label), data_of(rows))
-        self._resolved.clear()
-        self._set(rows)
+        self.put(self.frame().drop(columns=name))
+
+    def _check_column(self, name: str) -> None:
+        """Raise ``ValueError`` unless ``name`` is a parameter column."""
+        if name not in self.parameter_columns:
+            raise ValueError(f'{name} is not a column of the batch')
 
     def values(self, name: str) -> dict[str, Any]:
         """
@@ -418,8 +421,7 @@ class Batch:
         (:meth:`empty`, :func:`~.table.cell_of`), or ``None`` if it gives
         nothing. Raises ``ValueError`` if ``name`` is not a column.
         """
-        if name not in self.parameter_columns:
-            raise ValueError(f'{name} is not a column of the batch')
+        self._check_column(name)
         cells = {k: row[name] for k, row in self._rows[[name]].to_dict('index').items()}
         if name in (empty := self.empty()):
             given = cell_of(empty[name])

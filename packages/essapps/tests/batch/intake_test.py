@@ -110,7 +110,10 @@ def test_columns_given_are_empty_and_a_column_of_the_table_keeps_its_cells(
     sample(1, 'water')
 
     batch = intake.create(
-        PLAIN.name, title='A', source='pairs', columns=['sample', 'thickness']
+        PLAIN.name,
+        title='A',
+        source='pairs',
+        parameter_columns=['sample', 'thickness'],
     )
 
     frame = batch.frame()
@@ -205,12 +208,17 @@ def test_a_batch_made_without_a_source_has_none(intake: Intake) -> None:
     assert intake.source('a') is None
 
 
+def _not_registered(name: str, registered: str) -> str:
+    """The pattern of the refusal of the source ``name``, which is not registered."""
+    return rf'^the source {name} is not registered; registered: {registered}$'
+
+
 def test_a_source_that_is_not_registered_is_refused(
     intake: Intake, definitions: FolderDefinitions
 ) -> None:
-    with pytest.raises(ValueError, match='the source runs is not registered'):
+    with pytest.raises(ValueError, match=_not_registered('runs', 'pairs')):
         intake.create('plain', title='Morning', source='runs')
-    with pytest.raises(ValueError, match='the source runs is not registered'):
+    with pytest.raises(ValueError, match=_not_registered('runs', 'pairs')):
         intake.rows_of('runs')
     assert definitions.labels() == []
 
@@ -368,7 +376,7 @@ def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(
     batch.put(pd.concat([batch.frame(), typed]))
     del sources['pairs']
 
-    with pytest.raises(ValueError, match='the source pairs is not registered'):
+    with pytest.raises(ValueError, match=_not_registered('pairs', 'none')):
         intake.step()
 
     # A key typed by hand is considered only by a step that reads the source.
@@ -451,6 +459,24 @@ def test_a_spec_title_or_label_is_refused_before_the_source_is_looked_up(
     for source in ('broken', 'nope'):
         with pytest.raises(ValueError, match=said):
             intake.create(spec, title=title, source=source, label=label)
+
+
+@pytest.mark.parametrize(
+    ('spec', 'lacked'),
+    [
+        ('find', 'parameter transmission'),
+        ('repeated', 'parameters sample, transmission'),
+    ],
+)
+def test_a_spec_that_lacks_a_parameter_the_source_fills_is_refused(
+    intake: Intake, definitions: FolderDefinitions, spec: str, lacked: str
+) -> None:
+    said = f'the spec {spec} has no {lacked}, which the source pairs fills'
+
+    with pytest.raises(ValueError, match=f'^{said}$'):
+        intake.create(spec, title='A', source='pairs', label='a')
+
+    assert definitions.labels() == []
 
 
 # Which batch follows
@@ -623,7 +649,7 @@ def test_a_batch_whose_source_is_not_registered_cannot_follow(
 ) -> None:
     again = Intake(BatchManager(client, definitions=definitions), sources={})
 
-    with pytest.raises(ValueError, match='the source pairs is not registered'):
+    with pytest.raises(ValueError, match=_not_registered('pairs', 'none')):
         again.follow('b')
     assert again.following == 'a'
 

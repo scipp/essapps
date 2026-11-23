@@ -288,8 +288,8 @@ function gridColumns(state) {
   };
 }
 
-// Show the columns of the table of `state` if they changed, as a table
-// loaded changes them.
+// Show the columns of the batch table of `state` if they changed, as a table
+// file loaded changes them.
 function showColumns(state) {
   // The options of a pick are read when its editor opens (`current`).
   const shown = JSON.stringify([state.notes, state.columns.map((c) => [c.name, c.title, c.editor?.type, c.default, c.waits])]);
@@ -574,7 +574,8 @@ async function show(url, page, how) {
 // that batch's source, workflow, columns and settings, so that the next batch
 // is this form with a range that starts later. A batch from a source may
 // follow it; Follow is off unless ticked, since it stops the batch that
-// follows, for good, and reduces rows at once with the settings chosen.
+// follows, which the page cannot make follow again, and reduces rows at once
+// with the settings chosen.
 let choices = []; // what a new batch can be made with, as last loaded
 let none = 0; // the index of the choice without a source
 let sourceRows = null; // the rows of the source chosen, as last loaded
@@ -662,8 +663,8 @@ function rangeChosen() {
 }
 
 // Follow ticked: the range has no last row, since Follow adds every row that
-// arrives later; nor has a range of no row now. The manager refuses either
-// (`Range`, `BatchManager.create`); the form says so. "to" is then open, disabled,
+// arrives later; nor has a range of no row now. The batch layer refuses either
+// (`Intake.create`, `Range`); the form says so. "to" is then open, disabled,
 // and says so. Whether "to" was set and is open now, so that the rows are to
 // be marked again.
 function chooseFollow() {
@@ -801,7 +802,7 @@ async function makeBatch(event) {
           ...header,
           source: chosenSource().name,
           ...rangeChosen(),
-          columns: [...form.querySelectorAll('[name=column]:checked')].map((box) => box.value),
+          parameter_columns: [...form.querySelectorAll('[name=column]:checked')].map((box) => box.value),
           follow: way() === 'source' && elements.follow.checked,
         },
       ];
@@ -811,8 +812,8 @@ async function makeBatch(event) {
   else button.disabled = false;
 }
 
-// The dialog "Add rows from the runs": the rows of the source that the table
-// lacks, those that wait marked. The rows picked are added as the source makes
+// The dialog "Add rows from the runs": the rows of the source that the batch
+// table lacks, those that wait marked. The rows picked are added as the source makes
 // them now.
 async function openTake() {
   const listed = await request('rows/offered', {kind: 'offered'});

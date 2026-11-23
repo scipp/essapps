@@ -28,7 +28,7 @@ class CorrectedFiles:
     """
     A file source over ``source``, with corrections a person makes.
 
-    The workspace gets this source, so forms and sources of rows all see a file
+    The workspace gets this source, so forms and row sources all see a file
     as corrected, as :class:`~ess.apps.protocol.FileSource` requires::
 
         files = CorrectedFiles(FolderFiles('/data', table))
@@ -37,7 +37,7 @@ class CorrectedFiles:
 
     Listing asks ``source`` for every file and selects by the corrected
     metadata, so the source must select through :meth:`Selector.matches`, as
-    those that read a folder or a table do. A name such as ``file(run=1)`` is
+    those that read a folder or a files table do. A name such as ``file(run=1)`` is
     resolved by ``source``, so a correction of ``run`` does not rename a file.
 
     ``definitions`` keep the corrections (:mod:`~.definition`): they are read

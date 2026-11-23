@@ -8,7 +8,7 @@ The workspace asks its file source to resolve such a name to the file's
 identity when a request is submitted, so a record names the file itself.
 A file the catalogue lists is identified by its catalogue identifier, any
 other file by its path (see :class:`FolderFiles`). :func:`replace_at_once`
-writes a table of files, or any file that another process reads.
+writes a files table, or any file that another process reads.
 """
 
 from __future__ import annotations

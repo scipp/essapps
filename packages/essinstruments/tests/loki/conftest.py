@@ -41,6 +41,16 @@ REAL_DATA = frozenset(
 )
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    # Registered here, where it is used, so that a run of the tests of several
+    # packages from the root of the repository knows the marker too.
+    config.addinivalue_line(
+        'markers',
+        "real_data: the test downloads esssans' tutorial data and runs real "
+        'reductions; CI leaves it out',
+    )
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """

@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A workspace kept in a folder, for one person on one machine. It needs scipp
-and h5py.
+A workspace kept in a folder, for one person on one machine. It needs scipp,
+h5py and pandas (the extra ``files``).
 
 The folder holds what a workspace needs to go on after its process ended::
 
-    files.csv     the table of FolderFiles: file, run, pid, kind, role, ...
-                  (written by hand, or started with scan_folder)
+    files.csv     the files table of FolderFiles: file, run, pid, kind, role, ...
+                  (written by hand, or started with scan_folder, and
+                  described by a person's run table)
     log.jsonl     history: a header naming the format of the log and of
                   the store, then one event per line (see ess.apps.log)
     store/        persisted outputs, <record>/<output>.h5
@@ -34,6 +35,9 @@ import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
+import numpy as np
+import pandas as pd
 
 from ess.spec import Binding, FileRef
 
@@ -119,6 +123,60 @@ def scan_folder(
     rows.sort(key=_measured)
     FolderFiles(directory, rows)
     return rows
+
+
+def _empty(cell: Any) -> bool:
+    """Whether a cell holds nothing: no text, or what pandas reads a gap as."""
+    if cell is None or cell is pd.NA:
+        return True
+    return isinstance(cell, str | float) and (cell == '' or cell != cell)
+
+
+def _text(cell: Any) -> str:
+    """A cell that names a run or a file as text; ``1.0`` as ``'1'``."""
+    cell = cell.item() if isinstance(cell, np.generic) else cell
+    # pandas holds whole numbers next to a gap as floats
+    return str(int(cell) if isinstance(cell, float) and cell.is_integer() else cell)
+
+
+def described(files: pd.DataFrame, run_table: pd.DataFrame) -> pd.DataFrame:
+    """
+    The files table (see :func:`scan_folder`) with what a person's run
+    table says of each: its role, its sample, or any other column.
+
+    A row of ``run_table`` describes the file of its ``run``, or, if that cell
+    is empty or there is no such column, the file at its ``file``. The result
+    has the rows of ``files``: a row of ``run_table`` that describes no file is
+    ignored, and a file that no row describes keeps what it has. In a column of
+    both tables, a cell of ``run_table`` that is not empty replaces what the
+    file says of itself.
+
+    Raises ``ValueError`` if a row names neither a run nor a file, or two rows
+    describe one.
+    """
+    by: dict[str, dict[str, dict[str, Any]]] = {'run': {}, 'file': {}}
+    for record in run_table.to_dict('records'):
+        column = 'file' if _empty(record.get('run')) else 'run'
+        if _empty(record.get(column)):
+            raise ValueError('a row of the run table names neither a run nor a file')
+        key = _text(record[column])
+        if key in by[column]:
+            raise ValueError(f'two rows of the run table describe the {column} {key}')
+        by[column][key] = {
+            name: cell
+            for name, cell in record.items()
+            if name not in by and not _empty(cell)
+        }
+    rows = [
+        record
+        | by['file'].get(_text(record['file']), {})
+        | ({} if _empty(run := record.get('run')) else by['run'].get(_text(run), {}))
+        for record in files.to_dict('records')
+    ]
+    columns = dict.fromkeys(
+        [*files.columns, *run_table.columns.drop(list(by), 'ignore')]
+    )
+    return pd.DataFrame(rows, columns=list(columns)).fillna('')
 
 
 def folder_files(directory: Path) -> FolderFiles:

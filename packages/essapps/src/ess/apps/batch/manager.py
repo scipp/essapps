@@ -8,13 +8,13 @@ workspace" of ``packages/essapps/docs/batch.md``; the decisions are
 ``docs/developer/adr/0011``, ``0012`` and ``0013``.
 
 A batch is a label with a header. A :class:`~.reduction.Batch` is the object
-that holds its template and its table; the manager makes the one ``Batch`` of
-each batch. A batch is kept as these tables of the definitions
+that holds its template and its batch table; the manager makes the one ``Batch`` of
+each batch. A batch is kept as these entries of the definitions
 (:mod:`.definition`), each with one writer::
 
     header      title, description                      BatchManager
     settings    the template, with the fills as blanks  the Batch
-    rows        the table                               the Batch
+    rows        the batch table                         the Batch
     source      the source, the keys considered, and    Intake; only for a
                 whether the batch follows               batch made from a source
 
@@ -22,9 +22,9 @@ so a manager made again, after a restart, makes the same ``Batch`` of a label
 from them, the specs that the workspace binds, and the specs that run staged.
 Making a batch makes its ``Batch``, which writes the settings and the rows;
 then the manager writes the header: a label without a header is not a batch.
-Removing a batch deletes the header first, then every other table of the
+Removing a batch deletes the header first, then every other entry of the
 label, whoever wrote it. So a ``create`` or a ``remove`` cut off at any
-write leaves a label with tables and no header, which
+write leaves a label with entries and no header, which
 :meth:`BatchManager.remove` removes. After a restart, the ``Batch`` of a
 label is made at the first call of :meth:`BatchManager.batch`.
 """
@@ -113,7 +113,7 @@ class BatchManager:
     Attributes
     ----------
     definitions:
-        Where the batches are kept, also the tables that
+        Where the batches are kept, also the entries that
         :class:`~.intake.Intake` writes.
     """
 
@@ -148,7 +148,7 @@ class BatchManager:
         title: str,
         rows: pd.DataFrame | None = None,
         fills: Collection[str] = (),
-        columns: Collection[str] = (),
+        parameter_columns: Collection[str] = (),
         description: str = '',
         settings: Mapping[str, Any] | None = None,
         label: str | None = None,
@@ -157,11 +157,11 @@ class BatchManager:
         Make a batch and keep it; its ``Batch``, whose ``label`` names it.
         Nothing is written if a check fails; :meth:`check` comes first. The
         header is written after the
-        other tables of the batch, so a label without a header is no batch.
+        other entries of the batch, so a label without a header is no batch.
 
-        If the definitions refuse a write, the tables written are deleted,
+        If the definitions refuse a write, the entries written are deleted,
         and what was kept before stays. If a delete is refused too, as when
-        the process stops, what is left is a label with tables and no header,
+        the process stops, what is left is a label with entries and no header,
         which :meth:`remove` removes.
 
         Parameters
@@ -172,8 +172,8 @@ class BatchManager:
         title:
             What the batch is called.
         rows:
-            The first table, as :meth:`~.reduction.Batch.put` takes it; its
-            parameter columns are the blanks of the template. A table without
+            The first batch table, as :meth:`~.reduction.Batch.put` takes it;
+            its parameter columns are the blanks of the template. One without
             rows or columns if not given.
         fills:
             The parameters that a row source fills
@@ -181,9 +181,10 @@ class BatchManager:
             settings: each is a column of ``rows``, an empty cell there means
             that the row waits for its file, and the settings given are left
             out there (:meth:`.reduction.Batch.settable`).
-        columns:
-            Parameters that are columns of the batch, of empty cells, besides
-            those of ``rows``; a column of ``rows`` keeps its cells.
+        parameter_columns:
+            Parameters that are parameter columns of the batch, of empty
+            cells, besides those of ``rows``; a column of ``rows`` keeps its
+            cells.
         description:
             What a person says of the batch.
         settings:
@@ -201,7 +202,7 @@ class BatchManager:
             digits, ``_``, ``.`` and ``-``, starting with none of the last
             two, or has definitions or records; if the workspace binds no
             spec ``spec``; or if the rows are refused, as ``put`` refuses
-            them, also for a table without a column of ``fills``.
+            them, also for a batch table without a column of ``fills``.
         """
         self.check(spec, title=title, label=label)
         if label is None:
@@ -215,7 +216,7 @@ class BatchManager:
         if settings is None:
             settings = self._settings.get(spec, {})
         table = pd.DataFrame() if rows is None else rows
-        empty = [c for c in columns if c not in table.columns]
+        empty = [c for c in parameter_columns if c not in table.columns]
         # Refused here, before anything is written.
         table = typed(table.assign(**dict.fromkeys(empty)), bound.params)
         batch = self._kept(label, bound, {}, None, fills)
@@ -277,8 +278,8 @@ class BatchManager:
         Raises ``KeyError`` if no batch has the label; ``ValueError`` if the
         workspace binds no spec of the name of its settings, or if its
         settings or rows cannot be read. A version of the spec that takes
-        another kind of value at a column of the table, or that has a
-        parameter of the name of a note, refuses the cells of the table, and
+        another kind of value at a column of the batch table, or that has a
+        parameter of the name of a note, refuses the cells of the batch table, and
         the batch cannot be shown either.
 
         The blanks of the settings kept are the parameters that the source of
@@ -339,13 +340,13 @@ class BatchManager:
 
     def remove(self, label: str) -> None:
         """
-        Forget the batch of ``label`` and remove every table of it
+        Forget the batch of ``label`` and remove every entry of it
         (:func:`~.definition.label_keys`); its records stay, and those running
         keep running. A ``Batch`` of the label handed out before must not be
         used after: it would write its definitions again. A label that keeps
-        tables but no header, as a ``create`` or ``remove`` cut off leaves
+        entries but no header, as a ``create`` or ``remove`` cut off leaves
         it, is removed too, and can then be made again. Raises ``KeyError``
-        if no batch has the label and no table is kept of it.
+        if no batch has the label and no entry is kept of it.
 
         The header is deleted first, so a batch is never listed half removed.
         Whether the batch follows is kept with the label, so it goes too.

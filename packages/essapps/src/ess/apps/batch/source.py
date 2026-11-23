@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What an application gives a batch: a :class:`RowSource` makes a table from the
+What an application gives a batch: a :class:`RowSource` makes rows from the
 files.
 
 A row source is code of the application, registered by name with an
@@ -19,7 +19,7 @@ from the files now. A row is *filled* (:func:`filled`) once it has a value
 in each column that the source fills; until then it *waits*. A batch is made
 from the filled rows, or from a range of them (:class:`Range`), and Follow
 adds the rows that are new and filled (:mod:`~.auto`). A batch never asks
-its source again: how its table was made is not part of it.
+its source again: how its batch table was made is not part of it.
 """
 
 from __future__ import annotations
@@ -70,10 +70,12 @@ class RowSource:
     Parameters
     ----------
     rows:
-        Makes a table from files.
+        Makes the rows of the source from the files.
     fills:
-        The columns that ``rows`` fills. Follow adds a row once it has a
-        value in each of these that is a column of the batch.
+        The columns that ``rows`` fills, each named as a parameter of the
+        specs it fits (:func:`~.intake.fits`). A batch made from the source
+        keeps them as parameter columns (:attr:`~.reduction.Batch.fills`),
+        and Follow adds a row once it has a value in each.
     selector:
         The files that ``rows`` is given; raw files if not given.
     description:
@@ -90,7 +92,7 @@ class RowSource:
 
 def rows_of(client: Client, source: RowSource) -> pd.DataFrame:
     """
-    The table that ``source`` makes from the files of ``client`` now, with an
+    The rows that ``source`` makes from the files of ``client`` now, with an
     empty column for each of :attr:`RowSource.fills` that it lacks, so that a
     batch made from it has its columns also when no file is listed yet.
 

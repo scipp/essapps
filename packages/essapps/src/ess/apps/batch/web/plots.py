@@ -33,7 +33,7 @@ PALETTE = (
 
 def colors(indices: Sequence[int]) -> list[str]:
     """
-    Distinct colours for the rows at ``indices`` of the table, in one figure.
+    Distinct colours for the rows at ``indices`` of the batch table, in one figure.
     Each row has its own colour of the palette, the same in every figure, but
     where a row before it in ``indices`` has that colour it takes the first
     colour free. Past the palette, hues go round in steps of the golden angle.

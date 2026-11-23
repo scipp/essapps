@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The table of a batch as a frame: its dtypes, its cells, and ``rows.json``.
+The batch table as a frame: its dtypes, its cells, ``rows.json``, and table
+files.
 
-A table is one ``DataFrame``: the key of each row as index, named
-:data:`KEY`, a column per parameter of the spec that the rows give, and notes,
-any other column::
+A batch table is one ``DataFrame``: the key of each row as index, named
+:data:`KEY`, a parameter column per parameter of the spec that the rows give,
+and notes, any other column::
 
     key     run    name         sample      sample_transmission
     60339   60339  D2O buffer   run:60339   run:60305
@@ -116,7 +117,7 @@ from ess.spec import FileRef, OutputRef, field_types
 from ..files import file, replace_at_once
 
 KEY = 'key'
-"""The name of the index of a table: the key of each row."""
+"""The name of the index of a batch table: the key of each row."""
 
 _WORDS = {
     'string': 'text',

@@ -197,6 +197,17 @@ def pair(files):
 PAIRS = RowSource(pair, fills=('sample',), description='A row per sample run.')
 BROKEN = RowSource(lambda files: [f.metadata['nope'] for f in files], fills=('sample',))
 SOURCES = {'pairs': PAIRS, 'broken': BROKEN}
+
+
+class Metadata(BaseModel):
+    run: int
+
+
+REFUSING = {
+    'refusing': RowSource(
+        lambda files: Metadata.model_validate({'run': 'water'}), fills=('sample',)
+    )
+}
 '''
 
 
@@ -534,7 +545,7 @@ def test_a_table_given_with_a_source_is_refused(
     with pytest.raises(SystemExit):
         main([*command, *SOURCES, 'reduce', *reduce])
 
-    assert 'give a table or --source, not both' in capsys.readouterr().err
+    assert 'give a table file or --source, not both' in capsys.readouterr().err
     assert FolderDefinitions(folder).labels() == []
 
 
@@ -769,6 +780,21 @@ def test_a_source_that_raises_is_an_error_and_leaves_no_batch(
     assert FolderDefinitions(folder).labels() == []
 
 
+def test_reduce_refuses_a_source_that_fills_a_parameter_the_spec_lacks(
+    command: list[str], folder: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    template = folder / 'pair.yaml'
+    template.write_text('spec: {name: cli-pair, version: 1}\n')
+    reduce = [str(template), '-l', 'x', '--source', 'pairs']
+
+    assert main([*command, *SOURCES, 'reduce', *reduce]) == 2
+
+    assert capsys.readouterr().err == (
+        'the spec cli-pair has no parameter sample, which the source pairs fills\n'
+    )
+    assert FolderDefinitions(folder).labels() == []
+
+
 def kept(folder: Path, label: str) -> dict[str, str]:
     """The files that the definitions of ``label`` are kept in, by name."""
     files = (folder / 'definitions' / 'labels' / label).iterdir()
@@ -920,15 +946,16 @@ def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(
             ['-b', 'cli_toys_batch_files:BINDINGS', '-w', 'nope', 'specs'],
             'no files.csv',
         ),
-        ([*SOURCES, 'rows', 'p'], 'p is not a name in --sources: pairs, broken'),
+        (
+            [*SOURCES, 'rows', 'p'],
+            'the source p is not registered; registered: pairs, broken',
+        ),
         (
             [*SOURCES, 'reduce', '--source', 'p', '-l', 'x'],
-            '--source p is not a name in --sources: pairs, broken',
+            'the source p is not registered; registered: pairs, broken',
         ),
-        (
-            ['reduce', '--source', 'pairs', '-l', 'x'],
-            '--source pairs is not a name in --sources: none given',
-        ),
+        (['rows', 'pairs'], 'rows needs -s/--sources'),
+        (['reduce', '--source', 'pairs', '-l', 'x'], '--source needs -s/--sources'),
     ],
 )
 def test_main_refuses_a_wrong_name_in_a_line_before_the_folder_is_opened(
@@ -946,6 +973,17 @@ def test_main_refuses_a_wrong_name_in_a_line_before_the_folder_is_opened(
     assert said in err
     assert 'Traceback' not in err
     assert not (folder / 'log.jsonl').exists()
+
+
+def test_main_says_metadata_that_a_row_source_refuses_at_its_fields(
+    command: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = main([*command, '-s', 'cli_toys_batch_files:REFUSING', 'rows', 'refusing'])
+
+    assert code == 2
+    assert capsys.readouterr().err == (
+        'run must be a valid integer, unable to parse string as an integer\n'
+    )
 
 
 def test_main_refuses_reduce_without_a_label(
@@ -1681,8 +1719,9 @@ def following(intake: Intake, sample: toys.Measure) -> Batch:
     [
         (ValueError('no'), 'the source pairs: no'),
         (RuntimeError('boom'), 'RuntimeError: boom'),
+        (toys.refused_metadata(), f'the source pairs: {toys.REFUSED_METADATA}'),
     ],
-    ids=['refusal', 'defect'],
+    ids=['refusal', 'defect', 'metadata refused'],
 )
 def test_a_step_that_raises_is_said_while_it_changes_and_the_steps_go_on(
     manager: BatchManager,

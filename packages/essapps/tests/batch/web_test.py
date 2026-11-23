@@ -1398,6 +1398,25 @@ def test_a_defect_of_a_source_is_said_with_its_type_and_the_page_works_on(
     assert http.get('/api/state').status_code == 200
 
 
+def test_metadata_that_the_code_of_the_application_refuses_is_said_at_its_fields(
+    http: TestClient, fake: FakeFiles
+) -> None:
+    fake.list = failing(toys.refused_metadata())
+
+    answers = [
+        http.get('/api/rows/offered'),
+        http.get('/api/sources/rows', params={'name': 'pairs'}),
+        http.post('/api/batches', json=new_batch()),
+    ]
+
+    said = toys.REFUSED_METADATA
+    assert [(a.status_code, a.json()['message']) for a in answers] == [
+        (422, f'The rows of the source cannot be listed: the source pairs: {said}.'),
+        (422, f'{said[:1].upper()}{said[1:]}.'),
+        (422, f'The batch was not made: {said}.'),
+    ]
+
+
 def test_a_source_that_no_longer_gives_a_column_of_the_batch_is_said(
     pages: Pages, label: str, client: Client, definitions: DefinitionStore
 ) -> None:
@@ -1719,7 +1738,7 @@ def test_the_demo_makes_a_batch_of_its_samples_and_follow_adds_those_that_arrive
                 'title': 'Arriving',
                 'source': 'sample-runs',
                 'spec': demo.DEMO.name,
-                'columns': columns,
+                'parameter_columns': columns,
                 'follow': True,
             },
         ).json()
@@ -2061,7 +2080,7 @@ def new_batch(**given: Any) -> dict[str, Any]:
         'title': 'Afternoon',
         'source': 'pairs',
         'spec': STAGED.name,
-        'columns': ['sample', 'transmission'],
+        'parameter_columns': ['sample', 'transmission'],
     } | given
 
 
@@ -2109,7 +2128,8 @@ def test_a_batch_made_from_a_source_has_every_row_it_filled_and_the_columns_sent
     http: TestClient, pages: Pages, manager: BatchManager
 ) -> None:
     sent = new_batch(
-        description='Thicker cells', columns=['sample', 'transmission', 'thickness']
+        description='Thicker cells',
+        parameter_columns=['sample', 'transmission', 'thickness'],
     )
 
     made = http.post('/api/batches', json=sent).json()
@@ -2165,7 +2185,7 @@ def test_a_batch_without_a_source_is_made_with_the_columns_sent_and_no_rows(
     pages: Pages, manager: BatchManager, sample: Measure
 ) -> None:
     sample(1, 'water')
-    sent = new_batch(source=None, spec='find', columns=['sample'])
+    sent = new_batch(source=None, spec='find', parameter_columns=['sample'])
 
     made = TestClient(create_app(pages)).post('/api/batches', json=sent).json()
 
@@ -2291,7 +2311,7 @@ def test_a_batch_made_on_the_page_is_made_as_asked_or_not_at_all(
         title='New',
         spec=STAGED.name,
         source='pairs',
-        columns=['sample', 'transmission', 'thickness'],
+        parameter_columns=['sample', 'transmission', 'thickness'],
         settings_from='old',
         follow=True,
     )
@@ -2358,7 +2378,7 @@ def test_a_setting_of_the_batch_at_a_column_of_the_new_one_is_its_empty_cells(
     columns = ['sample', 'transmission', 'thickness']
 
     made = http.post(
-        '/api/batches', json=new_batch(settings_from='scan', columns=columns)
+        '/api/batches', json=new_batch(settings_from='scan', parameter_columns=columns)
     ).json()
 
     batch = manager.batch(made['label'])
@@ -2377,7 +2397,9 @@ def test_a_row_that_arrives_in_a_new_batch_that_follows_takes_a_setting_ticked(
     http.post('/api/settings', json={'path': ['thickness'], 'op': 'set', 'value': 2.5})
     http.post('/api/settings/apply')
     columns = ['sample', 'transmission', 'thickness']
-    sent = new_batch(settings_from='scan', columns=columns, later=True, follow=True)
+    sent = new_batch(
+        settings_from='scan', parameter_columns=columns, later=True, follow=True
+    )
 
     made = http.post('/api/batches', json=sent).json()
     sample(4, 'ethanol')
@@ -2396,7 +2418,9 @@ def test_a_column_that_the_rows_fill_keeps_its_cells_over_a_setting_of_its_name(
     manager.create(STAGED.name, title='X', settings={'sample': 'run:1'}, label='x')
 
     if way == 'source':
-        sent = new_batch(settings_from='x', columns=['sample', 'transmission'])
+        sent = new_batch(
+            settings_from='x', parameter_columns=['sample', 'transmission']
+        )
         made = http.post('/api/batches', json=sent).json()
         given = ['uuid:run-1', 'uuid:run-2']
     else:
@@ -2483,7 +2507,7 @@ def test_a_misspelt_column_of_a_table_file_is_a_note_and_its_setting_is_asked_fo
     [
         ({'title': ''}, 'a batch has a title that is not empty'),
         ({'title': '  '}, 'a batch has a title that is not empty'),
-        ({'source': 'other'}, 'the source other is not registered'),
+        ({'source': 'other'}, 'the source other is not registered; registered: pairs'),
         ({'spec': 'other'}, 'the workspace binds no spec other'),
     ],
     ids=['title', 'blank', 'source', 'spec'],

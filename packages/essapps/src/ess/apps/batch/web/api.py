@@ -190,7 +190,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @batch.get('/api/rows/offered')
     def offered(page: PageOfLabel) -> SourceRows:
-        """The rows of the source of the batch that its table lacks."""
+        """The rows of the source of the batch that its batch table lacks."""
         return page.offered()
 
     @batch.post('/api/rows/take')
@@ -262,7 +262,7 @@ def create_app(pages: Pages) -> FastAPI:
     def load_table(
         page: PageOfLabel, name: str, content: Annotated[bytes, Body()] = b''
     ) -> State:
-        """Replace the table of the batch with that of a table file."""
+        """Replace the batch table with the rows of a table file."""
         return page.load_table(name, content)
 
     @batch.get('/api/settings.yaml', response_class=Response)
@@ -316,7 +316,7 @@ def create_app(pages: Pages) -> FastAPI:
         description: str = '',
         settings_from: str | None = None,
     ) -> Made:
-        """Make a batch without a source, of the table of a table file."""
+        """Make a batch without a source, of the rows of a table file."""
         new = NewBatch(
             spec=spec, title=title, description=description, settings_from=settings_from
         )

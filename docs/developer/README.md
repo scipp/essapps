@@ -292,8 +292,8 @@ total = client.freeze(volume)                               # the final sum, as 
 
 ## Automatic reduction
 
-Automatic reduction is Follow on a batch of `ess.apps.batch`: a step every few seconds adds the rows of its source that are new and filled, and reduces the rows that are ready and have no result under the label ([batch.md, "Follow"](../../packages/essapps/docs/batch.md#follow), [automatic-reduction.md](automatic-reduction.md)).
-The application's source pairs runs as the technique needs:
+Automatic reduction is Follow on a batch of `ess.apps.batch`: a step every few seconds adds the rows of its row source that are filled and not considered, and reduces the rows that are ready and have no result under the label ([batch.md, "Follow"](../../packages/essapps/docs/batch.md#follow), [automatic-reduction.md](automatic-reduction.md)).
+The application's row source pairs runs as the technique needs:
 
 ```python
 def transmission_runs(files: Sequence[FileInfo]) -> pd.DataFrame:
@@ -308,7 +308,7 @@ intake.create('transmission', title='Transmissions', source='transmission-runs',
 intake.step()         # called by a timer of the application
 ```
 
-A step never changes a row that the table has. The results are read from the records under the label, so a restarted application reduces no row that has a result. A record under the label with a row's key as member, from any batch, is that row's result.
+A step never changes a row that the batch table has. The results are read from the records under the label, so a restarted application reduces no row that has a result. A record under the label with a row's key as member, from any batch, is that row's result.
 
 ## Provenance and publication
 

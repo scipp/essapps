@@ -6,8 +6,8 @@
 
 ## Context
 
-*Batch*, *template*, *blank*, *row*, *key*, `put` are the words of [ADR 0012](0012-a-batch-is-a-table.md): a batch is a template and a table, and only a person changes the table.
-*Source*, *Follow* and *step* are those of [ADR 0011](0011-a-person-makes-the-batches-of-a-workspace.md): a source is code of the application that makes rows from the files, and a batch that follows is reduced as its files arrive, by a step every few seconds.
+*Batch*, *template*, *blank*, *row*, *key*, `put` are the words of [ADR 0012](0012-a-batch-is-a-table.md): a batch is a template and a table, which only `put` changes and which is not computed again from the source at each read.
+*Source*, *Follow* and *step* are those of [ADR 0011](0011-a-person-makes-the-batches-of-a-workspace.md): a row source, the source for short, is code of the application that makes rows from the files, and a batch that follows is reduced as its files arrive, by a step every few seconds.
 
 ADR 0012 leaves open how a batch is amended from the files, with two conditions: what amends a batch uses the table as a person does, and what it needs to know is its own state next to the batch.
 
@@ -29,14 +29,14 @@ To do the third, a batch has to know who wrote each cell. To do the first withou
 def step(batch, source, considered):
     given = rows_of(batch.client, source)                  # every row the source makes from the files now
     table = batch.frame()
-    filled = [c for c in source.fills if c in table.columns]
+    filled = list(batch.fills)                             # source.fills as at making; each is a column of the table
     is_new = ~given.index.isin(considered) & ~given.index.isin(table.index)
     is_ready = given[filled].notna().all(axis=1)
     new = given[is_new & is_ready].reindex(columns=table.columns)
     batch.put(pd.concat([table, new]))                     # ADR 0012: the table is changed with `put`
     considered |= set(new.index) | (set(given.index) & set(table.index))   # kept, after the table is
     waiting = given.index[is_new & ~is_ready]              # shown on the page, not kept
-    batch.reduce(ready_without_result(batch.state()))
+    batch.reduce(not_reduced(batch.state()))              # ready, and without a result
 ```
 
 ### What is kept
@@ -71,7 +71,7 @@ What removes a bad run from the later rows is a correction of the run, which the
 
 ### A row waits until the source has filled it
 
-A source says which columns it fills (`RowSource.fills`, such as `sample` and `sample_transmission`). A row is added once it has a value in each of these that is a column of the batch. Until then it is *waiting*: the source gives it again at every step, and the page says how many rows wait.
+A source says which columns it fills (`RowSource.fills`, such as `sample` and `sample_transmission`), and a batch made from it keeps them as `batch.fills`. A row is added once it has a value in each of `batch.fills`. Until then it is *waiting*: the source gives it again at every step, and the page says how many rows wait.
 
 - A sample run measured before its transmission run is added when the transmission run is listed.
 - A row is added whatever its other columns hold. A column that the source does not fill is empty in a new row, and the row is incomplete if the template needs it.
@@ -84,7 +84,8 @@ A source says which columns it fills (`RowSource.fills`, such as `sample` and `s
 
 ```python
 intake.create('loki-iofq', title='Afternoon', source='sample-runs',
-              choose=Range(first='60339'), columns=['thickness'], follow=True)
+              choose=Range(first='60339'), parameter_columns=['thickness'],
+              follow=True)
 
 # in create:
 given = rows_of(client, source)                  # one listing
@@ -94,7 +95,7 @@ considered = arrived.index                       # the rows taken and the rows l
 ```
 
 - A row that waits when the batch is made is neither taken nor considered. It keeps waiting, and Follow adds it once it is filled, if the batch follows.
-- A person picks a range of `arrived`: `Range(first, last, later)`, a value that `create` calls as `choose` and reads, each end open if not given, or no row now with `later`. `columns` adds an empty column for each parameter named, such as the thickness.
+- A person picks a range of `arrived`: `Range(first, last, later)`, a value that `create` calls as `choose` and reads, each end open if not given, or no row now with `later`. `parameter_columns` adds an empty column for each parameter named, such as the thickness.
 - In code, `choose` may be any function that gives rows of `arrived`, with any columns, such as `lambda given: given[given.run >= 60339]`; `create` refuses a key that `arrived` lacks. Without `choose`, every filled row is taken as the source gives it.
 - A batch made from a source takes no `rows`: its rows come from the one listing, so no file listed in between is considered without being seen.
 
@@ -141,10 +142,15 @@ intake.stop()                                            # none follows
 intake.follow('afternoon')                               # follows again; the batch that followed before stops
 ```
 
+```sh
+essapps-batch follow -l afternoon                        # the same from the command, then steps until Ctrl-C, or --steps N
+essapps-batch stop                                       # none follows
+```
+
 - At most one batch follows, as in ADR 0011: `Intake` keeps whether a batch follows in its `source.json`, a restart resumes, and removing that batch ends Follow. Since `considered` is kept, the first step after a restart adds the rows that arrived in between.
 - A batch made without a source cannot follow: only `intake.create`, which takes a source, takes `follow=True`, and `intake.follow` refuses a batch without one.
 - A batch that follows again adds at its next step every row of its source that is filled and not considered: those that arrived while it did not follow, also those that another batch took meanwhile. A row left out when it was made, or removed by a person, stays out, since its key is considered.
-- A batch that follows has no last row. With one, the rows filled between the last row chosen and the making would be considered and never added, and the rows that arrive later would be. The range that a person picks is a value, `Range(first, last, later)`, which `Intake` reads: `create(follow=True)` with a `Range` that has a `last` is refused there. The page leaves the end of the range open while Follow is ticked, to say so before a person sends the form; the command does not follow. A `choose` that is a function may pick any rows, also with Follow: the rows were chosen in code, and the filled rows that it leaves out are considered, so Follow adds only the rows that arrive later.
+- A batch that follows has no last row. With one, the rows filled between the last row chosen and the making would be considered and never added, and the rows that arrive later would be. The range that a person picks is a value, `Range(first, last, later)`, which `Intake` reads: `create(follow=True)` with a `Range` that has a `last` is refused there. The page leaves the end of the range open while Follow is ticked, to say so before a person sends the form; `essapps-batch reduce --source` makes no batch that follows, and `essapps-batch follow` lets one follow later. A `choose` that is a function may pick any rows, also with Follow: the rows were chosen in code, and the filled rows that it leaves out are considered, so Follow adds only the rows that arrive later.
 - Nothing is kept that says a batch has followed. A batch made without Follow and a batch that was stopped are in the same state, and `intake.follow` writes `"follows": true` to either.
 - On the page, the next batch is one form, "New batch" with Follow. Follow is a state with one action, "Stop following", not a switch: the page offers no action to let a batch follow again.
 
@@ -179,7 +185,7 @@ A batch made from `sample-runs` with the rows from run 60339 on, with Follow.
 - The rule of a step is "ready and without a record". `RowState.changed_by_hand`, the columns `at` of `Automatic`, and the exception for cells set by hand go.
 - A row that only waits is not in the table. The page says how many rows wait, and a person can add them.
 - A transmission run measured again reaches no earlier row, and a correction of a run changes no row that the table has.
-- A stop by mistake is undone in code with `intake.follow(label)`, not on the page. On the page, a person adds the later rows with "Add rows from the runs", or makes a batch from the source, with Follow, that starts at the first row the stopped batch lacks.
+- A stop by mistake is undone with `intake.follow(label)` or `essapps-batch follow -l LABEL`, not on the page. On the page, a person adds the later rows with "Add rows from the runs", or makes a batch from the source, with Follow, that starts at the first row the stopped batch lacks.
 - A person who wants to try settings on a few rows first makes a batch without Follow, then the batch that follows with "Start with the settings of" the first. The rows tried are reduced again in the second batch.
 - A batch made with Follow is stepped within seconds: the rows taken at making are reduced with the settings it was made with.
 - `considered` grows by one key for each row that the source ever gave: some tens of bytes per row.
@@ -189,6 +195,5 @@ A batch made from `sample-runs` with the rows from run 60339 on, with Follow.
 
 ## Open
 
-- **The command.** `essapps-batch reduce --source NAME` makes a batch from every row of a source. Whether a later run of the command does one step is not decided.
 - **A row that waits for ever.** The page could say what each waiting row lacks. Not needed for the decision.
 - **Several workflows on one batch** (#222): a workflow that fills cells is the second thing besides a person that would write to the table. This ADR does not cover it.

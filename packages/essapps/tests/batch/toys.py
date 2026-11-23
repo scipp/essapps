@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from typing import Annotated, Any
 
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ess.apps import Client
 from ess.apps.batch import (
@@ -267,4 +267,29 @@ def from_pairs(intake: Intake, spec: str, **options: Any) -> str:
     with an empty column ``thickness``, so that its columns are
     :data:`COLUMNS`; its label.
     """
-    return intake.create(spec, source='pairs', columns=['thickness'], **options).label
+    made = intake.create(
+        spec, source='pairs', parameter_columns=['thickness'], **options
+    )
+    return made.label
+
+
+class _Metadata(BaseModel):
+    run: int
+    role: str
+
+
+def refused_metadata() -> ValidationError:
+    """
+    What code of an application raises that validates metadata with a run
+    that is no number and without a role; said as :data:`REFUSED_METADATA`.
+    """
+    try:
+        _Metadata.model_validate({'run': 'water'})
+    except ValidationError as error:
+        return error
+    raise AssertionError('the metadata is valid')
+
+
+REFUSED_METADATA = (
+    'run must be a valid integer, unable to parse string as an integer; role is missing'
+)

@@ -7,7 +7,7 @@ This module does not depend on HTTP: it imports neither ``fastapi`` nor
 ``starlette``.
 
 A page reads :class:`State` and sends the requests at the end. A form is a
-list of :class:`Node`; a cell of the table of a batch is a :class:`Cell`, and
+list of :class:`Node`; a cell of the batch table is a :class:`Cell`, and
 one of a run a :class:`RunCell`.
 """
 
@@ -209,9 +209,9 @@ class State(BaseModel):
     application. ``start`` changes when
     the server starts again, ``version`` with each change, and ``runs`` with
     each change of the runs. ``batches`` lists the batches of the workspace,
-    as :class:`Batches` has them. ``notes`` are the columns of the table that
-    are not parameters, but ``name``, and ``columns`` the parameter columns;
-    both change when the table does. ``settings`` is the form
+    as :class:`Batches` has them. ``notes`` are the note columns of the batch
+    table, but ``name``, and ``columns`` the parameter columns; both change
+    when the batch table does. ``settings`` is the form
     of the settings. ``settings_changed`` says whether a person changed it and
     has not applied the change; the rows read as with the batch's settings.
     ``settings_problem`` names the batch's settings that the form cannot show,
@@ -334,7 +334,7 @@ class SourceChoice(BaseModel):
 
 class SourceRow(BaseModel):
     """
-    A row of the table that a source makes: its key, its ``name`` (as
+    One of the rows of a source: its key, its ``name`` (as
     :class:`Row` has it), the text of each note, and its ``mark``:
     ``waits`` if a cell that the source fills is empty; for a range of a new
     batch, ``taken`` or ``left out``; else empty.
@@ -415,9 +415,9 @@ class NewBatch(BaseModel):
     Make a batch of ``spec``: with a ``source``, of the rows that the source
     has filled now from the row of key ``first`` to that of ``last``, or of
     none of them if ``later``, so that it gets only the rows added later
-    (:class:`~ess.apps.batch.Range`); without, of no
-    rows, or of those of a table file. ``columns`` are the parameter columns,
-    those that the source fills among them. The batch starts with the
+    (:class:`~ess.apps.batch.Range`); without, of no rows, or of those of a
+    table file. ``parameter_columns`` are the parameter columns, those that
+    the source fills among them. The batch starts with the
     settings of the batch of label ``settings_from`` if given, else with
     those that the application gives ``spec``; a setting at a column stays,
     the value of each row whose cell is empty, but at a column that the
@@ -434,7 +434,7 @@ class NewBatch(BaseModel):
     first: str | None = None
     last: str | None = None
     spec: str
-    columns: list[str] = []
+    parameter_columns: list[str] = []
     settings_from: str | None = None
     later: bool = False
     follow: bool = False
