@@ -76,11 +76,16 @@ class RowSource:
         value in each of these that is a column of the batch.
     selector:
         The files that ``rows`` is given; raw files if not given.
+    description:
+        What a row is and how ``rows`` pairs the files, for a person who
+        chooses the source or checks its rows, such as on ``essapps-batch
+        sources``.
     """
 
     rows: RowFunction
     fills: tuple[str, ...]
     selector: Selector | None = None
+    description: str = ''
 
 
 def rows_of(client: Client, source: RowSource) -> pd.DataFrame:

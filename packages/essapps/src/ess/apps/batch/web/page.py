@@ -139,7 +139,7 @@ import pandas as pd
 
 from ...errors import FieldError, SubmitError
 from ...fields import UNSET, Fields
-from ...records import Record, Status, Template
+from ...records import Record, Status
 from .. import frames
 from ..export import export_table
 from ..reduction import Batch
@@ -150,7 +150,7 @@ from ..state import (
     to_reduce,
 )
 from ..table import KEY, as_request, cell_of, read_table, write_table
-from ..templates import checked_settings, load_template, write_template
+from ..templates import checked_settings, load_template, settings_text
 from . import forms, plots
 from .models import (
     Action,
@@ -1162,10 +1162,7 @@ class Page:
             raise Problem(f'{unapplied} first.')
         if missing := self._form_held()[1]:
             raise Problem(f'Fill in the settings first: {SubmitError(missing)}')
-        batch = self.batch
-        with named_file('settings.yaml') as path:
-            write_template(Template(batch.spec, params=batch.settings), path)
-            return path.read_bytes()
+        return settings_text(self.batch).encode()
 
     @_action
     def load_settings(self, name: str, content: bytes) -> str:

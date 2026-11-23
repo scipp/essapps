@@ -296,6 +296,7 @@ SAMPLE_RUNS = RowSource(pair_by_sample, fills=('sample', 'sample_transmission'))
 - The index is the key, as text. A number as key is refused: write `str(run)`.
 - A file is its name, `str(f.ref)`, such as `'run:60339'`.
 - `selector` (optional) chooses the files the source is given; raw files if not given.
+- `description` (optional) says, for a person, what a row is and how the source pairs the files, such as which transmission run a sample run gets when several fit. `essapps-batch sources` prints it: a person cannot read the code to check a pairing.
 - `rows_of(client, source)` calls the source on the files listed now. It adds an empty column for each of `fills` that the table lacks, so a batch made on an empty folder still has its columns.
 - The page names a row by its note column `name` if the batch table has one, else by its key.
 - A source knows no spec. `fits(spec, source)` of `ess.apps.batch.intake` checks that each of `fills` is a parameter of the spec.
@@ -319,6 +320,7 @@ A parameter that takes text or an output is refused, since a cell cannot tell th
 
 Nothing converts a cell: `'2'` and `True` are not numbers.
 A cell of another kind than its column is refused where it enters the batch table, with a `ValueError` that names the key and the column.
+So is text at a parameter that takes an output, which names no output (`RECORD.OUTPUT`) and no file: the message says how a cell names an output.
 One exception: an `Int64` column takes a float that is a whole number, since pandas gives whole numbers with a gap as floats.
 A note column gets the dtype of `convert_dtypes()`, which must be one of the five.
 In the table an empty cell is `pd.NA` (`None` in an `object` column); in `rows.json` and in `to_dict('index')` it is `None`.
@@ -655,23 +657,55 @@ key,sample,thickness,binning,name
 - A note column of a `.csv` or `.tsv` file is text, so `0342` stays `'0342'`. A note column of a `.xlsx` file keeps the type of its cells.
 - A header that is not exactly a parameter name, such as `Sample`, is read as a note column, and `sample` has no column: every row takes its setting, or the row is incomplete if there is none.
 
-The command, with `-b package.module:BINDINGS` before each subcommand:
+The command `essapps-batch` (`ess.apps.batch.cli`) works on a workspace folder. Its `--help` is the page for a person who operates batches; this section is for the developer.
+The options before the subcommand name the folder (`-w`), the bindings (`-b package.module:BINDINGS`) and the row sources (`-s package.module:SOURCES`, a mapping of names to `RowSource`):
 
-```
-essapps-batch -b ... rows package.module:SOURCE -o runs.csv   # the table a source makes now
-essapps-batch -b ... reduce iofq.yaml runs.csv -l water        # makes `water`: iofq.yaml its template, runs.csv its table
-essapps-batch -b ... reduce -l water -o done.csv               # reduces every ready row again; writes the table with results
-essapps-batch -b ... reduce iofq.yaml done.csv -l water        # iofq.yaml becomes the settings, done.csv the table; reduces
-essapps-batch -b ... reduce iofq.yaml -l water2 -s package.module:SOURCES --source sample-runs
-                                                               # a batch of the rows that the source has filled
+```sh
+B="essapps-batch -w FOLDER -b package.module:BINDINGS -s package.module:SOURCES"
+$B specs                                       # name, version, title, outputs of each spec bound
+$B template loki-iofq -o iofq.yaml             # a template to fill in: each parameter, with what it takes
+$B sources                                     # the row sources by name: what each fills, and its description
+$B rows sample-runs -o runs.csv                # the table that a source makes now
+$B reduce iofq.yaml runs.csv -l water          # makes `water`: iofq.yaml its template, runs.csv its table
+$B reduce iofq.yaml -l water2 --source sample-runs
+                                               # a batch of the rows that the source has filled
+$B batches                                     # label, title, spec, rows, reduced, source, follows
+$B show -l water -o done.csv                   # the table with results; reduces nothing
+$B reduce -l water -o done.csv                 # reduces every ready row again; writes the table with results
+$B reduce iofq.yaml done.csv -l water          # iofq.yaml becomes the settings, done.csv the table; reduces
+$B template -l water -o now.yaml               # the settings of water, as the page's "settings as a file"
+$B export -l water results                     # the outputs of the done rows of water, by key
 ```
 
+Each subcommand is a few calls of the batch layer:
+
+| Subcommand | In code |
+|---|---|
+| `specs` | `client.specs()` |
+| `template SPEC` | `templates.template_to_fill(client.spec_named(SPEC), client.specs(), sources)` |
+| `template -l LABEL` | `templates.settings_text(batch)`, as the page's settings file |
+| `sources` | the names of `-s`, and the `fills` and `description` of each |
+| `rows NAME` | `rows_of(client, sources[NAME])` |
+| `batches` | `manager.headers()`, `batch.state(compare=False)`, `intake.source(label)`, `intake.following` |
+| `show -l LABEL` | `frames.with_results(client, batch.shown()[0], batch.frame())` |
+| `reduce` | `manager.create` or `intake.create`, or `batch.put` and `batch.settings = ...`; then `frames.reduce_batch` |
+| `export TABLE` or `export -l LABEL` | `export.export_table(client, table, directory)`, of the table file or of what `show` gives |
+
+`template_to_fill` reads the type of each parameter with `ess.spec.field_types`, as the fields of the settings form do (`ess.apps.fields`).
+Every parameter is commented out, one with a default showing it: the template as written is read by `load_template` and refused by `reduce`, naming each required parameter, and a parameter left commented takes the spec's default, not a copy of today's.
+A file in a group is written in its JSON form, `{'@ref': file, file: run:1}`, since `as_request` converts the value of a parameter, not of a field of a group.
+`batches` counts the rows whose newest result completed (`reduced`), without comparing requests, which would resolve every row of every batch; `show` gives the status of each row.
 The table written has the note columns `status` (the words of `RowState.text`), `record` and `failure`.
+`--json` writes a table as JSON in place of CSV: a list of objects, one per row, with the key as a field, `null` for an empty cell, and a list of names as a list (a CSV holds the names separated by a space).
 For a label that exists, the template becomes the settings and the table replaces the table.
 A value of the template at a column of the table is the setting that each row with an empty cell takes.
 `--remaining` reduces only `left_to_reduce`; `--earlier-settings` adds `earlier_settings` to it.
 A row that `--remaining` leaves reads `earlier`, and the command exits with 3.
 A label without a batch and with neither a table nor `--source` gets one row, keyed by the label: every parameter is a setting.
+A `reduce` that makes a batch and is then refused removes it again (`manager.remove`), unless a record has the label: nothing was submitted, and the same command line works once the template is right. If the definitions refuse the removal, the first refusal is what is said.
+On a label with a batch, a refused `reduce` keeps the template and table given.
+A wrong `package.module:NAME`, a file given that does not exist, and a folder without `files.csv` are a message and exit status 2, before the folder is opened.
+A command is a function of `_Given` and an entry of `_COMMANDS` in `cli.py`.
 The command does no step of Follow.
 
 ## Chains

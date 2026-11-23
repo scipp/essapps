@@ -35,7 +35,10 @@ data, the values of JSON as Python gives them. A note takes the dtype of
 ``convert_dtypes()``, which must be one of these five. A note with no value
 keeps its dtype if it is ``string``, ``Float64``, ``Int64`` or ``boolean``,
 and is ``string`` otherwise: pandas makes a column ``float64`` or ``object``
-when it fills it with empty cells, as ``concat`` does. The table owns the
+when it fills it with empty cells, as ``concat`` does. At a parameter that
+takes an output, text that :func:`as_request` reads as neither an output nor a
+file is refused too, since the workspace would refuse it: a cell names an
+output as ``RECORD.OUTPUT``. The table owns the
 lists and groups in its ``object`` cells: :func:`typed` copies them. An empty
 cell is
 ``None``, ``NaN`` or ``pd.NA`` as given; in the table it is ``pd.NA``, or
@@ -290,12 +293,14 @@ def typed(frame: pd.DataFrame, model: type[BaseModel]) -> pd.DataFrame:
     Raises ``ValueError``, naming each key, column or cell refused: a key that
     is not text, empty, or given twice; a column named :data:`KEY`, not named
     by text, or given twice; a note of another dtype than the five of a table;
-    a cell that is not of the kind of its column.
+    a cell that is not of the kind of its column; text that names no output
+    at a parameter that takes one.
     """
     index = _keys(frame.index)
     if problems := _names(frame.columns):
         raise ValueError('; '.join(problems))
-    types = dtypes(model)
+    parameters = {n: _parameter(n, i) for n, i in model.model_fields.items()}
+    types = {n: _dtype(p) for n, p in parameters.items()}
     columns = {}
     for name, column in frame.set_axis(index).items():
         if name in types:
@@ -315,6 +320,12 @@ def typed(frame: pd.DataFrame, model: type[BaseModel]) -> pd.DataFrame:
                 continue
         columns[name], refused = _cast(column, dtype)
         problems += refused
+        if name in parameters and not refused:
+            problems += [
+                f'row {k!r}, column {name!r}: {v!r} {_NOT_AN_OUTPUT}'
+                for k, v in columns[name].items()
+                if not _empty(v) and _names_no_output(parameters[name], v)
+            ]
     if problems:
         raise ValueError('; '.join(problems))
     return pd.DataFrame(columns, index=index, columns=list(frame.columns))
@@ -330,6 +341,39 @@ def _request_value(parameter: _Parameter, cell: Any) -> Any:
     if parameter.output and (found := _OUTPUT.fullmatch(cell)):
         return OutputRef(**found.groupdict())
     return cell
+
+
+_NOT_AN_OUTPUT = (
+    'names no output: a cell names one as RECORD.OUTPUT, such as r17.centre'
+)
+"""What a message says of text in a cell that names no output where one is taken."""
+
+
+def _names_no_output(parameter: _Parameter, cell: Any) -> bool:
+    """
+    Whether ``cell`` is text, or a list with text, at a parameter that takes
+    an output, which :func:`as_request` leaves as text: it names no output and
+    no file, and the parameter takes no text.
+    """
+    cells = cell if parameter.many and isinstance(cell, list) else [cell]
+    return parameter.output and any(
+        isinstance(c, str) and c and isinstance(_request_value(parameter, c), str)
+        for c in cells
+    )
+
+
+def not_outputs(model: type[BaseModel], values: Mapping[str, Any]) -> list[str]:
+    """
+    The names of ``values``, by the name of a parameter of ``model``, that are
+    text at a parameter that takes an output and name none: values that
+    :func:`as_request` leaves as text, which the workspace refuses.
+    """
+    fields = model.model_fields
+    return [
+        name
+        for name, value in values.items()
+        if name in fields and _names_no_output(_parameter(name, fields[name]), value)
+    ]
 
 
 def as_request(model: type[BaseModel], cells: Mapping[str, Any]) -> dict[str, Any]:

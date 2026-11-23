@@ -224,7 +224,9 @@ def _hold(path: Path) -> FileIO:
         fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         file.close()
-        raise RuntimeError(f'{path} is held by another log') from None
+        raise RuntimeError(
+            f'{path} is held by another process, or by another log of this one'
+        ) from None
     return file
 
 

@@ -616,7 +616,8 @@ def test_a_value_given_inline_at_a_file_field_is_refused(
     (error,) = raised.value.errors
     assert error.loc == ('sample',)
     assert error.msg == (
-        f'{inline!r} is not a file; a file field is written as file(...)'
+        f'{inline!r} is not a file; a file field is written as file(...), '
+        'whose JSON form is {"@ref": "file", "file": NAME}'
     )
 
 
