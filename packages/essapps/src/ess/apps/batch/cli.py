@@ -155,7 +155,7 @@ from .export import export_table
 from .intake import Intake
 from .manager import BatchManager
 from .reduction import Batch
-from .source import Range, RowSource, rows_of
+from .source import Range, RowSource
 from .table import KEY, SUFFIXES, read_table, read_text, write_table
 from .templates import checked_settings, load_template, settings_text, template_to_fill
 
@@ -324,7 +324,7 @@ def _row_sources(given: _Given) -> pd.DataFrame:
 
 def _rows(given: _Given) -> pd.DataFrame:
     """The rows that the row source of the name given makes now."""
-    return rows_of(given.client, given.sources[given.args.source])
+    return given.intake().rows_of(given.args.source)
 
 
 def _batches(given: _Given) -> pd.DataFrame:
@@ -955,6 +955,8 @@ def _reduce_check(args: argparse.Namespace) -> str | None:
         return 'give a table or --source, not both'
     if args.source is None and (args.first or args.last or args.later):
         return '--first, --last and --later pick rows of --source'
+    if args.source is not None and not args.sources:
+        return '--source needs -s/--sources'
     return None
 
 
@@ -1017,6 +1019,7 @@ _COMMANDS = {
         description='Write the table that the row source NAME makes from the '
         'files now. It reads and writes no batch.',
         arguments=_rows_arguments,
+        check=_with_sources('rows'),
     ),
     'batches': _Command(
         _batches,
@@ -1225,13 +1228,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.output.suffix not in suffixes:
                 raise _Wrong(f'{args.output}: write a file of {", ".join(suffixes)}')
         sources = {} if args.sources is None else _sources(args.sources)
-        source = getattr(args, 'source', None)
-        if source is not None and source not in sources:
-            flag = '--source ' if args.command == 'reduce' else ''
-            raise _Wrong(
-                f'{flag}{source} is not a name in --sources: '
-                f'{", ".join(sources) or "none given"}'
-            )
         if (wrong := command.check(args)) is not None:
             raise _Wrong(wrong)
         given = _Given(args, sources)
