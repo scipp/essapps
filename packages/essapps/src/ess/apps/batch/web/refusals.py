@@ -13,10 +13,13 @@ raised by the batch layer               said
 ======================================  =====================================
 ``ValueError``                          its text, as it is (:func:`why`)
 ``KeyError``                            its first argument (:func:`why`)
-``pydantic.ValidationError``            each error at its field (:func:`say`)
 :class:`~ess.apps.batch.NotKept`        "The change was not kept: ..."
                                         (:func:`kept`)
 ======================================  =====================================
+
+A reason at a field of the page is said with the title of the field
+(:func:`say`), as :func:`ess.apps.errors.said_at` words it: "Thickness is
+missing".
 
 So the page copies no rule of the batch layer: it adds what the person
 asked for, such as "The batch was not made: ", and says the rest as given.
@@ -25,11 +28,12 @@ Code of the application, such as a source, the file source or a drawing,
 may raise anything; the page says it and keeps working
 (:func:`ess.apps.errors.said`, which the command ``essapps-batch`` uses too).
 A ``ValueError`` or an ``OSError``, such as a mount that went away, is a
-refusal, said as its text. Anything else is a defect of that code, and is
-said with its type, so that a person can tell: ``RuntimeError: boom``,
-``KeyError: 'run'``. A request that runs such code says it with
-:func:`refused`; the listing of the files, the step of Follow and the plot
-show it in place of what they could not give.
+refusal, said as its text; a pydantic ``ValidationError``, such as of
+metadata that the code validates, as each reason at its field. Anything else
+is a defect of that code, and is said with its type, so that a person can
+tell: ``RuntimeError: boom``, ``KeyError: 'run'``. A request that runs such
+code says it with :func:`refused`; the listing of the files, the step of
+Follow and the plot show it in place of what they could not give.
 """
 
 from __future__ import annotations
@@ -37,9 +41,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from pydantic import ValidationError
-
-from ...errors import said
+from ...errors import said, said_at
 from ..definition import NotKept
 from . import forms
 
@@ -53,24 +55,22 @@ class Missing(Exception):
 
 
 def say(title: str, message: str) -> str:
-    """A reason at the field ``title``, as a sentence."""
-    message = forms.message(message)
-    if message in ('empty', 'missing', 'Field required'):
-        return f'{title} is missing'
-    if message.startswith('Input should be '):
-        return f'{title} must be {message.removeprefix("Input should be ")}'
-    return f'{title}: {message}'
+    """
+    A reason at the field ``title``, as a sentence
+    (:func:`~ess.apps.errors.said_at`).
+    """
+    return said_at(title, forms.message(message))
 
 
 def why(error: Exception) -> str:
-    """What an exception of a request says, without its type or quotes."""
-    if isinstance(error, ValidationError):
-        return '; '.join(
-            say('.'.join(map(str, e['loc'])), e['msg']) for e in error.errors()
-        )
+    """
+    What a ``ValueError``, ``OSError`` or ``KeyError`` of a request says,
+    without its type or quotes: a ``KeyError`` as its first argument, the
+    others as :func:`~ess.apps.errors.said` says them.
+    """
     if isinstance(error, KeyError) and error.args:
         return str(error.args[0])
-    return str(error)
+    return said(error)
 
 
 @contextmanager

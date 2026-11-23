@@ -1398,6 +1398,34 @@ def test_a_defect_of_a_source_is_said_with_its_type_and_the_page_works_on(
     assert http.get('/api/state').status_code == 200
 
 
+class _Metadata(BaseModel):
+    run: int
+    role: str
+
+
+def test_metadata_that_the_code_of_the_application_refuses_is_said_at_its_fields(
+    http: TestClient, fake: FakeFiles
+) -> None:
+    def listing(selector: Any) -> Any:
+        return _Metadata.model_validate({'run': 'water'})
+
+    fake.list = listing
+
+    answers = [
+        http.get('/api/sources/rows', params={'name': 'pairs'}),
+        http.post('/api/batches', json=new_batch()),
+    ]
+
+    said = (
+        'run must be a valid integer, unable to parse string as an integer; '
+        'role is missing'
+    )
+    assert [(a.status_code, a.json()['message']) for a in answers] == [
+        (422, f'{said[:1].upper()}{said[1:]}.'),
+        (422, f'The batch was not made: {said}.'),
+    ]
+
+
 def test_a_source_that_no_longer_gives_a_column_of_the_batch_is_said(
     pages: Pages, label: str, client: Client, definitions: DefinitionStore
 ) -> None:
