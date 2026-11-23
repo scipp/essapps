@@ -692,12 +692,12 @@ Each subcommand is a few calls of the batch layer:
 
 | Subcommand | In code |
 |---|---|
-| `files READ` | `folder.scan_folder(folder, read)`; with `--with TABLE`, then `frames.described(files, table.read_text(TABLE))` |
+| `files READ` | `folder.scan_folder(folder, read)`; with `--with TABLE`, then `folder.described(files, table.read_text(TABLE))` |
 | `specs` | `client.specs()` |
 | `template SPEC` | `templates.template_to_fill(client.spec_named(SPEC), client.specs(), sources)` |
 | `template -l LABEL` | `templates.settings_text(batch)`, as the page's settings file |
 | `sources` | the names of `-s`, and the `fills` and `description` of each |
-| `rows NAME` | `rows_of(client, sources[NAME])` |
+| `rows NAME` | `intake.rows_of(NAME)` |
 | `batches` | `manager.headers()`, `batch.state(compare=False)`, `intake.source(label)`, `intake.following` |
 | `show -l LABEL` | `frames.with_results(client, batch.shown()[0], batch.frame())` |
 | `reduce` | `manager.create` or `intake.create` (with `choose=Range(first, last, later=...)`), or `batch.put` and `batch.settings = ...`; then `frames.reduce_batch` |
