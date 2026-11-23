@@ -2,13 +2,15 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """How a person writes the settings of a batch in a template."""
 
+from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from ess.apps import Client, SpecId, Template, file
 from ess.apps.batch import Batch
-from ess.apps.batch.templates import checked_settings, with_latest
+from ess.apps.batch.templates import checked_settings, load_template, with_latest
 from ess.spec import FileRef
 
 from . import toys
@@ -154,3 +156,36 @@ def test_a_template_of_another_spec_or_version_is_refused_saying_why(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         checked_settings(batch.client, batch.spec, Template(spec, blanks=toys.COLUMNS))
+
+
+def test_a_template_is_loaded_from_yaml(tmp_path: Path) -> None:
+    path = tmp_path / 'template.yaml'
+    path.write_text(
+        yaml.safe_dump(
+            {
+                'spec': {'name': 'plain', 'version': 1},
+                'blanks': ['sample'],
+                'params': {'thickness': 2.0, 'transmission': 7},
+            }
+        )
+    )
+
+    assert load_template(path) == Template(
+        toys.PLAIN, params={'thickness': 2.0, 'transmission': 7}, blanks=['sample']
+    )
+
+
+def test_a_template_may_leave_out_the_blanks_and_the_params(tmp_path: Path) -> None:
+    path = tmp_path / 'template.yaml'
+    path.write_text('spec: {name: plain, version: 1}')
+
+    assert load_template(path) == Template(toys.PLAIN)
+
+
+def test_a_template_whose_params_are_all_commented_out_has_none(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'template.yaml'
+    path.write_text('spec: {name: plain, version: 1}\nparams:\n  #sample:\n')
+
+    assert load_template(path) == Template(toys.PLAIN)

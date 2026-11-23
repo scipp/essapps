@@ -3,6 +3,8 @@
 """The toy reduction of ``toys`` on a real in-process workspace."""
 
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from importlib import import_module
 from pathlib import Path
 
 import pandas as pd
@@ -16,8 +18,9 @@ from ess.apps.batch import (
     FolderDefinitions,
     Intake,
 )
+from ess.apps.batch.cli import main
 from ess.apps.batch.table import KEY
-from ess.apps.folder import open_folder
+from ess.apps.folder import folder_files, open_folder
 from ess.apps.testing import FakeFiles, FakeStore, StagedFunction, read_file
 from ess.spec import Binding, FileRef, function_binding
 
@@ -227,3 +230,242 @@ def table() -> pd.DataFrame:
         },
         index=pd.Index(['a', 'b'], name=KEY),
     )
+
+
+MODULE = '''
+import os
+import signal
+from typing import Annotated
+
+import pandas as pd
+from ess.apps.batch import RowSource
+from ess.apps.testing import StagedFunction, read_file
+from ess.spec import RunFile, WorkflowSpec, function_binding
+from pydantic import AfterValidator, BaseModel
+from ess.spec import Referenced
+
+
+class Offset(BaseModel):
+    value: float = 0.0
+
+
+class Params(BaseModel):
+    sample: RunFile
+    offset: Offset | Referenced[Offset] | None = None
+
+
+class FindOutputs(BaseModel):
+    offset: Offset
+
+
+class FindParams(BaseModel):
+    sample: RunFile
+
+
+FIND = WorkflowSpec(
+    name='cli-find', version=1, title='Find', description='A toy.',
+    params=FindParams, outputs=FindOutputs,
+)
+
+
+class Outputs(BaseModel):
+    total: float
+
+
+SPEC = WorkflowSpec(
+    name='cli-toy', version=1, title='Toy', description='A toy.',
+    params=Params, outputs=Outputs,
+)
+
+
+def _reduce(params: Params) -> Outputs:
+    value = read_file(params.sample)
+    if value < 0:
+        raise ValueError('refused')
+    if value == 77:  # as a person who presses Ctrl-C while it runs
+        os.kill(os.getpid(), signal.SIGINT)
+    return Outputs(total=value)
+
+
+def _find(params: FindParams) -> FindOutputs:
+    return FindOutputs(offset=Offset(value=read_file(params.sample)))
+
+
+class Pair(BaseModel):
+    sample: RunFile
+
+
+class PairParams(BaseModel):
+    pair: Pair
+
+
+PAIR = WorkflowSpec(
+    name='cli-pair', version=1, title='Pair', description='A file in a group.',
+    params=PairParams, outputs=Outputs,
+)
+
+
+def _pair(params: PairParams) -> Outputs:
+    return Outputs(total=read_file(params.pair.sample))
+
+
+LOCKED = []  # folders that validating cli-lock makes read-only
+
+
+def _lock(value: str) -> str:
+    for path in LOCKED:
+        path.chmod(0o500)
+    raise ValueError('locked')
+
+
+class LockParams(BaseModel):
+    sample: RunFile
+    lock: Annotated[str, AfterValidator(_lock)]
+
+
+LOCK = WorkflowSpec(
+    name='cli-lock', version=1, title='Lock', description='Refuses its settings.',
+    params=LockParams, outputs=Outputs,
+)
+
+
+BINDINGS = [
+    function_binding(SPEC, _reduce),
+    function_binding(FIND, _find),
+    function_binding(PAIR, _pair),
+    function_binding(LOCK, _reduce),
+]
+UPGRADED = [
+    function_binding(SPEC.model_copy(update={'version': 2}), _reduce),
+    function_binding(FIND, _find),
+]
+STAGING = [StagedFunction(SPEC, _reduce), function_binding(FIND, _find)]
+
+
+def pair(files):
+    rows = [
+        {'key': str(run := f.metadata['run']), 'run': int(run), 'sample': str(f.ref)}
+        for f in files
+        if f.metadata['role'] == 'sample'
+    ]
+    columns = ['key', 'run', 'sample']
+    return pd.DataFrame.from_records(rows, columns=columns).set_index('key')
+
+
+PAIRS = RowSource(pair, fills=('sample',), description='A row per sample run.')
+BROKEN = RowSource(lambda files: [f.metadata['nope'] for f in files], fills=('sample',))
+SOURCES = {'pairs': PAIRS, 'broken': BROKEN}
+
+
+class Metadata(BaseModel):
+    run: int
+
+
+REFUSING = {
+    'refusing': RowSource(
+        lambda files: Metadata.model_validate({'run': 'water'}), fills=('sample',)
+    )
+}
+'''
+
+
+@pytest.fixture
+def command(folder: Path, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The arguments that select the folder and the bindings of an importable module."""
+    (folder / 'cli_toys_batch_files.py').write_text(MODULE)
+    monkeypatch.syspath_prepend(folder)
+    return ['-w', str(folder), '-b', 'cli_toys_batch_files:BINDINGS']
+
+
+@pytest.fixture
+def cli_template(folder: Path) -> Path:
+    path = folder / 'iofq.yaml'
+    path.write_text('spec: {name: cli-toy, version: 1}\nblanks: [sample]\n')
+    return path
+
+
+def write_rows(folder: Path, samples: list[str]) -> Path:
+    """A table of a row per sample run, keyed ``row-0``, ``row-1``, ..."""
+    path = folder / 'runs.csv'
+    keys = [f'row-{i}' for i in range(len(samples))]
+    cells = [f'run:{run}' if run else '' for run in samples]
+    pd.DataFrame({'key': keys, 'sample': cells}).to_csv(path, index=False)
+    return path
+
+
+@contextmanager
+def app(folder: Path, label: str = 'x') -> Iterator[Batch]:
+    """The batch of ``label`` as an application on the folder makes it."""
+    with intake_on(folder) as intake:
+        yield intake.manager.batch(label)
+
+
+def edit(batch: Batch, key: str, sample: str) -> None:
+    """Set the sample of the row of ``key``, as a page does."""
+    frame = batch.frame()
+    frame.loc[key, 'sample'] = sample
+    batch.put(frame)
+
+
+@pytest.fixture
+def reduced_once(command: list[str], folder: Path) -> Path:
+    """The folder after a reduction of samples 1 and 2 with an offset, as ``x``."""
+    template = folder / 'offset.yaml'
+    template.write_text(
+        'spec: {name: cli-toy, version: 1}\nblanks: [sample]\n'
+        'params: {offset: {value: 0.5}}\n'
+    )
+    runs = write_rows(folder, ['1', '2'])
+    assert main([*command, 'reduce', str(template), str(runs), '-l', 'x']) == 0
+    return folder
+
+
+SOURCES = ['-s', 'cli_toys_batch_files:SOURCES']
+
+
+@contextmanager
+def intake_on(folder: Path) -> Iterator[Intake]:
+    """The intake of an application on the folder, with the sources by name."""
+    module = import_module('cli_toys_batch_files')
+    definitions = FolderDefinitions(folder)
+    files = CorrectedFiles(folder_files(folder), definitions=definitions)
+    with open_folder(folder, module.BINDINGS, files=files) as client:
+        manager = BatchManager(client, definitions=definitions)
+        yield Intake(manager, sources=module.SOURCES)
+
+
+def later(intake: BatchManager, **options: object) -> str:
+    """A batch of the samples 2 and 3 of the source, which it keeps."""
+    return intake.create(
+        'cli-toy',
+        title='Later',
+        source='pairs',
+        choose=lambda given: given.loc[['2', '3']],
+        **options,
+    ).label
+
+
+@pytest.fixture
+def toy_template(command: list[str], folder: Path) -> Path:
+    """The template of cli-toy that the command writes to fill in."""
+    path = folder / 'toy.yaml'
+    assert main([*command, 'template', 'cli-toy', '-o', str(path)]) == 0
+    return path
+
+
+def arrive(folder: Path, run: int, content: int | None = None) -> None:
+    """A sample run that arrives: its file, then its row in files.csv."""
+    (folder / f'run-{run}.json').write_text(str(run if content is None else content))
+    with (folder / 'files.csv').open('a') as f:
+        f.write(f'\nrun-{run}.json,{run},sample')
+
+
+@pytest.fixture
+def from_3(command: list[str], cli_template: Path, folder: Path) -> list[str]:
+    """
+    The folder with the batch ``x`` of sample run 3 on, reduced; the command
+    with the sources.
+    """
+    reduce = [str(cli_template), '--source', 'pairs', '--first', '3', '-l', 'x']
+    assert main([*command, *SOURCES, 'reduce', *reduce]) == 0
+    return [*command, *SOURCES]
