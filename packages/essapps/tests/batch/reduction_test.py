@@ -579,6 +579,20 @@ def test_make_setting_refuses_rows_that_take_different_values_without_a_row(
     assert 'thickness' in measured.parameter_columns
 
 
+@pytest.mark.parametrize('name', ['binning', 'run'], ids=['setting', 'note'])
+@pytest.mark.parametrize('key', [None, '1'])
+def test_make_setting_refuses_a_name_that_is_no_parameter_column(
+    measured: Batch, name: str, key: str | None
+) -> None:
+    before = (measured.frame(), dict(measured.settings), measured.version)
+
+    with pytest.raises(ValueError, match=f'^{name} is not a column of the batch$'):
+        measured.make_setting(name, key)
+
+    pd.testing.assert_frame_equal(measured.frame(), before[0])
+    assert (dict(measured.settings), measured.version) == before[1:]
+
+
 def test_make_setting_of_a_batch_without_rows_keeps_the_setting(
     batch: Batch,
 ) -> None:

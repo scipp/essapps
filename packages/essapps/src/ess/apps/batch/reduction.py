@@ -392,6 +392,7 @@ class Batch:
         take different values; :class:`~.definition.NotKept` if the
         definitions refuse a write.
         """
+        self._check_column(name)
         self._keeps_fills([c for c in self.parameter_columns if c != name])
         if key is None:
             values = self.values(name)
@@ -407,6 +408,11 @@ class Batch:
                 self.settings = {**self._settings, name: value}
         self.put(self.frame().drop(columns=name))
 
+    def _check_column(self, name: str) -> None:
+        """Raise ``ValueError`` unless ``name`` is a parameter column."""
+        if name not in self.parameter_columns:
+            raise ValueError(f'{name} is not a column of the batch')
+
     def values(self, name: str) -> dict[str, Any]:
         """
         The different values that the rows take at the column ``name``, each
@@ -415,8 +421,7 @@ class Batch:
         (:meth:`empty`, :func:`~.table.cell_of`), or ``None`` if it gives
         nothing. Raises ``ValueError`` if ``name`` is not a column.
         """
-        if name not in self.parameter_columns:
-            raise ValueError(f'{name} is not a column of the batch')
+        self._check_column(name)
         cells = {k: row[name] for k, row in self._rows[[name]].to_dict('index').items()}
         if name in (empty := self.empty()):
             given = cell_of(empty[name])
