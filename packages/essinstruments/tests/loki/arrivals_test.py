@@ -44,6 +44,7 @@ def rows(state: dict[str, Any]) -> dict[str, str]:
     return {row['name']: row['status'] for row in state['rows']}
 
 
+@pytest.mark.real_data
 def test_a_sample_whose_runs_arrived_is_added_and_reduced_by_a_step_of_follow(
     page: tuple[TestClient, Instrument, Client],
 ) -> None:

@@ -26,6 +26,36 @@ from ess.sans.types import (
 
 from ess.spec.parameters import QEdges, WavelengthEdges
 
+# The fixtures that hold files of esssans' tutorial data, or values computed
+# from them.
+REAL_DATA = frozenset(
+    {
+        'tutorial_dir',
+        'sample',
+        'other_sample',
+        'mask_file',
+        'direct_beam',
+        'iofq_values',
+        'plain_esssans_iofq',
+    }
+)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """
+    Mark each test that takes a fixture of :data:`REAL_DATA`, directly or
+    through another fixture, as ``real_data``. A test that fetches the tutorial
+    data by other code carries the mark itself.
+
+    CI leaves these tests out (``-m "not real_data"``): they download the
+    tutorial data and run real reductions, which together hold more memory
+    than a hosted runner has.
+    """
+    for item in items:
+        if REAL_DATA & set(getattr(item, 'fixturenames', ())):
+            item.add_marker(pytest.mark.real_data)
+
 
 @pytest.fixture(scope='session')
 def tutorial_centre() -> BeamCentre:

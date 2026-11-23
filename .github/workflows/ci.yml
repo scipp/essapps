@@ -30,7 +30,10 @@ jobs:
         working-directory: packages/essspec
       - run: python -m pytest -n auto
         working-directory: packages/essapps
-      - run: python -m pytest -n auto
+      # Without the tests on esssans' tutorial data: what a real reduction
+      # computes is not what these packages are tested for, and the tests
+      # together hold more memory than a hosted runner has.
+      - run: python -m pytest -n auto -m "not real_data"
         working-directory: packages/essinstruments
 
   pre-commit:
