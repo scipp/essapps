@@ -140,7 +140,13 @@ from ess.spec import Binding
 from ..client import Client
 from ..errors import Stopped, SubmitError, said
 from ..files import replace_at_once
-from ..folder import ArrivingFiles, folder_files, open_folder, scan_folder
+from ..folder import (
+    ArrivingFiles,
+    described,
+    folder_files,
+    open_folder,
+    scan_folder,
+)
 from ..records import Record, Status
 from . import frames
 from .corrections import CorrectedFiles
@@ -278,7 +284,7 @@ def _files(given: _Given) -> pd.DataFrame:
     files = pd.DataFrame(scan_folder(args.workspace, read), dtype=str).fillna('')
     if args.run_table is None:
         return files
-    return frames.described(files, read_text(args.run_table))
+    return described(files, read_text(args.run_table))
 
 
 def _names(given: _Given, names: Iterable[str]) -> list[str] | str:

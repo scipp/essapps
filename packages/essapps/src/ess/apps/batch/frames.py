@@ -13,17 +13,12 @@ batch, such as one of a manager. Both return the table with the columns of
     key    sample     name    status  record    failure
     60339  run:60339  water   done    3f2a...
     60340  run:60340  sds     failed  81c0...   refused: ...
-
-:func:`described` gives the files table of a folder what a person's run
-table says of each file.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from ..client import Client
@@ -32,60 +27,6 @@ from .reduction import Batch
 from .state import RowState, Which, to_reduce
 from .table import RESULT
 from .templates import checked_settings
-
-
-def _empty(cell: Any) -> bool:
-    """Whether a cell holds nothing: no text, or what pandas reads a gap as."""
-    if cell is None or cell is pd.NA:
-        return True
-    return isinstance(cell, str | float) and (cell == '' or cell != cell)
-
-
-def _text(cell: Any) -> str:
-    """A cell that names a run or a file as text; ``1.0`` as ``'1'``."""
-    cell = cell.item() if isinstance(cell, np.generic) else cell
-    # pandas holds whole numbers next to a gap as floats
-    return str(int(cell) if isinstance(cell, float) and cell.is_integer() else cell)
-
-
-def described(files: pd.DataFrame, run_table: pd.DataFrame) -> pd.DataFrame:
-    """
-    The files table (see :func:`..folder.scan_folder`) with what a person's
-    table says of each: its role, its sample, or any other column.
-
-    A row of ``run_table`` describes the file of its ``run``, or, if that cell
-    is empty or there is no such column, the file at its ``file``. The result
-    has the rows of ``files``: a row of ``run_table`` that describes no file is
-    ignored, and a file that no row describes keeps what it has. In a column of
-    both tables, a cell of ``run_table`` that is not empty replaces what the
-    file says of itself.
-
-    Raises ``ValueError`` if a row names neither a run nor a file, or two rows
-    describe one.
-    """
-    by: dict[str, dict[str, dict[str, Any]]] = {'run': {}, 'file': {}}
-    for record in run_table.to_dict('records'):
-        column = 'file' if _empty(record.get('run')) else 'run'
-        if _empty(record.get(column)):
-            raise ValueError('a row of the run table names neither a run nor a file')
-        key = _text(record[column])
-        if key in by[column]:
-            raise ValueError(f'two rows of the run table describe the {column} {key}')
-        by[column][key] = {
-            name: cell
-            for name, cell in record.items()
-            if name not in by and not _empty(cell)
-        }
-    rows = [
-        record
-        | by['file'].get(_text(record['file']), {})
-        | ({} if _empty(run := record.get('run')) else by['run'].get(_text(run), {}))
-        for record in files.to_dict('records')
-    ]
-    columns = dict.fromkeys(
-        [*files.columns, *run_table.columns.drop(list(by), 'ignore')]
-    )
-    return pd.DataFrame(rows, columns=list(columns)).fillna('')
 
 
 def reduce_table(
