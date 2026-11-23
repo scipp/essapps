@@ -721,7 +721,7 @@ A row that `--remaining` leaves reads `earlier`, and the command exits with 3.
 A label without a batch and with neither a table file nor `--source` gets one row, keyed by the label: every parameter is a setting.
 A `reduce` that makes a batch and is then refused removes it again (`manager.remove`), unless a record has the label: nothing was submitted, and the same command line works once the template is right. If the definitions refuse the removal, the first refusal is what is said.
 On a label with a batch, a refused `reduce` keeps the template and the table file given.
-A wrong `package.module:NAME`, a file given that does not exist, and a folder without `files.csv` are a message and exit status 2, before the folder is opened.
+A wrong `package.module:NAME`, a file given that does not exist, a row source that is not in `-s` (`rows NAME`, `reduce --source NAME`), and a folder without `files.csv` are a message and exit status 2, before the folder is opened, also while another process holds it.
 A command is a function of `_Given` and an entry of `_COMMANDS` in `cli.py`.
 The command opens the folder with `ArrivingFiles`, so `follow` finds the files that arrive while it runs; it reads `files.csv` once at the opening too, so that a files table in error is refused before anything runs.
 A table file or a files table that the command or the page writes replaces the file at once (`files.replace_at_once`, also used by `folder.write_files_table`): `files -o files.csv` does not open the folder, so it runs while `follow` holds the folder, and `follow` never reads half a files table.

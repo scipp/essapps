@@ -152,7 +152,7 @@ from . import frames
 from .corrections import CorrectedFiles
 from .definition import FolderDefinitions, NotKept
 from .export import export_table
-from .intake import Intake, step_failure
+from .intake import Intake, not_registered, step_failure
 from .manager import BatchManager
 from .reduction import Batch
 from .source import Range, RowSource
@@ -1233,6 +1233,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         sources = {} if args.sources is None else _sources(args.sources)
         if (wrong := command.check(args)) is not None:
             raise _Wrong(wrong)
+        # A name of the command line, so refused before the folder is opened,
+        # also while another process holds it.
+        source = getattr(args, 'source', None)
+        if source is not None and source not in sources:
+            raise _Wrong(not_registered(source, sources))
         given = _Given(args, sources)
         result = _opened(given, command) if command.folder else command.run(given)
     except _Wrong as error:

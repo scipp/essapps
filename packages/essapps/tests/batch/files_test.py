@@ -946,6 +946,14 @@ def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(
             ['-b', 'cli_toys_batch_files:BINDINGS', '-w', 'nope', 'specs'],
             'no files.csv',
         ),
+        (
+            [*SOURCES, 'rows', 'p'],
+            'the source p is not registered; registered: pairs, broken',
+        ),
+        (
+            [*SOURCES, 'reduce', '--source', 'p', '-l', 'x'],
+            'the source p is not registered; registered: pairs, broken',
+        ),
         (['rows', 'pairs'], 'rows needs -s/--sources'),
         (['reduce', '--source', 'pairs', '-l', 'x'], '--source needs -s/--sources'),
     ],
@@ -965,27 +973,6 @@ def test_main_refuses_a_wrong_name_in_a_line_before_the_folder_is_opened(
     assert said in err
     assert 'Traceback' not in err
     assert not (folder / 'log.jsonl').exists()
-
-
-@pytest.mark.parametrize(
-    'arguments', [['rows', 'p'], ['reduce', '--source', 'p', '-l', 'x']]
-)
-def test_a_row_source_that_is_not_registered_is_refused_as_the_intake_says(
-    command: list[str],
-    cli_template: Path,
-    folder: Path,
-    arguments: list[str],
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    if arguments[0] == 'reduce':
-        arguments = [*arguments, str(cli_template)]
-
-    assert main([*command, *SOURCES, *arguments]) == 2
-
-    assert capsys.readouterr().err == (
-        'the source p is not registered; registered: pairs, broken\n'
-    )
-    assert FolderDefinitions(folder).labels() == []
 
 
 def test_main_says_metadata_that_a_row_source_refuses_at_its_fields(

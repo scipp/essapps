@@ -77,6 +77,12 @@ def _lacked(spec: WorkflowSpec[Any, Any], source: RowSource | None) -> list[str]
     return [f for f in fills if f not in spec.params.model_fields]
 
 
+def not_registered(name: str, registered: Iterable[str]) -> str:
+    """Why the source ``name`` is refused: it is none of ``registered``."""
+    names = ', '.join(registered) or 'none'
+    return f'the source {name} is not registered; registered: {names}'
+
+
 def step_failure(error: Exception) -> str:
     """
     What a person reads of a step of Follow (:meth:`Intake.step`) that raised
@@ -236,10 +242,7 @@ class Intake:
         those that are.
         """
         if name not in self.sources:
-            registered = ', '.join(self.sources) or 'none'
-            raise ValueError(
-                f'the source {name} is not registered; registered: {registered}'
-            )
+            raise ValueError(not_registered(name, self.sources))
         return self.sources[name]
 
     def rows_of(self, source: str) -> pd.DataFrame:
