@@ -223,7 +223,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @batch.post('/api/follow/stop')
     def stop_following(page: PageOfLabel) -> State:
-        """Stop Follow, if this batch follows; it cannot follow again."""
+        """Stop Follow, if this batch follows; the page offers no action to undo it."""
         return page.stop_following()
 
     @batch.post('/api/settings')

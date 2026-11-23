@@ -235,8 +235,9 @@ def test_a_row_chosen_that_the_source_does_not_give_is_refused_and_nothing_is_ke
         lambda i: i.source('b'),
         lambda i: i.offered('b'),
         lambda i: i.take('b', []),
+        lambda i: i.follow('b'),
     ],
-    ids=['source', 'offered', 'take'],
+    ids=['source', 'offered', 'take', 'follow'],
 )
 def test_a_label_that_is_no_batch_is_refused(
     intake: Intake, call: Callable[[Intake], Any]
@@ -392,7 +393,7 @@ def test_rows_that_cannot_be_taken_are_refused_and_nothing_changes(
     pd.testing.assert_frame_equal(made.manager.batch('a').frame(), before)
 
 
-def test_a_batch_made_without_a_source_offers_and_takes_no_rows(
+def test_a_batch_made_without_a_source_offers_and_takes_no_rows_and_cannot_follow(
     intake: Intake,
 ) -> None:
     intake.manager.create('plain', title='A', label='a')
@@ -401,6 +402,9 @@ def test_a_batch_made_without_a_source_offers_and_takes_no_rows(
         intake.offered('a')
     with pytest.raises(ValueError, match='a was not made from a row source'):
         intake.take('a', ['1'])
+    with pytest.raises(ValueError, match='a was not made from a row source'):
+        intake.follow('a')
+    assert intake.following is None
 
 
 class _SourceRefused(Refusing):
@@ -552,6 +556,91 @@ def test_a_stopped_batch_gets_no_rows_at_a_step(
     assert intake.offered('a')['waits'].to_dict() == {'2': False}
 
 
+def test_a_stopped_batch_follows_again_and_its_step_adds_the_rows_filled_since(
+    intake: Intake, sample: Measure
+) -> None:
+    sample(1, 'water')
+    sample(2, 'sds')
+    batch = intake.create(
+        'plain', title='A', source='pairs', choose=Range(first='2'), label='a'
+    )
+    intake.stop()
+    sample(3, 'oil')
+
+    intake.follow('a')
+    intake.step()
+
+    assert intake.following == 'a'
+    assert list(batch.frame().index) == ['2', '3']  # 1 was left out at making
+
+
+def test_a_batch_that_follows_again_adds_the_rows_that_another_took_meanwhile(
+    two: Intake, sample: Measure
+) -> None:
+    sample(1, 'water')
+    two.follow('b')
+    two.step()
+
+    two.follow('a')
+    two.step()
+
+    assert list(two.manager.batch('a').frame().index) == ['1']
+    assert list(two.manager.batch('b').frame().index) == ['1']
+
+
+def test_a_batch_told_to_follow_ends_follow_on_the_one_before_then_writes_its_own(
+    two: Intake, refusing: Refusing, definitions: FolderDefinitions
+) -> None:
+    two.follow('b')
+
+    assert refusing.saved[-2:] == [source_key('a'), source_key('b')]
+    assert _follows(definitions) == ['b']
+    assert two.following == 'b'
+
+
+def test_a_batch_told_to_follow_follows_after_a_restart(
+    two: Intake, client: Client, definitions: FolderDefinitions
+) -> None:
+    two.stop()
+
+    two.follow('b')
+
+    assert _again(client, definitions).following == 'b'
+
+
+def test_a_batch_that_follows_already_is_left_as_it_is(
+    two: Intake, refusing: Refusing
+) -> None:
+    version, saved = two.version, list(refusing.saved)
+
+    two.follow('a')
+
+    assert (two.version, refusing.saved) == (version, saved)
+
+
+def test_a_batch_whose_source_is_not_registered_cannot_follow(
+    two: Intake, client: Client, definitions: FolderDefinitions
+) -> None:
+    again = Intake(BatchManager(client, definitions=definitions), sources={})
+
+    with pytest.raises(ValueError, match='the source pairs is not registered'):
+        again.follow('b')
+    assert again.following == 'a'
+
+
+def test_a_batch_refused_to_follow_leaves_the_one_before_following(
+    two: Intake, refusing: Refusing, client: Client, definitions: FolderDefinitions
+) -> None:
+    refusing.part = source_key('b')
+
+    with pytest.raises(NotKept):
+        two.follow('b')
+
+    assert two.following == 'a'
+    assert _follows(definitions) == ['a']
+    assert _again(client, definitions).following == 'a'
+
+
 def test_a_batch_removed_through_the_manager_follows_no_longer(
     two: Intake, client: Client, definitions: FolderDefinitions
 ) -> None:
@@ -636,8 +725,9 @@ def test_which_batch_follows_stays_if_the_definitions_refuse_a_change(
     [
         lambda i: i.create('plain', title='C', source='pairs', follow=True),
         lambda i: i.stop(),
+        lambda i: i.follow('b'),
     ],
-    ids=['create', 'stop'],
+    ids=['create', 'stop', 'follow'],
 )
 def test_the_version_moves_at_each_change_of_which_follows(
     two: Intake, change: Callable[[Intake], object]

@@ -82,7 +82,7 @@ Nothing in the batch layer imports the page or the command.
 | row source | code of the application that makes rows from the files (a `RowSource`) |
 | filled, waits | a row of the source is filled once it has a value in each of `RowSource.fills`; until then it waits |
 | considered | the keys of the source that a batch made from it has taken or left out |
-| Follow | a step every few seconds on one batch: add the rows of its source that are filled and not considered, then reduce the rows that are ready and have no result; chosen when the batch is made, until it is stopped |
+| Follow | a step every few seconds on one batch: add the rows of its source that are filled and not considered, then reduce the rows that are ready and have no result; from the making of the batch or `intake.follow(label)`, until it is stopped |
 
 `manager.create` and `intake.create` return the `Batch`, and `manager.batch(label)` gives it again.
 Every other method that names a batch takes its label.
@@ -138,7 +138,7 @@ Other tables are always named with what they are of:
 4. **A step never changes a row that the batch table has.** It adds rows, and reduces rows that have no result.
 5. **A batch is shown without its source and without the files.** A file that is not found is a problem of its row.
 6. **The rules are in the batch layer.** A refusal is a `ValueError`. The page and the command show it and copy no rule of the batch layer. The page refuses only a request that no call of the batch layer can express, such as Follow without a row source. The batch layer has no lock and no timer.
-7. **Follow is chosen when a batch is made.** A batch follows from `intake.create(..., follow=True)` until `intake.stop()`, its removal, or the making of another batch that follows. A batch that does not follow cannot be made to follow.
+7. **At most one batch follows.** It starts with `intake.create(..., follow=True)` or `intake.follow(label)`, and ends with `intake.stop()`, the removal of the batch, or another batch that starts to follow.
 
 ### What is kept on disk
 
@@ -155,6 +155,7 @@ Other tables are always named with what they are of:
 A label is a batch if and only if `header.json` exists.
 `manager.create` writes rows and settings, then the header.
 `intake.create` then, if the batch follows, writes `"follows": false` to the `source.json` of the batch that followed, then writes the `source.json` of the batch; if the definitions refuse a write, it removes the batch again.
+`intake.follow(label)` writes `"follows": false` to the `source.json` of the batch that followed, then `"follows": true` to that of `label`; a process that stops in between leaves no batch that follows.
 So a batch of `intake.create` is not always made as asked or not at all: a process that stops between the header and the batch's `source.json` leaves a batch made without a source, which neither offers rows nor follows, and no batch that follows.
 `manager.remove` deletes the header, then every other file of the label, `source.json` too.
 So whether a batch follows goes with its label: a batch made again with the label does not follow unless made so.
@@ -260,11 +261,12 @@ They make it from the source, with the settings of the afternoon, and with Follo
 evening = intake.create('loki-iofq', title='Evening', source='sample-runs',
                         choose=Range(first='60400'),
                         settings=manager.batch('afternoon').settings, label='evening',
-                        follow=True)  # 'afternoon' stops following, and cannot follow again
+                        follow=True)  # 'afternoon' stops following
 ```
 
 No row moves between batches.
 `afternoon` keeps its rows, also those from 60400 on that it added before, until a person removes them.
+`intake.follow('afternoon')` would let it follow again, in place of `evening`: its next step would add every filled row it has not considered, also those that `evening` took.
 A batch that follows has no last row: the rows filled between a last row and the making would never be added.
 `intake.create` refuses `follow=True` with a `Range` that has a `last` (see [From a row source](#from-a-row-source)); a function as `choose` may pick any rows, and the filled rows it leaves out are considered.
 For a batch of only the rows that arrive from now on, `choose` takes none: `choose=Range(later=True)`.
@@ -547,8 +549,8 @@ If the process stops while a batch that follows is made, the batch may be there 
 
 ## Follow
 
-At most one batch follows: the last one made with `follow=True`, until it is stopped.
-The life of a batch; a batch made without Follow and a batch that stopped are in the same state:
+At most one batch follows: the last one made with `follow=True` or given to `intake.follow(label)`, until it is stopped.
+The life of a batch made from a source; a batch made without Follow and a batch that stopped are in the same state:
 
 ```mermaid
 stateDiagram-v2
@@ -556,7 +558,8 @@ stateDiagram-v2
     still: does not follow
     [*] --> still: create(...)
     [*] --> follows: intake.create(..., follow=True)
-    follows --> still: stop(), or another batch made with Follow
+    still --> follows: intake.follow(label)
+    follows --> still: stop(), or another batch starts to follow
     still --> removed: remove()
     follows --> removed: remove()
 ```
@@ -564,7 +567,8 @@ stateDiagram-v2
 ```python
 intake.create(..., source='sample-runs', follow=True)    # follows; the batch that followed stops
 intake.following            # its label, or None
-intake.stop()               # none follows; the batch that followed cannot follow again
+intake.stop()               # none follows
+intake.follow(label)        # this batch follows; the batch that followed stops
 done = intake.step()        # a Step, or None if none follows
 intake.offered(label)       # the rows of the source that the table lacks, with a boolean column `waits`
 intake.take(label, keys)    # put these rows as the source gives them now, then consider them
@@ -616,6 +620,7 @@ sequenceDiagram
 - A row with a result is never reduced by a step, also when it is outdated, failed or cancelled.
 - A row whose request is refused does not hold back the others; `done.refused` says why, and the next step tries again.
 - A batch of the manager persists what it submits.
+- A batch that follows again adds at its next step every row of its source that is filled and not considered: those that arrived while it did not follow, also those that another batch took meanwhile. A row left out when it was made, or removed by a person, stays out. `intake.follow` refuses a batch made without a source, or whose source is not registered.
 - `manager.remove(label)` of the batch that follows ends Follow, since `source.json` goes with the label: `intake.following` is then `None`, and `intake.step()` does nothing. A batch made again with the label does not follow unless made so.
 
 A source whose row grows, such as the runs of a sample so far, gives the grown list a new key:
@@ -728,5 +733,5 @@ Each action of the page is one call of the batch layer:
 - A correction of a run changes no batch.
 - No range of runs is kept: "from run 60339 on" is the choice of rows when the batch is made.
 - No row moves between batches: the next batch is made from the source.
-- One batch follows at a time, and a batch that stopped following never follows again. The command does no step.
+- One batch follows at a time. The page offers no action to let a stopped batch follow again. The command does no step.
 - The batch layer has no lock and no timer: whoever serves owns both.

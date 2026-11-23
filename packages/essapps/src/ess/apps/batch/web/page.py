@@ -94,9 +94,10 @@ removed answers :class:`~.refusals.Missing`.
 
 A batch follows from the time it is made, if a person chooses Follow in
 "New batch" (:meth:`Pages.create <.pages.Pages.create>`). Its page then has
-the action "Stop following" (:meth:`Page.stop_following`), after which the
-batch never follows again; the page of a batch that does not follow has no
-action of Follow. While a batch follows, :meth:`Pages.tick
+the action "Stop following" (:meth:`Page.stop_following`); the page offers
+no action to let a stopped batch follow again
+(:meth:`~ess.apps.batch.Intake.follow`), and the page of a batch that does
+not follow has no action of Follow. While a batch follows, :meth:`Pages.tick
 <.pages.Pages.tick>` steps it every ``interval`` seconds
 (:meth:`~ess.apps.batch.Intake.step`), which adds the rows of its
 source that are new and filled, and reduces the rows that
@@ -942,7 +943,8 @@ class Page:
     def stop_following(self) -> str:
         """
         Let none follow, if this batch follows
-        (:meth:`~ess.apps.batch.Intake.stop`); it cannot follow again.
+        (:meth:`~ess.apps.batch.Intake.stop`); the page offers no action to
+        let it follow again.
         """
         if not self._follows():
             return ''  # another batch follows, or none
