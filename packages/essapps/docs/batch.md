@@ -71,7 +71,7 @@ Nothing in the batch layer imports the page or the command.
 | label | the name of a batch, unique in a workspace: its folder in the definitions, the label of its records, its address on the page and for the command; `batch.label` |
 | `Batch` | the object that holds the settings and the batch table of one label, and changes and reduces them |
 | `Intake` | the object that holds the manager and the row sources, by name, and brings rows of a source into a batch; it keeps which batch follows |
-| setting | the value of a parameter for the batch: an entry of `batch.settings` |
+| setting | the value of a parameter for the batch: one item of `batch.settings`, by the name of the parameter |
 | batch table | the rows of a batch, one per reduction: one `pandas.DataFrame` (below) |
 | value of a parameter for a row | what the row is reduced with at that parameter (rule 2) |
 | request of a row | the spec with the value of each parameter for the row |
@@ -722,7 +722,7 @@ A label without a batch and with neither a table file nor `--source` gets one ro
 A `reduce` that makes a batch and is then refused removes it again (`manager.remove`), unless a record has the label: nothing was submitted, and the same command line works once the template is right. If the definitions refuse the removal, the first refusal is what is said.
 On a label with a batch, a refused `reduce` keeps the template and the table file given.
 A wrong `package.module:NAME`, a file given that does not exist, a row source that is not in `-s` (`rows NAME`, `reduce --source NAME`), and a folder without `files.csv` are a message and exit status 2, before the folder is opened, also while another process holds it.
-A command is a function of `_Given` and an entry of `_COMMANDS` in `cli.py`.
+A command is a function of `_Given` and an item of `_COMMANDS` in `cli.py`.
 The command opens the folder with `ArrivingFiles`, so `follow` finds the files that arrive while it runs; it reads `files.csv` once at the opening too, so that a files table in error is refused before anything runs.
 A table file or a files table that the command or the page writes replaces the file at once (`files.replace_at_once`, also used by `folder.write_files_table`): `files -o files.csv` does not open the folder, so it runs while `follow` holds the folder, and `follow` never reads half a files table.
 

@@ -461,13 +461,20 @@ def test_a_spec_title_or_label_is_refused_before_the_source_is_looked_up(
             intake.create(spec, title=title, source=source, label=label)
 
 
+@pytest.mark.parametrize(
+    ('spec', 'lacked'),
+    [
+        ('find', 'parameter transmission'),
+        ('repeated', 'parameters sample, transmission'),
+    ],
+)
 def test_a_spec_that_lacks_a_parameter_the_source_fills_is_refused(
-    intake: Intake, definitions: FolderDefinitions
+    intake: Intake, definitions: FolderDefinitions, spec: str, lacked: str
 ) -> None:
-    said = 'the spec find has no parameter transmission, which the source pairs fills'
+    said = f'the spec {spec} has no {lacked}, which the source pairs fills'
 
     with pytest.raises(ValueError, match=f'^{said}$'):
-        intake.create('find', title='A', source='pairs', label='a')
+        intake.create(spec, title='A', source='pairs', label='a')
 
     assert definitions.labels() == []
 

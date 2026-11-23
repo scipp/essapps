@@ -366,10 +366,11 @@ class Intake:
         self.manager.check(spec, title=title, label=label)
         found = self._source(source)
         if not fits(bound := self.manager.spec_named(spec), found):
+            lacked = _lacked(bound, found)
+            named = f'{"parameter" if len(lacked) == 1 else "parameters"} '
             raise ValueError(
-                f'the spec {spec} has no parameter '
-                f'{", ".join(_lacked(bound, found))}, which the source {source} '
-                'fills'
+                f'the spec {spec} has no {named}{", ".join(lacked)}, which the '
+                f'source {source} fills'
             )
         given = self._given(found, found.fills)
         arrived = given[~given['waits']].drop(columns='waits')

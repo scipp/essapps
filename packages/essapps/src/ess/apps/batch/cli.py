@@ -110,7 +110,7 @@ another process holds, such as a page or a follow. Messages go to stderr.
 # The commands are thin: the rules are those of BatchManager, Intake and Batch,
 # as the page applies them, so a label is one batch whoever works on it. Only
 # reduce, take and the steps of follow change a batch table. A command is a
-# function of _Given and an entry of _COMMANDS. The guide is
+# function of _Given and an item of _COMMANDS. The guide is
 # packages/essapps/docs/batch.md, section
 # "Table files and the command".
 
