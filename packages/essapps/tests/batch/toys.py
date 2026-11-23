@@ -15,11 +15,11 @@ from pydantic import BaseModel, Field
 from ess.apps import Client
 from ess.apps.batch import (
     Batch,
-    BatchManager,
     DefinitionStore,
     FileInfo,
+    Intake,
     NotKept,
-    Source,
+    RowSource,
     rows_of,
 )
 from ess.apps.batch.definition import Key
@@ -236,8 +236,8 @@ def samples(files: Sequence[FileInfo]) -> pd.DataFrame:
     return pd.DataFrame.from_records(rows, columns=[KEY, 'sample']).set_index(KEY)
 
 
-PAIRS = Source(pair, fills=('sample', 'transmission'))
-SAMPLES = Source(samples, fills=('sample',))
+PAIRS = RowSource(pair, fills=('sample', 'transmission'))
+SAMPLES = RowSource(samples, fills=('sample',))
 SOURCES = {'pairs': PAIRS}
 STAGED_NAMES = frozenset({STAGED.name})
 """The specs whose batches run through a stage."""
@@ -261,15 +261,10 @@ def edit(batch: Batch, key: str, **cells: Any) -> None:
     batch.put(frame)
 
 
-def from_pairs(manager: BatchManager, spec: str, **options: Any) -> str:
+def from_pairs(intake: Intake, spec: str, **options: Any) -> str:
     """
-    A batch of ``manager`` made from the source ``pairs`` with ``options``,
+    A batch of ``intake`` made from the source ``pairs`` with ``options``,
     with an empty column ``thickness``, so that its columns are
     :data:`COLUMNS`; its label.
     """
-    return manager.create(
-        spec,
-        source='pairs',
-        columns=['thickness'],
-        **options,
-    )
+    return intake.create(spec, source='pairs', columns=['thickness'], **options).label

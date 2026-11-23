@@ -18,6 +18,7 @@ from ess.apps.batch import (
     CorrectedFiles,
     FolderDefinitions,
     Header,
+    Intake,
     Range,
     left_to_reduce,
 )
@@ -58,7 +59,7 @@ def test_a_template_may_leave_out_the_blanks_and_the_params(tmp_path: Path) -> N
 
 MODULE = '''
 import pandas as pd
-from ess.apps.batch import Source
+from ess.apps.batch import RowSource
 from ess.apps.testing import StagedFunction, read_file
 from ess.spec import RunFile, WorkflowSpec, function_binding
 from pydantic import BaseModel
@@ -127,8 +128,8 @@ def pair(files):
     return pd.DataFrame.from_records(rows, columns=columns).set_index('key')
 
 
-PAIRS = Source(pair, fills=('sample',))
-BROKEN = Source(lambda files: [f.metadata['nope'] for f in files], fills=('sample',))
+PAIRS = RowSource(pair, fills=('sample',))
+BROKEN = RowSource(lambda files: [f.metadata['nope'] for f in files], fills=('sample',))
 SOURCES = {'pairs': PAIRS, 'broken': BROKEN}
 '''
 
@@ -336,8 +337,8 @@ def test_main_refuses_earlier_settings_without_remaining(
 @contextmanager
 def app(folder: Path, label: str = 'x') -> Iterator[Batch]:
     """The batch of ``label`` as an application on the folder makes it."""
-    with manager(folder) as batches:
-        yield batches.batch(label)
+    with intake_on(folder) as intake:
+        yield intake.manager.batch(label)
 
 
 def edit(batch: Batch, key: str, sample: str) -> None:
@@ -435,9 +436,9 @@ SOURCES = ['-s', 'cli_toys_batch_files:SOURCES']
 def test_a_template_leaves_out_a_value_at_a_column_that_the_source_fills(
     command: list[str], folder: Path, sources: list[str]
 ) -> None:
-    with manager(folder) as batches:
-        label = later(batches)
-        batch = batches.batch(label)
+    with intake_on(folder) as intake:
+        label = later(intake)
+        batch = intake.manager.batch(label)
         waits = pd.DataFrame({'sample': [None]}, index=pd.Index(['9'], name=KEY))
         batch.put(pd.concat([batch.frame(), waits]))
     template = folder / 'one.yaml'
@@ -448,11 +449,11 @@ def test_a_template_leaves_out_a_value_at_a_column_that_the_source_fills(
 
     main([*command, 'reduce', *sources, str(template), '-l', label])
 
-    with manager(folder) as batches:
-        batch = batches.batch(label)
+    with intake_on(folder) as intake:
+        batch = intake.manager.batch(label)
         assert batch.settings == {'offset': {'value': 0.5}}
         assert batch.state()['9'].text == 'incomplete'
-        assert '9' not in {r.member for r in batches.client.records(label=label)}
+        assert '9' not in {r.member for r in intake.manager.client.records(label=label)}
 
 
 def test_a_table_given_with_a_source_is_refused(
@@ -471,17 +472,18 @@ def test_a_table_given_with_a_source_is_refused(
     assert FolderDefinitions(folder).labels() == []
 
 
-# The command and the batches of a manager on one folder
+# The command and the batches of an intake on one folder
 
 
 @contextmanager
-def manager(folder: Path) -> Iterator[BatchManager]:
-    """The manager of an application on the folder, with the sources by name."""
+def intake_on(folder: Path) -> Iterator[Intake]:
+    """The intake of an application on the folder, with the sources by name."""
     module = import_module('cli_toys_batch_files')
     definitions = FolderDefinitions(folder)
     files = CorrectedFiles(folder_files(folder), definitions=definitions)
     with open_folder(folder, module.BINDINGS, files=files) as client:
-        yield BatchManager(client, sources=module.SOURCES, definitions=definitions)
+        manager = BatchManager(client, definitions=definitions)
+        yield Intake(manager, sources=module.SOURCES)
 
 
 def test_reduce_on_a_new_label_writes_a_header_so_the_manager_lists_it(
@@ -491,8 +493,8 @@ def test_reduce_on_a_new_label_writes_a_header_so_the_manager_lists_it(
 
     assert main([*command, 'reduce', *SOURCES, *reduce]) == 0
 
-    with manager(folder) as batches:
-        assert batches.headers() == {'x': Header(title='x')}
+    with intake_on(folder) as intake:
+        assert intake.manager.headers() == {'x': Header(title='x')}
 
 
 def test_reduce_with_a_source_and_no_table_makes_a_batch_of_every_row_of_the_source(
@@ -504,8 +506,8 @@ def test_reduce_with_a_source_and_no_table_makes_a_batch_of_every_row_of_the_sou
     assert main([*command, 'reduce', *SOURCES, *reduce]) == 0
 
     assert list(read_text(out)['key']) == ['1', '2', '3']
-    with manager(folder) as batches:
-        assert batches.offered('x').empty
+    with intake_on(folder) as intake:
+        assert intake.offered('x').empty
 
 
 def test_reduce_refuses_a_label_that_has_definitions_but_no_batch(
@@ -514,9 +516,9 @@ def test_reduce_refuses_a_label_that_has_definitions_but_no_batch(
     folder: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    with manager(folder) as batches:
+    with intake_on(folder) as intake:
         old = Batch(
-            batches.client,
+            intake.manager.client,
             import_module('cli_toys_batch_files').SPEC,
             label='old',
             definitions=FolderDefinitions(folder),
@@ -528,37 +530,37 @@ def test_reduce_refuses_a_label_that_has_definitions_but_no_batch(
 
     assert code == 2
     assert 'old: the label has definitions or records' in capsys.readouterr().err
-    with manager(folder) as batches:
-        assert batches.headers() == {}
-        assert batches.client.records(label='old') == []
+    with intake_on(folder) as intake:
+        assert intake.manager.headers() == {}
+        assert intake.manager.client.records(label='old') == []
 
 
-def later(batches: BatchManager, **options: object) -> str:
+def later(intake: BatchManager, **options: object) -> str:
     """A batch of the samples 2 and 3 of the source, which it keeps."""
-    return batches.create(
+    return intake.create(
         'cli-toy',
         title='Later',
         source='pairs',
         choose=lambda given: given.loc[['2', '3']],
         **options,
-    )
+    ).label
 
 
 def test_reduce_on_a_batch_of_the_manager_reduces_its_rows_without_its_source(
     command: list[str], folder: Path
 ) -> None:
-    with manager(folder) as batches:
-        label = later(batches)
-        before = batches.headers()
+    with intake_on(folder) as intake:
+        label = later(intake)
+        before = intake.manager.headers()
     out = folder / 'done.csv'
 
     code = main([*command, 'reduce', '-l', label, '-o', str(out)])
 
     assert code == 0
     assert list(read_text(out)['key']) == ['2', '3']
-    with manager(folder) as batches:
-        assert batches.headers() == before
-        reduced = {r.member for r in batches.client.records(label=label)}
+    with intake_on(folder) as intake:
+        assert intake.manager.headers() == before
+        reduced = {r.member for r in intake.manager.client.records(label=label)}
         assert reduced == {'2', '3'}
 
 
@@ -715,9 +717,9 @@ def kept(folder: Path, label: str) -> dict[str, str]:
 def test_a_refused_reduce_changes_neither_the_settings_nor_the_rows_of_a_batch(
     command: list[str], folder: Path, table: str
 ) -> None:
-    with manager(folder) as batches:
-        label = later(batches, settings={'offset': {'value': 0.5}})
-        edit(batches.batch(label), '2', 'run:3')
+    with intake_on(folder) as intake:
+        label = later(intake, settings={'offset': {'value': 0.5}})
+        edit(intake.manager.batch(label), '2', 'run:3')
     before = kept(folder, label)
     template = folder / 'other.yaml'
     template.write_text(
@@ -736,10 +738,10 @@ def test_a_refused_reduce_changes_neither_the_settings_nor_the_rows_of_a_batch(
 def test_reduce_on_a_batch_without_rows_writes_a_table_of_its_columns(
     command: list[str], folder: Path
 ) -> None:
-    with manager(folder) as batches:
-        label = batches.create(
+    with intake_on(folder) as intake:
+        label = intake.create(
             'cli-toy', title='None', source='pairs', choose=Range(later=True)
-        )
+        ).label
     out = folder / 'done.csv'
 
     code = main([*command, 'reduce', '-l', label, '-o', str(out)])
@@ -759,8 +761,8 @@ def test_reduce_on_a_batch_without_rows_writes_a_table_of_its_columns(
 def test_a_template_without_a_table_is_the_settings_of_a_batch_that_keeps_its_rows(
     command: list[str], folder: Path
 ) -> None:
-    with manager(folder) as batches:
-        label = later(batches)
+    with intake_on(folder) as intake:
+        label = later(intake)
     template = folder / 'offset.yaml'
     template.write_text(
         'spec: {name: cli-toy, version: 1}\nblanks: [sample]\n'
@@ -771,8 +773,8 @@ def test_a_template_without_a_table_is_the_settings_of_a_batch_that_keeps_its_ro
     assert main([*command, 'reduce', str(template), '-l', label, '-o', str(out)]) == 0
 
     assert list(read_text(out)['key']) == ['2', '3']
-    with manager(folder) as batches:
-        assert batches.batch(label).settings == {'offset': {'value': 0.5}}
+    with intake_on(folder) as intake:
+        assert intake.manager.batch(label).settings == {'offset': {'value': 0.5}}
 
 
 def test_reduce_with_staged_runs_the_rows_of_its_batch_through_a_stage(
@@ -835,10 +837,10 @@ def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(
 @pytest.mark.parametrize(
     ('arguments', 'said'),
     [
-        (['rows', 'cli_toys_batch_files:pair'], 'is a function, not a Source'),
+        (['rows', 'cli_toys_batch_files:pair'], 'is a function, not a row source'),
         (
             ['reduce', '-s', 'cli_toys_batch_files:pair', '-l', 'x'],
-            'is a function, not a mapping of names to Sources',
+            'is a function, not a mapping of names to row sources',
         ),
         (
             ['reduce', *SOURCES, '--source', 'p', '-l', 'x'],

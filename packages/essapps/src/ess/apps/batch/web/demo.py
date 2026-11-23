@@ -56,7 +56,14 @@ from ess.spec import (
     WorkflowSpec,
 )
 
-from .. import BatchManager, CorrectedFiles, FileInfo, FolderDefinitions, Source
+from .. import (
+    BatchManager,
+    CorrectedFiles,
+    FileInfo,
+    FolderDefinitions,
+    Intake,
+    RowSource,
+)
 from ..table import KEY, cell_of
 from . import Pages, create_app, plots
 from .api import STATIC, every
@@ -206,7 +213,7 @@ def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
     return pd.DataFrame.from_records(rows, columns=columns).set_index(KEY)
 
 
-SOURCES = {'sample-runs': Source(pair_by_sample, fills=('sample', 'transmission'))}
+SOURCES = {'sample-runs': RowSource(pair_by_sample, fills=('sample', 'transmission'))}
 """The sources of the demo's batches, by name."""
 STAGED = frozenset({DEMO.name})
 """The specs whose batches run through a stage: the demo's."""
@@ -319,11 +326,11 @@ def build(
     a batch of the samples there are is made, with a column of thickness, so
     also at a start after a person removed the last one.
     """
-    manager = BatchManager(
-        client, sources=SOURCES, definitions=definitions, staged=STAGED
+    intake = Intake(
+        BatchManager(client, definitions=definitions, staged=STAGED), sources=SOURCES
     )
-    if not manager.headers():
-        manager.create(
+    if not intake.manager.headers():
+        intake.create(
             DEMO.name,
             title='Samples',
             source='sample-runs',
@@ -338,7 +345,7 @@ def build(
         return plots.figure(curves, quantity='I(Q)')
 
     pages = Pages(
-        manager,
+        intake,
         interval=interval,
         title=DEMO.title,
         draw={DEMO.name: draw},
@@ -409,7 +416,10 @@ def main() -> None:
 def _serve(directory: Path, port: int, *, interval: float, samples: int) -> None:
     import uvicorn
 
-    client, files, definitions = open_demo(directory, samples=samples)
+    try:
+        client, files, definitions = open_demo(directory, samples=samples)
+    except ValueError as error:  # such as definitions of another format
+        raise SystemExit(str(error)) from None
     with client:
         folder = directory.name
         app = build(client, files, definitions, folder=folder, interval=interval)

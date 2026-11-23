@@ -32,16 +32,16 @@ that :meth:`Pages.sources` offers, in one of three ways
 now (:meth:`Pages.rows_of`); from a table file; or without rows. Made from
 the page of a batch, it may start with the settings of that batch. A batch
 made from a source may follow it from then on, in place of the batch that
-followed before; no other action makes a batch follow. The manager decides
-what can be made. With no batch at all, the page is served
+followed before; no other action makes a batch follow. The manager and the
+intake decide what can be made. With no batch at all, the page is served
 without one: it shows the list of batches and the runs. So is the page of a
 batch that cannot be made (:meth:`Pages.page`), with the reason, and that of
 a batch removed (:meth:`Pages.remove`): a :class:`~.page.Page` handed out
 before answers :class:`~.refusals.Missing` from then on.
 
-The manager keeps which batch follows
-(:attr:`~ess.apps.batch.BatchManager.following`). :meth:`Pages.tick` is one
-step of it (:meth:`~ess.apps.batch.BatchManager.step`), with or without a
+``Intake`` keeps which batch follows
+(:attr:`~ess.apps.batch.Intake.following`). :meth:`Pages.tick` is one
+step of it (:meth:`~ess.apps.batch.Intake.step`), with or without a
 page open, plus what the page shows of the step
 (:meth:`Pages.follow_shown`, :meth:`Pages.unsubmitted`): why rows were
 refused, how many rows wait, and what the step raised; then
@@ -69,8 +69,8 @@ from ...files import Selector
 from ...listing import Listing
 from ..auto import Step
 from ..corrections import CorrectedFiles
-from ..manager import BatchManager, fits
-from ..source import Range, Source
+from ..intake import Intake, fits
+from ..source import Range, RowSource
 from ..state import RowState, not_reduced
 from ..table import read_table
 from . import forms
@@ -137,7 +137,7 @@ class SafeListing(Listing):
 
 class Pages:
     """
-    What the pages of the batches of ``manager`` share. It owns, and only it
+    What the pages of the batches of ``intake.manager`` share. It owns, and only it
     writes, the listing of the files and its version, the corrections of
     runs, and the step of Follow and what it said; a :class:`~.page.Page`
     writes its batch through the manager. Each public method takes
@@ -146,8 +146,8 @@ class Pages:
 
     Parameters
     ----------
-    manager:
-        The batches.
+    intake:
+        The row sources and Follow; its manager holds the batches.
     interval:
         The seconds between two steps of Follow, for the timer of
         :func:`~.api.create_app`.
@@ -171,7 +171,7 @@ class Pages:
 
     def __init__(
         self,
-        manager: BatchManager,
+        intake: Intake,
         *,
         interval: float = 5.0,
         title: str = '',
@@ -180,7 +180,7 @@ class Pages:
         marks: type[BaseModel] | None = None,
         folder: str = '',
     ) -> None:
-        self.manager = manager
+        self.intake = intake
         self.interval = interval
         self.title = title
         self.draw = {} if draw is None else draw
@@ -192,7 +192,7 @@ class Pages:
         # last step that did not raise, whose refusals :meth:`applied` empties.
         self._failure: str | None = None
         self._last: tuple[str, Step] | None = None
-        self._listing = SafeListing(manager.client)
+        self._listing = SafeListing(intake.manager.client)
         # The files of the listing with their metadata, and why they cannot
         # be listed, as at :attr:`files_version`.
         self._files = (self._listing.files_listed, self._listing.failure)
@@ -225,7 +225,7 @@ class Pages:
         gets a page of its own.
         """
         with self.lock:
-            if label not in self.manager.headers():
+            if label not in self.intake.manager.headers():
                 self._pages.pop(label, None)
                 raise Missing(f'There is no batch {label}.')
 
@@ -236,15 +236,15 @@ class Pages:
         ``/`` lists them rather than guess.
         """
         with self.lock:
-            if (label := self.manager.following) is not None:
+            if (label := self.intake.following) is not None:
                 return label
-            headers = self.manager.headers()
+            headers = self.intake.manager.headers()
             return next(iter(headers)) if len(headers) == 1 else None
 
     def tick(self) -> None:
         """
         A step of Follow on the batch that follows, if one does
-        (:meth:`~ess.apps.batch.BatchManager.step`), and what the page shows
+        (:meth:`~ess.apps.batch.Intake.step`), and what the page shows
         of it; then :meth:`Page.stepped <.page.Page.stepped>` of its page.
         :func:`~.api.create_app` calls it on a timer. What the step raises is
         said on the page (:meth:`follow_shown`), and the next step tries
@@ -255,10 +255,10 @@ class Pages:
         # said, such as an exception whose text raises, or a page that cannot
         # be made, must not end the timer.
         with self.lock, suppress(Exception):
-            if (label := self.manager.following) is None:
+            if (label := self.intake.following) is None:
                 return
             try:
-                if (done := self.manager.step()) is None:
+                if (done := self.intake.step()) is None:
                     return
                 self._last = (label, done)
                 self._failure = None
@@ -301,7 +301,9 @@ class Pages:
         the files or why they cannot be listed differ from the last listing.
         """
         with self.lock:
-            self._listing = SafeListing(self.manager.client, previous=self._listing)
+            self._listing = SafeListing(
+                self.intake.manager.client, previous=self._listing
+            )
             self._new_files()
 
     def _new_files(self) -> None:
@@ -405,7 +407,7 @@ class Pages:
 
     def _step(self, label: str) -> Step | None:
         """Follow's last step that did not raise, if on ``label``, which follows."""
-        if self.manager.following != label or self._last is None:
+        if self.intake.following != label or self._last is None:
             return None
         on, step = self._last
         return step if on == label else None
@@ -417,7 +419,7 @@ class Pages:
         read: equal while what the page shows of Follow stays the same.
         """
         with self.lock:
-            if self.manager.following != label:
+            if self.intake.following != label:
                 return None
             step = self._step(label)
             shown = None if step is None else (len(step.waiting), step.refused)
@@ -430,11 +432,11 @@ class Pages:
         many rows wait.
         """
         with self.lock:
-            on = self.manager.following == label
+            on = self.intake.following == label
             step = self._step(label)
             return Following(
                 on=on,
-                source=self.manager.source(label),
+                source=self.intake.source(label),
                 interval=self.interval,
                 failure=self._failure if on else None,
                 waiting=0 if step is None else len(step.waiting),
@@ -471,9 +473,9 @@ class Pages:
                     label=label,
                     title=header.title,
                     description=header.description,
-                    follows=label == self.manager.following,
+                    follows=label == self.intake.following,
                 )
-                for label, header in self.manager.headers().items()
+                for label, header in self.intake.manager.headers().items()
             ]
             return Batches(
                 application=self.title,
@@ -484,7 +486,7 @@ class Pages:
     def sources(self) -> list[SourceChoice]:
         """
         What a new batch can be made with: each registered source that a spec
-        fits (:func:`~ess.apps.batch.fits`), then no source, which every spec
+        fits (:func:`~ess.apps.batch.intake.fits`), then no source, which every spec
         fits, each with the specs that fit it. The specs are those that the
         workspace binds, of the version that
         :meth:`~ess.apps.batch.BatchManager.create` takes. The parameters
@@ -492,12 +494,12 @@ class Pages:
         whose cell the page edits.
         """
         with self.lock:
-            client = self.manager.client
+            client = self.intake.manager.client
             names = dict.fromkeys(spec.name for spec in client.specs())
             specs = [client.spec_named(name) for name in names]
             listing = self._listing
 
-            def choice(name: str | None, source: Source | None) -> SourceChoice:
+            def choice(name: str | None, source: RowSource | None) -> SourceChoice:
                 fills = () if source is None else source.fills
                 return SourceChoice(
                     name=name,
@@ -509,7 +511,7 @@ class Pages:
                     ],
                 )
 
-            given = [choice(n, s) for n, s in self.manager.sources.items()]
+            given = [choice(n, s) for n, s in self.intake.sources.items()]
             return [c for c in given if c.specs] + [choice(None, None)]
 
     def rows_of(
@@ -523,21 +525,22 @@ class Pages:
         The table that the source registered as ``source`` makes now, each
         row marked as taken, left out, or waiting, for a new batch of the
         :class:`~ess.apps.batch.Range` of ``first``, ``last`` and ``later``
-        (:meth:`~ess.apps.batch.BatchManager.marked`). Raises
+        (:meth:`~ess.apps.batch.Intake.marked`). Raises
         :class:`~.refusals.Problem` if no source is registered so, if the
         range is refused, and with what the source refuses
         (:func:`~.refusals.refused`).
         """
         with self.lock:
             with refused():
-                given = self.manager.marked(source, Range(first, last, later))
-            return listed(given, self.manager.sources[source].fills)
+                given = self.intake.marked(source, Range(first, last, later))
+            return listed(given, self.intake.sources[source].fills)
 
     def create(self, new: NewBatch, file: tuple[str, bytes] | None = None) -> Made:
         """
-        Make the batch of ``new`` with the manager, in one call
-        (:meth:`~ess.apps.batch.BatchManager.create`), so that it is made as
-        asked or not at all: with a source, of the rows of the
+        Make the batch of ``new`` in one call, with the :class:`Intake` if it
+        has a source (:meth:`~ess.apps.batch.Intake.create`), else with the
+        manager (:meth:`~ess.apps.batch.BatchManager.create`), so that a
+        refusal leaves no batch: with a source, of the rows of the
         :class:`~ess.apps.batch.Range` of ``new.first``, ``new.last`` and
         ``new.later`` of those that the source has filled now, with an empty
         column for each other of ``new.columns``; with a table ``file``, its
@@ -550,22 +553,23 @@ class Pages:
         It starts with the settings of the batch ``new.settings_from``, else
         with those that the application gives its spec. A setting at a column
         of ``new.columns`` stays, and each row with an empty cell takes it;
-        the manager leaves out the setting of a column that the source fills,
-        whose cells are those of the source.
+        the :class:`Intake` leaves out the setting of a column that the
+        source fills, whose cells are those of the source.
 
-        Raises :class:`~.refusals.Problem` with what the file, the manager or
-        the source refuses, for a label of ``settings_from`` that is no
-        batch, if the definitions refuse a write, and with what the source
-        raises otherwise (:func:`~.refusals.refused`).
+        Raises :class:`~.refusals.Problem` with what the file, the manager,
+        the :class:`Intake` or the source refuses, for a label of
+        ``settings_from`` that is no batch, if the definitions
+        refuse a write, and with what the source raises otherwise
+        (:func:`~.refusals.refused`).
         """
         with self.lock, refused('The batch was not made'):
-            manager = self.manager
+            manager = self.intake.manager
             settings = None
             if (other := new.settings_from) is not None:
                 if other not in manager.headers():
                     raise ValueError(f'there is no batch {other} to start from')
                 settings = manager.batch(other).settings
-            rows = choose = source = None
+            rows = None
             if file is not None:
                 name, content = file
                 params = manager.spec_named(new.spec).params
@@ -574,22 +578,28 @@ class Pages:
                 except ValueError as error:
                     raise ValueError(f'{name}: {error}') from None
             elif new.source is not None:
-                source = new.source
-                choose = Range(new.first, new.last, new.later)
-            label = manager.create(
+                batch = self.intake.create(
+                    new.spec,
+                    title=new.title,
+                    description=new.description,
+                    source=new.source,
+                    choose=Range(new.first, new.last, new.later),
+                    columns=new.columns,
+                    settings=settings,
+                    follow=new.follow,
+                )
+                if new.follow:
+                    self._failure = None  # said of the batch that followed before
+                return Made(label=batch.label)
+            batch = manager.create(
                 new.spec,
                 title=new.title,
                 description=new.description,
                 rows=rows,
-                source=source,
-                choose=choose,
                 columns=new.columns,
                 settings=settings,
-                follow=new.follow,
             )
-            if new.follow:
-                self._failure = None  # said of the batch that followed before
-        return Made(label=label)
+        return Made(label=batch.label)
 
     def remove(self, label: str) -> Notice:
         """
@@ -603,8 +613,8 @@ class Pages:
         """
         with self.lock, kept():
             self.check(label)
-            title = self.manager.headers()[label].title
-            self.manager.remove(label)
+            title = self.intake.manager.headers()[label].title
+            self.intake.manager.remove(label)
             self._pages.pop(label, None)
             return Notice(notice=f'Removed {title}.')
 
@@ -622,7 +632,7 @@ class Pages:
         reason in ``failed``, and names no files.
         """
         with self.lock:
-            manager = self.manager
+            manager = self.intake.manager
             rows: dict[str, dict[str, int]] = {}
             files: dict[str, list[str]] = {}
             failed: dict[str, str] = {}

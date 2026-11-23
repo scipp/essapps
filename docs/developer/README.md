@@ -301,11 +301,11 @@ def transmission_runs(files: Sequence[FileInfo]) -> pd.DataFrame:
             for f in files if f.metadata.get('role') == 'transmission']
     return pd.DataFrame.from_records(rows, columns=['key', 'run']).set_index('key')
 
-manager = BatchManager(client, definitions=FolderDefinitions(folder),
-                       sources={'transmission-runs': Source(transmission_runs, fills=('run',))})
-manager.create('transmission', title='Transmissions', source='transmission-runs',
-               follow=True)
-manager.step()        # called by a timer of the application
+manager = BatchManager(client, definitions=FolderDefinitions(folder))
+intake = Intake(manager, sources={'transmission-runs': RowSource(transmission_runs, fills=('run',))})
+intake.create('transmission', title='Transmissions', source='transmission-runs',
+              follow=True)
+intake.step()         # called by a timer of the application
 ```
 
 A step never changes a row that the table has. The results are read from the records under the label, so a restarted application reduces no row that has a result. A record under the label with a row's key as member, from any batch, is that row's result.

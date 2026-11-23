@@ -118,7 +118,7 @@ def test_the_source_gives_its_columns_without_files(tmp_path: Path) -> None:
     with local(proposal='p1', files=FolderFiles(tmp_path, []), bind=BINDINGS) as client:
         batch = Batch(client, IOFQ, label='iofq', rows=rows_of(client, SAMPLE_RUNS))
 
-    assert batch.columns == ('sample', 'sample_transmission')
+    assert batch.parameter_columns == ('sample', 'sample_transmission')
 
 
 @pytest.fixture

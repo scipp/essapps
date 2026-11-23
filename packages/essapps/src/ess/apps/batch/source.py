@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What an application gives a batch: a :class:`Source` makes a table from the
+What an application gives a batch: a :class:`RowSource` makes a table from the
 files.
 
-A source is code of the application, registered by name with a
-:class:`~.manager.BatchManager`. Its :data:`RowSource` takes the files with
+A row source is code of the application, registered by name with an
+:class:`~.intake.Intake`. Its :data:`RowFunction` takes the files with
 their metadata and returns a frame, the form that ``Batch.put`` takes::
 
     key     run    name         sample      sample_transmission
@@ -40,7 +40,7 @@ from .table import typed
 
 @dataclass(frozen=True)
 class FileInfo:
-    """A file and its metadata, as a :data:`RowSource` is given it."""
+    """A file and its metadata, as a :data:`RowFunction` is given it."""
 
     ref: FileRef
     metadata: Mapping[str, Any]
@@ -54,7 +54,7 @@ def _file_infos(client: Client, selector: Selector | None = None) -> list[FileIn
     ]
 
 
-type RowSource = Callable[[Sequence[FileInfo]], pd.DataFrame]
+type RowFunction = Callable[[Sequence[FileInfo]], pd.DataFrame]
 """
 What an application knows of its technique: which files make which rows. It
 takes plain data and returns a frame, so it is tested on its own.
@@ -62,9 +62,9 @@ takes plain data and returns a frame, so it is tested on its own.
 
 
 @dataclass(frozen=True)
-class Source:
+class RowSource:
     """
-    A source of rows: a :data:`RowSource`, the columns it fills, and the files
+    A row source: a :data:`RowFunction`, the columns it fills, and the files
     it is given.
 
     Parameters
@@ -78,15 +78,15 @@ class Source:
         The files that ``rows`` is given; raw files if not given.
     """
 
-    rows: RowSource
+    rows: RowFunction
     fills: tuple[str, ...]
     selector: Selector | None = None
 
 
-def rows_of(client: Client, source: Source) -> pd.DataFrame:
+def rows_of(client: Client, source: RowSource) -> pd.DataFrame:
     """
     The table that ``source`` makes from the files of ``client`` now, with an
-    empty column for each of :attr:`Source.fills` that it lacks, so that a
+    empty column for each of :attr:`RowSource.fills` that it lacks, so that a
     batch made from it has its columns also when no file is listed yet.
 
     Raises ``ValueError`` for a key that is not text, empty, or given twice,
@@ -122,8 +122,8 @@ class Range:
     """
     Which rows a new batch takes of those that its source has filled now, as
     a person picks them, given as ``choose`` to
-    :meth:`~.manager.BatchManager.create` and
-    :meth:`~.manager.BatchManager.marked`: called on the filled rows, it gives
+    :meth:`~.intake.Intake.create` and
+    :meth:`~.intake.Intake.marked`: called on the filled rows, it gives
     the rows from the row of key ``first`` to the row of key ``last``, both
     included, in their order; an end not given is open. With ``later``, it
     gives none, so that the batch gets only the rows added later, by Follow

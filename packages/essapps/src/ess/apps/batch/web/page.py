@@ -98,7 +98,7 @@ the action "Stop following" (:meth:`Page.stop_following`), after which the
 batch never follows again; the page of a batch that does not follow has no
 action of Follow. While a batch follows, :meth:`Pages.tick
 <.pages.Pages.tick>` steps it every ``interval`` seconds
-(:meth:`~ess.apps.batch.BatchManager.step`), which adds the rows of its
+(:meth:`~ess.apps.batch.Intake.step`), which adds the rows of its
 source that are new and filled, and reduces the rows that
 :func:`~ess.apps.batch.not_reduced` gives, the rows that are ready and have
 no result, under the lock of all pages, with the batch's settings, whatever
@@ -343,9 +343,9 @@ class Page:
     Parameters
     ----------
     pages:
-        What the pages share: the manager of the batch, the lock, the
-        listing of the files, Follow, and what the application gives every
-        page.
+        What the pages share: the manager of the batch, the ``Intake`` of its
+        rows and Follow, the lock, the listing of the files, and what the
+        application gives every page.
     label:
         The label of the batch.
     """
@@ -365,7 +365,7 @@ class Page:
     @property
     def batch(self) -> Batch:
         """The batch, asked of the manager at each use."""
-        return self.pages.manager.batch(self.label)
+        return self.pages.intake.manager.batch(self.label)
 
     @property
     def lock(self) -> AbstractContextManager[object]:
@@ -393,18 +393,18 @@ class Page:
         then shows the batch's settings.
         """
         batch = self.batch
-        if batch.columns == self._columns:
+        if batch.parameter_columns == self._columns:
             return
-        self._columns = batch.columns
+        self._columns = batch.parameter_columns
         self._cells = Fields(
-            batch.spec.params, self.pages.listing, fields=batch.columns
+            batch.spec.params, self.pages.listing, fields=batch.parameter_columns
         )
         self.settings = self._form()
         self._show_settings()
 
     def _follows(self) -> bool:
         """Whether this batch is the one that follows."""
-        return self.pages.manager.following == self.label
+        return self.pages.intake.following == self.label
 
     # Reading
 
@@ -423,7 +423,8 @@ class Page:
             self.batch.version,
             pages.listing.cursor,
             pages.files_version,
-            pages.manager.version,
+            pages.intake.manager.version,
+            pages.intake.version,
             pages.follow_token(self.label),
         )
 
@@ -455,7 +456,7 @@ class Page:
         What the form holds; a column left unset has no setting
         (:func:`.forms.held`).
         """
-        return forms.held(self.settings, self.batch.columns)
+        return forms.held(self.settings, self.batch.parameter_columns)
 
     def _show_settings(self) -> None:
         """Show the batch's settings in the form, which then holds no change."""
@@ -521,7 +522,7 @@ class Page:
     def state(self, notice: str = '') -> State:
         """Everything the page shows but a row's details, the plot, and the runs."""
         batch = self.batch
-        columns = batch.columns
+        columns = batch.parameter_columns
         states, unusable = self._states()
         unsubmitted = self.pages.unsubmitted(self.label, states)
         failures = self._failures(states)
@@ -561,7 +562,7 @@ class Page:
         unapplied = self._unapplied()
         marks = [e for e in (*unusable, *self.refused) if not e.entry and shown(e)]
         empty = batch.empty()
-        header = self.pages.manager.headers()[self.label]
+        header = self.pages.intake.manager.headers()[self.label]
         return State(
             version=self.version,
             start=self.start,
@@ -705,7 +706,7 @@ class Page:
                     text=self._text(given.get(c, UNSET)),
                     problem=problems.get(c),
                 )
-                for c in self.batch.columns
+                for c in self.batch.parameter_columns
             },
         )
 
@@ -748,7 +749,7 @@ class Page:
             return False
         if error.entry is None:
             return str(error.loc[0]) in self.settings.fields
-        return error.entry in keys and str(error.loc[0]) in self.batch.columns
+        return error.entry in keys and str(error.loc[0]) in self.batch.parameter_columns
 
     def _refused(self, error: FieldError, named: Mapping[str, str]) -> Refused:
         if error.entry is None:
@@ -820,12 +821,12 @@ class Page:
     def offered(self) -> SourceRows:
         """
         The rows of the source that the table lacks, those that wait marked
-        (:meth:`~ess.apps.batch.BatchManager.offered`), for :meth:`take`;
+        (:meth:`~ess.apps.batch.Intake.offered`), for :meth:`take`;
         what the source refuses is a :class:`~.refusals.Problem`
         (:func:`~.refusals.refused`).
         """
         with refused('The rows of the source cannot be listed'):
-            given = self.pages.manager.offered(self.label)
+            given = self.pages.intake.offered(self.label)
         return listed(given, self.batch.fills)
 
     @_action
@@ -833,12 +834,12 @@ class Page:
         """
         Add the rows of ``keys`` as the source makes them now, so that Follow
         does not add them again once removed
-        (:meth:`~ess.apps.batch.BatchManager.take`). What the manager or the
+        (:meth:`~ess.apps.batch.Intake.take`). What ``Intake`` or the
         source refuses is a :class:`~.refusals.Problem`
         (:func:`~.refusals.refused`).
         """
         with refused('No row was added'):
-            self.pages.manager.take(self.label, keys)
+            self.pages.intake.take(self.label, keys)
         # The rows may name files that the listing lacks.
         self._list_again()
         return f'Added {_rows(len(keys))}.'
@@ -921,7 +922,7 @@ class Page:
         except SubmitError as error:
             self.refused = [e for e in error.errors if self._placed(e, frame.index)]
             unplaced = [e for e in error.errors if e not in self.refused]
-            named = names(frame, self.batch.columns)
+            named = names(frame, self.batch.parameter_columns)
             raise _Refusal(
                 [self._refused(e, named).text for e in unplaced], len(self.refused)
             ) from None
@@ -941,11 +942,11 @@ class Page:
     def stop_following(self) -> str:
         """
         Let none follow, if this batch follows
-        (:meth:`~ess.apps.batch.BatchManager.stop`); it cannot follow again.
+        (:meth:`~ess.apps.batch.Intake.stop`); it cannot follow again.
         """
         if not self._follows():
             return ''  # another batch follows, or none
-        self.pages.manager.stop()
+        self.pages.intake.stop()
         return 'Stopped following.'
 
     def stepped(self) -> None:
@@ -1010,7 +1011,7 @@ class Page:
         where its cell is empty, the value that the row took.
         """
         frame = self._frame([key])
-        name = names(frame, self.batch.columns)[key]
+        name = names(frame, self.batch.parameter_columns)[key]
         row = self._states([key])[0][key]
         if row.record is None:
             raise Problem(f'{name} has no result.')
@@ -1020,7 +1021,11 @@ class Page:
                 'whose settings this one does not take.'
             )
         batch = self.batch
-        given = frame.loc[[key], list(batch.columns)].notna().to_dict('index')[key]
+        given = (
+            frame.loc[[key], list(batch.parameter_columns)]
+            .notna()
+            .to_dict('index')[key]
+        )
         own = {c for c, filled in given.items() if filled}
         kept = {n: v for n, v in batch.settings.items() if n in own}
         took = {n: v for n, v in row.record.request.params.items() if n not in own}
@@ -1039,7 +1044,7 @@ class Page:
         refuses is a :class:`~.refusals.Problem`, and changes nothing.
         """
         try:
-            self.pages.manager.change(
+            self.pages.intake.manager.change(
                 self.label, title=edit.title, description=edit.description
             )
         except ValueError as error:
@@ -1102,7 +1107,7 @@ class Page:
         if not chosen or draw is None:
             return Plot(figure=None, note=note)
         colors = plots.colors([order[s.key] for s in chosen])
-        named = names(frame, self.batch.columns)
+        named = names(frame, self.batch.parameter_columns)
         shown = [
             Shown(s.key, named[s.key], s.record, s.text == 'outdated', c)
             for s, c in zip(chosen, colors, strict=True)

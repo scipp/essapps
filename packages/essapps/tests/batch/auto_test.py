@@ -21,9 +21,10 @@ from ess.apps.batch import (
     CorrectedFiles,
     FileInfo,
     FolderDefinitions,
+    Intake,
     NotKept,
+    RowFunction,
     RowSource,
-    Source,
     rows_of,
 )
 from ess.apps.batch.auto import Step, added, step
@@ -62,7 +63,7 @@ class Stepping:
     """
 
     def __init__(
-        self, batch: Batch, source: Source, considered: Iterable[str] = ()
+        self, batch: Batch, source: RowSource, considered: Iterable[str] = ()
     ) -> None:
         self.batch, self.source = batch, source
         self.considered = frozenset(considered)
@@ -82,13 +83,13 @@ def loop(batch: Batch) -> Stepping:
     return Stepping(batch, PAIRS)
 
 
-def _loop(client: Any, make: RowSource = pair) -> Stepping:
+def _loop(client: Any, make: RowFunction = pair) -> Stepping:
     """A loop on ``client``, which may be a fake that wraps a client."""
     batch = Batch(client, PLAIN, label='scan', rows=rows(client))
     return Stepping(batch, replace(PAIRS, rows=make))
 
 
-def _changed(make: RowSource, **cells: Any) -> RowSource:
+def _changed(make: RowFunction, **cells: Any) -> RowFunction:
     """``make``, with ``cells`` set in each row that it makes, by key."""
 
     def changed(files: Sequence[FileInfo]) -> pd.DataFrame:
@@ -126,7 +127,7 @@ def test_a_source_that_makes_a_key_twice_is_refused(
     client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    twice = Source(lambda files: pd.concat([pair(files)] * 2), fills=PAIRS.fills)
+    twice = RowSource(lambda files: pd.concat([pair(files)] * 2), fills=PAIRS.fills)
 
     with pytest.raises(ValueError, match="the key '1' is given twice"):
         rows_of(client, twice)
@@ -182,7 +183,7 @@ def _per_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
 
 
 def _repeated(client: Client) -> Stepping:
-    source = Source(_per_sample, fills=('sample_runs', 'trans_runs'))
+    source = RowSource(_per_sample, fills=('sample_runs', 'trans_runs'))
     table = rows_of(client, source)
     batch = Batch(client, REPEATED, label='repeated', rows=table, fills=source.fills)
     return Stepping(batch, source)
@@ -486,7 +487,7 @@ def test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before(
         offsets = {k: {'offset': cell_of(r.ref('offset'))} for k, r in found.items()}
         return _changed(pair, **offsets)(files)
 
-    source = Source(with_offset, fills=(*PAIRS.fills, 'offset'))
+    source = RowSource(with_offset, fills=(*PAIRS.fills, 'offset'))
     table = rows_of(client, source)
     reduce = Batch(client, PLAIN, label='reduce', rows=table, fills=source.fills)
     loops = [Stepping(find, SAMPLES), Stepping(reduce, source)]
@@ -541,14 +542,14 @@ def test_two_loops_on_one_label_submit_a_file_once(
 
 
 @pytest.fixture
-def following(manager: BatchManager, client: Client, sample: Measure) -> BatchManager:
+def following(intake: Intake, client: Client, sample: Measure) -> Intake:
     """
-    ``manager`` with runs 1 to 4 measured, each with its transmission run,
+    ``intake`` with runs 1 to 4 measured, each with its transmission run,
     and the batch ``a`` of the rows from run 3 on, which follows.
     """
     for run, name in enumerate(['water', 'sds', 'dmso', 'd2o'], start=1):
         sample(run, name)
-    manager.create(
+    intake.create(
         PLAIN.name,
         title='A',
         source='pairs',
@@ -556,7 +557,7 @@ def following(manager: BatchManager, client: Client, sample: Measure) -> BatchMa
         label='a',
         follow=True,
     )
-    return manager
+    return intake
 
 
 def considered(definitions: FolderDefinitions) -> frozenset[str]:
@@ -564,18 +565,18 @@ def considered(definitions: FolderDefinitions) -> frozenset[str]:
 
 
 def test_a_batch_made_from_a_source_considers_every_row_it_gave(
-    following: BatchManager, client: Client, definitions: FolderDefinitions
+    following: Intake, client: Client, definitions: FolderDefinitions
 ) -> None:
     following.step()
 
     client.wait(client.records(label='a'))
-    assert list(following.batch('a').frame().index) == ['3', '4']
+    assert list(following.manager.batch('a').frame().index) == ['3', '4']
     assert {r.member for r in client.records(label='a')} == {'3', '4'}
     assert considered(definitions) == {'1', '2', '3', '4'}
 
 
 def test_a_row_of_a_sample_measured_before_its_transmission_waits_then_is_added(
-    following: BatchManager,
+    following: Intake,
     client: Client,
     fake: FakeFiles,
     sample: Measure,
@@ -590,13 +591,13 @@ def test_a_row_of_a_sample_measured_before_its_transmission_waits_then_is_added(
     assert isinstance(waits, Step)
     assert isinstance(adds, Step)
     assert (waits.waiting, adds.waiting) == (('5',), ())
-    assert list(following.batch('a').frame().index) == ['3', '4', '5']
+    assert list(following.manager.batch('a').frame().index) == ['3', '4', '5']
     assert '5' in {r.member for r in client.records(label='a')}
     assert considered(definitions) == {'1', '2', '3', '4', '5'}
 
 
-def test_a_row_that_a_person_removes_stays_away(following: BatchManager) -> None:
-    batch = following.batch('a')
+def test_a_row_that_a_person_removes_stays_away(following: Intake) -> None:
+    batch = following.manager.batch('a')
     batch.put(batch.frame().drop('4'))
 
     following.step()
@@ -605,9 +606,9 @@ def test_a_row_that_a_person_removes_stays_away(following: BatchManager) -> None
 
 
 def test_a_row_added_by_hand_with_a_key_the_source_gives_later_stays_away_once_removed(
-    following: BatchManager, sample: Measure
+    following: Intake, sample: Measure
 ) -> None:
-    batch = following.batch('a')
+    batch = following.manager.batch('a')
     edit(batch, '5', sample='uuid:run-1', transmission='uuid:run-1')
     sample(5, 'oil')
     following.step()  # the table has 5: the step adds no row, and considers it
@@ -619,7 +620,7 @@ def test_a_row_added_by_hand_with_a_key_the_source_gives_later_stays_away_once_r
 
 
 def test_a_row_of_a_step_cut_off_before_considered_stays_away_once_removed(
-    following: BatchManager, refusing: Refusing, client: Client, sample: Measure
+    following: Intake, refusing: Refusing, client: Client, sample: Measure
 ) -> None:
     sample(5, 'oil')
     refusing.part = 'source'  # as a process that stops after rows.json
@@ -628,7 +629,7 @@ def test_a_row_of_a_step_cut_off_before_considered_stays_away_once_removed(
     refusing.part = None
     client.wait(client.records(label='a'))
     following.step()  # the table has 5: the step considers it
-    batch = following.batch('a')
+    batch = following.manager.batch('a')
     batch.put(batch.frame().drop('5'))
 
     following.step()
@@ -639,14 +640,14 @@ def test_a_row_of_a_step_cut_off_before_considered_stays_away_once_removed(
 def test_an_error_of_a_step_is_said_also_if_considered_is_refused_after_it(
     client: Client, refusing: Refusing, sample: Measure
 ) -> None:
-    manager = BatchManager(Flaky(client), sources=SOURCES, definitions=refusing)
-    manager.create(PLAIN.name, title='A', source='pairs', label='a', follow=True)
+    intake = Intake(BatchManager(Flaky(client), definitions=refusing), sources=SOURCES)
+    intake.create(PLAIN.name, title='A', source='pairs', label='a', follow=True)
     sample(1, 'water')
-    manager.client.fail = 1  # type: ignore[attr-defined]
+    intake.manager.client.fail = 1  # type: ignore[attr-defined]
     refusing.part = 'source'
 
     with pytest.raises(ConnectionError):
-        manager.step()
+        intake.step()
 
 
 class _Refusing(Flaky):
@@ -659,28 +660,31 @@ class _Refusing(Flaky):
 def test_a_value_error_of_a_submission_is_not_said_as_one_of_the_source(
     client: Client, definitions: FolderDefinitions, sample: Measure
 ) -> None:
-    manager = BatchManager(_Refusing(client), sources=SOURCES, definitions=definitions)
-    manager.create(PLAIN.name, title='A', source='pairs', label='a', follow=True)
+    manager = BatchManager(_Refusing(client), definitions=definitions)
+    intake = Intake(manager, sources=SOURCES)
+    intake.create(PLAIN.name, title='A', source='pairs', label='a', follow=True)
     sample(1, 'water')
 
     with pytest.raises(ValueError, match=r'^the service refused the connection$'):
-        manager.step()
+        intake.step()
 
 
 def test_a_row_added_by_a_step_whose_submission_raised_stays_away_once_removed(
     client: Client, definitions: FolderDefinitions, sample: Measure
 ) -> None:
     flaky = Flaky(client)
-    manager = BatchManager(flaky, sources={'pairs': PAIRS}, definitions=definitions)
-    from_pairs(manager, PLAIN.name, title='A', label='a', follow=True)
+    intake = Intake(
+        BatchManager(flaky, definitions=definitions), sources={'pairs': PAIRS}
+    )
+    from_pairs(intake, PLAIN.name, title='A', label='a', follow=True)
     sample(1, 'water')
     flaky.fail = 1
     with pytest.raises(ConnectionError):
-        manager.step()
-    batch = manager.batch('a')
+        intake.step()
+    batch = intake.manager.batch('a')
     batch.put(batch.frame().drop('1'))
 
-    manager.step()
+    intake.step()
 
     assert batch.frame().empty
     assert considered(definitions) == {'1'}
@@ -689,40 +693,46 @@ def test_a_row_added_by_a_step_whose_submission_raised_stays_away_once_removed(
 def test_a_cell_of_the_source_that_the_batch_refuses_is_named_with_the_source(
     client: Client, definitions: FolderDefinitions, sample: Measure
 ) -> None:
-    thick = Source(_changed(pair, **{'1': {'thickness': 'thick'}}), PAIRS.fills)
-    manager = BatchManager(client, sources={'pairs': thick}, definitions=definitions)
-    from_pairs(manager, PLAIN.name, title='A', label='a', follow=True)
+    thick = RowSource(_changed(pair, **{'1': {'thickness': 'thick'}}), PAIRS.fills)
+    intake = Intake(
+        BatchManager(client, definitions=definitions), sources={'pairs': thick}
+    )
+    from_pairs(intake, PLAIN.name, title='A', label='a', follow=True)
     sample(1, 'water')
 
     with pytest.raises(
         ValueError, match=r"the source pairs: .*row '1', column 'thickness'"
     ):
-        manager.step()
+        intake.step()
 
 
 def test_a_step_after_a_restart_adds_the_rows_that_arrived_meanwhile(
-    following: BatchManager,
+    following: Intake,
     client: Client,
     definitions: FolderDefinitions,
     sample: Measure,
 ) -> None:
     following.step()
     sample(6, 'oil')
-    again = BatchManager(client, sources=following.sources, definitions=definitions)
+    again = Intake(
+        BatchManager(client, definitions=definitions), sources=following.sources
+    )
 
     again.step()
 
     assert again.following == 'a'
-    assert list(again.batch('a').frame().index) == ['3', '4', '6']
+    assert list(again.manager.batch('a').frame().index) == ['3', '4', '6']
 
 
 def test_a_transmission_measured_again_changes_no_row(
-    following: BatchManager, fake: FakeFiles
+    following: Intake, fake: FakeFiles
 ) -> None:
     following.step()
     fake.measure(2003, 1.0, role='transmission', sample='dmso')
 
     following.step()
 
-    assert following.batch('a').frame().loc['3', 'transmission'] == 'uuid:run-1003'
+    assert (
+        following.manager.batch('a').frame().loc['3', 'transmission'] == 'uuid:run-1003'
+    )
     assert following.rows_of('pairs').loc['3', 'transmission'] == 'uuid:run-2003'

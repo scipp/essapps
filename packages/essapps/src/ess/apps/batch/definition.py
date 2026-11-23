@@ -8,22 +8,21 @@ The definition is these tables, each with one writer. The settings and the
 rows of a batch are written by its ``Batch``, which the manager makes:
 
     corrections   metadata of a file set by hand, by file     CorrectedFiles
-    header        title, description                          the manager
-    settings      the template: spec, settings                Batch.settings,
+    header        title, description                          BatchManager
+    settings      the template: spec, settings, fills         Batch.settings,
                                                               Batch.make_setting
     rows          the table                                  Batch.put
-    source        the source a batch was made from, and the  the manager
-                  keys of it that the batch has considered
-    following     the label of the batch that follows        the manager
+    source        the row source a batch was made from, the  Intake
+                  keys of it that the batch has considered,
+                  and whether the batch follows
 
 The corrections are about files, and every batch of a workspace reads the
 files through one :class:`~.corrections.CorrectedFiles`, so a workspace has
-one table of them. The following label is the workspace's too. The others are
-of a label. A :class:`DefinitionStore`, *the definitions*, keeps each table as
-plain data under a key::
+one table of them. The others are of a label, so removing a label removes
+them all, also whether its batch follows. A :class:`DefinitionStore`, *the
+definitions*, keeps each table as plain data under a key::
 
     ('corrections',)
-    ('following',)
     ('labels', label, 'header')
     ('labels', label, 'settings')
     ('labels', label, 'rows')
@@ -38,16 +37,18 @@ The plain data of each table, as the functions below give and read it::
 
     corrections   {'pid:20.500.12269/abc': {'role': 'sample'}}
     header        {'title': 'Sample runs', 'description': ''}
-    settings      {'spec': ..., 'params': {...}, 'blanks': []}: a template
+    settings      {'spec': ..., 'params': {...}, 'blanks': ['sample']}: a template
     rows          {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
-    source        {'source': 'sample-runs', 'considered': ['60337', '60338']}
-    following     {'label': '20261118-130204'}, or {'label': None}
+    source        {'source': 'sample-runs', 'considered': ['60337', '60338'],
+                   'follows': True}
 
-The settings are a template without blanks, in the format of the file that a
-person saves from a page: its params are the settings of the batch, also
-those at the columns, which each row with an empty cell takes. Blanks are not
-read: the parameter columns of the rows are the blanks of the template that
-the rows fill (:meth:`~.reduction.Batch.template`).
+The settings are a template in the format of the file that a person saves
+from a page: its params are the settings of the batch, also those at the
+columns, which each row with an empty cell takes; its blanks are the
+parameters that the row source of the batch fills
+(:attr:`~.reduction.Batch.fills`), which take no setting and which each row
+must fill. The template that the rows fill has other blanks, all the
+parameter columns of the rows (:meth:`~.reduction.Batch.template`).
 The rows are :func:`~.table.data_of` of the table. Each table is checked when
 read: data of another shape raises ``ValueError`` naming the entry, and
 :class:`FolderDefinitions` adds the file.
@@ -64,7 +65,7 @@ from pathlib import Path
 from typing import Any, Protocol, TypedDict
 from urllib.parse import quote, unquote
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic_core import from_json, to_json
 
 from ess.spec import FileRef
@@ -75,7 +76,6 @@ type Key = tuple[str, ...]
 """Names a table: ``('corrections',)``, or ``('labels', label, part)``."""
 
 CORRECTIONS: Key = ('corrections',)
-FOLLOWING: Key = ('following',)
 
 
 def header_key(label: str) -> Key:
@@ -92,6 +92,11 @@ def rows_key(label: str) -> Key:
 
 def source_key(label: str) -> Key:
     return ('labels', label, 'source')
+
+
+def label_keys(label: str) -> tuple[Key, ...]:
+    """Every table of ``label``: the header first, then the others."""
+    return header_key(label), source_key(label), rows_key(label), settings_key(label)
 
 
 class NotKept(OSError):
@@ -124,18 +129,33 @@ class DefinitionStore(Protocol):
 _NAME_MAX = 255
 """The bytes of a file name, on the file systems of Linux and macOS."""
 
+# Moves with every change of what the kept files mean, such as where the fills
+# of a batch are kept, so that a folder of another format is refused, not read
+# wrong. No folder is migrated.
+FORMAT = 1
+"""The format of the files of :class:`FolderDefinitions`, in ``format.json``."""
+
+_FORMAT_KEY: Key = ('format',)
+
+
+class _Format(TypedDict):
+    format: int
+
+
+_FORMAT = TypeAdapter(_Format)
+
 
 class FolderDefinitions:
     """
     A :class:`DefinitionStore` of JSON files in ``definitions/`` of a
     workspace's folder (see :mod:`ess.apps.folder`)::
 
+        definitions/format.json
         definitions/corrections.json
         definitions/labels/auto%2Fiofq/header.json
         definitions/labels/auto%2Fiofq/settings.json
         definitions/labels/auto%2Fiofq/rows.json
         definitions/labels/auto%2Fiofq/source.json
-        definitions/following.json
 
     Each name of a key is a folder or a file, with ``/``, ``%`` and ``.``
     written as ``%2F``, ``%25`` and ``%2E``, so that no label reaches out of
@@ -145,10 +165,27 @@ class FolderDefinitions:
     file left by a write that was cut off stays, a few bytes, until its table
     is deleted: a reader cannot tell it from that of a write of another
     process that runs.
+
+    ``format.json`` holds ``{"format": FORMAT}`` (:data:`FORMAT`), written
+    before the first table of a folder without labels. Made on a folder with
+    labels and no ``format.json``, or another format, it raises
+    ``ValueError``: what the files mean may have changed, and no folder is
+    migrated.
     """
 
     def __init__(self, directory: Path) -> None:
         self._root = directory / 'definitions'
+        self._formatted = False  # format.json is written before the first table
+        if not self.labels():
+            return
+        found = self.load(_FORMAT_KEY, lambda data: _checked(_FORMAT, data)['format'])
+        if found != FORMAT:
+            given = 'none (no format.json)' if found is None else found
+            raise ValueError(
+                f'{self._root}: the definitions are of format {given}, and this '
+                f'version reads format {FORMAT}; make a new folder'
+            )
+        self._formatted = True
 
     def __str__(self) -> str:
         return str(self._root)
@@ -180,7 +217,13 @@ class FolderDefinitions:
             raise ValueError(f'{path}: {error}') from None
 
     def save(self, key: Key, data: Any) -> None:
-        path = self.path(key)
+        if not self._formatted:
+            self._write(self.path(_FORMAT_KEY), {'format': FORMAT})
+            self._formatted = True
+        self._write(self.path(key), data)
+
+    def _write(self, path: Path, data: Any) -> None:
+        """Write ``data`` to ``path`` whole; :class:`NotKept` if refused."""
         content = to_json(data, indent=1)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -258,25 +301,22 @@ class Header:
 @dataclass(frozen=True)
 class FromSource:
     """
-    What a batch made from a source keeps of it: the name of the source, the
-    keys of its rows that the batch has considered, those put into the batch
-    from the source or left out when the batch was made, and the parameters
-    that the source fills (:attr:`.reduction.Batch.fills`), as they were when
-    the batch was made.
+    What a batch made from a row source keeps of it: the name of the source;
+    the keys of its rows that the batch has considered, those put into the
+    batch from the source or left out when the batch was made; and whether
+    the batch follows its source. Data with other entries, or without one of
+    these, is refused when read.
     """
+
+    __pydantic_config__ = ConfigDict(extra='forbid')
 
     source: str
     considered: frozenset[str]
-    fills: tuple[str, ...]
-
-
-class _Following(TypedDict):
-    label: str | None
+    follows: bool
 
 
 _HEADER = TypeAdapter(Header)
 _FROM_SOURCE = TypeAdapter(FromSource)
-_FOLLOWING = TypeAdapter(_Following)
 _CORRECTIONS = TypeAdapter(dict[str, dict[str, Any]])
 _TEMPLATE = TypeAdapter(Template)
 
@@ -323,20 +363,10 @@ def source_data(made: FromSource) -> dict[str, Any]:
     return {
         'source': made.source,
         'considered': sorted(made.considered),
-        'fills': list(made.fills),
+        'follows': made.follows,
     }
 
 
 def source_of(data: Any) -> FromSource:
     """The source of :func:`source_data`; ``ValueError`` names an entry."""
     return _checked(_FROM_SOURCE, data)
-
-
-def following_data(label: str | None) -> dict[str, Any]:
-    """The label that follows, or ``None`` if none does, as plain data."""
-    return {'label': label}
-
-
-def following_of(data: Any) -> str | None:
-    """The label of :func:`following_data`; ``ValueError`` names an entry."""
-    return _checked(_FOLLOWING, data)['label']

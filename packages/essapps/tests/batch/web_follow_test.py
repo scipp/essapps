@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from ess.apps import Client, Status
-from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions
+from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions, Intake
 from ess.apps.batch.web import Page, Pages, create_app
 from ess.apps.batch.web.api import every
 from ess.apps.batch.web.models import CellEdit, Edit, NewBatch, Reduce, State
@@ -37,16 +37,14 @@ class Marks(BaseModel):
 
 
 @pytest.fixture
-def pages(manager: BatchManager, files: CorrectedFiles) -> Pages:
-    return Pages(manager, files=files, marks=Marks)
+def pages(intake: Intake, files: CorrectedFiles) -> Pages:
+    return Pages(intake, files=files, marks=Marks)
 
 
 @pytest.fixture
-def label(manager: BatchManager) -> str:
+def label(intake: Intake) -> str:
     """The batch ``scan`` of the conftest, made to follow."""
-    return toys.from_pairs(
-        manager, STAGED.name, title='Scan', label='scan', follow=True
-    )
+    return toys.from_pairs(intake, STAGED.name, title='Scan', label='scan', follow=True)
 
 
 @pytest.fixture
@@ -234,13 +232,13 @@ def test_a_result_that_finishes_while_a_step_runs_reaches_the_page_at_its_next_p
     finishing = FinishingClient(client, gate)
     manager = BatchManager(
         finishing,  # type: ignore[arg-type]
-        sources=SOURCES,
         definitions=definitions,
         staged=STAGED_NAMES,
     )
-    label = toys.from_pairs(manager, STAGED.name, title='Scan', follow=True)
+    intake = Intake(manager, sources=SOURCES)
+    label = toys.from_pairs(intake, STAGED.name, title='Scan', follow=True)
     sample(1, 'water')
-    pages = Pages(manager)
+    pages = Pages(intake)
     http = opened(pages, label)
     page = pages.page(label)
     gate.close()
@@ -285,9 +283,9 @@ def test_a_step_changes_no_row_that_the_table_has(
 
 
 def test_a_run_that_a_step_finds_can_be_chosen_in_a_cell_without_a_runs_view(
-    manager: BatchManager, label: str, sample: Measure
+    intake: Intake, label: str, sample: Measure
 ) -> None:
-    pages = Pages(manager)
+    pages = Pages(intake)
     page = pages.page(label)
     page.pages.tick()
     sample(1, 'water', partner=False)  # a row that waits, so no record is made
@@ -427,13 +425,13 @@ def test_stop_following_ends_the_steps_and_leaves_the_rows_running(
 
 
 def test_a_page_that_does_not_follow_stops_nothing(
-    page: Page, pages: Pages, manager: BatchManager
+    page: Page, pages: Pages, intake: Intake
 ) -> None:
-    other = pages.page(manager.create(STAGED.name, title='By hand'))
+    other = pages.page(intake.manager.create(STAGED.name, title='By hand').label)
 
     stopped = other.stop_following()
 
-    assert (stopped.notice, manager.following) == ('', page.label)
+    assert (stopped.notice, intake.following) == ('', page.label)
     assert (stopped.follow.on, stopped.follow.source) == (False, None)
     assert page.state().follow.source == 'pairs'
 
@@ -535,7 +533,7 @@ def test_a_tick_whose_step_raises_what_cannot_be_said_lets_the_next_tick_run(
 def test_a_tick_does_nothing_while_not_following(
     page: Page, pages: Pages, sample: Measure
 ) -> None:
-    pages.manager.stop()
+    pages.intake.stop()
     sample(1, 'water')
 
     pages.tick()
@@ -578,14 +576,14 @@ def test_a_tick_that_waited_for_the_request_that_stops_following_does_nothing(
 
 
 def test_the_app_steps_while_following_and_stops_with_the_app(
-    manager: BatchManager,
+    intake: Intake,
     label: str,
     sample: Measure,
     client: Client,
 ) -> None:
     sample(1, 'water')
 
-    with opened(Pages(manager, interval=0.01), label) as http:
+    with opened(Pages(intake, interval=0.01), label) as http:
         give_up = time.monotonic() + 10
         while not client.records() and time.monotonic() < give_up:
             time.sleep(0.01)
@@ -597,13 +595,13 @@ def test_the_app_steps_while_following_and_stops_with_the_app(
 
 
 def test_a_parent_that_runs_the_lifespan_of_the_app_it_mounts_steps_follow(
-    manager: BatchManager,
+    intake: Intake,
     label: str,
     sample: Measure,
     client: Client,
 ) -> None:
     sample(1, 'water')
-    batch = create_app(Pages(manager, interval=0.01))
+    batch = create_app(Pages(intake, interval=0.01))
     parent = FastAPI(lifespan=lambda _: batch.router.lifespan_context(batch))
     parent.mount('/batch', batch)
 
@@ -631,7 +629,7 @@ def test_a_batch_made_to_follow_ends_follow_on_the_page_of_the_one_before(
     assert shown is not None
     assert shown.follow.on is False
     assert pages.page(made.label).state().follow.on
-    assert pages.manager.following == made.label
+    assert pages.intake.following == made.label
 
 
 def test_follow_resumes_after_a_restart(
@@ -641,10 +639,8 @@ def test_follow_resumes_after_a_restart(
     sample: Measure,
     definitions: FolderDefinitions,
 ) -> None:
-    manager = BatchManager(
-        client, sources=SOURCES, definitions=definitions, staged=STAGED_NAMES
-    )
-    again = Pages(manager)
+    manager = BatchManager(client, definitions=definitions, staged=STAGED_NAMES)
+    again = Pages(Intake(manager, sources=SOURCES))
     sample(1, 'water')
 
     again.tick()
@@ -667,9 +663,9 @@ def test_a_tick_steps_the_batch_that_follows_without_a_page_open(
 
 
 def test_a_tick_after_follow_moved_steps_the_batch_that_follows_now(
-    page: Page, pages: Pages, manager: BatchManager, client: Client, sample: Measure
+    page: Page, pages: Pages, intake: Intake, client: Client, sample: Measure
 ) -> None:
-    other = toys.from_pairs(manager, STAGED.name, title='Other', follow=True)
+    other = toys.from_pairs(intake, STAGED.name, title='Other', follow=True)
     sample(1, 'water')
 
     pages.tick()
@@ -679,9 +675,9 @@ def test_a_tick_after_follow_moved_steps_the_batch_that_follows_now(
 
 
 def test_the_failure_of_a_step_shows_on_the_page_of_the_batch_that_follows_only(
-    page: Page, pages: Pages, manager: BatchManager, fake: FakeFiles
+    page: Page, pages: Pages, intake: Intake, fake: FakeFiles
 ) -> None:
-    other = pages.page(manager.create(STAGED.name, title='Other', source='pairs'))
+    other = pages.page(intake.create(STAGED.name, title='Other', source='pairs').label)
     fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
 
     pages.tick()
@@ -694,13 +690,13 @@ def test_the_failure_of_a_step_shows_on_the_page_of_the_batch_that_follows_only(
 
 
 @pytest.fixture
-def unmarked(manager: BatchManager, label: str) -> tuple[Pages, Page]:
+def unmarked(intake: Intake, label: str) -> tuple[Pages, Page]:
     """
     Pages without a Runs view, and the page of a batch that does not follow,
     once a step on ``label`` has run.
     """
-    pages = Pages(manager)
-    other = pages.page(manager.create(STAGED.name, title='Other', source='pairs'))
+    pages = Pages(intake)
+    other = pages.page(intake.create(STAGED.name, title='Other', source='pairs').label)
     pages.tick()
     return pages, other
 
@@ -759,7 +755,7 @@ def test_the_failure_of_the_batch_that_followed_is_not_said_on_the_next_that_fol
 def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follows(
     page: Page,
     pages: Pages,
-    manager: BatchManager,
+    intake: Intake,
     sample: Measure,
     fake: FakeFiles,
     client: Client,
@@ -775,7 +771,7 @@ def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follo
         other = pages.page(pages.create(new).label)
     else:
         other = pages.page(
-            toys.from_pairs(manager, STAGED.name, title='Other', follow=True)
+            toys.from_pairs(intake, STAGED.name, title='Other', follow=True)
         )
     # No step runs on the other batch: its first step raises.
     fake.list = lambda selector: (_ for _ in ()).throw(OSError('half written'))
@@ -786,10 +782,10 @@ def test_why_follow_refused_rows_of_one_batch_is_not_said_on_the_next_that_follo
 
 
 def test_a_correction_on_another_page_moves_the_version_of_the_runs_once(
-    page: Page, pages: Pages, manager: BatchManager, sample: Measure
+    page: Page, pages: Pages, intake: Intake, sample: Measure
 ) -> None:
     sample(1, 'water')
-    other = pages.page(manager.create(STAGED.name, title='Other', source='pairs'))
+    other = pages.page(intake.create(STAGED.name, title='Other', source='pairs').label)
     pages.tick()
     before = pages.runs_version
 

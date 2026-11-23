@@ -42,8 +42,7 @@ def step(batch, source, considered):
 ### What is kept
 
 ```
-definitions/labels/20261118-130204/source.json     {"source": "sample-runs", "considered": ["60337", "60338", "60339"]}
-definitions/following.json                         the label of the batch that follows, or none (ADR 0011)
+definitions/labels/20261118-130204/source.json     {"source": "sample-runs", "considered": ["60337", "60338", "60339"], "follows": true}
 ```
 
 - A key is *considered* by a batch once a row of that key was put into the batch from the source, or was filled and left out when the batch was made.
@@ -72,7 +71,7 @@ What removes a bad run from the later rows is a correction of the run, which the
 
 ### A row waits until the source has filled it
 
-A source says which columns it fills (`Source.fills`, such as `sample` and `sample_transmission`). A row is added once it has a value in each of these that is a column of the batch. Until then it is *waiting*: the source gives it again at every step, and the page says how many rows wait.
+A source says which columns it fills (`RowSource.fills`, such as `sample` and `sample_transmission`). A row is added once it has a value in each of these that is a column of the batch. Until then it is *waiting*: the source gives it again at every step, and the page says how many rows wait.
 
 - A sample run measured before its transmission run is added when the transmission run is listed.
 - A row is added whatever its other columns hold. A column that the source does not fill is empty in a new row, and the row is incomplete if the template needs it.
@@ -84,8 +83,8 @@ A source says which columns it fills (`Source.fills`, such as `sample` and `samp
 `create` lists the source once, and a person chooses the table of the batch from the rows that are filled:
 
 ```python
-manager.create('loki-iofq', title='Afternoon', source='sample-runs',
-               choose=Range(first='60339'), columns=['thickness'], follow=True)
+intake.create('loki-iofq', title='Afternoon', source='sample-runs',
+              choose=Range(first='60339'), columns=['thickness'], follow=True)
 
 # in create:
 given = rows_of(client, source)                  # one listing
@@ -116,10 +115,10 @@ The rule is on the state of the rows, as in ADR 0011. So in a batch that follows
 No row moves from one batch to another. A person who wants the runs from 60400 on in a batch of their own makes it with Follow:
 
 ```python
-label = manager.create('loki-iofq', title='Evening', source='sample-runs',
-                       choose=Range(first='60400'),
-                       settings=manager.batch('afternoon').settings,
-                       follow=True)          # the batch 'afternoon' stops following
+intake.create('loki-iofq', title='Evening', source='sample-runs',
+              choose=Range(first='60400'),
+              settings=manager.batch('afternoon').settings,
+              follow=True)          # the batch 'afternoon' stops following
 ```
 
 The earlier batch keeps its rows, also those from 60400 on, until a person removes them. It has considered the keys it has seen, and takes no row that arrives later, since it cannot follow again.
@@ -127,8 +126,8 @@ The earlier batch keeps its rows, also those from 60400 on, until a person remov
 A batch of only the rows that arrive later takes no row at making. Every row filled then is considered, so no row is reduced again:
 
 ```python
-manager.create('loki-iofq', title='Night', source='sample-runs',
-               choose=Range(later=True), follow=True)
+intake.create('loki-iofq', title='Night', source='sample-runs',
+              choose=Range(later=True), follow=True)
 ```
 
 ### A batch follows from the time it is made, until it is stopped
@@ -136,15 +135,15 @@ manager.create('loki-iofq', title='Night', source='sample-runs',
 Follow is chosen when a batch is made. A batch that follows can be stopped. A batch that does not follow cannot be made to follow.
 
 ```python
-manager.create(..., source='sample-runs', follow=True)   # follows; the batch that followed before stops
-manager.following                                        # its label
-manager.stop()                                           # none follows; that batch cannot follow again
+intake.create(..., source='sample-runs', follow=True)    # follows; the batch that followed before stops
+intake.following                                         # its label
+intake.stop()                                            # none follows; that batch cannot follow again
 ```
 
-- At most one batch follows, as in ADR 0011: the manager keeps its label in `following.json`, a restart resumes, and removing that batch ends Follow. Since `considered` is kept, the first step after a restart adds the rows that arrived in between.
-- A batch made without a source cannot follow; `create` refuses `follow=True` without a source.
-- A batch that follows has no last row. With one, the rows filled between the last row chosen and the making would be considered and never added, and the rows that arrive later would be. The range that a person picks is a value, `Range(first, last, later)`, which the manager reads: `create(follow=True)` with a `Range` that has a `last` is refused there. The page leaves the end of the range open while Follow is ticked, to say so before a person sends the form; the command does not follow. A `choose` that is a function may pick any rows, also with Follow: the rows were chosen in code, and the filled rows that it leaves out are considered, so Follow adds only the rows that arrive later.
-- Nothing is kept that says a batch has followed. A batch is stopped when another label, or none, is in `following.json`, and no call writes its label there again.
+- At most one batch follows, as in ADR 0011: `Intake` keeps whether a batch follows in its `source.json`, a restart resumes, and removing that batch ends Follow. Since `considered` is kept, the first step after a restart adds the rows that arrived in between.
+- A batch made without a source cannot follow: only `intake.create`, which takes a source, takes `follow=True`.
+- A batch that follows has no last row. With one, the rows filled between the last row chosen and the making would be considered and never added, and the rows that arrive later would be. The range that a person picks is a value, `Range(first, last, later)`, which `Intake` reads: `create(follow=True)` with a `Range` that has a `last` is refused there. The page leaves the end of the range open while Follow is ticked, to say so before a person sends the form; the command does not follow. A `choose` that is a function may pick any rows, also with Follow: the rows were chosen in code, and the filled rows that it leaves out are considered, so Follow adds only the rows that arrive later.
+- Nothing is kept that says a batch has followed. A batch is stopped when its `source.json` says that it does not follow, and no call writes that it follows again.
 - So the next batch is one form, "New batch" with Follow, and a step never takes a row that another batch took since.
 - On the page, Follow is a state with one action, "Stop following", not a switch.
 
@@ -175,7 +174,7 @@ A batch made from `sample-runs` with the rows from run 60339 on, with Follow.
 
 ## Consequences
 
-- `Scope`, `Row.index`, `Source.index_type`, `Source.index_title`, `Header.scope`, `Header.source` and `manager.change(scope=...)` go. `Source.fills` stays, with a second use: it says when a row is filled.
+- `Scope`, `Row.index`, `Source.index_type`, `Source.index_title`, `Header.scope`, `Header.source` and `manager.change(scope=...)` go. `RowSource.fills` stays, with a second use: it says when a row is filled.
 - The rule of a step is "ready and without a record". `RowState.changed_by_hand`, the columns `at` of `Automatic`, and the exception for cells set by hand go.
 - A row that only waits is not in the table. The page says how many rows wait, and a person can add them.
 - A transmission run measured again reaches no earlier row, and a correction of a run changes no row that the table has.

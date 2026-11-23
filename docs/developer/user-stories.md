@@ -112,7 +112,7 @@ Automatic reduction belongs to its sub-design ([automatic-reduction.md](automati
 The stories use these calls:
 
 ```python
-source = Source(rows_of_files, fills=(...))   # rows_of_files: the files -> a DataFrame of rows
+source = RowSource(rows_of_files, fills=(...))   # rows_of_files: the files -> a DataFrame of rows
 batch = Batch(client, SPEC, label=..., rows=rows_of(client, source), persist=True)
 done = step(batch, source, considered)   # reads batch.settings at each step
 done.records      # the step added the new rows of the source, and reduced the ready rows without a result; their records by key
@@ -648,7 +648,7 @@ def per_run(files):                                            # every raw file
     return pd.DataFrame({'sample': [f.ref.file for f in files]},
                         index=[str(f.metadata['run']) for f in files])
 
-PER_RUN = Source(per_run, fills=('sample',))
+PER_RUN = RowSource(per_run, fills=('sample',))
 
 def iofq_batch(client):
     return Batch(client, IOFQ, label='iofq', rows=rows_of(client, PER_RUN),
@@ -674,7 +674,7 @@ def angles(files):                                             # a row per sampl
     return pd.DataFrame({'sample': list(runs),
                          'runs': [[f.ref.file for f in found] for found in runs.values()]}, index=keys)
 
-source = Source(angles, fills=('runs',))
+source = RowSource(angles, fills=('runs',))
 batch = Batch(client, STITCH, label='reflectivity', rows=rows_of(client, source),
               persist=True, settings={'reference': reference})
 counts = {2: [1.0, 2.0], 3: [1.0, 1.0], 4: [4.0, 8.0]}

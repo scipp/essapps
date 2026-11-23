@@ -14,9 +14,9 @@ one of a run a :class:`RunCell`.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class Way(BaseModel):
@@ -422,8 +422,10 @@ class NewBatch(BaseModel):
     those that the application gives ``spec``; a setting at a column stays,
     the value of each row whose cell is empty, but at a column that the
     source fills. With ``follow``, the batch follows its source from then
-    on, in place of the batch that followed before; the manager refuses it
-    with a ``last``.
+    on, in place of the batch that followed before; the
+    :class:`~ess.apps.batch.Intake`
+    refuses it with a ``last``. A ``follow`` without a ``source`` is refused
+    here, since no call of the batch layer can express it.
     """
 
     title: str
@@ -436,6 +438,12 @@ class NewBatch(BaseModel):
     settings_from: str | None = None
     later: bool = False
     follow: bool = False
+
+    @model_validator(mode='after')
+    def _follows_a_source(self) -> Self:
+        if self.follow and self.source is None:
+            raise ValueError('a batch follows its source, and none is given')
+        return self
 
 
 class Value(BaseModel):

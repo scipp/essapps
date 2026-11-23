@@ -10,9 +10,9 @@ sample, and pairs the run with the transmission run of the same sample::
     {'file': 'run-1.nxs', 'run': 1, 'role': 'sample', 'sample': 'water'}
     {'file': 'run-2.nxs', 'run': 2, 'role': 'transmission', 'sample': 'water'}
 
-:data:`SOURCES` and :data:`STAGED` give a
-:class:`~ess.apps.batch.BatchManager` the batches of I(Q). A batch without a
-manager keeps nothing::
+:data:`SOURCES` gives an :class:`~ess.apps.batch.Intake`, and :data:`STAGED`
+a :class:`~ess.apps.batch.BatchManager`, the batches of I(Q). A batch without
+a manager keeps nothing::
 
     Batch(client, IOFQ, label='iofq', rows=rows_of(client, SAMPLE_RUNS), staged=True)
 
@@ -26,7 +26,7 @@ from collections.abc import Sequence
 
 import pandas as pd
 
-from ess.apps.batch import FileInfo, Source
+from ess.apps.batch import FileInfo, RowSource
 from ess.apps.batch.table import KEY, cell_of
 
 from .specs import IOFQ
@@ -81,7 +81,7 @@ def _measured(f: FileInfo) -> tuple[int, str]:
     return (sys.maxsize, f.ref.file) if run is None else (run, '')
 
 
-SAMPLE_RUNS = Source(pair_by_sample, fills=('sample', 'sample_transmission'))
+SAMPLE_RUNS = RowSource(pair_by_sample, fills=('sample', 'sample_transmission'))
 """A row per sample run, paired by :func:`pair_by_sample`."""
 SOURCES = {'sample-runs': SAMPLE_RUNS}
 """The sources of LoKI's batches, by name."""
