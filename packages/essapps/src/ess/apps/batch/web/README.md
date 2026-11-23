@@ -79,7 +79,7 @@ Each state replaces the form, but not while the focused input holds a value type
 
 A batch follows from the time it is made, if **Follow** is ticked in **+ New batch** (see [Making a batch](#making-a-batch)), until it is stopped.
 At most one batch follows: making one with Follow stops the batch that followed before, and the list of batches marks the one that follows.
-The page of the batch that follows has **Stop following** next to **List runs again** (`POST api/follow/stop`, `Intake.stop`). It asks once, since the batch cannot follow again; rows that arrive later are then added with **+ Add rows from the runs**, or go to a new batch.
+The page of the batch that follows has **Stop following** next to **List runs again** (`POST api/follow/stop`, `Intake.stop`). It asks once, since the page offers no action to let the batch follow again; rows that arrive later are then added with **+ Add rows from the runs**, or go to a new batch.
 The page of a batch that does not follow has no Follow control.
 While a batch follows, a timer in the server runs a step every `interval` seconds (5 by default; `Pages(intake, interval=...)`, or `--interval SECONDS`), under the lock of every request, with or without a page open.
 A step is `Intake.step`:

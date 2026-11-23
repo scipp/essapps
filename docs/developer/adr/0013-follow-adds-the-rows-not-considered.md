@@ -121,7 +121,7 @@ intake.create('loki-iofq', title='Evening', source='sample-runs',
               follow=True)          # the batch 'afternoon' stops following
 ```
 
-The earlier batch keeps its rows, also those from 60400 on, until a person removes them. It has considered the keys it has seen, and takes no row that arrives later, since it cannot follow again.
+The earlier batch keeps its rows, also those from 60400 on, until a person removes them. It has considered the keys it has seen, and takes no row that arrives later while it does not follow.
 
 A batch of only the rows that arrive later takes no row at making. Every row filled then is considered, so no row is reduced again:
 
@@ -130,22 +130,23 @@ intake.create('loki-iofq', title='Night', source='sample-runs',
               choose=Range(later=True), follow=True)
 ```
 
-### A batch follows from the time it is made, until it is stopped
+### A batch follows from the time it is made or told to follow, until it is stopped
 
-Follow is chosen when a batch is made. A batch that follows can be stopped. A batch that does not follow cannot be made to follow.
+A batch made from a source follows from its making with Follow, or from `intake.follow(label)`. A batch that follows can be stopped.
 
 ```python
 intake.create(..., source='sample-runs', follow=True)    # follows; the batch that followed before stops
 intake.following                                         # its label
-intake.stop()                                            # none follows; that batch cannot follow again
+intake.stop()                                            # none follows
+intake.follow('afternoon')                               # follows again; the batch that followed before stops
 ```
 
 - At most one batch follows, as in ADR 0011: `Intake` keeps whether a batch follows in its `source.json`, a restart resumes, and removing that batch ends Follow. Since `considered` is kept, the first step after a restart adds the rows that arrived in between.
-- A batch made without a source cannot follow: only `intake.create`, which takes a source, takes `follow=True`.
+- A batch made without a source cannot follow: only `intake.create`, which takes a source, takes `follow=True`, and `intake.follow` refuses a batch without one.
+- A batch that follows again adds at its next step every row of its source that is filled and not considered: those that arrived while it did not follow, also those that another batch took meanwhile. A row left out when it was made, or removed by a person, stays out, since its key is considered.
 - A batch that follows has no last row. With one, the rows filled between the last row chosen and the making would be considered and never added, and the rows that arrive later would be. The range that a person picks is a value, `Range(first, last, later)`, which `Intake` reads: `create(follow=True)` with a `Range` that has a `last` is refused there. The page leaves the end of the range open while Follow is ticked, to say so before a person sends the form; the command does not follow. A `choose` that is a function may pick any rows, also with Follow: the rows were chosen in code, and the filled rows that it leaves out are considered, so Follow adds only the rows that arrive later.
-- Nothing is kept that says a batch has followed. A batch is stopped when its `source.json` says that it does not follow, and no call writes that it follows again.
-- So the next batch is one form, "New batch" with Follow, and a step never takes a row that another batch took since.
-- On the page, Follow is a state with one action, "Stop following", not a switch.
+- Nothing is kept that says a batch has followed. A batch made without Follow and a batch that was stopped are in the same state, and `intake.follow` writes `"follows": true` to either.
+- On the page, the next batch is one form, "New batch" with Follow. Follow is a state with one action, "Stop following", not a switch: the page offers no action to let a batch follow again.
 
 ## Example
 
@@ -169,7 +170,7 @@ A batch made from `sample-runs` with the rows from run 60339 on, with Follow.
 - **Add a row at once and fill its empty cells later.** It needs no memory of what waits. But it fills a cell again that a person emptied, and an empty cell of a parameter that takes `None` is a value (ADR 0012), so "not listed yet" and "none" cannot be told apart.
 - **A step changes cells that have a value**, as today, so that a transmission run measured again reaches the earlier rows and they are reduced again. It needs to know who wrote each cell, and results change with nobody asking. A person can do it for the rows they choose.
 - **A scope kept in the header** (ADR 0011): a slice of an index that a source gives each row. With `considered`, the start of the slice is the choice of rows at making, and it has no end: the next batch is made from the source and follows in its place. The index, its type, and the conversion of the ends go.
-- **Follow turned on and off for a batch made before**, a switch on its page. A batch that follows again after another batch followed takes every row that arrived since, also the rows that the other batch took, and the next batch is two actions: make it, then turn Follow on.
+- **Follow as a switch on the page of each batch**, in place of Follow in "New batch". The next batch would be two actions: make it, then turn Follow on. And a person who turns it on for an earlier batch may not expect that it takes the rows that another batch took since.
 - **A row is added once it can be reduced**, in place of once the source has filled it. A column that the source does not fill would hold the row back for ever, and a parameter that takes `None` would let a row through before its file is listed.
 
 ## Consequences
@@ -178,7 +179,7 @@ A batch made from `sample-runs` with the rows from run 60339 on, with Follow.
 - The rule of a step is "ready and without a record". `RowState.changed_by_hand`, the columns `at` of `Automatic`, and the exception for cells set by hand go.
 - A row that only waits is not in the table. The page says how many rows wait, and a person can add them.
 - A transmission run measured again reaches no earlier row, and a correction of a run changes no row that the table has.
-- A stop by mistake cannot be undone. A person adds the later rows with "Add rows from the runs", or makes a batch from the source, with Follow, that starts at the first row the stopped batch lacks.
+- A stop by mistake is undone in code with `intake.follow(label)`, not on the page. On the page, a person adds the later rows with "Add rows from the runs", or makes a batch from the source, with Follow, that starts at the first row the stopped batch lacks.
 - A person who wants to try settings on a few rows first makes a batch without Follow, then the batch that follows with "Start with the settings of" the first. The rows tried are reduced again in the second batch.
 - A batch made with Follow is stepped within seconds: the rows taken at making are reduced with the settings it was made with.
 - `considered` grows by one key for each row that the source ever gave: some tens of bytes per row.

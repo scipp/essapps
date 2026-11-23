@@ -958,9 +958,9 @@ function renderFollow(follow) {
   rows.empty.textContent = follow.on ? 'No rows yet. Follow adds the rows of the runs that arrive.' : NO_ROWS;
 }
 
-// Stop Follow, once the person agrees that it cannot be turned on again.
+// Stop Follow, once the person agrees: the page has no action to turn it on again.
 function stopFollowing() {
-  const question = `Stop following? "${view.state.title}" cannot follow again. Rows that arrive later are added with "Add rows from the runs", or go to a new batch.`;
+  const question = `Stop following? This page cannot make "${view.state.title}" follow again. Rows that arrive later are added with "Add rows from the runs", or go to a new batch.`;
   if (confirm(question)) act('follow/stop');
 }
 
