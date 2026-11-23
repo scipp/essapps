@@ -193,7 +193,7 @@ from ess.spec.validation import OutputReads
 
 from .checks import Checks, check_fit, distinct
 from .client import Client
-from .errors import FieldError, NotReadable, RecordFailed, SubmitError
+from .errors import FieldError, NotReadable, RecordFailed, Stopped, SubmitError
 from .files import Selector, readable
 from .log import (
     Event,
@@ -775,7 +775,7 @@ class Workspace(WorkspaceProtocol):
     def _check_stopped(self) -> None:
         """Raise if the workspace has stopped."""
         if self._stopped is not None:
-            raise RuntimeError(
+            raise Stopped(
                 f'the workspace stopped: appending to its log failed: {self._stopped}'
             ) from self._stopped
 
@@ -783,7 +783,7 @@ class Workspace(WorkspaceProtocol):
         """Raise if the workspace has stopped or is closed."""
         self._check_stopped()
         if self._closed:
-            raise RuntimeError('the workspace is closed')
+            raise Stopped('the workspace is closed')
 
     def _wait_for(self, predicate: Callable[[], bool]) -> None:
         """

@@ -137,7 +137,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from ...errors import FieldError, SubmitError
+from ...errors import FieldError, SubmitError, said
 from ...fields import UNSET, Fields
 from ...records import Record, Status
 from .. import frames
@@ -171,7 +171,7 @@ from .models import (
     State,
     Value,
 )
-from .refusals import Problem, kept, refused, said, say, why
+from .refusals import Problem, kept, refused, say, why
 
 if TYPE_CHECKING:
     from .pages import Pages

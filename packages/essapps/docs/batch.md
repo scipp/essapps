@@ -718,13 +718,14 @@ A `reduce` that makes a batch and is then refused removes it again (`manager.rem
 On a label with a batch, a refused `reduce` keeps the template and table given.
 A wrong `package.module:NAME`, a file given that does not exist, and a folder without `files.csv` are a message and exit status 2, before the folder is opened.
 A command is a function of `_Given` and an entry of `_COMMANDS` in `cli.py`.
-The command opens the folder with `ArrivingFiles`, so `follow` finds the files that arrive while it runs.
+The command opens the folder with `ArrivingFiles`, so `follow` finds the files that arrive while it runs; it reads `files.csv` once at the opening too, so that a table of files in error is refused before anything runs.
+A table file that the command or the page writes replaces the file at once (`files.replace_at_once`, also used by `folder.write_files_table`): `files -o files.csv` does not open the folder, so it runs while `follow` holds the folder, and `follow` never reads half a table.
 
 `follow` is the second way to run Follow, after the page: whoever runs the loop owns the timer, and one process works on a folder, so the two never run on one folder at once.
 `cli.follow(intake, say=..., pause=..., stopped=..., steps=...)` is the loop: a step, `pause()`, a step, ..., until `stopped()` or after `steps`; then it waits for the reductions that run.
-The command passes `pause=lambda: event.wait(interval)` and `stopped=event.is_set`, and the first SIGINT or SIGTERM sets the event; a test passes functions that make files arrive and say when to stop.
-After a step that did something, `say` gets the keys added and submitted, the status of each row whose reduction ended (`RowState.text`) and why it failed, why rows were refused, and the keys that wait; the command writes it as a line, or as JSON with `--json`.
-A step that raises `ValueError` is said on stderr, once while the message stays the same, and the next step tries again, as the page does.
+The command passes `pause=lambda: event.wait(interval)` and `stopped=event.is_set`, and the first SIGINT, SIGTERM or SIGHUP sets the event (the handler does nothing else, since writing to stderr while the main thread writes raises a reentrant call); a test passes functions that make files arrive and say when to stop.
+After a step that did something, `say` gets the keys added and submitted, the status of each row whose reduction ended (`RowState.text`) and why it failed, why rows were refused, the keys that wait, and why the step raised (`error`, `None` if it did not); the command writes it as a line, or as JSON with `--json`.
+A step that raises anything is said on stderr as the page says it (`ess.apps.errors.said`), once while the message stays the same, and the next step tries again; a workspace that stopped (`ess.apps.errors.Stopped`) ends the loop, and the command exits with 1.
 Ending the loop does not end Follow: `source.json` still says that the batch follows, so the next `follow`, or a page, goes on; `stop` ends it.
 A second signal ends the process with `os._exit`, since the worker threads run the reductions to their end otherwise: a record that started reads failed at the next start (`Workspace._restart`), and a persisted record that had not started runs then.
 

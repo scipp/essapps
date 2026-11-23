@@ -22,8 +22,9 @@ So the page copies no rule of the batch layer: it adds what the person
 asked for, such as "The batch was not made: ", and says the rest as given.
 
 Code of the application, such as a source, the file source or a drawing,
-may raise anything; the page says it and keeps working (:func:`said`). A
-``ValueError`` or an ``OSError``, such as a mount that went away, is a
+may raise anything; the page says it and keeps working
+(:func:`ess.apps.errors.said`, which the command ``essapps-batch`` uses too).
+A ``ValueError`` or an ``OSError``, such as a mount that went away, is a
 refusal, said as its text. Anything else is a defect of that code, and is
 said with its type, so that a person can tell: ``RuntimeError: boom``,
 ``KeyError: 'run'``. A request that runs such code says it with
@@ -38,6 +39,7 @@ from contextlib import contextmanager
 
 from pydantic import ValidationError
 
+from ...errors import said
 from ..definition import NotKept
 from . import forms
 
@@ -69,18 +71,6 @@ def why(error: Exception) -> str:
     if isinstance(error, KeyError) and error.args:
         return str(error.args[0])
     return str(error)
-
-
-def said(error: Exception) -> str:
-    """
-    What code of the application raised, as a person reads it: a refusal
-    (``ValueError``, ``OSError``) as :func:`why` says it, a defect with the
-    name of its type.
-    """
-    name = type(error).__name__
-    if isinstance(error, ValueError | OSError):
-        return why(error) or name
-    return f'{name}: {error}' if str(error) else name
 
 
 @contextmanager

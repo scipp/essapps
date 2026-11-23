@@ -3,7 +3,7 @@
 """Framework for ESS data-reduction applications."""
 
 from .client import Accumulator, Client, Files, Provenance, Stage
-from .errors import FieldError, NotReadable, RecordFailed, SubmitError
+from .errors import FieldError, NotReadable, RecordFailed, Stopped, SubmitError
 from .files import FolderFiles, Selector, file
 from .listing import Listing
 from .protocol import FileSource, Store, WorkspaceProtocol
@@ -39,6 +39,7 @@ __all__ = [
     'SpecId',
     'Stage',
     'Status',
+    'Stopped',
     'Store',
     'SubmitError',
     'Template',

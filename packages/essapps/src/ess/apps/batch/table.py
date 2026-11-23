@@ -113,7 +113,7 @@ from pydantic_core import to_json, to_jsonable_python
 
 from ess.spec import FileRef, OutputRef, field_types
 
-from ..files import file
+from ..files import file, replace_at_once
 
 KEY = 'key'
 """The name of the index of a table: the key of each row."""
@@ -591,7 +591,8 @@ def _note(column: pd.Series) -> pd.Series:
 def write_table(frame: pd.DataFrame, out: Path | TextIO) -> None:
     """
     Write ``frame`` as :func:`read_table` reads it back: to a file of one of
-    :data:`SUFFIXES`, by its suffix, or as CSV to a stream. A named index,
+    :data:`SUFFIXES`, by its suffix, replaced at once
+    (:func:`~ess.apps.files.replace_at_once`), or as CSV to a stream. A named index,
     such as :data:`KEY`, is the first column, and each cell of an ``object``
     column is :func:`_write_cell` of it.
     """
@@ -608,6 +609,13 @@ def write_table(frame: pd.DataFrame, out: Path | TextIO) -> None:
             if column.dtype == object
         }
     )
+    if isinstance(out, Path):
+        replace_at_once(out, lambda path: _write_frame(frame, path, suffix))
+    else:
+        _write_frame(frame, out, suffix)
+
+
+def _write_frame(frame: pd.DataFrame, out: Path | TextIO, suffix: str) -> None:
     if suffix == '.xlsx':
         frame.to_excel(out, index=False)
     else:
