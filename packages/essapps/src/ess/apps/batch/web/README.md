@@ -302,7 +302,7 @@ sequenceDiagram
 ```
 
 `version` counts each action, each step of Follow that changes what the page shows (the rows, the runs, the records, the refusals, or its failure), each change of the batch that follows, and each change of the workspace's records, such as a reduction that finished.
-At each poll the server compares what the page saw at its last version with: `Batch.version` (the table, the template, the records of the batch), the position of the listing in the workspace's records, `Pages.files_version` (the files listed and why they cannot be), `BatchManager.version` (the headers), `Intake.version` (the batch that follows), and what the page shows of the last step of Follow (`Pages.follow_token`).
+At each poll the server compares what the page saw at its last version with: `Batch.version` (the batch table, the template, the records of the batch), the position of the listing in the workspace's records, `Pages.files_version` (the files listed and why they cannot be), `BatchManager.version` (the headers), `Intake.version` (the batch that follows), and what the page shows of the last step of Follow (`Pages.follow_token`).
 `start` is new at each start of the server; a page that sees another one loads again.
 `State.runs` is `Pages.files_version`, the changes of the runs, which all pages share, and `null` if the application corrects no runs; the Runs view asks for `api/runs` when it moves.
 The batches of each run come with the counts (`api/batches/counts`), every 2 s while the Runs view is shown, and not with `api/runs`: Follow adds rows that name runs without a change of the runs.
@@ -321,7 +321,7 @@ Every request that depends on the actions before it waits in one queue (`queued`
 | In the queue | Why |
 |---|---|
 | each action of a batch (`act`), the corrections of runs, the removal of a batch | each changes what the next one reads |
-| a file asked for (the table, the settings, the results) | it holds an edit that the click sent at the blur of its input |
+| a file asked for (the table file of the batch table, the settings, the results) | it holds an edit that the click sent at the blur of its input |
 | **Make** of a new batch | it starts with the settings that an **Apply** sent before put in force |
 
 The poll, the counts, and the other reads (`api/runs`, `api/sources`, `api/sources/rows`, `api/rows/offered`, `api/columns/values`, `api/plot`, `api/row`) go at once: they change nothing, and what they draw follows the next state; a dialog filled by one leaves the check to the server at its action, which waits in the queue.

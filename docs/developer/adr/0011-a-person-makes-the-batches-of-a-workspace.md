@@ -97,7 +97,7 @@ Nothing checks that the batches cover every row or that they do not overlap.
 intake.create(..., source='sample-runs', follow=True)    # this batch follows, and no other
 intake.following                                         # its label, or None
 intake.stop()                                            # none follows
-intake.follow(label)                                     # this batch follows again, and no other
+intake.follow(label)                                     # this batch follows, and no other
 intake.step()                                            # one step of Follow on it (ADR 0013)
 ```
 

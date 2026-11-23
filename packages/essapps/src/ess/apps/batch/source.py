@@ -72,9 +72,10 @@ class RowSource:
     rows:
         Makes the rows of the source from the files.
     fills:
-        The parameter columns that ``rows`` fills. A batch made from the
-        source keeps them (:attr:`~.reduction.Batch.fills`), and Follow adds
-        a row once it has a value in each of these.
+        The columns that ``rows`` fills, each named as a parameter of the
+        specs it fits (:func:`~.intake.fits`). A batch made from the source
+        keeps them as parameter columns (:attr:`~.reduction.Batch.fills`),
+        and Follow adds a row once it has a value in each.
     selector:
         The files that ``rows`` is given; raw files if not given.
     description:

@@ -3,9 +3,9 @@
 """
 Reduce many runs as batches, on a workspace folder.
 
-A batch is a table, its batch table, and a template, kept in the folder under
-a label. Each row of the batch table is one reduction, such as of one sample
-run; the template holds the settings that the rows share.
+A batch is a template and a batch table, kept in the folder under a label.
+Each row of the batch table is one reduction, such as of one sample run; the
+template holds the settings that the rows share.
 
 The options before the command name the folder, the bindings (the reductions
 that the folder runs) and the row sources (which make rows from the files):
@@ -39,8 +39,8 @@ A first session, in this order; each command has its own --help:
     $B remove -l water            # remove the batch; its records stay
 
 A template is YAML: the spec, and a value for each parameter that the rows
-share. A parameter that the batch table gives for each row, a parameter column,
-is left out:
+share. A parameter that each row gives in its own column of the batch table (a
+parameter column) is left out:
 
     spec: {name: loki-masks, version: 1}
     params:
@@ -74,11 +74,11 @@ The status of a row:
 follow -l water: water follows its row source, with a step every --interval
 seconds (5). A step adds the rows of the source that are filled and not
 considered (not one that a person removed or left out), and reduces each row
-that is ready and has no result. It never changes a row of the batch table: a row
-added with the transmission run that was newest then keeps it when a newer one
-arrives (compare rows SOURCE with show). It reduces no failed row again (reduce
---remaining does). A step that did something writes a line, or with --json an
-object, with "error" why the step raised (null if it did not):
+that is ready and has no result. It never changes a row of the batch table: a
+row added with the transmission run that was newest then keeps it when a newer
+one arrives (compare rows SOURCE with show). It reduces no failed row again
+(reduce --remaining does). A step that did something writes a line, or with
+--json an object, with "error" why the step raised (null if it did not):
 
     14:03:05 added 70011 | reducing 70011 | done 70009 | waiting 70013
     {"time": "2026-11-23T14:03:05+01:00", "added": ["70011"], "reducing": ["70011"],
@@ -98,8 +98,8 @@ show too, runs the reductions not started and waits for them.
 Exit status:
     0  done; after reduce or follow, every row of the batch is done
     1  an error, such as a folder that another process holds
-    2  refused, so that nothing ran: a wrong command line, template or table file,
-       or a row that cannot be reduced
+    2  refused, so that nothing ran: a wrong command line, template or table
+       file, or a row that cannot be reduced
     3  reduce or follow left a row not done, such as one that failed
     130  follow ended at once by a second SIGINT (143: SIGTERM, 129: SIGHUP)
 

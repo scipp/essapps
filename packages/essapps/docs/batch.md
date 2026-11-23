@@ -58,7 +58,7 @@ Nothing in the batch layer imports the page or the command.
 | batch | `reduction.py`: `Batch` | the settings and the batch table of one label: `put`, `state`, `reduce`, `cancel`, and `version`, which moves when the batch table, the settings or a record changes; the only part that submits to the client |
 | state | `state.py`: `RowState`, the rules | where each row stands; the rules are functions from the states of rows to keys |
 | step | `auto.py`: `step`, `Step` | one step of Follow on one batch: add rows of the source, reduce rows |
-| manager | `manager.py`: `BatchManager` | the batches of a workspace: make one from a table, list, change, remove; it knows no row source |
+| manager | `manager.py`: `BatchManager` | the batches of a workspace: make one from a batch table, list, change, remove; it knows no row source |
 | `Intake` | `intake.py`: `Intake` | rows of a row source into a batch: make a batch from a source, offer and take its rows; which batch follows, and its step; `considered` |
 | definitions | `definition.py`: `DefinitionStore`, `FolderDefinitions` | what a workspace keeps besides files and records (table below) |
 
@@ -116,7 +116,7 @@ Other tables are always named with what they are of:
 
 ### Rules that always hold
 
-1. **Only `put` changes a batch table.** A person on the page, the command, `take` and a step each build a frame and call `batch.put(frame)`. A `put` of an equal frame writes nothing. Which parameters have a column is said by the frame alone: `put` a frame with a column `thickness`, and each row may give its own thickness.
+1. **Only `put` changes a batch table.** A person on the page, the command, `take` and a step each build a frame and call `batch.put(frame)`; so do `batch.make_column` and `batch.make_setting`, which the page's "Make this a column" and "Make this a setting" call. A `put` of an equal frame writes nothing. Which parameters have a column is said by the frame alone: `put` a frame with a column `thickness`, and each row may give its own thickness.
 2. **A row is reduced with its cell, else with the setting, else with the default.** For each parameter `p` of the spec:
 
    ```python
@@ -219,7 +219,7 @@ table.loc['60340', 'thickness'] = 2.0
 batch.put(table)                      # row 60340 is outdated; 60339 still takes 1.5
 ```
 
-Rows 60339 and 60340, reduced in step 2 with the default 1.0, read `earlier` from the setting on.
+Rows 60339 and 60340, reduced in step 2 with the default 1.0, read `earlier` from the setting on, and `make_column` changes no state. At the `put`, row 60340 reads `outdated`, since its cell 2.0 differs from its result; row 60339 stays `earlier`.
 `rows.json` is written with an empty column `thickness`; `settings.json` keeps `thickness: 1.5`.
 A row added later, by a step of Follow, by `take` or by hand, takes 1.5 until its cell is set.
 `batch.put(table.drop(columns='thickness'))` drops the column, and every row takes 1.5 again.
@@ -433,7 +433,7 @@ The settings form of the page has no field for such a column.
 | `spec_changed` | the result is of another spec than the one bound |
 | `outdated` | `spec_changed`, or `changed` is not empty |
 | `earlier` | the row is ready, its result completed, and its request differs from that of the result only at settings: at parameters that are no column, or where the row's cell is empty |
-| `text` | what the page, a table written and the command say: `running`, `incomplete`, `ready`, `done`, `earlier`, `outdated`, `failed` or `cancelled` |
+| `text` | what the page, a table file written and the command say: `running`, `incomplete`, `ready`, `done`, `earlier`, `outdated`, `failed` or `cancelled` |
 
 A row with `earlier` reads `earlier`: its result is completed, as that of a row that reads `done`, and is plotted and downloaded as one.
 So a reader that wants the rows with a completed result reads `status` (the field), not `text`.
@@ -511,7 +511,7 @@ manager.remove(label)      # every file of the label goes; the records stay
 `parameter_columns=` names parameters that are parameter columns of empty cells, besides those of `rows`.
 
 - `create` refuses an empty title, a label that has definitions or records, a spec that the workspace does not bind, and rows that `put` refuses. `manager.check(spec, title=..., label=...)` refuses the first three without rows, and `create` calls it first.
-- `fills=` names the parameters that a row source fills (`batch.fills`). `create` keeps them as the `blanks` of `settings.json`, refuses a table without one of their columns, and leaves out the settings there (`batch.settable`). Every other setting stays, at a column too. `Intake.create` gives them; code that makes a batch from a table leaves them out.
+- `fills=` names the parameters that a row source fills (`batch.fills`). `create` keeps them as the `blanks` of `settings.json`, refuses a batch table without one of their columns, and leaves out the settings there (`batch.settable`). Every other setting stays, at a column too. `Intake.create` gives them; code that makes a batch from a batch table of its own, or from a table file, leaves them out.
 - `manager.batch(label)` reads `settings.json`, with the fills as its blanks, and `rows.json`, binds the spec by name, and passes the definitions, so the `Batch` writes each change.
 - Ask for the batch each time: one handed out before `remove` must not be used after.
 - A `Batch` made in code, `Batch(client, spec, label=..., settings=..., rows=...)`, is the same class without definitions: it keeps nothing.
@@ -761,7 +761,7 @@ A refused write raises `NotKept`.
 
 `ess.apps.batch.web` serves the batches of a manager as a page.
 `Pages(intake, ...)` takes the `Intake` and reaches the manager as `intake.manager`; it holds one lock over both, and the app calls `Pages.tick`, and so `intake.step()`, on a timer.
-`Page` is the presenter of one batch: each action that changes rows builds a table and calls `put`.
+`Page` is the presenter of one batch: each action that changes rows builds a batch table and calls `put`.
 The actions are described in [`batch/web/README.md`](../src/ess/apps/batch/web/README.md).
 Each action of the page is one call of the batch layer:
 
