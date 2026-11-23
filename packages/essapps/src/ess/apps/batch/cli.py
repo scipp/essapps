@@ -800,7 +800,7 @@ def _files_arguments(command: argparse.ArgumentParser) -> None:
         dest='run_table',
         type=_existing,
         metavar='TABLE',
-        help='a table with a row per run, by its column run or file, which says '
+        help='a run table: a row per run, by its column run or file, which says '
         'its role, its sample, or any other column',
     )
 
@@ -834,16 +834,16 @@ def _reduce_arguments(command: argparse.ArgumentParser) -> None:
         metavar='TABLE',
         type=_existing,
         nargs='?',
-        help=f'the rows: a file of {", ".join(SUFFIXES)} with a column key and a '
-        'column per parameter that differs between rows; without it, those of '
-        'the batch',
+        help=f'the batch table: a table file of {", ".join(SUFFIXES)} with a '
+        'column key and a column per parameter that differs between rows; '
+        'without it, that of the batch',
     )
     _label(command, required=True, help='the label of the batch')
     command.add_argument(
         '--source',
         metavar='NAME',
         help='make a new batch of the rows that the row source NAME in '
-        '-s/--sources has filled now; not with a table',
+        '-s/--sources has filled now; not with a table file',
     )
     command.add_argument(
         '--first', metavar='KEY', help='with --source, the rows from the row KEY on'
@@ -880,7 +880,7 @@ def _export_arguments(command: argparse.ArgumentParser) -> None:
         metavar='TABLE',
         type=_existing,
         nargs='?',
-        help='a table that reduce or show wrote; or -l',
+        help='a table file that reduce or show wrote; or -l',
     )
     command.add_argument(
         'directory', metavar='DIRECTORY', type=Path, help='the folder to write to'
@@ -953,7 +953,7 @@ def _reduce_check(args: argparse.Namespace) -> str | None:
     if args.earlier_settings and not args.remaining:
         return '--earlier-settings needs --remaining'
     if args.table is not None and args.source:
-        return 'give a table or --source, not both'
+        return 'give a table file or --source, not both'
     if args.source is None and (args.first or args.last or args.later):
         return '--first, --last and --later pick rows of --source'
     if args.source is not None and not args.sources:
@@ -985,7 +985,7 @@ class _Command:
 _COMMANDS = {
     'files': _Command(
         _files,
-        description='Write the table of the files of the folder (files.csv), '
+        description='Write the files table of the folder (files.csv), '
         'a row per file that READ knows. It refuses to overwrite an -o that '
         'exists, as a person may have added to it, unless --with is given. It '
         'replaces -o at once and does not open the folder, so it runs while '
@@ -1017,7 +1017,7 @@ _COMMANDS = {
     ),
     'rows': _Command(
         _rows,
-        description='Write the table that the row source NAME makes from the '
+        description='Write the rows that the row source NAME makes from the '
         'files now. It reads and writes no batch.',
         arguments=_rows_arguments,
         check=_with_sources('rows'),
@@ -1031,15 +1031,16 @@ _COMMANDS = {
     ),
     'show': _Command(
         _show,
-        description='Write the table of the batch of LABEL, with the columns '
+        description='Write the batch table of LABEL, with the columns '
         'status, record and failure, as reduce writes it. It reduces nothing.',
         arguments=_show_arguments,
     ),
     'reduce': _Command(
         _reduce,
         description='Make the batch of LABEL if it has none, or give it new '
-        'settings and a new table; then reduce its rows, every one that can be '
-        'reduced unless --remaining, and write its table with the columns '
+        'settings and a new batch table; then reduce its rows, every one that '
+        'can be reduced unless --remaining, and write its batch table with the '
+        'columns '
         'status, record and failure. Earlier records stay in the folder.',
         arguments=_reduce_arguments,
         check=_reduce_check,
@@ -1047,16 +1048,16 @@ _COMMANDS = {
     ),
     'export': _Command(
         _export,
-        description='Write the outputs of each done row of TABLE, or of the '
-        'batch of LABEL as it stands, to a folder of its key in DIRECTORY, and '
-        'the table with the path of each output.',
+        description='Write the outputs of each done row of the table file '
+        'TABLE, or of the batch of LABEL as it stands, to a folder of its key in '
+        'DIRECTORY, and those rows with the path of each output.',
         arguments=_export_arguments,
         check=_one_of('table', 'label'),
     ),
     'offered': _Command(
         _offered,
         description='List the rows that the row source of the batch of LABEL '
-        'makes now and its table lacks, with a column waits: whether a '
+        'makes now and its batch table lacks, with a column waits: whether a '
         'parameter that the source fills is empty. follow adds a row once it '
         'is filled, unless the batch left it out when made or a person '
         'removed it; take adds any.',
@@ -1066,10 +1067,11 @@ _COMMANDS = {
     'take': _Command(
         _take,
         description='Put the rows of KEY, as the row source of the batch of '
-        'LABEL makes them now, into its table, and write them as show does. '
+        'LABEL makes them now, into its batch table, and write them as show '
+        'does. '
         'It reduces nothing. A row that waits for a file goes in with its cell '
         'empty, and stays incomplete until a person fills it: follow changes '
-        'no row of the table.',
+        'no row of the batch table.',
         arguments=_take_arguments,
         check=_with_sources('take'),
     ),
@@ -1093,9 +1095,9 @@ _COMMANDS = {
     ),
     'remove': _Command(
         _remove,
-        description='Remove the batch of LABEL: its table, settings and row '
-        'source. Its records stay in the folder, under the label, so a new '
-        'batch takes another label.',
+        description='Remove the batch of LABEL: its batch table, settings and '
+        'what it keeps of its row source. Its records stay in the folder, under '
+        'the label, so a new batch takes another label.',
         arguments=_show_arguments,
         output=None,
     ),

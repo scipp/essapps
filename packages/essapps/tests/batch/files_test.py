@@ -534,7 +534,7 @@ def test_a_table_given_with_a_source_is_refused(
     with pytest.raises(SystemExit):
         main([*command, *SOURCES, 'reduce', *reduce])
 
-    assert 'give a table or --source, not both' in capsys.readouterr().err
+    assert 'give a table file or --source, not both' in capsys.readouterr().err
     assert FolderDefinitions(folder).labels() == []
 
 

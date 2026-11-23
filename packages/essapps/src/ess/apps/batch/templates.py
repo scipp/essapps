@@ -157,8 +157,8 @@ _WIDTH = 88
 _HOW = """\
 To set a parameter, remove the "#" before its name and write the value after
 the colon. A parameter left commented takes its default, or, if it is marked
-"required", is missing: give it a value, unless the table gives it for each
-row, as a column of the table or a parameter that the row source fills.
+"required", is missing: give it a value, unless the batch table gives it for
+each row, as a parameter column or a parameter that the row source fills.
 
 How to write a value:
   a run         70003, or run:70003
