@@ -39,7 +39,7 @@ from ess.spec import Binding, FileRef
 
 from . import hdf5
 from .client import Client
-from .files import FolderFiles, Selector
+from .files import FolderFiles, Selector, replace_at_once
 from .log import Log
 from .protocol import FileSource
 from .workspace import Workspace
@@ -137,8 +137,8 @@ def folder_files(directory: Path) -> FolderFiles:
 
 def write_files_table(directory: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     """
-    Replace ``files.csv`` in ``directory`` with a table of ``rows`` at once: it
-    is written next to it, then renamed, so that no reader, such as
+    Replace ``files.csv`` in ``directory`` with a table of ``rows`` at once
+    (:func:`~ess.apps.files.replace_at_once`), so that no reader, such as
     :class:`ArrivingFiles`, sees half of it. The columns are the keys of the
     rows, in the order they first appear; ``None`` is an empty cell.
     """
@@ -148,9 +148,7 @@ def write_files_table(directory: Path, rows: Sequence[Mapping[str, Any]]) -> Non
     writer.writeheader()
     for row in rows:
         writer.writerow({k: '' if row.get(k) is None else row[k] for k in columns})
-    partial = directory / 'files.csv.partial'
-    partial.write_text(text.getvalue())
-    partial.replace(directory / 'files.csv')
+    replace_at_once(directory / 'files.csv', lambda p: p.write_text(text.getvalue()))
 
 
 class ArrivingFiles:

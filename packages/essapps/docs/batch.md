@@ -639,7 +639,7 @@ The key names the whole list, since a step adds a row only under a key that is n
 `offered` and `take` raise `ValueError` "<label> was not made from a row source" for a batch without `source.json`.
 `step` takes no label: it steps the batch that follows, whose `source.json` says so.
 `auto.step(batch, source, considered)` runs the same step on a `Batch` made in code, with `considered` in memory: give the next step `done.considered`.
-Whoever serves calls `intake.step()` on a timer, such as `every` of `ess.apps.batch.web.api`.
+Whoever runs the loop owns the timer that calls `intake.step()`: the page's server (`every` of `ess.apps.batch.web.api`), or the command `essapps-batch follow` (`cli.follow`, see "Table files and the command").
 
 ## Table files and the command
 
@@ -669,12 +669,19 @@ $B rows sample-runs -o runs.csv                # the table that a source makes n
 $B reduce iofq.yaml runs.csv -l water          # makes `water`: iofq.yaml its template, runs.csv its table
 $B reduce iofq.yaml -l water2 --source sample-runs
                                                # a batch of the rows that the source has filled
+$B reduce iofq.yaml -l water3 --source sample-runs --first 60339
+                                               # of those from 60339 on; --last KEY, --later
 $B batches                                     # label, title, spec, rows, reduced, source, follows
 $B show -l water -o done.csv                   # the table with results; reduces nothing
 $B reduce -l water -o done.csv                 # reduces every ready row again; writes the table with results
 $B reduce iofq.yaml done.csv -l water          # iofq.yaml becomes the settings, done.csv the table; reduces
 $B template -l water -o now.yaml               # the settings of water, as the page's "settings as a file"
 $B export -l water results                     # the outputs of the done rows of water, by key
+$B offered -l water2                           # the rows of the source that the table lacks
+$B take -l water2 60337 60338                  # put them into the table; reduces nothing
+$B follow -l water2                            # follow, a step every 5 s until Ctrl-C
+$B stop                                        # no batch follows
+$B remove -l water2                            # the batch goes, its records stay
 ```
 
 Each subcommand is a few calls of the batch layer:
@@ -688,8 +695,13 @@ Each subcommand is a few calls of the batch layer:
 | `rows NAME` | `rows_of(client, sources[NAME])` |
 | `batches` | `manager.headers()`, `batch.state(compare=False)`, `intake.source(label)`, `intake.following` |
 | `show -l LABEL` | `frames.with_results(client, batch.shown()[0], batch.frame())` |
-| `reduce` | `manager.create` or `intake.create`, or `batch.put` and `batch.settings = ...`; then `frames.reduce_batch` |
+| `reduce` | `manager.create` or `intake.create` (with `choose=Range(first, last, later=...)`), or `batch.put` and `batch.settings = ...`; then `frames.reduce_batch` |
 | `export TABLE` or `export -l LABEL` | `export.export_table(client, table, directory)`, of the table file or of what `show` gives |
+| `offered -l LABEL` | `intake.offered(label)` |
+| `take -l LABEL KEY...` | `intake.take(label, keys)`, then the rows taken as `show` gives them |
+| `follow -l LABEL` | `intake.follow(label)`, then `cli.follow(intake, ...)`: `intake.step()` every `--interval` seconds |
+| `stop` | `intake.stop()` |
+| `remove -l LABEL` | `manager.remove(label)` |
 
 `template_to_fill` reads the type of each parameter with `ess.spec.field_types`, as the fields of the settings form do (`ess.apps.fields`).
 Every parameter is commented out, one with a default showing it: the template as written is read by `load_template` and refused by `reduce`, naming each required parameter, and a parameter left commented takes the spec's default, not a copy of today's.
@@ -706,7 +718,16 @@ A `reduce` that makes a batch and is then refused removes it again (`manager.rem
 On a label with a batch, a refused `reduce` keeps the template and table given.
 A wrong `package.module:NAME`, a file given that does not exist, and a folder without `files.csv` are a message and exit status 2, before the folder is opened.
 A command is a function of `_Given` and an entry of `_COMMANDS` in `cli.py`.
-The command does no step of Follow.
+The command opens the folder with `ArrivingFiles`, so `follow` finds the files that arrive while it runs; it reads `files.csv` once at the opening too, so that a table of files in error is refused before anything runs.
+A table file that the command or the page writes replaces the file at once (`files.replace_at_once`, also used by `folder.write_files_table`): `files -o files.csv` does not open the folder, so it runs while `follow` holds the folder, and `follow` never reads half a table.
+
+`follow` is the second way to run Follow, after the page: whoever runs the loop owns the timer, and one process works on a folder, so the two never run on one folder at once.
+`cli.follow(intake, say=..., pause=..., stopped=..., steps=...)` is the loop: a step, `pause()`, a step, ..., until `stopped()` or after `steps`; then it waits for the reductions that run.
+The command passes `pause=lambda: event.wait(interval)` and `stopped=event.is_set`, and the first SIGINT, SIGTERM or SIGHUP sets the event (the handler does nothing else, since writing to stderr while the main thread writes raises a reentrant call); a test passes functions that make files arrive and say when to stop.
+After a step that did something, `say` gets the keys added and submitted, the status of each row whose reduction ended (`RowState.text`) and why it failed, why rows were refused, the keys that wait, and why the step raised (`error`, `None` if it did not); the command writes it as a line, or as JSON with `--json`.
+A step that raises anything is said on stderr as the page says it (`ess.apps.errors.said`), once while the message stays the same, and the next step tries again; a workspace that stopped (`ess.apps.errors.Stopped`) ends the loop, and the command exits with 1.
+Ending the loop does not end Follow: `source.json` still says that the batch follows, so the next `follow`, or a page, goes on; `stop` ends it.
+A second signal ends the process with `os._exit`, since the worker threads run the reductions to their end otherwise: a record that started reads failed at the next start (`Workspace._restart`), and a persisted record that had not started runs then.
 
 ## Chains
 

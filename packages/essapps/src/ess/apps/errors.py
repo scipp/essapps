@@ -9,6 +9,9 @@ What the client raises, beyond Python's own errors for a wrong call.
   but cannot be read, such as a record released. One that is unknown raises
   ``KeyError``; both are a ``LookupError``.
 - :class:`RecordFailed`: a read of a record that failed or was cancelled.
+- :class:`Stopped`: any call of a workspace that stopped or is closed.
+
+:func:`said` says what code of an application raised, as a person reads it.
 
 Each holds only strings, integers, and tuples of these, so that a wire
 format can carry it as it is::
@@ -106,3 +109,23 @@ class RecordFailed(Exception):
     def __str__(self) -> str:
         why = f': {self.reason}' if self.reason is not None else ''
         return f'record {self.record} {self.status}{why}'
+
+
+class Stopped(RuntimeError):
+    """
+    The workspace takes no more calls: it stopped, since an append to its
+    log failed, or it is closed.
+    """
+
+
+def said(error: Exception) -> str:
+    """
+    What code of an application raised, such as a row source, the file
+    source or a drawing, as a person reads it: a refusal (``ValueError``,
+    ``OSError``) as its text, a defect with the name of its type, such as
+    ``RuntimeError: boom`` or ``KeyError: 'run'``.
+    """
+    name = type(error).__name__
+    if isinstance(error, ValueError | OSError):
+        return str(error) or name
+    return f'{name}: {error}' if str(error) else name

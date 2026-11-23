@@ -64,6 +64,7 @@ from pydantic import BaseModel
 from ess.spec import File, FileRef, WorkflowSpec
 
 from ...client import Client
+from ...errors import said
 from ...fields import UNSET, Fields
 from ...files import Selector
 from ...listing import Listing
@@ -94,7 +95,7 @@ from .models import (
     SpecChoice,
 )
 from .page import Draw, Page, listed, read, read_file
-from .refusals import Missing, Problem, kept, refused, said, why
+from .refusals import Missing, Problem, kept, refused, why
 
 
 class SafeListing(Listing):

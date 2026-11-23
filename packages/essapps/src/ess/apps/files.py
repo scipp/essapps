@@ -7,13 +7,14 @@ A person names a file by what they know: a run number, a path, or a PID.
 The workspace asks its file source to resolve such a name to the file's
 identity when a request is submitted, so a record names the file itself.
 A file the catalogue lists is identified by its catalogue identifier, any
-other file by its path (see :class:`FolderFiles`).
+other file by its path (see :class:`FolderFiles`). :func:`replace_at_once`
+writes a table of files, or any file that another process reads.
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -211,6 +212,21 @@ class FolderFiles:
 
     def list(self, selector: Selector) -> list[FileRef]:
         return [r for r, m in self._metadata.items() if selector.matches(m)]
+
+
+def replace_at_once(path: Path, write: Callable[[Path], None]) -> None:
+    """
+    Replace ``path`` with what ``write`` writes, at once: ``write`` writes a
+    file next to it, of the same suffix, which is then renamed to ``path``.
+    So a reader, such as one of ``files.csv`` while another process holds
+    the folder, sees the old file or the new one, never half of one.
+    """
+    partial = path.with_name(f'.{path.stem}.partial{path.suffix}')
+    try:
+        write(partial)
+        partial.replace(path)
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def _written_in_full(pid: str) -> bool:

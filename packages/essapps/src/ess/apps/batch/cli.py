@@ -15,23 +15,28 @@ that the folder runs) and the row sources (which make rows from the files):
 A first session, in this order; each command has its own --help:
 
     cd FOLDER; essapps-batch files package.module:read --with runs.xlsx -o files.csv
-                                  # once: the files of the folder; --with adds the
-                                  # role and sample of each run from a run table
+                                  # the files of the folder; --with adds the role
+                                  # and sample of each run from a run table
     $B specs                      # the reductions: name, version, title, outputs
     $B template SPEC -o t.yaml    # a template of SPEC: what each parameter takes
     $B sources                    # the row sources: what each fills, and how
-    $B rows SOURCE                # the rows that the row source SOURCE makes now
-    $B reduce t.yaml --source SOURCE -l water
-                                  # make the batch water of these rows; reduce it
-    $B reduce t.yaml runs.csv -l water
-                                  # or make it of a table file of your own
+    $B rows SOURCE                # the rows that SOURCE makes now; KEY is column 1
+    $B reduce t.yaml --source SOURCE -l water --first KEY
+                                  # make the batch water of the rows there are now,
+                                  # from the row KEY on (or --last KEY, or all), and
+                                  # reduce them; --later: none now; it does not follow
+    $B reduce t.yaml runs.csv -l water   # or of a table file of your own
     $B batches                    # the batches, with how many rows are reduced
     $B show -l water              # the table of water, with the status of each row
-    $B reduce -l water --remaining
-                                  # reduce the rows that are not done
-    $B template -l water -o now.yaml
-                                  # the settings of water, as a template
+    $B reduce -l water --remaining       # reduce the rows that are not done
+    $B template -l water -o now.yaml     # the settings of water, as a template
     $B export -l water results    # write the outputs of the rows of water
+    $B offered -l water           # the rows of the row source that water lacks
+    $B take -l water KEY...       # put those rows into water; reduces nothing
+    $B follow -l water --steps 3  # add and reduce the rows that arrive: 3 steps,
+                                  # or until Ctrl-C without --steps
+    $B stop                       # no batch follows
+    $B remove -l water            # remove the batch; its records stay
 
 A template is YAML: the spec, and a value for each parameter that the rows
 share. A parameter that the table gives for each row is left out:
@@ -42,18 +47,15 @@ share. A parameter that the table gives for each row is left out:
       mask_files: [path:calibration/masks.xml]
 
 Here detector is the output detector of the newest record under the label
-detector, and mask_files a list of one file, by its path in files.csv. A spec
-that needs an output of another: reduce that one first, under a label of its
-own, then name its output with '@latest'. The template that "template SPEC"
+detector, and mask_files a list of one file, by its path in files.csv: reduce
+the detector first, under a label of its own. The template that "template SPEC"
 writes says how to write each kind of value.
 
 reduce on a label without a batch makes the batch: of the rows of --source, of
-a table file, or else of one row keyed by the label. On a label with a batch, a
-template replaces its settings and a table its table. Then it reduces every row
-that can be reduced, also one reduced before, or with --remaining the rows not
-done; earlier records stay in the folder. It writes the table with a status, a
-record and a failure per row. A refused reduce leaves no new batch behind; on a
-label with a batch, the template and table given stay, though nothing ran.
+a table file, or else of one row keyed by the label; on a label with a batch, a
+template replaces its settings and a table its table. It reduces every row that
+can be, or with --remaining the rows not done. A refused reduce makes no batch,
+but a batch keeps the template and table given to it.
 
 The status of a row:
     ready       no result yet; it can be reduced, unless the settings are refused
@@ -68,36 +70,65 @@ The status of a row:
     failed      the reduction failed; the column failure says why
     cancelled   the reduction was cancelled
 
+follow -l water: water follows its row source, with a step every --interval
+seconds (5). A step adds the rows of the source that are filled and not
+considered (not one that a person removed or left out), and reduces each row
+that is ready and has no result. It never changes a row of the table: a row
+added with the transmission run that was newest then keeps it when a newer one
+arrives (compare rows SOURCE with show). It reduces no failed row again (reduce
+--remaining does). A step that did something writes a line, or with --json an
+object, with "error" why the step raised (null if it did not):
+
+    14:03:05 added 70011 | reducing 70011 | done 70009 | waiting 70013
+    {"time": "2026-11-23T14:03:05+01:00", "added": ["70011"], "reducing": ["70011"],
+     "ended": {"70009": "done"}, "failure": {}, "refused": {}, "waiting": ["70013"],
+     "error": null}
+
+ended: the status of each row whose reduction ended; failure, refused: why. A
+run counts once files.csv lists it: "files ... -o files.csv" brings it up to
+date, also while follow runs. Ctrl-C, SIGTERM or the last of --steps ends follow
+once the reductions that run are done (exit status 0 or 3), but water follows
+until stop: the next follow -l water, or a page, goes on with the rows that
+arrived meanwhile. One batch follows at a time; one that stopped can follow
+again. A second Ctrl-C ends it at once: the reduction that ran reads failed ("the
+workspace ended while it ran"), and the next command that opens the folder,
+show too, runs the reductions not started and waits for them.
+
 Exit status:
-    0  done; after reduce, every row of the batch is done
+    0  done; after reduce or follow, every row of the batch is done
     1  an error, such as a folder that another process holds
     2  refused, so that nothing ran: a wrong command line, template or table,
        or a row that cannot be reduced
-    3  reduce left a row not done, such as one that failed, or one that
-       --remaining left
+    3  reduce or follow left a row not done, such as one that failed
+    130  follow ended at once by a second SIGINT (143: SIGTERM, 129: SIGHUP)
 
 One process works on a folder at a time: the command refuses a folder that
-another process holds, such as a batch page that serves it. --json writes a
-table as JSON: a list of objects, one per row. Messages go to stderr.
+another process holds, such as a page or a follow. Messages go to stderr.
 """
 
 # The commands are thin: the rules are those of BatchManager, Intake and Batch,
 # as the page applies them, so a label is one batch whoever works on it. Only
-# reduce changes a batch. A command is a function of _Given and an entry of
-# _COMMANDS. The guide is packages/essapps/docs/batch.md, section "Table files
-# and the command".
+# reduce and take change a table. A command is a function of _Given and an
+# entry of _COMMANDS. The guide is packages/essapps/docs/batch.md, section
+# "Table files and the command".
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
+import os
+import signal
 import sys
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from contextlib import suppress
+import threading
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from types import FrameType
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -105,9 +136,10 @@ import pandas as pd
 from ess.spec import Binding
 
 from ..client import Client
-from ..errors import SubmitError
-from ..folder import folder_files, open_folder, scan_folder
-from ..records import Status
+from ..errors import Stopped, SubmitError, said
+from ..files import replace_at_once
+from ..folder import ArrivingFiles, folder_files, open_folder, scan_folder
+from ..records import Record, Status
 from . import frames
 from .corrections import CorrectedFiles
 from .definition import FolderDefinitions, NotKept
@@ -115,7 +147,7 @@ from .export import export_table
 from .intake import Intake
 from .manager import BatchManager
 from .reduction import Batch
-from .source import RowSource, rows_of
+from .source import Range, RowSource, rows_of
 from .table import KEY, SUFFIXES, read_table, read_text, write_table
 from .templates import checked_settings, load_template, settings_text, template_to_fill
 
@@ -209,13 +241,25 @@ class _Given:
     def batch(self, label: str) -> Batch:
         """The batch of ``label``; ``ValueError`` if the label has none."""
         manager = self.manager()
-        if label not in manager.headers():
-            raise ValueError(f'{label}: no batch has the label; batches lists them')
-        return manager.batch(label)
+        return manager.batch(_known(manager, label))
+
+    def intake(self) -> Intake:
+        """The batches of the folder, with the row sources."""
+        return Intake(self.manager(), sources=self.sources)
 
 
-type _Result = pd.DataFrame | str
-"""What a command writes: a table, or the text of a template."""
+def _known(manager: BatchManager, label: str) -> str:
+    """``label``; ``ValueError`` if no batch of ``manager`` has it."""
+    if label not in manager.headers():
+        raise ValueError(f'{label}: no batch has the label; batches lists them')
+    return label
+
+
+type _Result = pd.DataFrame | str | int
+"""
+What a command gives: a table or the text of a template, to write; or the exit
+status of a command that said what it did as it ran.
+"""
 
 
 def _files(given: _Given) -> pd.DataFrame:
@@ -284,7 +328,7 @@ def _batches(given: _Given) -> pd.DataFrame:
     done. A batch that cannot be read is said on stderr, and its row has no
     spec and no counts.
     """
-    intake = Intake(given.manager(), sources=given.sources)
+    intake = given.intake()
     following = intake.following
     listed = []
     for label, header in intake.manager.headers().items():
@@ -307,13 +351,23 @@ def _batches(given: _Given) -> pd.DataFrame:
     )
 
 
-def _show(given: _Given) -> pd.DataFrame:
-    """The table of the batch of the label, with what came of each row."""
-    batch = given.batch(given.args.label)
-    states, refused = batch.shown()
+def _table(client: Client, batch: Batch, keys: list[str] | None = None) -> pd.DataFrame:
+    """
+    The rows of ``keys`` of ``batch``, or all, with what came of each; why the
+    settings are refused, if they are, on stderr.
+    """
+    states, refused = batch.shown(keys)
     if refused:
         sys.stderr.write(f'the settings are refused: {SubmitError(refused)}\n')
-    return frames.with_results(given.client, states, batch.frame())
+    frame = batch.frame()
+    return frames.with_results(
+        client, states, frame if keys is None else frame.loc[keys]
+    )
+
+
+def _show(given: _Given) -> pd.DataFrame:
+    """The table of the batch of the label, with what came of each row."""
+    return _table(given.client, given.batch(given.args.label))
 
 
 def _reduce(given: _Given) -> pd.DataFrame:
@@ -324,13 +378,15 @@ def _reduce(given: _Given) -> pd.DataFrame:
     For a label without a batch, the manager makes the batch
     (:meth:`~.manager.BatchManager.create`) of the template's spec, with the
     label as title. Its table is the table given (:func:`.table.read_table`),
-    or the rows that the source ``--source`` has filled now
-    (:meth:`~.intake.Intake.create`), not both; without either, one row keyed
-    by the label. With ``--source``, the batch keeps its source, so that its
-    page offers the rows of the source that its table lacks; it does not
-    follow. ``create`` refuses a label that has definitions or records. If the
-    reduction is then refused, the batch is removed again: nothing was
-    submitted, and the same command line works once the template is right.
+    or the rows that the source ``--source`` has filled now, those that
+    ``--first``, ``--last`` and ``--later`` pick (:class:`~.source.Range`,
+    :meth:`~.intake.Intake.create`), not both; without either, one row keyed
+    by the label. With ``--source``, the batch keeps its source, so that
+    ``offered`` and its page offer the rows of the source that its table
+    lacks; it follows only after ``follow``. ``create`` refuses a label that
+    has definitions or records. If the reduction is then refused, the batch
+    is removed again: nothing was submitted, and the same command line works
+    once the template is right.
 
     For a label with a batch, the template becomes its settings and the table
     replaces its table (:meth:`.reduction.Batch.put`); ``--source`` is refused.
@@ -380,7 +436,12 @@ def _reduce(given: _Given) -> pd.DataFrame:
     elif args.source is not None:
         intake = Intake(manager, sources=given.sources)
         batch = intake.create(
-            spec.name, title=label, source=args.source, settings=settings, label=label
+            spec.name,
+            title=label,
+            source=args.source,
+            choose=Range(args.first, args.last, later=args.later),
+            settings=settings,
+            label=label,
         )
     else:
         batch = manager.create(
@@ -399,12 +460,17 @@ def _reduce(given: _Given) -> pd.DataFrame:
         raise
 
 
+def _count(number: int, noun: str) -> str:
+    """``number`` and ``noun``, plural unless one."""
+    return f'{number} {noun}{"" if number == 1 else "s"}'
+
+
 def _reduced(result: pd.DataFrame) -> int:
     """The exit status of reduce: 3 if a row is not done, saying why if earlier."""
     # Only --remaining without --earlier-settings leaves such rows.
     if left := int((result['status'] == 'earlier').sum()):
         sys.stderr.write(
-            f'left {left} row{"s" if left > 1 else ""} reduced with earlier '
+            f'left {_count(left, "row")} reduced with earlier '
             'settings: add --earlier-settings to reduce them\n'
         )
     return 0 if all(result['status'] == 'done') else 3
@@ -423,6 +489,288 @@ def _export(given: _Given) -> pd.DataFrame:
             )
         table = table.set_index(KEY)
     return export_table(given.client, table, args.directory)
+
+
+def _offered(given: _Given) -> pd.DataFrame:
+    """The rows of the source of a batch that its table lacks, with ``waits``."""
+    intake = given.intake()
+    return intake.offered(_known(intake.manager, given.args.label))
+
+
+def _take(given: _Given) -> pd.DataFrame:
+    """Put rows of its source into a batch; those rows, as ``show`` writes them."""
+    args = given.args
+    intake = given.intake()
+    intake.take(_known(intake.manager, args.label), args.keys)
+    return _table(given.client, intake.manager.batch(args.label), args.keys)
+
+
+def _remove(given: _Given) -> int:
+    """Remove a batch, saying that its records stay; a removal cut off too."""
+    label = given.args.label
+    try:
+        given.manager().remove(label)
+    except KeyError:
+        raise ValueError(
+            f'{label}: no batch has the label; batches lists them'
+        ) from None
+    kept = len(given.client.records(label=label))
+    sys.stderr.write(
+        f'removed {label}; '
+        + (
+            f'the folder keeps its {_count(kept, "record")} under the label, so '
+            'a new batch takes another label\n'
+            if kept
+            else 'it had no records, so the label is free\n'
+        )
+    )
+    return 0
+
+
+def _stop(given: _Given) -> int:
+    """End Follow, saying on which batch."""
+    intake = given.intake()
+    label = intake.following
+    intake.stop()
+    sys.stderr.write(
+        'no batch followed\n' if label is None else f'{label} follows no more\n'
+    )
+    return 0
+
+
+def _follow(given: _Given) -> int:
+    """
+    Let a batch follow, and run :func:`follow` on it until Ctrl-C or SIGTERM,
+    or for ``--steps``; 0 if every row of the batch is then done, else 3.
+    """
+    args = given.args
+    intake = given.intake()
+    label = _known(intake.manager, args.label)
+    intake.follow(label)
+    sys.stderr.write(
+        f'{label} follows: a step every {args.interval:g} s'
+        f'{"" if args.steps is None else f", {_count(args.steps, "step")}"}\n'
+    )
+    stop = threading.Event()
+
+    def say(line: Mapping[str, Any]) -> None:
+        now = datetime.now(UTC).astimezone()  # local time, with its offset
+        line = {'time': now.isoformat(timespec='seconds'), **line}
+        text = json.dumps(line, ensure_ascii=False) if args.json else _said(line)
+        if text is not None:
+            sys.stdout.write(f'{text}\n')
+            sys.stdout.flush()
+
+    with _stopped_by_signals(stop):
+        follow(
+            intake,
+            say=say,
+            pause=lambda: stop.wait(args.interval),
+            stopped=stop.is_set,
+            steps=args.steps,
+        )
+    states, _ = intake.manager.batch(label).shown()
+    if left := sum(s.text != 'done' for s in states.values()):
+        sys.stderr.write(
+            f'{_count(left, "row")} of {label} not done: show -l {label} says why\n'
+        )
+        return 3
+    return 0
+
+
+@contextmanager
+def _stopped_by_signals(stop: threading.Event) -> Iterator[None]:
+    """
+    While open, the first SIGINT, SIGTERM or SIGHUP sets ``stop``, and the
+    second ends the process at once, with 128 plus the number of the signal,
+    without waiting for the threads that run reductions.
+    """
+
+    # It writes nothing through sys.stderr, which the main thread may be
+    # writing to: Python refuses a reentrant call.
+    def asked(number: int, frame: FrameType | None) -> None:
+        if stop.is_set():
+            os.write(2, b'ended at once\n')
+            os._exit(128 + number)
+        stop.set()
+
+    signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    before = {number: signal.signal(number, asked) for number in signals}
+    try:
+        yield
+    finally:
+        for number, handler in before.items():
+            signal.signal(number, handler)
+
+
+def follow(
+    intake: Intake,
+    *,
+    say: Callable[[Mapping[str, Any]], None],
+    pause: Callable[[], object],
+    stopped: Callable[[], bool],
+    steps: int | None = None,
+) -> None:
+    """
+    Steps of Follow (:meth:`.intake.Intake.step`) on the batch that follows,
+    with ``pause()`` between two, until ``stopped()`` or after ``steps``
+    steps; then wait for the reductions that run, and return.
+
+    After a step that did something, ``say`` is given what, as a mapping of
+    names to keys::
+
+        added       the rows that the step added, a list of keys
+        reducing    the rows that it submitted
+        ended       the status of each row whose reduction ended since
+                    (RowState.text), by key; the reductions that ran at the
+                    first step count too
+        failure     why each of those failed or was cancelled, by key
+        refused     why each row could not be submitted, by key
+        waiting     the rows of the source that are not filled yet
+
+        error       why the step raised, ``None`` if it did not
+
+    A step did something if it added or submitted rows, if a reduction
+    ended, if what is refused or waits changed since ``say`` was last called,
+    or if it raised something else than the step before. After the wait,
+    ``say`` is given the reductions that ended in it.
+
+    A step may raise anything, as the code of the source may
+    (:meth:`.intake.Intake.step`). It is said on stderr
+    (:func:`~ess.apps.errors.said`), once while the message stays the same,
+    and the next step tries again, as on the page; but a workspace that
+    stopped (:class:`~ess.apps.errors.Stopped`) is raised, since no step can
+    work on it.
+
+    Parameters
+    ----------
+    intake:
+        The intake, whose batch follows; ``ValueError`` if none does.
+    say:
+        Called with what a step did.
+    pause:
+        Waits between two steps, such as ``event.wait(seconds)``.
+    stopped:
+        Whether to end, asked before each step.
+    steps:
+        The number of steps, unbounded if not given.
+    """
+    if (label := intake.following) is None:
+        raise ValueError('no batch follows')
+    batch = intake.manager.batch(label)
+    running = {
+        key: state.record
+        for key, state in batch.state(compare=False).items()
+        if state.record is not None and state.status is Status.PENDING
+    }
+    shown: tuple[Mapping[str, str], list[str]] = ({}, [])  # refused, waiting
+    failed: str | None = None  # what the step before raised, as said
+    done = 0
+    while steps is None or done < steps:
+        if done:
+            pause()
+        if stopped():
+            sys.stderr.write('stopping after the reductions that run\n')
+            break
+        done += 1
+        before = set(batch.frame().index)
+        error = None
+        try:
+            # None only if no batch follows, which this process alone changes.
+            stepped = intake.step()
+        except Stopped:
+            raise
+        except Exception as raised:  # code of the application, as on the page
+            stepped, error = None, said(raised)
+        if fresh := error is not None and error != failed:
+            sys.stderr.write(f'Follow could not step: {error}\n')
+        failed = error
+        if stepped is None:
+            added: list[str] = []
+            reducing: list[str] = []
+            refused, waiting = shown
+        else:
+            added = [k for k in batch.frame().index if k not in before]
+            reducing = list(stepped.records)
+            refused, waiting = dict(stepped.refused), list(stepped.waiting)
+            running |= stepped.records
+        line = _ended(batch, running)
+        if added or reducing or line['ended'] or (refused, waiting) != shown or fresh:
+            say(_line(added, reducing, line, refused, waiting, error))
+            shown = (refused, waiting)
+    if running:
+        batch.client.wait(list(running.values()))
+        say(_line([], [], _ended(batch, running), *shown, None))
+
+
+def _line(
+    added: list[str],
+    reducing: list[str],
+    ended: Mapping[str, Mapping[str, str]],
+    refused: Mapping[str, str],
+    waiting: list[str],
+    error: str | None,
+) -> dict[str, Any]:
+    """A line of :func:`follow`, in its order."""
+    return {
+        'added': added,
+        'reducing': reducing,
+        **ended,
+        'refused': refused,
+        'waiting': waiting,
+        'error': error,
+    }
+
+
+def _ended(batch: Batch, running: dict[str, Record]) -> dict[str, dict[str, str]]:
+    """
+    The status of each row of ``running`` whose reduction ended, as ``ended``,
+    and why it failed or was cancelled, as ``failure``; those rows leave
+    ``running``.
+    """
+    records = list(running.values())
+    statuses = batch.client.status(records)
+    ended = {
+        key: record
+        for (key, record), status in zip(running.items(), statuses, strict=True)
+        if status is not Status.PENDING
+    }
+    for key in ended:
+        del running[key]
+    if not ended:
+        return {'ended': {}, 'failure': {}}
+    states, _ = batch.shown(list(ended))
+    why = batch.client.failure(list(ended.values()))
+    return {
+        'ended': {key: states[key].text for key in ended},
+        'failure': {key: w for key, w in zip(ended, why, strict=True) if w},
+    }
+
+
+def _said(line: Mapping[str, Any]) -> str | None:
+    """
+    A line of :func:`follow` as a person reads it: its parts that are not
+    empty, but the error, which stderr says; ``None`` if none is left.
+    """
+
+    def keys(names: Iterable[str], why: Mapping[str, str]) -> str:
+        return ' '.join(
+            f'{k} ({" ".join(why[k].split())})' if k in why else k for k in names
+        )
+
+    ended = line['ended']
+    parts = [
+        ('added', line['added'], {}),
+        ('reducing', line['reducing'], {}),
+        *(
+            (status, [k for k, s in ended.items() if s == status], line['failure'])
+            for status in dict.fromkeys(ended.values())
+        ),
+        ('refused', list(line['refused']), line['refused']),
+        ('waiting', line['waiting'], {}),
+    ]
+    text = ' | '.join(f'{name} {keys(k, why)}' for name, k, why in parts if k)
+    return f'{line["time"][11:19]} {text}' if text else None
 
 
 def _label(command: argparse.ArgumentParser, *, required: bool, help: str) -> None:
@@ -487,6 +835,18 @@ def _reduce_arguments(command: argparse.ArgumentParser) -> None:
         '-s/--sources has filled now; not with a table',
     )
     command.add_argument(
+        '--first', metavar='KEY', help='with --source, the rows from the row KEY on'
+    )
+    command.add_argument(
+        '--last', metavar='KEY', help='with --source, the rows up to the row KEY'
+    )
+    command.add_argument(
+        '--later',
+        action='store_true',
+        help='with --source, no rows now: follow adds the rows filled from now '
+        'on, take any',
+    )
+    command.add_argument(
         '--staged',
         action='store_true',
         help='run the rows through a stage, which reduces once what they share',
@@ -521,6 +881,51 @@ def _export_arguments(command: argparse.ArgumentParser) -> None:
     )
 
 
+def _take_arguments(command: argparse.ArgumentParser) -> None:
+    _label(command, required=True, help='the label of the batch')
+    command.add_argument(
+        'keys', metavar='KEY', nargs='+', help='the key of a row that offered lists'
+    )
+
+
+def _seconds(text: str) -> float:
+    """A number of seconds, 0 or more; argparse refuses another."""
+    with suppress(ValueError):
+        if math.isfinite(seconds := float(text)) and seconds >= 0:
+            return seconds
+    raise argparse.ArgumentTypeError(f'{text}: give a number of seconds, 0 or more')
+
+
+def _steps(text: str) -> int:
+    """A number of steps, 1 or more; argparse refuses another."""
+    with suppress(ValueError):
+        if (steps := int(text)) >= 1:
+            return steps
+    raise argparse.ArgumentTypeError(f'{text}: give a number of steps, 1 or more')
+
+
+def _follow_arguments(command: argparse.ArgumentParser) -> None:
+    _label(command, required=True, help='the label of the batch')
+    command.add_argument(
+        '--interval',
+        type=_seconds,
+        default=5.0,
+        metavar='SECONDS',
+        help='the seconds between two steps (default: 5)',
+    )
+    command.add_argument(
+        '--steps',
+        type=_steps,
+        metavar='N',
+        help='do N steps, wait for the reductions, and exit',
+    )
+
+
+def _with_sources(name: str) -> Callable[[argparse.Namespace], str | None]:
+    """A check that -s/--sources is given to the command ``name``."""
+    return lambda args: None if args.sources else f'{name} needs -s/--sources'
+
+
 def _one_of(first: str, second: str) -> Callable[[argparse.Namespace], str | None]:
     """A check that exactly one of two arguments is given, by their names."""
 
@@ -538,74 +943,73 @@ def _reduce_check(args: argparse.Namespace) -> str | None:
         return '--earlier-settings needs --remaining'
     if args.table is not None and args.source:
         return 'give a table or --source, not both'
+    if args.source is None and (args.first or args.last or args.later):
+        return '--first, --last and --later pick rows of --source'
     return None
 
 
 @dataclass(frozen=True)
 class _Command:
     """
-    A command: the function that runs it, its texts for --help, and what it
-    takes. ``table``: it writes a table, to a table file or as JSON, else
-    text. ``folder``: it opens the folder, so it needs the bindings. ``check``
-    says what is wrong with the arguments, before anything runs. ``status``
-    gives the exit status of what ran.
+    A command: the function that runs it, its text for its --help, and what
+    it takes. ``output``: what it writes at its end, to -o or stdout: a table,
+    to a table file or as JSON, or text; ``None`` if it writes nothing then,
+    and its function gives its exit status. ``folder``: it opens the folder,
+    so it needs the bindings. ``check`` says what is wrong with the
+    arguments, before anything runs. ``status`` gives the exit status of what
+    was written.
     """
 
     run: Callable[[_Given], _Result]
-    help: str
     description: str
     arguments: Callable[[argparse.ArgumentParser], None] = lambda _: None
     check: Callable[[argparse.Namespace], str | None] = lambda _: None
     status: Callable[[Any], int] = lambda _: 0
-    table: bool = True
+    output: Literal['table', 'text'] | None = 'table'
     folder: bool = True
 
 
 _COMMANDS = {
     'files': _Command(
         _files,
-        help='write the table of the files of the folder, files.csv',
         description='Write the table of the files of the folder (files.csv), '
         'a row per file that READ knows. It refuses to overwrite an -o that '
-        'exists, as a person may have added to it, unless --with is given.',
+        'exists, as a person may have added to it, unless --with is given. It '
+        'replaces -o at once and does not open the folder, so it runs while '
+        'follow holds the folder, and follow then sees the runs it adds.',
         arguments=_files_arguments,
         folder=False,
     ),
     'specs': _Command(
         _specs,
-        help='list the specs that the bindings bind',
         description='List the specs that the bindings bind, one per row: name, '
         'version, title and the names of its outputs.',
     ),
     'template': _Command(
         _template,
-        help='write a template of a spec to fill in, or the settings of a batch',
         description='Write a template of SPEC to fill in, with a comment on each '
         'parameter: whether it is required or its default, what it takes, and '
         'what it is. Or, with -l, the settings of the batch of LABEL, as a '
         'template for reduce.',
         arguments=_template_arguments,
         check=_one_of('spec', 'label'),
-        table=False,
+        output='text',
     ),
     'sources': _Command(
         _row_sources,
-        help='list the row sources: what each fills, and how',
         description='List the row sources of -s/--sources by name, with the '
         'parameters that each fills for each row, and what a row is.',
-        check=lambda args: None if args.sources else 'sources needs -s/--sources',
+        check=_with_sources('sources'),
         folder=False,
     ),
     'rows': _Command(
         _rows,
-        help='write the rows that a row source makes from the files now',
         description='Write the table that the row source NAME makes from the '
         'files now. It reads and writes no batch.',
         arguments=_rows_arguments,
     ),
     'batches': _Command(
         _batches,
-        help='list the batches of the folder',
         description='List the batches of the folder: label, title, spec, number '
         'of rows, how many have a completed result (reduced, whether still '
         'current or not: show tells which rows are done), the row source it was '
@@ -613,14 +1017,12 @@ _COMMANDS = {
     ),
     'show': _Command(
         _show,
-        help='write the table of a batch, with what came of each row',
         description='Write the table of the batch of LABEL, with the columns '
         'status, record and failure, as reduce writes it. It reduces nothing.',
         arguments=_show_arguments,
     ),
     'reduce': _Command(
         _reduce,
-        help='reduce the rows of a batch; make the batch if the label has none',
         description='Make the batch of LABEL if it has none, or give it new '
         'settings and a new table; then reduce its rows, every one that can be '
         'reduced unless --remaining, and write its table with the columns '
@@ -631,12 +1033,57 @@ _COMMANDS = {
     ),
     'export': _Command(
         _export,
-        help='write the outputs of the rows of a table or a batch to files',
         description='Write the outputs of each done row of TABLE, or of the '
         'batch of LABEL as it stands, to a folder of its key in DIRECTORY, and '
         'the table with the path of each output.',
         arguments=_export_arguments,
         check=_one_of('table', 'label'),
+    ),
+    'offered': _Command(
+        _offered,
+        description='List the rows that the row source of the batch of LABEL '
+        'makes now and its table lacks, with a column waits: whether a '
+        'parameter that the source fills is empty. follow adds a row once it '
+        'is filled, unless the batch left it out when made or a person '
+        'removed it; take adds any.',
+        arguments=_show_arguments,
+        check=_with_sources('offered'),
+    ),
+    'take': _Command(
+        _take,
+        description='Put the rows of KEY, as the row source of the batch of '
+        'LABEL makes them now, into its table, and write them as show does. '
+        'It reduces nothing. A row that waits for a file goes in with its cell '
+        'empty, and stays incomplete until a person fills it: follow changes '
+        'no row of the table.',
+        arguments=_take_arguments,
+        check=_with_sources('take'),
+    ),
+    'follow': _Command(
+        _follow,
+        description='Let the batch of LABEL follow its row source, in place '
+        'of the batch that followed, and do a step every SECONDS until Ctrl-C '
+        'or SIGTERM, or for N steps; then wait for the reductions that run. '
+        'A step adds the rows of the source that are filled and not '
+        'considered, and reduces the rows that are ready and have no result. '
+        'It writes a line per step that did something, an object with --json. '
+        'The batch still follows when it exits: stop ends that.',
+        arguments=_follow_arguments,
+        check=_with_sources('follow'),
+        output=None,
+    ),
+    'stop': _Command(
+        _stop,
+        description='Let no batch follow, and say which one did.',
+        output=None,
+    ),
+    'remove': _Command(
+        _remove,
+        description='Remove the batch of LABEL: its table, settings and row '
+        'source. Its records stay in the folder, under the label, so a new '
+        'batch takes another label.',
+        arguments=_show_arguments,
+        output=None,
     ),
 }
 """The commands by name, in the order of a first session."""
@@ -653,7 +1100,7 @@ def _parser() -> argparse.ArgumentParser:
         '--workspace',
         type=Path,
         default=Path(),
-        help='the workspace folder, with its files.csv (default: here)',
+        help='the folder, with its files.csv (default: here)',
     )
     parser.add_argument(
         '-b',
@@ -666,30 +1113,35 @@ def _parser() -> argparse.ArgumentParser:
         '-s',
         '--sources',
         metavar='MODULE:NAME',
-        help='the row sources, by name; sources, rows and reduce --source need '
-        'them, and template marks the parameters that each fills',
+        help='the row sources by name, for sources, rows, offered, take, '
+        'follow, reduce --source and template',
     )
     parser.add_argument(
         '--json',
         action='store_true',
-        help='write a table as JSON, a list of objects, one per row',
+        help='write tables as JSON; follow: an object per line',
     )
     parser.add_argument(
         '--proposal', default='local', help='the proposal of the files (default: local)'
     )
-    commands = parser.add_subparsers(dest='command', required=True, metavar='COMMAND')
+    commands = parser.add_subparsers(
+        dest='command',
+        required=True,
+        metavar='COMMAND',
+        help='a command above; COMMAND --help says more',
+    )
     for name, command in _COMMANDS.items():
-        sub = commands.add_parser(
-            name, help=command.help, description=command.description
-        )
+        sub = commands.add_parser(name, description=command.description)
         command.arguments(sub)
+        if command.output is None:
+            continue
         sub.add_argument(
             '-o',
             '--output',
             type=Path,
             help=f'the file to write, of {", ".join(SUFFIXES)}, or .json with '
             '--json (default: stdout)'
-            if command.table
+            if command.output == 'table'
             else 'the YAML file to write (default: stdout)',
         )
     return parser
@@ -706,7 +1158,7 @@ def _cell(value: Any) -> Any:
     return value
 
 
-def _write(result: _Result, args: argparse.Namespace) -> None:
+def _write(result: pd.DataFrame | str, args: argparse.Namespace) -> None:
     """Write a template's text, or a table as a table file or as JSON."""
     if isinstance(result, pd.DataFrame) and not args.json:
         write_table(result, sys.stdout if args.output is None else args.output)
@@ -722,7 +1174,7 @@ def _write(result: _Result, args: argparse.Namespace) -> None:
     if args.output is None:
         sys.stdout.write(result)
     else:
-        args.output.write_text(result)
+        replace_at_once(args.output, lambda path: path.write_text(result))
 
 
 def _opened(given: _Given, command: _Command) -> _Result:
@@ -734,8 +1186,16 @@ def _opened(given: _Given, command: _Command) -> _Result:
     bind = _bindings(args.bind)
     if not (args.workspace / 'files.csv').is_file():
         raise _Wrong(f'{args.workspace}: no files.csv; the command files writes it')
+    try:  # as read once, so that a table of files in error is refused
+        folder_files(args.workspace)
+    except FileNotFoundError as error:
+        raise ValueError(f'files.csv lists {error}, which does not exist') from None
+    except ValueError as error:
+        raise ValueError(f'files.csv: {error}') from None
     definitions = FolderDefinitions(args.workspace)
-    files = CorrectedFiles(folder_files(args.workspace), definitions=definitions)
+    # Read again when files.csv is replaced, so that follow finds the files
+    # that arrive.
+    files = CorrectedFiles(ArrivingFiles(args.workspace), definitions=definitions)
     try:
         client = open_folder(args.workspace, bind, files=files, proposal=args.proposal)
     except RuntimeError as error:  # another process holds the folder
@@ -750,7 +1210,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     command = _COMMANDS[args.command]
     try:
-        if command.table and args.output is not None:
+        if command.output == 'table' and args.output is not None:
             suffixes = ('.json',) if args.json else SUFFIXES
             if args.output.suffix not in suffixes:
                 raise _Wrong(f'{args.output}: write a file of {", ".join(suffixes)}')
@@ -774,9 +1234,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     except NotKept as error:
         sys.stderr.write(f'not kept: {error}\n')
         return 1
+    except Stopped as error:
+        sys.stderr.write(f'{error}\n')
+        return 1
     except (SubmitError, ValueError) as error:  # also definitions of another format
         sys.stderr.write(f'{error}\n')
         return 2
+    if isinstance(result, int):
+        return result
     _write(result, args)
     return command.status(result)
 
